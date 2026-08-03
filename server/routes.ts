@@ -102,6 +102,7 @@ import { ApplicationIntakeError, submitPublicApplication } from "./onboardingApp
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
+import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
@@ -5465,7 +5466,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             repId: parsed.data.repId,
             saleRef: `knock:${knock.id}`,
             nowMs: Date.parse(serverTs),
-            seed: `${spiffTenant}:${parsed.data.repId}:knock:${knock.id}:${serverTs}`,
+            // The seed is derived ONLY from stable identity — tenant, rep, knock
+            // id — and deliberately NOT from the wall clock. A retried or
+            // replayed knock must re-evaluate to the SAME decision and the SAME
+            // dollar amount. (It previously mixed in serverTs, so a sale that
+            // awarded nothing on its first attempt could award on a retry, and
+            // the amount was not reproducible from the ledger.)
+            seed: `${spiffTenant}:${parsed.data.repId}:knock:${knock.id}`,
             actorId: (req as any).user?.id ?? null,
           });
         }
@@ -7742,10 +7749,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               ? Math.round(Number(commission.flatRateDollars) * 100)
               : 0;
           const flatRateCents = structure === "FLAT" ? Math.round(rawRateCents) : undefined;
+          // Chargeback reserve is set AT ONBOARDING alongside the rate. Absent =
+          // inherit the org default (which is what every rep got before this
+          // existed); an explicit null clears any override. Whole numbers only —
+          // a non-integer is dropped rather than rounded into someone's pay.
+          const reservePercent = commission.reservePercent === undefined ? undefined
+            : commission.reservePercent === null ? null
+            : Number.isInteger(commission.reservePercent) ? Number(commission.reservePercent) : undefined;
+          const reserveCapCents = commission.reserveCapCents === undefined ? undefined
+            : commission.reserveCapCents === null ? null
+            : Number.isInteger(commission.reserveCapCents) ? Number(commission.reserveCapCents) : undefined;
           commissionResult = commissionSvc.assignStructureToRep(tenantId, reviewer?.id ?? null, {
             repId: teamMemberId, structure, flatRateCents,
             commissionPlanVersionId: commission.commissionPlanVersionId ?? null,
             effectiveFrom: commission.effectiveFrom || undefined,
+            ...(reservePercent !== undefined ? { reservePercent } : {}),
+            ...(reserveCapCents !== undefined ? { reserveCapCents } : {}),
           });
         } else if (commission && tenantId == null) {
           commissionWarning = "Account created, but no organization is set on your login, so a commission plan could not be assigned.";
@@ -8608,15 +8627,33 @@ export function registerSaasRoutes(app: any) {
   // never touch commission/payroll. RBAC is strict and every read is tenant-
   // walled: a rep sees only their own feed, the team heat (the algorithm data) is
   // manager+, and money-state transitions (approve / paid) are admin-only + audited.
+  // The live award band, so the rep surface can say "$25–$50" (and list the
+  // exact ladder) without hardcoding numbers that could drift from the engine.
+  const spiffBand = () => {
+    const band = spiffAmountBand(DEFAULT_SPIFF_CONFIG);
+    return {
+      minCents: band.minCents,
+      maxCents: band.maxCents,
+      incrementCents: band.incrementCents,
+      ladderCents: spiffAmountLadder(DEFAULT_SPIFF_CONFIG),
+      triggers: spiffTriggerGuide(DEFAULT_SPIFF_CONFIG),
+    };
+  };
+  const emptyMine = () => ({
+    spiffs: [], heat: 0, snapshot: null,
+    totals: { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 },
+    band: spiffBand(),
+  });
+
   app.get("/api/spiffs/mine", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const tenantId = user?.tenantId;
-    if (tenantId == null) return res.json({ spiffs: [], heat: 0, snapshot: null, totals: { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 }, noTenant: true });
+    if (tenantId == null) return res.json({ ...emptyMine(), noTenant: true });
     const repId = user?.teamMemberId;
     // A user with no linked team member has no sales identity → empty feed, never
     // another rep's spiffs.
-    if (repId == null) return res.json({ spiffs: [], heat: 0, snapshot: null, totals: { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 } });
-    res.json(spiffStore.getRepSpiffs(tenantId, repId, Date.now()));
+    if (repId == null) return res.json(emptyMine());
+    res.json({ ...spiffStore.getRepSpiffs(tenantId, repId, Date.now()), band: spiffBand() });
   });
 
   app.get("/api/spiffs/team", requireManager, (req: Request, res: Response) => {
@@ -8634,14 +8671,64 @@ export function registerSaasRoutes(app: any) {
     res.json({ reps, pending });
   });
 
+  // A spiff transition is a MONEY transition, so every one of these is
+  // admin-only, tenant-walled (cross-tenant reads as 404, never 403), audited
+  // once per row that actually moved, and compare-and-swapped in the store so a
+  // retry or a second admin cannot pay the same spiff twice.
+  const spiffTenantOf = (req: Request, res: Response): number | null => {
+    const tenantId = Number((req as any).user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) { res.status(403).json({ error: "Organization required" }); return null; }
+    return tenantId;
+  };
+  const parseSpiffIds = (body: any): number[] =>
+    (Array.isArray(body?.ids) ? body.ids : []).map(Number).filter((n: number) => Number.isInteger(n) && n > 0);
+
+  // NOTE ON ORDER: the bulk routes are registered BEFORE the `:id` ones. Express
+  // matches in registration order, so `/api/spiffs/bulk/approve` would otherwise
+  // be swallowed by `/api/spiffs/:id/approve` with id = "bulk" (→ NaN → 404).
+
+  // Bulk approve — the "clear the queue" action. Per-row CAS in one transaction:
+  // rows someone else already moved come back as `skipped`, never re-approved,
+  // and only rows that actually changed are audited.
+  app.post("/api/spiffs/bulk/approve", requireAdmin, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = spiffTenantOf(req, res);
+    if (tenantId == null) return;
+    const ids = parseSpiffIds(req.body);
+    if (ids.length === 0) return res.status(400).json({ error: "ids must be a non-empty array of spiff ids" });
+    const result = spiffStore.approveSpiffs(tenantId, ids, user.id, Date.now(), user?.teamMemberId ?? null);
+    for (const s of result.changed) {
+      storage.logActivity(user.id, "spiff.approved", "spiff", s.id, { repId: s.repId, amountCents: s.amountCents, bulk: true }, req.ip, tenantId);
+    }
+    res.json(result);
+  });
+
+  // Bulk mark-paid — the settlement action. This is the exactly-once boundary:
+  // `paid` is terminal, and the per-row CAS makes a double submit a no-op rather
+  // than a second payment.
+  app.post("/api/spiffs/bulk/paid", requireAdmin, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = spiffTenantOf(req, res);
+    if (tenantId == null) return;
+    const ids = parseSpiffIds(req.body);
+    if (ids.length === 0) return res.status(400).json({ error: "ids must be a non-empty array of spiff ids" });
+    const result = spiffStore.markSpiffsPaid(tenantId, ids, Date.now());
+    for (const s of result.changed) {
+      storage.logActivity(user.id, "spiff.paid", "spiff", s.id, { repId: s.repId, amountCents: s.amountCents, bulk: true }, req.ip, tenantId);
+    }
+    res.json(result);
+  });
+
   app.post("/api/spiffs/:id/approve", requireAdmin, (req: Request, res: Response) => {
     const user = (req as any).user;
-    const tenantId = Number(user?.tenantId);
-    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    const tenantId = spiffTenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
-    const result = spiffStore.approveSpiff(tenantId, id, user.id, Date.now());
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: "Not found" });
+    const result = spiffStore.approveSpiff(tenantId, id, user.id, Date.now(), user?.teamMemberId ?? null);
     if (!result.ok) {
       if (result.reason === "not_found") return res.status(404).json({ error: "Not found" });
+      if (result.reason === "self_approval") return res.status(403).json({ error: "You cannot approve your own spiff." });
       return res.status(409).json({ error: `Cannot approve a spiff that is '${result.from}'` });
     }
     storage.logActivity(user.id, "spiff.approved", "spiff", id, { repId: result.spiff.repId, amountCents: result.spiff.amountCents }, req.ip, tenantId);
@@ -8650,9 +8737,10 @@ export function registerSaasRoutes(app: any) {
 
   app.post("/api/spiffs/:id/paid", requireAdmin, (req: Request, res: Response) => {
     const user = (req as any).user;
-    const tenantId = Number(user?.tenantId);
-    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    const tenantId = spiffTenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: "Not found" });
     const result = spiffStore.markSpiffPaid(tenantId, id, Date.now());
     if (!result.ok) {
       if (result.reason === "not_found") return res.status(404).json({ error: "Not found" });

@@ -4650,6 +4650,2393 @@ export const TRAINING_MODULES: TrainingModule[] = [
       },
     ],
   },
+  // ── M16 — The Knocker's Math ────────────────────────────────────────────────
+  {
+    id: "m16",
+    title: "The Knocker's Math",
+    tagline: "The personal funnel equation, the rookie ramp, and rejection as data.",
+    hook: "The door doesn't pay you. The math does. Fifty knocks is not a bad day — it's a data set.",
+    fieldStory:
+      "An HVAC knocker posts his eight-year ladder: 45k year one, six days a week, 11 a.m. to 8 p.m., rain, snow, heat. Year two, about 65k. Year three, 75 to 90k. Then year four jumps to 150-175k — \"i became good at filtering people and doors, not everyone's a deal\" — and years five through eight run 250-400k. The first three years he was paying for the skill that year four cashed in.",
+    sayThisNotThat: {
+      instead: "Nobody was buying today.",
+      say: "62 knocks, 19 conversations, 2 installs — my funnel held at 3%.",
+    },
+    lessons: [
+      {
+        id: "m16-equation",
+        title: "The only equation that pays you",
+        summary: "Knocks times conversations times close rate — manage inputs, never hope.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "The formula",
+            body: [
+              "Every dollar you will ever make in this job comes out of one equation: knocks times conversations times close rate equals installs. The reps who grow income fastest attack the input side of it — \"double your door count, keep the same close rate, and watch your income explode.\" The reason is structural: inputs are controllable, outputs are not. You cannot control whether door 41 buys. You can absolutely control whether you knock door 41. Manage knocks, not hope.",
+              "This is where the pacing work from Door Discipline gets its engine. m15 taught you to log the day honestly; this module teaches you what the log is for. Every number you write down tonight is a variable in the equation that pays you next month.",
+            ],
+          },
+          {
+            heading: "The field-verified funnel bands",
+            body: [
+              "Know the shape of a normal funnel before you judge your own. A trained rep's working baseline is roughly 50 to 70 knocks a day. About one worthwhile conversation comes out of every 3 to 5 knocks. An average rep turns roughly 2 to 3 percent of knocks into sales [VERIFY against your team's current funnel data]. In blitz conditions the door count climbs to 60 to 90 a day, and elite grinders claim 100 to 200 knocks and 5 to 10 sales a day — treat those elite numbers as the far edge, not the floor.",
+              "The spread matters. If your door count is fine but your conversations are dead, the problem is timing or turf, not hustle: \"If a rep is knocking 100 doors with a 10% contact rate, they don't need more hustle — they need better timing.\" The bands tell you which stage is sick before you burn a week treating the wrong one.",
+            ],
+          },
+          {
+            heading: "Work backwards from the income goal",
+            body: [
+              "Start at the paycheck and divide backwards. You want ten installs this week. Your close rate says that takes a set number of full conversations. The conversation ratio says how many knocks those conversations cost. Out comes your daily knock target — not a wish, a quotient. Every rep must be able to state their personal equation cold: X knocks produce Y conversations produce Z installs. If you can't say yours, you are hoping, and hope is not a funnel stage.",
+            ],
+          },
+          {
+            heading: "The 30-day rule",
+            body: [
+              "\"The prospecting you do in this 30-day period will pay off for the next 90 days. Miss a day of prospecting and it will tend to bite you sometime in the next 90 days.\" The fiber version: knocks today are installs 30 to 90 days from now — callbacks ripen, promo periods expire, contracts end, and the door you logged in March buys groceries in May. This is why a skipped Tuesday never shows up on Tuesday's scoreboard. It shows up six weeks later, wearing a disguise.",
+              "So the two professional rules. \"Amateurs wait until they feel like prospecting. Professionals prospect whether they feel like it or not.\" And: \"Elite salespeople, like elite athletes, track everything. You will never reach peak performance until you know your numbers.\"",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Knocks times conversations times close rate equals installs — inputs are controllable, outputs are not.",
+          "Working bands: 50-70 knocks a day trained baseline, one conversation per 3-5 knocks, 2-3% of knocks to sales for average reps [VERIFY].",
+          "State your personal equation cold: X knocks, Y conversations, Z installs.",
+          "Knocks today are installs 30-90 days from now — missed days bite late.",
+          "A dead stage is a timing or skill problem with an address; find it in the numbers, not in your feelings.",
+        ],
+        drillPrompt:
+          "For the next 7 knocking days, log four numbers per day: knocks, real conversations, installs, and minutes-to-recover after your worst door. On day 7, compute your personal equation (knocks to conversations to installs) and find your weakest stage. Bring the card to your 1:1 and name the one stage you are fixing this week — the conversion gap usually lives in a single funnel stage.",
+        quiz: [
+          {
+            question: "You want 8 installs this week, you close 1 in 4 full conversations, and 1 in 4 knocks becomes a real conversation. What is your weekly knock target?",
+            options: [
+              "32 knocks",
+              "64 knocks",
+              "128 knocks",
+              "8 knocks, one per install",
+            ],
+            answerIndex: 2,
+            explanation: "Work backwards: 8 installs need 32 conversations, and 32 conversations need 128 knocks. The income goal becomes a daily input target.",
+          },
+          {
+            question: "A rep knocks 100 doors a day with a 10% contact rate. What is the most likely fix?",
+            options: [
+              "More hustle — knock 150 doors",
+              "Better timing or turf — the door count is fine, the contact stage is sick",
+              "A louder opener",
+              "Lower close targets",
+            ],
+            answerIndex: 1,
+            explanation: "The funnel bands isolate the stage: volume is high, contact is dead. Treating a timing problem with more volume burns the rep and the turf.",
+          },
+          {
+            question: "What does the 30-day rule predict about skipping a slow Tuesday?",
+            options: [
+              "Nothing — one day is noise",
+              "The cost lands immediately, on Tuesday's numbers",
+              "The cost lands 30 to 90 days later, when today's knocks would have ripened into installs",
+              "It only matters in blitz weeks",
+            ],
+            answerIndex: 2,
+            explanation: "Prospecting pays forward. The skipped day is invisible now and shows up later as a mysteriously thin month.",
+          },
+        ],
+      },
+      {
+        id: "m16-rookie-ramp",
+        title: "The rookie ramp: what the first 90 days actually look like",
+        summary: "First sale in days, comfort in months, real money when the filtering skill lands.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "First sale fast, comfort slow",
+            body: [
+              "The first sale typically lands inside two to four full-effort knocking days. One rep's post says it in all caps: \"I GOT MY FIRST EVER SALE TODAY DOOR KNOCKING TOO. TOOK ME ABOUT 4 days of knocking.\" That early win is real and you should expect it — but do not confuse it with arrival. Comfort takes much longer: \"Don't expect excellence out of the gate. It took me a year to feel comfortable and confident.\"",
+              "Hold both truths at once. If you are on day three with no sale, you are normal — keep knocking. If you are on month three and still feel clumsy at the door, you are also normal — comfort is a year-long build, not a weekend course.",
+            ],
+          },
+          {
+            heading: "The income ladder is a skill ladder",
+            body: [
+              "The eight-year field report is the cleanest income map in this business: \"first year 45k… Year 2 approx 65k… Year 3 75-90k… Year 4 150-175k, i became good at filtering people and doors, not everyone's a deal. Year 5-8 was 250-400k.\" Read the jump carefully. Nothing about year four involved knocking more hours — the hours were constant from year one. The jump is a skill jump: learning which doors deserve your minutes. \"Not everyone's a deal\" is the whole lesson in five words.",
+            ],
+          },
+          {
+            heading: "Structured ramps beat sink-or-swim",
+            body: [
+              "The four-week progression that keeps rookies alive: fundamentals first, then shadow-selling beside a veteran, then supervised selling with a coach watching, then independent knocking with daily check-ins. The ramp scoreboard climbs in stages — 20 doors a day at 1 percent, then 50 a day at 2 percent, then 70-plus a day at 3 percent or better. You are not behind when week one looks small. You are on step one of a four-step staircase.",
+              "Why the structure matters so much: \"Speed to sale, speed to pay, speed to integrate. Miss any one and the new hire ghosts you before day 30.\" Time-to-first-funded-deal is the number one retention predictor in door-to-door, and most quitting concentrates in weeks three through eight. If you are in that window right now and wobbling, you are standing in the statistically normal danger zone — the move is to tell your lead today, not to disappear Friday.",
+            ],
+          },
+          {
+            heading: "When it's not working",
+            body: [
+              "Slow turf happens to everyone. The professional response has a rule: \"If a turf is slow, you work your plan (new opener, new pattern, new talk-track), not your complaints.\" Change one variable at a time so you know what worked. And permit yourself imperfection while you learn: \"Messy success is far better than perfect mediocrity.\" A clumsy pitch delivered to sixty doors beats a polished pitch delivered to twelve.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Expect a first sale inside 2-4 full-effort days — and expect real comfort to take closer to a year.",
+          "The income ladder jumps when filtering skill lands, not when hours increase: \"not everyone's a deal.\"",
+          "The ramp: fundamentals, shadow, supervised, independent with daily check-ins — 20/day at 1% up to 70+/day at 3%+.",
+          "Weeks 3-8 are the quitting window; if you are wobbling there, tell your lead today.",
+          "Slow turf gets a new plan, not a complaint — change one variable at a time.",
+        ],
+        drillPrompt:
+          "Write your own ramp card tonight: where you are on the four-week progression, your current doors-per-day and close rate, and the one variable you will change if this week stays slow. Compare it to the scoreboard stages (20 at 1%, 50 at 2%, 70+ at 3%+) and bring the gap — not the mood — to your next check-in.",
+        quiz: [
+          {
+            question: "What does the eight-year income ladder attribute the year-four jump to?",
+            options: [
+              "Working seven days a week instead of six",
+              "Better luck with territories",
+              "Learning to filter people and doors — a skill jump, not a hustle jump",
+              "A pay-plan change",
+            ],
+            answerIndex: 2,
+            explanation: "\"I became good at filtering people and doors, not everyone's a deal.\" The hours were constant; the qualification skill is what moved.",
+          },
+          {
+            question: "A rookie on day three has no sale yet. The field data says they are…",
+            options: [
+              "Statistically behind",
+              "Normal — first sales typically land inside 2-4 full-effort days",
+              "Ready for a new opener",
+              "Better off switching to evenings only",
+            ],
+            answerIndex: 1,
+            explanation: "Two to four full-effort days is the typical first-sale window. Day three with no sale is inside the band, not outside it.",
+          },
+          {
+            question: "When is door-to-door turnover most concentrated, and what does that mean for you?",
+            options: [
+              "Week one — push through orientation",
+              "Weeks 3-8 — if you are wobbling then, you are in the normal danger zone and should loop in your lead",
+              "Month six — ask for a raise",
+              "It is evenly spread",
+            ],
+            answerIndex: 1,
+            explanation: "Time-to-first-funded-deal is the top retention predictor, and quitting concentrates in weeks 3-8. Naming the window makes it survivable.",
+          },
+        ],
+      },
+      {
+        id: "m16-rejection-data",
+        title: "Rejection is data, not verdict",
+        summary: "Why the no's are the job, the fear is the brake, and bounce-back is a measurable skill.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The doctrine",
+            body: [
+              "Three independent research facets land on the same sentence in different words. From the field: \"Most people say no. Only a small percentage say yes. That's why it's hard. That's why it pays well.\" From the trainers: \"Rejection is data, not personal. Reps who take 'no' emotionally are gone in 90 days.\" From the canon: \"Some will; some won't; so what? Next!\" And the addendum that makes callbacks possible: \"No doesn't mean never; it means not yet.\"",
+              "Notice what the doctrine does not say. It does not say the no feels good. It says the no is information — about the door, the hour, the opener — and information has cash value even when it stings. \"Each 'no' gets you closer to your next 'yes'.\"",
+            ],
+          },
+          {
+            heading: "No-goals and the fifth ask",
+            body: [
+              "Sales folklore holds that most customers say no several times before yes and that most reps quit long before the fifth ask — teach that as direction, not as a measurement; the specific percentages are canon folklore, not verified fiber data. The usable version: set targets for no's collected, not just yeses. A rep hunting thirty no's cannot be crushed by the twelfth, because the twelfth was on the shopping list.",
+              "The consent boundary from m15 still governs everything: persistence lives inside a welcome conversation. Three genuine no's, a request to leave, a posted sign, or the clock ends the door — \"next\" is always part of the chant.",
+            ],
+          },
+          {
+            heading: "The fear is the brake, not the rejection",
+            body: [
+              "Study after study lands on the same mechanic: it is the fear of rejection, not rejection itself, that throttles a rep — the average salesperson spends only about ninety minutes a day actually face-to-face with prospects. The rest is steering around the fear: long lunches, map fiddling, one more coffee. The cure is volume delivered fast: \"run up to that first door before you overthink it.\" Motion kills the dread that planning feeds.",
+              "Make bounce-back time a tracked skill. The walk from a bad door to the next porch is where careers are decided — exhaled and reset in ten seconds, or marinated in for ten minutes. And learn the walk-away win: \"If you know the person is going to say 'no', beat them to the punch and walk away. In your head, you won!\"",
+            ],
+          },
+          {
+            heading: "The three controllables",
+            body: [
+              "\"In sales, there are only three things you can control: your Actions, your Reactions, your Mindset.\" Weather, turf, the homeowner's argument with their spouse an hour before you knocked — none of it is yours. Your actions (the knock), your reactions (the ten-second reset), and your mindset (rejection as data) are the entire control panel. \"Don't worry about the door slams, there are people out there who buy.\"",
+              "Zoom out to the season: \"Consistency beats intensity over a long enough time horizon… you'll pass 95% of the people who started with more raw talent than you.\" The rep who logs fifty doors every day in every mood beats the sprinter who logs a hundred on good days and zero on bad ones.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "\"Most people say no… That's why it's hard. That's why it pays well.\"",
+          "Rejection is data about the door, the hour, or the opener — never a verdict on you.",
+          "Set no-goals alongside yes-goals; treat the five-asks folklore as direction, not measurement [VERIFY].",
+          "Fear of rejection, not rejection, is the brake — beat it with fast volume, and track bounce-back time between doors.",
+          "Control only actions, reactions, and mindset; consistency out-earns intensity across a season.",
+        ],
+        drillPrompt:
+          "Tomorrow, set a no-goal: 25 collected no's before you leave the turf. After your single worst door of the day, time your bounce-back — seconds from that porch to a fully reset knock on the next one. Log both numbers. On Friday, tell your lead your fastest and slowest recovery and what you did differently.",
+        quiz: [
+          {
+            question: "According to the module, what actually limits most reps' production?",
+            options: [
+              "The rejection itself",
+              "The fear of rejection — the average salesperson averages only about ninety minutes a day face-to-face",
+              "Bad territories",
+              "Weak closing lines",
+            ],
+            answerIndex: 1,
+            explanation: "Rejection is over in seconds; the avoidance of it consumes hours. The cure is fast volume — \"run up to that first door before you overthink it.\"",
+          },
+          {
+            question: "What is the correct way to use the \"customers say no four times\" claim?",
+            options: [
+              "Quote the exact percentages to homeowners",
+              "Track your team against the exact 60/92 figures",
+              "Teach it as direction — keep asking within consent — because the specific numbers are unverified folklore",
+              "Ignore it entirely",
+            ],
+            answerIndex: 2,
+            explanation: "The pattern is real, the precise stats are folklore. Use it to justify no-goals and bounded persistence, never as a measured fact.",
+          },
+          {
+            question: "What are the three controllables?",
+            options: [
+              "Turf, timing, and talk-track",
+              "Price, product, and promotion",
+              "Actions, reactions, and mindset",
+              "Opener, pitch, and close",
+            ],
+            answerIndex: 2,
+            explanation: "Everything else — weather, mood, turf — is off your panel. Actions, reactions, and mindset are the whole control set.",
+          },
+        ],
+      },
+      {
+        id: "m16-at-bats",
+        title: "At-bats: the filtering identity",
+        summary: "Low pressure, high volume, hard filtering — the identity of the reps who eat.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Create at-bats, don't force closes",
+            body: [
+              "The top-earner pattern across every facet is the same three-legged stool: low pressure, high volume, strong filtering. A 490k-a-year rep describes it exactly: \"The biggest mistake is in trying to close everyone… I don't close hard sales, I create hundreds of easy ones… I just create more at bats.\" The baseball metaphor is the identity. You are not trying to hit a home run on every pitch. You are trying to get to the plate more times than anyone else, with the discipline to lay off bad pitches.",
+              "Here is the anti-pressure opener that rep actually runs, in full: \"You're not signing up for anything today. In a week or so you can, but I'm not gonna twist your arm. You'll either like it and do it or you won't.\" It works precisely because it lowers the shield — and because the rep has enough at-bats scheduled that this one door never has to convert.",
+            ],
+          },
+          {
+            heading: "Filtering is where the money lives",
+            body: [
+              "Filtering means spending your golden-window minutes on the doors that can actually say yes. Pre-qualify the map before you burn the gas: which streets are serviceable, which blocks are DSL conversions waiting to happen (the easiest wins in fiber), which are renters who need the quick service-choice version rather than the homeowner pitch. Stay in your lane — the year-four income jump from lesson two was a filtering jump, not a charisma jump.",
+              "Filtering is not skipping. Every door still gets a professional knock and an accurate disposition. You are deciding where the deep conversation goes, not where the manners go.",
+            ],
+          },
+          {
+            heading: "Hunter inside, helper outside",
+            body: [
+              "The internal fire has a name in the canon: \"The reps who eat are the reps who hunt.\" Keep that identity — for yourself. Externally, at the door, the posture stays neighbor-helper: you are the person with useful news about their street, not a predator who scented commission. The internal hunter keeps you on the turf at 7:45 p.m.; the external helper keeps the neighborhood glad you came. Both, in that order.",
+              "The floor under all of it is belief: \"Don't sell shit you can't get behind or believe in.\" Fiber is easy to believe in when you quote it honestly — symmetrical speeds, no caps, a real install window. If a claim ever needs you to stop believing in the product to say it, the claim is wrong, not the product.",
+            ],
+          },
+          {
+            heading: "One more door",
+            body: [
+              "\"The enduring mantra of the fanatical prospector is: One more call.\" Translate it: one more door. Not ten more, not an extra hour — one more door after the one where you wanted to stop. The mantra works because it is small enough to obey and large enough to compound. And keep the temperature of the work where it belongs: \"If we're not having fun, we're doing something wrong.\" Fun here means loose shoulders and a real smile at the door — the version of you that homeowners actually talk to.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "\"I don't close hard sales, I create hundreds of easy ones… I just create more at bats.\"",
+          "The anti-pressure opener converts because volume removes the neediness: \"I'm not gonna twist your arm.\"",
+          "Filtering aims golden-window minutes at serviceable, winnable doors — it decides where depth goes, never where manners go.",
+          "Hunter identity internally, neighbor-helper posture externally — in that order.",
+          "One more door is the mantra; fun is the diagnostic.",
+        ],
+        drillPrompt:
+          "Run the anti-pressure opener verbatim on your next 10 doors — \"You're not signing up for anything today…\" — and log what it does to the first thirty seconds of each conversation. Then practice one more door: when you hit your planned stop time for one shift this week, knock exactly one more door at full professionalism and write down what happened.",
+        quiz: [
+          {
+            question: "What is the actual mechanism behind the \"I'm not gonna twist your arm\" opener?",
+            options: [
+              "It tricks homeowners into signing",
+              "Low pressure lowers the shield, and high volume means no single door has to convert",
+              "It legally binds the homeowner to a callback",
+              "It saves the rep time on paperwork",
+            ],
+            answerIndex: 1,
+            explanation: "De-pressurizing works because the rep genuinely has more at-bats scheduled — the calm is real, and the door can feel it.",
+          },
+          {
+            question: "What did the year-four income jump in the field report come from?",
+            options: [
+              "Harder closes",
+              "Longer hours",
+              "Filtering — spending prime minutes on doors that can say yes",
+              "A better zip code",
+            ],
+            answerIndex: 2,
+            explanation: "\"I became good at filtering people and doors, not everyone's a deal.\" Qualification skill, not charisma or volume, moved the number.",
+          },
+          {
+            question: "How do the hunter and helper identities coexist?",
+            options: [
+              "Hunter at the door, helper in the truck",
+              "Hunter internally to drive volume, helper externally at the door",
+              "Alternate by neighborhood",
+              "Drop the hunter identity entirely",
+            ],
+            answerIndex: 1,
+            explanation: "The internal hunter keeps you hunting at-bats; the external helper keeps the porch relaxed. Internal fire, external service.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M17 — The Buildout Window ───────────────────────────────────────────────
+  {
+    id: "m17",
+    title: "The Buildout Window",
+    tagline: "Deployment stages, the 2-4 week window, install clusters, and the team blitz.",
+    hook: "In fiber, the calendar is the closer. The same pitch on the same porch is worth three times as much in week one of a buildout as in month six.",
+    fieldStory:
+      "A municipal fiber crew signed 30 percent of a town before the fiber was even in the ground — three pre-build marketing touches and an interest list. Then they sent knockers out in front of the plow crews, while the machines were visibly trenching, and took another 15 percent. The trucks were the marketing; the knocks just collected.",
+    sayThisNotThat: {
+      instead: "I'll swing through that neighborhood sometime.",
+      say: "Oak Street lights Tuesday — first pass by Friday, cluster around every install, second pass in fourteen days.",
+    },
+    lessons: [
+      {
+        id: "m17-deployment-stages",
+        title: "Know which stage you're standing in",
+        summary: "Greenfield, pre-registration, overbuild, and MDU are four different conversations.",
+        minutes: 6,
+        pitchDrill:
+          "Hey, how's it going? We just finished running fiber to your street — you're one of the first homes that can get it. Are you currently with your cable provider?",
+        sections: [
+          {
+            heading: "The strategic frame",
+            body: [
+              "\"Fiber D2D is not generic sales — it is deployment-tied. You cannot sell where fiber has not been built, and the pitch, urgency, and objection set change completely depending on which stage of the buildout you are standing in… Treating them the same way is the most common mistake teams make.\" Before you plan a single knock, name the stage of the turf. The stage chooses the script, the urgency, and the objections you will meet.",
+            ],
+          },
+          {
+            heading: "The four deployment contexts",
+            body: [
+              "Greenfield (newly lit) is the novelty-and-upgrade play: \"Hey, how's it going? We just finished running fiber to your street — you're one of the first homes that can get it. Are you currently with [cable provider]?\" The news does the work; m11's fresh-fiber pitch lives here.",
+              "Soft-launch / pre-registration is the interest-list play with honest timelines: \"We're planning to bring fiber to this area, and the number of homes that pre-register helps us prioritize which streets get built first. Can I get you on the interest list — no cost, no commitment?\" The warning that travels with it: \"overpromising an install date here damages trust before the network even exists.\"",
+              "Competitive overbuild is the comparison play: \"Homeowners are less novelty-driven and more comparison-driven… Lead with a direct, specific price-for-speed comparison.\" m18's Spectrum deep-dive is your ammunition here. MDU is property-manager-first: \"Fiber to multi-unit buildings requires clearing the property manager or HOA before any door gets knocked\" — one townhome sat 30 feet from a fiber box and still could not get service until the building-wide access was signed.",
+            ],
+          },
+          {
+            heading: "Mapping it to NC/SC",
+            body: [
+              "Kinetic greenfield turf tracks the grant-funded builds — the Cabarrus and Stanly county CAB areas and the new community lighting announcements [VERIFY against ops' current buildout calendar before you plan a campaign]. The overbuild battlegrounds are the Charlotte-metro suburbs where Spectrum, AT&T Fiber, and Lumos already fight for the porch [VERIFY which competitor serves each zone]. The stage map changes quarterly; a street that was pre-registration in spring can be greenfield by fall.",
+            ],
+          },
+          {
+            heading: "Step zero, every stage, every knock",
+            body: [
+              "Before the pitch, before the walk up, before the flyer prints: verify serviceability at the address. Pitching an unserviceable address is the fastest brand-burn in telecom — homeowners mock it publicly, by name. The app check takes seconds; the mockery lives on the neighborhood group forever. No serviceability check, no knock.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Fiber D2D is deployment-tied: name the stage before you plan the knock.",
+          "Greenfield = novelty/upgrade; pre-registration = interest list with honest timelines; overbuild = comparison; MDU = property manager first.",
+          "Never promise install dates before the network exists — that debt comes due.",
+          "Check the buildout calendar quarterly; stages migrate [VERIFY].",
+          "Step zero of every knock is an address-level serviceability check.",
+        ],
+        drillPrompt:
+          "Pull your current turf list and label every zone with its deployment stage: greenfield, pre-registration, overbuild, or MDU. For each zone, write the one-line opener that matches its stage. Bring the map to the huddle and present one zone in 60 seconds — stage, opener, and the objection set you expect there.",
+        quiz: [
+          {
+            question: "What is the correct play in a soft-launch / pre-registration area?",
+            options: [
+              "Quote install dates to build urgency",
+              "Build the interest list with honest timelines — overpromising dates here damages trust before the network exists",
+              "Skip the area until it is lit",
+              "Lead with a price comparison against cable",
+            ],
+            answerIndex: 1,
+            explanation: "\"Can I get you on the interest list — no cost, no commitment?\" The list itself helps prioritize the build; fake dates poison a territory that will be prime turf later.",
+          },
+          {
+            question: "A townhome has a fiber box 30 feet away but can't get service. Why?",
+            options: [
+              "The box is decorative",
+              "MDU service requires building-wide access — clear the property manager or HOA before any unit gets pitched",
+              "The homeowner filled out the wrong form",
+              "The unit is too far from the street",
+            ],
+            answerIndex: 1,
+            explanation: "Multi-unit buildings are property-manager-first. Unit-by-unit pitching in an MDU wastes the rep and angers the manager who controls the whole building.",
+          },
+          {
+            question: "What comes before the pitch at every address, in every stage?",
+            options: [
+              "The flyer drop",
+              "The four-beat opener",
+              "An address-level serviceability check — no check, no knock",
+              "A look at the neighbor's install",
+            ],
+            answerIndex: 2,
+            explanation: "Pitching unserviceable addresses is the fastest brand-burn in telecom. Seconds in the app, or permanent mockery in the neighborhood group.",
+          },
+        ],
+      },
+      {
+        id: "m17-window",
+        title: "The two-to-four-week window",
+        summary: "Why the first weeks after lighting convert hardest — and how to ride the notification wave.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Why the window converts",
+            body: [
+              "\"The homeowner has seen the construction and is curious, [the ISP] is running promotional pricing, the competition has not yet responded with retention offers, and there is a neighborhood momentum effect where early adopters talk to their neighbors.\" Four conversion forces peak at once — and all four decay. \"The awareness is high because they have seen the construction trucks and orange conduit being laid for weeks.\"",
+              "The deepest of the four is risk perception: \"When a homeowner sees a fiber installation truck parked three doors down, their perceived risk of switching providers drops… Your job is to step into that psychological gap.\" The truck is proof the switch works. Six months later the proof is gone and you are selling from scratch.",
+            ],
+          },
+          {
+            heading: "The benchmark bands",
+            body: [
+              "Planning bands for a fresh buildout [VERIFY — vendor-sourced, treat as planning targets, not promises]: a first pass converts roughly 15 to 25 percent of homes knocked; a disciplined second pass adds 5 to 10; a well-executed team campaign lands a 20 to 30 percent take rate across the neighborhood; mature areas settle to 5 to 10. If your campaign is running at mature-area numbers on fresh turf, the campaign — not the neighborhood — is the problem.",
+            ],
+          },
+          {
+            heading: "Knock in front of the plows",
+            body: [
+              "The municipal case that proves the tactic: three pre-build marketing touches got \"30 percent had signed up before we put fiber in the ground\"; then \"we went around and knocked on every door… in front of the plow crews and we got another 15 percent.\" One town, one case — teach the tactic, not the exact points. The tactic: knock while the crews are visibly working. Construction is theater, and the theater sells.",
+            ],
+          },
+          {
+            heading: "Ride the notification wave",
+            body: [
+              "The big fiber builders all announce themselves. Metronet mails homeowners at least 30 days before crews arrive and plants yard signs and door hangers. Ziply sends ambassadors door-to-door in the days before construction. Lumos synchronizes mailers during construction in the Carolinas. Calendar your knocks to land after the mailer and with the trucks — the homeowner has been pre-warmed by the company's own marketing, and your knock is the easy final step.",
+              "Plan capacity honestly: a blitz day produces roughly 3 to 6 signups per rep [VERIFY]. Treat any certification-course claim of 10 to 13 deals a day as marketing, and staff your campaign around the real band.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Curiosity, promos, un-answered competition, and neighbor momentum all peak in weeks 1-4 — then decay.",
+          "The install truck three doors down drops the perceived risk of switching; step into that gap.",
+          "Bands [VERIFY]: first pass 15-25%, second pass +5-10%, team campaign 20-30%, mature turf 5-10%.",
+          "Knock in front of the plow crews — visible construction is the cheapest marketing you will ever get.",
+          "Land knocks after the ISP's mailer, with the trucks; plan capacity at 3-6 signups per rep per blitz day [VERIFY].",
+        ],
+        drillPrompt:
+          "Pick one zone from ops' current buildout calendar [VERIFY]. Build a one-page campaign plan: deployment stage, the pre-notification wave to ride, first-pass dates inside the 2-4 week window, your 3-day cluster targets around any scheduled installs, the second-pass date, and the disposition habit that keeps pass two off signed doors. Present it in the huddle in 90 seconds.",
+        quiz: [
+          {
+            question: "Which force does the parked installation truck primarily create?",
+            options: [
+              "Price pressure",
+              "A drop in the perceived risk of switching — visible proof the switch works",
+              "Fear of missing a contract",
+              "Curiosity about the crew's equipment",
+            ],
+            answerIndex: 1,
+            explanation: "\"When a homeowner sees a fiber installation truck parked three doors down, their perceived risk of switching providers drops.\" The truck is proof; step into the gap.",
+          },
+          {
+            question: "Your campaign on freshly lit turf is converting at mature-area rates (5-10%). What does the window model say?",
+            options: [
+              "The neighborhood is a dud — move on",
+              "The campaign is the problem — fresh turf should run 15-25% on the first pass [VERIFY]",
+              "Wait two months for awareness to build",
+              "Cut the take-rate targets in half",
+            ],
+            answerIndex: 1,
+            explanation: "The bands exist to diagnose. Fresh turf converting at mature rates means the passes, timing, or staffing are broken — not the doors.",
+          },
+          {
+            question: "What is the lesson of the municipal 30% pre-sign case?",
+            options: [
+              "Promise 30% pre-signups on every build",
+              "The exact percentages will repeat on Kinetic turf",
+              "Knock while the crews are visibly working — construction itself is the marketing",
+              "Skip knocking until the build is complete",
+            ],
+            answerIndex: 2,
+            explanation: "One municipal case, teach the tactic not the points: pre-build touches fill the list, and knocking in front of the plows collects the rest.",
+          },
+        ],
+      },
+      {
+        id: "m17-cluster-blitz",
+        title: "The 3-day cluster and the team blitz",
+        summary: "Every install becomes a three-day street event; every blitz is zones, density, and live intel.",
+        minutes: 6,
+        pitchDrill:
+          "Hey, we are about to install the new fiber lines at your neighbor's place. I just wanted to see if you had any questions about the service while we are actually on this street.",
+        sections: [
+          {
+            heading: "The 3-day cluster, verbatim",
+            body: [
+              "Every scheduled install is an anchor for a three-day event on its street. Day one, the anchor knock: \"Hey, we are about to install the new fiber lines at your neighbor's place. I just wanted to see if you had any questions about the service while we are actually on this street.\"",
+              "Day two, expand: \"Hey, we finished up with the Garcia house yesterday. The Martins are getting set up this afternoon. I wanted to make sure you didn't miss out on this window while the crews are still working in this area.\" Day three, close the street: \"So, we just finished about six houses on the street. You are actually one of the last ones I haven't spoken to yet.\"",
+            ],
+          },
+          {
+            heading: "The honesty guardrail (mandatory)",
+            body: [
+              "The day-three scarcity line is only honest if it is literally true. \"The difference between sleazy scarcity and effective scarcity is whether the constraint is real.\" If six houses are not finished, do not say six. If you are not down to unspoken-to homes, do not say so. The legitimate version is a verifiable constraint: \"We have three open install slots this month for your neighborhood because our crew is already here… Once those fill up, the next availability is six weeks out\" — said only when the schedule actually shows it. m22 makes this a compliance rule; here it is enough that fake scarcity also does not work twice on the same street.",
+            ],
+          },
+          {
+            heading: "Team blitz mechanics",
+            body: [
+              "A blitz is not five reps wandering the same subdivision. Divide the neighborhood into zero-overlap zones so no homeowner gets double-knocked. Put 3 to 5 reps in the same neighborhood on the same day so \"homeowners see your team… and perceive it as an event rather than a random solicitation.\" Track take rates by zone in real time, and share intelligence instantly — the street that is all rentals, the hostile HOA president on the corner lot, the competitor's tech who was just there. Then send the strongest closers on the second pass, where the warm maybes live.",
+              "Run the verify-measure-manage loop around it: confirm reps are working the assigned zones and hitting contact-rate targets, with territory boundaries drawn around the buildout footprint and assignments pushed to phones. After every install, stack the neighborhood: knock the five closest doors — left, right, and across the street first, the cloverleaf pattern — while the truck is still warming the block.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Every install anchors a 3-day cluster: anchor knock, expand with named neighbors, close the street.",
+          "Scarcity lines are only honest when literally true — \"whether the constraint is real\" is the whole test.",
+          "Blitz = zero-overlap zones, 3-5 reps visible same day, live intel sharing, take rates by zone.",
+          "Strongest closers take the second pass.",
+          "After every install, knock the five closest doors — cloverleaf left, right, across.",
+        ],
+        drillPrompt:
+          "At your next scheduled install, run the full 3-day cluster on the ten closest doors: day-one anchor script, day-two named-neighbor expansion, day-three street close — every line literally true. Log disposition per door per day, and report at the huddle how many cluster doors converted versus your solo-knock baseline.",
+        quiz: [
+          {
+            question: "When may you say \"you are actually one of the last ones I haven't spoken to yet\"?",
+            options: [
+              "Whenever the door feels cold",
+              "Only on day three of any cluster",
+              "Only when it is literally true — the constraint must be real",
+              "Never — scarcity is banned",
+            ],
+            answerIndex: 2,
+            explanation: "\"The difference between sleazy scarcity and effective scarcity is whether the constraint is real.\" True scarcity closes; fake scarcity is a compliance violation that also burns the street.",
+          },
+          {
+            question: "Why put 3-5 reps in one neighborhood on the same day instead of spreading them out?",
+            options: [
+              "Easier carpooling",
+              "Homeowners perceive an event rather than a random solicitation",
+              "It halves the territory",
+              "Managers can watch from one car",
+            ],
+            answerIndex: 1,
+            explanation: "Visible density changes the psychology: the team looks like the neighborhood's next thing, not another lone solicitor.",
+          },
+          {
+            question: "Who should work the second pass of a blitz?",
+            options: [
+              "The newest reps, for practice",
+              "Whoever is closest",
+              "The strongest closers — the second pass holds the warm maybes",
+              "Nobody; second passes are optional",
+            ],
+            answerIndex: 2,
+            explanation: "Second-pass doors are pre-warmed. Putting your best closers there is where the +5-10% [VERIFY] comes from.",
+          },
+        ],
+      },
+      {
+        id: "m17-second-passes",
+        title: "Second passes: maybes and not-homes, never re-knocks",
+        summary: "Concentric circles, the yo-yo return, and the flyer loop — pass two hunts warm doors only.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The discipline",
+            body: [
+              "\"Work in concentric circles outward from the build's center, and track every knock so second and third passes target maybes and not-homes instead of re-knocking signed accounts.\" Three canvass passes reach about 90 percent of homes — but only if the passes are aimed. A second pass that re-knocks signed customers and hard no's is not a pass; it is a complaint generator. The disposition log from m15 is what makes aiming possible: pass two exists to hunt maybes and not-homes, and nothing else.",
+            ],
+          },
+          {
+            heading: "The yo-yo approach",
+            body: [
+              "Mid-day, skip the houses with no signs of life and keep moving. Then, \"as most people return home from work at 5 pm, circle back around to the houses that were previously vacant… Most reps usually skip going back to missed houses.\" That skip is your edge. The not-home door is the highest-value door in the log — it was never a no, it was a scheduling problem, and scheduling problems are solvable.",
+            ],
+          },
+          {
+            heading: "The flyer-and-reknock loop",
+            body: [
+              "Knock 25 to 30 houses, leave a flyer at each not-home, take a break, then return. A missing flyer means someone is home now — the flyer is your motion sensor. Morning flyers become the next day's evening reknock list. And when the homeowner mentions it, \"Let the customer make the connection that they saw your flyer\" — the flyer did the introduction before you arrived.",
+              "Keep the hierarchy straight: \"Leaving a flyer on a door is advertising, not sales.\" The flyer exists to set up the reknock, never to replace it. Flyers alone convert at under one percent; the return visit is the sales act.",
+            ],
+          },
+          {
+            heading: "Timing hygiene on campaign days",
+            body: [
+              "Campaign adrenaline is when hours violations happen. The contact peaks are weekday evenings and Saturday late morning — but the hard stop is 8:30 to 9 p.m., and never after dark in winter. A blitz that violates hours is a compliance event, not a sales event: one 9:20 p.m. knock in a fiber market produced a viral thread and a police report. Plan the blitz to end in daylight, and staff the second pass with your strongest closers — that is where the extra 5 to 10 points [VERIFY] come from.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Passes two and three target maybes and not-homes only — re-knocking signed doors is a complaint generator.",
+          "Three passes reach ~90% of homes, but only when the disposition log aims them.",
+          "Yo-yo back at 5 p.m. to the houses that were vacant mid-day — most reps never do.",
+          "Flyers are motion sensors for the reknock, not a sales channel: \"advertising, not sales.\"",
+          "Hard stop 8:30-9 p.m., never after dark in winter — an after-hours blitz is a compliance event.",
+        ],
+        drillPrompt:
+          "On your next full turf day, run the flyer loop exactly: 25-30 doors with flyers at not-homes, a break, then reknock every door whose flyer is gone. Log the conversion difference between first-touch doors and flyer-loop returns, and bring the two numbers to your 1:1.",
+        quiz: [
+          {
+            question: "What is the correct target list for a second pass?",
+            options: [
+              "Every door on the street, in order",
+              "Maybes and not-homes — never signed accounts or hard no's",
+              "Only the biggest houses",
+              "Doors that complained",
+            ],
+            answerIndex: 1,
+            explanation: "The disposition log exists to aim pass two at warm and unreached doors. Re-knocking signed or refused doors burns the brand.",
+          },
+          {
+            question: "A flyer you left at 11 a.m. is gone when you return at 5. What does that tell you?",
+            options: [
+              "The wind took it",
+              "Someone is home now — the flyer is a motion sensor, reknock that door",
+              "The homeowner is uninterested",
+              "The competitor was there",
+            ],
+            answerIndex: 1,
+            explanation: "A missing flyer means the door opened. The loop turns a not-home into a live conversation the same day.",
+          },
+          {
+            question: "Why does the module call an after-hours blitz a compliance event rather than a sales event?",
+            options: [
+              "Sales don't count after 8 p.m.",
+              "Hours violations produce complaints, viral threads, and police reports — the brand damage exceeds any sale",
+              "Homeowners can't sign after dark",
+              "The app stops working at 9 p.m.",
+            ],
+            answerIndex: 1,
+            explanation: "Hard stop 8:30-9 p.m., never after dark in winter. One late knock can undo a whole campaign's goodwill.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M18 — Advanced Objection Mastery ────────────────────────────────────────
+  {
+    id: "m18",
+    title: "Advanced Objection Mastery",
+    tagline: "The triage between objection and indecision, and the deep-dives m12 never touched.",
+    hook: "m12 taught you to survive objections. This module teaches you to read them — because 'let me think about it' is a different disease than 'it's too expensive,' and the cure for one poisons the other.",
+    fieldStory:
+      "A woman warns a solar rep that nobody in the neighborhood is interested — then, mid-warning, mentions her own house has solar. \"That's your house? How's your trueup?\" She says 1500 dollars a year. He closed her fifteen minutes later. The hostile objection was not a wall; it was the door to the real conversation.",
+    sayThisNotThat: {
+      instead: "Oh, you need to talk to your spouse…",
+      say: "If your spouse loves the idea, are you 100% on board, or do you still have reservations?",
+    },
+    lessons: [
+      {
+        id: "m18-triage",
+        title: "Objection or indecision? The triage that changes everything",
+        summary: "Named concerns get rebuttals; unnamed stalls get JOLT. Mix them up and you lose both.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "One skeleton, many names",
+            body: [
+              "Every serious objection framework is the same skeleton wearing different initials. LAARC: Listen, Acknowledge, Assess, Respond, Confirm. Taggart: Validate, Isolate, Pivot. SPOTIO: Acknowledge, Clarify, Address, Confirm. The field shorthand: \"agree, validate, pivot to a question that uncovers the truth.\" GhostRep's version: \"Never argue — acknowledge first, then redirect.\" Learn one cold, and you know them all — m12 was your level-one reflex training; this is the graduate course.",
+              "Three rules sit above every rebuttal. One: never repeat the objection back as a statement — \"Don't make it a real thing. At this point, it's just a smoke screen.\" Two: \"It's a reflex, not a decision\" — most objections are the conversational equivalent of flinching. Three: every rebuttal ends with exactly one ask.",
+            ],
+          },
+          {
+            heading: "The triage",
+            body: [
+              "Here is the split this module is built around. An objection has content — the price, the contract, the spouse, the provider. It gets a classic rebuttal. Indecision has no content — \"let me think about it\" with nothing behind it. Indecision does not get a rebuttal; it gets JOLT: Judge the indecision, Offer a recommendation, Limit the exploration, Take risk off the table.",
+              "Why the split matters so much: large-scale sales research found that 40 to 60 percent of qualified lost deals end in no-decision at all — not lost to a competitor, lost to fear. The stall is usually the buyer's fear of messing up, not loyalty to the status quo, and arguing harder against the status quo backfires on these buyers [MEDIUM confidence — single-study, teach the triage rule, not the exact percentages]. The rep who rebuttals an indecision buyer is treating the wrong disease, and the treatment is what kills the deal.",
+            ],
+          },
+          {
+            heading: "Objections are buying signals",
+            body: [
+              "Reframe the whole category: \"An objection is not a rejection—it's a request for more information delivered with emotion.\" Buyers who are truly gone do not object; they go inside. The objection is the sound of someone still on the porch doing math. Belfort's first-loop deflection keeps them there: \"I hear what you're saying, [Name], but let me ask you a question: does the idea make sense to you? Do you like the idea?\"",
+            ],
+          },
+          {
+            heading: "Door rules vs. table rules",
+            body: [
+              "The same words mean different things at different depths. \"'I need to talk to my spouse' at the door means set a joint follow-up… at the signing table means you handle it on the spot.\" Signing-table aggression at the doorstep kills deals — the door is a 90-second environment, and the win there is a specific next step, not a signature extracted under porch pressure. m14 owns the table; this module owns the triage that tells you which room you are standing in.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "All objection frameworks share one skeleton: acknowledge, isolate, pivot, confirm — learn one, name the rest.",
+          "Never repeat the objection back as a statement; it is a reflex, not a decision; end every rebuttal with one ask.",
+          "Objection (named concern) gets a rebuttal; indecision (unnamed stall) gets JOLT — recommend, limit, de-risk.",
+          "\"An objection is not a rejection—it's a request for more information delivered with emotion.\"",
+          "At the door, the win is a specific next step — table aggression on a porch kills deals.",
+        ],
+        drillPrompt:
+          "GhostRep's standard is 10 role-play reps per objection, not 3 — at ten repetitions the response becomes automatic and you can watch the prospect instead of the script. This week: 10 reps each on think-about-it, spouse, and too-expensive, rotating empathy-first, logic-based, and urgency-driven framings. Log every real field objection to the territory objection map; the hardest one from yesterday becomes tomorrow's huddle drill.",
+        quiz: [
+          {
+            question: "\"Let me think about it\" with no named concern behind it should be treated as…",
+            options: [
+              "A price objection — counter with the daily-rate reframe",
+              "Indecision — run JOLT: recommend, limit the exploration, take risk off the table",
+              "A polite no — leave immediately",
+              "A spouse objection — book the joint call",
+            ],
+            answerIndex: 1,
+            explanation: "No content means no rebuttal will land. Indecision is fear of messing up; the cure is a recommendation and de-risking, not argument.",
+          },
+          {
+            question: "Why should you never repeat the objection back as a statement?",
+            options: [
+              "It wastes time",
+              "It makes the smoke screen real — you validate a reflex into a decision",
+              "It sounds scripted",
+              "The homeowner will correct you",
+            ],
+            answerIndex: 1,
+            explanation: "\"Don't make it a real thing. At this point, it's just a smoke screen.\" Acknowledge the feeling without canonizing the words.",
+          },
+          {
+            question: "What do LAARC, Validate-Isolate-Pivot, and SPOTIO's four steps have in common?",
+            options: [
+              "Nothing — they conflict",
+              "They are the same skeleton: acknowledge first, isolate the truth, then respond and confirm",
+              "They all require a manager's approval",
+              "They only work at the signing table",
+            ],
+            answerIndex: 1,
+            explanation: "Every serious framework acknowledges before it argues and isolates before it answers. Learn one cold and the rest are dialects.",
+          },
+        ],
+      },
+      {
+        id: "m18-think-about-it",
+        title: "\"Let me think about it\": the smoke-screen playbook",
+        summary: "Isolate the real concern, permit the no, or de-risk the indecision — then lock a specific return.",
+        minutes: 6,
+        pitchDrill:
+          "Absolutely, this is a big decision and I would never want you to rush into anything. Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?",
+        sections: [
+          {
+            heading: "What the smoke screen is",
+            body: [
+              "\"The ultimate smoke screen… they do not want to say yes, but they are too polite to say no.\" It is \"usually built from a past regret, not this offer\" — some burned purchase from years ago standing between you and today's decision. Or, in the blunt vendor translation: \"not a real objection — it is a polite way of saying 'I don't see enough value to act right now.'\" Either way, the words on the surface are not the thing you need to handle.",
+            ],
+          },
+          {
+            heading: "The forced-choice isolate",
+            body: [
+              "The number one tool: \"Absolutely, this is a big decision and I would never want you to rush into anything. Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?\" — \"Nine times out of ten, they will tell you the real objection.\" The fiber variant swaps in the local nouns: \"is it the price, the speed, or something else that you'd want to look into?\"",
+              "Why it works: agreement first removes the combat, the forced choice makes answering easy, and \"something else entirely\" gives them a dignified exit ramp to name the real thing. Once the real objection is on the porch, you are back in m12 and this module's deep-dives.",
+            ],
+          },
+          {
+            heading: "For the repeat staller",
+            body: [
+              "When the stall survives the isolate, name the pattern out loud: \"Whenever I tell someone I need to think about it, I usually mean one of three things… Be honest with me; which one of those things is it for you right now?\" And when the politeness itself is the wall, flip it — permission to say no: \"If this isn't for you, I'd rather have a no right now – believe me, you won't hurt my feelings. Is that where you're leaning right now?\" A clean no beats a fake maybe every day of the week: the no frees your evening, and the honest rep who takes it gracefully gets the door back later.",
+            ],
+          },
+          {
+            heading: "When it is true indecision",
+            body: [
+              "If the isolate surfaces nothing because there is nothing — pure fear of messing up — switch from rebuttal to JOLT. Offer the recommendation: \"Given everything you've shared, here's what I'd do in your shoes.\" Limit the exploration: \"We've already looked at how X compares for homes like yours, and here's why this is the right fit.\" Then take risk off the table with real instruments: the price-lock, the install guarantee, and the three-day cooling-off right — m22 teaches why that last one is a closer, not a concession.",
+              "Then bridge to the follow-up machinery of m19 with the speed-test anchor: \"Tonight around 7:00 PM, when everyone is streaming and gaming, run a quick speed test on your phone. I am going to swing back by tomorrow afternoon just to see what numbers you got. If they are exactly what you are paying for, I will not bother you again. Fair enough?\" Disengage rule: after two isolate attempts with nothing named, they will not buy today — lock a specific return time, never \"I'll check back sometime.\"",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "\"Let me think about it\" is politeness wearing a costume — the surface words are never the real thing.",
+          "The forced-choice isolate surfaces the real objection nine times out of ten.",
+          "Permission to say no builds the trust that brings the door back later.",
+          "True indecision gets JOLT: recommend, limit, de-risk with real instruments — including the cooling-off right.",
+          "Two failed isolates = lock a specific return time and leave warmly.",
+        ],
+        drillPrompt:
+          "Ten role-play reps of the forced-choice isolate this week, rotating the three endings — price, speed, something else. Then run it live: every \"let me think about it\" you hear in the field gets exactly one isolate attempt delivered warmly. Log what the real objection turned out to be each time and bring the strangest one to the huddle.",
+        quiz: [
+          {
+            question: "What makes the forced-choice isolate work?",
+            options: [
+              "It corners the homeowner into agreeing",
+              "Agreement removes combat, the menu makes answering easy, and \"something else entirely\" dignifies the real concern",
+              "It ends the conversation faster",
+              "It proves the rep is an expert",
+            ],
+            answerIndex: 1,
+            explanation: "Each clause does a job: no-rush agreement, an easy menu, and an exit ramp that lets them name the truth without embarrassment.",
+          },
+          {
+            question: "Why offer \"I'd rather have a no right now\"?",
+            options: [
+              "Reverse psychology to force a yes",
+              "A clean no frees your evening, and the graceful exit keeps the door open for later",
+              "It's a compliance requirement",
+              "It ends the shift early",
+            ],
+            answerIndex: 1,
+            explanation: "Fake maybes cost callbacks and evenings. A real no is data, and the rep who takes it well is welcome back.",
+          },
+          {
+            question: "After two isolate attempts produce nothing, the rule is…",
+            options: [
+              "Try a third rebuttal",
+              "Discount the price",
+              "Lock a specific return time and leave — never \"I'll check back sometime\"",
+              "Ask for the sale one last time",
+            ],
+            answerIndex: 2,
+            explanation: "They won't buy today. The professional move is a dated next step, which is m19's territory.",
+          },
+        ],
+      },
+      {
+        id: "m18-spouse",
+        title: "\"I need to talk to my spouse\": diagnose before you rebut",
+        summary: "Rarely about the spouse — isolate the hidden reservation, then arm the advocate.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Two causes, one sentence",
+            body: [
+              "The spouse line is rarely about the spouse. Cause one is emotional: you did not surface enough value, and the spouse is a polite wall. Cause two is logistical and legitimate: \"Many couples have agreements on spending above certain dollar amounts… The tough guy sales routine doesn't work well anymore.\" Your first job is diagnosis, because the cure for a value problem is a different animal than the cure for a spending pact.",
+            ],
+          },
+          {
+            heading: "The isolation rebuttal",
+            body: [
+              "\"That makes total sense, and I would expect you to make this decision together. Just so I know where you stand, if your spouse comes home and says they love the idea, are you 100% on board, or do you still have some reservations?\" Respect the partnership, then isolate the individual. If they are not 100 percent on board, the reservations are yours to handle right now — the spouse was the smoke screen. If they are 100 percent, your job changes: arm them to advocate, with the one number and the one sentence that will win the kitchen-table conversation you cannot attend.",
+            ],
+          },
+          {
+            heading: "The escalation ladder",
+            body: [
+              "Rung one, call them now: \"Would it make sense for us to call them now? That way if they have any questions that you might not know the answer to, I could answer them?\" Rung two, the joint meeting: \"If I could free up some time tomorrow, would she be available…?\" Rung three, project the spouse: \"What do you think they would say about these options?\" And when both are present, the privacy move: \"Why don't you guys have a chat and then I'll meet you back here in five minutes. How does that sound?\"",
+            ],
+          },
+          {
+            heading: "The money warning",
+            body: [
+              "Bulldozing the spouse objection is the single biggest creator of next-day cancellations in home services: \"a slightly delayed Sale in many cases can be much more productive than a pressured or rushed sale that will be cancelled later.\" A signature extracted against a couple's spending pact is not a sale — it is a cooling-off cancellation with a chargeback attached, and m19 will show you what that costs in dollars.",
+              "So the door rule: at the doorstep, the win is a both-present appointment — \"I'm on this street tomorrow at 6 — will [name] be home?\" The forbidden line, never to be said at any depth: \"You don't need to talk to your spouse.\"",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The spouse objection is a value problem or a spending pact — diagnose before you rebut.",
+          "Isolate: \"if your spouse loves the idea, are you 100% on board, or do you still have reservations?\"",
+          "Escalate: call now, joint meeting, project the spouse, or the five-minute privacy move.",
+          "Bulldozing a spending pact manufactures cooling-off cancellations and chargebacks.",
+          "Forbidden line: \"You don't need to talk to your spouse.\" At the door, the win is the both-present appointment.",
+        ],
+        drillPrompt:
+          "Role-play the spouse objection 10 times this week in pairs: once where the hidden issue is price, once where it is a real spending pact, once where they are 100% on board. Practice the full ladder — isolate, call-now, joint meeting — and end every rep by booking a specific both-present time out loud.",
+        quiz: [
+          {
+            question: "What are the two real causes behind \"I need to talk to my spouse\"?",
+            options: [
+              "Laziness and dishonesty",
+              "Not enough value surfaced, or a real couple spending pact",
+              "Bad timing and bad turf",
+              "Price and speed",
+            ],
+            answerIndex: 1,
+            explanation: "Emotional (thin value) or logistical (a legitimate pact). Diagnosis decides which tool comes out.",
+          },
+          {
+            question: "They answer the isolation question with \"honestly, I'd still want to see the total cost.\" What just happened?",
+            options: [
+              "The deal is dead",
+              "The spouse was a smoke screen — the real objection (cost) is now on the porch for you to handle",
+              "You should call the spouse",
+              "You should leave a flyer",
+            ],
+            answerIndex: 1,
+            explanation: "The isolate worked: \"are you 100% on board?\" surfaced the hidden reservation, which is yours to handle right now.",
+          },
+          {
+            question: "Why is bulldozing a spending pact a money-losing move even when it produces a signature?",
+            options: [
+              "Spouses talk to neighbors",
+              "Pressured sales get cancelled inside the cooling-off window, triggering chargebacks",
+              "It's against the huddle rules",
+              "The paperwork takes longer",
+            ],
+            answerIndex: 1,
+            explanation: "\"A slightly delayed Sale… can be much more productive than a pressured or rushed sale that will be cancelled later.\" The delayed yes outearns the pressured one.",
+          },
+        ],
+      },
+      {
+        id: "m18-money-competitor",
+        title: "The money objection and the competitor deep-dive",
+        summary: "Isolate 'expensive,' pivot Spectrum on its real weaknesses, and win back the burned.",
+        minutes: 7,
+        sections: [
+          {
+            heading: "\"Too expensive\" — isolate before you reframe",
+            body: [
+              "First, find out what 'expensive' is comparing against: \"When you say expensive, are you comparing it to what you expected the monthly payment to be, or are you looking at the total?\" Then reframe on the axis they name. Reallocation: \"You're already paying $X a month to rent slow internet from the cable company — same money, redirected.\" Reduce-to-the-ridiculous: \"It's about a dollar-eighty a day — less than the coffee you grabbed this morning\" [ADAPTED — field-test before canonizing].",
+              "The strongest money tool is their own paperwork: \"Would you mind pulling up your most recent internet bill? I find that about seven out of ten homes I visit are actually paying more than they think.\" And the hard rule that outranks every technique: if the issue is genuine inability to pay, disengage — never push a household past what it can afford. That sale cancels, and it should.",
+            ],
+          },
+          {
+            heading: "The Spectrum pivot",
+            body: [
+              "Spectrum is the dominant incumbent in NC/SC, so know their real shape. Their honest strengths: no contracts, no data caps, and a 500-dollar early-termination buyout — which means \"we have no contract\" is a wrong wedge, and using it outs you as a rep who does not know the market. The three real wedges, all verifiable. One, upload symmetry: cable uploads typically max out around 10 to 35 Mbps [VERIFY current tiers]; the door line is \"Cable gives you maybe 10 or 20 megs upload, which is why Zoom calls freeze. Fiber gives you 500 up and 500 down\" [VERIFY current plan speeds].",
+              "Two, the promo cliff: post-promo standard rates jump roughly 20 to 35 dollars a month — call it 420 a year [VERIFY] — against Kinetic fiber's flat-after-12-months pricing [VERIFY current offer terms]. Three, shared-node evening congestion, which turns into the 6 p.m. pain question: does your internet get weird right when everyone gets home? And expect the save offer — \"calling to cancel routes to a retention line with unlisted discounts\" — so pre-empt it at the door: the discount exists because you called to leave, and it will still be there if fiber somehow disappoints you.",
+            ],
+          },
+          {
+            heading: "\"We just got fiber from a competitor\"",
+            body: [
+              "The comparison play, verbatim: \"I know you've already got fiber from [competitor] — what are you paying for what speed?\" Congratulate them on having fiber — never disparage the choice, because insulting their provider insults their judgment. If your math beats theirs, show it with real numbers. If it does not, plant the seed and leave warmly: \"When's your promo period up? I'll make a note to swing by the month before; that's when the bill usually jumps\" [ADAPTED — field-test before canonizing]. Log the expiry date, compliment the choice, and exit as the rep they will actually open for in eleven months.",
+            ],
+          },
+          {
+            heading: "The bad-experience win-back",
+            body: [
+              "The strongest objection class of all: \"we had you before and cancelled.\" Acknowledge and separate — that was then, probe for the specific failure: \"What part of the experience felt off for you?\" Then differentiate on exactly that axis and nothing else. Humor is forbidden here; a joke about their bad experience ends the conversation. Let silence do the work after they describe the wound. And if the wound is open — a live billing dispute, a damage claim — switch out of sales mode entirely into service-recovery mode: get it to someone who can fix it. A rep who fixes the old wound owns the household's next decade.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Isolate 'expensive' first — expected monthly, or the total — then reframe on the axis they name.",
+          "The bill pull is the strongest money tool: \"seven out of ten homes… are paying more than they think.\"",
+          "Spectrum's real wedges: upload symmetry, the promo cliff, evening congestion — never \"no contract\" [VERIFY all numbers].",
+          "Competitor-fiber homes: congratulate, compare with real math, plant the promo-expiry seed, leave warmly.",
+          "Bad experiences: probe the specific failure, no humor, and switch to service recovery if the wound is open.",
+        ],
+        drillPrompt:
+          "Build your Spectrum battlecard this week and verify every number on it against current offer data [VERIFY]: upload tiers, the promo-cliff delta, the evening-congestion question, and the retention-line pre-emption. Role-play the full pivot 10 times, then the win-back probe 5 times with a partner playing a genuinely burned ex-customer — no jokes allowed in that rep.",
+        quiz: [
+          {
+            question: "Why is \"we have no contracts\" a wrong wedge against Spectrum?",
+            options: [
+              "Contracts are illegal",
+              "Spectrum already offers no contracts and no data caps — the claim marks you as a rep who doesn't know the market",
+              "Homeowners like contracts",
+              "Kinetic requires contracts",
+            ],
+            answerIndex: 1,
+            explanation: "Know the incumbent's real shape. The credible wedges are upload symmetry, the promo cliff, and shared-node evening congestion [VERIFY numbers].",
+          },
+          {
+            question: "A homeowner says \"we had Kinetic before and cancelled.\" Your first move is…",
+            options: [
+              "A light joke to defuse it",
+              "\"What part of the experience felt off for you?\" — then differentiate on exactly that axis",
+              "The promo-cliff math",
+              "The speed-test anchor",
+            ],
+            answerIndex: 1,
+            explanation: "Acknowledge, separate, probe the specific failure. Humor is forbidden here; silence after their answer does the work.",
+          },
+          {
+            question: "A competitor-fiber household's math beats yours this month. The correct exit is…",
+            options: [
+              "Point out three flaws in their provider",
+              "Push harder — everyone has a price",
+              "Congratulate the choice, plant the promo-expiry seed with a logged date, and leave warmly",
+              "Leave a flyer and never return",
+            ],
+            answerIndex: 2,
+            explanation: "\"When's your promo period up? I'll make a note to swing by the month before.\" The graceful exit converts next year; the disparaging one never converts.",
+          },
+          {
+            question: "What do you do when 'too expensive' turns out to be genuine inability to pay?",
+            options: [
+              "Reduce to the daily rate",
+              "Offer the cheapest tier twice",
+              "Disengage — never push a household past what it can afford",
+              "Ask a manager for a bigger discount",
+            ],
+            answerIndex: 2,
+            explanation: "Selling past inability to pay manufactures cancellations and real harm. Disengage rules are scored skills, not suggestions.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M19 — The Follow-Up Fortune ─────────────────────────────────────────────
+  {
+    id: "m19",
+    title: "The Follow-Up Fortune",
+    tagline: "Flake control, the callback architecture, chargeback protection, and the second dollar.",
+    hook: "The easiest install you'll ever sell is the one you already sold — and the easiest street is the one where your truck is already parked. The fortune isn't in the first knock; it's in the calendar.",
+    fieldStory:
+      "A community-solar rep counts his week: \"I had over $1200 in possible commissions lost this past week because of customers saying they'll enroll later that day or they wanna research and get back to me and never did.\" Seven days of maybes, zero callbacks answered. Every one of those doors was a five-minute A/B appointment away from being real. He counted it as a loss event and never let \"later\" leave a porch unscheduled again.",
+    sayThisNotThat: {
+      instead: "They said they'd sign up online tonight.",
+      say: "They're penciled for Thursday at 6 and I'm swinging by at 5:45 to confirm.",
+    },
+    lessons: [
+      {
+        id: "m19-enroll-later",
+        title: "\"I'll enroll later\" is a loss event, not a pipeline event",
+        summary: "Later almost never happens — quantify the leak and structure the next step instead.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The leak, quantified",
+            body: [
+              "A working rep did the accounting the hard way: \"I had over $1200 in possible commissions lost this past week because of customers saying they'll enroll later that day or they wanna research and get back to me and never did.\" Twelve hundred dollars, one week, one rep. \"I'll enroll later\" feels like a pipeline because it is polite. It is not a pipeline. It is a leak.",
+              "The supporting numbers are brutal: flyers left alone convert at under one percent — \"Leaving a flyer on a door is advertising, not sales\" and \"A flyer is where sales go to die.\" And even after a real signup, long install waits measurably raise pre-install cancellations — keep days-to-install inside 3 to 7 [VERIFY current install windows]. Every version of \"later\" bleeds.",
+            ],
+          },
+          {
+            heading: "Pressure closes flake — structure doesn't",
+            body: [
+              "The counterintuitive truth: \"sales that close because of persuasion or pressure will either flake or cause headaches.\" So flake control is not closing harder — it is structuring the next step so the deal does not need pressure. The rule of the porch: \"don't walk to your car without a date on the calendar.\" A maybe with a date is a follow-up. A maybe without one is a eulogy.",
+              "When the door earns a sit-down, set it with all four conditions: \"both decision-makers, kitchen table, 45 minutes, no obligation.\" Half-conditioned appointments are where flakes are born.",
+            ],
+          },
+          {
+            heading: "The reflex no is not a flake",
+            body: [
+              "Separate two animals that look identical at second five. The reflex brush-off — \"not interested\" before you finished your name — deserves one de-pressurizing bridge and about thirty seconds: \"I get it you weren't expecting me, I'll be quick and get out of your hair…\" A real flake risk is different: an engaged, interested person trying to leave without a date. Fight the first one briefly; structure the second one completely. The consent boundary governs both — after the bridge, a clear no is a no, and you leave warmly.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "\"I'll enroll later\" is a loss event — one rep counted $1,200 gone in a single week.",
+          "Flyers alone convert under 1%; \"A flyer is where sales go to die.\"",
+          "Keep days-to-install at 3-7 [VERIFY] — long waits manufacture pre-install cancellations.",
+          "Flake control is structure, not pressure: \"don't walk to your car without a date on the calendar.\"",
+          "Reflex no's get one bridge and thirty seconds; interested stalls get a date. Consent caps both.",
+        ],
+        drillPrompt:
+          "Run a 7-day flake audit: every door that ends without a signature gets logged as (a) dated appointment, (b) speed-test homework plus return time, (c) calendar play with an expiry date, or (d) dead. Any door you cannot classify is a leak. On Friday, count last week's \"they'll enroll later\" doors and put a dollar figure on them using your real per-install commission [VERIFY comp terms].",
+        quiz: [
+          {
+            question: "Why classify \"I'll enroll later\" as a loss event instead of pipeline?",
+            options: [
+              "Pessimism keeps reps sharp",
+              "The follow-through almost never happens — the rep who counted lost $1,200 in one week",
+              "The app can't store maybes",
+              "Managers prefer it",
+            ],
+            answerIndex: 1,
+            explanation: "Later-doors convert so rarely that counting them as pipeline is self-deception. Structure a date or count the loss honestly.",
+          },
+          {
+            question: "What are the four conditions of a properly set sit-down appointment?",
+            options: [
+              "Morning, weekend, one hour, one decision-maker",
+              "Both decision-makers, kitchen table, 45 minutes, no obligation",
+              "Phone first, evening, quick, with a deposit",
+              "Any time, any place, any length, any attendee",
+            ],
+            answerIndex: 1,
+            explanation: "\"Both decision-makers, kitchen table, 45 minutes, no obligation.\" Missing conditions are where flakes gestate.",
+          },
+          {
+            question: "How does pressure closing relate to flake rates?",
+            options: [
+              "Pressure reduces flakes by creating commitment",
+              "\"Sales that close because of persuasion or pressure will either flake or cause headaches\" — structure beats pressure",
+              "No relationship exists",
+              "Pressure only matters at the table",
+            ],
+            answerIndex: 1,
+            explanation: "Pressured closes cancel. Structured next steps hold. Flake control is calendar architecture, not persuasion volume.",
+          },
+        ],
+      },
+      {
+        id: "m19-callback-architecture",
+        title: "The callback architecture",
+        summary: "A/B booking, speed-test homework, and the face-saving re-open — never open-ended.",
+        minutes: 6,
+        pitchDrill:
+          "I am going to be talking to the rest of the neighbors on this block for the next hour. Should I swing back by in about 45 minutes, or would tomorrow evening be better for you?",
+        sections: [
+          {
+            heading: "A/B booking, never open-ended",
+            body: [
+              "Every callback is booked as an either/or, never a \"sometime.\" The classic form: \"We're running free 20-minute demonstrations on days A and B, would A or B be better for you?\" The fiber field version: \"I am going to be talking to the rest of the neighbors on this block for the next hour. Should I swing back by in about 45 minutes, or would tomorrow evening be better for you?\" The compressed version for busy doors: \"Understood—should I pop back tomorrow at 6:30 or Saturday at 10?\"",
+              "The pattern is m14's two-day-choice close generalized to the calendar: you are not asking whether they want a next step, you are asking which one. An open-ended \"I'll check back\" is not a callback; it is a hope wearing a calendar costume.",
+            ],
+          },
+          {
+            heading: "Anchors that survive the night",
+            body: [
+              "The speed-test homework anchor gives the return visit a purpose the homeowner chose: \"Tonight around 7:00 PM, when everyone is streaming and gaming, run a quick speed test on your phone. I am going to swing back by tomorrow afternoon just to see what numbers you got. If they are exactly what you are paying for, I will not bother you again. Fair enough?\" They run the test at the worst congestion hour; you return to numbers, not to a pitch.",
+              "The neighbor-install follow-up rides m17's cluster: \"Hey [Name], Sam from [Company] again. I was just down the street getting the Smiths set up with their new fiber line. I wanted to drop off this quick comparison sheet I promised you… Have you had a chance to look at your current bill since we spoke?\" And the smallest retention trick in the business: get their name and note it — \"if you get their name, make note… you'd be surprised how far that goes when selling in a neighborhood.\"",
+            ],
+          },
+          {
+            heading: "The face-saving re-open",
+            body: [
+              "Old leads and expired promos get the reframe that removes their embarrassment: \"I'm guessing you haven't got around to shopping your internet since the promo expired.\" Nobody did — that is exactly why the line works. It normalizes the lapse, hands them a reason that is not their fault, and makes you the solution to a problem they just admitted having.",
+            ],
+          },
+          {
+            heading: "Return exactly when promised",
+            body: [
+              "The professionalism of the quick exit is the pitch for the return visit. When you leave a stall gracefully and then appear at the exact promised minute, you demonstrate — before any paperwork exists — that this company keeps commitments. Almost nobody in this industry arrives when they say they will; the rep who does arrives pre-trusted.",
+              "And know the ceiling: \"If there's no engagement after 3-4 well-spaced attempts, reconsider.\" Persistence past that is not follow-up; it is the pestering that m22 shows going viral. Log it dead and let the calendar plays of lesson four carry the door.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Book every callback as A or B — \"Should I swing back by in about 45 minutes, or would tomorrow evening be better?\"",
+          "The speed-test anchor makes the homeowner run the test at the worst hour, so you return to numbers.",
+          "Note names — \"you'd be surprised how far that goes.\"",
+          "The face-saving re-open: \"I'm guessing you haven't got around to shopping your internet since the promo expired.\"",
+          "Return at the exact promised minute; stop after 3-4 well-spaced attempts with no engagement.",
+        ],
+        drillPrompt:
+          "For one week, end every non-signing conversation with an A/B booking delivered out loud — no \"I'll check back\" allowed. Log each booked callback and whether you hit the promised minute exactly. Friday: compute your kept-appointment rate and your kept-time rate separately, and bring both to your 1:1.",
+        quiz: [
+          {
+            question: "What is wrong with \"I'll check back sometime\"?",
+            options: [
+              "Nothing, if you mean it",
+              "It is open-ended — an unbooked callback is a hope, not an appointment",
+              "It sounds too formal",
+              "It takes too long to say",
+            ],
+            answerIndex: 1,
+            explanation: "Callbacks are booked A or B. Without a specific time, there is no commitment on either side and the door decays.",
+          },
+          {
+            question: "Why does the speed-test anchor specify \"tonight around 7:00 PM\"?",
+            options: [
+              "Reps prefer evening callbacks",
+              "That is peak congestion — the homeowner measures their current service at its worst hour",
+              "Speed tests only work at night",
+              "It avoids meal times",
+            ],
+            answerIndex: 1,
+            explanation: "The test runs when everyone is streaming and gaming. The homeowner generates the evidence; you return to numbers, not a pitch.",
+          },
+          {
+            question: "When does a follow-up sequence end?",
+            options: [
+              "After ten attempts",
+              "Only when they buy",
+              "After 3-4 well-spaced attempts with no engagement — log it dead and let calendar plays carry it",
+              "At the end of the week",
+            ],
+            answerIndex: 2,
+            explanation: "Past that ceiling, follow-up becomes the pestering that burns brands. The promo-expiry calendar is the long game.",
+          },
+        ],
+      },
+      {
+        id: "m19-protect-commission",
+        title: "Protect the commission after the signature",
+        summary: "Commission pays on activation, chargebacks punish hype — the 8-stage workflow is yours.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "The money mechanic",
+            body: [
+              "Here is the part of the pay plan nobody puts on the recruiting flyer: commission typically pays on activation, not signup, and chargebacks claw it back if the customer cancels inside the first 30 to 90 days [VERIFY your actual comp terms]. \"To minimize chargebacks, make sure every customer understands what they are signing up for, set correct expectations about installation timeline and pricing, and do not oversell.\"",
+              "The math that should change how you close: 40 closes with 12 chargebacks nets you 28. 30 closes with 2 chargebacks also nets 28 — at three-quarters of the work and none of the complaints. The careful closer and the hype closer can end the quarter at the same money; only one of them enjoyed it.",
+            ],
+          },
+          {
+            heading: "The 8-stage workflow you own",
+            body: [
+              "The rep's job does not end at the signature. The full chain: verify serviceability, door approach, signup, dispatch, pre-install confirmation, install and activation, first-bill check-in, post-install referral ask. You own the truth of every stage, because you made the promises the rest of the chain has to keep. The canonical failure: a door rep's written promises disowned by the install tech, support siding with the paperwork — \"the service agreement defines the contract, not the salesperson\" — and a cancellation plus a public trashing. m22 tells that story in full; the lesson here is that your words outlive your visit.",
+            ],
+          },
+          {
+            heading: "The expectations checklist",
+            body: [
+              "Cancels are born from surprise. Kill the surprises at the door: the 4-hour appointment window with an adult 18 or older present. The honest duration by scenario — one to two hours if the home is fiber-ready, up to four to six for an underground drop [VERIFY current install guidance] — never the breezy \"takes maybe an hour.\" The small drill hole, sealed. The ONT box placement and its power outlet. The temporary drop line lying on the lawn until burial day — normal, with a real timeline. Private utility marking for sprinklers and invisible dog fences, the notorious complaint. And the honest cutover rule: do not cancel the old service until the new one is running.",
+            ],
+          },
+          {
+            heading: "The 10-minute insurance policy",
+            body: [
+              "\"Some reps even check in with new customers a week after installation… The 10 minutes you spend on a follow-up call can save a $150 commission.\" [VERIFY your per-install payout.] One week after activation, call: Did the first bill match what we discussed? Is the speed what the test promised? Any install question I can chase down? Ten minutes, three questions, and the chargeback window closes quietly instead of loudly.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Commission pays on activation; cancels inside 30-90 days claw it back [VERIFY comp terms].",
+          "40 closes with 12 chargebacks = 30 closes with 2 — careful closing pays the same with less pain.",
+          "Own all 8 stages from serviceability check to the post-install referral ask.",
+          "Kill surprises: windows, durations, drill hole, ONT, temp drops, utility marking, honest cutover.",
+          "The week-after check-in call: 10 minutes to save a $150 commission [VERIFY].",
+        ],
+        drillPrompt:
+          "Build your expectations checklist card from this lesson and verify every number on it against current install guidance [VERIFY]. Use it verbatim on your next 5 signups, then set a reminder for the one-week check-in call on each. Track whether any of the five surfaces a surprise you failed to pre-empt — and add that surprise to the card.",
+        quiz: [
+          {
+            question: "When does commission typically pay, and what threatens it?",
+            options: [
+              "At the door; nothing",
+              "At signup; weather",
+              "On activation; chargebacks if the customer cancels inside 30-90 days [VERIFY]",
+              "At year-end; taxes",
+            ],
+            answerIndex: 2,
+            explanation: "The signature is the midpoint, not the finish. Cancellations inside the chargeback window claw the money back.",
+          },
+          {
+            question: "Rep A closes 40 with 12 chargebacks. Rep B closes 30 with 2. Who earned more?",
+            options: [
+              "Rep A, obviously",
+              "They net the same — 28 — and Rep B did it with less work and fewer complaints",
+              "Rep B, by double",
+              "Impossible to say",
+            ],
+            answerIndex: 1,
+            explanation: "The math is the argument for honest expectation-setting: hype closing and careful closing can pay identically.",
+          },
+          {
+            question: "A customer asks how long tomorrow's underground-drop install will take. The honest answer is…",
+            options: [
+              "\"Maybe an hour\"",
+              "Up to four to six hours for an underground drop [VERIFY] — quote the scenario, not the wish",
+              "\"All day, guaranteed\"",
+              "\"The tech will tell you\"",
+            ],
+            answerIndex: 1,
+            explanation: "Surprise durations are cancel-bait. Fiber-ready homes run 1-2 hours; underground work runs 4-6. Quote the real scenario.",
+          },
+        ],
+      },
+      {
+        id: "m19-referral-engine",
+        title: "The referral engine and the calendar plays",
+        summary: "Every sale is a lead-generation event; every \"under contract\" is a dated future sale.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Every sale is a lead event",
+            body: [
+              "The close is the beginning of the street, not the end of the door. Ask for referrals while the signature is warm. Run the install-day ask while the truck is still parked out front — the most persuasive billboard in fiber. Stack the neighborhood after every install: the five closest doors, cloverleaf left, right, and across the street, with the true and fresh line that the crew just left their neighbor's house. One install, worked properly, is worth a street of warm doors.",
+            ],
+          },
+          {
+            heading: "The contract-expiry calendar",
+            body: [
+              "Every \"I'm under contract\" is a future sale with a date on it. Log the expiration, check whether a buyout offer or ETF credit currently applies [VERIFY current offers], and plant the seed on the way off the porch: \"When's your promo period up? I'll make a note to swing by the month before; that's when the bill usually jumps\" [ADAPTED — field-test before canonizing].",
+              "Old leads get the re-hash opener: \"Hi Mr. Jones… I'm sure you remember us from when we were out here in April? Great — I was in the area and wanted to let you know about a new special we're running this month…\" Only run it when there genuinely is something new to say — the re-hash trades on memory, and a fake reason burns the memory it borrowed.",
+            ],
+          },
+          {
+            heading: "New move-ins: the warmest doors in fiber",
+            body: [
+              "\"People who just moved into a home are in setup mode… They have not yet developed loyalty to any internet provider at this address. A recently placed 'sold' sign or a dumpster in the driveway from a renovation are visual cues.\" Knock or door-hanger inside the first two weeks with the welcome frame: welcome to the neighborhood, and here is who built the fiber on your street. (Vendor stats about new-mover spending float around the industry [VERIFY] — teach the pattern: no loyalty yet, decisions being made fast.)",
+            ],
+          },
+          {
+            heading: "Segment timing",
+            body: [
+              "Match the pitch to the household's clock. Work-from-home households get the upload-symmetry and stability pitch — Kinetic's own survey found 42 percent of its fiber users work from home and about half of those report fewer video issues after switching (company survey, use as an internal proof point, not neutral market data). Gaming households get latency and jitter framing, not bandwidth bragging. The right segment pitch makes the same product sound like it was built for the person answering the door — because on their street, it literally was.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Every sale triggers referral asks, install-day visibility, and a five-door cloverleaf while the truck is warm.",
+          "Log every contract expiry; check buyout/ETF offers [VERIFY]; swing by the month before the promo ends.",
+          "The re-hash opener trades on memory — only run it with something genuinely new to say.",
+          "New move-ins are the warmest doors in fiber: no loyalty yet, decisions made fast, first two weeks.",
+          "WFH gets upload/stability; gamers get latency and jitter — same product, right lens.",
+        ],
+        drillPrompt:
+          "This week, after every sale or install on your turf, run the full stack before you leave the street: referral ask at the door, five-door cloverleaf, and one logged contract-expiry date from a not-yet door. On Friday, count how many new dated future touches you created per sale — target is three or more.",
+        quiz: [
+          {
+            question: "Why is the install-day referral ask so effective?",
+            options: [
+              "Customers feel obligated",
+              "The truck is visible proof on the street — the strongest billboard fiber has",
+              "Installers close the deal",
+              "It saves a trip next week",
+            ],
+            answerIndex: 1,
+            explanation: "The parked truck drops perceived risk for every neighbor watching. Ask while it is still there.",
+          },
+          {
+            question: "A homeowner says \"I'm under contract until March.\" The professional move is…",
+            options: [
+              "Pitch the switch anyway",
+              "Log the expiry date, check current buyout/ETF offers [VERIFY], and plant the month-before seed",
+              "Delete the lead",
+              "Come back weekly until March",
+            ],
+            answerIndex: 1,
+            explanation: "An under-contract no is a dated future yes. The calendar converts it; pressure just burns it.",
+          },
+          {
+            question: "What makes new move-ins the warmest doors in fiber?",
+            options: [
+              "They have more money",
+              "They are in setup mode with no provider loyalty at the address yet — knock inside the first two weeks",
+              "They answer the door more",
+              "They always need faster speeds",
+            ],
+            answerIndex: 1,
+            explanation: "\"They have not yet developed loyalty to any internet provider at this address.\" Sold signs and renovation dumpsters are the visual cues.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M20 — Magic Words and the Sound of the Close ────────────────────────────
+  {
+    id: "m20",
+    title: "Magic Words and the Sound of the Close",
+    tagline: "Exact-word swaps, tonalities, strategic silences — the micro-language layer.",
+    hook: "The exact phrase is the technique. Two reps can say the same sentence and get opposite doors — the difference is one swapped word and three seconds of silence.",
+    fieldStory:
+      "A fiber rep finds his magic number: homeowners literally mid-swing on closing the door stop when they hear the concrete savings figure — \"people about to close the door until they hear the magic number and change their minds.\" Not a better product, not a better price. Better words. The words you pick decide whether the door finishes closing.",
+    sayThisNotThat: {
+      instead: "Do you have any questions?",
+      say: "What questions do you have for me?",
+    },
+    lessons: [
+      {
+        id: "m20-fast-brain",
+        title: "Twenty words that move the fast brain",
+        summary: "Jones's rejection-free openers, adapted to fiber — seasoning, not a meal.",
+        minutes: 6,
+        pitchDrill:
+          "I'm not sure if it's for you, but your street just got fiber and I'd hate for you to miss the install window while the crew's here.",
+        sections: [
+          {
+            heading: "The premise",
+            body: [
+              "Decisions get made twice: the subconscious decides first, and the conscious mind justifies afterward. The phrases in this lesson talk to the first decider. And the reason to drill them before the shift: \"the worst time to think about what to say is in the moment.\" These are seasoning, not a meal — they slot into the four-beat structure from m11; they do not replace it.",
+            ],
+          },
+          {
+            heading: "The rejection-free family, fiber-adapted",
+            body: [
+              "\"I'm not sure if it's for you, but…\" disarms by conceding: \"I'm not sure if it's for you, but your street just got fiber and I'd hate for you to miss the install window while the crew's here.\" [ADAPTED — field-test before canonizing.] \"How open-minded are you…?\" recruits their self-image: \"How open-minded would you be about seeing if we could cut your bill?\"",
+              "\"How would you feel if…?\" pre-lives the win: \"How would you feel if your Zoom never dropped in a client meeting again?\" \"Just imagine…\" paints the scene: \"Just imagine every TV in the house streaming 4K at 7 PM while the kids game.\"",
+              "\"What do you know about…?\" turns a debate into reflection: \"What do you know about fiber vs. cable?\" \"I'm guessing you haven't got around to…\" removes blame: \"…shopping your internet since the promo expired.\" And \"I bet you're a bit like me…\" builds the bridge: \"I don't notice my internet until it stops working.\"",
+            ],
+          },
+          {
+            heading: "The usage rule",
+            body: [
+              "Never stack more than one magic phrase per exchange. One phrase is seasoning; three in a row is a parlor trick, and homeowners can smell a parlor trick through the screen door. Pick the phrase that fits the moment in the m11 skeleton, deliver it like conversation, then be quiet and let it work.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The subconscious decides first — these phrases talk to it, then the conscious mind justifies.",
+          "\"The worst time to think about what to say is in the moment\" — drill before the shift.",
+          "The family: not-sure-if, open-minded, how-would-you-feel, just-imagine, what-do-you-know, haven't-got-around-to, bit-like-me.",
+          "Seasoning, not a meal: maximum one magic phrase per exchange.",
+        ],
+        drillPrompt:
+          "Pick ONE phrase from this lesson and use it on every door for a full day. Each evening, log which phrase you used, at which doors, and what happened. By Friday, present your single best door story to the huddle — what you said, verbatim.",
+        quiz: [
+          {
+            question: "What does \"I'm not sure if it's for you, but…\" accomplish at the door?",
+            options: [
+              "It shows weakness",
+              "It disarms by conceding the decision while delivering the news anyway",
+              "It qualifies the homeowner's budget",
+              "It is a compliance disclaimer",
+            ],
+            answerIndex: 1,
+            explanation: "The concession lowers the shield; the \"but\" clause still lands the message. Disagreement has nothing to grab.",
+          },
+          {
+            question: "What is the maximum number of magic phrases per exchange?",
+            options: [
+              "Three — one per beat",
+              "As many as fit",
+              "One — stacking reads as a parlor trick",
+              "Zero on fresh-fiber streets",
+            ],
+            answerIndex: 2,
+            explanation: "One is seasoning; a stack is a trick, and homeowners smell tricks. Deliver one, then be quiet.",
+          },
+          {
+            question: "\"What do you know about fiber vs. cable?\" is designed to…",
+            options: [
+              "Test their technical knowledge",
+              "Turn a potential debate into reflection — they consult their own knowledge instead of fighting yours",
+              "Fill silence",
+              "Qualify their current plan",
+            ],
+            answerIndex: 1,
+            explanation: "A knowledge question invites them to think out loud; a claim invites them to argue. Reflection beats debate.",
+          },
+        ],
+      },
+      {
+        id: "m20-assume-outcome",
+        title: "Swaps that assume the outcome",
+        summary: "Question-frame, options, sequence-skipping, and the conditional close — word-level closes.",
+        minutes: 6,
+        pitchDrill:
+          "As I see it, you have three options: keep cable as-is, take the 500, or take the gig. Of those three options, what's going to be easiest for you?",
+        sections: [
+          {
+            heading: "The simple swaps",
+            body: [
+              "\"Do you have any questions?\" invites \"no.\" Swap it: \"What questions do you have for me?\" — \"The minute you assume an outcome… they have made a decision and you are perfectly positioned to ask for it.\" Same device for the contact info: not \"Can I have your phone number?\" but \"What's the best number to contact you at?\" — fiber version: \"What's the best number to reach you about the install?\"",
+            ],
+          },
+          {
+            heading: "The options frame",
+            body: [
+              "\"As I see it, you have three options…\" — keep cable as-is, take the 500, or take the gig — then the handoff: \"Of those three options, what's going to be easiest for you?\" [VERIFY current plan names and tiers.] Three options makes the comparison feel complete; \"easiest\" makes choosing feel like relief. And the quietest power word in the set: \"Would the gig plan be enough for you?\" — enough lets them say yes without feeling sold.",
+            ],
+          },
+          {
+            heading: "The sequence-skipper and the conditional close",
+            body: [
+              "The sequence-skipper narrates the process as underway: \"What happens next is I check your address in the system, then we pick an install window. What's the best email for the confirmation?\" No permission requested, no gap to object into — the next step simply arrives with a logistics question attached.",
+              "The conditional close trades a concession for a commitment: \"If I can waive the install fee today, will you pick a window?\" [VERIFY current install offer before you offer to waive anything.] The structure is the point — if-I-can, will-you — and it only works when the concession is real.",
+            ],
+          },
+          {
+            heading: "The judo and the keep-alive",
+            body: [
+              "When an objection lands, the judo move is five words and silence: \"What makes you say that?\" The gentler variant: \"Just out of curiosity, what is it specifically you need to think about?\" Either way, ask and then shut up — their answer is the rebuttal you did not have to invent.",
+              "The keep-alive for a closing door: \"Before you make up your mind, let me show you the one number that changes people's minds — your actual evening speed.\" The Columbo exit, used only when literally true (F1): \"Just one more thing — the install crew finishes this street Friday; after that it's a 3-week wait\" [VERIFY the crew schedule]. And the social-proof reframe: \"Most people on the street take the gig plan because it's only $10 more than the 500\" [VERIFY the price delta], or \"The good news is the fiber's already at your property line — no construction in your yard.\"",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "\"What questions do you have for me?\" assumes the outcome; \"any questions\" invites the no.",
+          "Three options plus \"what's easiest for you?\" — and \"would the gig be enough?\" closes without pressure.",
+          "The sequence-skipper narrates the process as already moving.",
+          "Conditional close: \"If I can…, will you…?\" — the concession must be real [VERIFY].",
+          "\"What makes you say that?\" — then silence; their answer is the rebuttal.",
+        ],
+        drillPrompt:
+          "Flashcard day on the swaps. Write the instead/say pairs on cards and drill until the swap is reflexive, then use exactly one swap family per day this week — Monday the question-frame, Tuesday the options frame, and so on. Log doors, swap used, and result; the week's best story goes to the huddle verbatim.",
+        quiz: [
+          {
+            question: "Why does \"What questions do you have for me?\" outperform \"Do you have any questions?\"",
+            options: [
+              "It's longer",
+              "It assumes there are questions, so the rep is positioned as the answerer rather than the beggar",
+              "It's more polite",
+              "It confuses the homeowner",
+            ],
+            answerIndex: 1,
+            explanation: "\"The minute you assume an outcome… they have made a decision and you are perfectly positioned to ask for it.\"",
+          },
+          {
+            question: "What constraint governs the conditional close \"If I can waive the install fee, will you pick a window?\"",
+            options: [
+              "Say it only at the table",
+              "The concession must be real and current — verify the install offer before offering it",
+              "Never offer it twice",
+              "It requires manager approval by text",
+            ],
+            answerIndex: 1,
+            explanation: "An if-I-can you cannot deliver is a broken promise at the exact moment of maximum trust. Verify first [VERIFY].",
+          },
+          {
+            question: "After \"What makes you say that?\" the technique requires…",
+            options: [
+              "A quick follow-up question",
+              "The price anchor",
+              "Silence — their answer hands you the real objection",
+              "A smile and a nod",
+            ],
+            answerIndex: 2,
+            explanation: "The judo is the question plus the pause. Talking first wastes the move.",
+          },
+        ],
+      },
+      {
+        id: "m20-tonality",
+        title: "Tonality: how it lands, not what it says",
+        summary: "Four porch voices, the certainty sequence, and when humor gets you killed.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Words move logic, tone moves emotion",
+            body: [
+              "The sales canon's framing: the vast majority of communication is non-verbal — teach that as a principle about tonality's weight, not as a measured statistic. At a door, the homeowner's screen door is a tone filter: they read your music before your lyrics. The same sentence lands as neighbor or as nuisance entirely on delivery.",
+            ],
+          },
+          {
+            heading: "The four porch tonalities",
+            body: [
+              "Relaxed/playful is the default porch voice — light, unhurried, smiling, because they can hear a smile. Focused/serious is the money moment: the second real dollars are on the table, the playfulness steps out. Assertive/commanding is reserved for the close itself: \"I think we can agree that this is a good deal for both of us, so let's move forward.\" Empathetic/low is for bad experiences, scam concerns, and cancellations — slow, quiet, and completely unfunny.",
+              "The craft is the switch, not the voice. Amateurs run one tonality for the whole door; professionals move playful to focused to assertive as the conversation earns each gear.",
+            ],
+          },
+          {
+            heading: "The micro-permission tone",
+            body: [
+              "The ten-second exit line only works in genuine nonchalance: \"If I am catching you at a bad time, I can be gone in ten seconds... fair enough?\" — \"You are giving them control of the interaction.\" Any trace of neediness kills it, because the words promise ease while the tone begs. Same rule for the \"if not, that's cool too\" bridge: the cool has to be real. This is why m16's volume identity matters here — neediness is a funnel problem before it is a tone problem.",
+            ],
+          },
+          {
+            heading: "When humor kills",
+            body: [
+              "Four no-joke zones: during a bad-experience objection, during any scam-or-trust moment, during the money moment, and after a joke that lands flat. The flat-joke recovery is three words and a pivot: \"I'm just kidding,\" and move on — never double down on a dead joke. Practice method: record your own pitch and listen back; you will hear the tonalities you thought you used and the ones you actually did.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Tone moves emotion; the homeowner reads your music before your lyrics.",
+          "Four porch tonalities: playful default, focused for money, assertive only at the close, low empathy for wounds.",
+          "The skill is the switch between voices as the conversation earns each gear.",
+          "Micro-permission lines die with any trace of neediness — volume is what makes nonchalance real.",
+          "Humor is banned at bad experiences, trust moments, money moments — and after a flat joke: \"I'm just kidding,\" and move on.",
+        ],
+        drillPrompt:
+          "Record yourself delivering your opener plus one objection answer on your phone. Listen back twice: once for the words, once for the music. Mark the exact second your tone should have shifted from playful to focused, re-record with the switch, and play both for a teammate at the huddle.",
+        quiz: [
+          {
+            question: "When does the assertive/commanding tonality belong?",
+            options: [
+              "The opener",
+              "The whole pitch",
+              "The close only — used early it reads as aggression",
+              "The goodbye",
+            ],
+            answerIndex: 2,
+            explanation: "\"I think we can agree that this is a good deal for both of us, so let's move forward\" is a closing voice. Each gear is earned by the conversation.",
+          },
+          {
+            question: "Why does neediness kill the ten-second micro-permission line?",
+            options: [
+              "Homeowners dislike fast talkers",
+              "The words promise ease while the tone begs — the contradiction reads as manipulation",
+              "It takes longer than ten seconds",
+              "It requires a permit",
+            ],
+            answerIndex: 1,
+            explanation: "The line works by genuinely handing them control. Needy delivery takes it back, and they hear the take-back.",
+          },
+          {
+            question: "A joke lands flat during a trust moment. The recovery is…",
+            options: [
+              "Repeat it louder",
+              "Explain the joke",
+              "\"I'm just kidding,\" and move on — never double down",
+              "Silence and a long pause",
+            ],
+            answerIndex: 2,
+            explanation: "Three words, pivot, done. Doubling down on a dead joke in a trust moment ends the door.",
+          },
+        ],
+      },
+      {
+        id: "m20-silences",
+        title: "The seven silences and the 8-Mile move",
+        summary: "Strategic pauses that let the homeowner close themselves — and saying their objection first.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The seven silences",
+            body: [
+              "Silence is a technique with a checklist. Pause after you say their name — it lands. Pause after every question — \"they will fill in the space.\" Pause after a trial close and listen to the tone of the answer; if it is hesitant, name it: \"I hear some hesitancy there.\" Pause after receiving an objection. Pause after answering one — \"Does that answer your question?\" then wait.",
+              "Pause number six is the one that pays: after you ask for the sale, shut up — \"He who speaks first loses.\" And number seven, at the price presentation: say the number and stop — \"Don't project your relationship with money onto them. LET THEM SPEAK!\" Your rent is not their rent.",
+            ],
+          },
+          {
+            heading: "The 80/20 rule",
+            body: [
+              "\"Let your customer talk 80% of the time — let them talk themselves into the deal — when in doubt pause.\" The field corroboration is a homeowner's complaint about a rep who failed exactly here: he \"never once addressed my needs… you need to start listening more.\" The monologue feels safe because you control it. It is the least safe thing you can do, because nobody ever talked themselves into anything while listening.",
+            ],
+          },
+          {
+            heading: "The 8-Mile move",
+            body: [
+              "\"Use the 8 Mile strategy – Say what they're going to say first.\" Name the objection before they do and you own it. The fiber version [ADAPTED — field-test before canonizing]: \"You're probably thinking 'another cable guy promising the world' — fair. Here's the one difference…\" The skepticism they were holding becomes the skepticism you just proved you understand — and the difference statement that follows lands on open ears.",
+            ],
+          },
+          {
+            heading: "The mid-pitch permission pause",
+            body: [
+              "When you feel the door drifting, ask: \"Can I pause for a sec? I want to make sure this is actually helpful.\" — \"Most people will say, 'No, this is helpful,' and re-engage more fully.\" The pause works because it is the opposite of every pushy rep they have ever met: you checked on them mid-pitch instead of flooring it through the disinterest.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Seven silences: name, question, trial close, objection received, objection answered, the ask, the price.",
+          "After you ask for the sale, shut up — \"He who speaks first loses.\"",
+          "\"Don't project your relationship with money onto them\" — state the price and let them speak.",
+          "80/20: they talk themselves into the deal; monologues kill it.",
+          "The 8-Mile move: say their objection first, then show the one difference [ADAPTED].",
+        ],
+        drillPrompt:
+          "For your next 10 doors, keep a silence tally: mark a tick each time you held the pause after a question or an ask, and an X each time you filled the space yourself. Target: ten ticks, zero X's. Then run the 8-Mile opener on three doors and log what the pre-empted skepticism did to the first minute.",
+        quiz: [
+          {
+            question: "What happens immediately after you ask for the sale?",
+            options: [
+              "You recap the benefits",
+              "You offer a fallback",
+              "Nothing — you shut up; he who speaks first loses",
+              "You check the app",
+            ],
+            answerIndex: 2,
+            explanation: "The ask creates a decision space. The first person to speak relieves the pressure — make sure it is not you.",
+          },
+          {
+            question: "Why pause after stating the price?",
+            options: [
+              "To seem mysterious",
+              "To check their body language",
+              "Because projecting your own money-relationship onto them distorts their answer — let them speak",
+              "To remember the next line",
+            ],
+            answerIndex: 2,
+            explanation: "\"Don't project your relationship with money onto them. LET THEM SPEAK!\" The number means something different in their household than in yours.",
+          },
+          {
+            question: "The 8-Mile move is…",
+            options: [
+              "A rap battle opener",
+              "Naming the homeowner's objection before they say it, then showing the one difference",
+              "An eight-minute pitch limit",
+              "A closing discount",
+            ],
+            answerIndex: 1,
+            explanation: "\"Say what they're going to say first.\" Pre-empted skepticism becomes proof you understand them.",
+          },
+        ],
+      },
+      {
+        id: "m20-one-liner-vault",
+        title: "The one-liner vault: flashcards for the fast brain",
+        summary: "Fifty field-tested lines, organized by moment — drill one a day until they are reflexes.",
+        minutes: 8,
+        sections: [
+          {
+            heading: "Openers and pattern interrupts",
+            body: [
+              "\"Hi, I will be super quick. My name is [Name] and I am the local field manager for [Company]. We are the ones installing the new fiber optic lines in the neighborhood this week. If I am catching you at a bad time, I can be gone in ten seconds... fair enough?\" — the micro-permission opener. \"Hey, how's it going? We just finished running fiber to your street — you're one of the first homes that can get it. Are you currently with [cable provider]?\" — the greenfield play.",
+              "\"Hi, my name is [Name] — I work with [Company] and I've been out here talking to a few of your neighbors today about [context]. I just have a quick question for you — do you have 60 seconds?\" \"I get it you weren't expecting me, I'll be quick and get out of your hair...\" — the brush-off bridge. \"Quick heads-up: this is a cold call. But if it's not relevant, you'll know it in 30 seconds.\" \"I'll pitch you in 30 seconds. Then you tell me if I earned another 30. Deal?\" \"You're probably thinking 'another cable guy promising the world' — fair. Here's the one difference…\" [ADAPTED — the 8-Mile move].",
+            ],
+          },
+          {
+            heading: "Discovery and pain probes",
+            body: [
+              "\"How are you currently handling [internet speed]? Has that been an issue for you, or has it been fine?\" \"Who's your current provider?\" — easy to answer, and it hands you the positioning. \"What do you know about fiber vs. cable?\" \"That's great! Can I ask what you like about your current provider?\" — the curveball trust-builder when they praise the incumbent.",
+              "\"A lot of the folks we are talking to on this street say it works fine during the day, but right around 6:00 PM when everyone gets home, it starts buffering or dropping connections. Have you noticed any of those evening slowdowns, or has yours been pretty stable?\" — the congestion probe. \"The other issue neighbors are mentioning is that their bill keeps creeping up every year after the promo ends… Has your bill jumped up recently?\" — the price pivot. \"What would it be worth if every device in the house just worked at once?\"",
+            ],
+          },
+          {
+            heading: "Objection bridges",
+            body: [
+              "\"Totally understand. You weren't expecting the [fiber] guy to stop by today. Let me show you what I was doing for Ms. Jones next door. If it works for you, cool. If not, that's cool too.\" \"I am glad to hear that. Honestly, your current provider has been the best option in this area for a long time. The only reason we are out here is that the infrastructure has finally changed…\" — the happy-provider judo.",
+              "\"Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?\" \"If this isn't for you, I'd rather have a no right now – believe me, you won't hurt my feelings.\" \"If your spouse comes home and says they love the idea, are you 100% on board, or do you still have some reservations?\" \"Sure! Would it make sense for us to call them now?\" \"Would you mind pulling up your most recent internet bill? I find that about seven out of ten homes I visit are actually paying more than they think.\" \"I know you've already got fiber from [competitor] — what are you paying for what speed?\" \"I understand how you feel. Many of my current customers felt the same way. But what they found was…\" \"What makes you say that?\" — then silence.",
+            ],
+          },
+          {
+            heading: "Trust, closes, and rep self-talk",
+            body: [
+              "Trust as a close [ADAPTED]: \"Smart question — you should ask it. Here's my rep ID… call it while I stand here. And when you sign up, federal law gives you three days to cancel for any reason — it's printed right on the paperwork.\" \"Don't take my word for it — check [ISP].com on your phone right now and you'll see fiber is live at this address.\" \"You're not signing up for anything today. In a week or so you can, but I'm not gonna twist your arm. You'll either like it and do it or you won't.\"",
+              "Closes and next steps: \"I have my tech in the neighborhood tomorrow between 2:00 PM and 4:00 PM, or I can have him swing by Thursday morning. Which one works better…?\" \"Should I swing back by in about 45 minutes, or would tomorrow evening be better for you?\" \"What questions do you have for me?\" \"If I can waive the install fee today, will you pick a window?\" [VERIFY current install offer] \"What happens next is I check your address in the system, then we pick an install window. What's the best email for the confirmation?\" \"Tonight around 7:00 PM… run a quick speed test on your phone. I am going to swing back by tomorrow afternoon just to see what numbers you got.\"",
+              "And the self-talk cards for the huddle wall: \"Most people say no. Only a small percentage say yes. That's why it's hard. That's why it pays well.\" \"I don't close hard sales, I create hundreds of easy ones.\" \"Amateurs wait until they feel like prospecting. Professionals prospect whether they feel like it or not.\" \"Don't walk to your car without a date on the calendar.\" \"Rejection is data, not personal.\" \"Leaving a flyer on a door is advertising, not sales.\" \"An objection is not a rejection—it's a request for more information delivered with emotion.\" \"The difference between sleazy scarcity and effective scarcity is whether the constraint is real.\" \"Not everyone's a deal.\"",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The vault is a drill deck, not a script wall — one line a day until it is a reflex.",
+          "Every line maps to a moment: opener, probe, bridge, trust, close, or self-talk.",
+          "[ADAPTED] lines are field-test candidates — log what they do before you canonize them.",
+          "Price, speed, and offer claims inside any line carry [VERIFY] — check the current offer before quoting.",
+        ],
+        drillPrompt:
+          "Flashcard week. Day 1: pick ONE vault line and use it on every door. Each evening, log which line you used, at which doors, and what happened — one principle per day. By Friday you own five lines cold; present the single best door story to the huddle, what you said, verbatim.",
+        quiz: [
+          {
+            question: "How is the vault meant to be drilled?",
+            options: [
+              "Memorize all fifty lines in one weekend",
+              "One line per day, every door, logged nightly — until the line is a reflex",
+              "Read once before each shift",
+              "Only before blitz days",
+            ],
+            answerIndex: 1,
+            explanation: "The one-principle-per-day rollout builds reflexes without parlor-trick stacking. Five days, five owned lines.",
+          },
+          {
+            question: "A vault line contains a price or speed claim. What happens before you quote it?",
+            options: [
+              "Nothing — vault lines are pre-approved",
+              "You verify it against the current offer — [VERIFY] tags follow the number wherever the line goes",
+              "You round it down",
+              "You say it only to renters",
+            ],
+            answerIndex: 1,
+            explanation: "The line is language; the number inside it is a live offer claim. Verify before it leaves your mouth.",
+          },
+          {
+            question: "What does an [ADAPTED] tag on a vault line mean?",
+            options: [
+              "The line is banned",
+              "The line was re-worded for fiber and must be field-tested and logged before it becomes canon",
+              "The line is for managers only",
+              "The line is legally reviewed",
+            ],
+            answerIndex: 1,
+            explanation: "Adapted lines are candidates, not scripture. Use them, log what they do, and let the results canonize them.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M21 — The Team Lead's Operating System ──────────────────────────────────
+  {
+    id: "m21",
+    title: "The Team Lead's Operating System",
+    tagline: "Huddles, scorecards, ride-alongs, and motivation mechanics — the manager track.",
+    hook: "Talent is great. Systems are better. A good rep on a great system beats a great rep on a bad system every single time — and building the system is now your job.",
+    fieldStory:
+      "The 9-to-9 team lead knocks mornings while training the newbies, closes in the evenings, and between appointments goes straight back to knocking — \"works his ass off always knocking or closing 9 to 9.\" His reps don't follow a manager. They follow a pace-setter.",
+    sayThisNotThat: {
+      instead: "Why are your numbers down?",
+      say: "Show me your funnel — which stage moved this week?",
+    },
+    lessons: [
+      {
+        id: "m21-huddle",
+        title: "The 20-minute huddle",
+        summary: "MANAGER TRACK: the daily ignition ritual — wins, targets, one micro-training, pair-ups, send-off.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "Who this module is for",
+            body: [
+              "This module is manager-facing. It is written for team leads, assistant managers, and senior reps on the leadership path — the people who now own the system the reps run inside. Nothing in modules 1 through 20 is manager content; this one converts the team-systems research into the lead's playbook. If you are a rep, your job is in the other twenty-one modules. If you are a lead, this module is the job.",
+            ],
+          },
+          {
+            heading: "The format, verbatim",
+            body: [
+              "Twenty minutes, hard stop, no exceptions — run it on a visible timer. Two minutes: celebrate two actionable micro-wins by name. Five minutes: today's one to three targets — presentations, sprints, callbacks — with the expectation stated: \"After your first close, I need an immediate text reporting your 90-minute sprint doors.\" Eight minutes: micro-training on exactly ONE topic, one new phrasing, two reps role-playing it immediately. Three minutes: pair-ups — a winning veteran with a newer rep for the first 90 minutes. Two minutes: the send-off question, answered by every rep: \"What is your first door/appointment?\"",
+              "Cut tangents with one phrase: \"we can talk about that one-on-one.\" The huddle is ignition, not administration: \"Don't run a meeting—ignite a sprint.\"",
+            ],
+          },
+          {
+            heading: "The variant rule and the culture law",
+            body: [
+              "No metrics review in the huddle. Numbers go to the weekly 30-to-45-minute sync, where door knocks, contact rate, appointments, and close rate get their proper autopsy. Mixing the two kills both: the huddle gets heavy, the sync gets rushed.",
+              "The culture law is absolute: never cancel a huddle — \"You don't cancel on culture.\" A cancelled huddle tells the team the system is optional, and optional systems are dead systems.",
+            ],
+          },
+          {
+            heading: "The anti-pattern and the drill loop",
+            body: [
+              "The failure mode to avoid is the ra-ra hype meeting — the one that sends overcaffeinated rookies bouncing into neighborhoods. A homeowner described the result from the other side of the door: reps with \"the eyes of someone hopped up on redBull and motivational ra ra sales meetings.\" Energy at your huddle comes from structure and micro-wins, not volume.",
+              "Close the loop with the field: \"the hardest objection from yesterday becomes the drill for tomorrow.\" The objection map from m18 feeds the eight-minute micro-training slot, so the huddle is always practicing against live ammunition, and daily role-play stays a fixed fifteen minutes inside the week.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Manager track: this module is for leads and leadership-path seniors — you own the system now.",
+          "The agenda: 2 celebrate, 5 targets, 8 micro-training with live role-play, 3 pair-ups, 2 send-off — 20 minutes, hard stop.",
+          "No metrics in the huddle; the weekly 30-45 minute sync owns the numbers.",
+          "Never cancel a huddle — \"You don't cancel on culture.\"",
+          "Yesterday's hardest field objection is tomorrow's drill.",
+        ],
+        drillPrompt:
+          "Run tomorrow's huddle on the timer — 20 minutes hard stop, one micro-training topic, two reps role-playing before anyone leaves. Then audit your week: how many minutes of direct coaching did each rep receive? Any rep at zero gets a ride-along scheduled before Friday.",
+        quiz: [
+          {
+            question: "Where does the weekly metrics review belong?",
+            options: [
+              "The daily huddle",
+              "The weekly 30-45 minute sync — the huddle is for ignition, not administration",
+              "A group text",
+              "The ride-along",
+            ],
+            answerIndex: 1,
+            explanation: "Mixing metrics into the huddle makes it heavy and slow. Huddle ignites the day; the sync autopsies the week.",
+          },
+          {
+            question: "What is the correct response when a tangent threatens the huddle clock?",
+            options: [
+              "Let it run — engagement matters",
+              "Table it with \"we can talk about that one-on-one\" and keep the 20-minute hard stop",
+              "End the huddle early",
+              "Move it to the send-off",
+            ],
+            answerIndex: 1,
+            explanation: "The timer is the format. One phrase preserves both the tangent (which gets its 1:1) and the ritual.",
+          },
+          {
+            question: "A rep suggests cancelling huddles on blitz days to gain knocking time. The rule is…",
+            options: [
+              "Reasonable — blitzes are revenue",
+              "Never cancel a huddle — you don't cancel on culture",
+              "Cancel every other one",
+              "Replace it with a conference call",
+            ],
+            answerIndex: 1,
+            explanation: "A cancelled huddle declares the system optional. Optional systems are dead systems.",
+          },
+        ],
+      },
+      {
+        id: "m21-scorecards",
+        title: "Scorecards that coach, not surveil",
+        summary: "Five KPIs plus coaching minutes — diagnose one funnel stage, never micromanage the ace.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "The five KPIs plus one",
+            body: [
+              "Track five numbers per rep: doors knocked, conversations started, demos booked, closes, and average deal size — for fiber, define a \"demo\" as a delivered speed-test or quote. Then add the coaching KPI that separates teams from cost centers: minutes of direct coaching received per rep per week. \"If that last one is zero, you're not running a sales team — you're running a cost center.\" Review cadence: daily by the rep, weekly by you, monthly by the owner.",
+            ],
+          },
+          {
+            heading: "Benchmark bands and stage diagnosis",
+            body: [
+              "Working bands, to be calibrated against your own team's data before you coach from them [VERIFY]: 80 to 120 doors per 8-hour shift; contact rate 30 to 50 percent, running 40 to 55 percent in the 6-to-8 p.m. window versus 20 to 30 percent late morning. The bands exist to aim coaching, not to shame.",
+              "Diagnose ONE stage, not everything: contact under 35 percent is a timing or territory problem; presentations under 60 percent of contacts is an opening problem; closes under 15 percent of presentations is a pitch or objection problem. \"70–80% of the conversion gap is caused by a single stage in the funnel\" — find the stage and fix only that. And compare reps on knock-to-lead ratio, not raw sales, because territory luck inflates raw numbers: \"If a rep is knocking 100 doors with a 10% contact rate, they don't need more hustle — they need better timing.\"",
+            ],
+          },
+          {
+            heading: "The micromanagement landmine",
+            body: [
+              "The rep-side warning, scored one of the most-upvoted posts in the research: \"Your guy that is running >100% to quota does not need micromanaged at all, he needs a pat on the back… Having that guy spend hours a day doing stupid reporting is absolutely criminal.\" Scorecards serve the coaching conversation; the moment they serve surveillance, your best rep starts interviewing.",
+              "Design for the field's patience: CRM disposition entry must take under 20 seconds per door or reps stop logging — and unlogged doors make every scorecard fiction. Keep the entry that fast and the data stays real.",
+            ],
+          },
+          {
+            heading: "Territory data hygiene",
+            body: [
+              "Respect historical close rates over proximity: \"the neighborhood you closed 3 deals in last month is more valuable than the neighborhood that's 5 minutes closer.\" Assign turf by evidence, not convenience. And tag wins and losses to script variants so the opener library gets A/B tested by reality — the huddle should be drilling what the data says works on this turf, not what sounded good in a course.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Five KPIs (doors, conversations, demos, closes, deal size) plus coaching minutes per rep per week.",
+          "\"If coaching minutes is zero, you're not running a sales team — you're running a cost center.\"",
+          "Diagnose one funnel stage: contact = timing/turf, presentation = opener, close = pitch/objection.",
+          "Compare reps on knock-to-lead ratio, not raw sales; under-20-second logging keeps the data real.",
+          "Never micromanage the over-quota rep — assign turf by historical close rates, not proximity.",
+        ],
+        drillPrompt:
+          "Pull your team's funnel this week and find each rep's single broken stage — contact, presentation, or close. Write one sentence of coaching per rep aimed at exactly that stage, and time your next disposition entry: if it takes over 20 seconds, bring the friction to your ops contact before Friday.",
+        quiz: [
+          {
+            question: "A rep's contact rate is 22% but presentations-per-contact and close rate are team-best. The diagnosis is…",
+            options: [
+              "A closing problem",
+              "A motivation problem",
+              "A timing or territory problem — fix the contact stage, leave the rest alone",
+              "A paperwork problem",
+            ],
+            answerIndex: 2,
+            explanation: "One stage is broken; 70-80% of the conversion gap lives in a single stage. Coach timing and turf, not the opener.",
+          },
+          {
+            question: "What does the coaching-minutes KPI catch that the five activity KPIs cannot?",
+            options: [
+              "Rep dishonesty",
+              "Whether you are actually developing anyone — zero coaching minutes means a cost center, not a team",
+              "Territory quality",
+              "Comp plan fairness",
+            ],
+            answerIndex: 1,
+            explanation: "Activity KPIs measure the reps. Coaching minutes measure the manager.",
+          },
+          {
+            question: "Why must disposition entry take under 20 seconds?",
+            options: [
+              "App store requirements",
+              "If logging is slow, reps stop logging — and every scorecard built on unlogged doors is fiction",
+              "Battery life",
+              "Faster entries pay more",
+            ],
+            answerIndex: 1,
+            explanation: "Data quality is a UX problem. Slow entry produces fake dashboards and mis-aimed coaching.",
+          },
+        ],
+      },
+      {
+        id: "m21-ride-alongs",
+        title: "Ride-alongs and the rookie ramp",
+        summary: "Observe, don't intervene — the 3-phase ride-along, the cadence, and the retention stakes.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "The 3-phase ride-along",
+            body: [
+              "Pre-visit: review the rep's plan together — which addresses, the goal per stop. During: \"Observe, don't intervene (unless asked or unless the deal is at risk).\" Your silence at the door is the assessment; jumping in teaches nothing but dependence. Debrief: \"Ask the rep to self-assess first — 'How do you think that went?' — before offering your observations… one thing to reinforce and one thing to adjust.\" One and one. A debrief with six fixes is a demotion speech.",
+              "The anti-pattern that poisons the tool: \"managers who only ride along when numbers are down. That turns observation into surveillance.\" Ride with your top performer on the same cadence as your struggler, or the ride-along becomes the punishment van.",
+            ],
+          },
+          {
+            heading: "The cadence",
+            body: [
+              "Observation-only for new reps in their first 30 days. Shadow-and-assist in weeks 5 through 12 — the highest-value tool for reps who are stuck. Side-by-side after the ramp, plus peer ride-alongs between reps. Frequency: three to four per week for days 0 to 60, one to two per week for days 60 to 120, monthly after that.",
+              "Performance flags that trigger an unscheduled ride-along: close rate below team baseline for two straight weeks, three or more no-decision stalls in a row, or the rep simply asks for help. That last one is the healthiest signal a team can produce — protect it by making help consequence-free.",
+            ],
+          },
+          {
+            heading: "The ramp and the retention stakes",
+            body: [
+              "The four-week progression: fundamentals, shadow-selling, supervised selling, independent with daily check-ins. Manage the three speed levers: \"Speed to sale, speed to pay, speed to integrate. Miss any one and the new hire ghosts you before day 30.\" Use the pre-hire ride-along as a recruiting filter — \"If a candidate won't ride along before the offer, that tells you everything\" — and hire for coachability, work ethic, and resilience, explicitly not for sales experience.",
+              "Why this is existential: time-to-first-funded-deal is the number one retention predictor, and turnover concentrates in weeks three through eight. Kinetic's direct-sales employer reviews sit around 2.7 out of 5 with metric-pressure and management-knowledge complaints [VERIFY current rating] — which means the manager system described in this module is not overhead. The manager system is the retention plan. And the recruiting wedge is real: fiber knocks year-round, with no off-season layoff against the summer-model churn of pest and solar.",
+            ],
+          },
+          {
+            heading: "Lead from the front",
+            body: [
+              "The rhythm that earns followership: \"He knocks mornings and trains newbies and closes in the evenings.\" The operating day: 8:30 huddle, 9:30 to noon knocking, midday management, 3 to 7-plus back on the doors. \"Managers sell. Setters set. Closers close. Everyone trains. Everyone logs reps.\" A lead who knocks can say \"watch me\" — the two most credible words in management.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Ride-along phases: plan together, observe without intervening, self-assessment first, one reinforce plus one adjust.",
+          "Never ride along only when numbers are down — that turns observation into surveillance.",
+          "Cadence: observation days 0-30, shadow-assist weeks 5-12, side-by-side post-ramp; flags trigger extras.",
+          "Speed to sale, speed to pay, speed to integrate — weeks 3-8 are the quitting window.",
+          "Lead from the front: \"Managers sell. Setters set. Closers close. Everyone trains. Everyone logs reps.\"",
+        ],
+        drillPrompt:
+          "Schedule this week's ride-alongs on the cadence — including one with your top performer, observed silently and debriefed with self-assessment first. Audit the roster: any rep in weeks 3-8 without a funded deal gets a shadow-and-assist day and a daily check-in until the first deal funds.",
+        quiz: [
+          {
+            question: "Mid-ride-along, the rep botches an objection but the deal is not at risk. You…",
+            options: [
+              "Step in and save the door",
+              "Correct them at the door quietly",
+              "Stay silent — observe, don't intervene — and bring it to the debrief",
+              "End the ride-along",
+            ],
+            answerIndex: 2,
+            explanation: "Intervening teaches dependence and ruins the assessment. The debrief — self-assessment first — is where the fix belongs.",
+          },
+          {
+            question: "Why ride along with your top performer on the same cadence as your struggler?",
+            options: [
+              "To check their numbers",
+              "So observation never reads as surveillance — and you learn what to teach everyone else",
+              "To keep them humble",
+              "Fairness paperwork",
+            ],
+            answerIndex: 1,
+            explanation: "\"Managers who only ride along when numbers are down turn observation into surveillance.\" Universal cadence keeps the tool clean.",
+          },
+          {
+            question: "What are the three speed levers of rookie retention?",
+            options: [
+              "Speed, price, quality",
+              "Speed to sale, speed to pay, speed to integrate",
+              "Hustle, attitude, attendance",
+              "Opener, pitch, close",
+            ],
+            answerIndex: 1,
+            explanation: "\"Miss any one and the new hire ghosts you before day 30.\" Weeks 3-8 are where the levers pay out or the rep walks.",
+          },
+        ],
+      },
+      {
+        id: "m21-motivation",
+        title: "Motivation mechanics that survive week six",
+        summary: "Cash and recognition beat hype; rotate the contest before it rots; reward controllables.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The perception gap",
+            body: [
+              "Seventy-one percent of sales managers say they know how to motivate their team; only 40 percent of reps agree. Close the gap with what reps actually rank: real-time progress tracking, regular recognition, individual goal progression — and cash bonuses as the best reward, named by a majority. Anchor spiffs in cash and recognition in public, in that order.",
+            ],
+          },
+          {
+            heading: "The decay law",
+            body: [
+              "Leaderboard-only gamification loses its impact after six to eight weeks; \"a contest that never changes stops working within a few weeks.\" Rotate the mechanic monthly at minimum, and match the mechanic to the outcome you want: leaderboards drive raw volume, badges and levels drive consistency, contests drive short bursts, and one-day blitz competitions pair with the m17 campaign calendar.",
+              "The mistakes table: rewarding only top performers (the middle quits trying), overcomplicated rules (nobody can repeat the contest means nobody is running it), the same contest on loop, and rewarding activity over quality (you get doors knocked by ghosts).",
+            ],
+          },
+          {
+            heading: "Reward controllables, celebrate in detail",
+            body: [
+              "Reward what reps control — knocks, contact rate, follow-up speed — not just closes, and celebrate behavior micro-wins in the huddle. When a closer wins, \"share wins publicly, in detail\": the closer walks the team through exactly what they said at the door, sentence by sentence. A vague congratulations teaches nothing; a verbatim play-by-play teaches the whole roster.",
+            ],
+          },
+          {
+            heading: "Aspiration and the pipeline",
+            body: [
+              "Keep the ceiling visible. The Golden Door winners are the proof: Jack Slezak's summer — 544 accounts, 653K in revenue, and he \"remembered names, engaged in meaningful conversations, and even got invited to neighborhood parties.\" The fiber version, Noah: records his own pitches, sends them for feedback, self-audits nightly — \"I only sold four or five, six today. Like, what am I doing wrong?\" That is what a self-coaching rep sounds like, and it is a system output, not a personality type.",
+              "The leadership pipeline is itself a retention mechanic: \"Rep → senior rep → team lead → assistant manager → manager. Each step has defined criteria and a clear next-step path.\" Reps stay where they can see a staircase. And underneath all of it: \"Talent is great, systems are better… build the system that makes B-players dangerous.\"",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The gap: 71% of managers think they motivate; 40% of reps agree — cash spiffs, public recognition, real-time tracking.",
+          "Contests decay in 6-8 weeks — rotate monthly; leaderboard = volume, badges = consistency, contest = burst, blitz = campaign.",
+          "Reward controllables (knocks, contact rate, follow-up speed), not just closes.",
+          "Share wins publicly in verbatim detail — the play-by-play is the training.",
+          "The defined pipeline (rep to manager) is retention; \"build the system that makes B-players dangerous.\"",
+        ],
+        drillPrompt:
+          "Audit your current contest against the mistakes table: Is it older than six weeks? Can every rep repeat the rules? Does anyone besides the top two have a chance? Fix one flaw this week, and at the next huddle have your last winner deliver the door conversation verbatim instead of accepting applause.",
+        quiz: [
+          {
+            question: "Why do leaderboard-only contests fade after 6-8 weeks?",
+            options: [
+              "Reps stop caring about money",
+              "The same contest stops working — the mechanic must rotate, matched to the outcome you want",
+              "The prizes get smaller",
+              "New reps join",
+            ],
+            answerIndex: 1,
+            explanation: "Novelty is the fuel. Rotate monthly: leaderboards for volume, badges for consistency, contests for bursts.",
+          },
+          {
+            question: "What should a win celebration in the huddle actually contain?",
+            options: [
+              "Applause and a gift card",
+              "The closer walking through exactly what they said at the door, sentence by sentence",
+              "A screenshot of the leaderboard",
+              "A motivational video",
+            ],
+            answerIndex: 1,
+            explanation: "\"Share wins publicly, in detail.\" The verbatim play-by-play converts one rep's win into the whole team's training.",
+          },
+          {
+            question: "Why does the defined rep-to-manager pipeline function as retention?",
+            options: [
+              "It raises base pay",
+              "Reps stay where they can see a staircase — each step has criteria and a clear next step",
+              "It impresses recruits",
+              "HR requires it",
+            ],
+            answerIndex: 1,
+            explanation: "Ambition without a visible path becomes a resignation letter. Defined steps keep the ambitious reps climbing inside your team.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M22 — Compliance Is the Pitch ───────────────────────────────────────────
+  {
+    id: "m22",
+    title: "Compliance Is the Pitch",
+    tagline: "The Cooling-Off Rule as a trust asset, real urgency only, and the playbook that burned the channel.",
+    hook: "The fastest way to kill a neighborhood is to win the wrong way. Every rule in this module is also a sales weapon — the rep who shows the cancel-rights paperwork closes the skeptic the last four knocks couldn't.",
+    fieldStory:
+      "A Quantum Fiber customer signs at the door on the rep's written promises of features and speeds. Install day arrives, and the tech disowns every line: \"you know Quantum is just CenturyLink in a new dress right?... this isn't the first time we've caught the salespeople overpromising.\" Support sides with the paperwork: \"the service agreement defines the contract, not the salesperson.\" Cancellation, public trashing, and a whole thread of neighbors who will never open the door again. One overpromise, one burned territory.",
+    sayThisNotThat: {
+      instead: "This price is only good while I'm standing here.",
+      say: "The crew finishes this street Friday — that's the real date, and I can show you the schedule.",
+    },
+    lessons: [
+      {
+        id: "m22-cooling-off",
+        title: "The Cooling-Off Rule is your friend",
+        summary: "Three days to cancel, disclosed up front — the skeptic-closer hiding inside a legal duty.",
+        minutes: 6,
+        pitchDrill:
+          "Smart question — you should ask it. Here's my rep ID, and here's the official number on my badge — call it while I stand here. And when you sign up, federal law gives you three days to cancel for any reason — it's printed right on the paperwork.",
+        sections: [
+          {
+            heading: "The law",
+            body: [
+              "Door-to-door sales of 25 dollars or more at a home trigger the FTC Cooling-Off Rule: the buyer gets a three-business-day right to cancel, you must deliver the notice in writing and explain it orally, and violations carry civil penalties up to $43,280 each [VERIFY the current penalty adjustment]. The seller also cannot assign the contract for five business days. This is not a brand policy you can waive; it is federal law attached to every porch signature you collect.",
+            ],
+          },
+          {
+            heading: "The flip: disclosure as a closing tool",
+            body: [
+              "Here is the thesis of this module: disclosing the rule up front is a trust asset, not a speed bump. The D2D Experts' guidance is \"We follow FTC rules and leave your 3-day cancel notice and itemized quote… Say it, show it.\" The psychology is risk-reversal — \"When the downside is capped, the decision gets easier.\" The consumer-grade de-risking instruments are the contract buyout, the price-lock, the install guarantee, and the cooling-off period. You are not weakening the close; you are removing the last reason to stall.",
+            ],
+          },
+          {
+            heading: "The \"is this a scam?\" answer stack",
+            body: [
+              "m12 taught you to survive the scam objection; this is the compliance weapon that ends it [ADAPTED — field-test before canonizing]: \"Smart question — you should ask it. Here's my rep ID, and here's the official [ISP] number on my badge — call it while I stand here… And when you sign up, federal law gives you three days to cancel for any reason — it's printed right on the paperwork.\" The verify-yourself close pairs with it [ADAPTED]: \"Don't take my word for it — check [ISP].com on your phone right now and you'll see fiber is live at this address.\"",
+              "When they hesitate over payment, reward the caution — m13 owns the mechanics, this is the language [ADAPTED]: \"Good policy — you shouldn't hand your card to a stranger on the porch… you enter your own payment info in the [ISP] app yourself… Nothing goes through me.\" And remember who you are talking to: \"skeptics who verify become your loudest advocates.\" The porch that checks you out is the porch that defends you in the neighborhood group next week.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Sales of $25+ at a home: 3-business-day cancel right, written plus oral disclosure, penalties to $43,280 per violation [VERIFY].",
+          "Disclose up front — \"Say it, show it\" — because capped downside makes the decision easier.",
+          "The scam-answer stack: rep ID, official number called from the porch, three-day federal cancel right on the paperwork.",
+          "Reward card caution: the customer enters their own payment info; nothing goes through you.",
+          "\"Skeptics who verify become your loudest advocates.\"",
+        ],
+        drillPrompt:
+          "Role-play the full scam-answer stack until you can deliver the rep-ID-and-cooling-off answer in under 20 seconds, cheerfully. Then run it live: on your next 10 doors, disclose the three-day right before they ask, and log what the early disclosure does to the trust temperature of the conversation.",
+        quiz: [
+          {
+            question: "What does the FTC Cooling-Off Rule require on a door-to-door sale of $25 or more?",
+            options: [
+              "A phone confirmation within 24 hours",
+              "A 3-business-day right to cancel, disclosed in writing and orally",
+              "A notarized signature",
+              "A manager's co-signature",
+            ],
+            answerIndex: 1,
+            explanation: "Written plus oral disclosure of the three-day right is mandatory, with civil penalties up to $43,280 per violation [VERIFY].",
+          },
+          {
+            question: "Why disclose the cooling-off right before the customer asks?",
+            options: [
+              "To get the legal duty over with",
+              "Risk-reversal: \"When the downside is capped, the decision gets easier\" — disclosure closes skeptics",
+              "It shortens the install window",
+              "It prevents chargebacks entirely",
+            ],
+            answerIndex: 1,
+            explanation: "The disclosure is a trust asset. \"Say it, show it\" converts a legal obligation into the reason the skeptic signs.",
+          },
+          {
+            question: "A homeowner refuses to hand you their card. The compliant response is…",
+            options: [
+              "Reassure them you are trustworthy",
+              "Reward the caution — they enter their own payment info in the app; nothing goes through you",
+              "Move to cash",
+              "Skip the payment step",
+            ],
+            answerIndex: 1,
+            explanation: "\"Good policy — you shouldn't hand your card to a stranger on the porch.\" Never argue someone out of good security habits.",
+          },
+        ],
+      },
+      {
+        id: "m22-real-urgency",
+        title: "Urgency: real constraints only",
+        summary: "Crew schedules, promo end dates, install slots — verifiable urgency closes; fake urgency convicts.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The bright line",
+            body: [
+              "Memorize the standard: \"If you offer a 'today-only' discount and then give the same deal next week, you haven't created urgency — you've destroyed trust… The difference between sleazy scarcity and effective scarcity is whether the constraint is real.\" That is the entire rule. Real constraint, permitted urgency. Invented constraint, deceptive practice.",
+            ],
+          },
+          {
+            heading: "The permitted inventory",
+            body: [
+              "Real urgency is abundant in fiber if you do the homework. Real crew schedules and install-slot counts: \"We have three open install slots this month for your neighborhood because our crew is already here working on Oak Street. Once those fill up, the next availability is six weeks out\" — said only when the schedule shows it. Real promo end dates from the current offer sheet [VERIFY]. The visible construction itself: \"they have seen the construction trucks and orange conduit being laid for weeks.\"",
+              "And the deadline-hold rule from the canon: a deadline you actually honor builds Black-Friday energy over time; honoring it inconsistently \"destroys credibility and hands control to the customer.\" If the promo ends Friday, it ends Friday — including for the door you want most.",
+            ],
+          },
+          {
+            heading: "The banned list and what it costs",
+            body: [
+              "Banned, always: \"This deal is only good today\" and \"the price expires when I leave\" when untrue. This is not a style rule — fake urgency is deceptive-practice exposure under state consumer-protection statutes, the kind that generates attorney-general complaints. The day-three \"last one on the street\" squeeze from m17 is permitted only when literally true.",
+              "The economics convict it too: fake urgency manufactures exactly the pressured sales that cancel inside the cooling-off window — \"a pressured or rushed sale… will be cancelled later\" — and m19 already showed you what the flake class costs in dollars. Fake urgency does not just risk the AG. It loses money on a spreadsheet.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "\"The difference between sleazy scarcity and effective scarcity is whether the constraint is real.\"",
+          "Permitted: real crew schedules, real install-slot counts, real promo end dates [VERIFY], visible construction.",
+          "Honor your own deadlines — inconsistency \"destroys credibility and hands control to the customer.\"",
+          "Banned: today-only claims that are not true — deceptive-practice exposure plus manufactured cancellations.",
+          "Fake urgency is an accounting loss before it is a legal one.",
+        ],
+        drillPrompt:
+          "Audit your last 10 closes: list every urgency claim you made and the verifiable fact behind each. Any claim without a fact goes on your personal banned list, and you replace it this week with one item from the permitted inventory — a real crew date, a real slot count, or a real promo end date pulled from the current offer sheet.",
+        quiz: [
+          {
+            question: "Which urgency claim is permitted?",
+            options: [
+              "\"This price expires when I leave\"",
+              "\"We have three open install slots this month because our crew is already here\" — when the schedule actually shows it",
+              "\"Everyone on the street already signed\"",
+              "\"The offer ends tonight\"",
+            ],
+            answerIndex: 1,
+            explanation: "Real crew schedules and real slot counts are verifiable constraints. The rest are manufactured scarcity.",
+          },
+          {
+            question: "A promo is set to end Friday, and a great door wants it held to Monday. The deadline-hold rule says…",
+            options: [
+              "Hold it — the deal matters more",
+              "It ends Friday — honoring the deadline is what gives your deadlines power",
+              "Extend it if they sign today",
+              "Split the difference",
+            ],
+            answerIndex: 1,
+            explanation: "Honored deadlines build energy over time; flexible ones \"destroy credibility and hand control to the customer.\"",
+          },
+          {
+            question: "Beyond legal exposure, what does fake urgency do to your numbers?",
+            options: [
+              "Nothing measurable",
+              "It manufactures pressured sales that cancel inside the cooling-off window — the flake class m19 counts in dollars",
+              "It increases referrals",
+              "It speeds up installs",
+            ],
+            answerIndex: 1,
+            explanation: "\"A pressured or rushed sale… will be cancelled later.\" The fake-urgency close is a chargeback with a delay timer.",
+          },
+        ],
+      },
+      {
+        id: "m22-forbidden-playbook",
+        title: "The forbidden playbook: the tactics that burned this channel",
+        summary: "Impersonation, speed-test games, overpromising, unserviceable pitching, fraud, and FUD — named and banned.",
+        minutes: 7,
+        sections: [
+          {
+            heading: "Impersonation and speed-test games",
+            body: [
+              "The impersonation case: a rep told an elderly woman \"the copper connection is being replaced by fiber optic. Which provider are you with right now?\" — \"It sounds incredibly official, as if it's a mandatory technical upgrade. But it is pure deception… weaponizing the national transition… especially among the elderly.\" The copper retirement is a true and powerful talking point [VERIFY Kinetic-specific plans with ops] — but you are a salesperson, never a migration agent. Leverage the visible construction; never impersonate the crew.",
+              "Speed-test integrity: a viral legal-advice thread alleges a rep's demo speeds mysteriously recovering as he moved down the street — jamming accusations, believed by hundreds of upvoters. Even honest tests mislead when run far from the router. The rule: \"test hardwired or next to the router, state what the test does and doesn't prove, and never touch the customer's network.\"",
+            ],
+          },
+          {
+            heading: "Overpromising and unserviceable pitching",
+            body: [
+              "The overpromise case is this module's field story: written promises disowned by the install tech, support ruling that \"the service agreement defines the contract, not the salesperson,\" cancellation and public trashing. The cousins: \"takes maybe an hour\" against documented two-to-six-hour windows [VERIFY], and the eleven-engineer-visit collapse. The rule: quote scenario-appropriate windows, and put numbers in writing only when accurate — sophisticated buyers already ask for writing (\"its probably worth seeing that in writing\"), and the rep whose written numbers survive wins that buyer.",
+              "Unserviceable pitching is the fastest brand-burn: \"ATT fiber has no internet here but they keep sending flyers and door-to-door salesmen, Kinetic only offers a 4mbps package but the flyers are two to three times a week.\" That is a real homeowner, naming us. The rule is step zero of every knock: no serviceability check, no knock.",
+            ],
+          },
+          {
+            heading: "Channel fraud and competitor FUD",
+            body: [
+              "Named and banned: fake call-center confirmations, pity appointments booked to hit quota, new-line-versus-upgrade gaming, fake \"free trial\" billing. These are documented telecom D2D practices, and homeowners have read the stories — being the rep who references and disavows them is differentiation, not oversharing.",
+              "Competitor FUD is the mirror violation. The anti-Google-Fiber pressure pitch in Austin — \"you don't know IF you'll get it!\" — got quoted online with \"Personally, it pisses me off… Screw that.\" The rep claiming \"wireless is unlimited because it's in the air\" got laughed off the porch. The rule: \"Never talk bad about competitors – sell on value.\" Validate the incumbent, then differentiate on verifiable axes — m18's Spectrum pivots are the compliant version of the comparison.",
+            ],
+          },
+          {
+            heading: "The saturated-opener answer",
+            body: [
+              "A homeowner recites, from memory, the script of \"the last 4 door to door salesman that swung by\": \"Hey I was just knocking on your door to see if you've heard about the upgrades in the Fiber cable in your neighborhood. Bill, Jill, and Becky down the street just upgraded…\" If you open that way, you are the fifth identical knock, and the door is already closing.",
+              "The fix is not a cleverer script — it is verifiable specificity: address-level serviceability confirmed in the app, a real number pulled from their actual bill, claims you will put in writing, and compliance artifacts — the rep ID, the cancel-rights paperwork — that the previous four knocks never offered. \"Specificity beats generality every time. A number beats a vague promise.\" The previous four reps taught the homeowner to expect a script. Be the evidence instead.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Never impersonate crews or migration agents — leverage construction, state who you are in the first breath.",
+          "Speed tests: hardwired or next to the router, state what they prove, never touch the customer's network.",
+          "Quote scenario-appropriate windows; written numbers only when accurate — \"the service agreement defines the contract.\"",
+          "No serviceability check, no knock — unserviceable pitching gets us mocked by name.",
+          "The saturated-opener answer is verifiable specificity: \"A number beats a vague promise.\"",
+        ],
+        drillPrompt:
+          "Write your differentiation kit on one card: your serviceability check, your bill-pull number, the claim you will put in writing, and your compliance artifacts. Role-play opening on a homeowner who recites the last four reps' script at you — your only tools are the four items on the card. Run it three times this week.",
+        quiz: [
+          {
+            question: "The copper retirement is a true talking point. What makes the impersonation version deception?",
+            options: [
+              "Copper isn't really retiring",
+              "The rep framed it as a mandatory technical upgrade and himself as an agent of it — salesperson, never migration agent",
+              "It only works on the elderly",
+              "It requires a permit",
+            ],
+            answerIndex: 1,
+            explanation: "\"Pure deception… weaponizing the national transition.\" The fact is usable; the false official capacity is the crime.",
+          },
+          {
+            question: "What are the three rules of the in-home speed test?",
+            options: [
+              "Fast, quiet, free",
+              "Hardwired or next to the router, state what it does and doesn't prove, never touch the customer's network",
+              "Morning, noon, and night",
+              "Phone, tablet, laptop",
+            ],
+            answerIndex: 1,
+            explanation: "Even honest tests mislead off-router. Integrity rules keep the demo a proof instead of an allegation.",
+          },
+          {
+            question: "A homeowner recites the \"Bill, Jill, and Becky\" script back at you. The winning response is…",
+            options: [
+              "Deliver the same script better",
+              "Verifiable specificity: address-level serviceability, a real number from their bill, written claims, and compliance artifacts",
+              "A bigger discount",
+              "Humor about the other reps",
+            ],
+            answerIndex: 1,
+            explanation: "\"Specificity beats generality every time. A number beats a vague promise.\" The burned opener is beaten by evidence, not by a fresher script.",
+          },
+          {
+            question: "Why is competitor FUD banned even when the claims are technically true?",
+            options: [
+              "Competitors might sue",
+              "It insults the homeowner's past judgment and gets laughed off the porch — validate, then differentiate on verifiable axes",
+              "It takes too long",
+              "It confuses the pitch",
+            ],
+            answerIndex: 1,
+            explanation: "\"Never talk bad about competitors – sell on value.\" The documented FUD cases all end in public mockery of the rep.",
+          },
+        ],
+      },
+      {
+        id: "m22-territory-law",
+        title: "Territory law every rep must know",
+        summary: "Signs, gated communities, hours, and the porch rule — compliance as brand protection.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "Signage: what binds and what doesn't",
+            body: [
+              "A \"No Soliciting\" sign on an individual home is enforceable — \"it is illegal for them to ignore this request,\" and ignoring it risks trespassing charges. Honor it one hundred percent, every time. Community-entrance signs in open neighborhoods with public streets generally cannot bar canvassers — the decision belongs to individual homeowners — but gated and private-road communities can absolutely exclude you, and the customer-list carve-out is real: reps have been limited to \"those designated doors but nobody else's.\"",
+              "The direction of travel is stricter, not looser: Florida's 2026 statute adds a $500 noncriminal fine escalating to a misdemeanor for soliciting a dwelling displaying a compliant sign, plus county permit requirements. Carolinas rules \"vary significantly across different municipalities\" — pull the county ordinances for every territory before the first knock [VERIFY per-county].",
+            ],
+          },
+          {
+            heading: "Hours and the case files",
+            body: [
+              "Most jurisdictions limit solicitation to roughly 9 a.m. to 9 p.m.; the field standard is stricter — hard stop 8:30 to 9 p.m., never after dark in winter. The case studies are what happens otherwise: a 9:20 p.m. knock produced a viral thread and a police report, and one Florida community's \"Constantly knocking\" TV segment — \"They cannot accept no answer. It's basically harassment\" — forced a corporate compliance statement. One rep's late knock became the whole company's local news story.",
+            ],
+          },
+          {
+            heading: "The porch rule",
+            body: [
+              "\"Never debate constitutional law on a porch.\" If a homeowner, an HOA board member, or a security guard challenges you: \"Respect the Rules… Always be respectful and prepared to leave if asked.\" Instant, pleasant compliance. You may be legally right about the public street — and being right loudly is still a loss, because \"the neighborhood is watching how you treat the rules, and tonight's HOA complainer is often tomorrow's sign-up.\" Exit gracefully, flag the interaction to your lead, and let the company settle the legal question through channels that are not a doorstep.",
+            ],
+          },
+          {
+            heading: "The vulnerable and the brand tax",
+            body: [
+              "Door-to-door's worst reputation vector is pressure on the lonely and elderly — the regret threads and the \"preyed on the lonely and elderly\" posts are the highest-scored D2D content that exists, and the impersonation case targeted an elderly woman specifically. Kinetic is the incumbent in many of these communities: every pushy rep story is a local brand tax the whole team pays for years. Disengaging from a pressured situation is a scored skill in this curriculum, not a courtesy.",
+              "Hold the counter-signal too, because it is the goal: \"I've hired 2 people that came to my door to sell to me.\" That is how much a professional rep impresses people. The channel works \"when the rep is informative and leaves when asked; it turns toxic on persistence, late hours, and overclaiming.\" Every rule in this module is the difference between the two versions.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Individual \"No Soliciting\" signs are enforceable — honor them 100%; entrance signs on public streets generally are not, but gated communities can exclude you.",
+          "Florida 2026: $500 fine escalating to misdemeanor; Carolinas rules vary per municipality — pull county ordinances [VERIFY].",
+          "Hours: roughly 9-9 by law, 8:30-9 hard stop in the field, never after dark in winter.",
+          "\"Never debate constitutional law on a porch\" — comply instantly and pleasantly; the neighborhood is watching.",
+          "Pressure on the lonely and elderly is the channel's worst vector; \"informative and leaves when asked\" is the whole game.",
+        ],
+        drillPrompt:
+          "Compliance self-audit of your last 10 closes: for each, confirm (1) serviceability was verified before the pitch, (2) every urgency claim was verifiably true, (3) the 3-day cancel right was disclosed orally and in writing, (4) every number you quoted would survive being put in writing, (5) no signed door, no after-hours knock, no past-consent persistence. Any \"no\" answer goes to your team lead this week — self-reported, no penalty.",
+        quiz: [
+          {
+            question: "Which \"No Soliciting\" signage is legally enforceable against you?",
+            options: [
+              "A sign at a community entrance on public streets",
+              "A sign on an individual home — ignoring it risks trespassing charges",
+              "Any HOA newsletter rule",
+              "None — canvassing is always protected",
+            ],
+            answerIndex: 1,
+            explanation: "Individual-home signs bind. Entrance signs on public streets generally do not — but you never argue that on a porch.",
+          },
+          {
+            question: "An HOA board member orders you off a public street you may legally work. The rule is…",
+            options: [
+              "Cite the First Amendment and keep knocking",
+              "Comply instantly and pleasantly — never debate constitutional law on a porch — and flag it to your lead",
+              "Knock only the far side of the street",
+              "Return after dark",
+            ],
+            answerIndex: 1,
+            explanation: "Being right loudly is still a loss. \"The neighborhood is watching how you treat the rules.\"",
+          },
+          {
+            question: "What is the field-standard hard stop, and why is it stricter than the law?",
+            options: [
+              "10 p.m., for coverage",
+              "8:30-9 p.m., never after dark in winter — because one late knock can become a police report and a corporate news story",
+              "Sunset, everywhere, always",
+              "Whenever the rep is tired",
+            ],
+            answerIndex: 1,
+            explanation: "The documented cases — the 9:20 p.m. police report, the \"Constantly knocking\" TV segment — are what stricter-than-law prevents.",
+          },
+          {
+            question: "What does \"I've hired 2 people that came to my door to sell to me\" prove?",
+            options: [
+              "Homeowners are gullible",
+              "A professional rep impresses people so much they offer jobs — the channel works when the rep is informative and leaves when asked",
+              "Recruiting beats selling",
+              "Porch pitching is dead",
+            ],
+            answerIndex: 1,
+            explanation: "That is the counter-signal: professionalism at the door is so rare it reads as hire-worthy. That is the standard.",
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 // ── Fast-start track ──────────────────────────────────────────────────────────

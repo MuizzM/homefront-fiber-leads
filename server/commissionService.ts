@@ -11,6 +11,9 @@ import { storage } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
 import { computeHoldback, rollupReserve, type Holdback, type ReserveLedger } from "@shared/commissionReserve";
 import {
+  resolveRepReserveConfig, getReserveBalanceCents, recordWeeklyHold, setRepReserveConfig,
+} from "./reserveService";
+import {
   validateTiers, calculateRetroactiveCommission, calculateFlatCommission, formatUsdCents,
   type CommissionTier, type RetroResult, DEFAULT_RETRO_TIERS,
 } from "@shared/commissionTiers";
@@ -679,7 +682,22 @@ export function transitionStatement(tenantId: number, actorId: number | null, st
     rawDb.prepare(`UPDATE commission_statements SET status='PAID', paid_at=?, paid_by=?, updated_at=? WHERE id=?`).run(now, actorId, now, statementId);
   }
   storage.logActivity(actorId, `commission.statement.${action.toLowerCase()}`, "commission_statement", statementId, { from: stmt.status }, undefined);
-  return rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ?`).get(statementId);
+  const after = rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ?`).get(statementId) as any;
+
+  // The week's chargeback-reserve HOLD is appended when the week SETTLES — that
+  // is the moment the earned number is frozen, so the amount held can never
+  // disagree with the amount paid. Idempotent per (tenant, rep, week) via a
+  // unique partial index, so FINALIZE → MARK_PAID (or a reopen + re-finalize)
+  // holds exactly once. Never on REOPEN: the ledger is append-only and a
+  // correction is a new entry, not a rewrite.
+  if (action === "FINALIZE" || action === "MARK_PAID") {
+    recordWeeklyHold({
+      tenantId, repId: after.rep_id, statementId: after.id,
+      weekStartUtc: after.week_start_utc, weekLabel: after.local_week_label,
+      earnedCents: Number(after.final_commission_cents || 0), actorId,
+    });
+  }
+  return after;
 }
 
 // ── Org config read/update ────────────────────────────────────────────────────
@@ -818,6 +836,11 @@ export function assignStructureToRep(tenantId: number, actorId: number | null, i
   repId: number; structure: CommissionStructure; flatRateCents?: number | null;
   commissionPlanVersionId?: number | null; effectiveFrom?: string; closeExisting?: boolean;
   tiers?: CommissionTier[] | null;
+  // Per-rep chargeback-reserve overrides, set in the SAME action that sets pay
+  // (onboarding, or the comp editor). `undefined` leaves them alone; `null`
+  // clears the override back to the org default.
+  reservePercent?: number | null;
+  reserveCapCents?: number | null;
 }): { assignment: any; versionId: number; structure: CommissionStructure } {
   const rep = storage.getTeamMemberById(input.repId);
   if (!rep || rep.tenantId !== tenantId) throw new CommissionError("CROSS_TENANT_ACCESS", "Rep not found in tenant.", 404);
@@ -850,6 +873,15 @@ export function assignStructureToRep(tenantId: number, actorId: number | null, i
   }
 
   const assignment = assignPlanVersionToRep(tenantId, actorId, { repId: input.repId, commissionPlanVersionId: versionId, effectiveFrom });
+  // Reserve overrides travel with the comp change and are audited separately with
+  // their own before/after (setRepReserveConfig), so a pay-affecting reserve edit
+  // is never buried inside a plan-assignment log line.
+  if (input.reservePercent !== undefined || input.reserveCapCents !== undefined) {
+    setRepReserveConfig(tenantId, input.repId, actorId, {
+      ...(input.reservePercent !== undefined ? { reservePercent: input.reservePercent } : {}),
+      ...(input.reserveCapCents !== undefined ? { reserveCapCents: input.reserveCapCents } : {}),
+    });
+  }
   storage.logActivity(actorId, "commission_structure.assigned", "rep_commission_assignment", assignment.id, { repId: input.repId, structure, versionId, flatRateCents: input.flatRateCents ?? null }, undefined);
   return { assignment, versionId, structure };
 }
@@ -861,10 +893,13 @@ export function getCurrentStructureForRep(tenantId: number, repId: number): any 
     id: a.id, commissionPlanVersionId: a.commission_plan_version_id,
     effectiveFrom: a.effective_from, effectiveTo: a.effective_to,
   }));
+  // The reserve policy is a property of the REP, not of the plan assignment, so
+  // the comp editor can read (and seed from) it even for an unassigned rep.
+  const reserve = resolveRepReserveConfig(tenantId, repId);
   const active = resolveAssignmentForWeek(assignments, new Date().toISOString());
-  if (!active) return null;
+  if (!active) return { structure: null, reserve };
   const version = rawDb.prepare(`SELECT v.*, p.name AS plan_name, p.type AS plan_type, p.tier_mode FROM commission_plan_versions v JOIN commission_plans p ON p.id = v.commission_plan_id WHERE v.id = ? AND v.tenant_id = ?`).get(active.commissionPlanVersionId, tenantId) as any;
-  if (!version) return null;
+  if (!version) return { structure: null, reserve };
   const tiers = version.plan_type === "TIERED" ? getPlanVersionTiers(tenantId, version.id) : [];
   const acceptedRow = rawDb.prepare(`SELECT accepted_at FROM rep_commission_assignments WHERE id = ?`).get(active.id) as any;
   return {
@@ -874,6 +909,7 @@ export function getCurrentStructureForRep(tenantId: number, repId: number): any 
     flatRateCents: version.flat_rate_cents,
     acceptedAt: acceptedRow?.accepted_at ?? null,
     tiers: tiers.map((t: any) => ({ minimumSales: t.minimum_sales, maximumSales: t.maximum_sales, rateCents: t.rate_cents, label: t.label })),
+    reserve,
   };
 }
 
@@ -1291,7 +1327,9 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
 // creates a NEW assignment which needs a fresh acceptance.
 export function acceptCurrentPlan(tenantId: number, repId: number, actorUserId: number | null, ip?: string | null): any {
   const current = getCurrentStructureForRep(tenantId, repId);
-  if (!current) throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT", "No commission plan is assigned to you yet.");
+  // `structure: null` is the "no plan" shape (the reserve policy still rides
+  // along on that object, so a falsy check on the object itself is not enough).
+  if (!current?.structure) throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT", "No commission plan is assigned to you yet.");
   const existing = rawDb.prepare(`SELECT accepted_at FROM rep_commission_assignments WHERE id = ? AND tenant_id = ?`).get(current.assignmentId, tenantId) as any;
   if (existing?.accepted_at) return { alreadyAccepted: true, acceptedAt: existing.accepted_at };
 
@@ -1333,19 +1371,41 @@ export function listWeekSalesForRep(tenantId: number, repId: number, weekReferen
 // everywhere it's rendered (rep screen, admin view, API), so the split is a real
 // payroll instruction, not a cosmetic overlay. Disabled tenants (percent 0) get
 // an all-net holdback — the UI simply shows no reserve.
-export function holdbackForStatement(tenantId: number, finalCommissionCents: number): Holdback {
-  return computeHoldback({ earnedCents: Math.trunc(finalCommissionCents || 0), reservePercent: loadOrgConfig(tenantId).reservePercent });
+// When `repId` is given the split is PER-REP and CAP-AWARE: the rep's own
+// percent/cap override (falling back to the org default) applied against their
+// live ledger balance, so the number stops at the cap instead of over-holding.
+// Omitting repId reproduces the original org-wide, uncapped split byte for byte
+// — no existing caller changes behaviour.
+export function holdbackForStatement(tenantId: number, finalCommissionCents: number, repId?: number): Holdback {
+  const earnedCents = Math.trunc(finalCommissionCents || 0);
+  if (repId == null) {
+    return computeHoldback({ earnedCents, reservePercent: loadOrgConfig(tenantId).reservePercent });
+  }
+  const cfg = resolveRepReserveConfig(tenantId, repId);
+  return computeHoldback({
+    earnedCents,
+    reservePercent: cfg.reservePercent,
+    reserveCapCents: cfg.reserveCapCents,
+    currentBalanceCents: getReserveBalanceCents(tenantId, repId),
+  });
 }
 
-/** Running reserve accrued across ALL of a rep's statements, rolled up from the
- *  same per-period split each statement shows, so the balance can never disagree
- *  with the sum of the parts. */
+/** LEGACY per-statement rollup: what the current percent WOULD have withheld
+ *  across a rep's settled weeks, plus the net paid against them.
+ *
+ *  This is a projection, NOT the balance. The authoritative balance — the only
+ *  thing that knows about manual chargeback drawdowns and releases — is the
+ *  append-only ledger (`reserveService.getReserveBalanceCents`, SQL SUM), which
+ *  is what `/api/me/reserve` and the admin reserve view report. Kept because the
+ *  weekly screen still shows netPaid/earnedToDate off the same statement fold
+ *  its per-week splits come from.
+ *
+ *  ONLY settled weeks are folded. An OPEN week is live-recomputed on every knock,
+ *  so including it made "held to date" and "net paid to date" drift upward in
+ *  real time off money that has not been paid. FINALIZED/PAID weeks are frozen.
+ */
 export function getReserveLedgerForRep(tenantId: number, repId: number): ReserveLedger {
-  const pct = loadOrgConfig(tenantId).reservePercent;
-  // ONLY settled weeks accrue the reserve. An OPEN week is live-recomputed on
-  // every knock, so including it made "held to date" and "net paid to date" drift
-  // upward in real time off money that has not been paid. FINALIZED/PAID weeks are
-  // frozen, so their split is stable — that is what has actually been withheld.
+  const pct = resolveRepReserveConfig(tenantId, repId).reservePercent;
   const rows = rawDb.prepare(
     `SELECT final_commission_cents AS finalCents FROM commission_statements
       WHERE tenant_id = ? AND rep_id = ? AND status IN ('FINALIZED','PAID')`,

@@ -2217,6 +2217,59 @@ export function runMigrations() {
        company_id TEXT NOT NULL,
        updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
 
+    // ══ CHARGEBACK RESERVE ══════════════════════════════════════════════════════
+    // Per-rep overrides of the org reserve policy. BOTH nullable — NULL means
+    // "inherit the org default", which every pre-existing row is, so no rep's pay
+    // changes until an admin sets one. (Drizzle-only columns don't exist at
+    // runtime; these ALTERs are what actually create them.)
+    `ALTER TABLE team_members ADD COLUMN reserve_percent INTEGER`,
+    `ALTER TABLE team_members ADD COLUMN reserve_cap_cents INTEGER`,
+    // Org-level ceiling. NULL → the product default ($2,500); 0 → uncapped.
+    `ALTER TABLE tenants ADD COLUMN commission_reserve_cap_cents INTEGER`,
+
+    // The append-only reserve ledger — the ONE source of truth for a balance.
+    // Balance = SUM(amount_cents) in SQL. holds are positive; drawdowns and
+    // releases are negative. Nothing here is ever UPDATEd or DELETEd.
+    `CREATE TABLE IF NOT EXISTS reserve_entries (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       rep_id INTEGER NOT NULL,
+       kind TEXT NOT NULL CHECK (kind IN ('hold','drawdown','release')),
+       amount_cents INTEGER NOT NULL,
+       statement_id INTEGER,
+       week_start_utc TEXT,
+       week_label TEXT,
+       reason TEXT NOT NULL,
+       actor_user_id INTEGER,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_reserve_entries_rep ON reserve_entries(tenant_id, rep_id, id)`,
+    // IDEMPOTENT WEEKLY HOLD: at most ONE hold per (tenant, rep, week). This is
+    // what makes recalculating / re-finalizing a statement unable to double-hold
+    // — the second insert hits this index and is ignored, not applied twice.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_reserve_entries_hold_week
+       ON reserve_entries(tenant_id, rep_id, week_start_utc) WHERE kind = 'hold'`,
+    // Append-only, enforced in the DB (same pattern as consent_records /
+    // internal DNC in server/calling/migrations.ts): no code path — present or
+    // future, app or console — can rewrite a rep's reserve history. Corrections
+    // are new rows.
+    `CREATE TRIGGER IF NOT EXISTS trg_reserve_entries_no_update
+       BEFORE UPDATE ON reserve_entries
+       BEGIN SELECT RAISE(ABORT,'reserve_entries_are_append_only'); END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_reserve_entries_no_delete
+       BEFORE DELETE ON reserve_entries
+       BEGIN SELECT RAISE(ABORT,'reserve_entries_are_append_only'); END`,
+    // Sign + type discipline: money is INTEGER cents, a hold can only add, a
+    // drawdown/release can only subtract, and no entry may be zero. A wrong-signed
+    // row would silently invert a balance, so it can never be written at all.
+    `CREATE TRIGGER IF NOT EXISTS trg_reserve_entries_amount_sign
+       BEFORE INSERT ON reserve_entries
+       WHEN typeof(NEW.amount_cents) <> 'integer'
+         OR NEW.amount_cents = 0
+         OR (NEW.kind = 'hold' AND NEW.amount_cents < 0)
+         OR (NEW.kind IN ('drawdown','release') AND NEW.amount_cents > 0)
+         OR length(trim(COALESCE(NEW.reason,''))) = 0
+       BEGIN SELECT RAISE(ABORT,'reserve_entry_amount_or_reason_invalid'); END`,
+
     // ══ HOURLY PAY (Sequifi-style hybrid hourly+commission) — additive ════════
     // The rep's CURRENT hourly rate (integer cents/hour). NULL = commission-only.
     // effective_from gates which weeks it governs (a week's rate is the one

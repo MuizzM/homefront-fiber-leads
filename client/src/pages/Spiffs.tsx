@@ -1,32 +1,54 @@
 // Spiffs — the sales-incentive recognition surface.
 //
-// A rep sees their own spiff feed ("$50 spiff — hot streak!"), a running total,
-// and their live HEAT meter (the algorithm's read on how locked-in they are).
+// A rep sees the money first: a running total, then every award with its dollar
+// amount, why it fired in plain language, and when. A NEW award since their last
+// visit gets one tasteful reveal (and none at all under prefers-reduced-motion).
+// "What can I earn" is spelled out from the live engine config so the rules can
+// never drift from the copy.
+//
 // A manager/admin sees the team HEAT leaderboard (the algorithm data) plus, for
-// admins, the approve / mark-paid work queue. Spiffs are a recognition ledger
-// tracked earned -> approved -> paid; nothing here is commission or payroll.
-import { FOCUS } from "@/lib/a11y";
+// admins, the approval queue: pending money up top where it cannot be missed,
+// bulk approve, and a "mark paid" action that is the single, terminal
+// settlement — a spiff is paid exactly once (see server/spiffStore.ts).
+//
+// Spiffs are a recognition ledger tracked earned -> approved -> paid; nothing
+// here is commission or payroll.
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { FOCUS } from "@/lib/a11y";
+import { cn } from "@/lib/utils";
 import { PageHeader, StatStrip, StatTile, SectionLabel } from "@/components/ui/page-scaffold";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Gift, Flame, TrendingUp, Award, Sparkles, CheckCheck, BadgeCheck } from "lucide-react";
-import { spiffReasonLabel, spiffReasonBlurb, type PerfSnapshot } from "@shared/spiffEngine";
-
-type SpiffReason = "random" | "streak" | "improvement" | "milestone";
+import {
+  Gift, Flame, TrendingUp, Award, Sparkles, CheckCheck, BadgeCheck, X,
+  AlertTriangle, Wallet, Clock, Loader2,
+} from "lucide-react";
+import {
+  spiffReasonLabel, spiffReasonBlurb, spiffAmountBand, spiffAmountLadder,
+  spiffTriggerGuide, DEFAULT_SPIFF_CONFIG,
+  type PerfSnapshot, type SpiffReason,
+} from "@shared/spiffEngine";
 
 interface SpiffRow {
   id: number; repId: number; saleRef: string | null; amountCents: number;
   reason: string; status: string; createdAt: string;
   approvedBy: number | null; approvedAt: string | null; paidAt: string | null;
 }
+interface AwardBand {
+  minCents: number; maxCents: number; incrementCents: number;
+  ladderCents: number[];
+  triggers: Array<{ reason: SpiffReason; title: string; how: string }>;
+}
 interface MineResponse {
   spiffs: SpiffRow[]; heat: number; snapshot: PerfSnapshot | null;
   totals: { earnedCents: number; approvedCents: number; paidCents: number; count: number };
+  band?: AwardBand;
 }
 interface TeamHeatEntry {
   repId: number; name: string | null; role: string | null;
@@ -35,7 +57,51 @@ interface TeamHeatEntry {
 }
 interface TeamResponse { reps: TeamHeatEntry[]; pending: (SpiffRow & { repName: string | null })[]; }
 
-const usd = (cents: number) => `$${(cents / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+// ── Money ─────────────────────────────────────────────────────────────────────
+// Integer cents in, string out, with the split done in INTEGER arithmetic — no
+// `cents / 100` float ever reaches a rendered digit, and no cents are silently
+// rounded away (the old formatter used maximumFractionDigits: 0, which showed
+// $123.45 as "$123"). Whole-dollar amounts drop the ".00" because every spiff
+// lands on a $5 step.
+function usd(cents: number): string {
+  const v = Math.trunc(Number.isFinite(cents) ? cents : 0);
+  const sign = v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  const whole = Math.floor(abs / 100).toLocaleString("en-US");
+  const rem = abs % 100;
+  return rem === 0 ? `${sign}$${whole}` : `${sign}$${whole}.${String(rem).padStart(2, "0")}`;
+}
+
+/** "Today" / "Yesterday" / "4 days ago" / a plain date. Never a raw ISO string. */
+function whenLabel(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const days = Math.floor((Date.now() - t) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+const STATUS_COPY: Record<string, { label: string; hint: string; className: string }> = {
+  earned: {
+    label: "Earned",
+    hint: "Waiting on approval",
+    className: "bg-secondary text-muted-foreground",
+  },
+  approved: {
+    label: "Approved",
+    hint: "Cleared — payout queued",
+    className: "bg-primary/15 text-primary",
+  },
+  paid: {
+    label: "Paid",
+    hint: "Settled",
+    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+  },
+};
+const statusCopy = (status: string) =>
+  STATUS_COPY[status] ?? { label: status, hint: "", className: "bg-secondary text-muted-foreground" };
 
 function reasonIcon(reason: string) {
   switch (reason) {
@@ -47,48 +113,173 @@ function reasonIcon(reason: string) {
 }
 
 // Heat is the algorithm's 0..100 read on how locked-in a rep is. Warm tint the
-// higher it climbs — never a bare colored number.
+// higher it climbs — never a bare colored number, and readable in BOTH themes
+// (the old amber-400/orange-400 pair washed out on a light background).
 function heatTone(heat: number): string {
-  if (heat >= 70) return "text-orange-400";
-  if (heat >= 40) return "text-amber-400";
-  if (heat >= 15) return "text-yellow-400";
+  if (heat >= 70) return "text-orange-600 dark:text-orange-400";
+  if (heat >= 40) return "text-amber-600 dark:text-amber-400";
+  if (heat >= 15) return "text-yellow-600 dark:text-yellow-400";
   return "text-muted-foreground";
 }
 
 function HeatMeter({ heat, testId }: { heat: number; testId?: string }) {
-  const pct = Math.max(0, Math.min(100, heat));
+  const pct = Math.max(0, Math.min(100, Math.round(Number.isFinite(heat) ? heat : 0)));
   return (
     <div className="flex items-center gap-2" data-testid={testId}>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary" role="meter"
            aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Heat score">
         <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500" style={{ width: `${pct}%` }} />
       </div>
-      <span className={`w-9 shrink-0 text-right text-sm font-bold tabular-nums ${heatTone(pct)}`}>{pct}</span>
+      <span className={cn("w-9 shrink-0 text-right text-sm font-bold tabular-nums", heatTone(pct))}>{pct}</span>
     </div>
   );
 }
 
+// ── "New since you last looked" ───────────────────────────────────────────────
+// Remembers the highest spiff id the rep has already seen so a fresh award gets
+// exactly ONE reveal, not a re-run on every poll. localStorage can throw (private
+// mode, disabled storage), so every access is guarded — a broken store must never
+// break the page.
+const SEEN_KEY = (repId: number | string) => `hf.spiffs.lastSeenId.${repId}`;
+function readSeen(repId: number | string): number {
+  try { return Number(window.localStorage.getItem(SEEN_KEY(repId))) || 0; } catch { return 0; }
+}
+function writeSeen(repId: number | string, id: number): void {
+  try { window.localStorage.setItem(SEEN_KEY(repId), String(id)); } catch { /* storage unavailable */ }
+}
+
+function NewAwardReveal({ spiff, onDismiss }: { spiff: SpiffRow; onDismiss: () => void }) {
+  const Icon = reasonIcon(spiff.reason);
+  return (
+    <div
+      data-testid="spiff-reveal"
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "relative flex items-center gap-3 overflow-hidden rounded-2xl border border-primary/30 bg-primary/[0.07] p-4",
+        // Tasteful: one short fade + slight zoom, and nothing at all when the
+        // viewer has asked for reduced motion.
+        "animate-in fade-in zoom-in-95 duration-300 motion-reduce:animate-none",
+      )}
+    >
+      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary">
+        <Icon className="h-6 w-6" aria-hidden="true" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <SectionLabel>New spiff</SectionLabel>
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <span className="text-2xl font-bold tabular-nums tracking-tight text-primary" data-testid="spiff-reveal-amount">
+            {usd(spiff.amountCents)}
+          </span>
+          <span className="text-sm font-semibold text-foreground">{spiffReasonLabel(spiff.reason as SpiffReason)}</span>
+        </div>
+        <p className="mt-0.5 text-[13px] text-muted-foreground">{spiffReasonBlurb(spiff.reason as SpiffReason)}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        data-testid="spiff-reveal-dismiss"
+        aria-label="Dismiss new spiff"
+        className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-secondary", FOCUS)}
+      >
+        <X className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+// ── What can I earn ───────────────────────────────────────────────────────────
+function EarnGuide({ band }: { band: AwardBand }) {
+  return (
+    <Card className="rounded-2xl">
+      <CardContent className="p-4">
+        <SectionLabel className="mb-2">What you can earn</SectionLabel>
+        <p className="text-sm text-foreground">
+          Every spiff is worth{" "}
+          <span className="font-bold tabular-nums" data-testid="earn-band">
+            {usd(band.minCents)}–{usd(band.maxCents)}
+          </span>
+          , drawn in {usd(band.incrementCents)} steps. The harder a spiff is to earn, the more the draw leans to the top of the band.
+        </p>
+        <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="earn-ladder" aria-label="Possible spiff amounts">
+          {band.ladderCents.map((c) => (
+            <li key={c} className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
+              {usd(c)}
+            </li>
+          ))}
+        </ul>
+        <ul className="mt-3 space-y-2" data-testid="earn-triggers">
+          {band.triggers.map((t) => {
+            const Icon = reasonIcon(t.reason);
+            return (
+              <li key={t.reason} className="flex items-start gap-2.5">
+                <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-secondary text-muted-foreground">
+                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-semibold text-foreground">{t.title}</span>
+                  <span className="block text-[13px] text-muted-foreground">{t.how}</span>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Rep's own feed ────────────────────────────────────────────────────────────
-function MySpiffs() {
+function MySpiffs({ repKey }: { repKey: number | string }) {
   const { data, isLoading, isError } = useQuery<MineResponse>({
     queryKey: ["/api/spiffs/mine"],
     refetchInterval: 60_000,
   });
 
-  const runningTotal = data ? data.totals.earnedCents + data.totals.approvedCents + data.totals.paidCents : 0;
+  const totals = data?.totals;
+  const runningTotal = totals ? totals.earnedCents + totals.approvedCents + totals.paidCents : 0;
+
+  // The live band from the server, falling back to the engine defaults so the
+  // "what can I earn" copy renders correctly before the first response lands.
+  const band: AwardBand = useMemo(() => {
+    if (data?.band) return data.band;
+    const b = spiffAmountBand(DEFAULT_SPIFF_CONFIG);
+    return {
+      minCents: b.minCents, maxCents: b.maxCents, incrementCents: b.incrementCents,
+      ladderCents: spiffAmountLadder(DEFAULT_SPIFF_CONFIG),
+      triggers: spiffTriggerGuide(DEFAULT_SPIFF_CONFIG),
+    };
+  }, [data?.band]);
+
+  // One reveal per genuinely-new award.
+  const newest = data?.spiffs?.[0];
+  const [seen, setSeen] = useState<number>(() => readSeen(repKey));
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => {
+    if (newest && newest.id > seen) writeSeen(repKey, newest.id);
+  }, [newest?.id, seen, repKey]);
+  const reveal = !dismissed && newest && newest.id > seen ? newest : null;
+  const dismissReveal = () => {
+    if (newest) { writeSeen(repKey, newest.id); setSeen(newest.id); }
+    setDismissed(true);
+  };
 
   return (
     <section className="space-y-4" data-testid="my-spiffs">
-      <StatStrip columns={3}>
-        <StatTile label="Spiffs earned" accent testId="stat-total"
+      {reveal && <NewAwardReveal spiff={reveal} onDismiss={dismissReveal} />}
+
+      <StatStrip columns={4}>
+        <StatTile label="Total won" accent testId="stat-total"
           value={isError ? "—" : usd(runningTotal)} icon={Gift} />
         <StatTile label="Awaiting payout" testId="stat-pending"
-          value={isError ? "—" : usd((data?.totals.earnedCents ?? 0) + (data?.totals.approvedCents ?? 0))} />
+          value={isError ? "—" : usd((totals?.earnedCents ?? 0) + (totals?.approvedCents ?? 0))} icon={Clock} />
+        <StatTile label="Paid out" testId="stat-paid"
+          value={isError ? "—" : usd(totals?.paidCents ?? 0)} icon={Wallet} />
         <StatTile label="Heat" testId="stat-heat"
           value={isError ? "—" : (data?.heat ?? 0)} icon={Flame} />
       </StatStrip>
 
-      <Card>
+      <Card className="rounded-2xl">
         <CardContent className="p-4">
           <SectionLabel className="mb-2">Your heat</SectionLabel>
           <HeatMeter heat={data?.heat ?? 0} testId="my-heat" />
@@ -101,46 +292,61 @@ function MySpiffs() {
       <div>
         <SectionLabel className="mb-2">Recent spiffs</SectionLabel>
         {isLoading ? (
-          <div className="space-y-2" data-testid="my-spiffs-loading">
-            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-16 w-full rounded-2xl" />)}
+          <div className="space-y-2" data-testid="my-spiffs-loading" aria-busy="true">
+            {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[72px] w-full rounded-2xl" />)}
           </div>
+        ) : isError ? (
+          <EmptyState icon={AlertTriangle} title="Couldn't load your spiffs" bordered testId="my-spiffs-error"
+            description="Something went wrong reading the spiff ledger. Pull to refresh, or try again in a moment." />
         ) : !data || data.spiffs.length === 0 ? (
-          <EmptyState icon={Gift} title="No spiffs yet"
-            description="Log a sale and you're in the running for a $50 spiff — some land at random, more when you're heating up." />
+          <EmptyState icon={Gift} title="No spiffs yet" bordered testId="my-spiffs-empty"
+            description={`Log a sale and you're in the running for a ${usd(band.minCents)}–${usd(band.maxCents)} spiff. Some drop at random; the rest come from streaks, milestones, and beating your own average.`} />
         ) : (
           <ul className="space-y-2" data-testid="my-spiff-list">
             {data.spiffs.map((s) => {
               const Icon = reasonIcon(s.reason);
+              const st = statusCopy(s.status);
               return (
                 <li key={s.id} data-testid={`spiff-${s.id}`}
                     className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3">
-                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-400">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
                     <Icon className="h-5 w-5" aria-hidden="true" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">{usd(s.amountCents)} spiff</span>
-                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      {/* The amount is the hero: biggest thing on the row. */}
+                      <span className="text-lg font-bold tabular-nums tracking-tight text-foreground"
+                            data-testid={`spiff-amount-${s.id}`}>
+                        {usd(s.amountCents)}
+                      </span>
+                      <span className="text-[13px] font-semibold text-foreground">
                         {spiffReasonLabel(s.reason as SpiffReason)}
                       </span>
                     </div>
                     <p className="truncate text-[13px] text-muted-foreground">{spiffReasonBlurb(s.reason as SpiffReason)}</p>
                   </div>
-                  <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold capitalize text-muted-foreground"
-                        data-testid={`spiff-status-${s.id}`}>
-                    {s.status}
-                  </span>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", st.className)}
+                          title={st.hint} data-testid={`spiff-status-${s.id}`}>
+                      {st.label}
+                    </span>
+                    <span className="text-[11px] tabular-nums text-muted-foreground" data-testid={`spiff-when-${s.id}`}>
+                      {whenLabel(s.createdAt)}
+                    </span>
+                  </div>
                 </li>
               );
             })}
           </ul>
         )}
       </div>
+
+      <EarnGuide band={band} />
     </section>
   );
 }
 
-// ── Manager/admin: team heat + approve/paid queue ─────────────────────────────
+// ── Manager/admin: team heat + approve/pay queue ──────────────────────────────
 function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
   const { toast } = useToast();
   const { data, isLoading, isError } = useQuery<TeamResponse>({
@@ -148,39 +354,114 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
     refetchInterval: 60_000,
   });
 
+  const pending = data?.pending ?? [];
+  const earnedRows = useMemo(() => pending.filter((s) => s.status === "earned"), [pending]);
+  const approvedRows = useMemo(() => pending.filter((s) => s.status === "approved"), [pending]);
+  const sumCents = (rows: SpiffRow[]) => rows.reduce((n, s) => n + (Number(s.amountCents) || 0), 0);
+  const earnedCents = sumCents(earnedRows);
+  const approvedCents = sumCents(approvedRows);
+
+  // Selection lives on ids so a background refetch can never move the checkboxes
+  // onto different rows; ids that vanish are dropped on the next render.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const visibleIds = useMemo(() => new Set(pending.map((s) => s.id)), [pending]);
+  const liveSelected = useMemo(
+    () => [...selected].filter((id) => visibleIds.has(id)),
+    [selected, visibleIds],
+  );
+  const selectedRows = useMemo(
+    () => pending.filter((s) => liveSelected.includes(s.id)),
+    [pending, liveSelected],
+  );
+  const selectedEarned = selectedRows.filter((s) => s.status === "earned");
+  const selectedApproved = selectedRows.filter((s) => s.status === "approved");
+
+  const toggle = (id: number, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  const allSelected = pending.length > 0 && liveSelected.length === pending.length;
+  const toggleAll = (on: boolean) => setSelected(on ? new Set(pending.map((s) => s.id)) : new Set());
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/spiffs/team"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/spiffs/mine"] });
+  };
+
   const transition = useMutation({
     mutationFn: async ({ id, action }: { id: number; action: "approve" | "paid" }) => {
       const res = await apiRequest("POST", `/api/spiffs/${id}/${action}`);
       return res.json();
     },
     onSuccess: (_row, { action }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/spiffs/team"] });
+      invalidate();
       toast({ title: action === "approve" ? "Spiff approved" : "Spiff marked paid" });
     },
     onError: (err: any) => toast({ title: "Couldn't update spiff", description: String(err?.message ?? err), variant: "destructive" }),
   });
 
+  const bulk = useMutation({
+    mutationFn: async ({ ids, action }: { ids: number[]; action: "approve" | "paid" }) => {
+      const res = await apiRequest("POST", `/api/spiffs/bulk/${action}`, { ids });
+      return res.json() as Promise<{ changed: SpiffRow[]; skipped: Array<{ id: number }>; totalCents: number }>;
+    },
+    onSuccess: (result, { action }) => {
+      invalidate();
+      setSelected(new Set());
+      const n = result?.changed?.length ?? 0;
+      const skipped = result?.skipped?.length ?? 0;
+      toast({
+        title: action === "approve"
+          ? `Approved ${n} spiff${n === 1 ? "" : "s"} — ${usd(result?.totalCents ?? 0)}`
+          : `Marked ${n} spiff${n === 1 ? "" : "s"} paid — ${usd(result?.totalCents ?? 0)}`,
+        description: skipped > 0 ? `${skipped} already handled by someone else.` : undefined,
+      });
+    },
+    onError: (err: any) => toast({ title: "Bulk action failed", description: String(err?.message ?? err), variant: "destructive" }),
+  });
+
+  const busy = transition.isPending || bulk.isPending;
+
   return (
     <section className="space-y-4" data-testid="team-heat">
+      {isAdmin && (
+        <StatStrip columns={3}>
+          <StatTile label="Awaiting approval" accent testId="queue-total-earned"
+            value={usd(earnedCents)} icon={BadgeCheck}
+            delta={<span className="text-[11px] font-semibold tabular-nums text-muted-foreground">{earnedRows.length}</span>} />
+          <StatTile label="Approved — owed" testId="queue-total-approved"
+            value={usd(approvedCents)} icon={Wallet}
+            delta={<span className="text-[11px] font-semibold tabular-nums text-muted-foreground">{approvedRows.length}</span>} />
+          <StatTile label="Open spiff money" testId="queue-total-open"
+            value={usd(earnedCents + approvedCents)} icon={Gift} />
+        </StatStrip>
+      )}
+
       <div>
         <SectionLabel className="mb-2">Team heat — the algorithm's read</SectionLabel>
         {isLoading ? (
-          <div className="space-y-2" data-testid="team-heat-loading">
+          <div className="space-y-2" data-testid="team-heat-loading" aria-busy="true">
             {[0, 1, 2].map((i) => <Skeleton key={i} className="h-14 w-full rounded-2xl" />)}
           </div>
-        ) : isError || !data || data.reps.length === 0 ? (
-          <EmptyState icon={Flame} title="No heat data yet" description="Rep heat appears here as sales come in." />
+        ) : isError ? (
+          <EmptyState icon={AlertTriangle} title="Couldn't load team heat" bordered testId="team-heat-error"
+            description="The heat read failed. Try again in a moment." />
+        ) : !data || data.reps.length === 0 ? (
+          <EmptyState icon={Flame} title="No heat data yet" bordered description="Rep heat appears here as sales come in." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[560px] border-separate border-spacing-y-1.5 text-sm">
+              <caption className="sr-only">Rep heat scores and spiff totals</caption>
               <thead>
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-1">Rep</th>
-                  <th className="px-3 py-1 w-40">Heat</th>
-                  <th className="px-3 py-1 text-right">Streak</th>
-                  <th className="px-3 py-1 text-right">Pace/day</th>
-                  <th className="px-3 py-1 text-right">Recent</th>
-                  <th className="px-3 py-1 text-right">Spiffs</th>
+                  <th scope="col" className="px-3 py-1">Rep</th>
+                  <th scope="col" className="px-3 py-1 w-40">Heat</th>
+                  <th scope="col" className="px-3 py-1 text-right">Streak</th>
+                  <th scope="col" className="px-3 py-1 text-right">Pace/day</th>
+                  <th scope="col" className="px-3 py-1 text-right">Recent</th>
+                  <th scope="col" className="px-3 py-1 text-right">Spiffs</th>
                 </tr>
               </thead>
               <tbody>
@@ -204,42 +485,127 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
 
       {isAdmin && (
         <div>
-          <SectionLabel className="mb-2">Approve &amp; pay</SectionLabel>
-          {!data || data.pending.length === 0 ? (
-            <EmptyState icon={CheckCheck} title="Nothing to approve" description="Earned spiffs land here for approval, then payout." />
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <SectionLabel>Approve &amp; pay</SectionLabel>
+            <p className="text-[11px] text-muted-foreground">
+              Approving owes it. Marking paid settles it — once, permanently.
+            </p>
+          </div>
+
+          {isLoading ? (
+            <div className="space-y-2" data-testid="spiff-queue-loading" aria-busy="true">
+              {[0, 1].map((i) => <Skeleton key={i} className="h-16 w-full rounded-2xl" />)}
+            </div>
+          ) : pending.length === 0 ? (
+            <EmptyState icon={CheckCheck} title="Nothing to approve" tone="positive" bordered testId="spiff-queue-empty"
+              description="Every spiff is settled. New ones land here the moment the algorithm awards them." />
           ) : (
-            <ul className="space-y-2" data-testid="spiff-queue">
-              {data.pending.map((s) => (
-                <li key={s.id} data-testid={`queue-spiff-${s.id}`}
-                    className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-foreground">{usd(s.amountCents)}</span>
-                      <span className="text-[13px] text-muted-foreground">{s.repName ?? `Rep ${s.repId}`}</span>
-                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
-                        {spiffReasonLabel(s.reason as SpiffReason)}
-                      </span>
-                    </div>
-                    <span className="text-[11px] font-semibold capitalize text-muted-foreground">{s.status}</span>
-                  </div>
-                  {s.status === "earned" ? (
-                    <button type="button" disabled={transition.isPending}
-                      onClick={() => transition.mutate({ id: s.id, action: "approve" })}
-                      data-testid={`approve-${s.id}`}
-                      className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-50 ${FOCUS}`}>
-                      <BadgeCheck className="h-4 w-4" aria-hidden="true" /> Approve
-                    </button>
-                  ) : (
-                    <button type="button" disabled={transition.isPending}
-                      onClick={() => transition.mutate({ id: s.id, action: "paid" })}
-                      data-testid={`paid-${s.id}`}
-                      className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-secondary px-3 text-sm font-semibold text-foreground disabled:opacity-50 ${FOCUS}`}>
-                      <CheckCheck className="h-4 w-4" aria-hidden="true" /> Mark paid
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <div className="rounded-2xl border border-border bg-card">
+              {/* Bulk bar — the whole queue is drivable from the keyboard: tab to
+                  the select-all box, space to toggle, tab to the bulk buttons. */}
+              <div className="flex flex-wrap items-center gap-2 border-b border-border p-3">
+                <label className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={(v) => toggleAll(v === true)}
+                    aria-label="Select every spiff in the queue"
+                    data-testid="queue-select-all"
+                    className={FOCUS}
+                  />
+                  <span data-testid="queue-selection-count">
+                    {liveSelected.length > 0 ? `${liveSelected.length} selected` : "Select all"}
+                  </span>
+                </label>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={busy || selectedEarned.length === 0}
+                    onClick={() => bulk.mutate({ ids: selectedEarned.map((s) => s.id), action: "approve" })}
+                    data-testid="bulk-approve"
+                    className={cn(
+                      "inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-primary px-3 text-[13px] font-semibold text-primary-foreground disabled:opacity-50",
+                      FOCUS,
+                    )}
+                  >
+                    {bulk.isPending
+                      ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                      : <BadgeCheck className="h-4 w-4" aria-hidden="true" />}
+                    Approve {selectedEarned.length > 0 ? `${selectedEarned.length} · ${usd(sumCents(selectedEarned))}` : "selected"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || selectedApproved.length === 0}
+                    onClick={() => bulk.mutate({ ids: selectedApproved.map((s) => s.id), action: "paid" })}
+                    data-testid="bulk-paid"
+                    className={cn(
+                      "inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-secondary px-3 text-[13px] font-semibold text-foreground disabled:opacity-50",
+                      FOCUS,
+                    )}
+                  >
+                    <CheckCheck className="h-4 w-4" aria-hidden="true" />
+                    Mark paid {selectedApproved.length > 0 ? `${selectedApproved.length} · ${usd(sumCents(selectedApproved))}` : ""}
+                  </button>
+                </div>
+              </div>
+
+              <ul className="divide-y divide-border" data-testid="spiff-queue">
+                {pending.map((s) => {
+                  const st = statusCopy(s.status);
+                  const checked = liveSelected.includes(s.id);
+                  return (
+                    <li key={s.id} data-testid={`queue-spiff-${s.id}`} className="flex items-center gap-3 p-3">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(v) => toggle(s.id, v === true)}
+                        aria-label={`Select ${usd(s.amountCents)} spiff for ${s.repName ?? `rep ${s.repId}`}`}
+                        data-testid={`queue-select-${s.id}`}
+                        className={FOCUS}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-baseline gap-x-2">
+                          <span className="text-base font-bold tabular-nums tracking-tight text-foreground"
+                                data-testid={`queue-amount-${s.id}`}>
+                            {usd(s.amountCents)}
+                          </span>
+                          <span className="truncate text-[13px] font-medium text-foreground">{s.repName ?? `Rep ${s.repId}`}</span>
+                          <span className="text-[13px] text-muted-foreground">
+                            {spiffReasonLabel(s.reason as SpiffReason)}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", st.className)}
+                                data-testid={`queue-status-${s.id}`}>
+                            {st.label}
+                          </span>
+                          <span className="text-[11px] tabular-nums text-muted-foreground">{whenLabel(s.createdAt)}</span>
+                        </div>
+                      </div>
+                      {s.status === "earned" ? (
+                        <button type="button" disabled={busy}
+                          onClick={() => transition.mutate({ id: s.id, action: "approve" })}
+                          data-testid={`approve-${s.id}`}
+                          className={cn(
+                            "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-50",
+                            FOCUS,
+                          )}>
+                          <BadgeCheck className="h-4 w-4" aria-hidden="true" /> Approve
+                        </button>
+                      ) : (
+                        <button type="button" disabled={busy}
+                          onClick={() => transition.mutate({ id: s.id, action: "paid" })}
+                          data-testid={`paid-${s.id}`}
+                          className={cn(
+                            "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl bg-secondary px-3 text-sm font-semibold text-foreground disabled:opacity-50",
+                            FOCUS,
+                          )}>
+                          <CheckCheck className="h-4 w-4" aria-hidden="true" /> Mark paid
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
         </div>
       )}
@@ -252,15 +618,20 @@ export default function Spiffs() {
   const role = user?.role;
   const isManager = role === "manager" || role === "admin" || role === "super_admin";
   const isAdmin = role === "admin" || role === "super_admin";
+  const band = spiffAmountBand(DEFAULT_SPIFF_CONFIG);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 p-4 pt-5 pb-24 md:p-6">
       <PageHeader
         title="Spiffs"
         icon={Gift}
-        subtitle="$50 recognition bonuses on sales — some random, more when you're locked in."
+        subtitle={`${usd(band.minCents)}–${usd(band.maxCents)} recognition bonuses on sales — some random, more when you're locked in.`}
       />
-      <MySpiffs />
+      {/* Keyed on identity: if auth resolves late (or the viewer changes), the
+          "already seen" bookmark is re-read for the RIGHT person rather than
+          carrying another rep's state. */}
+      <MySpiffs key={String(user?.teamMemberId ?? user?.id ?? "anon")}
+                repKey={user?.teamMemberId ?? user?.id ?? "anon"} />
       {isManager && <TeamHeat isAdmin={isAdmin} />}
     </div>
   );
