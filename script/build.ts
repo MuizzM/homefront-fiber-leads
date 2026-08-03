@@ -91,6 +91,16 @@ async function buildAll() {
   } catch (e) {
     console.warn("Could not copy join form:", e);
   }
+
+  // Copy the vendored IRS W-9 template (PAY-A2) so the prod bundle can fill it.
+  try {
+    const { mkdir, copyFile: cp } = await import("fs/promises");
+    await mkdir("dist/assets", { recursive: true });
+    await cp("server/assets/fw9.pdf", "dist/assets/fw9.pdf");
+    console.log("copied W-9 template to dist/assets/");
+  } catch (e) {
+    console.warn("Could not copy W-9 template:", e);
+  }
 }
 
 async function findMapFiles(dir: string): Promise<string[]> {

@@ -784,3 +784,61 @@ export const commissionAdjustments = sqliteTable("commission_adjustments", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export type CommissionAdjustment = typeof commissionAdjustments.$inferSelect;
+
+// ── PAY-A2: contractor pay plane (banking, W-9, company DFI profile) ─────────
+// APPEND-ONLY tables. Secrets (routing/account/TIN/EIN/DFI numbers) are stored
+// AES-256-GCM ciphertext via server/payCrypto.ts — the *_enc columns. last4 is
+// the only plaintext secret-derived value (display masking).
+
+// One ACTIVE bank account per rep (rep_id is the PK). Self-service onboarding;
+// reps can replace their own row (upsert), which re-encrypts the new numbers.
+export const repBankDetails = sqliteTable("rep_bank_details", {
+  repId: integer("rep_id").primaryKey(),                 // team_members.id
+  tenantId: integer("tenant_id").notNull(),
+  routingEnc: text("routing_enc").notNull(),             // AES-256-GCM ciphertext
+  accountEnc: text("account_enc").notNull(),             // AES-256-GCM ciphertext
+  accountType: text("account_type").notNull(),           // 'checking' | 'savings'
+  last4: text("last4").notNull(),                        // display mask only
+  status: text("status").notNull().default("active"),    // 'active' | 'disabled'
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type RepBankDetails = typeof repBankDetails.$inferSelect;
+
+// ESIGN-compliant electronic W-9. TIN encrypted; signature evidence (typed
+// name, date, IP, user agent, consent flag) retained with the generated PDF.
+export const w9Forms = sqliteTable("w9_forms", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),                    // team_members.id
+  legalName: text("legal_name").notNull(),
+  businessName: text("business_name"),
+  addressLine1: text("address_line1").notNull(),
+  city: text("city").notNull(),
+  state: text("state").notNull(),
+  zip: text("zip").notNull(),
+  tinEnc: text("tin_enc").notNull(),                     // AES-256-GCM ciphertext
+  tinType: text("tin_type").notNull(),                   // 'ssn' | 'ein'
+  signatureName: text("signature_name").notNull(),
+  signatureDate: text("signature_date").notNull(),
+  signatureIp: text("signature_ip"),
+  signatureUa: text("signature_ua"),
+  consent: integer("consent").notNull().default(0),      // 1 = ESIGN consent given
+  pdfPath: text("pdf_path"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type W9Form = typeof w9Forms.$inferSelect;
+
+// Originating company profile for NACHA files (per tenant). The DFI account +
+// EIN are encrypted; the DFI routing (bank's own transit number) and company id
+// are operational identifiers left readable for file generation/ops.
+export const companyProfile = sqliteTable("company_profile", {
+  tenantId: integer("tenant_id").primaryKey(),
+  legalName: text("legal_name").notNull(),
+  einEnc: text("ein_enc").notNull(),                     // AES-256-GCM ciphertext
+  dfiAccountEnc: text("dfi_account_enc").notNull(),      // AES-256-GCM ciphertext
+  dfiRouting: text("dfi_routing").notNull(),             // ODFI transit (BofA)
+  companyId: text("company_id").notNull(),               // NACHA company id (10)
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type CompanyProfile = typeof companyProfile.$inferSelect;

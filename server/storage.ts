@@ -2220,6 +2220,50 @@ export function runMigrations() {
     `ALTER TABLE commission_statements ADD COLUMN hourly_rate_cents INTEGER`,
     `ALTER TABLE commission_statements ADD COLUMN hourly_pay_cents INTEGER NOT NULL DEFAULT 0`,
 
+    // ── PAY-A2: contractor pay plane (banking, W-9, company DFI profile) ──────
+    // APPEND-ONLY at the END of this list to minimize merge conflicts with
+    // sibling pay lanes. Secrets live in *_enc columns as AES-256-GCM
+    // ciphertext (server/payCrypto.ts); only last4-style masks are plaintext.
+    `CREATE TABLE IF NOT EXISTS rep_bank_details (
+       rep_id INTEGER PRIMARY KEY,
+       tenant_id INTEGER NOT NULL,
+       routing_enc TEXT NOT NULL,
+       account_enc TEXT NOT NULL,
+       account_type TEXT NOT NULL,
+       last4 TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'active',
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_rep_bank_details_tenant ON rep_bank_details(tenant_id)`,
+    `CREATE TABLE IF NOT EXISTS w9_forms (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       rep_id INTEGER NOT NULL,
+       legal_name TEXT NOT NULL,
+       business_name TEXT,
+       address_line1 TEXT NOT NULL,
+       city TEXT NOT NULL,
+       state TEXT NOT NULL,
+       zip TEXT NOT NULL,
+       tin_enc TEXT NOT NULL,
+       tin_type TEXT NOT NULL,
+       signature_name TEXT NOT NULL,
+       signature_date TEXT NOT NULL,
+       signature_ip TEXT,
+       signature_ua TEXT,
+       consent INTEGER NOT NULL DEFAULT 0,
+       pdf_path TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_w9_forms_rep ON w9_forms(tenant_id, rep_id)`,
+    `CREATE TABLE IF NOT EXISTS company_profile (
+       tenant_id INTEGER PRIMARY KEY,
+       legal_name TEXT NOT NULL,
+       ein_enc TEXT NOT NULL,
+       dfi_account_enc TEXT NOT NULL,
+       dfi_routing TEXT NOT NULL,
+       company_id TEXT NOT NULL,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
