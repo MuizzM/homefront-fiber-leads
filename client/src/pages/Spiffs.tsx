@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { CampaignBoard } from "@/components/CampaignBoard";
 import { MilestoneSection } from "@/components/MilestoneCard";
+import { MomentumOffer } from "@/components/MomentumOffer";
 import { MilestoneLadderEditor } from "@/components/MilestoneLadderEditor";
 import { CampaignLauncher } from "@/components/CampaignLauncher";
 import { useAuth } from "@/lib/auth";
@@ -276,6 +277,10 @@ function MySpiffs({ repKey }: { repKey: number | string }) {
       {/* Live campaigns sit ABOVE the ledger. The ledger is what a rep already
           won; the board is what they can still win in the next two hours — and
           only one of those changes what they do this afternoon. */}
+      {/* The live hot-streak offer, above everything — it is the only one with
+          a deadline in minutes. */}
+      <MomentumOffer />
+
       <CampaignBoard />
 
       {/* The standing ladder, under the contests. A campaign may or may not be

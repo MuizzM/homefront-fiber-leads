@@ -123,6 +123,10 @@ export function createSavedKnockReconciliation(
     // Every knock moves campaign progress, sale or not — that is the point of an
     // effort-shaped trigger. Refetch so the card the rep looks at next is live.
     effects.invalidateQuery(["/api/me/campaigns"]);
+    effects.invalidateQuery(["/api/me/milestones"]);
+    // Momentum is the one with a clock measured in minutes — an armed offer the
+    // rep cannot see for another 30 seconds has already lost part of its window.
+    effects.invalidateQuery(["/api/me/momentum"]);
     effects.invalidateQuery(["/api/spiffs/mine"]);
     effects.invalidateQuery(["/api/leads"]);
     effects.invalidateQuery(["/api/followups"]);
