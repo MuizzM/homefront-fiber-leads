@@ -104,19 +104,22 @@ function fromMember(m: TeamMember): MemberForm {
 
 // ── Role picker card ──────────────────────────────────────────────────────────
 function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v: RepRole) => void; allowed: readonly RepRole[] }) {
+  // Single-choice group → radiogroup semantics, so the visible "Role" label
+  // and the selected state are announced (plain buttons read as unrelated toggles).
   return (
     <div className="space-y-2">
-      <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Role *</Label>
-      <div className="space-y-2">
+      <Label id="role-picker-label" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Role *</Label>
+      <div className="space-y-2" role="radiogroup" aria-labelledby="role-picker-label">
         {ROLES.filter(r => allowed.includes(r.value)).map(r => {
           const selected = value === r.value;
           return (
             <button
               key={r.value}
               type="button"
+              role="radio"
               onClick={() => onChange(r.value as RepRole)}
               data-testid={`role-option-${r.value}`}
-              aria-pressed={selected}
+              aria-checked={selected}
               className={`w-full text-left rounded-lg border px-3 py-2.5 transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
                 selected
                   ? "border-primary bg-primary/10 ring-1 ring-primary/30"
@@ -177,8 +180,9 @@ function MemberFormUI({
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
-        <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Full Name *</Label>
+        <Label htmlFor="form-rep-name" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Full name *</Label>
         <Input
+          id="form-rep-name"
           value={form.name}
           onChange={e => set("name", e.target.value)}
           className="h-9 bg-secondary border-input"
@@ -189,8 +193,9 @@ function MemberFormUI({
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Phone</Label>
+          <Label htmlFor="form-rep-phone" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Phone</Label>
           <Input
+            id="form-rep-phone"
             value={form.phone}
             onChange={e => set("phone", e.target.value)}
             className="h-9 bg-secondary border-input"
@@ -200,8 +205,9 @@ function MemberFormUI({
         </div>
         {!selfEdit && (
           <div className="space-y-1.5">
-            <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email (login)</Label>
+            <Label htmlFor="form-rep-email" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email (login)</Label>
             <Input
+              id="form-rep-email"
               value={form.email}
               onChange={e => set("email", e.target.value)}
               className="h-9 bg-secondary border-input"
@@ -232,14 +238,14 @@ function MemberFormUI({
       {/* Reports To — who this member is under in the org chart */}
       {!selfEdit && showReportsTo && (
         <div className="space-y-1.5">
-          <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Reports To {form.role === "rep" ? "(Team Lead or Manager)" : "(Manager)"}
+          <Label htmlFor="form-rep-reports-to" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Reports to {form.role === "rep" ? "(team lead or manager)" : "(manager)"}
           </Label>
           <Select
             value={form.reportsToId != null ? String(form.reportsToId) : "none"}
             onValueChange={v => setForm({ ...form, reportsToId: v === "none" ? null : Number(v) })}
           >
-            <SelectTrigger className="h-9 bg-secondary border-input" data-testid="form-rep-reports-to">
+            <SelectTrigger id="form-rep-reports-to" className="h-9 bg-secondary border-input" data-testid="form-rep-reports-to">
               <SelectValue placeholder="Select supervisor" />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
@@ -618,7 +624,7 @@ export default function Team() {
                         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                           onClick={() => navigate("/applications")} data-testid={`btn-documents-rep-${member.id}`}
                           aria-label={`Open rep onboarding for ${member.name}`}
-                          title="Open Rep Onboarding">
+                          title="Open rep onboarding">
                           <FileSignature className="w-3.5 h-3.5" />
                         </Button>
                       )}
@@ -668,7 +674,7 @@ export default function Team() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Organization</div>
-          <h1 className="text-xl font-bold text-foreground mt-0.5">Team Management</h1>
+          <h1 className="text-xl font-bold text-foreground mt-0.5">Team management</h1>
           <p className="text-sm text-muted-foreground mt-1">
             <span className="tabular-nums font-medium text-foreground">{activeCount}</span> active member{activeCount !== 1 ? "s" : ""}
             <span className="mx-1.5 text-border">·</span>
@@ -791,8 +797,8 @@ export default function Team() {
       ) : (
         <div className="space-y-6">
           <RoleSection title="Managers" members={managers} role="manager" />
-          <RoleSection title="Team Leads" members={leads} role="team_lead" />
-          <RoleSection title="Sales Reps" members={reps} role="rep" />
+          <RoleSection title="Team leads" members={leads} role="team_lead" />
+          <RoleSection title="Sales reps" members={reps} role="rep" />
 
           {/* Former members — offboarded people keep their records but lose all
               access. Anyone who outranks them can bring them back. */}
@@ -802,7 +808,7 @@ export default function Team() {
                 <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 bg-muted text-muted-foreground">
                   <Archive className="w-3 h-3" />
                 </div>
-                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Former Members</h2>
+                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Former members</h2>
                 <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground tabular-nums">{formerMembers.length}</span>
                 <div className="flex-1 h-px bg-border" />
               </div>
@@ -1221,10 +1227,10 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
           </div>
         ) : (
           <div className="mt-1 space-y-1.5">
-            <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Rate per qualified sale</Label>
+            <Label htmlFor="input-team-flat-rate" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Rate per qualified sale</Label>
             <div className="flex items-center gap-1.5">
               <span className="text-muted-foreground">$</span>
-              <Input type="number" min={1} step={1} value={flatRate} onChange={e => setFlatRate(e.target.value)}
+              <Input id="input-team-flat-rate" type="number" min={1} step={1} value={flatRate} onChange={e => setFlatRate(e.target.value)}
                 className="h-9 w-28 bg-secondary border-border tabular-nums" data-testid="input-team-flat-rate" />
               <span className="text-xs text-muted-foreground">per sale</span>
             </div>

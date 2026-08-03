@@ -168,7 +168,9 @@ function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => voi
               const meta = isKnockOutcome(e.outcome) ? OUTCOME_META[e.outcome] : null;
               return (
                 <div key={e.id} className="flex min-w-0 gap-2.5">
-                  <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: meta?.color ?? "#64748b" }} />
+                  {/* Fallback dot reads the muted-foreground token (a plain
+                      slate hex ignored the light theme). */}
+                  <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: meta?.color ?? "hsl(var(--muted-foreground))" }} />
                   <div className="min-w-0 flex-1 leading-tight">
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="truncate text-[13px] font-medium text-foreground">{meta?.label ?? e.outcome}</span>

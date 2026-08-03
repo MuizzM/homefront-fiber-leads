@@ -89,12 +89,12 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },
   { href: "/training",     label: "Training",     icon: GraduationCap,show: isFieldRole,                              group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
-  { href: "/my-commission",label: "My Commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
-  { href: "/my-documents", label: "My Documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
+  { href: "/my-commission",label: "My commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
+  { href: "/my-documents", label: "My documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
   // Tax & direct deposit — the rep's own W-9 + bank details. Every field role
   // gets paid, so every field role needs it; the server scopes each request to
   // the caller's own rep record.
-  { href: "/tax-and-pay",  label: "Tax & Pay",     icon: Landmark,     show: isFieldRole,                              group: "Field" },
+  { href: "/tax-and-pay",  label: "Tax & pay",     icon: Landmark,     show: isFieldRole,                              group: "Field" },
   // ── Fiber Intelligence — ONE consolidated map-first workspace (Fresh Now · Map
   //    · Coming Soon · Coverage · Operations). Old Markets/Sweeps/Scanner routes
   //    redirect here. Deep scan tools stay admin-only.

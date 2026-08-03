@@ -205,7 +205,8 @@ export default function PropertyDetail() {
           scrollport bottom, and can never overlap the content above it. */}
       {lead && (
         <div className="sticky bottom-0 z-10 mt-auto border-t border-border bg-background/90 backdrop-blur-md">
-          <div className="mx-auto w-full max-w-lg px-4 py-3">
+          {/* pb clears the home indicator on notched phones (map's env() pattern). */}
+          <div className="mx-auto w-full max-w-lg px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <SaveState state={snap.byLead[lead.id]} online={snap.online} />
             <button onClick={openLog} data-testid="detail-log-cta" className="h-12 w-full rounded-xl bg-primary text-[14px] font-semibold text-primary-foreground transition-all duration-150 hover:bg-primary/90 active:scale-[.99]">Log outcome</button>
           </div>
@@ -503,7 +504,8 @@ function FactRow({ icon: Icon, label, value, tone }: { icon: any; label: string;
 
 function TimelineRow({ h, last }: { h: HistoryRow; last: boolean }) {
   const meta = h.type === "status_change" ? OUTCOME_META[(h.status ?? "") as KnockOutcome] : null;
-  const color = meta?.color ?? "#64748b";
+  // Non-outcome rows fall back to the muted-foreground token, not a slate hex.
+  const color = meta?.color ?? "hsl(var(--muted-foreground))";
   const Icon = h.type === "assignment" ? UserPlus : h.type === "note" ? StickyNote : null;
   return (
     <li className="relative pl-6 pb-4 last:pb-0">

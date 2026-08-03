@@ -514,8 +514,10 @@ export default function CallingLead() {
 
             {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button data-testid="next-eligible-lead" disabled={nextLeadMutation.isPending} onClick={() => nextLeadMutation.mutate()}>{nextLeadMutation.isPending ? "Finding next eligible lead…" : "Next eligible lead →"}</Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
 
+            {/* Safe-area: the sticky thumb-zone bar must clear the home
+                indicator on notched phones (same env() pattern as the map). */}
             {activeAttempt && !completed && (
-              <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="calling-quick-dispositions">
+              <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="calling-quick-dispositions">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Quick outcome</div>
                 <div className="mt-2 grid grid-cols-4 gap-2">
                   {([

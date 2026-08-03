@@ -409,7 +409,7 @@ export default function USAScanner() {
             className="pl-9 bg-background border-border h-9 text-sm"
           />
           {search && (
-            <button className="absolute right-2 top-1/2 -translate-y-1/2" onClick={() => setSearch("")}>
+            <button type="button" aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 p-1" onClick={() => setSearch("")}>
               <X className="w-4 h-4 text-muted-foreground" />
             </button>
           )}

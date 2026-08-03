@@ -67,7 +67,7 @@ export default function Profile() {
                   <FileSignature className="w-4 h-4" />
                 </span>
                 <span>
-                  <span className="block text-[14px] font-medium text-foreground">My Documents</span>
+                  <span className="block text-[14px] font-medium text-foreground">My documents</span>
                   <span className="block text-[12px] text-muted-foreground mt-0.5">Review and sign rep agreements</span>
                 </span>
               </span>

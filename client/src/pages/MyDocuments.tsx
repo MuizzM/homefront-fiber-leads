@@ -204,7 +204,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
           {content.data && <p className="text-2xs text-muted-foreground font-mono mt-1">Document SHA-256 {content.data.contentSha256}</p>}
         </DialogHeader>
 
-        {content.isLoading && <div className="flex-1 p-5 space-y-3"><div className="h-7 bg-secondary rounded animate-pulse" /><div className="h-52 bg-secondary/60 rounded animate-pulse" /></div>}
+        {content.isLoading && <div className="flex-1 p-5 space-y-3" role="status" aria-busy="true" aria-label="Loading agreement"><div className="h-7 bg-secondary rounded animate-pulse" /><div className="h-52 bg-secondary/60 rounded animate-pulse" /></div>}
         {content.isError && <div className="flex-1 grid place-items-center p-6"><div className="text-center"><AlertTriangle className="w-7 h-7 text-red-400 mx-auto" /><p className="text-sm font-semibold mt-2">Couldn’t open this agreement</p><Button variant="outline" size="sm" className="mt-3" onClick={() => content.refetch()}>Try again</Button></div></div>}
 
         {content.data && snapshot && (
@@ -341,11 +341,11 @@ export default function MyDocuments() {
     <div className="p-4 sm:p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-5">
       <header>
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Rep onboarding</div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground mt-0.5 flex items-center gap-2"><FileSignature className="w-5 h-5 text-primary" /> My Documents</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground mt-0.5 flex items-center gap-2"><FileSignature className="w-5 h-5 text-primary" /> My documents</h1>
         <p className="text-sm text-muted-foreground mt-1">Review, sign, and download your agreements with Home Front Sign.</p>
       </header>
 
-      {query.isLoading && <div className="h-40 rounded-2xl bg-card border border-border animate-pulse" />}
+      {query.isLoading && <div className="h-40 rounded-2xl bg-card border border-border animate-pulse" role="status" aria-busy="true" aria-label="Loading your documents" />}
       {query.isError && <div className="rounded-2xl bg-card border border-red-500/30 p-6 text-center"><p className="text-sm font-semibold">Couldn’t load your documents</p><Button variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>Try again</Button></div>}
       {data?.noRepProfile && <div className="rounded-2xl bg-card border border-amber-500/30 p-5 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" /><div><p className="text-sm font-semibold">No rep profile linked</p><p className="text-xs text-muted-foreground mt-1">Ask your manager to link your login to your team profile.</p></div></div>}
       {data && !data.noRepProfile && !data.configured && <div className="rounded-2xl bg-card border border-amber-500/30 p-4 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" /><div><p className="text-sm font-semibold">Onboarding email is temporarily unavailable</p><p className="text-xs text-muted-foreground mt-1">Existing agreements remain available to review, sign, and download. Your manager cannot issue new ones until Resend is connected.</p></div></div>}

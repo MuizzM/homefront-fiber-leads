@@ -292,7 +292,7 @@ export default function CallingQueue() {
                 <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">Queue unavailable</h2>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">No lead can be opened for calling while the queue is unknown.</p>
                 <button type="button" onClick={() => void queueQuery.refetch()}
-                  className="mt-4 min-h-10 rounded-xl border border-border bg-card px-4 text-[13px] font-semibold transition-colors hover:bg-secondary/60">Retry</button>
+                  className="mt-4 min-h-11 rounded-xl border border-border bg-card px-4 text-[13px] font-semibold transition-colors hover:bg-secondary/60">Retry</button>
               </div>
             ) : filtered.length ? (
               <section aria-label="Calling queue" className="overflow-hidden rounded-2xl border border-border bg-card">

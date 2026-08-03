@@ -175,12 +175,12 @@ export default function ReadyToCall() {
       {/* Progress + prev/next */}
       <div className="mb-3 flex items-center justify-between">
         <button onClick={() => go(-1)} disabled={idx === 0} aria-label="Previous lead"
-          className={`grid h-10 w-10 place-items-center rounded-xl border border-border bg-secondary text-foreground disabled:opacity-40 active:scale-95 transition-transform ${FOCUS}`}>
+          className={`grid h-11 w-11 place-items-center rounded-xl border border-border bg-secondary text-foreground disabled:opacity-40 active:scale-95 transition-transform ${FOCUS}`}>
           <ChevronLeft className="w-5 h-5" />
         </button>
         <span className="text-xs font-semibold tabular-nums text-muted-foreground" aria-live="polite">{idx + 1} of {queue.length}</span>
         <button onClick={() => go(1)} disabled={idx >= queue.length - 1} aria-label="Next lead"
-          className={`grid h-10 w-10 place-items-center rounded-xl border border-border bg-secondary text-foreground disabled:opacity-40 active:scale-95 transition-transform ${FOCUS}`}>
+          className={`grid h-11 w-11 place-items-center rounded-xl border border-border bg-secondary text-foreground disabled:opacity-40 active:scale-95 transition-transform ${FOCUS}`}>
           <ChevronRight className="w-5 h-5" />
         </button>
       </div>

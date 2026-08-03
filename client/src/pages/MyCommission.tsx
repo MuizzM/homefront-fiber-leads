@@ -110,7 +110,7 @@ export default function MyCommission() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">My Commission</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">My commission</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {data?.bounds?.localWeekLabel ? `Week of ${data.bounds.localWeekLabel}` : "This week's earnings"}
           </p>
@@ -135,7 +135,7 @@ export default function MyCommission() {
       {stmtId != null && <CommissionStatement statementId={stmtId} onClose={() => setStmtId(null)} />}
 
       {isLoading && (
-        <div className="space-y-4">
+        <div className="space-y-4" role="status" aria-busy="true" aria-label="Loading your commission">
           <div className="h-40 rounded-xl bg-card border border-border animate-pulse" />
           <div className="h-24 rounded-xl bg-card border border-border animate-pulse" />
         </div>

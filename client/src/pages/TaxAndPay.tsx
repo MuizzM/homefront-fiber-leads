@@ -1033,7 +1033,7 @@ function BankSaved({ status, onReplace }: { status: BankStatus; onReplace: () =>
 
 function SectionSkeleton() {
   return (
-    <div className="space-y-3" data-testid="section-skeleton">
+    <div className="space-y-3" data-testid="section-skeleton" role="status" aria-busy="true" aria-label="Loading this section">
       <Skeleton className="h-4 w-40 rounded" />
       <Skeleton className="h-11 w-full rounded-xl" />
       <Skeleton className="h-11 w-full rounded-xl" />
