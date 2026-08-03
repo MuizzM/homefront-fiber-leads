@@ -120,6 +120,7 @@ import {
 import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
+import { rollDoorDrop } from "./doorDropStore";
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
@@ -5687,6 +5688,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let milestoneAwards: ReturnType<typeof awardMilestonesForRep> = [];
     let momentumArmed: ReturnType<typeof armMomentumOffer> = null;
     let momentumWin: ReturnType<typeof convertMomentumOffer> = null;
+    let doorDrop: ReturnType<typeof rollDoorDrop> = null;
     if (!superseded && parsed.data.repId != null) {
       const bonusTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
       try {
@@ -5731,6 +5733,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       } catch (e: any) {
         console.warn("[spiff-momentum] evaluate failed (non-fatal):", e?.message);
       }
+      // ── DOOR DROP: any verified door can pay a small surprise ─────────────
+      // Only rolled for a door the geo check actually rated `verified` — an
+      // unverifiable knock is not evidence of work, and paying a random bonus
+      // for one would teach the floor exactly which way to hold the phone.
+      //
+      // The roll is a deterministic hash of the knock id, so this same knock
+      // always decides the same way: a retry cannot buy a second spin, and the
+      // ledger key is the knock, so it cannot be collected twice either.
+      try {
+        if (bonusTenant != null && verdict.status === "verified") {
+          doorDrop = rollDoorDrop(bonusTenant, parsed.data.repId, knock.id, Date.parse(serverTs));
+        }
+      } catch (e: any) {
+        console.warn("[door-drop] roll failed (non-fatal):", e?.message);
+      }
     }
     // REVIEWER GATE: persist the CAS result ON the knock row — retries,
     // history, and counters can all tell the truth (it was previously
@@ -5751,6 +5768,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         .map(a => ({ amountCents: a.amountCents, reason: a.reason, campaignName: "Milestone" })),
       ...(momentumWin?.inserted
         ? [{ amountCents: momentumWin.amountCents, reason: momentumWin.reason, campaignName: "Hot streak" }]
+        : []),
+      ...(doorDrop?.inserted
+        ? [{ amountCents: doorDrop.amountCents, reason: doorDrop.reason, campaignName: "Door drop" }]
         : []),
     ];
     // A newly-armed offer rides the response too, so the rep is told AT THE

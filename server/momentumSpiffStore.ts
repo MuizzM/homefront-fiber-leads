@@ -350,9 +350,9 @@ export function convertMomentumOffer(
   const key = `momentum:${offer.id}`;
   const reason = momentumReason(offer.amountCents);
   const info = rawDb.prepare(
-    `INSERT OR IGNORE INTO spiffs (tenant_id, rep_id, sale_ref, amount_cents, reason, status)
-     VALUES (?,?,?,?,?,'earned')`,
-  ).run(tenantId, repId, key, offer.amountCents, reason);
+    `INSERT OR IGNORE INTO spiffs (tenant_id, rep_id, sale_ref, amount_cents, reason, status, created_at)
+     VALUES (?,?,?,?,?,'earned',?)`,
+  ).run(tenantId, repId, key, offer.amountCents, reason, new Date(nowMs).toISOString());
 
   const inserted = info.changes === 1;
   if (inserted) {

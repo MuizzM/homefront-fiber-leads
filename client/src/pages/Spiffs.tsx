@@ -24,8 +24,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { CampaignBoard } from "@/components/CampaignBoard";
 import { MilestoneSection } from "@/components/MilestoneCard";
+import { DoorDropSection } from "@/components/DoorDropCard";
 import { MomentumOffer } from "@/components/MomentumOffer";
 import { MilestoneLadderEditor } from "@/components/MilestoneLadderEditor";
+import { DoorDropEditor } from "@/components/DoorDropEditor";
 import { CampaignLauncher } from "@/components/CampaignLauncher";
 import { useAuth } from "@/lib/auth";
 import { can, type Role as AppRole } from "@shared/capabilities";
@@ -287,6 +289,11 @@ function MySpiffs({ repKey }: { repKey: number | string }) {
           running; this one always is, which is exactly why it belongs on the
           screen every day rather than only when someone launches something. */}
       <MilestoneSection />
+
+      {/* Drops last of the four. Everything above is something a rep can aim at;
+          this is the one they cannot, so it reads as a footnote to the plan
+          rather than part of it — which is exactly its job. */}
+      <DoorDropSection />
 
       <StatStrip columns={4}>
         <StatTile label="Total won" accent testId="stat-total"
@@ -657,6 +664,7 @@ export default function Spiffs() {
           carrying another rep's state. */}
       {canLaunch && <CampaignLauncher />}
       {canLaunch && <MilestoneLadderEditor />}
+      {canLaunch && <DoorDropEditor />}
       <MySpiffs key={String(user?.teamMemberId ?? user?.id ?? "anon")}
                 repKey={user?.teamMemberId ?? user?.id ?? "anon"} />
       {isManager && <TeamHeat isAdmin={isAdmin} />}

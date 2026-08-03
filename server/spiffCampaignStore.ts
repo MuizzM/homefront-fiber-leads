@@ -406,9 +406,10 @@ export function awardCampaignsForRep(
 
     const key = idempotencyKey(campaign, repId, nowMs, tz, saleRef);
     const info = rawDb.prepare(
-      `INSERT OR IGNORE INTO spiffs (tenant_id, rep_id, sale_ref, amount_cents, reason, status, campaign_id)
-       VALUES (?,?,?,?,?,'earned',?)`,
-    ).run(tenantId, repId, key, verdict.award.amountCents, verdict.award.reason, campaign.id);
+      `INSERT OR IGNORE INTO spiffs (tenant_id, rep_id, sale_ref, amount_cents, reason, status, campaign_id, created_at)
+       VALUES (?,?,?,?,?,'earned',?,?)`,
+    ).run(tenantId, repId, key, verdict.award.amountCents, verdict.award.reason, campaign.id,
+          new Date(nowMs).toISOString());
 
     const inserted = info.changes === 1;
     if (inserted) {

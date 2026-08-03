@@ -124,6 +124,10 @@ export function createSavedKnockReconciliation(
     // effort-shaped trigger. Refetch so the card the rep looks at next is live.
     effects.invalidateQuery(["/api/me/campaigns"]);
     effects.invalidateQuery(["/api/me/milestones"]);
+    // Door drops move on EVERY verified door, and the card's whole job is to say
+    // how long the dry run has been. A stale one contradicts the drop the rep was
+    // just toasted about.
+    effects.invalidateQuery(["/api/me/door-drops"]);
     // Momentum is the one with a clock measured in minutes — an armed offer the
     // rep cannot see for another 30 seconds has already lost part of its window.
     effects.invalidateQuery(["/api/me/momentum"]);
