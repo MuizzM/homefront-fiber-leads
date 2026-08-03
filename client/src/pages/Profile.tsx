@@ -2,7 +2,7 @@
 // Identity + session controls, mobile-first. Deliberately small: who am I,
 // which role, light/dark, sign out. Everything else lives in its own tab.
 
-import { ChevronRight, Clock3, FileSignature, LogOut, Moon, Sun, Trophy } from "lucide-react";
+import { ChevronRight, Clock3, FileSignature, Landmark, LogOut, Moon, Sun, Trophy } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -69,6 +69,22 @@ export default function Profile() {
                 <span>
                   <span className="block text-[14px] font-medium text-foreground">My Documents</span>
                   <span className="block text-[12px] text-muted-foreground mt-0.5">Review and sign rep agreements</span>
+                </span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-muted-foreground" />
+            </Link>
+            <Link
+              href="/tax-and-pay"
+              data-testid="profile-tax-and-pay"
+              className="w-full px-5 py-4 flex items-center justify-between gap-4 text-left border-t border-border active:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
+            >
+              <span className="flex items-center gap-3">
+                <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                  <Landmark className="w-4 h-4" />
+                </span>
+                <span>
+                  <span className="block text-[14px] font-medium text-foreground">Tax &amp; Direct Deposit</span>
+                  <span className="block text-[12px] text-muted-foreground mt-0.5">File your W-9 and set where your pay lands</span>
                 </span>
               </span>
               <ChevronRight className="w-4 h-4 text-muted-foreground" />

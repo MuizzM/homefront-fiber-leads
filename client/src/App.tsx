@@ -46,6 +46,7 @@ const Applications = lazy(() => import("@/pages/Applications"));
 const MyCommission = lazy(() => import("@/pages/MyCommission"));
 const CommissionConsole = lazy(() => import("@/pages/CommissionConsole"));
 const MyDocuments = lazy(() => import("@/pages/MyDocuments"));
+const TaxAndPay = lazy(() => import("@/pages/TaxAndPay"));
 const LiveMap = lazy(() => import("@/pages/LiveMap"));
 const ClockIn = lazy(() => import("@/pages/ClockIn"));
 const Profile = lazy(() => import("@/pages/Profile"));
@@ -253,6 +254,11 @@ function AppRoutes() {
           </Route>
           <Route path="/my-commission"><CapabilityGuard role={role} capability="commission.read.self"><MyCommission /></CapabilityGuard></Route>
           <Route path="/my-documents"><CapabilityGuard role={role} capability="onboarding.documents.read.self"><MyDocuments /></CapabilityGuard></Route>
+          {/* Tax & direct deposit — the caller's OWN W-9 and bank details. Not
+              capability-gated (like /profile): every authenticated user may
+              manage their own pay record, and the server independently scopes
+              /api/me/w9 and /api/me/bank to the session's linked rep. */}
+          <Route path="/tax-and-pay" component={TaxAndPay} />
           <Route path="/commission-console">
             <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
               <CommissionConsole />

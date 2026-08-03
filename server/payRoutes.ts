@@ -38,6 +38,45 @@ function fail(res: Response, e: unknown) {
   return res.status(500).json({ error: msg });
 }
 
+// ── ACH EXPORT KILL SWITCH ───────────────────────────────────────────────────
+// GET /api/pay/nacha originates REAL MONEY MOVEMENT, and four blockers below it
+// are still unfixed. Until every one of them is closed the export must be inert,
+// so it is OFF unless the operator sets ACH_EXPORT_ENABLED="true" (read per
+// request — no boot-time capture — so the flag can be flipped and audited
+// without a code change).
+//
+// MUST BE FIXED BEFORE SETTING ACH_EXPORT_ENABLED=true:
+//   1. NO PAYMENT LEDGER. Nothing records that a week was exported/settled, so
+//      re-downloading the file (a retry, a second manager, a browser refresh)
+//      re-pays the entire roster. Needs a durable "this statement was paid in
+//      ACH file X" ledger that the builder excludes on the next run.
+//   2. EFFECTIVE DATE IS DERIVED FROM THE PAY-PERIOD START. nachaService uses
+//      nextBankingDay(weekStartUtc), which for any week already closed is a
+//      date in the PAST — banks reject the file (or post it wrong). It must be
+//      derived from the SUBMISSION date plus the ODFI's settlement lead time.
+//   3. SERVICE CLASS 200 ON A CREDITS-ONLY BATCH. 200 declares "mixed debits
+//      and credits"; this batch is credits only and must be class 220 in the
+//      batch header, batch control, and the file control totals.
+//   4. NO KEY VERSION IN THE CIPHERTEXT. payCrypto writes no key id, so
+//      rotating PAY_CRYPTO_KEY silently makes every stored TIN and bank
+//      account undecryptable — an unrecoverable loss of the pay roster. The
+//      envelope needs a key version and a dual-key read path first.
+//
+// Do NOT "temporarily" flip this to ship a payroll run: every blocker above
+// either loses money or loses the data needed to pay anyone again.
+const ACH_EXPORT_DISABLED_MESSAGE =
+  "The ACH/NACHA export is disabled in this deployment. It stays off until the payment ledger " +
+  "(so a re-download cannot double-pay the roster), the submission-date effective date, the " +
+  "credits-only service class, and key-versioned pay ciphertext are in place. Set " +
+  "ACH_EXPORT_ENABLED=true only after that work ships.";
+
+const requireAchExportEnabled: Mw = (_req, res, next) => {
+  if (process.env.ACH_EXPORT_ENABLED !== "true") {
+    return res.status(503).json({ error: ACH_EXPORT_DISABLED_MESSAGE, code: "ACH_EXPORT_DISABLED" });
+  }
+  next();
+};
+
 // Secrets-ready guard: without an encryption key the pay plane fails CLOSED
 // (503) rather than writing anything unencrypted.
 const requirePaySecrets: Mw = (_req, res, next) => {
@@ -252,8 +291,12 @@ export function registerPayRoutes(app: Express, deps: Deps) {
   // first). ?allowPartial=1 pays the payable set and names the excluded reps
   // in the X-Nacha-Exceptions JSON header. ?fileIdModifier=B… regenerates the
   // same week under NACHA duplicate-file rules.
+  //
+  // DISABLED BY DEFAULT — see requireAchExportEnabled further up. The
+  // code stays intact (and tested) so the remaining work is a fix, not a
+  // rewrite; it simply cannot originate a real payment until the flag is set.
 
-  app.get("/api/pay/nacha", requireCapability("commission.read.all"), requirePaySecrets, (req, res) => {
+  app.get("/api/pay/nacha", requireCapability("commission.read.all"), requireAchExportEnabled, requirePaySecrets, (req, res) => {
     try {
       const weekReference = parseWeekRef(req.query.weekStart);
       if (!weekReference) return res.status(400).json({ error: "weekStart=YYYY-MM-DD is required" });
