@@ -35,6 +35,16 @@ export interface QueueSnapshot {
   deadItems: DeadKnockSummary[];
   byLead: Record<number, LeadSaveState>; // no entry = "idle"
   online: boolean;
+  /** leadId → the outcome this rep logged that has NOT reached the server yet.
+   *
+   *  This is what lets an optimistic pin survive a refetch. The recolor used to
+   *  be a one-shot patch into the react-query cache, so ANY refetch landing
+   *  before the queue flushed — a poll, the map-changed stream firing on a
+   *  teammate's knock, a tab refocus — replaced it with server data that did
+   *  not have the knock yet, and the pin visibly reverted. Exposing the pending
+   *  outcomes means the overlay can be REBUILT from durable queue state after
+   *  every server read instead of being lost by it. */
+  pendingOutcomes: Record<number, { outcome: string; at: string }>;
 }
 
 export interface StorageLike {
@@ -204,7 +214,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   const recentSaves = new Map<number, { clientId: string; knockId: number }>();
   const listeners = new Set<() => void>();
 
-  let snapshot: QueueSnapshot = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true };
+  let snapshot: QueueSnapshot = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true, pendingOutcomes: {} };
   let inflight = false;
   // Restart-burst detection: epoch ms of the last GENUINELY transient failure
   // (network/timeout/5xx/429) on this queue. A 403 landing inside the burst
@@ -227,12 +237,21 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   // The ONLY place the snapshot object is rebuilt — getSnapshot returns the
   // cached reference otherwise (useSyncExternalStore tears on fresh objects).
   const markChanged = (): void => {
+    // Newest queued outcome wins per door: two taps on one house before a flush
+    // must overlay as the SECOND one, matching what the server will settle on.
+    const pendingOutcomes: Record<number, { outcome: string; at: string }> = {};
+    for (const it of pending) {
+      const at = it.deviceTs ?? "";
+      const prev = pendingOutcomes[it.leadId];
+      if (!prev || at >= prev.at) pendingOutcomes[it.leadId] = { outcome: it.outcome, at };
+    }
     snapshot = {
       pendingCount: pending.length,
       deadCount: dead.length,
       deadItems: dead.map(summarizeDeadKnock),
       byLead: { ...byLead },
       online: isOnline(),
+      pendingOutcomes,
     };
     listeners.forEach((cb) => cb());
   };
