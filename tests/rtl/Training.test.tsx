@@ -153,6 +153,26 @@ describe("Training page", () => {
     }
   });
 
+  it("renders every expansion module (m16-m22): first lesson shows its title and section bodies", async () => {
+    mockApi();
+    renderPage();
+    await screen.findByTestId("training-hero-count");
+    const expansion = TRAINING_MODULES.filter((m) => ["m16", "m17", "m18", "m19", "m20", "m21", "m22"].includes(m.id));
+    expect(expansion).toHaveLength(7);
+    for (const mod of expansion) {
+      // Module card and its lesson rows are present on the overview.
+      expect(screen.getByTestId(`training-module-${mod.id}`)).toBeTruthy();
+      const lesson = mod.lessons[0];
+      fireEvent.click(screen.getByTestId(`training-lesson-${lesson.id}`));
+      await screen.findByTestId(`lesson-view-${lesson.id}`);
+      // Title and at least one section body paragraph render in the reader.
+      expect(screen.getByRole("heading", { name: lesson.title })).toBeTruthy();
+      expect(screen.getByText(lesson.sections[0].body[0])).toBeTruthy();
+      fireEvent.click(screen.getByTestId("lesson-back"));
+      await screen.findByTestId(`training-module-${mod.id}`);
+    }
+  });
+
   it("hides the team table from reps and never fetches the summary", async () => {
     mockApi();
     renderPage();
