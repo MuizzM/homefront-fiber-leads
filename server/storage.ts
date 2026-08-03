@@ -851,6 +851,14 @@ export function runMigrations() {
     // then HIDES the column rather than printing $0.00 beside every door (which
     // reads as "this sale was worth nothing" instead of "not configured").
     `ALTER TABLE tenants ADD COLUMN commission_house_amount_cents INTEGER NOT NULL DEFAULT 0`,
+    // SELF-SERVE OPEN FIELD — off by default, deliberately.
+    // A door with no rep and no territory is unowned ground. Enabling this lets
+    // any rep in the tenant see and work it. For an org that imported a whole
+    // market's FCC footprint that means every rep opens the app to tens of
+    // thousands of doors nobody handed them, which is how work stops being
+    // distributed by assignment. Left available because the opposite org exists
+    // — a small team told to go work the town — but it is an explicit choice.
+    `ALTER TABLE tenants ADD COLUMN open_field_enabled INTEGER NOT NULL DEFAULT 0`,
 
     `CREATE TABLE IF NOT EXISTS commission_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, currency TEXT NOT NULL DEFAULT 'USD', type TEXT NOT NULL DEFAULT 'TIERED', tier_mode TEXT NOT NULL DEFAULT 'RETROACTIVE_WEEKLY', status TEXT NOT NULL DEFAULT 'DRAFT', created_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_commission_plans_tenant ON commission_plans(tenant_id, status)`,
@@ -3055,6 +3063,15 @@ export class Storage implements IStorage {
   // extends — so the full feed, bbox windows, the count probe, and the
   // density grid all apply the identical "latest" predicate (no forked
   // builder). Absent view = the byte-stable unfiltered predicate.
+  /** Does this tenant let reps work unowned ground? Off unless switched on. */
+  openFieldEnabled(tenantId?: number): boolean {
+    if (tenantId == null) return false;
+    try {
+      const row = rawDb.prepare(`SELECT open_field_enabled AS v FROM tenants WHERE id = ?`).get(tenantId) as any;
+      return !!row?.v;
+    } catch { return false; }
+  }
+
   private mapScopeWhere(tenantId?: number, assignedRep?: number | number[], view?: MapView): { where: string; params: any[] } {
     const clauses: string[] = [];
     const params: any[] = [];
@@ -3079,9 +3096,9 @@ export class Storage implements IStorage {
       //
       // Fail-closed on an empty scope: the helper returns the impossible
       // predicate, so a rep with no linked member sees zero pins, not all.
-      clauses.push(repVisibilitySql(assignedRep, "l")!);
+      clauses.push(repVisibilitySql(assignedRep, "l", this.openFieldEnabled(tenantId))!);
     } else if (assignedRep != null) {
-      clauses.push(repVisibilitySql([assignedRep], "l")!);
+      clauses.push(repVisibilitySql([assignedRep], "l", this.openFieldEnabled(tenantId))!);
     }
     const where = clauses.length ? clauses.join(" AND ") : "1 = 1";
     // Scope predicate shared by both statements below. The lead_status gate:

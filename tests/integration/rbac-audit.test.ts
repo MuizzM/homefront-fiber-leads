@@ -194,11 +194,11 @@ describe("reps are fail-closed on everything above their grade", () => {
   it("a rep reads only their own doors — a teammate's lead is a 404, not a 403", async () => {
     expect((await req(`/api/leads/${ids.team1Lead}`, who.rep1.session)).status).toBe(200);
     expect((await req(`/api/leads/${ids.team2Lead}`, who.rep1.session)).status).toBe(404);
-    // OPEN FIELD: a lead with no rep AND no territory is unworked tenant ground —
-    // any rep in the tenant may read/knock it (see knock-open-field.test.ts).
-    expect((await req(`/api/leads/${ids.poolLead}`, who.rep1.session)).status).toBe(200);
-    // The LIST stays assignment-scoped even though single-lead access opened:
-    // open field is self-serve at the door, not a map full of pool pins.
+    // OPEN FIELD is OPT-IN and off for this tenant, so an unowned door is not
+    // a rep's to read either — the same 404 as a teammate's lead. With the
+    // tenant flag on it becomes readable; that path is covered end-to-end in
+    // knock-open-field.test.ts, which switches it on.
+    expect((await req(`/api/leads/${ids.poolLead}`, who.rep1.session)).status).toBe(404);
     const list = await (await req("/api/leads", who.rep1.session)).json();
     expect(list.leads.map((l: any) => l.id)).toEqual([ids.team1Lead]);
   });

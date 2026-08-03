@@ -23,9 +23,18 @@ describe("repCanWorkLead", () => {
     expect(repCanWorkLead({ assignedRepId: 9, assignedTerritoryId: 100 }, SCOPE, AREAS)).toBe(true);
   });
 
-  it("OPEN FIELD — no rep and no territory is unowned ground, self-serve", () => {
-    // The branch the SQL was missing. This is the ~62k imported town leads.
-    expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: null }, SCOPE, AREAS)).toBe(true);
+  it("OPEN FIELD is OFF by default — an unowned door is not a rep's to work", () => {
+    // Default off on purpose: an org that imported a market's whole FCC
+    // footprint would otherwise hand every rep tens of thousands of doors
+    // nobody assigned them. Assignment is how work gets distributed.
+    expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: null }, SCOPE, AREAS)).toBe(false);
+  });
+
+  it("OPEN FIELD opens up only when the tenant opts in", () => {
+    expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: null }, SCOPE, AREAS, true)).toBe(true);
+    // …and opting in still does not hand over somebody else's ground.
+    expect(repCanWorkLead({ assignedRepId: 9, assignedTerritoryId: null }, SCOPE, AREAS, true)).toBe(false);
+    expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: 200 }, SCOPE, AREAS, true)).toBe(false);
   });
 
   it("another rep's door is denied", () => {
@@ -42,16 +51,16 @@ describe("repCanWorkLead", () => {
     expect(repCanWorkLead(undefined, SCOPE, AREAS)).toBe(false);
   });
 
-  it("an empty scope can work nothing — not even open field", () => {
-    // A login with no linked team member must fail CLOSED.
-    expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: null }, [], new Set())).toBe(true);
-    // …open field is genuinely open, but a door owned by anyone stays denied:
+  it("an empty scope can work nothing", () => {
+    // A login with no linked team member must fail CLOSED on every shape.
+    expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: null }, [], new Set())).toBe(false);
     expect(repCanWorkLead({ assignedRepId: 9, assignedTerritoryId: null }, [], new Set())).toBe(false);
     expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: 200 }, [], new Set())).toBe(false);
   });
 
   it("treats undefined ownership the same as null (unhydrated rows)", () => {
-    expect(repCanWorkLead({ assignedRepId: undefined, assignedTerritoryId: undefined }, SCOPE, AREAS)).toBe(true);
+    expect(repCanWorkLead({ assignedRepId: undefined, assignedTerritoryId: undefined }, SCOPE, AREAS)).toBe(false);
+    expect(repCanWorkLead({ assignedRepId: undefined, assignedTerritoryId: undefined }, SCOPE, AREAS, true)).toBe(true);
   });
 
   it("a team lead's scope covers their reports' doors", () => {
@@ -70,12 +79,15 @@ describe("repVisibilitySql", () => {
     expect(repVisibilitySql([])).toBe("1 = 0");
   });
 
-  it("carries all three branches", () => {
-    const frag = repVisibilitySql([7], "l")!;
-    expect(frag).toContain("l.assigned_rep_id IN (7)");
-    expect(frag).toContain("l.assigned_rep_id IS NULL AND l.assigned_territory_id IS NULL");
-    expect(frag).toContain("FROM territories t");
-    expect(frag).toContain("json_each");
+  it("omits the open-field branch unless the tenant opts in", () => {
+    const off = repVisibilitySql([7], "l")!;
+    expect(off).toContain("l.assigned_rep_id IN (7)");
+    expect(off).toContain("FROM territories t");
+    expect(off).toContain("json_each");
+    expect(off).not.toContain("assigned_territory_id IS NULL");
+
+    const on = repVisibilitySql([7], "l", true)!;
+    expect(on).toContain("l.assigned_rep_id IS NULL AND l.assigned_territory_id IS NULL");
   });
 
   it("honours the table alias so raw and Drizzle callers can both compose it", () => {

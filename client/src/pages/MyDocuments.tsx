@@ -371,6 +371,22 @@ export default function MyDocuments() {
   };
 
   const data = query.data;
+  // Tax paperwork status, so the W-9 row in the packet reports the truth rather
+  // than a static "go do this". Both endpoints 404 when nothing is on file yet,
+  // which is a normal state for a new rep, not an error worth retrying.
+  const w9 = useQuery<{ submitted?: boolean } | null>({
+    queryKey: ["/api/me/w9"],
+    queryFn: () => apiRequest("GET", "/api/me/w9").then(r => (r.ok ? r.json() : null)).catch(() => null),
+    retry: false,
+  });
+  const bank = useQuery<{ last4?: string } | null>({
+    queryKey: ["/api/me/bank"],
+    queryFn: () => apiRequest("GET", "/api/me/bank").then(r => (r.ok ? r.json() : null)).catch(() => null),
+    retry: false,
+  });
+  const w9Filed = !!w9.data?.submitted;
+  const taxReady = w9Filed && !!bank.data?.last4;
+
   const percentage = data?.progress.total ? Math.round((data.progress.completed / data.progress.total) * 100) : 0;
   const nextDocument = data?.documents.find(document =>
     document.envelope?.status === "sent" || document.envelope?.status === "delivered"
@@ -408,33 +424,42 @@ export default function MyDocuments() {
               </Button>
             </section>
           )}
-          {/* Signing agreements is only half of onboarding — a rep cannot be
-              PAID until their W-9 and bank details are on file. That surface
-              lives on its own page; this is the signpost to it. */}
-          <Link
-            href="/tax-and-pay"
-            data-testid="link-tax-and-pay"
-            className="block rounded-2xl border border-border bg-card p-4 transition-colors hover:border-primary/40 focus-visible:border-primary/40 focus-visible:outline-none"
-          >
-            <div className="flex items-start gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
-                <Landmark className="h-5 w-5" aria-hidden="true" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Before you can be paid</div>
-                <div className="mt-0.5 text-[15px] font-semibold text-foreground">Tax form &amp; direct deposit</div>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  File your IRS Form W-9 and tell us which bank account your commission lands in.
-                </p>
-              </div>
-              <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            </div>
-          </Link>
           <section className="rounded-2xl bg-card border border-border p-4" aria-label="Onboarding progress">
             <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${percentage === 100 ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
             <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className="h-full bg-primary rounded-full transition-all" style={{ width: `${percentage}%` }} /></div>
           </section>
           <section className="rounded-2xl bg-card border border-border overflow-hidden"><div className="divide-y divide-border">
+            {/* The W-9 is onboarding paperwork the company requires before it can
+                pay anyone, so it belongs IN the packet — one list of everything a
+                rep owes, with one progress number — rather than as a separate
+                destination they have to remember to visit. It links out to the
+                tax form because a W-9 is filled in, not counter-signed like an
+                agreement; the form itself opens the real IRS PDF. */}
+            <article className="render-lazy p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid="onboarding-document-w9">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${taxReady ? "bg-emerald-500/10" : "bg-secondary"}`}>
+                  {taxReady ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <Landmark className="w-5 h-5 text-muted-foreground" />}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-sm font-semibold">IRS Form W-9 &amp; direct deposit</h2>
+                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${taxReady ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`} data-testid="w9-packet-status">
+                      {taxReady ? "On file" : w9Filed ? "Bank details needed" : "Not filed"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    Certify your taxpayer information on the official IRS form and tell us which account your commission lands in. You cannot be paid until both are on file.
+                  </p>
+                </div>
+              </div>
+              <div className="flex-shrink-0 pl-[52px] sm:pl-0">
+                <Link href="/tax-and-pay" data-testid="link-tax-and-pay">
+                  <Button size="sm" variant={taxReady ? "outline" : "default"} className="h-9">
+                    <Landmark className="w-3.5 h-3.5 mr-1" /> {taxReady ? "View" : "Complete"}
+                  </Button>
+                </Link>
+              </div>
+            </article>
             {data.documents.map(document => {
               const record = document.envelope;
               const actionable = record && (record.status === "sent" || record.status === "delivered");

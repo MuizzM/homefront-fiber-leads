@@ -504,6 +504,7 @@ function repCanAccessLead(user: any, lead: any): boolean {
     lead,
     scope as number[],
     territoryIdsForScope(scope as number[], user?.tenantId),
+    storage.openFieldEnabled(user?.tenantId),
   );
 }
 
