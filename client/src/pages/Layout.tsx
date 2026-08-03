@@ -41,6 +41,7 @@ import { PaywallBanner } from "@/components/PaywallBanner";
 import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
 import { apiRequest } from "@/lib/queryClient";
+import { prefetchRoute } from "@/lib/routePrefetch";
 import { useTheme } from "@/hooks/use-theme";
 import { can, type Role as AppRole } from "@shared/capabilities";
 
@@ -300,6 +301,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         key={href}
                         href={href}
                         onClick={() => setMobileOpen(false)}
+                        onPointerEnter={() => prefetchRoute(href)}
+                        onFocus={() => prefetchRoute(href)}
                         className={cn(
                           "relative flex min-h-11 md:min-h-0 items-center gap-3 rounded-xl md:rounded-lg px-3 py-2.5 md:py-2 text-[14px] md:text-[13px] font-medium transition-colors",
                           isActive
@@ -456,7 +459,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 {visibleNav
                   .filter(item => !["/", "/today", "/leads", "/map", "/my-commission"].includes(item.href))
                   .map(({ href, label, icon: Icon }) => (
-                    <Link key={href} href={href} onClick={() => setMoreOpen(false)} className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-border bg-background/55 px-3.5 py-3 text-left active:scale-[.98] transition hover:border-primary/25">
+                    <Link key={href} href={href} onClick={() => setMoreOpen(false)} onPointerEnter={() => prefetchRoute(href)} onFocus={() => prefetchRoute(href)} className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-border bg-background/55 px-3.5 py-3 text-left active:scale-[.98] transition hover:border-primary/25">
                       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary"><Icon className="h-[19px] w-[19px]" /></span>
                       <span className="min-w-0 text-[13px] font-semibold leading-tight text-foreground">{label}</span>
                     </Link>
