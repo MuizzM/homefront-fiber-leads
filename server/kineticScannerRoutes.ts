@@ -34,6 +34,12 @@ import {
   stopKineticWorker,
 } from "./kineticScannerWorkers";
 
+// SEC-B: export caps — a full-tenant CSV used to be built unbounded in one
+// string. 50k rows covers every realistic tenant; the header/trailer note
+// tells the operator when the export was cut.
+export const KINETIC_EXPORT_MAX_ROWS = 50_000;
+export const KINETIC_EXPORT_CHUNK = 5_000;
+
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 interface Deps {
   requireCapability: (capability: Capability) => Middleware;
@@ -820,11 +826,16 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
   app.get("/api/kinetic-scanner/export", read, (req, res) => {
     const tid = requireTenant(req, res);
     if (!tid) return;
+    // SEC-B: cap the export (was unbounded — one request built the whole
+    // table into a single in-memory string) and stream the body in chunks so
+    // a max-size export never wedges the event loop or doubles its size in RAM.
     const rows = rawDb
       .prepare(
-        `SELECT kinetic_address_id AS kineticAddressId,sequential_id AS sequentialId,address,city,state,zip,latitude,longitude,exchange_id AS exchangeId,technology_type AS technologyType,maximum_qualification AS maximumQualification,estimated_completion_date AS estimatedCompletionDate,is_live AS isLive,is_coming_soon AS isComingSoon,is_copper_upgrade_candidate AS isCopperUpgradeCandidate,last_checked_at AS lastChecked FROM kinetic_addresses WHERE tenant_id=? ORDER BY sequential_id`,
+        `SELECT kinetic_address_id AS kineticAddressId,sequential_id AS sequentialId,address,city,state,zip,latitude,longitude,exchange_id AS exchangeId,technology_type AS technologyType,maximum_qualification AS maximumQualification,estimated_completion_date AS estimatedCompletionDate,is_live AS isLive,is_coming_soon AS isComingSoon,is_copper_upgrade_candidate AS isCopperUpgradeCandidate,last_checked_at AS lastChecked FROM kinetic_addresses WHERE tenant_id=? ORDER BY sequential_id LIMIT ?`,
       )
-      .all(tid) as any[];
+      .all(tid, KINETIC_EXPORT_MAX_ROWS + 1) as any[];
+    const truncated = rows.length > KINETIC_EXPORT_MAX_ROWS;
+    if (truncated) rows.length = KINETIC_EXPORT_MAX_ROWS;
     const headers = [
       "kineticAddressId",
       "sequentialId",
@@ -848,12 +859,17 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
       "Content-Disposition",
       `attachment; filename="kinetic-addresses-${new Date().toISOString().slice(0, 10)}.csv"`,
     );
-    res.send(
-      [
-        headers.join(","),
-        ...rows.map((row) => headers.map((key) => csvCell(row[key])).join(",")),
-      ].join("\n"),
-    );
+    if (truncated) res.setHeader("X-Export-Truncated", "true");
+    res.write(headers.join(",") + "\n");
+    // Chunked build: join + write per slice instead of one giant template.
+    for (let i = 0; i < rows.length; i += KINETIC_EXPORT_CHUNK) {
+      const slice = rows.slice(i, i + KINETIC_EXPORT_CHUNK);
+      res.write(slice.map((row) => headers.map((key) => csvCell(row[key])).join(",")).join("\n") + "\n");
+    }
+    if (truncated) {
+      res.write(`# TRUNCATED: export capped at ${KINETIC_EXPORT_MAX_ROWS} rows. Narrow the dataset or page through the API for the remainder.\n`);
+    }
+    res.end();
   });
   app.delete("/api/kinetic-scanner/clear", manage, (req, res) => {
     const tid = requireTenant(req, res);

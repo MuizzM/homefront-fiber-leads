@@ -16,6 +16,11 @@ import compression from "compression";
 import { structuredLog } from "./structuredLog";
 import { anfParkedSql, provenHourlyCapacity } from "@shared/scanPolicy";
 import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPolicy";
+import {
+  scanWorkflowRateLimits, payoutTransitionLimiter, payDisputeLimiter,
+  punchCorrectionLimiter, documentSignLimiter, knockPostLimiter,
+  callingAttemptLimiter, moneyExportLimiter,
+} from "./limiters";
 import { BLOCKED_RESPONSE_FIELDS, scrubSecretText } from "./secretScrub";
 
 // ── Multi-core scan cluster ────────────────────────────────────────────────────
@@ -120,7 +125,12 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc:     ["'self'"],
-      scriptSrc:      ["'self'", "'unsafe-eval'", "blob:", "https://api.mapbox.com"],   // Mapbox GL CDN
+      // SEC-B: script eval removed — no part of the app (Mapbox GL included)
+      // evaluates strings as code, and eval is the highest-leverage XSS sink.
+      // TODO(csp-nonces): 'unsafe-inline' on scriptSrcElem/styleSrc below is
+      // retained until the Vite bundle + Mapbox <script> tag move to nonced
+      // loads; nonce migration is tracked separately and is out of scope here.
+      scriptSrc:      ["'self'", "blob:", "https://api.mapbox.com"],   // Mapbox GL CDN
       scriptSrcElem:  ["'self'", "'unsafe-inline'", "blob:", "https://api.mapbox.com"],   // Mapbox GL <script> tag
       workerSrc:      ["'self'", "blob:"],   // service worker (PWA offline shell)
       manifestSrc:    ["'self'"],            // installable web app manifest
@@ -317,6 +327,26 @@ app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/setup", authLimiter);
 app.use("/api/auth/otp/request", otpLimiter);
 app.use("/api/auth/otp/verify", authLimiter);
+
+// ── Dedicated scan budgets (SEC-B) ───────────────────────────────────────────
+// Scan paths skip the GLOBAL per-IP bucket (shared carrier NATs), but they are
+// metered here by PER-USER budgets: money-spending mutations 120/hour, hot
+// progress polls 3600/hour, other scan reads 600/hour. Nothing under /api/scan
+// or /api/sweeps is unmetered anymore.
+app.use(scanWorkflowRateLimits());
+
+// ── Money-mutation limiters (SEC-B) ─────────────────────────────────────────
+// Wired by PATH because the route handlers live in sibling-owned modules
+// (payout/pay/commission/calling). The global bucket stays as a backstop.
+app.use("/api/payouts/week/pay", payoutTransitionLimiter);
+app.use("/api/commission/week/transition", payoutTransitionLimiter);
+app.use("/api/pay/disputes", payDisputeLimiter); // POST create + POST :id/resolve (GET list unmetered)
+app.use("/api/pay/punch-corrections", punchCorrectionLimiter);
+app.use("/api/onboarding/documents/:id/sign", documentSignLimiter); // agreement counter-sign
+app.use("/api/leads/:id/knock", knockPostLimiter);
+app.use("/api/v1/calling/attempts/start", callingAttemptLimiter);
+app.use("/api/pay/nacha", moneyExportLimiter);
+app.use("/api/commission/week-export.csv", moneyExportLimiter);
 
 declare module "http" {
   interface IncomingMessage {

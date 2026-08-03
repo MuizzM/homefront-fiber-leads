@@ -186,7 +186,11 @@ import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { getFiberChanges, getCopperPool } from "./fiberTransitions";
-import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter } from "./limiters";
+import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter } from "./limiters";
+import { scanSseCaps } from "./scanSseCaps";
+import { otpRateBuckets } from "./otpRateBuckets";
+import { validateLeadPatch, rescanPoolPlan, clampActivityLogLimit, validateTerritoryRequestMessage, filterInChunks, RESCAN_POOL_MAX_TARGETS, RESCAN_POOL_CHUNK_SIZE as RESCAN_POOL_CHUNK } from "./routeInputPolicy";
+import { sniffUploadedFile, uploadKindAllowed } from "./uploadSniff";
 import * as scanSvc from "./scanService";
 import {
   CORROBORATION_SOURCES, freshPoints, knockList, listMarkets, monitoringSummary,
@@ -2211,6 +2215,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (Object.prototype.hasOwnProperty.call(req.body, "assignMark") && !isLeadMarkOrClear(req.body.assignMark)) {
       return res.status(400).json({ error: "Invalid mark", code: "INVALID_LEAD_MARK" });
     }
+    // SEC-B: validate the VALUES of allowlisted fields too — allowlisting
+    // stops mass-assignment of internal columns but used to let an unknown
+    // leadStatus, a fractional assignedRepId, or a megabyte of notes through.
+    const patchCheck = validateLeadPatch(req.body ?? {});
+    if (!patchCheck.ok) return res.status(patchCheck.status).json({ error: patchCheck.error, code: patchCheck.code });
     const safeUpdate: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(req.body)) {
       if (ALLOWED_LEAD_FIELDS.has(k)) safeUpdate[k] = k === "assignMark" ? normalizeLeadMark(v) : v;
@@ -4046,7 +4055,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const hours = Math.min(24 * 90, Math.max(1, Number(req.query.hours) || 168));
       const limit = Math.min(2_000, Math.max(1, Number(req.query.limit) || 300));
       res.json(getFiberChanges(tenantId, hours, limit));
-    } catch (error: any) { res.status(500).json({ error: String(error?.message ?? error) }); }
+    } catch (error: any) {
+      // SEC-B: never ship raw error text (paths/SQL fragments) to the client.
+      console.error("[fiber/changes] read failed:", error?.message);
+      res.status(500).json({ error: "Fiber change feed unavailable" });
+    }
   });
 
   // GET /api/fiber/copper-pool — the copper-upgrade candidate pool: addresses whose
@@ -4055,7 +4068,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     try {
       const tenantId = req.user?.tenantId ?? getDefaultTenantId();
       res.json(getCopperPool(tenantId));
-    } catch (error: any) { res.status(500).json({ error: String(error?.message ?? error) }); }
+    } catch (error: any) {
+      console.error("[fiber/copper-pool] read failed:", error?.message);
+      res.status(500).json({ error: "Copper pool unavailable" });
+    }
   });
 
   // GET /api/coming-soon/program — the Coming Soon PROGRAM surface (opportunity-
@@ -4066,7 +4082,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const tenantId = req.user?.tenantId ?? getDefaultTenantId();
       res.json(getComingSoonWatchlist(tenantId));
     } catch (error: any) {
-      res.status(500).json({ error: String(error?.message ?? error) });
+      console.error("[coming-soon/program] read failed:", error?.message);
+      res.status(500).json({ error: "Coming-soon program unavailable" });
     }
   });
 
@@ -4091,18 +4108,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Uses zero geocoding (addresses are already stored), dedups against existing
   // leads, records address-level changes, and lets the shared projector publish
   // only independently confirmed fresh fiber. This is the cheap repeatable pass.
-  app.post("/api/scan/rescan-pool", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req, res) => {
-    const limit = Math.min(Number(req.body?.limit) || 50000, 100000);
-    const targets = storage.getScanTargetsToRescan(limit);
+  app.post("/api/scan/rescan-pool", requireAdmin, requireScanningAllowed, authorizedScanAdmission, rescanPoolLimiter, async (req, res) => {
+    // SEC-B: cap the blast radius of one call (was up to 100k targets) and
+    // bound launches per account (rescanPoolLimiter, 6/hour default).
+    const plan = rescanPoolPlan(req.body?.limit);
+    if (!plan.ok) return res.status(plan.status).json({ error: plan.error, code: plan.code, max: plan.max });
+    const targets = storage.getScanTargetsToRescan(plan.limit);
     if (!targets.length) {
       return res.status(400).json({ error: "Address pool is empty. Run a city scan first to build it." });
     }
     // Only re-check addresses that aren't already leads; confirmed transitions
-    // are published by the evidence projector, never by this route.
+    // are published by the evidence projector, never by this route. Built in
+    // setImmediate chunks so a 10k-target pool never wedges the event loop.
     const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
-    const toScan = targets
-      .filter((t: any) => !existingSet.has(normalizeAddrForDedup(t.address || "")))
-      .map((t: any) => ({ address: t.address, city: t.city, state: t.state, zip: t.zip, lat: t.lat, lng: t.lng }));
+    const toScan = await filterInChunks(targets, RESCAN_POOL_CHUNK, (t: any) =>
+      existingSet.has(normalizeAddrForDedup(t.address || ""))
+        ? null
+        : { address: t.address, city: t.city, state: t.state, zip: t.zip, lat: t.lat, lng: t.lng });
     if (!toScan.length) {
       return res.json({ jobId: null, total: 0, source: "pool", message: "Every pooled address is already a lead — nothing new to check." });
     }
@@ -4115,7 +4137,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     };
     scanJobs.set(jobId, job);
     runCityScan(jobId, toScan).catch(() => {});
-    res.json({ jobId, total: toScan.length, source: "pool" });
+    res.json({ jobId, total: toScan.length, source: "pool", cappedAt: RESCAN_POOL_MAX_TARGETS });
   });
 
   // SSE: real-time scan stream — registered BEFORE :jobId wildcard
@@ -4127,11 +4149,36 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const _sseTid = (req as any).user?.tenantId;
     if (!job || (_sseTid && job.tenantId !== _sseTid)) return res.status(404).json({ error: "Job not found" });
 
+    // SEC-B: bound concurrent streams — per-user AND process-wide — so a
+    // hijacked session can't pin the socket table with thousands of streams.
+    const sseUserKey = String((req as any).user?.id ?? req.ip ?? "unknown");
+    const sseGrant = scanSseCaps.tryAcquire(sseUserKey);
+    if (!sseGrant.ok) {
+      res.setHeader("Retry-After", "30");
+      return res.status(429).json({
+        error: sseGrant.reason === "user_cap"
+          ? `Too many live scan streams for this account (max ${scanSseCaps.options.perUser}). Close another tab and retry.`
+          : "Scan stream capacity reached. Retry shortly.",
+        code: sseGrant.reason === "user_cap" ? "SSE_USER_CAP" : "SSE_GLOBAL_CAP",
+      });
+    }
+
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
+
+    // SEC-B: no stream lives forever — auto-close after the max duration with
+    // an explicit reconnect hint so the client re-subscribes instead of a
+    // zombie socket holding a slot (and a job reference) indefinitely.
+    const maxLifeTimer = setTimeout(() => {
+      try {
+        res.write(`event: reconnect\ndata: ${JSON.stringify({ reason: "max_duration", reconnectAfterMs: 1000 })}\n\n`);
+        res.end();
+      } catch { /* socket already gone */ }
+    }, scanSseCaps.options.maxDurationMs);
+    maxLifeTimer.unref?.();
 
     let lastSent = 0;
     function sendState() {
@@ -4162,7 +4209,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const timer = setInterval(sendState, 1000);
     sendState();
-    req.on("close", () => clearInterval(timer));
+    req.on("close", () => {
+      clearInterval(timer);
+      clearTimeout(maxLifeTimer);
+      sseGrant.grant.release();
+    });
   });
 
   app.get("/api/scan/:jobId", requireManager, (req, res) => {
@@ -5889,11 +5940,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ tenant: { id: t.id, companyName: t.companyName, brandName: t.brandName, brandColor: t.brandColor, tagline: t.tagline, plan: t.plan } });
   });
 
-  // ── Rate limiting maps (in-memory, per IP + per email) ───────────────────────
-  // Tracks: { attempts, firstAttempt, lockedUntil }
-  const otpRequestLimiter = new Map<string, { count: number; windowStart: number; lockedUntil: number }>();
-  const otpVerifyLimiter  = new Map<string, { count: number; windowStart: number; lockedUntil: number }>();
-
+  // ── Rate limiting (SQLite-backed, per IP + per email) ─────────────────────
+  // SEC-B: the buckets live in the shared otp_rate_buckets table instead of
+  // per-process Maps, so the caps hold across N cluster workers and restarts
+  // (a deploy used to hand an attacker a fresh guess budget).
   const OTP_REQUEST_EMAIL_MAX = 5;  // strict account-specific send cap
   const OTP_VERIFY_EMAIL_MAX  = 5;  // strict account-specific guess cap
   const OTP_REQUEST_IP_MAX   = 50;  // shared office/cellular NAT safety
@@ -5901,28 +5951,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   const RATE_WINDOW_MS   = 15 * 60 * 1000; // 15 minutes
   const LOCKOUT_MS       = 30 * 60 * 1000; // 30 min lockout after too many attempts
 
-  function checkRateLimit(map: typeof otpRequestLimiter, key: string, max: number): { allowed: boolean; retryAfter?: number } {
-    const now = Date.now();
-    let entry = map.get(key);
-    if (!entry) { entry = { count: 0, windowStart: now, lockedUntil: 0 }; map.set(key, entry); }
-    // Still locked?
-    if (entry.lockedUntil > now) return { allowed: false, retryAfter: Math.ceil((entry.lockedUntil - now) / 1000) };
-    // Reset window if expired
-    if (now - entry.windowStart > RATE_WINDOW_MS) { entry.count = 0; entry.windowStart = now; }
-    entry.count++;
-    if (entry.count > max) {
-      entry.lockedUntil = now + LOCKOUT_MS;
-      return { allowed: false, retryAfter: Math.ceil(LOCKOUT_MS / 1000) };
-    }
-    return { allowed: true };
+  function checkRateLimit(bucket: "request" | "verify", key: string, max: number): { allowed: boolean; retryAfter?: number } {
+    return otpRateBuckets.check(bucket, key, max, RATE_WINDOW_MS, LOCKOUT_MS);
   }
-
-  // Clean up rate limit maps every hour to avoid memory leaks
-  setInterval(() => {
-    const now = Date.now();
-    for (const [k, v] of otpRequestLimiter) if (now - v.windowStart > LOCKOUT_MS * 2) otpRequestLimiter.delete(k);
-    for (const [k, v] of otpVerifyLimiter)  if (now - v.windowStart > LOCKOUT_MS * 2) otpVerifyLimiter.delete(k);
-  }, 60 * 60 * 1000);
 
   // ── Universal OTP login — works for ALL roles (admin, manager, team_lead, rep) ──
 
@@ -5935,8 +5966,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const cleanEmail = email.trim().toLowerCase();
     // IP + email rate limiting
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit(otpRequestLimiter, `ip:${ip}`, OTP_REQUEST_IP_MAX);
-    const emailCheck = checkRateLimit(otpRequestLimiter, `email:${cleanEmail}`, OTP_REQUEST_EMAIL_MAX);
+    const ipCheck = checkRateLimit("request", `ip:${ip}`, OTP_REQUEST_IP_MAX);
+    const emailCheck = checkRateLimit("request", `email:${cleanEmail}`, OTP_REQUEST_EMAIL_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
@@ -5995,8 +6026,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const cleanEmail = email.trim().toLowerCase();
     // Rate limit verify attempts per email
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit(otpVerifyLimiter, `ip:${ip}`, OTP_VERIFY_IP_MAX);
-    const emailCheck = checkRateLimit(otpVerifyLimiter, `email:${cleanEmail}`, OTP_VERIFY_EMAIL_MAX);
+    const ipCheck = checkRateLimit("verify", `ip:${ip}`, OTP_VERIFY_IP_MAX);
+    const emailCheck = checkRateLimit("verify", `email:${cleanEmail}`, OTP_VERIFY_EMAIL_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
@@ -6015,9 +6046,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
     // Reset verify limiter on success
-    otpVerifyLimiter.delete(`email:${cleanEmail}`);
-    otpVerifyLimiter.delete(`ip:${ip}`);
-    otpRequestLimiter.delete(`email:${cleanEmail}`);
+    otpRateBuckets.reset("verify", `email:${cleanEmail}`);
+    otpRateBuckets.reset("verify", `ip:${ip}`);
+    otpRateBuckets.reset("request", `email:${cleanEmail}`);
     const session = storage.createSession(user.id);
     res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId } });
   });
@@ -7349,20 +7380,28 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(409).json({ error: "You already have a pending territory request." });
     }
 
-    const { message } = req.body;
+    // SEC-B: bound the free-text message BEFORE it is stored and mailed —
+    // it is interpolated into an admin-notification HTML email below.
+    const msgCheck = validateTerritoryRequestMessage(req.body?.message);
+    if (!msgCheck.ok) return res.status(msgCheck.status).json({ error: msgCheck.error });
+    const message = msgCheck.message;
     // Stamp the requesting rep's tenant so the row is walled from creation.
-    const request = storage.createTerritoryRequest(member.id, user.id, message, (member as any).tenantId ?? user?.tenantId ?? null);
+    const request = storage.createTerritoryRequest(member.id, user.id, message ?? undefined, (member as any).tenantId ?? user?.tenantId ?? null);
 
     // Email admin
     if (process.env.SMTP_USER && adminInbox()) {
+      // SEC-B: escape every interpolated value (rep name + free-text message)
+      // with the shared mail escaper — a crafted message/name used to inject
+      // arbitrary HTML into the admin inbox. Subject strips CR/LF so the name
+      // can't split headers either.
       sendMailResilient({
         from: mailFrom(),
         to: adminInbox()!,
-        subject: `Territory Request — ${member.name}`,
+        subject: `Territory Request — ${String(member.name).replace(/[\r\n]/g, " ").slice(0, 120)}`,
         html: `
           <h2>New Territory Request</h2>
-          <p><strong>${member.name}</strong> has finished their current territory and is requesting a new one.</p>
-          ${message ? `<p><em>"${message}"</em></p>` : ""}
+          <p><strong>${escapeHtml(String(member.name))}</strong> has finished their current territory and is requesting a new one.</p>
+          ${message ? `<p><em>"${escapeHtml(message)}"</em></p>` : ""}
           <p>Log in to Fiber Scout → Map → Draw Territory to assign them a new area.</p>
         `,
       }).catch((e: any) => console.error("Email error:", e));
@@ -7577,6 +7616,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const lead = photoLeadOr404(req as any, res);
     if (!lead) { if (req.file) try { fs.unlinkSync(req.file.path); } catch {} return; }
     if (!req.file) return res.status(400).json({ error: "Attach a photo file" });
+    // SEC-B: trust magic bytes, not the client-supplied extension — a renamed
+    // executable/polyglot used to pass the .jpg/.png/.webp extension filter.
+    if (!uploadKindAllowed(req.file.path, ["jpeg", "png", "webp"])) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+      return res.status(415).json({ error: "Photo content is not a valid JPEG, PNG or WebP image." });
+    }
     // Bound disk use per door — an authed account can't fill the volume.
     if (storage.getLeadPhotos(lead.id).length >= LEAD_PHOTO_CAP) {
       try { fs.unlinkSync(req.file.path); } catch {}
@@ -7656,6 +7701,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
       const headshotFile = files?.headshot?.[0];
       const licenseFile = files?.license?.[0];
+      // SEC-B: validate what the files ARE (magic bytes), not what they're
+      // named — headshot must be a real image, license an image or real PDF.
+      for (const f of [headshotFile, licenseFile]) {
+        if (f && !uploadKindAllowed(f.path, ["jpeg", "png", "webp", "pdf"])) {
+          cleanupUploads(files);
+          return res.status(415).json({ error: "Uploaded file content is not a valid JPEG, PNG, WebP or PDF." });
+        }
+      }
+      if (headshotFile && sniffUploadedFile(headshotFile.path) === "pdf") {
+        cleanupUploads(files);
+        return res.status(415).json({ error: "Headshot must be a photo (JPEG, PNG or WebP), not a PDF." });
+      }
       let app2: any;
       try {
         app2 = submitPublicApplication({
@@ -8166,6 +8223,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const ctx = loadHrApplication(req, res);
     if (!ctx) { if (req.file) { try { fs.unlinkSync(req.file.path); } catch { /* best effort */ } } return; }
     if (!req.file) return res.status(400).json({ error: "No photo uploaded" });
+    // SEC-B: magic-byte validation — the extension filter alone is client-claims-only.
+    if (!uploadKindAllowed(req.file.path, ["jpeg", "png", "webp"])) {
+      try { fs.unlinkSync(req.file.path); } catch { /* best effort */ }
+      return res.status(415).json({ error: "Photo content is not a valid JPEG, PNG or WebP image." });
+    }
     const existing = getHrCheckpoint(Number(ctx.application.id), "badge_photo");
     // Remove the previous badge file so re-uploads don't orphan on disk.
     if (existing.badgePhotoPath) {
@@ -8600,7 +8662,9 @@ export function registerSaasRoutes(app: any) {
   // ── Activity Log ──────────────────────────────────────────────────────────────
   app.get("/api/activity-log", requireManager, (req: Request, res: Response) => {
     const tid = (req as any).user?.tenantId ?? undefined; // super_admin (null) = all tenants
-    const limit = Number(req.query.limit ?? 100);
+    // SEC-B: clamp like the sibling /api/auth/login-attempts endpoint — a
+    // negative or unbounded limit used to flow straight into the storage read.
+    const limit = clampActivityLogLimit(req.query.limit);
     // Tenant-scoped audit stream — a manager never reads another org's actions,
     // actor names, or client IPs.
     const entries = storage.getActivityLog(limit, tid);

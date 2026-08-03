@@ -265,3 +265,38 @@ export function clearPersistedQueryCache(): void {
     /* storage unavailable (private mode) — nothing to clear */
   }
 }
+
+// ── Session-scoped localStorage sweep (SEC-B) ───────────────────────────────
+// On logout / confirmed 401 / identity switch, the previous account's
+// session-scoped data must not survive for the next user of the device. The
+// sweep is PREFIX-based and deliberately narrow — unrelated keys (map camera,
+// filter prefs, last geo fix) are convenience state, not account data, and
+// stay.
+const SESSION_SCOPED_KEY_PREFIXES = [
+  "hf.mapPinsSnapshot.", // per-tenant/rep pin snapshots (address-level data)
+  "hf.knockQueue.v1.",   // queued knocks for the signed-out rep
+  "hf.knockDead.v1.",    // dead-lettered knocks for the signed-out rep
+];
+const SESSION_SCOPED_KEYS = [
+  "hf.pendingNotes.v1",  // stashed lead notes awaiting sync
+];
+
+export function isSessionScopedStorageKey(key: string): boolean {
+  return SESSION_SCOPED_KEYS.includes(key)
+    || SESSION_SCOPED_KEY_PREFIXES.some((p) => key.startsWith(p));
+}
+
+export function purgeSessionScopedKeys(): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    // Collect first — removing while iterating shifts indexes.
+    const doomed: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && isSessionScopedStorageKey(key)) doomed.push(key);
+    }
+    for (const key of doomed) window.localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable (private mode) — nothing to clear */
+  }
+}

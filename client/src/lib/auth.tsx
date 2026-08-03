@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, queryClient } from "@/lib/queryClient";
+import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -36,29 +36,26 @@ const Ctx = createContext<AuthCtx>({
   login: () => {}, logout: async () => {},
 });
 
-// Session persistence: localStorage is the PRIMARY store — it survives a hard
-// refresh AND a home-screen PWA relaunch (window.name alone does NOT: iOS gives a
-// standalone web app a fresh browsing context on relaunch, wiping window.name, so
-// the user got logged out on every refresh). window.name stays as a fallback for
-// sandboxed-iframe contexts where storage is blocked.
+// Session persistence (SEC-B): sessionStorage ONLY. The token used to live in
+// localStorage (survives indefinitely on a shared device — any later same-
+// origin script could lift it) with a window-name mirror (leaks the token to
+// any navigated-away page and to cross-tab snooping). Both are gone. The
+// token now lives for the browser session: it survives a hard refresh and a
+// home-screen PWA relaunch on modern mobile (the standalone context keeps its
+// session storage), and it dies with the app — which is the point.
 const SID_KEY = "hfs.sid";
 function readPersistedSession(): string | null {
   try {
-    const ls = window.localStorage?.getItem(SID_KEY);
-    if (typeof ls === "string" && ls) return ls;
-  } catch { /* storage blocked — fall through */ }
-  try {
-    const data = JSON.parse(window.name || "{}");
-    return typeof data.sid === "string" && data.sid ? data.sid : null;
-  } catch { /* ignore */ }
+    const ss = window.sessionStorage?.getItem(SID_KEY);
+    if (typeof ss === "string" && ss) return ss;
+  } catch { /* storage blocked */ }
   return null;
 }
 function writePersistedSession(sid: string | null) {
   try {
-    if (sid) window.localStorage?.setItem(SID_KEY, sid);
-    else window.localStorage?.removeItem(SID_KEY);
+    if (sid) window.sessionStorage?.setItem(SID_KEY, sid);
+    else window.sessionStorage?.removeItem(SID_KEY);
   } catch { /* storage blocked */ }
-  try { window.name = JSON.stringify(sid ? { sid } : {}); } catch { /* ignore */ }
 }
 
 // Last-known user snapshot — the offline cold-launch grace. A rep opening the
@@ -138,6 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // device, and the 401 path cleared nothing at all.
         try { queryClient.clear(); } catch { /* */ }
         clearPersistedQueryCache();
+        purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
         setSid(null);
         syncSessionToQueryClient(null);
         setUser(null);
@@ -188,9 +186,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function login(newSid: string, u: AuthUser) {
     // P1-11: a NEW identity is arriving — evict everything the previous
     // identity cached before the new session hydrates (user switch in one tab).
-    try { queryClient.clear(); clearPersistedQueryCache(); } catch { /* */ }
+    try { queryClient.clear(); clearPersistedQueryCache(); purgeSessionScopedKeys(); } catch { /* */ }
     _memSession = newSid;
-    writePersistedSession(newSid); // persist across page reloads via window.name
+    writePersistedSession(newSid); // persist across page reloads (sessionStorage)
     setSid(newSid);
     syncSessionToQueryClient(newSid);
     (window as any).__sessionId = newSid; // expose for browser scanner native fetch calls
@@ -213,6 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writePersistedUser(null); // clear the offline-grace snapshot
     try { queryClient.clear(); } catch { /* */ }
     clearPersistedQueryCache(); // drop the on-disk dashboard SWR snapshot
+    purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
     setSid(null);
     syncSessionToQueryClient(null);
     setUser(null);
