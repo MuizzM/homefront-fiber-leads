@@ -195,7 +195,11 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
         // the existing lead was ungeocoded / suppressed / out of the caller's
         // scope (there was nothing to open).
         if (!existed) {
-          toast({ title: "Lead added", description: submittedAddress });
+          // When the client had no coordinates (a typed address, not a rooftop
+          // tap), the server geocodes in the background and the pin lands a beat
+          // later — say so instead of implying it's already on the map.
+          const placing = lead?.lat == null || lead?.lng == null;
+          toast({ title: "Lead added", description: placing ? `${submittedAddress} — placing on map…` : submittedAddress });
         }
         qc.invalidateQueries({ queryKey: ["/api/leads"] });
         qc.invalidateQueries({ queryKey: ["/api/leads/map"] });

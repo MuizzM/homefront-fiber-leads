@@ -2130,24 +2130,39 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       freshConfidence: undefined,
       freshSources: undefined,
     };
-    // Invisible-pin fix: a typed-in lead with no coordinates never rendered on
-    // the map (the pin feed skips null lat/lng). ONE bounded forward geocode
-    // fills them; on failure the lead still saves (list views show it).
-    if ((safeLead as any).lat == null || (safeLead as any).lng == null) {
-      const q = [safeLead.address, safeLead.city, safeLead.state, (safeLead as any).zip]
-        .filter(Boolean).join(", ");
-      const geo = await forwardGeocodeOnce(q);
-      if (geo) {
-        (safeLead as any).lat = geo.lat;
-        (safeLead as any).lng = geo.lng;
-      }
-    }
+    // GEOCODE IS OFF THE CRITICAL PATH. A typed-in address (no client coords)
+    // used to block this response on a synchronous Mapbox call (up to an 8s
+    // timeout), which gated the pin AND the card that opens on the returned id —
+    // the "add-lead card is slow" report. We now insert and RESPOND immediately;
+    // when coords are missing we forward-geocode in the BACKGROUND and repaint
+    // the pin live (SSE) once it resolves. Tap-a-house / use-my-location already
+    // carry coords, so their pin is instant; a typed address lands its pin a
+    // beat later instead of freezing the card. On geocode failure the lead still
+    // saves (list views show it), exactly as before.
+    const needsGeocode = (safeLead as any).lat == null || (safeLead as any).lng == null;
     const created = storage.createLead(safeLead as any);
     // A brand-new door is a pin appearing, not a pin changing — "status" is the
     // closest the wire type gets, and the projection tells the map everything it
     // needs to draw it without a refetch.
     emitLeadChange("status", created, req.user, tenantId);
     res.status(201).json(stripProviderIds(created, req.user));
+    if (needsGeocode) {
+      const q = [safeLead.address, safeLead.city, safeLead.state, (safeLead as any).zip]
+        .filter(Boolean).join(", ");
+      void (async () => {
+        try {
+          const geo = await forwardGeocodeOnce(q);
+          if (!geo) return; // lead still saved; a later edit can place it
+          const patched = storage.updateLead(created.id, { lat: geo.lat, lng: geo.lng } as any, tenantId);
+          if (patched) {
+            // Live-repaint the now-placed pin (SSE) and drop the map-pin cache so
+            // any fresh /api/leads/map fetch includes it too.
+            emitLeadChange("status", patched, req.user, tenantId);
+            bustMapCache(tenantId);
+          }
+        } catch { /* geocode is best-effort; the lead is already durable */ }
+      })();
+    }
   });
   app.patch("/api/leads/:id", requireManager, (req, res) => {
     // Allowlist only safe fields — prevent mass-assignment of internal fields
