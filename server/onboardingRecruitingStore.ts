@@ -25,6 +25,11 @@ export interface RecruitingInvite {
   loginSentAt: string | null;
   agreementsIssuedAt: string | null;
   activatedAt: string | null;
+  // Comp terms chosen at invite time — seed the rep's plan + reserve at approval.
+  commissionStructure: "FLAT" | "TIERED" | null;
+  flatRateCents: number | null;
+  reservePercent: number | null;
+  reserveCapCents: number | null;
   deliveryAttempts: number;
   failureReason: string | null;
   createdAt: string;
@@ -42,7 +47,12 @@ function mapInvite(row: any): RecruitingInvite {
     appliedAt: row.applied_at ?? null, approvedAt: row.approved_at ?? null,
     rejectedAt: row.rejected_at ?? null, loginEmailId: row.login_email_id ?? null,
     loginSentAt: row.login_sent_at ?? null, agreementsIssuedAt: row.agreements_issued_at ?? null,
-    activatedAt: row.activated_at ?? null, deliveryAttempts: Number(row.delivery_attempts ?? 0),
+    activatedAt: row.activated_at ?? null,
+    commissionStructure: row.commission_structure === "FLAT" || row.commission_structure === "TIERED" ? row.commission_structure : null,
+    flatRateCents: row.flat_rate_cents == null ? null : Number(row.flat_rate_cents),
+    reservePercent: row.reserve_percent == null ? null : Number(row.reserve_percent),
+    reserveCapCents: row.reserve_cap_cents == null ? null : Number(row.reserve_cap_cents),
+    deliveryAttempts: Number(row.delivery_attempts ?? 0),
     failureReason: row.failure_reason ?? null, createdAt: String(row.created_at), updatedAt: String(row.updated_at),
   };
 }
@@ -61,6 +71,10 @@ function persistToken(row: RecruitingInvite, expiresAt: string): string {
 
 export function createRecruitingInvite(input: {
   tenantId: number; candidateName: string; candidateEmail: string; invitedBy: number | null;
+  commissionStructure?: "FLAT" | "TIERED" | null;
+  flatRateCents?: number | null;
+  reservePercent?: number | null;
+  reserveCapCents?: number | null;
 }): RecruitingInvite {
   const candidateEmail = input.candidateEmail.trim().toLowerCase();
   const open = rawDb.prepare(
@@ -71,11 +85,19 @@ export function createRecruitingInvite(input: {
   if (open) throw new Error("An open invitation already exists for this candidate");
   const recordId = crypto.randomUUID();
   const now = new Date().toISOString();
+  // Only persist a FLAT rate when the structure is FLAT (a TIERED plan uses the
+  // tenant's ladder, not a per-rep rate). Reserve fields ride through as given.
+  const structure = input.commissionStructure === "FLAT" || input.commissionStructure === "TIERED" ? input.commissionStructure : null;
+  const flatRateCents = structure === "FLAT" && input.flatRateCents != null ? Math.max(0, Math.trunc(input.flatRateCents)) : null;
+  const reservePercent = input.reservePercent == null ? null : Math.min(100, Math.max(0, Math.trunc(input.reservePercent)));
+  const reserveCapCents = input.reserveCapCents == null ? null : Math.max(0, Math.trunc(input.reserveCapCents));
   const result = rawDb.prepare(
     `INSERT INTO onboarding_recruiting_invites
-      (record_id, tenant_id, candidate_name, candidate_email, status, invited_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'creating', ?, ?, ?)`,
-  ).run(recordId, input.tenantId, input.candidateName.trim(), candidateEmail, input.invitedBy, now, now);
+      (record_id, tenant_id, candidate_name, candidate_email, status, invited_by,
+       commission_structure, flat_rate_cents, reserve_percent, reserve_cap_cents, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(recordId, input.tenantId, input.candidateName.trim(), candidateEmail, input.invitedBy,
+        structure, flatRateCents, reservePercent, reserveCapCents, now, now);
   const row = getRecruitingInvite(Number(result.lastInsertRowid))!;
   persistToken(row, expiryFrom());
   return getRecruitingInvite(row.id)!;

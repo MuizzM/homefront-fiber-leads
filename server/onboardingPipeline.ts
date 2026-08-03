@@ -35,6 +35,8 @@ export interface OnboardingPipelineRecord {
   invite: null | {
     status: string; sentAt: string | null; expiresAt: string | null; deliveryAttempts: number;
     failureReason: string | null; secureUrl: string;
+    commissionStructure: "FLAT" | "TIERED" | null;
+    flatRateCents: number | null; reservePercent: number | null; reserveCapCents: number | null;
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -168,6 +170,10 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
     invite: invite ? {
       status: invite.status, sentAt: invite.sentAt, expiresAt: invite.expiresAt,
       deliveryAttempts: invite.deliveryAttempts, failureReason: invite.failureReason, secureUrl,
+      commissionStructure: invite.commissionStructure ?? null,
+      flatRateCents: invite.flatRateCents ?? null,
+      reservePercent: invite.reservePercent ?? null,
+      reserveCapCents: invite.reserveCapCents ?? null,
     } : null,
     application: application ? {
       status: application.status, phone: application.phone, city: application.city, state: application.state, zip: application.zip,

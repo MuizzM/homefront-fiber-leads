@@ -1385,6 +1385,13 @@ export function runMigrations() {
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN agreements_issued_at TEXT`,
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN activated_at TEXT`,
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0`,
+    // Comp terms chosen by the manager/admin/team-lead AT INVITE TIME. They ride
+    // the invite → application → approval, where they seed the rep's commission
+    // plan + chargeback reserve (assignStructureToRep). NULL = inherit org default.
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN commission_structure TEXT`,   // 'FLAT' | 'TIERED'
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN flat_rate_cents INTEGER`,     // per-sale rate when FLAT
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN reserve_percent INTEGER`,     // whole percent 0..100 held back
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN reserve_cap_cents INTEGER`,   // reserve ceiling in cents; 0 = uncapped
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_token
        ON onboarding_recruiting_invites(token_sha256) WHERE token_sha256 IS NOT NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_application

@@ -61,6 +61,13 @@ const sendSchema = z.object({
 const recruitingInviteSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.string().trim().email().max(254).transform(value => value.toLowerCase()),
+  // Comp terms the manager sets when sending the invite (all optional; absent =
+  // inherit the org default at approval). flatRateCents ≤ $1,000/sale, reserve
+  // ceiling ≤ $1,000,000 — sane bounds so a typo can't set absurd pay.
+  commissionStructure: z.enum(["FLAT", "TIERED"]).optional(),
+  flatRateCents: z.number().int().min(0).max(100_000).optional(),
+  reservePercent: z.number().int().min(0).max(100).optional(),
+  reserveCapCents: z.number().int().min(0).max(100_000_000).optional(),
 }).strict();
 const signSchema = z.object({
   typedName: z.string().trim().min(2).max(120),
@@ -357,6 +364,10 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         candidateName: parsed.data.name,
         candidateEmail: parsed.data.email,
         invitedBy: actorId,
+        commissionStructure: parsed.data.commissionStructure ?? null,
+        flatRateCents: parsed.data.flatRateCents ?? null,
+        reservePercent: parsed.data.reservePercent ?? null,
+        reserveCapCents: parsed.data.reserveCapCents ?? null,
       });
     } catch (error: any) {
       if (/open invitation|unique/i.test(error?.message ?? "")) {

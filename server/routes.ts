@@ -7641,7 +7641,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // PATCH /api/onboarding/applications/:id — approve or reject
   app.patch("/api/onboarding/applications/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
-    const { status, reviewNotes, commission } = req.body;
+    const { status, reviewNotes } = req.body;
+    // Mutable: when the reviewer doesn't pass explicit terms, the invite's
+    // manager-chosen comp terms seed it (set just after the invite is loaded).
+    let commission = req.body.commission;
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
     }
@@ -7724,6 +7727,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     const recruitingInvite = getRecruitingInviteByApplication(application.id);
     if (recruitingInvite && status === "approved") markInviteApproved(recruitingInvite.id);
+    // Terms chosen by the manager AT INVITE TIME are the source of truth for the
+    // rep's commission plan + chargeback reserve. The reviewer can still override
+    // by sending an explicit `commission` object; absent that, the invite's
+    // stored terms drive assignStructureToRep below. undefined fields there mean
+    // "inherit the org default", so a partly-filled invite still behaves.
+    if (status === "approved" && !commission && recruitingInvite?.commissionStructure) {
+      commission = {
+        structure: recruitingInvite.commissionStructure,
+        flatRateCents: recruitingInvite.flatRateCents ?? undefined,
+        reservePercent: recruitingInvite.reservePercent ?? undefined,
+        reserveCapCents: recruitingInvite.reserveCapCents ?? undefined,
+      };
+    }
 
     if (status === "approved") {
       // Create user account — OTP-only, no passwords stored or emailed
