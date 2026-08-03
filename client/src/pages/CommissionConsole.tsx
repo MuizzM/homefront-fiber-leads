@@ -445,7 +445,7 @@ export default function CommissionConsole() {
       </Dialog>
 
       {/* Statement drill-down */}
-      <StatementDrawer row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canClose} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); }} />
+      <StatementDrawer row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canClose} canMoveReserve={canPay} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); }} />
     </div>
   );
 }
@@ -462,10 +462,137 @@ function downloadCsv(weekRef: string) {
     });
 }
 
+// ── Chargeback reserve — the admin's MANUAL controls ─────────────────────────
+// Both movements are manual by product decision: the reserve never auto-draws
+// when a sale reverses, and nothing auto-releases on a timer or on departure.
+// The panel READS on commission.read.all (manager oversight may look) but the
+// two buttons require payouts.pay — moving reserve money is the org owner's
+// call, exactly like marking a week paid. Nothing here edits history: every
+// action appends an entry to an append-only ledger.
+interface ReserveSummary {
+  repId: number; reservePercent: number; reserveCapCents: number | null;
+  balanceCents: number; capRemainingCents: number | null; capProgressPercent: number | null;
+  atCap: boolean; heldToDateCents: number; drawnDownToDateCents: number; releasedToDateCents: number;
+  entries: Array<{ id: number; kind: "hold" | "drawdown" | "release"; amountCents: number; weekLabel: string | null; reason: string; createdAt: string }>;
+}
+
+const RESERVE_ENTRY_LABEL: Record<string, string> = {
+  hold: "Held", drawdown: "Chargeback applied", release: "Released to rep",
+};
+
+function ReservePanel({ repId, repName, canMove }: { repId: number; repName: string; canMove: boolean }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [mode, setMode] = useState<"drawdown" | "release" | null>(null);
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+
+  const key = ["/api/commission/reps", repId, "reserve"];
+  const { data } = useQuery<ReserveSummary>({
+    queryKey: key,
+    queryFn: () => apiRequest("GET", `/api/commission/reps/${repId}/reserve`).then(r => r.json()),
+  });
+
+  const move = useMutation({
+    mutationFn: () => {
+      // A blank amount on a RELEASE means "the whole balance" — the SERVER
+      // resolves it, so the client never races the true balance. Dollars are
+      // converted to integer cents exactly once, here.
+      const body: any = { reason: reason.trim() };
+      if (amount.trim() !== "") body.amountCents = Math.round(parseFloat(amount) * 100);
+      return apiRequest("POST", `/api/commission/reps/${repId}/reserve/${mode}`, body).then(r => r.json());
+    },
+    onSuccess: () => {
+      toast({
+        title: mode === "drawdown" ? "Chargeback applied to the reserve" : "Reserve released",
+        description: `${repName}'s reserve ledger has a new entry. Nothing was rewritten — the history is intact.`,
+      });
+      setMode(null); setAmount(""); setReason("");
+      qc.invalidateQueries({ queryKey: key });
+    },
+    onError: (e: any) => toast({ title: "Reserve action failed", description: e.message, variant: "destructive" }),
+  });
+
+  if (!data || (data.reservePercent <= 0 && data.balanceCents === 0)) return null;
+  const amountCents = amount.trim() === "" ? null : Math.round(parseFloat(amount) * 100);
+  const blocked =
+    !reason.trim() ? "A reason is required — every reserve movement is audited"
+    : mode === "drawdown" && (amountCents == null || !(amountCents > 0)) ? "Enter an amount above $0"
+    : amountCents != null && amountCents > data.balanceCents ? `More than the ${usd(data.balanceCents)} balance — the reserve can never go negative`
+    : mode === "release" && amountCents == null && data.balanceCents <= 0 ? "There is no balance to release"
+    : null;
+
+  return (
+    <div data-testid="admin-reserve-panel">
+      <div className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
+        Chargeback reserve
+      </div>
+      <div className="rounded-2xl border border-border bg-secondary/30 p-3">
+        <div className="flex items-baseline justify-between">
+          <span className="text-sm text-muted-foreground">Balance</span>
+          <span className="tabular-nums text-lg font-bold text-foreground" data-testid="admin-reserve-balance">{usd(data.balanceCents)}</span>
+        </div>
+        <div className="mt-1 text-2xs text-muted-foreground tabular-nums">
+          {data.reservePercent}% held weekly
+          {data.reserveCapCents != null && <> · max {usd(data.reserveCapCents)}{data.atCap ? " · at the cap, nothing more is held" : ` · ${usd(data.capRemainingCents ?? 0)} to go`}</>}
+          {" · "}held {usd(data.heldToDateCents)} · charged back {usd(data.drawnDownToDateCents)} · released {usd(data.releasedToDateCents)}
+        </div>
+
+        {canMove && (
+          <div className="mt-2.5 flex gap-1.5">
+            <Button size="sm" variant="outline" className="h-7 text-2xs border-border"
+              onClick={() => { setMode(m => (m === "drawdown" ? null : "drawdown")); setAmount(""); }}
+              data-testid="btn-reserve-drawdown">Apply chargeback</Button>
+            <Button size="sm" variant="outline" className="h-7 text-2xs border-border"
+              onClick={() => { setMode(m => (m === "release" ? null : "release")); setAmount(""); }}
+              data-testid="btn-reserve-release">Release</Button>
+          </div>
+        )}
+
+        {canMove && mode && (
+          <div className="mt-2 space-y-2 rounded-xl border border-border bg-card p-2.5">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground text-sm">$</span>
+              <Input type="number" step="0.01" min={0} value={amount} onChange={e => setAmount(e.target.value)}
+                placeholder={mode === "release" ? `blank = full balance (${usd(data.balanceCents)})` : "e.g. 150.00"}
+                className="bg-secondary border-border h-8 text-sm tabular-nums" data-testid="input-reserve-amount" />
+            </div>
+            <div>
+              <Label className="text-2xs text-muted-foreground">Reason (required, audited)</Label>
+              <Input value={reason} onChange={e => setReason(e.target.value)}
+                placeholder={mode === "drawdown" ? "e.g. 12 Oak St cancelled in month 2 — carrier chargeback" : "e.g. Contract ended — releasing the remaining balance"}
+                className="bg-secondary border-border h-8 text-sm mt-1" data-testid="input-reserve-reason" />
+            </div>
+            <Button size="sm" className="h-7 text-xs w-full bg-primary hover:bg-primary/90 text-primary-foreground"
+              disabled={!!blocked || move.isPending} onClick={() => move.mutate()} data-testid="btn-reserve-submit">
+              {move.isPending ? "Working…" : mode === "drawdown" ? "Apply chargeback to reserve" : "Release to rep"}
+            </Button>
+            {blocked && <p className="text-[11px] text-amber-400 [.light_&]:text-amber-700" data-testid="reserve-blocked-reason">{blocked}</p>}
+          </div>
+        )}
+
+        {data.entries.length > 0 && (
+          <div className="mt-2.5 divide-y divide-border rounded-xl border border-border overflow-hidden">
+            {data.entries.slice(0, 6).map(e => (
+              <div key={e.id} className="px-2.5 py-1.5 bg-card flex items-start justify-between gap-3 text-xs" data-testid={`admin-reserve-entry-${e.id}`}>
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">{RESERVE_ENTRY_LABEL[e.kind] ?? e.kind}</span>
+                  <span className="block text-[11px] text-muted-foreground truncate">{e.weekLabel ? `${e.weekLabel} · ` : ""}{e.reason}</span>
+                </span>
+                <span className="shrink-0 tabular-nums font-semibold text-foreground">{usdSigned(e.amountCents)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Drill-down: explain every dollar ──────────────────────────────────────────
 // Final total → tier math → the exact doors → adjustments → statement lineage.
-function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
-  row: OverviewRow | null; weekRef: string; weekLabel: string; canAdjust: boolean; onClose: () => void;
+function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canMoveReserve, onClose }: {
+  row: OverviewRow | null; weekRef: string; weekLabel: string; canAdjust: boolean; canMoveReserve: boolean; onClose: () => void;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -654,6 +781,9 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
             </div>
           )}
         </div>
+
+        {/* Chargeback reserve — balance, cap, and the manual admin movements. */}
+        <ReservePanel repId={row.repId} repName={row.repName} canMove={canMoveReserve} />
 
         <DialogFooter>
           <Button variant="outline" className="border-border" onClick={onClose}><X className="w-3.5 h-3.5 mr-1" /> Close</Button>

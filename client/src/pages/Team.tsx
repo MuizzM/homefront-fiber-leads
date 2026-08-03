@@ -9,7 +9,7 @@ import {
   User, CheckCircle2, Users, Crown, Star, ChevronUp,
   Wallet, Layers, DollarSign, ChevronRight,
   DoorOpen, Handshake, PhoneCall, TrendingUp, FileSignature,
-  UserMinus, UserCheck, ShieldAlert, KeyRound, GitBranch, Archive
+  UserMinus, UserCheck, ShieldAlert, KeyRound, GitBranch, Archive, PiggyBank
 } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
 import { TierEditor } from "@/components/commission/TierEditor";
@@ -1066,6 +1066,12 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
   const qc = useQueryClient();
   const [structure, setStructure] = useState<"TIERED" | "FLAT">("TIERED");
   const [flatRate, setFlatRate] = useState("150");
+  // Chargeback reserve, per rep. A BLANK field means "inherit the org default" —
+  // the placeholder states what that inherited value currently is, so an empty
+  // box is never a mystery. Set here and at onboarding; both write the same
+  // columns through the same money-config capability.
+  const [reservePct, setReservePct] = useState("");
+  const [reserveCap, setReserveCap] = useState("");
   // Editable ladder. Defaults to the operator's stated plan: 1–6 at $150, 7+ at
   // $200 — the final band open-ended so beating it still pays.
   const [tiers, setTiers] = useState<CommissionTier[]>([
@@ -1101,6 +1107,14 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
         })));
       }
     }
+    // Reserve overrides seed from the rep's RAW override (null = inherited), so
+    // reopening the dialog and hitting Apply can never silently promote an
+    // inherited value into a hard per-rep override.
+    const r = current.reserve;
+    if (r) {
+      setReservePct(r.repReservePercent == null ? "" : String(r.repReservePercent));
+      setReserveCap(r.repReserveCapCents == null ? "" : String(r.repReserveCapCents / 100));
+    }
   }, [current]);
 
   // Client-side gate mirroring the server's shared validator, so Apply is
@@ -1108,15 +1122,31 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
   // blocked, the reason is on screen (the dead-button rule).
   const tierValidation = useMemo(() => validateTiers(tiers), [tiers]);
   const flatCents = Math.round((parseFloat(flatRate) || 0) * 100);
+  // Reserve inputs: blank = inherit. Anything else must be a whole percent
+  // 0..100 / a non-negative dollar amount, mirroring the server's validator.
+  const reservePctTrimmed = reservePct.trim();
+  const reserveCapTrimmed = reserveCap.trim();
+  const reservePctValue = reservePctTrimmed === "" ? null : Number(reservePctTrimmed);
+  const reserveCapValue = reserveCapTrimmed === "" ? null : Number(reserveCapTrimmed);
+  const reserveBlocked =
+    reservePctValue != null && (!Number.isInteger(reservePctValue) || reservePctValue < 0 || reservePctValue > 100)
+      ? "Reserve percent must be a whole number from 0 to 100 (leave blank to inherit)"
+    : reserveCapValue != null && (!Number.isFinite(reserveCapValue) || reserveCapValue < 0)
+      ? "Reserve maximum must be $0 or more (leave blank to inherit)"
+    : null;
   const blockedReason =
     structure === "TIERED" && !tierValidation.ok ? tierValidation.errors[0]
     : structure === "FLAT" && !(flatCents > 0) ? "Enter a per-sale rate above $0"
     : structure === "FLAT" && flatCents > 100000 ? "Rate above $1,000/sale — check the number"
-    : null;
+    : reserveBlocked;
 
   const assignMutation = useMutation({
     mutationFn: async () => {
       const body: any = { repId: member!.id, structure, closeExisting: true };
+      // Integer cents cross the wire — the dollars → cents conversion happens
+      // ONCE, here. `null` explicitly clears the override back to the org default.
+      body.reservePercent = reservePctValue == null ? null : Math.trunc(reservePctValue);
+      body.reserveCapCents = reserveCapValue == null ? null : Math.round(reserveCapValue * 100);
       if (structure === "FLAT") body.flatRateCents = flatCents;
       // Tiers travel as integer cents; the server re-validates before it books
       // anything, so this is a request, not a decision.
@@ -1200,6 +1230,50 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
             </div>
           </div>
         )}
+
+        {/* ── Chargeback reserve ────────────────────────────────────────────
+            Percent AND maximum are both per-rep. Blank inherits the org
+            default (stated in the placeholder), so nothing changes for a rep
+            an admin never touches. Money is entered in dollars and converted
+            to integer cents once, at submit. */}
+        <div className="mt-1 rounded-2xl border border-border bg-secondary/30 p-3">
+          <div className="flex items-center gap-2">
+            <PiggyBank className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />
+            <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Chargeback reserve</Label>
+          </div>
+          <p className="mt-1 text-2xs text-muted-foreground leading-snug">
+            Holds part of each week's pay to cover cancellations. It builds to the maximum and then stops.
+          </p>
+          <div className="mt-2.5 grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label htmlFor="reserve-percent" className="text-2xs font-semibold text-muted-foreground">Held each week</Label>
+              <div className="flex items-center gap-1.5">
+                <Input id="reserve-percent" type="number" min={0} max={100} step={1} inputMode="numeric"
+                  value={reservePct} onChange={e => setReservePct(e.target.value)}
+                  placeholder={String(current?.reserve?.orgReservePercent ?? 0)}
+                  className="h-9 w-20 bg-secondary border-border tabular-nums" data-testid="input-team-reserve-percent" />
+                <span className="text-xs text-muted-foreground">%</span>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="reserve-cap" className="text-2xs font-semibold text-muted-foreground">Maximum held</Label>
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground">$</span>
+                <Input id="reserve-cap" type="number" min={0} step={100} inputMode="decimal"
+                  value={reserveCap} onChange={e => setReserveCap(e.target.value)}
+                  placeholder={String(Math.round((current?.reserve?.reserveCapCents ?? 250000) / 100))}
+                  className="h-9 w-24 bg-secondary border-border tabular-nums" data-testid="input-team-reserve-cap" />
+              </div>
+            </div>
+          </div>
+          <p className="mt-2 text-2xs text-muted-foreground" data-testid="text-reserve-inherit-hint">
+            Leave blank to use the company default
+            {" "}({current?.reserve?.orgReservePercent ?? 0}% up to{" "}
+            <span className="tabular-nums">
+              ${(((current?.reserve?.orgReserveCapCents ?? 250000)) / 100).toLocaleString()}
+            </span>).
+          </p>
+        </div>
 
         <DialogFooter className="mt-2">
           <Button variant="outline" onClick={onClose} className="h-9 border-border">Cancel</Button>

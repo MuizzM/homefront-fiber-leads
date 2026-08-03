@@ -7736,10 +7736,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               ? Math.round(Number(commission.flatRateDollars) * 100)
               : 0;
           const flatRateCents = structure === "FLAT" ? Math.round(rawRateCents) : undefined;
+          // Chargeback reserve is set AT ONBOARDING alongside the rate. Absent =
+          // inherit the org default (which is what every rep got before this
+          // existed); an explicit null clears any override. Whole numbers only —
+          // a non-integer is dropped rather than rounded into someone's pay.
+          const reservePercent = commission.reservePercent === undefined ? undefined
+            : commission.reservePercent === null ? null
+            : Number.isInteger(commission.reservePercent) ? Number(commission.reservePercent) : undefined;
+          const reserveCapCents = commission.reserveCapCents === undefined ? undefined
+            : commission.reserveCapCents === null ? null
+            : Number.isInteger(commission.reserveCapCents) ? Number(commission.reserveCapCents) : undefined;
           commissionResult = commissionSvc.assignStructureToRep(tenantId, reviewer?.id ?? null, {
             repId: teamMemberId, structure, flatRateCents,
             commissionPlanVersionId: commission.commissionPlanVersionId ?? null,
             effectiveFrom: commission.effectiveFrom || undefined,
+            ...(reservePercent !== undefined ? { reservePercent } : {}),
+            ...(reserveCapCents !== undefined ? { reserveCapCents } : {}),
           });
         } else if (commission && tenantId == null) {
           commissionWarning = "Account created, but no organization is set on your login, so a commission plan could not be assigned.";
