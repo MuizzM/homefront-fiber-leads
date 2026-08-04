@@ -14,6 +14,7 @@ import { captureFieldFix } from "@/lib/geoFix";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { LiveSlot } from "@/components/LiveSlot";
+import { EarningsToday } from "@/components/EarningsToday";
 import { useLiveItems } from "@/hooks/useLiveItems";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
@@ -159,14 +160,22 @@ export default function Today() {
     <div className="min-h-full bg-background pb-24">
       <div className="mx-auto w-full max-w-lg px-4 pt-5">
         <header className="flex items-start justify-between gap-3">
+          {/* MONEY, not a greeting.
+              "Good morning, Marcus" was 27px bold and owned the most valuable
+              space above the fold while carrying no information — a rep opens
+              this screen to find out where they stand, not to be greeted. The
+              name and date move to a single small line above the number.
+              EarningsToday shows BANKED money only (hours worked + spiffs in the
+              ledger) and keeps commission on today's sales separate and labelled
+              pending, because a sale can still fail qualification or charge back
+              — and a headline number that turns out wrong on Friday discredits
+              every other number on the screen. */}
           <div className="min-w-0">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" data-testid="today-greeting">
               <Sun className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
-              {dateLabel}
+              {greeting}, {firstName} · {dateLabel}
             </div>
-            <h1 className="text-[27px] font-bold tracking-tight text-foreground mt-1 leading-tight" data-testid="today-greeting">
-              {greeting}, {firstName}
-            </h1>
+            <EarningsToday className="mt-1.5" />
           </div>
           {clockQ.data?.clockedIn && (
             <button
