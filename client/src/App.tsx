@@ -55,7 +55,6 @@ const LoginActivity = lazy(() => import("@/pages/LoginActivity"));
 const Governance = lazy(() => import("@/pages/Governance"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
-const ReadyToCall = lazy(() => import("@/pages/ReadyToCall"));
 const Training = lazy(() => import("@/pages/Training"));
 const Coach = lazy(() => import("@/pages/Coach"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
@@ -222,7 +221,9 @@ function AppRoutes() {
           </Route>
           <Route path="/today"><CapabilityGuard role={role} capability="field.app.use"><Today /></CapabilityGuard></Route>
           <Route path="/followups"><CapabilityGuard role={role} capability="field.app.use"><FollowUps /></CapabilityGuard></Route>
-          <Route path="/ready-to-call"><CapabilityGuard role={role} capability="field.app.use"><ReadyToCall /></CapabilityGuard></Route>
+          {/* Folded into the single Cold Calling surface. Redirect rather than
+              delete the path: it was in the field nav, so reps have it bookmarked. */}
+          <Route path="/ready-to-call"><Redirect to="/calling" /></Route>
           <Route path="/lead/:id"><CapabilityGuard role={role} capability="field.app.use"><PropertyDetail /></CapabilityGuard></Route>
           <Route path="/map"><CapabilityGuard role={role} capability="field.app.use"><MapView /></CapabilityGuard></Route>
           <Route path="/leads"><CapabilityGuard role={role} capability="field.app.use"><Leads /></CapabilityGuard></Route>
