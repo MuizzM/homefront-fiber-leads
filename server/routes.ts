@@ -122,6 +122,7 @@ import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
 import { publishSale, publishStreak, feedForUser, markRead } from "./teamFeedStore";
+import { earningsToday } from "./earningsTodayStore";
 import { emitAnnouncement, onAnnouncement } from "./announcementBus";
 import { visibleTo, usd as feedUsd } from "@shared/teamFeed";
 import {
@@ -2006,6 +2007,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     };
     req.on("close", cleanup);
     res.on("close", cleanup);
+  });
+
+  // GET /api/me/earnings-today — the number the home screen opens with.
+  // Returns BANKED (certain) and PENDING (estimated) separately and never blends
+  // them; see server/earningsTodayStore.ts for why that split is the whole point.
+  app.get("/api/me/earnings-today", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const repId = req.user?.teamMemberId;
+    if (tenantId == null || repId == null) {
+      return res.json({
+        bankedCents: 0, hourlyCents: 0, hourlyMinutes: 0, spiffCents: 0,
+        salesToday: 0, pendingCents: null, pendingBasis: "no_sales",
+      });
+    }
+    res.json(earningsToday(Number(tenantId), Number(repId), Date.now()));
   });
 
   // ── Team announcements ──────────────────────────────────────────────────────
