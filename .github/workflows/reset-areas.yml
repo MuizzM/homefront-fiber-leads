@@ -1,0 +1,164 @@
+name: Reset areas (production)
+
+# One-off maintenance: delete every Area and clear every rep assignment, so the
+# org restarts on the crew-based area process. See docs/AREA_DELETION.md and
+# script/reset-areas.ts for exactly what is and is not touched.
+#
+# WHY THIS IS A WORKFLOW AND NOT AN SSH COMMAND
+# The production SSH key exists only as a repository secret — nobody has a copy,
+# which is the point. So the only thing that can reach the box is Actions. This
+# reuses deploy.yml's pinned-host-key connection so the reset travels the same
+# audited path a release does.
+#
+# WHY IT RUNS `node dist/reset-areas.cjs` AND NOT `npx tsx script/…`
+# The runtime image is `npm ci --omit=dev` and copies only dist/ and deploy/:
+# script/ never ships and tsx is a devDependency. script/build.ts bundles the
+# maintenance entry points into dist/ precisely so they can run in the deployed
+# image, against the real /data volume, with no toolchain on the host.
+#
+# DRY RUN IS THE DEFAULT. `apply: true` additionally requires typing the tenant
+# id into `confirm`, because a destructive one-click button that only needs one
+# click is a destructive button somebody will click by accident.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: 'Organization id to reset, or "all" for every org on the database'
+        required: true
+        type: string
+      apply:
+        description: "WRITE. Leave unchecked for a dry run that changes nothing."
+        required: false
+        default: false
+        type: boolean
+      confirm:
+        description: 'Required when apply is checked: retype the tenant id exactly'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reset-areas-production
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    name: ${{ inputs.apply && 'APPLY — reset areas + rep assignments' || 'Dry run — reset areas + rep assignments' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Validate inputs
+        env:
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Whitelist, not sanitize: this string is interpolated into a remote
+          # shell command, so anything but a bare id or the literal "all" is
+          # refused outright rather than escaped and hoped about.
+          if [[ ! "$TENANT" =~ ^([0-9]+|all)$ ]]; then
+            echo "tenant must be a positive integer or the word 'all' (got: $TENANT)" >&2
+            exit 1
+          fi
+          if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "$TENANT" ]; then
+            echo "Refusing to write: 'confirm' must exactly match 'tenant' ($TENANT)." >&2
+            echo "Re-run with confirm=$TENANT, or leave 'apply' unchecked for a dry run." >&2
+            exit 1
+          fi
+          echo "tenant=$TENANT  apply=$APPLY"
+
+      - name: Run the reset on the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              bash -s -- "$TENANT" "$APPLY" <<'REMOTE'
+          set -euo pipefail
+          TENANT="$1"
+          APPLY="$2"
+          [[ "$TENANT" =~ ^([0-9]+|all)$ ]]
+          [[ "$APPLY" =~ ^(true|false)$ ]]
+
+          cd /srv/homefront
+
+          # The image tag the LIVE release is running — deploy.sh records it in
+          # .deployed-tag. Reused rather than rebuilt, so the reset runs against
+          # exactly the code serving traffic.
+          TAG="$(cat .deployed-tag 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            # Fall back to whatever the running app container is actually on,
+            # the same way deploy.sh derives PREV_TAG.
+            RUNNING="$(docker ps --filter 'ancestor=homefront-app' --format '{{.Image}}' | head -n1)"
+            TAG="${RUNNING##*:}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Could not determine the running image tag — refusing to guess" >&2
+            exit 1
+          fi
+          echo "running against image homefront-app:$TAG"
+
+          if [ "$TENANT" = "all" ]; then SCOPE=(--all-tenants); else SCOPE=(--tenant "$TENANT"); fi
+          if [ "$APPLY" = "true" ]; then MODE=(--apply); else MODE=(); fi
+
+          # `compose run` rather than a raw `docker run`: compose resolves the
+          # image, the app-data volume (whose real name carries the compose
+          # project prefix) and the env_file from the service definition, so
+          # none of that is hardcoded here and drifting compose config cannot
+          # silently point this at the wrong volume.
+          #   --rm       leave nothing behind either way
+          #   --no-deps  do not start Caddy for a one-off script
+          #   --entrypoint node   bypass start.sh, which would boot the server
+          #                       and Litestream instead of running the script
+          # This is a SEPARATE container on the same volume, never `exec` into
+          # the live one — the app keeps serving and this cannot disturb it.
+          APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+            run --rm --no-deps --entrypoint node app \
+            dist/reset-areas.cjs "${SCOPE[@]}" "${MODE[@]}"
+          REMOTE
+
+      - name: What to do next
+        if: success()
+        shell: bash
+        run: |
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            echo "::notice::Reset applied. A pre-write snapshot sits beside the DB on the volume (data.before-area-reset-*.db) — the log above prints the restore command. Draw the new areas from the Field Map."
+          else
+            echo "::notice::Dry run only — nothing was written. Re-run with apply checked and confirm set to the tenant id to commit."
+          fi

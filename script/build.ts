@@ -60,6 +60,32 @@ async function buildAll() {
     logLevel: "info",
   });
 
+  // ── Maintenance entry points ────────────────────────────────────────────
+  // One-off operational scripts, bundled the same way the server is so they can
+  // RUN IN PRODUCTION. The runtime image is `npm ci --omit=dev` and copies only
+  // dist/ and deploy/ — script/ never ships and tsx is a devDependency, so
+  // `npx tsx script/<x>.ts` on the box cannot work. Bundling them here is what
+  // makes `node dist/<x>.cjs` possible inside the running image, against the
+  // real /data volume, with no toolchain on the host and no SSH key in anyone's
+  // hands (see .github/workflows/reset-areas.yml).
+  console.log("building maintenance scripts...");
+  for (const entry of ["reset-areas"]) {
+    await esbuild({
+      entryPoints: [`script/${entry}.ts`],
+      platform: "node",
+      bundle: true,
+      format: "cjs",
+      outfile: `dist/${entry}.cjs`,
+      define: { "process.env.NODE_ENV": '"production"' },
+      // NOT minified: an operator reading a destructive script's stack trace at
+      // 9pm should get real function names.
+      minify: false,
+      sourcemap: false,
+      external: externals,
+      logLevel: "info",
+    });
+  }
+
   // Belt-and-braces hardening: delete any stray source maps from dist.
   // Neither Vite nor esbuild is configured to emit them, but a plugin or
   // config drift could reintroduce them — sweep so prod never ships one.
