@@ -41,6 +41,8 @@ import {
 } from "@shared/knock";
 import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
 import { normalizeZip5 } from "@shared/addressKey";
+import { LeadContacts } from "@/components/LeadContacts";
+import { leadDisplayName, type TracedPhone } from "@shared/tracerfy";
 import { PeekBar } from "@/components/lead-sheet/PeekBar";
 import { QuickBody } from "@/components/lead-sheet/QuickBody";
 import { DetailsBody } from "@/components/lead-sheet/DetailsBody";
@@ -58,6 +60,12 @@ export interface SheetLead {
   assignedRepId?: number | null;  // shown/edited only for lead.assign holders
   visited?: boolean; lastOutcome?: string | null; lastKnockedAt?: string | null;
   leadTag?: string | null; freshConfidence?: string | null;
+  /** Skip-trace results. The NAME belongs in Quick Actions — a knocker needs it
+   *  BEFORE they knock — while the full number list sits in Details, because at
+   *  the door you are talking, not dialling, and the outcome grid must not get
+   *  pushed below the fold to make room for phones. */
+  ownerName?: string | null;
+  phones?: TracedPhone[];
   // Opt-in: present only when the caller is authorized to dial this lead. The
   // Field Map pins payload carries NO phone for ordinary reps, so Call stays
   // hidden for them; the separate Calling workspace remains the gated path.
@@ -824,9 +832,19 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start gap-1 min-w-0">
-                  <h2 className="min-w-0 flex-1 text-[19px] leading-[1.15] font-semibold text-white truncate">
-                    {renderedLead.address}
-                  </h2>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="min-w-0 text-[19px] leading-[1.15] font-semibold text-white truncate">
+                      {renderedLead.address}
+                    </h2>
+                    {/* Who to ask for. Only when the trace actually returned a
+                        name — the "Resident at …" fallback would just repeat
+                        the address line above it. */}
+                    {renderedLead.ownerName && renderedLead.ownerName.trim().length >= 2 && (
+                      <p className="mt-0.5 truncate text-[13px] font-medium text-white/70" data-testid="knock-owner-name">
+                        Ask for {leadDisplayName(renderedLead.ownerName, renderedLead.address)}
+                      </p>
+                    )}
+                  </div>
                   <button
                     type="button"
                     data-testid="knock-copy-address"
@@ -932,6 +950,20 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               notes={notesCard}
             />
           </div>
+
+          {/* Traced numbers live at the DETAILS level, not Quick Actions. At a
+              door the rep is talking, not dialling — putting the phone list up
+              top would push the outcome grid below the fold to serve the rarer
+              need. DNC rows render inert here exactly as on the map card. */}
+          {(renderedLead.phones?.length ?? 0) > 0 && (
+            <div hidden={!detailsShown} className="px-4 pb-1" data-testid="knock-contacts">
+              <LeadContacts
+                ownerName={renderedLead.ownerName}
+                address={renderedLead.address}
+                phones={renderedLead.phones}
+              />
+            </div>
+          )}
 
           {/* DETAILS level — premise facts, assignment (capability-gated),
               admin actions (manager-gated), and the full History timeline with
