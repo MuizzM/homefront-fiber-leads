@@ -18,6 +18,8 @@ import { MapPin, Zap, Plus, ArrowUpRight, Navigation } from "lucide-react";
 import { CopyAddressButton } from "@/components/CopyAddressButton";
 import { formatFullAddress } from "@/lib/reverseGeocode";
 import { leadMarkMeta } from "@shared/leadMark";
+import { LeadContacts } from "@/components/LeadContacts";
+import type { TracedPhone } from "@shared/tracerfy";
 
 export interface CardProperty {
   id?: number;                       // present → already a saved lead
@@ -30,6 +32,12 @@ export interface CardProperty {
   freshConfidence?: string | null; assignMark?: string | null;
   techType?: string | null; placement?: string | null; householdSegmentType?: string | null;
   source?: "scan" | "tap" | "lead";
+  // Skip-trace results. The name is the highest-value thing a trace buys — a
+  // knocker who can open with "is that Dana?" converts better than one who
+  // opens with "hi there" — so LeadContacts renders ABOVE the facts grid in
+  // every variant. DNC numbers stay visible there, badged and un-tappable.
+  ownerName?: string | null;
+  phones?: TracedPhone[];
 }
 
 // Which layout to render. Works with the SPA's hash router: the param may sit
@@ -257,6 +265,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
             <p className="mt-0.5 text-[13px] text-muted-foreground">{cityLine}</p>
             <MarkChip mark={p.assignMark} />
 
+            <LeadContacts ownerName={p.ownerName} address={p.address} phones={p.phones} className="mt-3" />
             <FactsList facts={facts} />
 
             <div className={`mt-4 grid gap-2 ${hasPrimary ? "grid-cols-3" : "grid-cols-2"}`}>
@@ -310,6 +319,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
             </div>
 
             {/* Score + evidence live in the strip above — don't repeat them. */}
+            <LeadContacts ownerName={p.ownerName} address={p.address} phones={p.phones} className="mt-3" />
             <FactsList facts={facts.filter((f) => f.label !== "Lead score" && f.label !== "Evidence")} />
 
             <div className="mt-4 flex flex-col gap-2">
@@ -349,6 +359,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
                 </div>
               </div>
 
+              <LeadContacts ownerName={p.ownerName} address={p.address} phones={p.phones} className="mt-3" />
               <FactsList facts={facts} dense={false} />
             </div>
           </div>
