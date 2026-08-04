@@ -15,6 +15,8 @@ import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { LiveSlot } from "@/components/LiveSlot";
 import { EarningsToday } from "@/components/EarningsToday";
+import { PushSetupCard } from "@/components/PushSetupCard";
+import { TeamFeedBell, TeamFeedHeadline } from "@/components/TeamFeed";
 import { useLiveItems } from "@/hooks/useLiveItems";
 import { WarmupStrip } from "@/components/training/WarmupStrip";import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
@@ -159,6 +161,25 @@ export default function Today() {
   return (
     <div className="min-h-full bg-background pb-24">
       <div className="mx-auto w-full max-w-lg px-4 pt-5">
+        {/* ── ABOVE EVERYTHING: how the phone reaches them, and what it said ──
+            Both of these were built and mounted NOWHERE — the install animation
+            shipped to no one, and a manager could post an announcement that no
+            rep had any surface to read. They go first because they are the two
+            things that stop working silently:
+
+            · PushSetupCard is the ONLY route to phone notifications, and on
+              iPhone the only route to them existing at all (web push requires a
+              home-screen install). It teaches the install with an animation,
+              then asks for permission — in that order, because asking inside a
+              Safari tab burns the single prompt iOS will ever show. It renders
+              nothing once granted, unsupported, or dismissed, so it costs this
+              screen no permanent space.
+            · TeamFeedHeadline surfaces the newest UNREAD announcement as one
+              line. Reading it clears it. A promo or a payout change should not
+              require a rep to be curious about a badge. */}
+        <PushSetupCard className="mb-3" />
+        <TeamFeedHeadline className="mb-3" />
+
         <header className="flex items-start justify-between gap-3">
           {/* MONEY, not a greeting.
               "Good morning, Marcus" was 27px bold and owned the most valuable
@@ -177,6 +198,12 @@ export default function Today() {
             </div>
             <EarningsToday className="mt-1.5" />
           </div>
+          {/* The bell is ALWAYS here, clocked in or not — it is the standing
+              way back to anything the strip above was dismissed past by being
+              read. Sits before the clock-out pill so the destructive-ish action
+              stays at the far edge. */}
+          <div className="flex shrink-0 items-start gap-1">
+          <TeamFeedBell className="-mr-1 mt-0.5" />
           {clockQ.data?.clockedIn && (
             <button
               onClick={() => { if (confirmOut) clockOut.mutate(); else { setConfirmOut(true); setTimeout(() => setConfirmOut(false), 3000); } }}
@@ -192,6 +219,7 @@ export default function Today() {
                   : <><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true" />On the clock</>}
             </button>
           )}
+          </div>
         </header>
 
         {(offline || backlog || snap.deadCount > 0) && (

@@ -2,11 +2,24 @@ import { rawDb } from "./db";
 import { startKineticRecheck } from "./kineticScannerWorkers";
 import { runDailyMarketRefresh } from "./dailyMarketRefresh";
 import { structuredLog } from "./structuredLog";
+import { DEFAULT_WORKWEEK, localWallToUtcMs, localYmdParts } from "@shared/workweek";
 
 export interface CronStatus { lastRunAt:string|null;lastRunResult:string|null;nextRunAt:string|null;isRunning:boolean;totalNewFiberFound:number;totalRunCount:number }
 const status:CronStatus={lastRunAt:null,lastRunResult:null,nextRunAt:null,isRunning:false,totalNewFiberFound:0,totalRunCount:0};
 let timer:NodeJS.Timeout|null=null;
-function nextTwoAm():Date{const now=new Date(),next=new Date(now);next.setHours(2,0,0,0);if(next<=now)next.setDate(next.getDate()+1);return next;}
+// 2 AM in the OPERATING timezone, not the container's. `setHours(2)` means 02:00
+// UTC in production — 10 PM Eastern, the middle of evening knocking. This job
+// starts a kinetic recheck worker per tenant plus an OSM discovery diff, so it
+// was putting the heaviest background load of the day on top of peak field use.
+// The schedule is global (every tenant), so it runs on the default workweek zone
+// as a house clock rather than on any single org's.
+function nextTwoAm():Date{
+  const tz=DEFAULT_WORKWEEK.timezone,now=Date.now();
+  const {y,mo,d}=localYmdParts(now,tz);
+  let at=localWallToUtcMs(y,mo,d,2,0,tz);
+  if(at<=now)at=localWallToUtcMs(y,mo,d+1,2,0,tz);   // Date.UTC normalizes the day overflow
+  return new Date(at);
+}
 export function getCronStatus():CronStatus{return{...status};}
 export function getEngineStatus():unknown{return{running:status.isRunning,cronRunning:status.isRunning,mode:"kinetic-address-recheck",nextRunAt:status.nextRunAt};}
 export async function triggerManualScan():Promise<void>{

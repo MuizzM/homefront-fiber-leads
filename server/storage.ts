@@ -52,6 +52,7 @@ import { repVisibilitySql } from "@shared/leadVisibility";
 import { syncAssignments } from "./territoryAssignments";
 import { bumpTerritoryVersion } from "./territoryScopeCache";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
+import { DEFAULT_WORKWEEK, localWallToUtcMs, localYmdParts } from "@shared/workweek";
 import {
   planLegacyCommissionTransition,
   type LegacyCommissionLifecycleErrorCode,
@@ -3147,6 +3148,34 @@ function bustPinCaches(tenantId?: number | null) {
   if (typeof bust === "function") bust(tenantId ?? undefined);
 }
 
+/** UTC instant of midnight in the org's local day.
+ *
+ *  "Today" for a field rep is the day on the phone in their hand, not the day
+ *  in the container. An org on Eastern rolls over five hours before UTC does,
+ *  so any counter keyed off container midnight is wrong for the entire evening
+ *  — which is prime knocking time.
+ *
+ *  Falls back to the default workweek zone when the tenant is unknown or the
+ *  lookup fails, never to container-local time. */
+function localDayStartMs(tenantId: number | undefined | null, nowMs: number): number {
+  const tz = orgTimezoneFor(tenantId);
+  const { y, mo, d } = localYmdParts(nowMs, tz);
+  return localWallToUtcMs(y, mo, d, 0, 0, tz);
+}
+
+/** The org's IANA timezone, or the default workweek zone when unknown.
+ *
+ *  Exported because date-range filters are built in the route layer and must
+ *  agree with the aggregates computed here — a "today" that means one thing in
+ *  the WHERE clause and another in the SELECT is worse than either alone. */
+export function orgTimezoneFor(tenantId: number | undefined | null): string {
+  if (tenantId == null) return DEFAULT_WORKWEEK.timezone;
+  try {
+    const row = rawDb.prepare(`SELECT commission_timezone AS tz FROM tenants WHERE id = ?`).get(tenantId) as any;
+    return row?.tz || DEFAULT_WORKWEEK.timezone;
+  } catch { return DEFAULT_WORKWEEK.timezone; }
+}
+
 export class Storage implements IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[] {
@@ -4259,9 +4288,22 @@ export class Storage implements IStorage {
   getLeaderboard(window?: { since?: string; until?: string }, tenantId?: number) {
     const reps = this.getTeamMembers(tenantId).filter(r => r.active);
     if (reps.length === 0) return [];
-    // Local midnight — a 7am knock must count as "today".
-    const midnight = new Date();
-    midnight.setHours(0, 0, 0, 0);
+    // Midnight in the ORG's timezone, not the container's.
+    //
+    // This was `new Date().setHours(0,0,0,0)`, which is midnight wherever the
+    // process happens to run — UTC in production, while the org runs Eastern.
+    // That put the boundary at 20:00 ET the PREVIOUS evening, and the evening
+    // half of that error is the damaging one: at 8pm ET, mid-shift, UTC midnight
+    // rolls and the whole day's knocking drops off the board. A rep 60 doors
+    // into their day watches the count reset to zero. (Before 8pm it errs the
+    // other way, folding last night's knocks into today.)
+    //
+    // Same resolution every other "today" surface uses — earningsTodayStore,
+    // spiffCampaignStore, momentumSpiffStore, doorDropStore, teamFeedStore and
+    // knockMilestoneStore all read commission_timezone. A cross-tenant call
+    // (tenantId undefined) has no single org day, so it falls back to the
+    // default workweek zone rather than silently reverting to container time.
+    const midnight = new Date(localDayStartMs(tenantId, Date.now()));
     const w = (col = "") => `(@since IS NULL OR k.knocked_at >= @since) AND (@until IS NULL OR k.knocked_at <= @until)${col}`;
     // A SALE only counts while it is still TRUE. `superseded = 0` alone is not
     // that: it records whether a knock lost the CAS when it was WRITTEN, so an

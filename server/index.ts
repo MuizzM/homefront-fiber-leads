@@ -44,6 +44,7 @@ import { BLOCKED_RESPONSE_FIELDS, scrubSecretText } from "./secretScrub";
 //   (scanWorkers.ts) so index/db/scanner can never drift.
 import { resolveScanWorkerCount } from "./scanWorkers";
 import { startPrimaryElection, isPrimaryNode } from "./primaryNodeLease";
+import { isoDaysAgo } from "./sqlTime";
 const SCAN_WORKERS = resolveScanWorkerCount();
 // The control role runs the work-PRODUCING singletons (statewide sweep, radar,
 // expansion, hot/frontier markets, discovery, daily refresh). True in single-process
@@ -1395,7 +1396,7 @@ app.use((req, res, next) => {
           MIN(created_at) AS firstSeen, MAX(created_at) AS lastSeen
         FROM leads
         WHERE tenant_id=? AND carrier='frontier' AND lead_tag='fresh_fiber_confirmed'
-          AND exchange_id LIKE 'cn%' AND created_at >= datetime('now','-21 days')
+          AND exchange_id LIKE 'cn%' AND created_at >= ${isoDaysAgo(21)}
         GROUP BY exchange_id HAVING c >= ? ORDER BY c DESC`).all(tid, minCluster) as any[];
       for (const z of zones) {
         const boosted = rawDb.prepare(`UPDATE leads SET fresh_confidence='cross_verified', updated_at=datetime('now')

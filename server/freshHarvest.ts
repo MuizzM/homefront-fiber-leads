@@ -58,6 +58,7 @@ import { streetKeyOf } from "@shared/addressKey";
 export { streetKeyOf }; // back-compat: callers import it from this module
 import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
 import { budgetShapeFactor } from "./harvestScheduler";
+import { isoDaysAgo } from "./sqlTime";
 
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
@@ -104,7 +105,7 @@ export function tierB(tenantId: number, limit: number): TierRow[] {
          FROM leads l
         WHERE l.tenant_id=? AND l.lat IS NOT NULL AND l.lng IS NOT NULL
           AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${TIER_B_FRESH_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(TIER_B_FRESH_WINDOW_DAYS)}
         GROUP BY clat, clng
      )
      , cell_scans AS (
@@ -117,7 +118,7 @@ export function tierB(tenantId: number, limit: number): TierRow[] {
      , prior AS (
        SELECT CAST((SELECT COUNT(*) FROM leads l2
                      WHERE l2.tenant_id=? AND l2.lead_tag='fresh_fiber_confirmed'
-                       AND l2.created_at >= datetime('now','-${TIER_B_FRESH_WINDOW_DAYS} days')) AS REAL)
+                       AND l2.created_at >= ${isoDaysAgo(TIER_B_FRESH_WINDOW_DAYS)}) AS REAL)
               / (1 + (SELECT COUNT(*) FROM scan_targets s2
                        WHERE s2.tenant_id=? AND s2.last_scanned_at IS NOT NULL)) AS p0
      )
@@ -150,7 +151,7 @@ export function tierB2(tenantId: number, limit: number): TierRow[] {
               lower(l.city) AS city, lower(l.state) AS state
          FROM leads l
         WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${TIER_B_FRESH_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(TIER_B_FRESH_WINDOW_DAYS)}
           AND harvest_street_key(l.address) <> ''
      )
      SELECT s.id
@@ -235,7 +236,7 @@ export function tierD1(tenantId: number, limit: number): TierRow[] {
        SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
          FROM leads l
         WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${TIER_B_FRESH_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(TIER_B_FRESH_WINDOW_DAYS)}
         GROUP BY lower(l.city), lower(l.state)
      )
      SELECT s.id
@@ -258,7 +259,7 @@ export function tierC(tenantId: number, limit: number): TierRow[] {
        SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
          FROM leads l
         WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${TIER_B_FRESH_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(TIER_B_FRESH_WINDOW_DAYS)}
         GROUP BY lower(l.city), lower(l.state)
      )
      SELECT s.id
@@ -360,7 +361,7 @@ export function emitEconomyReport(tenantId: number): void {
     const s = rawDb.prepare(`SELECT COUNT(*) AS checks, SUM(blocked) AS blocked, SUM(fresh) AS fresh
       FROM availability_snapshots WHERE checked_at_epoch > ?`).get(cut) as any;
     const l = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads
-      WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND created_at > datetime('now','-1 day')`).get(tenantId) as any;
+      WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND created_at > ${isoDaysAgo(1)}`).get(tenantId) as any;
     const checks = Number(s?.checks ?? 0), fresh = Number(s?.fresh ?? 0), leads = Number(l?.c ?? 0);
     const bw = governorStats();
     structuredLog("fresh_harvest.economy", {

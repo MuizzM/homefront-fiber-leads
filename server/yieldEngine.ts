@@ -37,6 +37,7 @@ import { registerFootprintSqlFunctions, warmFootprintGate, footprintGateActive, 
 import { budgetShapeFactor } from "./harvestScheduler";
 import { yieldRollupsReady } from "./yieldRollups";
 import { anfParkedSql, provenHourlyCapacity } from "@shared/scanPolicy";
+import { isoDaysAgo } from "./sqlTime";
 
 const FRESH_WINDOW_DAYS = 21;
 // Fraction of each cycle's budget spent on random NEVER-scanned footprint
@@ -176,7 +177,7 @@ export function learnYieldWeights(tenantId: number): void {
          SELECT DISTINCT harvest_street_key(l.address) AS street, lower(l.city) AS city
            FROM leads l
           WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-            AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+            AND l.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}
             AND harvest_street_key(l.address) <> ''
        )
        SELECT COUNT(*) AS n, SUM(s.fresh) AS f
@@ -293,7 +294,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
          FROM leads l
         WHERE l.tenant_id=? AND l.lat IS NOT NULL AND l.lng IS NOT NULL
           AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}
         GROUP BY clat, clng
      ),
      recent_cells AS (
@@ -301,7 +302,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
          FROM leads l
         WHERE l.tenant_id=? AND l.lat IS NOT NULL AND l.lng IS NOT NULL
           AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(FLIP_PROXIMITY_DAYS)}
         GROUP BY clat, clng
      ),
      cell_momentum AS (
@@ -311,7 +312,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
          FROM leads l
         WHERE l.tenant_id=${tid} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
           AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${MOMENTUM_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(MOMENTUM_WINDOW_DAYS)}
         GROUP BY clat, clng
      ),
      cell_scans AS (
@@ -324,7 +325,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
      prior AS (
        SELECT CAST((SELECT COUNT(*) FROM leads l2
                      WHERE l2.tenant_id=? AND l2.lead_tag='fresh_fiber_confirmed'
-                       AND l2.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')) AS REAL)
+                       AND l2.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}) AS REAL)
               / (1 + (SELECT COUNT(*) FROM scan_targets s2
                        WHERE s2.tenant_id=? AND s2.last_scanned_at IS NOT NULL)) AS p0
      ),
@@ -333,7 +334,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
               lower(l.city) AS city, lower(l.state) AS state
          FROM leads l
         WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}
           AND harvest_street_key(l.address) <> ''
      ),
      recent_streets AS (
@@ -341,14 +342,14 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
               lower(l.city) AS city, lower(l.state) AS state
          FROM leads l
         WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(FLIP_PROXIMITY_DAYS)}
           AND harvest_street_key(l.address) <> ''
      ),
      city_hits AS (
        SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
          FROM leads l
         WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+          AND l.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}
         GROUP BY lower(l.city), lower(l.state)
      ),
      due_watch AS (
@@ -454,7 +455,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
          AND l.lead_tag='fresh_fiber_confirmed'
-         AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+         AND l.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}
        GROUP BY clat, clng;
     CREATE INDEX idx_yf_fresh_cells ON yf_fresh_cells(clat, clng);
     DROP TABLE IF EXISTS temp.yf_recent_cells;
@@ -464,7 +465,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
          AND l.lead_tag='fresh_fiber_confirmed'
-         AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+         AND l.created_at >= ${isoDaysAgo(FLIP_PROXIMITY_DAYS)}
        GROUP BY clat, clng;
     CREATE INDEX idx_yf_recent_cells ON yf_recent_cells(clat, clng);
     DROP TABLE IF EXISTS temp.yf_cell_momentum;
@@ -475,7 +476,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
          AND l.lead_tag='fresh_fiber_confirmed'
-         AND l.created_at >= datetime('now','-${MOMENTUM_WINDOW_DAYS} days')
+         AND l.created_at >= ${isoDaysAgo(MOMENTUM_WINDOW_DAYS)}
        GROUP BY clat, clng;
     CREATE INDEX idx_yf_cell_momentum ON yf_cell_momentum(clat, clng);
     DROP TABLE IF EXISTS temp.yf_fresh_streets;
@@ -485,7 +486,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
              lower(l.city) AS city, lower(l.state) AS state
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lead_tag='fresh_fiber_confirmed'
-         AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+         AND l.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}
          AND harvest_street_key(l.address) <> '';
     CREATE INDEX idx_yf_fresh_streets ON yf_fresh_streets(street, city, state);
     DROP TABLE IF EXISTS temp.yf_recent_streets;
@@ -495,7 +496,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
              lower(l.city) AS city, lower(l.state) AS state
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lead_tag='fresh_fiber_confirmed'
-         AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+         AND l.created_at >= ${isoDaysAgo(FLIP_PROXIMITY_DAYS)}
          AND harvest_street_key(l.address) <> '';
     CREATE INDEX idx_yf_recent_streets ON yf_recent_streets(street, city, state);
     DROP TABLE IF EXISTS temp.yf_city_hits;
@@ -504,7 +505,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
       SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lead_tag='fresh_fiber_confirmed'
-         AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+         AND l.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}
        GROUP BY lower(l.city), lower(l.state);
     CREATE INDEX idx_yf_city_hits ON yf_city_hits(city, state);
   `);
@@ -578,7 +579,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
      prior AS (
        SELECT CAST((SELECT COUNT(*) FROM leads l2
                      WHERE l2.tenant_id=? AND l2.lead_tag='fresh_fiber_confirmed'
-                       AND l2.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')) AS REAL)
+                       AND l2.created_at >= ${isoDaysAgo(FRESH_WINDOW_DAYS)}) AS REAL)
               / (1 + (SELECT COUNT(*) FROM scan_targets s2
                        WHERE s2.tenant_id=? AND s2.last_scanned_at IS NOT NULL)) AS p0
      ),
