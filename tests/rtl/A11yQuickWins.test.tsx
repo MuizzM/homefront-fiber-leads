@@ -3,7 +3,7 @@
 // accessible names, thumb-zone controls must meet the 44px one-handed hit-area
 // floor (--tap-target-min / h-11), and async regions must announce themselves
 // (role="status" + aria-busy). Exercises the three highest-traffic surfaces the
-// pass touched: the knock sheet header, the ready-to-call workspace pager, and
+// pass touched: the knock sheet header and
 // the My pay loading state.
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -91,46 +91,10 @@ vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ user: { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 } }),
 }));
 
-import ReadyToCall from "@/pages/ReadyToCall";
 import MyCommission from "@/pages/MyCommission";
 
-const QUEUE_LEAD = {
-  id: 11, address: "11 Oak Ave", city: "Lexington", state: "NC", zip: "27292",
-  leadStatus: "prospect", lastCallOutcome: null, contactName: "Sam Oak",
-  contactPhone: "(704) 555-0101", ownerName: null, ownerPhone: null,
-  lockedByUserId: null, lockedByName: null, lockedUntil: null,
-};
 
-function renderReadyToCall() {
-  apiRequest.mockImplementation((method: string, url: string) => {
-    if (url === "/api/ready-to-call/queue") {
-      return Promise.resolve({
-        json: () => Promise.resolve({
-          queue: [QUEUE_LEAD, { ...QUEUE_LEAD, id: 12, address: "12 Oak Ave" }],
-          meId: 1,
-        }),
-      });
-    }
-    // claim / heartbeat / release
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-  });
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}><ReadyToCall /></QueryClientProvider>);
-}
 
-describe("ReadyToCall — queue pager", () => {
-  it("previous/next are named and meet the 44px touch floor", async () => {
-    renderReadyToCall();
-    const prev = await screen.findByRole("button", { name: "Previous lead" });
-    const next = screen.getByRole("button", { name: "Next lead" });
-    for (const btn of [prev, next]) {
-      expect(btn.className).toContain("h-11");
-      expect(btn.className).toContain("w-11");
-    }
-    // Position is announced as it changes.
-    expect(screen.getByText("1 of 2")).toBeInTheDocument();
-  });
-});
 
 // ── My pay loading region ────────────────────────────────────────────────────
 function renderMyCommissionPending() {

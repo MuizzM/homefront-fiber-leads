@@ -21,7 +21,6 @@ const ROUTE_CHUNKS: Record<string, Thunk> = {
   "/leads": () => import("@/pages/Leads"),
   "/lead/": () => import("@/pages/PropertyDetail"),
   "/followups": () => import("@/pages/FollowUps"),
-  "/ready-to-call": () => import("@/pages/ReadyToCall"),
   "/areas": () => import("@/pages/Areas"),
   "/leaderboard": () => import("@/pages/Leaderboard"),
   "/spiffs": () => import("@/pages/Spiffs"),
@@ -36,7 +35,6 @@ const ROUTE_CHUNKS: Record<string, Thunk> = {
   "/commission-console": () => import("@/pages/CommissionConsole"),
   "/applications": () => import("@/pages/Applications"),
   "/live-map": () => import("@/pages/LiveMap"),
-  "/calling/compliance": () => import("@/pages/CallingCompliance"),
   "/calling": () => import("@/pages/CallingQueue"),
   "/profile": () => import("@/pages/Profile"),
 };

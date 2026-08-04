@@ -79,8 +79,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/leads", label: "Leads",        icon: MapPin,          show: isFieldRole,                                   group: "Core" },
   // Calling is a separate, capability-gated workspace. Field-map access never
   // implies calling authority and the map never reveals a phone number.
-  { href: "/calling", label: "Calling Queue", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
-  { href: "/calling/compliance", label: "Calling Compliance", icon: ShieldCheck, show: r => can(r, "calling.compliance.read"), group: "Calling" },
+  { href: "/calling", label: "Cold Calling", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
   // ── Field ─────────────────────────────────────────────────────────────────
   // Areas — the console for territory ground truth: who holds which ground,
   // pass progress, assignment and reclaim. That is a MANAGEMENT view, not a
@@ -89,7 +88,6 @@ const NAV_ITEMS: NavItem[] = [
   // ground that is not theirs. Gated on the same capability that hands areas
   // out, so the people who can assign are the people who can see the board.
   { href: "/areas",        label: "Areas",         icon: LayoutGrid,   show: r => roleCan(r, "assign_territory"),          group: "Field" },
-  { href: "/ready-to-call", label: "Ready to Call", icon: PhoneCall,  show: isFieldRole,                              group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
   { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },
   { href: "/training",     label: "Training",     icon: GraduationCap,show: isFieldRole,                              group: "Field" },

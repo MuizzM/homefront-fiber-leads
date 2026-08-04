@@ -133,3 +133,48 @@ describe("lead card perceived-latency contract", () => {
     expect(screen.queryByTestId("lead-card")).not.toBeInTheDocument();
   });
 });
+
+// ── Skip-trace contacts are actually MOUNTED, in every variant ──────────────
+//
+// This block exists because of a real miss: PushSetupCard and TeamFeed both
+// shipped fully built and referenced from no page at all. A component test
+// passes happily against a component nothing renders, so these assert the WIRING
+// — and do it per variant, because the card has three layouts and inserting into
+// one of them is exactly how this regresses.
+describe("the doorstep contact panel is wired into every card variant", () => {
+  const traced = {
+    ownerName: "Dana Whitfield",
+    phones: [
+      { number: "+15551110000", lineType: "wireless" as const, confidence: 0.9, dncFlags: {}, scrubbedAtMs: Date.now() - 86_400_000 },
+      { number: "+15552220000", lineType: "landline" as const, confidence: 0.8, dncFlags: { federalDnc: true }, scrubbedAtMs: Date.now() - 86_400_000 },
+    ],
+  };
+
+  for (const variant of [1, 2, 3] as const) {
+    it(`variant ${variant} shows the name and both numbers`, () => {
+      window.location.hash = `#/map?cardVariant=${variant}`;
+      renderCard({ property: baseProperty(traced) });
+
+      expect(screen.getByTestId("lead-contact-name").textContent).toBe("Dana Whitfield");
+      expect(screen.getByTestId("lead-phone-+15551110000")).toBeTruthy();
+      // The DNC number is STILL on the card — that is the requirement.
+      expect(screen.getByTestId("lead-phone-+15552220000")).toBeTruthy();
+    });
+
+    it(`variant ${variant} never renders a DNC number as a tel: link`, () => {
+      window.location.hash = `#/map?cardVariant=${variant}`;
+      renderCard({ property: baseProperty(traced) });
+
+      const blocked = screen.getByTestId("lead-phone-+15552220000");
+      expect(blocked.closest("a")).toBeNull();
+      // …while the clean one IS dialable.
+      expect(screen.getByTestId("lead-phone-+15551110000").getAttribute("href")).toBe("tel:+15551110000");
+    });
+  }
+
+  it("stays out of the way on a card with no traced contacts", () => {
+    window.location.hash = "#/map";
+    renderCard();
+    expect(screen.queryByTestId("lead-contacts")).toBeNull();
+  });
+});

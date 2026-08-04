@@ -55,12 +55,10 @@ const LoginActivity = lazy(() => import("@/pages/LoginActivity"));
 const Governance = lazy(() => import("@/pages/Governance"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
-const ReadyToCall = lazy(() => import("@/pages/ReadyToCall"));
 const Training = lazy(() => import("@/pages/Training"));
 const Coach = lazy(() => import("@/pages/Coach"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
 const CallingLead = lazy(() => import("@/pages/CallingLead"));
-const CallingCompliance = lazy(() => import("@/pages/CallingCompliance"));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
 // while a page chunk loads — never a blank screen.
@@ -148,7 +146,6 @@ function AppRoutes() {
       && ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4) >= 4;
     const warm = () => {
       if (user.role === "calling_rep" || user.role === "calling_manager") import("@/pages/CallingQueue");
-      else if (user.role === "compliance_admin" || user.role === "auditor") import("@/pages/CallingCompliance");
       else {
         import("@/pages/Leads");
         if (user.role === "rep") import("@/pages/Today");
@@ -211,20 +208,22 @@ function AppRoutes() {
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
           <Route path="/">{role === "rep" ? <Redirect to="/today" />
             : role === "calling_rep" || role === "calling_manager" ? <Redirect to="/calling" />
-            : role === "compliance_admin" || role === "auditor" ? <Redirect to="/calling/compliance" />
+            // Compliance/auditor roles land on the queue too: scrubbing is
+            // Tracerfy's job now and enforcement is server-side, so there is no
+            // separate console left to send them to — one calling surface.
+            : role === "compliance_admin" || role === "auditor" ? <Redirect to="/calling" />
             : <Dashboard />}</Route>
           <Route path="/calling/lead/:id">
             <CapabilityGuard role={role} capability="calling.lead.read"><CallingLead /></CapabilityGuard>
-          </Route>
-          <Route path="/calling/compliance">
-            <CapabilityGuard role={role} capability="calling.compliance.read"><CallingCompliance /></CapabilityGuard>
           </Route>
           <Route path="/calling">
             <CapabilityGuard role={role} capability="calling.queue.read"><CallingQueue /></CapabilityGuard>
           </Route>
           <Route path="/today"><CapabilityGuard role={role} capability="field.app.use"><Today /></CapabilityGuard></Route>
           <Route path="/followups"><CapabilityGuard role={role} capability="field.app.use"><FollowUps /></CapabilityGuard></Route>
-          <Route path="/ready-to-call"><CapabilityGuard role={role} capability="field.app.use"><ReadyToCall /></CapabilityGuard></Route>
+          {/* Folded into the single Cold Calling surface. Redirect rather than
+              delete the path: it was in the field nav, so reps have it bookmarked. */}
+          <Route path="/ready-to-call"><Redirect to="/calling" /></Route>
           <Route path="/lead/:id"><CapabilityGuard role={role} capability="field.app.use"><PropertyDetail /></CapabilityGuard></Route>
           <Route path="/map"><CapabilityGuard role={role} capability="field.app.use"><MapView /></CapabilityGuard></Route>
           <Route path="/leads"><CapabilityGuard role={role} capability="field.app.use"><Leads /></CapabilityGuard></Route>

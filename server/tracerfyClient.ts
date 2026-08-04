@@ -1,0 +1,336 @@
+// ── Tracerfy: skip trace + DNC scrub ────────────────────────────────────────
+//
+// Two calls, one shape each:
+//
+//   skipTraceLead(lead)  → { ownerName?, phones: LeadPhone[] }
+//   scrubPhones(phones)  → { [e164]: { dnc, flags } }
+//
+// Both are async-queue APIs, not request/response: you submit a job, poll a
+// queue id, then download a CSV. That is hidden behind the two functions above
+// so callers never see a queue.
+//
+// ── ENDPOINTS ───────────────────────────────────────────────────────────────
+//
+//   POST /v1/api/trace/                start a skip-trace job
+//   GET  /v1/api/queue/:id             trace status + result urls
+//   POST /v1/api/dnc/scrub-from-queue/ scrub straight off a finished trace
+//   POST /v2/api/dnc/scrub/            scrub an arbitrary phone list
+//   GET  /v2/api/dnc/queue/:id         scrub status + result urls
+//
+// DNC is v2: it returns `state_dnc_list` (WHICH state registry matched, not
+// merely that one did). v2 drops `dma` and `phone_type`, which costs us
+// nothing — line type comes from the TRACE, and DMA is a mail-preference
+// service we record but do not enforce (see shared/tracerfy.ts).
+//
+// We download `download_url`, NEVER `clean_download_url`. The clean file omits
+// flagged numbers entirely, and a flagged number has to stay on the lead card:
+// the rule is "don't dial", not "don't know".
+//
+// ── FAILING CLOSED ──────────────────────────────────────────────────────────
+//
+// Every phone this module returns carries `dnc: true` until a scrub says
+// otherwise. A timeout, a truncated CSV, a phone missing from the results — all
+// of them leave the number blocked rather than dialable. That is the whole
+// safety posture: the expensive failure is a number that gets dialled because
+// nobody checked, not one that sits undialled for a day.
+import { setTimeout as delay } from "node:timers/promises";
+import { normalizeUsPhone } from "@shared/calling";
+import type { DncFlags, LineType } from "@shared/tracerfy";
+
+export interface LeadPhone {
+  number: string;
+  lineType?: LineType;
+  confidence?: number;
+  dnc: boolean;
+  /** Which system decided. "tracerfy_dnc_v2" | "unscreened" | "scrub_failed". */
+  dncSource?: string;
+  dncFlags?: DncFlags;
+  scrubbedAtMs?: number | null;
+}
+
+export interface SkipTraceInput {
+  address: string;
+  city: string;
+  state: string;
+  zip?: string;
+  ownerName?: string | null;
+}
+
+export interface SkipTraceResult {
+  ownerName?: string | null;
+  phones: LeadPhone[];
+}
+
+export interface ScrubVerdict {
+  dnc: boolean;
+  flags?: DncFlags;
+}
+
+const BASE = (process.env.TRACERFY_BASE_URL || "https://api.tracerfy.com").replace(/\/+$/, "");
+const POLL_INTERVAL_MS = 3_000;
+const POLL_TIMEOUT_MS = 10 * 60_000;
+
+/** Secret from the environment, never from the database or a config row. */
+function apiKey(): string {
+  const key = process.env.TRACERFY_API_KEY;
+  if (!key) throw new Error("TRACERFY_API_KEY is not configured");
+  return key;
+}
+
+async function api(path: string, init: RequestInit = {}): Promise<any> {
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    // A redirect is a configuration error, not something to follow blindly to
+    // an unchecked host.
+    redirect: "manual",
+    headers: {
+      authorization: `Bearer ${apiKey()}`,
+      accept: "application/json",
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!res.ok) throw new Error(`Tracerfy ${path} → HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Poll a queue until it reports completion. Returns the final payload.
+ *
+ *  `phones_checked` / `phones_clean` / `credits_deducted` are absent while a
+ *  job is pending, so their PRESENCE is the completion signal alongside an
+ *  explicit status — belt and braces, because a half-written payload read as
+ *  "done" would silently produce an empty result set. */
+async function pollQueue(path: string, nowMs: () => number): Promise<any> {
+  const deadline = nowMs() + POLL_TIMEOUT_MS;
+  for (;;) {
+    const body = await api(path);
+    const status = String(body?.status ?? "").toLowerCase();
+    if (status === "complete" || status === "completed" || body?.download_url) return body;
+    if (status === "failed" || status === "error") {
+      throw new Error(`Tracerfy job failed: ${body?.error ?? "unknown"}`);
+    }
+    if (nowMs() >= deadline) throw new Error(`Tracerfy job timed out after ${POLL_TIMEOUT_MS}ms`);
+    await delay(POLL_INTERVAL_MS);
+  }
+}
+
+/** Minimal RFC-4180 CSV → row objects. Handles quoted fields containing commas
+ *  and escaped quotes, which owner names ("Smith, John Jr.") routinely do. */
+export function parseCsv(text: string): Array<Record<string, string>> {
+  const rows: string[][] = [];
+  let row: string[] = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i]!;
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 1; } else quoted = false;
+      } else field += c;
+      continue;
+    }
+    if (c === '"') { quoted = true; continue; }
+    if (c === ",") { row.push(field); field = ""; continue; }
+    if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i += 1;
+      row.push(field); field = "";
+      if (row.some(v => v !== "")) rows.push(row);
+      row = [];
+      continue;
+    }
+    field += c;
+  }
+  row.push(field);
+  if (row.some(v => v !== "")) rows.push(row);
+
+  const [header, ...body] = rows;
+  if (!header) return [];
+  return body.map(r => {
+    const o: Record<string, string> = {};
+    header.forEach((h, i) => { o[h.trim()] = (r[i] ?? "").trim(); });
+    return o;
+  });
+}
+
+const truthy = (v: string | undefined): boolean =>
+  v != null && ["true", "1", "yes", "y", "t"].includes(v.trim().toLowerCase());
+
+function lineTypeOf(raw: string | undefined): LineType {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v.startsWith("mobile") || v.startsWith("wireless") || v.startsWith("cell")) return "wireless";
+  if (v.startsWith("land")) return "landline";
+  if (v.includes("voip")) return "voip";
+  return "unknown";
+}
+
+async function downloadCsv(url: string): Promise<Array<Record<string, string>>> {
+  const res = await fetch(url, { redirect: "manual" });
+  if (!res.ok) throw new Error(`Tracerfy result download → HTTP ${res.status}`);
+  return parseCsv(await res.text());
+}
+
+/**
+ * Skip-trace one property.
+ *
+ * `trace_type: "advanced"` is not optional for us: the pilot ran a batch as
+ * "normal" and scored 0%, because `normal` matches on a NAME we do not have.
+ * Address-only lists must use `advanced`.
+ *
+ * Every phone comes back `dnc: true` / `dncSource: "unscreened"`. Tracing tells
+ * us a number exists; it says nothing about whether it may be dialled, and the
+ * caller must run scrubPhones() before anything reaches a queue.
+ */
+export async function skipTraceLead(
+  lead: SkipTraceInput,
+  opts: { nowMs?: () => number } = {},
+): Promise<SkipTraceResult> {
+  const now = opts.nowMs ?? Date.now;
+  const started = await api("/v1/api/trace/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      trace_type: "advanced",
+      records: [{
+        mail_address: lead.address,
+        city: lead.city,
+        state: lead.state,
+        zip: lead.zip ?? "",
+        first_name: "",
+        last_name: "",
+      }],
+    }),
+  });
+
+  const queueId = started?.queue_id ?? started?.id;
+  if (!queueId) throw new Error("Tracerfy trace returned no queue id");
+  const done = await pollQueue(`/v1/api/queue/${encodeURIComponent(String(queueId))}`, now);
+  if (!done?.download_url) return { ownerName: lead.ownerName ?? null, phones: [] };
+
+  const rows = await downloadCsv(done.download_url);
+  const first = rows[0];
+  const ownerName = [first?.owner_name, first?.first_name && first?.last_name
+    ? `${first.first_name} ${first.last_name}` : null].find(v => (v ?? "").trim().length > 1)
+    ?? lead.ownerName ?? null;
+
+  // Providers spread phones across numbered columns (phone1, phone2, …) with a
+  // matching type/score column. Collect every populated slot rather than
+  // assuming a fixed count.
+  const phones: LeadPhone[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const [key, value] of Object.entries(row)) {
+      if (!/^phone[_ ]?\d*$/i.test(key) || !value) continue;
+      const e164 = normalizeUsPhone(value);
+      if (!e164 || seen.has(e164)) continue;
+      seen.add(e164);
+      const idx = key.replace(/\D/g, "");
+      const score = Number(row[`phone${idx}_score`] ?? row[`phone_score`] ?? "");
+      phones.push({
+        number: e164,
+        lineType: lineTypeOf(row[`phone${idx}_type`] ?? row.phone_type),
+        confidence: Number.isFinite(score) ? Math.max(0, Math.min(1, score > 1 ? score / 100 : score)) : 0.5,
+        dnc: true,                      // fails closed until scrubbed
+        dncSource: "unscreened",
+        scrubbedAtMs: null,
+      });
+    }
+  }
+  return { ownerName, phones };
+}
+
+/**
+ * DNC-scrub a list of numbers.
+ *
+ * Returns a verdict for EVERY input number. A number the provider omitted from
+ * its results stays `dnc: true` — silence is not a clearance.
+ */
+export async function scrubPhones(
+  phones: string[],
+  opts: { nowMs?: () => number } = {},
+): Promise<Record<string, ScrubVerdict>> {
+  const now = opts.nowMs ?? Date.now;
+  const unique = Array.from(new Set(phones.map(p => normalizeUsPhone(p)).filter(Boolean) as string[]));
+  // Start from "blocked" for every number, then relax the ones the scrub clears.
+  const out: Record<string, ScrubVerdict> = {};
+  for (const p of unique) out[p] = { dnc: true };
+  if (unique.length === 0) return out;
+
+  const started = await api("/v2/api/dnc/scrub/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ phones: unique }),
+  });
+  const queueId = started?.queue_id ?? started?.id;
+  if (!queueId) throw new Error("Tracerfy scrub returned no queue id");
+
+  const done = await pollQueue(`/v2/api/dnc/queue/${encodeURIComponent(String(queueId))}`, now);
+  // ALL phones, not clean_download_url — blocked numbers must stay on the card.
+  if (!done?.download_url) return out;
+
+  for (const row of await downloadCsv(done.download_url)) {
+    const e164 = normalizeUsPhone(row.phone ?? "");
+    if (!e164 || !(e164 in out)) continue;
+    const flags: DncFlags = {
+      federalDnc: truthy(row.national_dnc),
+      stateDnc: truthy(row.state_dnc),
+      dma: truthy(row.dma),                    // v1 only; absent on v2
+      tcpaLitigator: truthy(row.litigator),
+    };
+    // `is_clean` is the provider's own summary. Trust our own OR of the flags
+    // when they disagree — a provider that adds a new flag type we do not read
+    // must not be able to widen what we consider dialable.
+    const blocked = flags.federalDnc || flags.stateDnc || flags.tcpaLitigator;
+    out[e164] = { dnc: blocked || !truthy(row.is_clean), flags };
+  }
+  return out;
+}
+
+/** Trace results already sitting in a Tracerfy queue, scrubbed without a second
+ *  upload. Cheaper and avoids the address round-trip the pilot hit when the
+ *  results CSV dropped the custom id column. */
+export async function scrubFromQueue(
+  traceQueueId: string,
+  opts: { nowMs?: () => number } = {},
+): Promise<Record<string, ScrubVerdict>> {
+  const now = opts.nowMs ?? Date.now;
+  const started = await api("/v1/api/dnc/scrub-from-queue/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ queue_id: traceQueueId }),
+  });
+  const queueId = started?.queue_id ?? started?.id;
+  if (!queueId) throw new Error("Tracerfy scrub-from-queue returned no queue id");
+  const done = await pollQueue(`/v2/api/dnc/queue/${encodeURIComponent(String(queueId))}`, now);
+  const out: Record<string, ScrubVerdict> = {};
+  if (!done?.download_url) return out;
+  for (const row of await downloadCsv(done.download_url)) {
+    const e164 = normalizeUsPhone(row.phone ?? "");
+    if (!e164) continue;
+    const flags: DncFlags = {
+      federalDnc: truthy(row.national_dnc),
+      stateDnc: truthy(row.state_dnc),
+      dma: truthy(row.dma),
+      tcpaLitigator: truthy(row.litigator),
+    };
+    const blocked = flags.federalDnc || flags.stateDnc || flags.tcpaLitigator;
+    out[e164] = { dnc: blocked || !truthy(row.is_clean), flags };
+  }
+  return out;
+}
+
+/** Merge scrub verdicts onto traced phones. Anything the scrub did not answer
+ *  for stays blocked and is marked so the UI can say WHY. */
+export function applyScrub(
+  phones: LeadPhone[],
+  verdicts: Record<string, ScrubVerdict>,
+  nowMs: number,
+): LeadPhone[] {
+  return phones.map(p => {
+    const v = verdicts[p.number];
+    if (!v) return { ...p, dnc: true, dncSource: "scrub_failed", scrubbedAtMs: null };
+    return {
+      ...p,
+      dnc: v.dnc,
+      dncFlags: v.flags,
+      dncSource: "tracerfy_dnc_v2",
+      scrubbedAtMs: nowMs,
+    };
+  });
+}
