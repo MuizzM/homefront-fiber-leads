@@ -5,7 +5,8 @@ import crypto from "crypto";
 import { sendMailResilient, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { storage, getDefaultTenantId, type MapPinRow, type MapPinWindow, type MapView } from "./storage";
+import { storage, getDefaultTenantId, orgTimezoneFor, type MapPinRow, type MapPinWindow, type MapView } from "./storage";
+import { localWallToUtcMs, localYmdParts } from "@shared/workweek";
 import { billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
 import { stripeConfigured, webhookConfigured, verifyStripeSignature, createCheckoutSession, createPortalSession, processWebhookEvent } from "./stripeAdapter";
@@ -6110,29 +6111,47 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Date-range filter: ?range=7d|30d|1y|today|all (presets), or a custom window
     // ?since=YYYY-MM-DD&until=YYYY-MM-DD. Computed server-side so the client only
     // sends intent; counts below reflect the chosen window (all-time by default).
+    // Scope to the caller's tenant and project to non-PII fields ONLY — the
+    // leaderboard is visible to reps, so it must never carry email/phone/org
+    // structure. Rankings need id/name/role + the counts, nothing more.
+    const tid = (req as any).user?.tenantId ?? undefined;
+    // Resolved BEFORE the window so calendar-day ranges land on the org's day.
+    // "today" and a custom YYYY-MM-DD used to be parsed in CONTAINER-local time
+    // (UTC in production) while the org runs Eastern — a four-to-five hour skew
+    // that shifted every calendar boundary onto the previous evening.
+    const tz = orgTimezoneFor(tid);
+    const dayStartIso = (y: number, mo: number, d: number) =>
+      new Date(localWallToUtcMs(y, mo, d, 0, 0, tz)).toISOString();
     const window = (() => {
       const range = String(req.query.range ?? "").toLowerCase();
       const dayMs = 86400000;
       const now = Date.now();
       const back = (days: number) => new Date(now - days * dayMs).toISOString();
-      if (range === "today") { const m = new Date(); m.setHours(0, 0, 0, 0); return { since: m.toISOString() }; }
+      if (range === "today") {
+        const { y, mo, d } = localYmdParts(now, tz);
+        return { since: dayStartIso(y, mo, d) };
+      }
       if (range === "7d") return { since: back(7) };
       if (range === "30d") return { since: back(30) };
       if (range === "1y") return { since: back(365) };
       if (range === "custom" || req.query.since || req.query.until) {
         const s = String(req.query.since ?? ""), u = String(req.query.until ?? "");
         const ok = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+        const parts = (v: string) => v.split("-").map(Number) as [number, number, number];
+        // `until` is INCLUSIVE of the named day, expressed as the last instant
+        // before the next local day starts — so it stays correct across a DST
+        // boundary, where "+24h" and "next midnight" are not the same duration.
+        const untilIso = () => {
+          const [y, mo, d] = parts(u);
+          return new Date(localWallToUtcMs(y, mo, d + 1, 0, 0, tz) - 1).toISOString();
+        };
         return {
-          since: ok(s) ? new Date(s + "T00:00:00").toISOString() : undefined,
-          until: ok(u) ? new Date(u + "T23:59:59.999").toISOString() : undefined,
+          since: ok(s) ? dayStartIso(...parts(s)) : undefined,
+          until: ok(u) ? untilIso() : undefined,
         };
       }
       return undefined; // all-time
     })();
-    // Scope to the caller's tenant and project to non-PII fields ONLY — the
-    // leaderboard is visible to reps, so it must never carry email/phone/org
-    // structure. Rankings need id/name/role + the counts, nothing more.
-    const tid = (req as any).user?.tenantId ?? undefined;
     const rows = storage.getLeaderboard(window, tid)   // tenant-scoped in SQL now
       .map(r => ({
         rep: { id: r.rep.id, name: r.rep.name, role: (r.rep as any).role ?? "rep" },
