@@ -36,7 +36,6 @@ const ROUTE_CHUNKS: Record<string, Thunk> = {
   "/commission-console": () => import("@/pages/CommissionConsole"),
   "/applications": () => import("@/pages/Applications"),
   "/live-map": () => import("@/pages/LiveMap"),
-  "/calling/compliance": () => import("@/pages/CallingCompliance"),
   "/calling": () => import("@/pages/CallingQueue"),
   "/profile": () => import("@/pages/Profile"),
 };

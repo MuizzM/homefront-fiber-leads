@@ -6,11 +6,12 @@ import { useCan } from "@/lib/capabilities";
 
 export function CallingChrome({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
-  const canReadCompliance = useCan("calling.compliance.read");
   const canReadQueue = useCan("calling.queue.read");
   const tabs = [
+    // ONE calling surface. The compliance console is gone: Tracerfy scrubs
+    // every number on ingest and enforcement lives server-side, so a second tab
+    // existed only to show a rep a second, weaker answer to "may I dial this".
     { href: "/calling", label: "Queue", show: canReadQueue },
-    { href: "/calling/compliance", label: "Compliance", show: canReadCompliance },
   ].filter(item => item.show);
 
   return (

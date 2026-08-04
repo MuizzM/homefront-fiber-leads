@@ -80,7 +80,6 @@ const NAV_ITEMS: NavItem[] = [
   // Calling is a separate, capability-gated workspace. Field-map access never
   // implies calling authority and the map never reveals a phone number.
   { href: "/calling", label: "Calling Queue", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
-  { href: "/calling/compliance", label: "Calling Compliance", icon: ShieldCheck, show: r => can(r, "calling.compliance.read"), group: "Calling" },
   // ── Field ─────────────────────────────────────────────────────────────────
   // Areas — the console for territory ground truth: who holds which ground,
   // pass progress, assignment and reclaim. That is a MANAGEMENT view, not a

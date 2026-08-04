@@ -60,7 +60,6 @@ const Training = lazy(() => import("@/pages/Training"));
 const Coach = lazy(() => import("@/pages/Coach"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
 const CallingLead = lazy(() => import("@/pages/CallingLead"));
-const CallingCompliance = lazy(() => import("@/pages/CallingCompliance"));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
 // while a page chunk loads — never a blank screen.
@@ -148,7 +147,6 @@ function AppRoutes() {
       && ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4) >= 4;
     const warm = () => {
       if (user.role === "calling_rep" || user.role === "calling_manager") import("@/pages/CallingQueue");
-      else if (user.role === "compliance_admin" || user.role === "auditor") import("@/pages/CallingCompliance");
       else {
         import("@/pages/Leads");
         if (user.role === "rep") import("@/pages/Today");
@@ -211,13 +209,13 @@ function AppRoutes() {
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
           <Route path="/">{role === "rep" ? <Redirect to="/today" />
             : role === "calling_rep" || role === "calling_manager" ? <Redirect to="/calling" />
-            : role === "compliance_admin" || role === "auditor" ? <Redirect to="/calling/compliance" />
+            // Compliance/auditor roles land on the queue too: scrubbing is
+            // Tracerfy's job now and enforcement is server-side, so there is no
+            // separate console left to send them to — one calling surface.
+            : role === "compliance_admin" || role === "auditor" ? <Redirect to="/calling" />
             : <Dashboard />}</Route>
           <Route path="/calling/lead/:id">
             <CapabilityGuard role={role} capability="calling.lead.read"><CallingLead /></CapabilityGuard>
-          </Route>
-          <Route path="/calling/compliance">
-            <CapabilityGuard role={role} capability="calling.compliance.read"><CallingCompliance /></CapabilityGuard>
           </Route>
           <Route path="/calling">
             <CapabilityGuard role={role} capability="calling.queue.read"><CallingQueue /></CapabilityGuard>
