@@ -21,7 +21,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Gift, Sparkles } from "lucide-react";
-import { usd } from "@shared/doorDrop";
+import { usd } from "@shared/moneyFormat";
 
 export interface DoorDropCardData {
   enabled: boolean;

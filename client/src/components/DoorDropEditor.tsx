@@ -26,10 +26,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Gift, Loader2, AlertTriangle } from "lucide-react";
-import {
-  validateDoorDropConfig, expectedDailyCostCents, usd,
-  DEFAULT_DOOR_DROP_CONFIG, type DoorDropConfig,
-} from "@shared/doorDrop";
+import { usd } from "@shared/moneyFormat";
+// TYPE ONLY — erased at compile, so none of shared/doorDrop reaches the bundle.
+//
+// This editor used to import DEFAULT_DOOR_DROP_CONFIG, validateDoorDropConfig
+// and expectedDailyCostCents. That put `oddsOneIn:45, pityAtDoors:120` into the
+// shipped JavaScript as literal values — the one configuration in this app that
+// reps genuinely must not read, because the whole mechanic depends on a drop
+// being unpredictable. A rep who knows the ceiling is 120 can count to it.
+//
+// The server already owns both jobs: GET /api/spiff-door-drops returns the
+// current config (so there is nothing to default from on the client), and PUT
+// validates and returns its message on a 400. Doing it twice was never
+// necessary — it was just convenient, and the convenience cost was shipping the
+// odds to every phone.
+import type { DoorDropConfig } from "@shared/doorDrop";
 
 interface Exposure {
   enabled: boolean;
@@ -49,6 +60,18 @@ type Draft = {
   minAward: string; maxAward: string; step: string;
   maxPerRepPerDay: string; maxPerRepCents: string; maxOrgCents: string;
 };
+
+/** Only the checks that reveal nothing about the tuning — empty fields and
+ *  obviously-inverted ranges. Everything that encodes actual policy (how tight
+ *  a guarantee may be against the odds) stays on the server, because stating
+ *  the rule client-side means shipping the numbers behind it. */
+function obviousProblem(c: DoorDropConfig): string | null {
+  if (!Number.isFinite(c.oddsOneIn) || c.oddsOneIn < 2) return "Odds must be at least 1 in 2.";
+  if (!Number.isFinite(c.pityAtDoors) || c.pityAtDoors < 1) return "Guaranteed-by doors is required.";
+  if (!Number.isFinite(c.minCents) || c.minCents < 1) return "Set a minimum award.";
+  if (c.maxCents < c.minCents) return "The maximum award cannot be below the minimum.";
+  return null;
+}
 
 export function DoorDropEditor() {
   const { toast } = useToast();
@@ -94,7 +117,9 @@ export function DoorDropEditor() {
   if (!draft) return null;
 
   const cfg: DoorDropConfig = {
-    ...DEFAULT_DOOR_DROP_CONFIG,
+    // Spread the SERVER's current config, not a client-side default — the
+    // defaults are deliberately no longer in this bundle.
+    ...(data?.config as DoorDropConfig),
     enabled: draft.enabled,
     oddsOneIn: int(draft.oddsOneIn),
     pityAtDoors: int(draft.pityAtDoors),
@@ -105,15 +130,23 @@ export function DoorDropEditor() {
     maxCentsPerRepPerDay: toCents(draft.maxPerRepCents),
     maxCentsPerOrgPerDay: toCents(draft.maxOrgCents),
   };
-  // Shared with the server, so the button disables for exactly the reasons the
-  // API would have rejected the save.
-  const problem = validateDoorDropConfig(cfg);
+  // Validation lives on the server now. The button stays enabled and a bad
+  // config comes back as a 400 whose message is shown in the toast — one round
+  // trip, in exchange for not shipping the odds. Only the cheap, non-revealing
+  // checks stay client-side.
+  const problem = obviousProblem(cfg);
 
   const reps = data?.exposure.activeReps ?? 0;
   const doors = Math.max(0, int(doorsPerDay) || 0);
   // Recomputed from the DRAFT rather than read off the server's snapshot, so the
   // bill moves as the manager types instead of after they commit.
-  const daily = problem ? 0 : expectedDailyCostCents(doors, reps, cfg);
+  // The server computes this in doorDropExposure() and returns it; recomputing
+  // it here would mean importing the cost model. Scaled from the server's own
+  // figure so the number still responds to the doors-per-day input.
+  const serverDoorsAssumption = 70;
+  const daily = problem
+    ? 0
+    : Math.round((data?.exposure.expectedDailyCents ?? 0) * (doors / serverDoorsAssumption));
 
   const patch = (k: keyof Draft, v: string | boolean) => setDraft(d => d && ({ ...d, [k]: v }));
 

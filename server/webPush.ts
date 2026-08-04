@@ -59,8 +59,29 @@ export function generateVapidKeys(): { publicKey: string; privateKey: string } {
   ecdh.generateKeys();
   return {
     publicKey: b64url(ecdh.getPublicKey()),
-    privateKey: b64url(ecdh.getPrivateKey()),
+    // PADDED. getPrivateKey() returns the scalar as a big-endian integer with
+    // leading zero bytes STRIPPED, so roughly 1 key in 256 comes back as 31
+    // bytes (measured: 19 of 3000). Storing a short key is silently fatal —
+    // see pad32.
+    privateKey: b64url(pad32(ecdh.getPrivateKey())),
   };
+}
+
+/** Left-pad a P-256 scalar to its full 32 bytes.
+ *
+ *  This is the whole bug. node strips leading zeros from the private scalar,
+ *  and the PKCS#8 template below declares a fixed 32-byte OCTET STRING — so a
+ *  31-byte key produces DER that OpenSSL rejects with
+ *  "asn1 encoding routines: not enough data".
+ *
+ *  The failure mode is nasty because VAPID keys are generated ONCE and stored:
+ *  an org unlucky enough to mint a short key would have every push fail forever,
+ *  with an ASN.1 error nobody would connect to notifications not arriving.
+ *  Caught by the 40-iteration loop in tests/unit/web-push.test.ts. */
+function pad32(b: Buffer): Buffer {
+  if (b.length === 32) return b;
+  if (b.length > 32) return b.subarray(b.length - 32);
+  return Buffer.concat([Buffer.alloc(32 - b.length), b]);
 }
 
 // ── HKDF (RFC 5869), the two-step form RFC 8291 uses ────────────────────────
@@ -92,7 +113,9 @@ function derToJose(der: Buffer): Buffer {
 function privateKeyFromRaw(rawPrivate: Buffer, rawPublic: Buffer) {
   const der = Buffer.concat([
     Buffer.from("308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420", "hex"),
-    rawPrivate,
+    // Padded here too, not just at generation: a key stored before this fix, or
+    // pasted in from elsewhere, must still sign rather than throw.
+    pad32(rawPrivate),
     Buffer.from("a144034200", "hex"),
     rawPublic,
   ]);

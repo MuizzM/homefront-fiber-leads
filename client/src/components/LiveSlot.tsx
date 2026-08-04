@@ -20,7 +20,7 @@ import {
   resolveLiveSlot, msLeft, countdownLabel, isUrgent,
   type LiveItem, type LiveKind,
 } from "@shared/liveSlot";
-import { usd } from "@shared/dailyUpside";
+import { usd } from "@shared/moneyFormat";
 
 const ICON: Record<LiveKind, typeof Flame> = {
   challenge: Timer,
