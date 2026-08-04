@@ -31,6 +31,7 @@ import {
   GraduationCap,
   Gift,
   LayoutGrid,
+  Zap,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -92,6 +93,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
   { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },
   { href: "/training",     label: "Training",     icon: GraduationCap,show: isFieldRole,                              group: "Field" },
+  { href: "/coach",        label: "Coach",        icon: Zap,          show: isFieldRole,                              group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
   { href: "/my-commission",label: "My commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
   { href: "/my-documents", label: "My documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },

@@ -16,7 +16,7 @@ import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { LiveSlot } from "@/components/LiveSlot";
 import { EarningsToday } from "@/components/EarningsToday";
 import { useLiveItems } from "@/hooks/useLiveItems";
-import {
+import { WarmupStrip } from "@/components/training/WarmupStrip";import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
 } from "@shared/knock";
@@ -252,6 +252,7 @@ export default function Today() {
             collapses the rest to one tappable line. */}
         <div className="mt-4 empty:mt-0" data-testid="today-campaign">
           <LiveSlot items={liveItems} />
+          <WarmupStrip />
         </div>
 
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}

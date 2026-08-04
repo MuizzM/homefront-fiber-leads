@@ -120,7 +120,13 @@ export async function apiRequest(
       });
       _inflightGets.set(key, shared);
       // Free the slot once settled so a later, genuinely-new request re-fetches.
-      shared.finally(() => { if (_inflightGets.get(key) === shared) _inflightGets.delete(key); });
+      // .then(onOk, onErr), NOT .finally: .finally's derived promise would
+      // itself reject UNHANDLED when the shared request fails (offline GET),
+      // which surfaces as unhandled-rejection noise in tests and consoles.
+      shared.then(
+        () => { if (_inflightGets.get(key) === shared) _inflightGets.delete(key); },
+        () => { if (_inflightGets.get(key) === shared) _inflightGets.delete(key); },
+      );
     }
     return (await shared).clone();
   }
@@ -228,6 +234,9 @@ export const PERSISTED_QUERY_KEYS = new Set<string>([
   "/api/stats/saas",
   "/api/stats",
   "/api/scan/first-seen-live",
+  // CE-2 coaching engine: the drill-card deck snapshot makes the whole
+  // coaching loop work offline after one warm visit.
+  "/api/training/deck",
 ]);
 
 const QUERY_CACHE_STORAGE_KEY = "hf-query-cache-v1";

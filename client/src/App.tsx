@@ -57,6 +57,7 @@ const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
 const ReadyToCall = lazy(() => import("@/pages/ReadyToCall"));
 const Training = lazy(() => import("@/pages/Training"));
+const Coach = lazy(() => import("@/pages/Coach"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
 const CallingLead = lazy(() => import("@/pages/CallingLead"));
 const CallingCompliance = lazy(() => import("@/pages/CallingCompliance"));
@@ -247,6 +248,9 @@ function AppRoutes() {
           {/* Training — D2D psychology & pitch curriculum. Every field role can
               study; the manager rollup inside the page is gated separately. */}
           <Route path="/training"><CapabilityGuard role={role} capability="field.app.use"><Training /></CapabilityGuard></Route>
+          {/* Coach — the field coaching engine (drill cards, field modes,
+              what-to-say-next). Same capability as the Training Library. */}
+          <Route path="/coach"><CapabilityGuard role={role} capability="field.app.use"><Coach /></CapabilityGuard></Route>
           {/* Legacy commission bookmarks now land in the role-appropriate,
               authoritative commission workspace. */}
           <Route path="/commissions">
