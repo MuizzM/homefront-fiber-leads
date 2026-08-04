@@ -136,6 +136,7 @@ import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
 import { registerComingSoonRoutes } from "./comingSoonWatchlist";
 import { registerLeadRankingRoutes } from "./leadRanking";
 import { registerKineticScannerRoutes } from "./kineticScannerRoutes";
+import { registerTrainingEngineRoutes } from "./trainingEngine";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -1162,6 +1163,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   registerPayRoutes(app, { requireAuth, requireCapability });
   // Manager-launched SPIFF contests — awards land in the existing spiffs ledger.
   registerSpiffCampaignRoutes(app, { requireAuth, requireCapability });
+  // CE-1 drill engine — due deck, review capture, coach summary. Lives under
+  // /api/training, so the training gate's allowlist already covers it.
+  registerTrainingEngineRoutes(app, { requireAuth });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle

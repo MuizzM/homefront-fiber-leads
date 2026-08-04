@@ -2416,6 +2416,46 @@ export function runMigrations() {
        company_id TEXT NOT NULL,
        updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
 
+    // ── CE-1 drill engine: card state + review log ───────────────────────────
+    // APPEND-ONLY at the END of this list to minimize merge conflicts with
+    // sibling lanes. Card ids come from shared/trainingCards.ts and are
+    // validated at the route before any write (same anti-junk rule as
+    // training_progress lesson ids). tenant_id is normalized to 0 for legacy
+    // users, matching the training_progress convention.
+    // One row per (tenant, user, card): the rep's ladder position.
+    `CREATE TABLE IF NOT EXISTS training_card_state (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL DEFAULT 0,
+       user_id INTEGER NOT NULL,
+       card_id TEXT NOT NULL,
+       rung INTEGER NOT NULL DEFAULT 0,
+       due_at TEXT,
+       last_grade TEXT,
+       reps INTEGER NOT NULL DEFAULT 0,
+       lapses INTEGER NOT NULL DEFAULT 0,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, user_id, card_id))`,
+    `CREATE INDEX IF NOT EXISTS idx_training_card_state_due
+       ON training_card_state(tenant_id, user_id, due_at)`,
+    // Append-only event log: powers the streak computation and the debrief.
+    // reviewed_at is the CLIENT clock (offline reviews keep their real time;
+    // the server never rewrites it); the dedupe index makes a replayed batch
+    // harmless — same card + same reviewed_at inserts once.
+    `CREATE TABLE IF NOT EXISTS training_review_log (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL DEFAULT 0,
+       user_id INTEGER NOT NULL,
+       card_id TEXT NOT NULL,
+       grade TEXT NOT NULL,
+       rung_before INTEGER NOT NULL,
+       rung_after INTEGER NOT NULL,
+       reviewed_at TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_training_review_log_user
+       ON training_review_log(tenant_id, user_id, reviewed_at)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_training_review_log_dedupe
+       ON training_review_log(tenant_id, user_id, card_id, reviewed_at)`,
+
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
