@@ -1,89 +1,76 @@
-# Deploying the HomeFront portal to Railway (→ portal.homefrontsolutionsllc.com)
+# Deploying the HomeFront portal → portal.homefrontsolutionsllc.com
 
-Stateful Node app (Express + SQLite + file uploads) → it needs one always-on
-instance with a **persistent volume**. Railway builds the included `Dockerfile`
-(which also runs **Litestream** for continuous off-site database backup) and
-reads `railway.json` for the health check + restart policy.
+> **This file used to describe a Railway deploy. That is not the infrastructure
+> this project runs on, and following it wastes an afternoon** — there is no
+> Railway service, no `railway.json`-driven build pipeline in use, and no `main`
+> branch to push to. It is kept as a pointer so nobody follows the old version
+> from a bookmark or a search result.
 
-## 1. Push the code to GitHub
-```bash
-git add -A && git commit -m "portal"
-git push -u origin main
-```
-`.env`, `data.db*`, `uploads/`, `node_modules/` are gitignored — secrets and
-local data stay off GitHub.
+Production is **Hetzner + Docker Compose + Caddy**, deployed by a manual,
+approval-gated GitHub Actions workflow over SSH. Nothing auto-deploys: pushing a
+branch — including the default branch — ships nothing.
 
-## 2. Create the service on Railway
-1. https://railway.app → **New Project → Deploy from GitHub repo** → pick this repo.
-2. Railway detects the `Dockerfile` and `railway.json` automatically.
-3. Service → **Settings → Volumes → Add volume**, mount path **`/data`** (1–5 GB).
-   This holds `data.db` + `uploads/` across every redeploy.
-
-## 3. Set environment variables (service → Variables)
-Copy values from your local `.env` (`.env.example` documents each one):
-
-| Variable | Value / note |
+| What | Where |
 |---|---|
-| `DATA_DIR` | `/data` (must match the volume mount) |
-| `APP_ORIGIN` | `https://portal.homefrontsolutionsllc.com` |
-| `MAPBOX_PUBLIC_TOKEN` | pk.… map token — **domain-restrict it, see §6** |
-| `MAPBOX_TOKEN` | sk.… geocoding token (server-only; optional if you don't run Mapbox harvests) |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | email for login codes — Resend SMTP works: host `smtp.resend.com`, user `resend`, pass = API key |
-| `SUPER_ADMIN_EMAILS` | your admin email(s), comma-separated |
-| `KFS_AUTOMATION_AUTHORIZED` | Enables the confirmed Kinetic token/search contract; defaults to disabled |
-| `SCANNER_SUBMIT_SECRET` / `PROXY_URL` | scanner + Decodo proxy (from local .env) |
-| `ENABLE_NIGHTLY_SCAN` | leave **unset** (nightly scan stays OFF — proxy costs money) |
-| `LITESTREAM_BUCKET` / `LITESTREAM_ENDPOINT` / `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | backups — see §5 |
+| Full setup + architecture | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) *(canonical)* |
+| The deploy workflow | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) |
+| What runs on the box | [`scripts/deploy.sh`](scripts/deploy.sh) |
+| Rollback / restore / DR | [`docs/INCIDENT_RUNBOOK.md`](docs/INCIDENT_RUNBOOK.md) |
+| DNS | [`docs/DNS.md`](docs/DNS.md) |
+| Every env var | [`.env.example`](.env.example) |
 
-`NODE_ENV=production` and `TRUST_PROXY` (defaults to `1` in production) are
-already handled; `PORT` is injected by Railway.
+When this file and `docs/` disagree, **`docs/` wins**.
 
-Deploy runs automatically. The health check `/api/health` gates each deploy —
-a broken build never replaces the live one.
+## Shipping a release
 
-## 4. First-run admin setup
-The production database starts **empty**. Open the app → first-run setup →
-create the admin account with the email from `SUPER_ADMIN_EMAILS`.
-To migrate your local data instead, see §8.
+The default branch is whatever GitHub reports (currently
+**`rep-knocking-workflow`**, not `main` or `master` — check before assuming).
+The workflow refuses any commit that is not an ancestor of it, and refuses any
+commit whose CI run has not succeeded for that **exact** SHA.
 
-## 5. Turn on backups (do this before real data goes in)
-1. Backblaze B2 → create bucket `hfs-portal-backup` (private).
-2. Create an **application key** scoped to that bucket.
-3. Set the four `LITESTREAM_*` variables in Railway (endpoint looks like
-   `https://s3.us-east-005.backblazeb2.com` — shown on the bucket page).
-4. Redeploy. Logs should show `[start] Litestream enabled`.
-
-From then on every change streams to B2 (~pennies/month). **Disaster recovery
-is automatic**: a fresh/empty volume restores itself from B2 on boot
-(`litestream restore -if-db-not-exists`). Point-in-time restore window: 72h.
-
-## 6. Lock down the Mapbox token 🔒
-Mapbox dashboard → the `pk.` token → **URL restrictions** →
-`https://portal.homefrontsolutionsllc.com` (and your Railway `*.up.railway.app`
-URL while testing). Scope: `styles:read` + `tiles:read` only — never geocoding.
-This is the #1 cost safeguard: a leaked restricted token is useless elsewhere.
-
-## 7. Attach the portal subdomain
-1. Railway service → **Settings → Networking → Custom Domain** →
-   `portal.homefrontsolutionsllc.com`. Railway shows a CNAME target.
-2. At your DNS: **CNAME** · name `portal` · value `<target>.up.railway.app`.
-3. HTTPS is issued automatically once DNS propagates.
-
-Then add the button on the main site:
-```html
-<a href="https://portal.homefrontsolutionsllc.com">Portal →</a>
-```
-
-## 8. (Optional) Migrate existing local data
-Easiest path: enable backups first (§5), then from this folder replicate your
-local DB straight into the bucket once:
 ```bash
-litestream replicate -config deploy/litestream.yml   # run briefly, Ctrl-C
-```
-…or ask and I'll walk the exact copy for your setup. A fresh deploy with an
-empty volume then restores that data automatically.
+# 1. Land the work on the default branch and let CI finish.
+git push origin <default-branch>
 
-## Redeploys
-Every push to `main` auto-deploys. `/data` (database + uploads) and the B2
-replica persist — no data is lost, and a failed health check keeps the old
-version serving.
+# 2. Deploy that exact commit (full 40-character SHA — nothing else is accepted).
+gh workflow run deploy.yml -f commit_sha=$(git rev-parse HEAD)
+
+# 3. Watch it.
+gh run watch "$(gh run list --workflow=deploy.yml --limit=1 --json databaseId --jq '.[0].databaseId')"
+```
+
+The box builds an image tagged with the SHA, keeps the old release serving
+during the build, cuts over behind a health check, and **auto-rolls-back to the
+previous SHA if health fails**. `scripts/rollback.sh` reverts manually.
+
+## The approval gate is not configured
+
+`deploy.yml` says, in its own header:
+
+> Production is deliberately manual. Configure the `production` environment with
+> required reviewers before adding its SSH secrets.
+
+The SSH secrets (`DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`,
+`DEPLOY_KNOWN_HOSTS`) **are** set. The `production` environment exists but has
+**no required reviewers**, so `gh workflow run deploy.yml` deploys straight to
+production with no second pair of eyes. Add reviewers under
+*Settings → Environments → production → Required reviewers* if you want the gate
+the workflow assumes you have.
+
+## Database
+
+SQLite on a persistent volume (`DATA_DIR`, `/data` on the box), with encrypted
+pre-release snapshots and scheduled offline backups
+(`scripts/backup-offline.sh`). Migrations run on boot and are **additive only**
+(`ADD COLUMN` / `CREATE ... IF NOT EXISTS`, idempotent). A destructive change is
+never automated — see the approval-gated procedure in
+[`docs/INCIDENT_RUNBOOK.md`](docs/INCIDENT_RUNBOOK.md).
+
+One-off maintenance scripts run on the box against that volume, e.g.:
+
+```bash
+DATA_DIR=/data npx tsx script/reset-areas.ts --tenant <id>
+```
+
+They should default to a dry run and take their own snapshot before writing —
+see [`script/reset-areas.ts`](script/reset-areas.ts) for the shape to copy.
