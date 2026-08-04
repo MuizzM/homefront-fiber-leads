@@ -235,6 +235,104 @@ export async function skipTraceLead(
   return { ownerName, phones };
 }
 
+/** Address key used to match a result row back to the lead that produced it.
+ *  Case/punctuation/whitespace-insensitive, because the provider echoes a
+ *  normalized form of what we sent rather than the exact string. */
+function addressKey(address: string, zip: string | undefined): string {
+  return `${address} ${zip ?? ""}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+export interface BatchSkipTraceLead extends SkipTraceInput {
+  leadId: number;
+}
+
+export interface BatchSkipTraceResult {
+  /** The trace queue, so the caller can scrubFromQueue() instead of
+   *  re-uploading every number it just received. */
+  traceQueueId: string;
+  byLeadId: Map<number, SkipTraceResult>;
+}
+
+/**
+ * Skip-trace MANY properties in one job.
+ *
+ * The API takes `records[]`, and an area is 100–250 doors. Tracing them one at
+ * a time means one queued job per door, each polled to completion — hours of
+ * wall clock and a separate job per address, when the provider is built to
+ * take the whole list at once. Same endpoint, same `trace_type: "advanced"`,
+ * same CSV; only the batching differs.
+ *
+ * Rows are matched back to leads by ADDRESS, not by a custom id column: the
+ * pilot found the results CSV can drop custom columns, which is the same
+ * lesson that produced scrubFromQueue. An unmatched row is discarded rather
+ * than guessed at — attaching a stranger's phone number to a door is far worse
+ * than returning none.
+ */
+export async function skipTraceLeads(
+  leads: BatchSkipTraceLead[],
+  opts: { nowMs?: () => number } = {},
+): Promise<BatchSkipTraceResult> {
+  const now = opts.nowMs ?? Date.now;
+  const byLeadId = new Map<number, SkipTraceResult>();
+  for (const lead of leads) byLeadId.set(lead.leadId, { ownerName: lead.ownerName ?? null, phones: [] });
+  if (leads.length === 0) return { traceQueueId: "", byLeadId };
+
+  const started = await api("/v1/api/trace/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      trace_type: "advanced",
+      records: leads.map(lead => ({
+        mail_address: lead.address,
+        city: lead.city,
+        state: lead.state,
+        zip: lead.zip ?? "",
+        first_name: "",
+        last_name: "",
+      })),
+    }),
+  });
+  const traceQueueId = String(started?.queue_id ?? started?.id ?? "");
+  if (!traceQueueId) throw new Error("Tracerfy trace returned no queue id");
+
+  const done = await pollQueue(`/v1/api/queue/${encodeURIComponent(traceQueueId)}`, now);
+  if (!done?.download_url) return { traceQueueId, byLeadId };
+
+  // Index the leads by address so each row lands on the right door.
+  const leadByAddress = new Map<string, BatchSkipTraceLead>();
+  for (const lead of leads) leadByAddress.set(addressKey(lead.address, lead.zip), lead);
+
+  const seenPerLead = new Map<number, Set<string>>();
+  for (const row of await downloadCsv(done.download_url)) {
+    const lead = leadByAddress.get(addressKey(row.mail_address ?? row.address ?? "", row.zip));
+    if (!lead) continue;
+    const result = byLeadId.get(lead.leadId)!;
+    const traced = [row.owner_name, row.first_name && row.last_name
+      ? `${row.first_name} ${row.last_name}` : null].find(v => (v ?? "").trim().length > 1);
+    if (traced && !(result.ownerName ?? "").trim()) result.ownerName = traced;
+
+    let seen = seenPerLead.get(lead.leadId);
+    if (!seen) { seen = new Set<string>(); seenPerLead.set(lead.leadId, seen); }
+    for (const [key, value] of Object.entries(row)) {
+      if (!/^phone[_ ]?\d*$/i.test(key) || !value) continue;
+      const e164 = normalizeUsPhone(value);
+      if (!e164 || seen.has(e164)) continue;
+      seen.add(e164);
+      const idx = key.replace(/\D/g, "");
+      const score = Number(row[`phone${idx}_score`] ?? row[`phone_score`] ?? "");
+      result.phones.push({
+        number: e164,
+        lineType: lineTypeOf(row[`phone${idx}_type`] ?? row.phone_type),
+        confidence: Number.isFinite(score) ? Math.max(0, Math.min(1, score > 1 ? score / 100 : score)) : 0.5,
+        dnc: true,                      // fails closed until scrubbed
+        dncSource: "unscreened",
+        scrubbedAtMs: null,
+      });
+    }
+  }
+  return { traceQueueId, byLeadId };
+}
+
 /**
  * DNC-scrub a list of numbers.
  *

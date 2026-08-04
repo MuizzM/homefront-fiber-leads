@@ -37,6 +37,8 @@ import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog"
 import { RepPicker } from "@/components/territory/RepPicker";
 import { AreaDeleteDialog } from "@/components/AreaDeleteDialog";
 import { can as roleCan } from "@shared/permissions";
+import { can as capCan } from "@shared/capabilities";
+import { AreaSkipTracePanel } from "@/components/area/AreaSkipTracePanel";
 import { repColorOf } from "@shared/repColors";
 import { shortDate, shortRep } from "@shared/territoryLabel";
 import {
@@ -51,7 +53,7 @@ import {
 // means the UI can never offer an action the API will reject.
 type TeamRow = { id: number; name: string; active?: boolean; color?: string | null };
 
-type TabId = "overview" | "passes" | "stats" | "doors" | "map";
+type TabId = "overview" | "passes" | "stats" | "doors" | "phones" | "map";
 
 const CHIP = "text-[10px] font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
 
@@ -76,6 +78,11 @@ export default function AreaDetail() {
   // /passes and /history are requireTeamLead routes. A rep asking for them gets
   // a 403, so we never ask: the tab and the pass chip simply are not theirs.
   const canSeePasses = canAssign;
+  // Gated on the SAME capability the Express middleware checks, so the tab and
+  // the button can never offer something the API will 403. Both land on
+  // team_lead+ (manager and admin inherit), which is who runs an area.
+  const canReadSkipTrace = capCan(role, "lead.skip_trace.read");
+  const canRunSkipTrace = capCan(role, "lead.skip_trace.request");
 
   const [tab, setTab] = useState<TabId>("overview");
   const [assignOpen, setAssignOpen] = useState(false);
@@ -232,6 +239,7 @@ export default function AreaDetail() {
     ...(canSeePasses ? [{ id: "passes" as TabId, label: "Passes & history" }] : []),
     { id: "stats", label: "Stats" },
     { id: "doors", label: "Doors" },
+    ...(canReadSkipTrace ? [{ id: "phones" as TabId, label: "Phones" }] : []),
     { id: "map", label: "Map" },
   ];
 
@@ -548,6 +556,10 @@ export default function AreaDetail() {
             </Link>
           </div>
         </section>
+      )}
+
+      {tab === "phones" && canReadSkipTrace && (
+        <AreaSkipTracePanel areaId={id} canRun={canRunSkipTrace} />
       )}
 
       {tab === "map" && (

@@ -193,11 +193,22 @@ export function evaluateCallingCompliance(input: ComplianceInput): ComplianceEva
     const internalDncOk = add("internal_dnc", !input.internalDnc && !input.tenantDnc, input.internalDnc ? "COMPANY_DNC_HIT" : "TENANT_DNC_HIT");
     const nationalOk = add("national_dnc", !input.nationalDnc, "NATIONAL_DNC_HIT", input.dncDatasetRef);
     const stateOk = add("state_dnc", !input.stateDnc, "STATE_DNC_HIT", input.dncDatasetRef);
+    // COVERAGE, not just hits — and the reason this exists: dncHit() answers
+    // `false` when there is no dataset at all (store.ts), so without this rule
+    // an organization holding ZERO DNC data was ELIGIBLE_MANUAL_CALL for every
+    // number. Simple mode evaluated the two *hit* rules above but never the
+    // freshness rules that full mode has, so absence of evidence read as
+    // evidence of absence. Full mode already fails closed here; this makes
+    // simple mode — which is the production default, since every check reads
+    // `!== "off"` and nothing but tests/setup.ts sets it — agree.
+    const screenedOk = add("dnc_screened", input.nationalDncFresh && input.stateDncFresh,
+      "PHONE_NOT_DNC_SCREENED", input.dncDatasetRef);
     const consentOk = add("consent_revocation", !input.consentRevoked, "CONSENT_REVOKED");
     if (!internalDncOk) return finishEarly("BLOCKED_INTERNAL_DNC");
     if (!consentOk) return finishEarly("BLOCKED_CONSENT_REVOKED");
     if (!nationalOk) return finishEarly("BLOCKED_NATIONAL_DNC");
     if (!stateOk) return finishEarly("BLOCKED_STATE_DNC");
+    if (!screenedOk) return finishEarly("BLOCKED_STALE_DNC_DATA");
     const gate = rules.find((rule) => !rule.passed);
     if (gate) return finishEarly("BLOCKED_TENANT_POLICY");
     return finishEarly("ELIGIBLE_MANUAL_CALL", true);

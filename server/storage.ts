@@ -788,6 +788,61 @@ export function runMigrations() {
     `ALTER TABLE lead_events ADD COLUMN idem_key TEXT`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_events_idem ON lead_events(lead_id, idem_key) WHERE idem_key IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_leads_assigned_territory ON leads(assigned_territory_id)`,
+    // ── Skip-traced contacts ────────────────────────────────────────────────
+    // What a Tracerfy trace + DNC scrub found for a door. One row per number.
+    //
+    // `scrubbed_at_ms` is the ONLY freshness record, and it is deliberately a
+    // timestamp rather than a dnc boolean: shared/tracerfy.ts derives the
+    // verdict from it against SCRUB_TTL_DAYS on every read, so a number whose
+    // scrub ages out flips back to blocked with nothing written. Storing a
+    // boolean would freeze a January answer into a permanent clearance.
+    // NULL means never scrubbed, which reads as blocked, not as clear.
+    `CREATE TABLE IF NOT EXISTS lead_traced_phones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER,
+      lead_id INTEGER NOT NULL,
+      number TEXT NOT NULL,
+      line_type TEXT,
+      confidence REAL NOT NULL DEFAULT 0,
+      dnc_flags TEXT,
+      scrubbed_at_ms INTEGER,
+      dnc_source TEXT,
+      traced_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_traced_phone_unique ON lead_traced_phones(lead_id, number)`,
+    `CREATE INDEX IF NOT EXISTS idx_traced_phone_lead ON lead_traced_phones(tenant_id, lead_id)`,
+    // Owner name from the trace. Kept separate from leads.owner_name, which the
+    // GIS/parcel enrichment owns — overwriting that would let a phone vendor
+    // silently rewrite property data.
+    `ALTER TABLE leads ADD COLUMN traced_owner_name TEXT`,
+    `ALTER TABLE leads ADD COLUMN traced_at TEXT`,
+    // ── Area skip-trace runs ────────────────────────────────────────────────
+    // The partial unique index is the concurrency control: a second run on the
+    // same area fails at the DB rather than in a read-then-write race that
+    // would double-spend. heartbeat_at lets the reaper tell a slow run from an
+    // abandoned one — the driver is an in-process promise, so a restart
+    // mid-run would otherwise wedge the area forever.
+    `CREATE TABLE IF NOT EXISTS area_skip_trace_runs (
+      id TEXT PRIMARY KEY,
+      tenant_id INTEGER,
+      territory_id INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      requested_by INTEGER,
+      eligible_leads INTEGER NOT NULL DEFAULT 0,
+      processed_leads INTEGER NOT NULL DEFAULT 0,
+      failed_leads INTEGER NOT NULL DEFAULT 0,
+      total_phones INTEGER NOT NULL DEFAULT 0,
+      dialable_phones INTEGER NOT NULL DEFAULT 0,
+      error_code TEXT,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_area_skip_trace_one_active
+      ON area_skip_trace_runs(tenant_id, territory_id) WHERE status IN ('queued','running')`,
+    `CREATE INDEX IF NOT EXISTS idx_area_skip_trace_recent
+      ON area_skip_trace_runs(tenant_id, territory_id, started_at DESC)`,
     // Offline knock queue idempotency — a retried flush with the same client_id
     // must return the existing row, never double-log. Partial unique index so all
     // legacy NULL rows stay untouched (SQLite treats NULLs as distinct anyway).

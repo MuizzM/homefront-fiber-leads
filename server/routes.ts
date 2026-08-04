@@ -139,6 +139,8 @@ import {
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
+import { registerAreaSkipTraceRoutes } from "./areaSkipTraceRoutes";
+import { tracedPhonesForLead } from "./areaSkipTrace";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
 import { registerComingSoonRoutes } from "./comingSoonWatchlist";
 import { registerLeadRankingRoutes } from "./leadRanking";
@@ -1149,6 +1151,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   registerAddressDiscoveryRoutes(app, { requireAuth, requireCapability, requireScanningAllowed });
   registerCallingRoutes(app, { requireAuth, requireCapability });
+  // Area skip trace reuses the SAME ownership rule as every other territory
+  // action, so a team lead can trace their own areas and nobody else's.
+  registerAreaSkipTraceRoutes(app, {
+    requireAuth,
+    requireCapability,
+    canManageArea: (req: any, territoryId: number) =>
+      canManageTerritory(req.user, storage.getTerritoryById(territoryId, req.user?.tenantId ?? undefined)),
+  });
   registerFiberOperationsRoutes(app, {
     requireAuth, requireCapability, requireScanningAllowed, scanAdmission: authorizedScanAdmission,
   });
@@ -2202,7 +2212,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!lead || (tid && lead.tenantId !== tid)) return res.status(404).json({ error: "Not found" });
     // Reps can only view leads assigned to them — 404 (not 403) to avoid leaking existence
     if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
-    res.json(stripProviderIds(lead, user));
+    // Skip-traced contacts ride along so the knock sheet and the map card can
+    // show WHO lives here and which numbers are dialable. `phones` carries the
+    // raw flags + scrub time, never a stored verdict — shared/tracerfy.ts
+    // derives that on the client, so a scrub that ages out re-blocks a number
+    // with nothing written anywhere.
+    const phones = tid ? tracedPhonesForLead(tid, lead.id) : [];
+    res.json({
+      ...stripProviderIds(lead, user),
+      ownerName: (lead as any).tracedOwnerName ?? (lead as any).ownerName ?? null,
+      phones,
+    });
   });
   // Team lead+ can create leads; manager+ can update status/delete
   // Helper to bust map pin cache after any lead mutation

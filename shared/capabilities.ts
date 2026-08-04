@@ -19,6 +19,11 @@ export type Capability =
   | "lead.read.assigned" | "lead.read.all"
   | "lead.assign" | "lead.reassign"
   | "lead.disposition.update" | "lead.note.write"
+  // Area skip trace. Deliberately lead-domain, NOT calling.*: team_lead and
+  // manager hold zero calling.* capabilities by design, so gating this on
+  // calling.enrichment.request would 403 exactly the roles that run areas —
+  // and granting them that capability would open the whole calling surface.
+  | "lead.skip_trace.request" | "lead.skip_trace.read"
   // Address discovery / field scans. Two tiers on purpose: submit starts a scan
   // and observes your OWN job with provider diagnostics redacted; manage sees
   // every job in the org unredacted and configures sources. Scanning begins at
@@ -81,6 +86,11 @@ const TEAM_LEAD: readonly Capability[] = [
   // MANAGER and no role holds one without the other, which makes that redaction
   // unreachable and quietly collapses the split.
   "scan.submit",
+  // Starting an area skip trace spends metered provider budget, so it sits
+  // with the other supervisory spend actions rather than with field work. NOT
+  // added to REP: these sets are unions, so a REP entry would grant it to
+  // every tier at once.
+  "lead.skip_trace.request", "lead.skip_trace.read",
 ];
 
 // A manager adds org-wide oversight reads AND the commission write surface
@@ -116,9 +126,14 @@ const CALLING_MANAGER: readonly Capability[] = [
 const COMPLIANCE_ADMIN: readonly Capability[] = [
   "dashboard.read.org", "audit.read.org", "calling.queue.read", "calling.lead.read",
   "calling.compliance.read", "calling.policy.manage", "calling.providers.manage", "calling.dnc.manage",
+  // Read-only: compliance must be able to review what a vendor screen decided
+  // without gaining the ability to spend budget starting one.
+  "lead.skip_trace.read",
 ];
 
-const AUDITOR: readonly Capability[] = ["dashboard.read.org", "audit.read.org", "calling.compliance.read"];
+const AUDITOR: readonly Capability[] = [
+  "dashboard.read.org", "audit.read.org", "calling.compliance.read", "lead.skip_trace.read",
+];
 
 export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   rep: new Set(REP),
@@ -171,6 +186,8 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "lead.read.all": "leads",
   "lead.disposition.update": "leads",
   "lead.note.write": "leads",
+  "lead.skip_trace.request": "leads",
+  "lead.skip_trace.read": "leads",
   "lead.assign": "assignments",
   "lead.reassign": "assignments",
   "scan.submit": "scanning",
@@ -210,6 +227,8 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
 // change ownership, expose org-wide data, or alter policy.
 export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   "lead.assign", "lead.reassign",
+  // Spends metered provider budget on an entire area in one action.
+  "lead.skip_trace.request",
   "commission.structure.manage", "commission.read.all",
   "commission.sales.write", "commission.adjustments.write", "commission.statements.write",
   "onboarding.documents.manage",

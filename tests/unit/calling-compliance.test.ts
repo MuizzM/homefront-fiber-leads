@@ -311,3 +311,56 @@ describe("calling consent evidence", () => {
     ]);
   });
 });
+
+// ── DNC coverage in SIMPLE mode ─────────────────────────────────────────────
+// Simple mode is the PRODUCTION default: every check reads
+// `process.env.CALLING_SIMPLE_MODE !== "off"`, and nothing but tests/setup.ts
+// ever sets it. It evaluated the national/state DNC *hit* rules but never the
+// *coverage* rules that full mode has — and store.dncHit() answers `false`
+// when there is no dataset. An organization holding zero DNC data was
+// therefore ELIGIBLE_MANUAL_CALL for every number it held.
+describe("DNC coverage in simple mode", () => {
+  /** Run under the production default, then restore the suite's "off" pin.
+   *  Without this the shipped code path is never exercised by any test here. */
+  function inSimpleMode(body: () => void): void {
+    const previous = process.env.CALLING_SIMPLE_MODE;
+    delete process.env.CALLING_SIMPLE_MODE;
+    try { body(); } finally {
+      if (previous === undefined) delete process.env.CALLING_SIMPLE_MODE;
+      else process.env.CALLING_SIMPLE_MODE = previous;
+    }
+  }
+
+  it("blocks a never-screened number — absence of evidence is not evidence of absence", () => {
+    inSimpleMode(() => {
+      const result = evaluateCallingCompliance(eligible({
+        nationalDncFresh: false, stateDncFresh: false,
+      }));
+      expect(result.eligible).toBe(false);
+      expect(result.decision).toBe("BLOCKED_STALE_DNC_DATA");
+      expect(result.reasonCodes).toContain("PHONE_NOT_DNC_SCREENED");
+    });
+  });
+
+  it("blocks when only one registry is current", () => {
+    inSimpleMode(() => {
+      expect(evaluateCallingCompliance(eligible({ stateDncFresh: false })).eligible).toBe(false);
+      expect(evaluateCallingCompliance(eligible({ nationalDncFresh: false })).eligible).toBe(false);
+    });
+  });
+
+  it("still allows a properly screened number", () => {
+    inSimpleMode(() => {
+      expect(evaluateCallingCompliance(eligible()).eligible).toBe(true);
+    });
+  });
+
+  it("evaluates every DNC rule, so a refactor cannot silently drop one", () => {
+    inSimpleMode(() => {
+      const names = new Set(evaluateCallingCompliance(eligible()).rules.map(rule => rule.rule));
+      for (const rule of ["internal_dnc", "national_dnc", "state_dnc", "dnc_screened"]) {
+        expect(names).toContain(rule);
+      }
+    });
+  });
+});

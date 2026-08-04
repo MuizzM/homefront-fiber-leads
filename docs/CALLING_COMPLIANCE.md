@@ -127,6 +127,26 @@ The legacy direct JSON import endpoint is disabled in production regardless of `
 
 The FTC's [TSR compliance guide](https://www.ftc.gov/business-guidance/resources/complying-telemarketing-sales-rule) is the federal baseline. The FTC's 2024 [recordkeeping guidance](https://www.ftc.gov/business-guidance/blog/2024/10/mark-your-calendars-telemarketers-sellers-october-15-telemarketing-sales-rules-record-store-day) describes five-year retention for relevant records, including call detail, service providers, DNC versions, and opt-outs. State rules may be stricter. For North Carolina, counsel should review [Chapter 75, Article 4](https://www.ncleg.gov/EnactedLegislation/Statutes/HTML/ByArticle/Chapter_75/Article_4.html) and the telephonic seller registration/exemption rules in [Chapter 66, Article 33](https://www.ncleg.gov/EnactedLegislation/Statutes/HTML/ByArticle/Chapter_66/Article_33.html).
 
+## Area skip trace (Tracerfy)
+
+An operator with `lead.skip_trace.request` (team lead and above) can trace one Area: `POST /api/areas/:areaId/tracerfy-run`, polled by `GET /api/areas/:areaId/tracerfy-run`, with results read through `GET /api/areas/:areaId/dialing-list`. The run traces every open door in one provider job, scrubs the results straight off that job's queue, and stores what came back.
+
+**This is a projection, not a gate.** The `dnc` a rep sees comes from `shared/tracerfy.ts`, which fails closed on `never_scrubbed` and `scrub_expired` (`SCRUB_TTL_DAYS = 25`, under the federal 31-day ceiling). `shared/calling.ts` remains the sole authority for placing a call. Nothing in the area path writes to `dnc_dataset_versions`, `dnc_suppressions`, `internal_dnc_entries` or `platform_dnc_entries` — a broker answer never acquires registry standing.
+
+**Storage keeps a TIME, not a verdict.** `lead_traced_phones` holds the number, line type, confidence, the raw `dnc_flags`, and `scrubbed_at_ms`. There is deliberately no `dnc` column: the verdict is derived on every read, so a number whose scrub ages out re-blocks itself with nothing written. A boolean would freeze a January answer into a permanent clearance. On a re-run the newer scrub time wins (`max`), so a failed scrub can never send a cleared number back to "never scrubbed".
+
+**Owner name.** Written to `leads.traced_owner_name`, never `leads.owner_name`, which the GIS/parcel enrichment owns — a phone vendor must not silently rewrite property data. The client renders `leadDisplayName`, which falls back to "Resident at …" and never invents a person.
+
+**Door selection.** Sold and already-customer doors are excluded. `already_customer` is *not* a `lead_status` — it persists as `lead_status='not_interested'` with `last_outcome='already_customer'`, so both columns are read, plus `last_call_outcome` and `do_not_knock`. A plain `not_interested` door IS included: a trace buys the owner's name, and the DNC rules govern the telephone, not the doorstep.
+
+**Spend and concurrency.** `AREA_SKIP_TRACE_ENABLED` must be exactly `"true"` and `TRACERFY_API_KEY` must be set, or the run refuses. `AREA_SKIP_TRACE_MAX_LEADS` (default 250) refuses a larger area with its count rather than silently tracing part of it. `uq_area_skip_trace_one_active` makes a concurrent run a database error, not a race. Doors go out in chunks of 100 so one provider failure is partial, not total, and a failed scrub still stores the numbers — as unscrubbed, therefore blocked.
+
+**Stranded runs.** The driver is an un-awaited in-process promise, so a deploy mid-run would leave the row `running` and the unique index would lock that area out permanently. Runs heartbeat after every chunk; `reconcileStrandedRuns` fails anything quiet for 45 minutes and runs on boot, hourly, and before each new run.
+
+**No new plaintext exit for the calling module.** The dialing list returns traced numbers for the FIELD surfaces — the same numbers the map card and knock sheet already show, rendered through the same `<LeadContacts>`, where a blocked number is inert and never a `tel:` link. It is stamped `advisory: true, authorizationRequired: true`. The Calling module's own reveal path (`attempts/start`, one-use token) is untouched.
+
+**Before enabling, confirm with counsel:** that the Tracerfy agreement permits area-wide batch skip tracing *and* use of the results for outbound telemarketing, and what the DNC data is derived from.
+
 ## Consent and revocation
 
 Consent is immutable evidence, not a checkbox on a call outcome. A record requires seller, organization, phone, service address, consumer identity (or the explicit value `unavailable`), consent type/channels/scope, disclosure version and text hash, capture time and timezone, method, source, affirmative action, immutable artifact reference, and either a signature reference or voice recording reference. Recorded-call consent always requires the recording reference. IP address and timestamp alone are not durable proof.

@@ -250,6 +250,11 @@ export const leads = sqliteTable("leads", {
   freshSources: text("fresh_sources"),
   // ── Lead Enrichment ───────────────────────────────────────────────────────
   ownerName: text("owner_name"),
+  // Owner name as a skip trace found it. Deliberately NOT owner_name, which the
+  // GIS/parcel enrichment owns — a phone vendor must not silently rewrite
+  // property data, and keeping them apart lets either be trusted on its own.
+  tracedOwnerName: text("traced_owner_name"),
+  tracedAt: text("traced_at"),
   ownerPhone: text("owner_phone"),
   ownerEmail: text("owner_email"),
   incomeRange: text("income_range"),        // e.g. "$45k–$60k"

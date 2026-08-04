@@ -692,6 +692,24 @@ app.use((req, res, next) => {
   purgeCallingProviderPayloads();
   const providerRetentionTimer = setInterval(purgeCallingProviderPayloads, 60 * 60 * 1_000);
   providerRetentionTimer.unref();
+  // An area skip-trace run is driven by an in-process promise, so a deploy or
+  // crash mid-run leaves its row active. The partial unique index that stops
+  // two concurrent runs would then lock that area out permanently. Reap on
+  // boot and hourly; a live run heartbeats every door, so a slow one survives.
+  const { reconcileStrandedRuns } = await import("./areaSkipTrace");
+  const reapStrandedSkipTraceRuns = () => {
+    try {
+      const reaped = reconcileStrandedRuns();
+      if (reaped > 0) structuredLog("calling.area_skip_trace_runs_reaped", { reaped });
+    } catch (error) {
+      structuredLog("calling.area_skip_trace_reap_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  if (!IS_CLUSTER_WORKER) reapStrandedSkipTraceRuns();
+  const skipTraceReaperTimer = setInterval(reapStrandedSkipTraceRuns, 60 * 60 * 1_000);
+  skipTraceReaperTimer.unref();
   const { verifyCallingAuditIntegrity } = await import("./calling/store");
   const verifyCallingAuditChain = () => {
     try {
