@@ -933,7 +933,14 @@ export default function MapView() {
   // feedback, so add mode never shows a spinner or "finding…" phase.)
   const [lassoPoints, setLassoPoints] = useState<[number, number][]>([]);
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
-  const [lassoRepId, setLassoRepId] = useState("");
+  const [lassoRepId, setLassoRepId] = useState("");        // "Change Ownership" — one rep, one bulk move
+  // The AREA crew, in pick order: the first is the primary. Separate from
+  // lassoRepId above because they answer different questions — "hand this
+  // selection to somebody" is one rep by definition, "who walks this ground"
+  // is not.
+  const [lassoRepIds, setLassoRepIds] = useState<number[]>([]);
+  const toggleLassoRep = (repId: number) =>
+    setLassoRepIds((prev) => (prev.includes(repId) ? prev.filter((r) => r !== repId) : [...prev, repId]));
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
   // Areas under an overlapping tap, awaiting "which one did you mean?".
   const [territoryPickIds, setTerritoryPickIds] = useState<number[]>([]);
@@ -1225,35 +1232,39 @@ export default function MapView() {
   const assignAreaMutation = useMutation({
     mutationFn: async ({
       polygon,
-      repId,
+      repIds,
       name,
       color,
     }: {
       polygon: [number, number][];
-      repId: number;
+      /** The COMPLETE crew, primary first — an area can be walked by several
+       *  reps, and this is the call that creates it. */
+      repIds: number[];
       name?: string;
       color?: string;
     }) => {
       const res = await apiRequest("POST", "/api/territories/assign-area", {
         polygon,
-        repId,
+        repIds,
         ...(name?.trim() ? { name: name.trim() } : {}),
         // The colour chosen before the stroke. Omitted rather than sent empty so
         // the server's own default still applies for a caller that never picked.
         ...(color ? { color } : {}),
       });
-      return res.json();
+      return res.json() as Promise<{ assigned: number; repNames?: string[]; territory: { repId: number } }>;
     },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["/api/territories"] });
       qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      const repName =
-        team.find((m: TeamMember) => m.id === data.territory?.repId)?.name ??
-        "rep";
+      // Name everyone who just got the ground, not only the primary.
+      const names = data.repNames?.length
+        ? data.repNames
+        : [team.find((m: TeamMember) => m.id === data.territory?.repId)?.name ?? "rep"];
+      const who = names.length > 2 ? `${names[0]} +${names.length - 1}` : names.join(" and ");
       toast({
-        title: `${data.assigned} leads assigned to ${repName} · territory saved`, severity: "success",
+        title: `${data.assigned} leads assigned to ${who} · territory saved`, severity: "success",
       });
       exitLasso();
     },
@@ -1401,15 +1412,33 @@ export default function MapView() {
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  // The map's two-tap delete. It shares the server default with the Area
+  // Console's dialog (repAssignments=clear — the doors lose the area AND the rep
+  // the area granted them), sent explicitly so the two surfaces can never drift
+  // apart on the strength of a default. The map has no room for the keep/clear
+  // choice; that lives in AreaDeleteDialog, on the Areas pages.
   const deleteTerritoryMutation = useMutation({
     mutationFn: async (id: number) => {
-      const res = await apiRequest("DELETE", `/api/territories/${id}`);
-      return res.json();
+      const res = await apiRequest("DELETE", `/api/territories/${id}?repAssignments=clear`);
+      return res.json() as Promise<{ detached: number; repCleared: number; clearedRepNames: string[] }>;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ["/api/territories"] });
       qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      // The doors just changed hands. Without these the map keeps painting them
+      // in the departed rep's colour until something else forces a refetch.
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      const freed = result?.repCleared ?? 0;
+      toast({
+        title: "Area deleted",
+        description: freed > 0
+          ? `${freed} ${freed === 1 ? "door" : "doors"} unassigned from ${result.clearedRepNames?.join(", ") || "their rep"}.`
+          : `${result?.detached ?? 0} ${result?.detached === 1 ? "door" : "doors"} went back to no area.`,
+        severity: "success",
+      });
     },
+    onError: (e: any) => toast({ title: e?.message ?? "Couldn't delete the area", variant: "destructive" }),
   });
 
   // Territory selected by tapping its region on the map → detail panel
@@ -1611,6 +1640,7 @@ export default function MapView() {
     setLassoPoints([]);
     setLassoSelected([]);
     setLassoRepId("");
+    setLassoRepIds([]);
     setLassoName("");
     setLassoDisabled(new Set());
     setLassoAction("area");
@@ -7254,8 +7284,12 @@ export default function MapView() {
                           maxLength={60}
                           data-testid="lasso-area-name"
                           placeholder={
-                            lassoRepId
-                              ? `"${team.find((m) => m.id === Number(lassoRepId))?.name ?? "Rep"}'s area"`
+                            // Mirrors the server's auto-name so the field shows
+                            // what will actually be saved if left blank.
+                            lassoRepIds.length
+                              ? lassoRepIds.length === 1
+                                ? `"${team.find((m) => m.id === lassoRepIds[0])?.name ?? "Rep"}'s area"`
+                                : `"${team.find((m) => m.id === lassoRepIds[0])?.name ?? "Rep"} +${lassoRepIds.length - 1}"`
                               : "Area name…"
                           }
                           className="h-11 w-full rounded-lg bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/55 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
@@ -7300,43 +7334,60 @@ export default function MapView() {
                         </div>
                       </div>
 
+                      {/* The crew. An area is many-to-many everywhere else in
+                          the product, but this — the control that CREATES one —
+                          could only ever name one rep, so a two-person patch had
+                          to be drawn and then shared as a second step. Tap to
+                          add, tap again to drop; the first pick is the primary
+                          (it drives the auto-name and the doors' rep). */}
                       <div className="flex flex-col gap-1.5">
-                        <label
-                          htmlFor="lasso-area-rep-input"
+                        <span
+                          id="lasso-area-rep-label"
                           className="text-[11px] font-semibold uppercase tracking-wide text-white/60"
                         >
-                          Assign to rep
-                        </label>
-                        <select
-                          id="lasso-area-rep-input"
-                          value={lassoRepId}
-                          onChange={(e) => setLassoRepId(e.target.value)}
-                          data-testid="lasso-area-rep-select"
-                          className="h-11 w-full rounded-lg bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                          Assign to {lassoRepIds.length > 1 ? `${lassoRepIds.length} reps` : "rep"}
+                        </span>
+                        <div
+                          role="group"
+                          aria-labelledby="lasso-area-rep-label"
+                          data-testid="lasso-area-rep-picker"
+                          className="flex flex-wrap gap-1.5"
                         >
-                          <option value="" className="text-slate-900">
-                            Rep…
-                          </option>
-                          {team
-                            .filter((m) => m.active)
-                            .map((m: TeamMember) => (
-                              <option
+                          {team.filter((m) => m.active).map((m: TeamMember) => {
+                            const idx = lassoRepIds.indexOf(m.id);
+                            const on = idx >= 0;
+                            return (
+                              <button
                                 key={m.id}
-                                value={m.id}
-                                className="text-slate-900"
+                                type="button"
+                                aria-pressed={on}
+                                disabled={assignAreaMutation.isPending}
+                                data-testid={`lasso-area-rep-${m.id}`}
+                                onClick={() => toggleLassoRep(m.id)}
+                                className={`inline-flex h-11 items-center gap-1.5 rounded-full border px-3 text-[12px] font-semibold transition disabled:opacity-40 ${
+                                  on
+                                    ? "border-teal-400 bg-teal-500/25 text-white"
+                                    : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+                                } ${FOCUS}`}
                               >
                                 {m.name}
-                              </option>
-                            ))}
-                        </select>
+                                {idx === 0 && lassoRepIds.length > 1 && (
+                                  <span className="rounded-full bg-teal-400/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide">
+                                    1st
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
 
                       <Button
-                        disabled={!lassoRepId || assignAreaMutation.isPending}
+                        disabled={!lassoRepIds.length || assignAreaMutation.isPending}
                         onClick={() =>
                           assignAreaMutation.mutate({
                             polygon: lassoPoints,
-                            repId: Number(lassoRepId),
+                            repIds: lassoRepIds,
                             name: lassoName,
                             color: lassoColor,
                           })

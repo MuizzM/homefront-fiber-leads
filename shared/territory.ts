@@ -104,6 +104,11 @@ export function territoryUnassigned(
 // the rep's territories already in an active-like status (active/shared).
 export const MAX_ACTIVE_AREAS_PER_REP = 5;
 
+// Upper bound on the crew for ONE area. Not a product rule so much as a sanity
+// wall: assignee_ids is a JSON array read on every visibility check, and an area
+// with fifty reps on it is a mis-click or a script, not a patch anyone walks.
+export const MAX_AREA_ASSIGNEES = 12;
+
 export function canRepTakeAnotherArea(currentActiveCount: number, max = MAX_ACTIVE_AREAS_PER_REP): boolean {
   return currentActiveCount < max;
 }
@@ -210,4 +215,92 @@ export function unassignRep(state: TerritoryState, repId: number, opts: Unassign
     leads,
     history: [...state.history, { at: opts.at, action: `unassign:${repId}`, actorId: opts.actorId, from }],
   };
+}
+
+// ── Deleting an area — what happens to the doors inside it ───────────────────
+//
+// THE RULE: deleting an area unassigns EVERY door in it — from whoever holds
+// it, one rep or five, however that rep came to hold it. The area link goes and
+// the rep goes with it, and the doors land in the pool ready to be handed out
+// again.
+//
+// Deleting used to keep the rep unconditionally, which is the bug this fixes: an
+// area handed to a rep and then deleted left every door inside it still assigned
+// to them, still on their dialing list, still counting toward their stats, with
+// nothing left on screen to explain why.
+//
+// An earlier draft narrowed this to "reps the area granted" — holders, past
+// holders, the primary marker — so a door handed to somebody directly would
+// survive. That is a distinction the person deleting the area cannot see and did
+// not ask for. Deleting an area is a statement about the GROUND, and the doors
+// on that ground stop being anybody's. One rule, no exceptions to explain.
+//
+// `keep` is the documented escape hatch for "we deleted the outline but the crew
+// keeps the work" — see AreaDeleteDialog, which asks.
+
+export type AreaDeleteRepPolicy = "clear" | "keep";
+
+/** Clearing is the default: an area's grant should not outlive the area. */
+export const DEFAULT_AREA_DELETE_REP_POLICY: AreaDeleteRepPolicy = "clear";
+
+/**
+ * Read the caller's choice. Absent → the default; anything unrecognised → null,
+ * so a typo ("keeep") is a 400 rather than a silent mass unassign.
+ */
+export function parseAreaDeleteRepPolicy(value: unknown): AreaDeleteRepPolicy | null {
+  if (value === undefined || value === null || value === "") return DEFAULT_AREA_DELETE_REP_POLICY;
+  return value === "clear" || value === "keep" ? value : null;
+}
+
+/**
+ * Everyone this area is, or ever was, held by — current holders, the
+ * primary-owner marker, and the reassignment history. Deduped, order-stable.
+ *
+ * NOT the delete rule (that clears every rep, holder or not). This is who the
+ * AREA belonged to, for the audit trail and for "who loses access" copy.
+ */
+export function areaGrantedRepIds(
+  territory: { repId?: number | null; assigneeIds?: unknown; pastAssigneeIds?: unknown },
+): number[] {
+  const ids = [
+    ...(parseAssigneeIds(territory.assigneeIds) ?? []),
+    ...(parseAssigneeIds(territory.pastAssigneeIds) ?? []),
+    ...(typeof territory.repId === "number" ? [territory.repId] : []),
+  ].filter((id) => Number.isInteger(id) && id > 0);
+  return Array.from(new Set(ids));
+}
+
+/**
+ * Predicate form of the rule, for ONE door. The set-based UPDATE in
+ * scanIntelStore.releaseTerritoryLeads is the same rule in SQL
+ * (`assigned_rep_id IS NOT NULL`); a test pins the two together so a change to
+ * one that isn't made to the other fails.
+ */
+export function areaDeleteClearsRep(
+  lead: TerritoryLeadRef,
+  policy: AreaDeleteRepPolicy = DEFAULT_AREA_DELETE_REP_POLICY,
+): boolean {
+  if (policy === "keep") return false;
+  return lead.assignedRepId != null;
+}
+
+/**
+ * The whole area's doors after the delete. PURE — never mutates `leads`.
+ * `repIdsCleared` is the list a manager reads in the toast and the audit row:
+ * "84 doors disassociated from Talal and Bo".
+ */
+export function planAreaDeleteLeads(
+  leads: readonly TerritoryLeadRef[],
+  policy: AreaDeleteRepPolicy = DEFAULT_AREA_DELETE_REP_POLICY,
+): { leads: TerritoryLeadRef[]; repCleared: number; repIdsCleared: number[] } {
+  const cleared: number[] = [];
+  let repCleared = 0;
+  const next = leads.map((l) => {
+    if (!areaDeleteClearsRep(l, policy)) return { ...l };
+    const rep = l.assignedRepId as number;
+    if (!cleared.includes(rep)) cleared.push(rep);
+    repCleared++;
+    return { ...l, assignedRepId: null };
+  });
+  return { leads: next, repCleared, repIdsCleared: cleared };
 }

@@ -209,6 +209,11 @@ export function detachTerritoryLeads(territoryId: number): number {
   return clearTerritoryFromLeads(territoryId);
 }
 
+// The full delete-time release: drops the area link AND, for the doors the area
+// itself granted, the rep with it. See @shared/territory (areaGrantedRepIds,
+// areaDeleteClearsRep) for which doors those are and why.
+export { releaseTerritoryLeads, type TerritoryReleaseResult } from "./scanIntelStore";
+
 function clampBudget(n: number): number {
   const b = Math.floor(Number(n));
   if (!Number.isFinite(b) || b <= 0) return 0;

@@ -236,6 +236,26 @@ export function reconcileStrandedRuns(tenantId?: number, territoryId?: number): 
     WHERE ${where.join(" AND ")}`).run(...params).changes;
 }
 
+/**
+ * Close out every live run for an area that is going away.
+ *
+ * A run is driven by an un-awaited in-process promise reading
+ * `assigned_territory_id = <area>`. Deleting the area NULLs that column, so the
+ * driver's remaining chunks find nothing — but the ROW stays 'running' forever:
+ * the stranded-run reaper only touches rows past the stale window, and until
+ * then the partial unique index still counts it as an active run. Marking it
+ * here means the delete leaves no run in a state anything downstream reads as
+ * live. Returns how many were closed.
+ */
+export function cancelAreaSkipTraceRuns(territoryId: number, tenantId?: number): number {
+  const where = ["status IN ('queued','running')", "territory_id=?"];
+  const params: unknown[] = [territoryId];
+  if (tenantId != null) { where.push("(tenant_id IS NULL OR tenant_id=?)"); params.push(tenantId); }
+  return rawDb.prepare(`UPDATE area_skip_trace_runs
+    SET status='failed',error_code='AREA_DELETED',finished_at=datetime('now')
+    WHERE ${where.join(" AND ")}`).run(...params).changes;
+}
+
 export class AreaSkipTraceError extends Error {
   constructor(message: string, readonly status: number, readonly code: string, readonly detail?: unknown) {
     super(message);

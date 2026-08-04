@@ -20,7 +20,7 @@ import { Link, useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   ArrowLeft, DoorOpen, Hand, BadgeDollarSign, CalendarClock, Map as MapIcon,
-  MapPinned, RotateCcw, Trash2, UserMinus, UserCog, ShieldCheck, AlertTriangle, Ban,
+  MapPinned, RotateCcw, Trash2, UserMinus, UserPlus, UserCog, ShieldCheck, AlertTriangle, Ban,
   Ruler, History, Loader2, SearchX, type LucideIcon,
 } from "lucide-react";
 
@@ -42,7 +42,7 @@ import { AreaSkipTracePanel } from "@/components/area/AreaSkipTracePanel";
 import { repColorOf } from "@shared/repColors";
 import { shortDate, shortRep } from "@shared/territoryLabel";
 import {
-  areaStatusMeta, initialsOf, isNotFoundError, isPoolArea,
+  areaHolders, areaStatusMeta, initialsOf, isNotFoundError, isPoolArea,
   type AreaHistoryEvent, type AreaPassesResponse, type AreaProgressRow,
 } from "@/lib/areaProgress";
 
@@ -88,6 +88,11 @@ export default function AreaDetail() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [nextPassOpen, setNextPassOpen] = useState(false);
   const [pickedRepId, setPickedRepId] = useState<number | null>(null);
+  // Crew editing. `confirmRemoveId` arms one rep's Remove; `removingRepId` is
+  // which one is in flight, so only that row spins.
+  const [addRepOpen, setAddRepOpen] = useState(false);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<number | null>(null);
+  const [removingRepId, setRemovingRepId] = useState<number | null>(null);
 
   const progressQuery = useQuery<AreaProgressRow>({
     queryKey: [`/api/territories/${id}/progress`],
@@ -107,7 +112,8 @@ export default function AreaDetail() {
 
   const teamQuery = useQuery<TeamRow[]>({
     queryKey: ["/api/team"],
-    enabled: canAssign && (assignOpen || nextPassOpen),
+    // Also for "Add a rep" on the crew card — without it the picker opens empty.
+    enabled: canAssign && (assignOpen || nextPassOpen || addRepOpen),
   });
   const reps = useMemo(
     () => (teamQuery.data ?? []).filter(m => m.active !== false).map(m => ({ id: m.id, name: m.name, color: m.color })),
@@ -148,17 +154,51 @@ export default function AreaDetail() {
     }),
   });
 
+  // Take ONE rep off the area. The server releases their doors inside it and
+  // leaves the doors in the area for whoever is left, so this is "off the crew",
+  // not "the area is over".
   const unassignMutation = useMutation({
     mutationFn: async (repId: number) => {
       const res = await apiRequest("POST", `/api/territories/${id}/unassign`, { repId });
+      return res.json() as Promise<{ leadsReleased: number; assigneeIds: number[] }>;
+    },
+    onSuccess: (data, repId) => {
+      setRemovingRepId(null);
+      invalidateArea();
+      const name = (area && areaHolders(area).find(h => h.id === repId)?.name) ?? "That rep";
+      const n = data?.leadsReleased ?? 0;
+      toast({
+        title: `${name} removed from this area`,
+        description: n > 0
+          ? `${n} ${n === 1 ? "door" : "doors"} went back to the pool.`
+          : "They had no doors in it.",
+        severity: "success",
+      });
+    },
+    onError: (e: any) => {
+      setRemovingRepId(null);
+      toast({
+        title: "Couldn't remove the rep from this area",
+        description: String(e?.message ?? e).slice(0, 160),
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Add a rep. /share takes the COMPLETE holder set, so the caller sends who
+  // should be on it afterwards — the same contract the map's assignee bar uses.
+  const shareMutation = useMutation({
+    mutationFn: async (repIds: number[]) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/share`, { repIds });
       return res.json();
     },
     onSuccess: () => {
+      setAddRepOpen(false);
       invalidateArea();
-      toast({ title: "Rep removed from this area", severity: "success" });
+      toast({ title: "Added to this area", severity: "success" });
     },
     onError: (e: any) => toast({
-      title: "Couldn't remove the rep from this area",
+      title: "Couldn't add that rep",
       description: String(e?.message ?? e).slice(0, 160),
       variant: "destructive",
     }),
@@ -232,7 +272,9 @@ export default function AreaDetail() {
   const currentPass = passesQuery.data?.currentPass;
   const lastPass = passesQuery.data?.passes?.[0] ?? null;
   const dot = area.color || repColorOf({ id: area.repId, color: null });
-  const ownerName = pool ? null : area.repName;
+  // The whole crew, primary first. One source for the header line, the card and
+  // the remove control, so they cannot disagree about who is on this ground.
+  const holders = areaHolders(area);
 
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: "overview", label: "Overview" },
@@ -288,12 +330,15 @@ export default function AreaDetail() {
             {pool ? "Assign" : "Re-assign"}
           </button>
         )}
-        {canAssign && !pool && area.repId != null && (
+        {/* Only for a one-rep area: "Unassign Bo" is unambiguous there. On a
+            crew it would beg the question WHICH rep, so removal moves to the
+            per-rep control on the card below. */}
+        {canAssign && !pool && holders.length === 1 && area.repId != null && (
           <button
             type="button"
             data-testid="area-action-unassign"
             disabled={unassignMutation.isPending}
-            onClick={() => unassignMutation.mutate(area.repId as number)}
+            onClick={() => { setRemovingRepId(area.repId as number); unassignMutation.mutate(area.repId as number); }}
             className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70 disabled:opacity-50", FOCUS)}
           >
             {unassignMutation.isPending
@@ -365,7 +410,11 @@ export default function AreaDetail() {
             <div className="min-w-0 flex-1">
               <SectionLabel>Current assignment</SectionLabel>
               <div className="mt-1 text-2xl font-bold tracking-tight text-foreground" data-testid="area-hero-value">
-                {pool ? meta.label : `${meta.label} to ${area.repName}`}
+                {pool
+                  ? meta.label
+                  : `${meta.label} to ${holders.length > 2
+                      ? `${holders[0].name} +${holders.length - 1}`
+                      : holders.map(h => h.name).join(" and ") || area.repName}`}
               </div>
               <p className="mt-1 text-[13px] text-muted-foreground">{meta.blurb}</p>
             </div>
@@ -386,9 +435,14 @@ export default function AreaDetail() {
             </div>
           </div>
 
-          {/* Owner */}
+          {/* ── Who works this area ──────────────────────────────────────────
+              An area is many-to-many everywhere else in the product; this card
+              used to print exactly one name, so a crew read as one rep's ground
+              and there was no way to take somebody off it from the Area tab.
+              Removal is per-rep and two-step: dropping a rep hands their doors
+              back, so a mis-tap costs someone their working queue. */}
           <div className="rounded-2xl border border-border bg-card p-4" data-testid="area-owner">
-            <SectionLabel>Owner</SectionLabel>
+            <SectionLabel>{holders.length > 1 ? `Who works this area · ${holders.length} reps` : "Owner"}</SectionLabel>
             {pool ? (
               <div className="mt-2 flex items-center gap-3" data-testid="area-owner-empty">
                 <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-dashed border-border text-muted-foreground" aria-hidden="true">
@@ -402,22 +456,111 @@ export default function AreaDetail() {
                 </div>
               </div>
             ) : (
-              <div className="mt-2 flex items-center gap-3">
-                <span
-                  data-testid="area-owner-avatar"
-                  aria-hidden="true"
-                  style={{ borderColor: repColorOf({ id: area.repId, color: null }) }}
-                  className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 text-[13px] font-bold text-foreground"
-                >
-                  {initialsOf(ownerName)}
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-foreground" data-testid="area-owner-name">{area.repName}</div>
-                  <div className="text-[13px] text-muted-foreground">
-                    Assigned rep{currentPass != null ? ` · working pass ${currentPass}` : ""}
-                  </div>
-                </div>
+              <ul className="mt-2 space-y-1.5" data-testid="area-owner-list">
+                {holders.map((h, i) => {
+                  const arming = confirmRemoveId === h.id;
+                  const busy = unassignMutation.isPending && removingRepId === h.id;
+                  return (
+                    <li key={h.id} className="flex items-center gap-3" data-testid={`area-holder-${h.id}`}>
+                      <span
+                        data-testid={i === 0 ? "area-owner-avatar" : `area-holder-avatar-${h.id}`}
+                        aria-hidden="true"
+                        style={{ borderColor: repColorOf({ id: h.id, color: null }) }}
+                        className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 text-[13px] font-bold text-foreground"
+                      >
+                        {initialsOf(h.name)}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className="truncate text-sm font-semibold text-foreground"
+                          {...(i === 0 ? { "data-testid": "area-owner-name" } : {})}
+                        >
+                          {h.name}
+                        </div>
+                        <div className="text-[13px] text-muted-foreground">
+                          {holders.length > 1 && i === 0 ? "Primary" : "Assigned rep"}
+                          {currentPass != null ? ` · working pass ${currentPass}` : ""}
+                        </div>
+                      </div>
+                      {canAssign && (
+                        arming ? (
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            <button
+                              type="button"
+                              data-testid={`area-holder-remove-confirm-${h.id}`}
+                              disabled={unassignMutation.isPending}
+                              onClick={() => { setConfirmRemoveId(null); setRemovingRepId(h.id); unassignMutation.mutate(h.id); }}
+                              className={cn("min-h-11 rounded-xl bg-destructive px-3 text-[13px] font-semibold text-destructive-foreground disabled:opacity-50", FOCUS)}
+                            >
+                              {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : "Remove"}
+                            </button>
+                            <button
+                              type="button"
+                              data-testid={`area-holder-remove-cancel-${h.id}`}
+                              onClick={() => setConfirmRemoveId(null)}
+                              className={cn("min-h-11 rounded-xl border border-border px-3 text-[13px] font-semibold text-foreground", FOCUS)}
+                            >
+                              Keep
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`area-holder-remove-${h.id}`}
+                            aria-label={`Remove ${h.name} from this area`}
+                            disabled={unassignMutation.isPending}
+                            onClick={() => setConfirmRemoveId(h.id)}
+                            className={cn("inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3 text-[13px] font-semibold text-foreground transition-colors hover:bg-secondary/70 disabled:opacity-50", FOCUS)}
+                          >
+                            <UserMinus className="h-4 w-4" aria-hidden="true" />
+                            Remove
+                          </button>
+                        )
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {canAssign && !pool && (
+              <div className="mt-3 border-t border-border pt-3">
+                {addRepOpen ? (
+                  <>
+                    <RepPicker
+                      label="Add a rep to this area"
+                      disabled={shareMutation.isPending}
+                      reps={reps.filter(r => !holders.some(h => h.id === r.id))}
+                      onChange={(repId) => shareMutation.mutate([...holders.map(h => h.id), repId])}
+                    />
+                    <button
+                      type="button"
+                      data-testid="area-add-rep-cancel"
+                      onClick={() => setAddRepOpen(false)}
+                      disabled={shareMutation.isPending}
+                      className={cn("mt-2 min-h-11 w-full rounded-xl border border-border bg-secondary text-[13px] font-semibold text-foreground disabled:opacity-50", FOCUS)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="area-add-rep"
+                    onClick={() => setAddRepOpen(true)}
+                    className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-dashed border-border px-3.5 text-[13px] font-semibold text-muted-foreground transition-colors hover:border-solid hover:bg-secondary hover:text-foreground", FOCUS)}
+                  >
+                    <UserPlus className="h-4 w-4" aria-hidden="true" />
+                    Add a rep
+                  </button>
+                )}
               </div>
+            )}
+
+            {canAssign && !pool && (
+              <p className="mt-2 text-[12px] leading-snug text-muted-foreground" data-testid="area-holder-note">
+                Removing a rep takes this area out of their app and hands their doors in it back — the doors stay in the area for whoever is left.
+              </p>
             )}
           </div>
 

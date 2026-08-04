@@ -119,3 +119,34 @@ describe("Areas index", () => {
     expect(screen.queryByTestId("areas-grid")).toBeNull();
   });
 });
+
+// ── The crew, on the card ───────────────────────────────────────────────────
+// The card printed one name for ground that can be walked by several reps, so a
+// shared area read as one rep's.
+describe("Areas index — who works each area", () => {
+  it("names every holder on a shared area, not just the primary", async () => {
+    renderPage([row({ id: 4, name: "Shared patch", status: "shared", repId: 5, repName: "Bo Rivera",
+      repIds: [5, 6], repNames: ["Bo Rivera", "Talal Rep"] })]);
+    expect(await screen.findByTestId("area-card-4-rep")).toHaveTextContent("Bo Rivera · Talal Rep");
+  });
+
+  it("counts past two rather than overflowing the card", async () => {
+    renderPage([row({ id: 4, status: "shared", repIds: [5, 6, 7], repNames: ["Bo", "Talal", "Cam"] })]);
+    const cell = await screen.findByTestId("area-card-4-rep");
+    expect(cell).toHaveTextContent("Bo +2");
+    // The full list stays reachable rather than being lost to the truncation.
+    expect(cell).toHaveAttribute("title", "Bo, Talal, Cam");
+  });
+
+  it("still says Unassigned for a pool area, even one with a stale holder list", async () => {
+    // repId keeps naming the LAST rep after a reclaim — reading it as a holder
+    // is how a reclaimed area gets handed back to whoever it was taken from.
+    renderPage([row({ id: 4, status: "unassigned", repId: null, repIds: [5], repNames: ["Bo Rivera"] })]);
+    expect(await screen.findByTestId("area-card-4-rep")).toHaveTextContent("Unassigned");
+  });
+
+  it("falls back to the single name for a row served before repIds existed", async () => {
+    renderPage([row({ id: 4, repName: "Bo Rivera" })]);
+    expect(await screen.findByTestId("area-card-4-rep")).toHaveTextContent("Bo Rivera");
+  });
+});

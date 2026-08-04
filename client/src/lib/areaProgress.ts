@@ -27,6 +27,11 @@ export interface AreaProgressRow extends TerritoryProgress {
   status: string;
   /** Primary holder's display name, or "Unassigned" when nobody holds it. */
   repName: string;
+  /** The WHOLE crew, primary first — an area is many-to-many. Optional because
+   *  a cached response from before these fields existed is still a valid row;
+   *  `areaHolders()` below is the one place that falls back. */
+  repIds?: number[];
+  repNames?: string[];
   knocked: number;
   sold: number;
   availableBase: number;
@@ -156,6 +161,29 @@ export const AREA_STATUS_FILTERS = ["active", "shared", "unassigned", "reclaimed
 /** Nobody currently holds it. Mirrors shared/territoryLabel's pool rule. */
 export function isPoolArea(row: Pick<AreaProgressRow, "status" | "repId">): boolean {
   return row.status === "unassigned" || row.status === "reclaimed" || row.repId == null;
+}
+
+export interface AreaHolder { id: number; name: string }
+
+/**
+ * Who works this area, primary first — the ONE way the Area Console answers
+ * that, so the index card, the detail header and the remove control can never
+ * disagree about who is on it.
+ *
+ * A pool area has no holders, full stop: `repId` deliberately still names the
+ * LAST rep after a reclaim (it drives colour and history), and reading it as a
+ * holder is how a reclaimed area gets handed straight back to the person it was
+ * taken from. Falls back to the primary pair only for a row served before
+ * repIds/repNames existed.
+ */
+export function areaHolders(row: AreaProgressRow): AreaHolder[] {
+  if (isPoolArea(row)) return [];
+  const ids = row.repIds;
+  if (ids?.length) {
+    const names = row.repNames ?? [];
+    return ids.map((id, i) => ({ id, name: names[i] ?? `Rep #${id}` }));
+  }
+  return row.repId != null ? [{ id: row.repId, name: row.repName }] : [];
 }
 
 /** Initials for the owner avatar — two letters at most, "?" for a blank name. */

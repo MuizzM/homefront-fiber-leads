@@ -69,14 +69,14 @@ import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenantRead, sameTenantWrite } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
-import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, areaGrantedRepIds, parseAreaDeleteRepPolicy, parseAssigneeIds, MAX_ACTIVE_AREAS_PER_REP, MAX_AREA_ASSIGNEES, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
   calcCommission, pickActiveStructure, describeStructure,
   type CommissionStructure, type Tier, type CalcType,
 } from "@shared/commission";
-import type { CommissionRate } from "@shared/schema";
+import type { CommissionRate, TeamMember } from "@shared/schema";
 import { LEGACY_COMMISSION_STATUSES } from "@shared/legacyCommissionLifecycle";
 import {
   can as hasCapability, capabilitiesFor, groupedCapabilities, rolesWithCapability, isHighRisk,
@@ -140,7 +140,8 @@ import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerG
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerAreaSkipTraceRoutes } from "./areaSkipTraceRoutes";
-import { tracedPhonesForLead } from "./areaSkipTrace";
+import { tracedPhonesForLead, cancelAreaSkipTraceRuns } from "./areaSkipTrace";
+import { closeAllAssignments } from "./territoryAssignments";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
 import { registerComingSoonRoutes } from "./comingSoonWatchlist";
 import { registerLeadRankingRoutes } from "./leadRanking";
@@ -6726,15 +6727,44 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // POST /api/territories/assign-area — the SalesRabbit move: draw an area, pick
-  // a rep, and in ONE atomic action (a) save the polygon as a rep-colored
-  // territory and (b) assign every enclosed lead to that rep.
-  // Body: { polygon: [lng,lat][], repId: number, name?: string }
+  // the crew, and in ONE atomic action (a) save the polygon as a coloured
+  // territory and (b) assign every enclosed lead to it.
+  //
+  // Body: { polygon: [lng,lat][], repIds: number[], name?, color? }
+  //   · `repIds` is the COMPLETE crew. An area is many-to-many everywhere else
+  //     in this file (/share, /unassign, assignee_ids, the visibility rule) and
+  //     this — the route that CREATES areas — was the one place that could only
+  //     express one rep, so a two-person patch had to be drawn and then shared
+  //     as a second step.
+  //   · `repId` (singular) is still accepted for older clients and means the
+  //     one-element crew.
+  // The FIRST id is the primary: it drives the area's colour, its auto-name and
+  // the assigned_rep_id stamped on the doors. The rest see the same doors
+  // through the area (shared/leadVisibility rule 2), which is what holding an
+  // area means — assigned_rep_id names only ONE of possibly several assignees.
   app.post("/api/territories/assign-area", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const { polygon, repId, name, color: requestedColor } = req.body as { polygon: [number, number][]; repId: number; name?: string; color?: string };
+    const { polygon, name, color: requestedColor } = req.body as { polygon: [number, number][]; name?: string; color?: string };
     if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
-    if (typeof repId !== "number") return res.status(400).json({ error: "repId required" });
+
+    // One crew list from either shape, deduped and order-preserving so "who I
+    // picked first" survives as the primary.
+    const rawIds: unknown[] = Array.isArray((req.body as any)?.repIds)
+      ? (req.body as any).repIds
+      : [(req.body as any)?.repId];
+    const repIds: number[] = [];
+    for (const raw of rawIds) {
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0) {
+        return res.status(400).json({ error: "repIds must be positive integers" });
+      }
+      if (!repIds.includes(raw)) repIds.push(raw);
+    }
+    if (!repIds.length) return res.status(400).json({ error: "repIds required" });
+    if (repIds.length > MAX_AREA_ASSIGNEES) {
+      return res.status(400).json({ error: `An area can hold at most ${MAX_AREA_ASSIGNEES} reps`, code: "TOO_MANY_ASSIGNEES" });
+    }
+    const repId = repIds[0];
     // The drawer picks a colour before drawing and it has to survive the save —
     // this endpoint used to drop it on the floor and stamp colorForRep(repId)
     // instead, so every area came back wearing the rep's palette hue and the
@@ -6744,28 +6774,42 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (requestedColor !== undefined && normalizeTerritoryColor(requestedColor) === null) {
       return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
     }
-    const rep = storage.getTeamMemberById(repId);
-    if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
-    // A team_lead may only assign an area to one of their own reps.
-    if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
-
-    // Max-active-areas guard (company rule; recommended 3–5)
-    const activeForRep = storage.getTerritoriesByRep(repId).filter((t: any) => t.status === "active" || t.status === "shared").length;
-    if (!canRepTakeAnotherArea(activeForRep)) {
-      return res.status(409).json({ error: `${rep.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}). Reclaim one first.` });
+    // EVERY rep on the crew is validated the same way, and all of it happens
+    // before a single row is written: a crew of three where the third is out of
+    // scope must not leave an area behind holding the first two.
+    const crew: TeamMember[] = [];
+    for (const id of repIds) {
+      const member = storage.getTeamMemberById(id);
+      if (!member || (tid && member.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
+      // A team_lead may only assign an area to one of their own reps.
+      if (!repInVisibilityScope(user, id)) return res.status(403).json({ error: `${member.name} is not on your team`, code: "OUT_OF_SCOPE" });
+      // Max-active-areas guard (company rule; recommended 3–5)
+      const activeForRep = storage.getTerritoriesByRep(id).filter((t: any) => t.status === "active" || t.status === "shared").length;
+      if (!canRepTakeAnotherArea(activeForRep)) {
+        return res.status(409).json({ error: `${member.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}). Reclaim one first.` });
+      }
+      crew.push(member);
     }
+    const rep = crew[0];
 
     const at = new Date().toISOString();
-    // Chosen colour wins; the rep's own colour (persisted at hire, hash for
-    // legacy rows) is only the default for a caller that never picked one
+    // Chosen colour wins; the PRIMARY rep's own colour (persisted at hire, hash
+    // for legacy rows) is only the default for a caller that never picked one
     // (older clients, and the API used directly).
     const color = normalizeTerritoryColor(requestedColor) ?? repColorOf(rep);
+    // The auto-name follows the crew: one rep keeps "Ann's area"; more than one
+    // says so, because "Ann's area" on ground three people walk is a lie the map
+    // then repeats on every screen.
+    const autoName = crew.length === 1
+      ? `${rep.name}'s area`
+      : `${rep.name} +${crew.length - 1}`;
     const territory = storage.createTerritory({
-      tenantId: tid ?? null, name: (name && name.trim()) || `${rep.name}'s area`,
+      tenantId: tid ?? null, name: (name && name.trim()) || autoName,
       repId, polygon: JSON.stringify(polygon), color,
-      status: "active", assigneeIds: JSON.stringify([repId]), updatedAt: at,
+      status: crew.length > 1 ? "shared" : "active",
+      assigneeIds: JSON.stringify(repIds), assignedAt: at, updatedAt: at,
     } as any);
-    storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId, name: territory.name });
+    storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId, repIds, name: territory.name });
 
     // Only leads the caller may reassign (unassigned or own-team for a team_lead;
     // all for admin/manager) — an area draw never poaches another team's doors.
@@ -6780,9 +6824,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? l.tenantId);
       }
     }
-    storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, assigned });
+    storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, repIds, assigned });
 
-    res.status(201).json({ territory, assigned, total: enclosed.length });
+    res.status(201).json({
+      territory, assigned, total: enclosed.length,
+      // The crew, echoed back so the client can name everyone it just put on the
+      // ground rather than only the primary it happens to read off `territory`.
+      repIds, repNames: crew.map((m) => m.name),
+    });
   });
 
   // ── Territory lifecycle: reclaim / complete / share / archive / history ──────
@@ -7234,6 +7283,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "repIds required — use /reclaim to empty an area" });
     }
     const merged = Array.from(new Set(repIds));
+    // Same wall the create path applies, so a crew that cannot be drawn cannot
+    // be reached by editing one either.
+    if (merged.length > MAX_AREA_ASSIGNEES) {
+      return res.status(400).json({ error: `An area can hold at most ${MAX_AREA_ASSIGNEES} reps`, code: "TOO_MANY_ASSIGNEES" });
+    }
     const at = new Date().toISOString();
     // The primary drives the map colour, so it has to move with the assignment;
     // otherwise a reassigned area keeps wearing the previous rep's colour and the
@@ -7336,14 +7390,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } as any, tid);
 
     // Persist only the leads whose rep actually changed (the removed rep's).
+    //
+    // The released doors STAY LINKED to the area. This used to NULL
+    // assigned_territory_id along with the rep, which on a shared area threw the
+    // removed rep's doors out of the patch entirely: no rep and no territory is
+    // "open field", invisible to every co-assignee still walking that ground and
+    // to the area's own door count. Taking one person off a crew must leave the
+    // work with the crew. The link is only cleared when the AREA itself goes
+    // away (delete) or is explicitly emptied (reclaim to pool).
     const beforeById = new Map(before.map((l: any) => [l.id, l.assignedRepId]));
     let leadsReleased = 0;
     for (const l of next.leads) {
       if (beforeById.get(l.id) !== l.assignedRepId) {
         const moved = storage.updateLead(l.id, {
           assignedRepId: l.assignedRepId,
-          assignedTerritoryId: l.assignedRepId == null ? null : t.id,
+          assignedTerritoryId: t.id,
           assignmentSource: l.assignedRepId == null ? null : "territory-sync",
+          // The paperwork describes an assignment that is over; leaving it
+          // behind prints "assigned by Mona" under an empty owner.
+          ...(l.assignedRepId == null ? { assignedBy: null, assignedAt: null } : {}),
           unassignedAt: l.assignedRepId == null ? at : null,
         } as any, tid);
         leadsReleased++;
@@ -7449,27 +7514,106 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // UI referenced the action, so nobody was ever refused and the mismatch never
   // showed. Deleting an area detaches every door in it; team_lead keeps assign
   // and reclaim, which are reversible.
+  //
+  // ?repAssignments=clear (DEFAULT) | keep
+  //
+  // "clear" is the default because the area IS the grant: an area assigned to
+  // Talal, then deleted, used to leave every door inside it still assigned to
+  // Talal — on his dialing list, in his stats, in his knock sheet — with the
+  // area that explained it gone from every screen. Deleting now unassigns EVERY
+  // door in the area, from whoever holds it, one rep or five (the rule lives in
+  // @shared/territory as areaDeleteClearsRep). The ground stops being anybody's.
+  //
+  // "keep" is the documented escape hatch — "the outline was wrong but the crew
+  // keeps the work" — and the delete dialog asks for it explicitly rather than
+  // leaving it to a default nobody can see.
   app.delete("/api/territories/:id", requireAdmin, (req, res) => {
-    const ttid = (req as any).user?.tenantId ?? undefined;
+    const user = (req as any).user;
+    const ttid = user?.tenantId ?? undefined;
     const id = Number(req.params.id);
     const terr = storage.getTerritories(ttid).find(t => t.id === id);
-    if (!terr || !canManageTerritory((req as any).user, terr)) return res.status(404).json({ error: "Not found" });
-    // LEARNING LOOP + orphan fix: teach the market from this area's outcome, then
-    // DETACH its leads (clear their territory ref, keep the rep) BEFORE deleting —
-    // the old hard-delete left leads pointing at a ghost territory (2,855 orphans).
+    if (!terr || !canManageTerritory(user, terr)) return res.status(404).json({ error: "Not found" });
+
+    // A typo must not silently fall through to a mass unassign, so an
+    // unrecognised value is a 400 rather than the default.
+    const repPolicy = parseAreaDeleteRepPolicy(req.query.repAssignments);
+    if (repPolicy === null) {
+      return res.status(400).json({ error: "repAssignments must be 'clear' or 'keep'", code: "BAD_REP_POLICY" });
+    }
+
+    const at = new Date().toISOString();
+    // Who the AREA belonged to — for the audit row. NOT the release rule: the
+    // release clears every rep on every door, holder or not.
+    const grantedRepIds = areaGrantedRepIds(terr as any);
+
+    // LEARNING LOOP: teach the market from this area's outcome BEFORE the
+    // release — computeTerritoryOutcome reads assigned_territory_id, so once the
+    // link is gone the lesson is unrecoverable.
     scanSvc.recordTerritoryOutcome(ttid ?? getDefaultTenantId(), id, (terr as any).createdAt ?? null);
-    // Captured BEFORE the detach: clearTerritoryFromLeads is a set-based UPDATE
-    // that hands back only a row count, and once assigned_territory_id is cleared
-    // there is no way left to ask which doors it cleared it from.
-    const detachedIds = storage.getLeadsByTerritory(id).map((l: any) => l.id);
-    const detached = scanSvc.detachTerritoryLeads(id);
-    if (!storage.deleteTerritory(id, ttid)) return res.status(404).json({ error: "Not found" });
+
+    // One transaction: the release, the assignment ledger, the in-flight skip
+    // trace and the row itself. A door that lost its area but kept a rep nobody
+    // can see is the half-state this whole route exists to remove, so it must
+    // not be reachable by a crash between two of these writes.
+    let released!: scanSvc.TerritoryReleaseResult;
+    let closedRepIds: number[] = [];
+    let cancelledRuns = 0;
+    const GONE = Symbol("territory-vanished");
+    try {
+      rawDb.transaction(() => {
+        released = scanSvc.releaseTerritoryLeads(id, { clearReps: repPolicy === "clear", at });
+        // The assignment LEDGER is a second store of "who holds this area", and
+        // it is append-only: deleting the row left every open assignment open,
+        // so the record said a rep still held ground that no longer existed.
+        closedRepIds = closeAllAssignments(id, user?.id ?? null, "area deleted", at);
+        cancelledRuns = cancelAreaSkipTraceRuns(id, ttid);
+        // Lost a race with a concurrent delete. Throwing rolls the whole thing
+        // back rather than leaving doors unassigned for an area that is still
+        // there — the one way this route could make things worse than it found
+        // them.
+        if (!storage.deleteTerritory(id, ttid)) throw GONE;
+      }).immediate();
+    } catch (e) {
+      if (e === GONE) return res.status(404).json({ error: "Not found" });
+      throw e;
+    }
+
     if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(ttid);
-    // The doors keep their rep and lose their area, so a rep who held them only
-    // THROUGH the area (many-to-many assignee, never assigned_rep_id) drops out
-    // of the recipient set here — correctly, since that is what the write did.
-    emitLeadChangesBulk("assignment", detachedIds, (req as any).user, ttid);
-    res.json({ success: true, detached });
+
+    // Named, not just counted — "84 doors disassociated from Talal" is the line
+    // a manager needs, and after the write the rep ids are no longer on the rows.
+    const clearedRepNames = released.repIdsCleared
+      .map((rid) => storage.getTeamMemberById(rid, ttid)?.name ?? `rep #${rid}`);
+
+    // Doors that lost their rep are now pool doors, so the post-write row
+    // authorizes only org-wide roles — the departing rep's own copy is retired
+    // by the map-changed ping above, which is the only safe way to tell someone
+    // about a lead they can no longer see.
+    emitLeadChangesBulk("assignment", released.leadIds, user, ttid);
+
+    recordAdminAudit({
+      ...auditContext(req),
+      action: "territory.deleted", targetType: "territory", targetId: id, targetLabel: terr.name,
+      before: { status: (terr as any).status ?? "active", repIds: grantedRepIds, doors: released.detached },
+      after: {
+        repAssignments: repPolicy, detached: released.detached,
+        repCleared: released.repCleared, repIdsCleared: released.repIdsCleared,
+        assignmentsClosed: closedRepIds, skipTraceRunsCancelled: cancelledRuns,
+      },
+      tenantId: ttid ?? null, outcome: "success",
+    });
+    storage.logActivity(user?.id ?? null, "territory.deleted", "territory", id, {
+      name: terr.name, repAssignments: repPolicy,
+      detached: released.detached, repCleared: released.repCleared, clearedRepNames,
+    }, req.ip);
+
+    res.json({
+      success: true,
+      detached: released.detached,
+      repAssignments: repPolicy,
+      repCleared: released.repCleared,
+      clearedRepNames,
+    });
   });
 
   // ── Territory progress computation ──────────────────────────────────────────
@@ -7576,9 +7720,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
       const areaWorkedPct = total ? Math.round((verifiedWorkedLeads / total) * 10000) / 100 : 0;
 
+      // The WHOLE crew, not just the primary. An area is many-to-many, and the
+      // Area tab could only ever name one of them — so a two-rep area read as
+      // one rep's, and there was no way to take the other off from that screen.
+      // repId/repName stay exactly as they were for older clients.
+      const holderIds = parseAssigneeIds((t as any).assigneeIds)
+        ?? (t.repId != null ? [t.repId] : []);
+      const nameOf = (id: number) => members.find((m: any) => m.id === id)?.name ?? `Rep #${id}`;
+
       return {
         id: t.id, name: t.name, color: t.color, repId: t.repId, status: (t as any).status ?? "active",
         repName: members.find((m: any) => m.id === t.repId)?.name ?? "Unassigned",
+        repIds: holderIds,
+        repNames: holderIds.map(nameOf),
         total, knocked, sold,
         // Metric buckets + the documented rates. availableBase is the single
         // denominator every rate here divides by.

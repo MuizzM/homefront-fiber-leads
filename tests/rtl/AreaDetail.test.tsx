@@ -16,7 +16,8 @@ const { mockAuth } = vi.hoisted(() => ({
   mockAuth: { user: { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 } as any },
 }));
 vi.mock("@/lib/auth", () => ({ useAuth: () => mockAuth }));
-vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+const toast = vi.fn();
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 
 // The next-pass dialog loads its own dry run through apiRequest (it takes the
 // fetcher as a prop precisely so it stays testable). Stub the transport, keep
@@ -26,12 +27,10 @@ const passPreview = {
   totals: { total: 200, reset: 130, frozen: 12 },
   frozenByReason: { sold: 12 }, callbacksAtRisk: 0,
 };
+const { apiRequest } = vi.hoisted(() => ({ apiRequest: vi.fn() }));
 vi.mock("@/lib/queryClient", async importOriginal => {
   const actual = await importOriginal<typeof import("@/lib/queryClient")>();
-  return {
-    ...actual,
-    apiRequest: vi.fn(async () => ({ json: async () => passPreview } as unknown as Response)),
-  };
+  return { ...actual, apiRequest };
 });
 
 import AreaDetail from "../../client/src/pages/AreaDetail";
@@ -73,7 +72,11 @@ function renderPage(over: Partial<typeof progress> = {}, opts: { progressError?:
           }
           if (url.endsWith("/passes")) return Promise.resolve(passes);
           if (url.endsWith("/history")) return Promise.resolve([]);
-          if (url === "/api/team") return Promise.resolve([{ id: 5, name: "Bo Rivera", active: true }]);
+          if (url === "/api/team") return Promise.resolve([
+            { id: 5, name: "Bo Rivera", active: true },
+            { id: 6, name: "Talal Rep", active: true },
+            { id: 9, name: "Rae Rep", active: true },
+          ]);
           return Promise.resolve(null);
         },
       },
@@ -86,6 +89,14 @@ function renderPage(over: Partial<typeof progress> = {}, opts: { progressError?:
     </Router>,
   );
 }
+
+beforeEach(() => {
+  toast.mockReset();
+  // Default transport: the next-pass dialog's dry run. Tests that exercise a
+  // lifecycle write override it.
+  apiRequest.mockReset();
+  apiRequest.mockImplementation(async () => ({ json: async () => passPreview } as unknown as Response));
+});
 
 describe("AreaDetail — the area's own numbers", () => {
   beforeEach(() => { mockAuth.user = { id: 2, name: "Mona Manager", role: "manager", teamMemberId: 4 }; });
@@ -228,5 +239,114 @@ describe("AreaDetail — who may act", () => {
     expect(await screen.findByTestId("next-pass-dialog")).toBeInTheDocument();
     // It opens the real dry run, so the reset is never a blind one-tap action.
     expect(await screen.findByRole("button", { name: "Start pass 4" })).toBeInTheDocument();
+  });
+});
+
+// ── The crew, and taking somebody off it from the Area tab ──────────────────
+//
+// An area is many-to-many everywhere else in the product, but this screen could
+// only ever print ONE name — so a two-rep area read as one rep's ground, and
+// there was no way to remove the other from here at all.
+describe("AreaDetail — who works this area", () => {
+  const CREW = {
+    repId: 5, repName: "Bo Rivera",
+    repIds: [5, 6], repNames: ["Bo Rivera", "Talal Rep"],
+    status: "shared",
+  };
+
+  beforeEach(() => { mockAuth.user = { id: 2, name: "Mona Manager", role: "manager", teamMemberId: 4 }; });
+
+  it("lists EVERY holder, not just the primary", async () => {
+    renderPage(CREW);
+    expect(await screen.findByTestId("area-holder-5")).toHaveTextContent("Bo Rivera");
+    expect(screen.getByTestId("area-holder-6")).toHaveTextContent("Talal Rep");
+    expect(screen.getByTestId("area-owner")).toHaveTextContent("2 reps");
+    // The first is marked as primary — it drives the colour and the doors' rep.
+    expect(screen.getByTestId("area-holder-5")).toHaveTextContent("Primary");
+  });
+
+  it("the hero line names the crew instead of one rep", async () => {
+    renderPage(CREW);
+    expect(await screen.findByTestId("area-hero-value")).toHaveTextContent("Bo Rivera and Talal Rep");
+  });
+
+  it("falls back to the primary pair for a row served before repIds existed", async () => {
+    renderPage();   // no repIds/repNames on the fixture
+    expect(await screen.findByTestId("area-holder-5")).toHaveTextContent("Bo Rivera");
+    expect(screen.getByTestId("area-owner-name")).toHaveTextContent("Bo Rivera");
+  });
+
+  it("THE REQUIREMENT: removing one rep calls /unassign for THAT rep, after a confirm", async () => {
+    const user = userEvent.setup();
+    apiRequest.mockImplementation(async () => ({
+      json: async () => ({ ok: true, leadsReleased: 84, assigneeIds: [5] }),
+    } as unknown as Response));
+    renderPage(CREW);
+
+    await user.click(await screen.findByTestId("area-holder-remove-6"));
+    // Armed, not fired: dropping a rep hands their doors back, so a mis-tap
+    // costs somebody their working queue.
+    expect(apiRequest).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("area-holder-remove-confirm-6"));
+    expect(apiRequest).toHaveBeenCalledWith("POST", "/api/territories/7/unassign", { repId: 6 });
+  });
+
+  it("says how many doors went back, naming the rep who lost them", async () => {
+    const user = userEvent.setup();
+    apiRequest.mockImplementation(async () => ({
+      json: async () => ({ ok: true, leadsReleased: 84, assigneeIds: [5] }),
+    } as unknown as Response));
+    renderPage(CREW);
+    await user.click(await screen.findByTestId("area-holder-remove-6"));
+    await user.click(screen.getByTestId("area-holder-remove-confirm-6"));
+
+    await vi.waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(toast.mock.calls[0][0]).toMatchObject({ title: "Talal Rep removed from this area" });
+    expect(toast.mock.calls[0][0].description).toBe("84 doors went back to the pool.");
+  });
+
+  it("Keep cancels the armed removal and calls nothing", async () => {
+    const user = userEvent.setup();
+    renderPage(CREW);
+    await user.click(await screen.findByTestId("area-holder-remove-6"));
+    await user.click(screen.getByTestId("area-holder-remove-cancel-6"));
+    expect(screen.queryByTestId("area-holder-remove-confirm-6")).toBeNull();
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
+  it("adds a rep through /share with the COMPLETE new holder set", async () => {
+    const user = userEvent.setup();
+    renderPage(CREW);
+    await user.click(await screen.findByTestId("area-add-rep"));
+    // The picker offers only reps who are NOT already on it.
+    await user.click(await screen.findByTestId("rep-option-9"));
+    expect(apiRequest).toHaveBeenCalledWith("POST", "/api/territories/7/share", { repIds: [5, 6, 9] });
+  });
+
+  it("hides the ambiguous single 'Unassign Bo' button once there is a crew", async () => {
+    // "Unassign Bo" on ground three people walk begs the question WHICH rep, so
+    // removal moves to the per-rep control on the card.
+    renderPage(CREW);
+    await screen.findByTestId("area-holder-5");
+    expect(screen.queryByTestId("area-action-unassign")).toBeNull();
+    // A one-rep area keeps the fast path.
+    renderPage();
+    expect(await screen.findByTestId("area-action-unassign")).toBeInTheDocument();
+  });
+
+  it("a rep sees the crew but is offered no way to change it", async () => {
+    mockAuth.user = { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 };
+    renderPage(CREW);
+    expect(await screen.findByTestId("area-holder-5")).toBeInTheDocument();
+    expect(screen.queryByTestId("area-holder-remove-5")).toBeNull();
+    expect(screen.queryByTestId("area-add-rep")).toBeNull();
+  });
+
+  it("an unassigned area shows the pool state, not a stale crew", async () => {
+    renderPage({ status: "unassigned", repId: null, repName: "Unassigned", repIds: [], repNames: [] });
+    expect(await screen.findByTestId("area-owner-empty")).toHaveTextContent(/Nobody holds this area/i);
+    expect(screen.queryByTestId("area-owner-list")).toBeNull();
+    expect(screen.queryByTestId("area-add-rep")).toBeNull();
   });
 });

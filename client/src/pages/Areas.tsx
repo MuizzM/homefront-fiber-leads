@@ -25,7 +25,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { repColorOf } from "@shared/repColors";
 import { shortDate } from "@shared/territoryLabel";
 import {
-  AREA_STATUS_FILTERS, areaStatusMeta, isPoolArea, type AreaProgressRow,
+  AREA_STATUS_FILTERS, areaHolders, areaStatusMeta, isPoolArea, type AreaProgressRow,
 } from "@/lib/areaProgress";
 
 const CHIP = "text-[10px] font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
@@ -168,6 +168,12 @@ export default function Areas() {
 function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => void }) {
   const meta = areaStatusMeta(row.status);
   const pool = isPoolArea(row);
+  // The card used to print one name for ground that can be walked by a crew, so
+  // a two-rep area read as one rep's. Two names fit; past that it counts.
+  const holders = areaHolders(row);
+  const crew = holders.length > 2
+    ? `${holders[0].name} +${holders.length - 1}`
+    : holders.map(h => h.name).join(" · ");
   const dot = row.color || repColorOf({ id: row.repId, color: null });
   // Straight off the wire: knocked / available doors, already computed once,
   // server-side, against the one denominator.
@@ -209,8 +215,12 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-bold text-foreground">{row.name}</div>
-          <div className="truncate text-[13px] text-muted-foreground" data-testid={`area-card-${row.id}-rep`}>
-            {pool ? "Unassigned" : row.repName}
+          <div
+            className="truncate text-[13px] text-muted-foreground"
+            data-testid={`area-card-${row.id}-rep`}
+            title={holders.length > 2 ? holders.map(h => h.name).join(", ") : undefined}
+          >
+            {pool ? "Unassigned" : crew || row.repName}
           </div>
         </div>
         <span className={cn(CHIP, meta.chip, "shrink-0")}>{meta.label}</span>

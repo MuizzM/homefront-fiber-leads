@@ -61,10 +61,20 @@ export function inlineScriptHashes(html: string): string[] {
   );
 }
 
+// This module is loaded in BOTH module formats: the production bundle is CJS
+// (script/build.ts → format "cjs", where __dirname exists), while `npm run dev`
+// runs the TypeScript directly as ESM, where it does not. Referencing it bare
+// threw `ReferenceError: __dirname is not defined in ES module scope` at import
+// time — before the server ever listened, so the dev server could not boot at
+// all. `typeof` on an undeclared identifier is the one safe way to ask.
+const bundleDir: string | null = typeof __dirname === "string" ? __dirname : null;
+
 /** Candidate locations for the served index.html, prod first. */
 function indexCandidates(): string[] {
   return [
-    path.resolve(__dirname, "public", "index.html"),        // prod: dist/public
+    // prod: dist/public, resolved next to the bundle. Absent under ESM dev,
+    // where the two cwd-relative candidates below are the real answers anyway.
+    ...(bundleDir ? [path.resolve(bundleDir, "public", "index.html")] : []),
     path.resolve(process.cwd(), "dist", "public", "index.html"),
     path.resolve(process.cwd(), "client", "index.html"),    // dev source
   ];

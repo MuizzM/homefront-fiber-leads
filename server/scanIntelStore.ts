@@ -629,14 +629,81 @@ export function computeTerritoryOutcome(territoryId: number, createdAt: string |
   return { city: dom.city, state: dom.state, doors: leads.length, knocks: km?.knocks ?? 0, contacts: km?.contacts ?? 0, sales, daysActive };
 }
 
-// Clear leads' territory ref (used when a territory is deleted) WITHOUT touching
-// their rep assignment — the old hard-delete orphaned 2,855 leads pointing at
-// nonexistent territories. Returns the count cleared.
+// ── Releasing an area's doors ────────────────────────────────────────────────
+// Called when a territory is deleted. TWO writes, deliberately separate:
+//
+//   1. the REP — every door in the area loses whoever holds it, one rep or five
+//      (`clearReps`, the default; see areaDeleteClearsRep in @shared/territory,
+//      the same rule stated once in TypeScript). Skipped entirely when the
+//      caller chose "keep", which is what makes the old behaviour reachable.
+//   2. the AREA LINK, for every door — unconditional. The old hard-delete did
+//      neither and orphaned 2,855 leads pointing at nonexistent territories.
+//
+// The rep write runs FIRST and is predicated on assigned_territory_id, so it
+// must happen while the link still exists. Both run in one transaction: a door
+// that lost its area but kept a rep nobody can see is precisely the half-state
+// this whole change exists to remove.
+
+export interface TerritoryReleaseResult {
+  /** Doors whose area link was cleared. */
+  detached: number;
+  /** Of those, the ones that also lost their rep. */
+  repCleared: number;
+  /** Which reps lost doors — the names a manager reads in the toast. Ordered by
+   *  lead id, so the list reads the same way twice. */
+  repIdsCleared: number[];
+  /** Every door touched, captured BEFORE the write: once the link is NULL there
+   *  is no way left to ask which doors it was cleared from. */
+  leadIds: number[];
+}
+
+export function releaseTerritoryLeads(
+  territoryId: number,
+  opts: { clearReps?: boolean; at?: string } = {},
+): TerritoryReleaseResult {
+  const at = opts.at ?? new Date().toISOString();
+  const clearReps = opts.clearReps === true;
+
+  const apply = rawDb.transaction(() => {
+    const before = all<{ id: number; assigned_rep_id: number | null }>(
+      `SELECT id, assigned_rep_id FROM leads WHERE assigned_territory_id = ? ORDER BY id`, territoryId);
+
+    let repCleared = 0;
+    const repIdsCleared: number[] = [];
+    if (clearReps) {
+      // assignment_source / assigned_by / assigned_at go with the rep: they
+      // describe an assignment that no longer exists, and leaving them behind
+      // makes the Leads table print "Territory sync" under an empty owner.
+      repCleared = rawDb.prepare(
+        `UPDATE leads
+            SET assigned_rep_id = NULL, assignment_source = NULL, assigned_by = NULL,
+                assigned_at = NULL, unassigned_at = ?, updated_at = ?
+          WHERE assigned_territory_id = ? AND assigned_rep_id IS NOT NULL`,
+      ).run(at, at, territoryId).changes;
+      for (const r of before) {
+        if (r.assigned_rep_id != null && !repIdsCleared.includes(r.assigned_rep_id)) {
+          repIdsCleared.push(r.assigned_rep_id);
+        }
+      }
+    }
+
+    // updated_at moves with the write — the map's data-version/ETag is derived
+    // from MAX(updated_at), so a silent clear must never serve a stale 304.
+    const detached = rawDb.prepare(
+      `UPDATE leads SET assigned_territory_id = NULL, updated_at = ? WHERE assigned_territory_id = ?`,
+    ).run(at, territoryId).changes;
+
+    return { detached, repCleared, repIdsCleared, leadIds: before.map((r) => r.id) };
+  });
+
+  return apply.immediate() as TerritoryReleaseResult;
+}
+
+// Clear leads' territory ref WITHOUT touching their rep assignment. Kept as the
+// narrow form for callers that only ever meant "de-orphan" (the scan engine's
+// housekeeping); the delete route goes through releaseTerritoryLeads above.
 export function clearTerritoryFromLeads(territoryId: number): number {
-  // updated_at moves with the write — the map's data-version/ETag is derived
-  // from MAX(updated_at), so a silent clear must never serve a stale 304.
-  return rawDb.prepare(`UPDATE leads SET assigned_territory_id = NULL, updated_at = ? WHERE assigned_territory_id = ?`)
-    .run(new Date().toISOString(), territoryId).changes;
+  return releaseTerritoryLeads(territoryId).detached;
 }
 
 function key(city: string, state: string): string { return `${(city || "").toLowerCase()}|${(state || "").toLowerCase()}`; }
