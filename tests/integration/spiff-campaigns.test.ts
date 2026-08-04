@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DEFAULT_WORKWEEK, localWallToUtcMs, localYmdParts } from "../../shared/workweek";
 
 let server: Server;
 let baseUrl: string;
@@ -52,9 +53,27 @@ let admin: Fixture, rep: Fixture, otherRep: Fixture, plainRep: Fixture, adminB: 
  *  has its own suite (tests/integration/knock-milestones.test.ts); here it just
  *  has to be satisfied so the contest logic is what is under test. */
 let seedBatch = 0;
+/**
+ * `hourLocal` means the hour in the ORG'S timezone, not the process's.
+ *
+ * This used to be `new Date(); at.setHours(hourLocal, 0, 0, 0)`, and setHours
+ * resolves against the CONTAINER's clock — which is UTC in CI and in the dev
+ * image. The campaign counters, correctly, measure "today" in the tenant's
+ * timezone (America/New_York by default).
+ *
+ * Between 20:00 and midnight Eastern — i.e. 00:00–04:00 UTC — those two
+ * disagree about the DATE: setHours(9) produced tomorrow-09:00 UTC, which is
+ * tomorrow 05:00 Eastern, so every seeded knock landed on the wrong local day
+ * and the trigger counted zero. The suite passed all afternoon and failed at
+ * night, which is the worst possible shape for a flake.
+ *
+ * Constructed through the same helpers the product uses, so the test and the
+ * code under test agree on what "today at 9am" means.
+ */
 function seedKnocks(repId: number, _unusedLeadId: number, n: number, hourLocal = 9): void {
-  const at = new Date();
-  at.setHours(hourLocal, 0, 0, 0);
+  const tz = DEFAULT_WORKWEEK.timezone;
+  const { y, mo, d } = localYmdParts(Date.now(), tz);
+  const at = new Date(localWallToUtcMs(y, mo, d, hourLocal, 0, tz));
   const batch = seedBatch += 1;
   for (let i = 0; i < n; i += 1) {
     const lead = storage.createLead({
