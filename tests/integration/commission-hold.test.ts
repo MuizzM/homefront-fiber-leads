@@ -24,6 +24,7 @@ let baseUrl: string;
 let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: import("better-sqlite3").Database;
 let svc: typeof import("../../server/commissionService");
+let runMigrations: () => void;
 let nacha: typeof import("../../server/nachaService");
 
 type Person = { userId: number; memberId: number; session: string };
@@ -94,6 +95,7 @@ beforeAll(async () => {
   process.env.PAY_CRYPTO_KEY = "b".repeat(64); // company-profile secrets for NACHA
   const storageModule = await import("../../server/storage");
   storageModule.runMigrations();
+  runMigrations = storageModule.runMigrations;
   storage = storageModule.storage;
   ({ rawDb } = await import("../../server/db"));
   svc = await import("../../server/commissionService");
@@ -389,5 +391,58 @@ describe("chargeback reserve — untouched by the install hold", () => {
     const line = csv.split("\n").find(l => l.startsWith('"Hold Rep C"'))!;
     expect(line.split(",")[12]).toBe("10.00"); // Reserve
     expect(line.split(",")[13]).toBe("90.00"); // Total = 100.00 − 10.00
+  });
+});
+
+describe("hold scope — pay-eligibility ONLY", () => {
+  it("a held sale still counts as a REAL sale for campaign counters and incentive triggers", async () => {
+    // Tenant B's policy is ON (toggled back above). The sale is held for PAY…
+    const lead = makeLead(TENANT_B, rep2.memberId);
+    await knock(lead.id, rep2.session, "sold");
+    const [commission] = commissionsFor(lead.id);
+    expect(commission.status).toBe("pending");
+    expect(commission.install_confirmed_at).toBeNull(); // held
+
+    // …but incentive counters are not a pay surface: the sale HAPPENED, so the
+    // campaign engine must see it. (Regression pin: the hold filter is an
+    // opt-in of the statement path — countQualifiedSales(..., {forPay:true})
+    // — never a property of the raw sales count.)
+    const campaigns = await import("../../server/spiffCampaignStore");
+    const now = Date.now();
+    const campaign = campaigns.createCampaign(TENANT_B, null, {
+      name: "Hold scope", startsAtMs: now - 86_400_000, endsAtMs: now + 86_400_000,
+      trigger: { kind: "per_sale" }, rewardCents: 1000, nowMs: now,
+    });
+    const counters = campaigns.buildCounters(TENANT_B, campaign, rep2.memberId, now);
+    expect(counters.salesInWindow).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("install-hold adoption migration (rollout safety)", () => {
+  it("releases commissions that were already pending pre-deploy — once — and never touches post-deploy holds", () => {
+    // A pre-deploy row: pending, never confirmed, created long before the
+    // first-boot adoption mark (booked under the old payable-immediately
+    // contract — the deploy must not silently freeze it).
+    rawDb.prepare(
+      "INSERT INTO commissions (tenant_id, rep_id, lead_id, amount, status, sale_date, created_at) VALUES (1, ?, NULL, 50, 'pending', '2020-01-01', '2020-01-01T00:00:00.000Z')",
+    ).run(rep1.memberId);
+
+    // Second boot: the mark is already frozen at first boot (INSERT OR
+    // IGNORE), so only rows predating it are adopted.
+    runMigrations();
+    const adopted = rawDb.prepare("SELECT * FROM commissions WHERE sale_date = '2020-01-01'").get() as any;
+    expect(adopted.install_confirmed_at).toBe("2020-01-01T00:00:00.000Z");
+    expect(adopted.payable_after).toBe("2020-01-01T00:00:00.000Z");
+
+    // Post-deploy held rows (this suite's unconfirmed commissions) keep NULL.
+    const stillHeld = rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM commissions WHERE status = 'pending' AND install_confirmed_at IS NULL",
+    ).get() as any;
+    expect(stillHeld.n).toBeGreaterThan(0);
+
+    // …and a third boot changes nothing (the adoption is a one-time event).
+    runMigrations();
+    const again = rawDb.prepare("SELECT * FROM commissions WHERE sale_date = '2020-01-01'").get() as any;
+    expect(again.payable_after).toBe("2020-01-01T00:00:00.000Z");
   });
 });

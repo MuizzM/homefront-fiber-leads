@@ -2533,6 +2533,12 @@ export function runMigrations() {
        )
        BEGIN SELECT RAISE(ABORT, 'a completed onboarding signature is immutable'); END`,
 
+    // One-time data-migration marks (see the guarded post-loop steps below —
+    // e.g. the install-hold adoption, which must run exactly once per DB).
+    `CREATE TABLE IF NOT EXISTS migration_marks (
+       key TEXT PRIMARY KEY,
+       applied_at TEXT NOT NULL)`,
+
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -2541,6 +2547,33 @@ export function runMigrations() {
       }
     }
   }
+  // ── Install-hold adoption (one-time, guarded by migration_marks) ──────────
+  // The install hold is default-ON for NEW sales (the owner's intent), but a
+  // tenant's ALREADY-pending commissions must not silently freeze the moment
+  // this ships: they were booked under the old payable-immediately contract.
+  // So the FIRST boot after deploy stamps every pre-existing pending row with
+  // install_confirmed_at = payable_after = created_at — released by
+  // construction, payable exactly as it was. The migration_marks row freezes
+  // the adoption instant on first boot (INSERT OR IGNORE no-ops after that),
+  // and only rows created BEFORE it are released — commissions held after the
+  // deploy keep their hold on every subsequent boot.
+  try {
+    raw.prepare("INSERT OR IGNORE INTO migration_marks (key, applied_at) VALUES ('install-hold.adopt.v1', ?)")
+      .run(new Date().toISOString());
+    const adoptMark = (raw.prepare("SELECT applied_at AS t FROM migration_marks WHERE key = 'install-hold.adopt.v1'").get() as any)?.t;
+    if (adoptMark) {
+      const released = raw.prepare(
+        `UPDATE commissions
+            SET install_confirmed_at = created_at, payable_after = created_at
+          WHERE status = 'pending' AND install_confirmed_at IS NULL AND payable_after IS NULL
+            AND replace(created_at, ' ', 'T') < ?`,
+      ).run(adoptMark);
+      if (released.changes) {
+        console.log(`[migration] install-hold adoption: released ${released.changes} pre-existing pending commission(s)`);
+      }
+    }
+  } catch (e: any) { console.warn("Migration warning (install-hold adoption):", e?.message); }
+
   // CHECK-constraint migration: tables created with state IN ('NC','SC') reject GA
   // rows, and SQLite can't alter a CHECK — rebuild any such table in place. The
   // new CREATE above is a no-op for existing DBs, so detect the old constraint

@@ -93,8 +93,23 @@ function campaignWith(trigger: any, name: string) {
 describe("campaign counters only compute what the trigger reads", () => {
   it("a knocks_by_time campaign does not touch sales or the streak", () => {
     const c = campaignWith({ kind: "knocks_by_time", knocks: 10, byHourLocal: 23 }, "By time");
-    const counters = campaigns.buildCounters(1, c, repId, Date.now());
-    expect(counters.knocksBeforeCutoffToday).toBeGreaterThan(0);
+    // Deterministic evaluation clock: noon UTC is morning in every US org
+    // timezone, so the 23:00-local cutoff can NEVER have passed and the knocks
+    // below always count. (Evaluating at Date.now() made this test go quiet
+    // for the hour after 23:00 local each day — the fixture knocks, stamped at
+    // "now", were then legitimately past the cutoff and the counter correctly
+    // read 0.) Dedicated knocks on tail leads keep the count exact regardless
+    // of which fixture rows share the local day.
+    const realNow = new Date();
+    const noonUtc = Date.UTC(realNow.getUTCFullYear(), realNow.getUTCMonth(), realNow.getUTCDate(), 12, 0, 0);
+    const ins = rawDb.prepare(
+      `INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, tenant_id, verification_status, superseded)
+       VALUES (?,?,?,?,?,1,'verified',0)`);
+    for (let k = 0; k < 3; k += 1) {
+      ins.run(leadIds[leadIds.length - 1 - k], repId, "interested", 1, new Date(noonUtc - (k + 1) * 60_000).toISOString());
+    }
+    const counters = campaigns.buildCounters(1, c, repId, noonUtc);
+    expect(counters.knocksBeforeCutoffToday).toBeGreaterThanOrEqual(3);
     // Untouched — a field this trigger cannot read must not cost a query.
     expect(counters.salesInWindow).toBe(0);
     expect(counters.salesToday).toBe(0);

@@ -199,12 +199,21 @@ function loadTiers(tenantId: number, versionId: number): CommissionTier[] {
 // Aggregate qualified sales for a rep+week via the composite index — one query,
 // no rows loaded into JS, no N+1. Half-open [weekStart, nextWeekStart).
 //
-// ── Install-hold overlay (tenant_pay_policy) ─────────────────────────────────
-// Semantics mirror shared/commissionHold.ts (the pure read-side math), applied
-// here at the ONE aggregation point every pay surface funnels through
-// (statements → week-overview → week-export.csv → NACHA), so the money math
-// itself is never forked. Under a require-install-confirm policy a QUALIFIED
-// sale with a linked legacy commissions row is hold-gated:
+// ── Install-hold overlay (tenant_pay_policy) — PAY-ELIGIBILITY ONLY ──────────
+// The hold gates whether a sale is PAYABLE, never whether it HAPPENED. It is
+// therefore an OPT-IN (`forPay: true`) taken by exactly one caller — the
+// statement computation every pay surface funnels through (statements →
+// week-overview → week-export.csv → NACHA). The DEFAULT is the raw,
+// unfiltered count: campaign counters, leaderboards, streaks, milestones and
+// any other incentive trigger must keep seeing held sales as the REAL sales
+// they are (a held sale still won the door), so any future non-pay consumer
+// gets the raw count by construction. Incentive counters deliberately do not
+// call this function at all (see spiffCampaignStore.saleCount) — the opt-in
+// parameter is the second line of defense.
+//
+// Semantics mirror shared/commissionHold.ts (the pure read-side math), so the
+// money math itself is never forked. Under a require-install-confirm policy a
+// QUALIFIED sale with a linked legacy commissions row is hold-gated:
 //   • install never confirmed (payable_after NULL) → never payable;
 //   • confirmed but now < payable_after → still inside the hold window;
 //   • released (now >= payable_after) → the sale counts in the week containing
@@ -217,10 +226,13 @@ function loadTiers(tenantId: number, versionId: number): CommissionTier[] {
 // hold-gated — the hold is a knock-sale control; managers booking sales
 // directly are the control there. requireInstallConfirm=false collapses the
 // overlay to the legacy query, byte for byte.
-function countQualifiedSales(tenantId: number, repId: number, basis: QualificationBasis, bounds: WeekBounds, now: Date = new Date()): number {
+function countQualifiedSales(
+  tenantId: number, repId: number, basis: QualificationBasis, bounds: WeekBounds,
+  opts: { forPay?: boolean; now?: Date } = {},
+): number {
   const col = BASIS_COLUMN[basis];
-  const policy = getTenantPayPolicy(tenantId);
-  if (!policy.requireInstallConfirm) {
+  const policy = opts.forPay ? getTenantPayPolicy(tenantId) : null;
+  if (!policy?.requireInstallConfirm) {
     const row = rawDb.prepare(
       `SELECT COUNT(*) AS c FROM commission_sales
        WHERE tenant_id = ? AND rep_id = ? AND status = 'QUALIFIED'
@@ -228,6 +240,7 @@ function countQualifiedSales(tenantId: number, repId: number, basis: Qualificati
     ).get(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any;
     return Number(row?.c ?? 0);
   }
+  const now = opts.now ?? new Date();
   // The CASE below is the SQL rendering of isCommissionHeld() (pending status,
   // unconfirmed install, or now < payable_after) plus the release-week rule —
   // only a HELD linked commission gates the sale; any other lifecycle status
@@ -365,7 +378,10 @@ export function calculateOrRecalculateStatement(input: {
 
     const tiers = plan.type === "TIERED" ? loadTiers(tenantId, version.id) : [];
     basis = (version.qualification_basis || config.qualificationBasis) as QualificationBasis;
-    const qualifiedSaleCount = countQualifiedSales(tenantId, repId, basis, bounds);
+    // forPay: the statement IS the pay document — the ONE place the install
+    // hold may gate sale counts. Every other consumer (incentive counters,
+    // leaderboards) must use the raw count and see held sales as real sales.
+    const qualifiedSaleCount = countQualifiedSales(tenantId, repId, basis, bounds, { forPay: true });
 
     comp = computeStatement({
       planType: plan.type, tierMode: plan.tier_mode, flatRateCents: version.flat_rate_cents,
