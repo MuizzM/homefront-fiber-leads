@@ -17,8 +17,10 @@
 import { rawDb } from "./db";
 import { storage } from "./storage";
 import {
-  announceSale, announceStreak, visibleTo,
+  announceSale, announceStreak, visibleTo, buildAuthoredAnnouncement,
+  validateAuthoredAnnouncement,
   type Announcement, type AnnouncementKind, type SaleFacts, type StreakFacts,
+  type AuthoredAnnouncementInput,
 } from "@shared/teamFeed";
 import { DEFAULT_WORKWEEK, localWallToUtcMs, localYmdParts } from "@shared/workweek";
 
@@ -215,3 +217,34 @@ export function markRead(userId: number, upToId: number, nowMs: number): number 
 
 /** Re-export so the SSE fan-out applies exactly the same rule as the feed. */
 export { visibleTo };
+
+
+/**
+ * Post a manager-written promo or update.
+ *
+ * The dedupe key is a SEQUENCE, not a hash of the text: two identical "Push
+ * tonight" promos on consecutive Fridays are both real posts, and content
+ * hashing would silently swallow the second — the failure mode where a manager
+ * types an announcement, sees nothing happen, and types it again.
+ */
+export function publishAuthored(
+  tenantId: number, actorUserId: number | null, authorName: string | null,
+  input: AuthoredAnnouncementInput, nowMs: number,
+): StoredAnnouncement | null {
+  const problem = validateAuthoredAnnouncement(input);
+  if (problem) throw Object.assign(new Error(problem), { httpStatus: 400 });
+
+  const row = rawDb.prepare(
+    `SELECT COUNT(*) AS n FROM team_announcements WHERE tenant_id = ? AND kind IN ('promo','update')`,
+  ).get(tenantId) as any;
+  const seq = Number(row?.n ?? 0) + 1;
+
+  const announcement = buildAuthoredAnnouncement(input, authorName, seq);
+  const stored = publish(tenantId, announcement, nowMs);
+  if (stored) {
+    storage.logActivity(actorUserId, `announcement.${input.kind}.posted`, "tenant", tenantId, {
+      title: announcement.headline, amountCents: input.amountCents ?? null,
+    }, undefined);
+  }
+  return stored;
+}

@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Bell, Flame, PartyPopper } from "lucide-react";
+import { BadgeDollarSign, Bell, Flame, Megaphone, PartyPopper } from "lucide-react";
 import { agoLabel, type AnnouncementKind } from "@shared/teamFeed";
 
 export interface FeedItem {
@@ -81,11 +81,19 @@ export function applyLiveAnnouncement(qc: ReturnType<typeof useQueryClient>, a: 
 const KIND_ICON: Record<AnnouncementKind, typeof Flame> = {
   sale: PartyPopper,
   hot_streak: Flame,
+  promo: BadgeDollarSign,
+  update: Megaphone,
 };
 
 const KIND_TONE: Record<AnnouncementKind, string> = {
   sale: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   hot_streak: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  // A promo has money attached and a deadline behind it — amber, same language
+  // the Live Slot uses for "clock running".
+  promo: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  // An update is news. Neutral on purpose: it must not compete with the two
+  // registers that mean "act now".
+  update: "bg-secondary text-muted-foreground",
 };
 
 function FeedRow({ item, now }: { item: FeedItem; now: number }) {

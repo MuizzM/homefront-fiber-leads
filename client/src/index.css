@@ -728,3 +728,61 @@
   .no-print { display: none !important; }
   @page { margin: 14mm; }
 }
+
+/* ── Add-to-Home-Screen walkthrough ─────────────────────────────────────────
+   Keyframes for client/src/components/AddToHomeScreen.tsx.
+
+   They live HERE rather than in a <style dangerouslySetInnerHTML> inside the
+   component on purpose: that would reintroduce the only DOM injection sink in
+   the codebase, which the security pass just removed. The content is static
+   either way, but "zero sinks" is only a property worth having if it is
+   actually zero.
+
+   Everything animates transform/opacity only — no layout, no paint thrash on a
+   field phone. */
+@keyframes hfs-a2hs-tap {
+  0%, 8%    { transform: scale(1);   opacity: .55; }
+  12%       { transform: scale(1.5); opacity: 1; }
+  18%, 100% { transform: scale(1);   opacity: .55; }
+}
+@keyframes hfs-a2hs-sheet {
+  0%, 14%   { transform: translateY(100%); opacity: 0; }
+  22%, 62%  { transform: translateY(0);    opacity: 1; }
+  70%, 100% { transform: translateY(100%); opacity: 0; }
+}
+@keyframes hfs-a2hs-row {
+  0%, 34%   { background-color: transparent; }
+  40%, 58%  { background-color: hsl(var(--primary) / 0.22); }
+  64%, 100% { background-color: transparent; }
+}
+@keyframes hfs-a2hs-icon {
+  0%, 66%   { transform: scale(.4);   opacity: 0; }
+  76%       { transform: scale(1.12); opacity: 1; }
+  82%, 100% { transform: scale(1);    opacity: 1; }
+}
+@keyframes hfs-a2hs-glow {
+  0%, 70% { opacity: 0; }
+  80%     { opacity: .9; }
+  100%    { opacity: 0; }
+}
+.hfs-a2hs [data-anim] {
+  animation-duration: 7s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+.hfs-a2hs [data-anim="tap"]   { animation-name: hfs-a2hs-tap; }
+.hfs-a2hs [data-anim="sheet"] { animation-name: hfs-a2hs-sheet; }
+.hfs-a2hs [data-anim="row"]   { animation-name: hfs-a2hs-row; }
+.hfs-a2hs [data-anim="icon"]  { animation-name: hfs-a2hs-icon; }
+.hfs-a2hs [data-anim="glow"]  { animation-name: hfs-a2hs-glow; }
+
+/* Reduced motion holds the LAST frame — icon already on the home screen, sheet
+   gone. That is the frame that actually teaches, so freezing there costs the
+   viewer nothing. */
+@media (prefers-reduced-motion: reduce) {
+  .hfs-a2hs [data-anim] { animation: none !important; }
+  .hfs-a2hs [data-anim="sheet"] { transform: translateY(100%); opacity: 0; }
+  .hfs-a2hs [data-anim="icon"]  { transform: scale(1); opacity: 1; }
+  .hfs-a2hs [data-anim="glow"]  { opacity: 0; }
+  .hfs-a2hs [data-anim="tap"]   { opacity: .55; }
+}

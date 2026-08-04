@@ -34,7 +34,19 @@
 //
 // PURE: no clock, no database, no I/O.
 
-export type AnnouncementKind = "sale" | "hot_streak";
+export type AnnouncementKind =
+  /** A teammate closed one. Proof the street is live. */
+  | "sale"
+  /** A teammate is running hot. An invitation to race them. */
+  | "hot_streak"
+  /** Money on the table, authored by a manager — a promo, a contest, a push. */
+  | "promo"
+  /** Something changed in the app, or something the floor needs to know. */
+  | "update";
+
+/** The two kinds a human writes, as opposed to the two the system emits. */
+export const AUTHORED_KINDS = ["promo", "update"] as const;
+export type AuthoredKind = typeof AUTHORED_KINDS[number];
 
 export interface Announcement {
   kind: AnnouncementKind;
@@ -183,4 +195,75 @@ export function agoLabel(createdAtMs: number, nowMs: number): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h`;
   return `${Math.floor(h / 24)}d`;
+}
+
+
+// ── Announcements a manager writes ──────────────────────────────────────────
+// The sale and streak kinds are emitted by the system from facts. These two are
+// authored, which makes them the only place in the feed where a human chooses
+// the words — and therefore the only place that needs limits.
+//
+// A promo interrupts (there is money attached and a rep should act now); an
+// update does not (it is news, and news that buzzes a phone mid-pitch is how
+// people turn notifications off).
+
+export const ANNOUNCEMENT_TITLE_MAX = 80;
+export const ANNOUNCEMENT_BODY_MAX = 240;
+
+export interface AuthoredAnnouncementInput {
+  kind: AuthoredKind;
+  title: string;
+  body: string;
+  /** Optional money, for a promo. Display only — it does not pay anything by
+   *  itself, and the copy must not imply it does. */
+  amountCents?: number;
+}
+
+/** Shared by the API and the compose form, so the button disables for exactly
+ *  the reasons the server would reject. Returns null when valid. */
+export function validateAuthoredAnnouncement(input: unknown): string | null {
+  const a = input as AuthoredAnnouncementInput | null;
+  if (!a || typeof a !== "object") return "Nothing to post.";
+  if (!AUTHORED_KINDS.includes(a.kind)) return "Pick promo or update.";
+
+  const title = String(a.title ?? "").trim();
+  const body = String(a.body ?? "").trim();
+  if (!title) return "Give it a headline.";
+  // Length caps are not cosmetic: this text becomes a phone notification, and
+  // anything past ~80 characters is truncated by the OS mid-word.
+  if (title.length > ANNOUNCEMENT_TITLE_MAX) return `Headline is over ${ANNOUNCEMENT_TITLE_MAX} characters.`;
+  if (!body) return "Say what it means for them.";
+  if (body.length > ANNOUNCEMENT_BODY_MAX) return `Message is over ${ANNOUNCEMENT_BODY_MAX} characters.`;
+
+  if (a.amountCents != null) {
+    const c = Number(a.amountCents);
+    if (!Number.isInteger(c) || c < 0) return "Amount must be a whole number.";
+    // Same ceiling every other incentive here enforces. A four-figure promo is
+    // a fat finger, and this one goes to every phone in the org.
+    if (c > 100_000) return "A promo cannot advertise more than $1,000.";
+  }
+  return null;
+}
+
+export function buildAuthoredAnnouncement(
+  input: AuthoredAnnouncementInput, authorName: string | null | undefined, seq: number,
+): Announcement {
+  const title = String(input.title).trim();
+  const body = String(input.body).trim();
+  return {
+    kind: input.kind,
+    // Authored announcements have no actor REP — they come from the org, not
+    // from a rep's activity. -1 keeps them out of the "don't show me my own
+    // win" filter, which would otherwise hide a manager's promo from the
+    // manager who wrote it (and from nobody else, which is worse than useless).
+    actorRepId: -1,
+    actorName: shortName(authorName) || "Homefront",
+    headline: title,
+    body,
+    amountCents: input.amountCents,
+    // Sequence rather than content: two identical "Push tonight" promos on
+    // consecutive Fridays are both real, and hashing the text would silently
+    // swallow the second.
+    dedupeKey: `${input.kind}:authored:${seq}`,
+  };
 }
