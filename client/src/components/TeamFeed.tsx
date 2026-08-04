@@ -164,6 +164,86 @@ export function TeamFeedBell({ className }: { className?: string }) {
   );
 }
 
+/** The newest announcement, inline at the top of the home screen.
+ *
+ *  The bell alone is not enough for the thing a manager most wants read. A promo
+ *  or a schedule change posted at 7am sits behind a badge that a rep walking
+ *  between doors has no reason to tap, and "the payout changed today" should not
+ *  require curiosity to reach someone.
+ *
+ *  So: ONE line, only while it is UNREAD, tapping opens the full feed. It
+ *  disappears the moment the feed is opened, which is what keeps it from
+ *  becoming another permanent slab on a screen that already fought that battle
+ *  (see the Live Slot comment in Today.tsx — five systems each wanting a card is
+ *  how a home screen turns into a slot machine).
+ *
+ *  Deliberately NOT separately dismissible: reading it dismisses it. An X would
+ *  train reps to swipe the announcement away without reading it, which is the
+ *  exact failure this exists to prevent. */
+export function TeamFeedHeadline({ className }: { className?: string }) {
+  const { data } = useTeamFeed();
+  const [open, setOpen] = useState(false);
+  const qc = useQueryClient();
+
+  const clear = useMutation({
+    mutationFn: async (upToId: number) => {
+      const res = await apiRequest("POST", "/api/announcements/read", { upToId });
+      return res.json();
+    },
+    // Optimistic: the strip must vanish on tap, not after the round trip.
+    onMutate: async (upToId: number) => {
+      await qc.cancelQueries({ queryKey: FEED_KEY });
+      qc.setQueryData<FeedPayload>(FEED_KEY, prev =>
+        prev ? { ...prev, unread: 0, latestId: Math.max(prev.latestId, upToId) } : prev);
+    },
+    onSettled: () => { qc.invalidateQueries({ queryKey: FEED_KEY }); },
+  });
+
+  const unread = data?.unread ?? 0;
+  const item = data?.items?.[0];
+  const onOpen = (next: boolean) => {
+    setOpen(next);
+    if (next && (data?.latestId ?? 0) > 0) clear.mutate(data!.latestId);
+  };
+
+  // Keep the sheet mounted while it is open even after `unread` drops to 0 —
+  // returning null on tap would unmount the sheet along with the strip.
+  if ((unread <= 0 || !item) && !open) return null;
+
+  const Icon = item ? (KIND_ICON[item.kind] ?? PartyPopper) : PartyPopper;
+
+  return (
+    <>
+      {unread > 0 && item && (
+        <button
+          type="button"
+          onClick={() => onOpen(true)}
+          data-testid="team-feed-headline"
+          aria-label={`${item.headline}. ${unread} new. Open team activity.`}
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-xl border border-primary/20 bg-primary/[0.07] px-3 py-2.5 text-left transition-transform active:scale-[.99] hover:border-primary/40",
+            FOCUS, className,
+          )}
+        >
+          <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", KIND_TONE[item.kind])}>
+            <Icon className="h-[15px] w-[15px]" aria-hidden="true" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-semibold leading-snug text-foreground">{item.headline}</span>
+            <span className="block truncate text-[12px] leading-snug text-muted-foreground">{item.body}</span>
+          </span>
+          {unread > 1 && (
+            <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-bold leading-[18px] text-primary-foreground tabular-nums">
+              {unread > 9 ? "9+" : unread}
+            </span>
+          )}
+        </button>
+      )}
+      <TeamFeedSheet open={open} onOpenChange={onOpen} />
+    </>
+  );
+}
+
 export function TeamFeedSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const { data, isLoading } = useTeamFeed(open);
   // One clock for the whole list, ticking while it is open — otherwise every

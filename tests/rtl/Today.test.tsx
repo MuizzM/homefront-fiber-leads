@@ -36,6 +36,15 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
 vi.mock("@/components/OutcomeSheet", () => ({ OutcomeSheet: () => null }));
 
+// The install/push card reads real browser capability. jsdom is neither iOS nor
+// standalone, so unmocked it renders null and would let the "is it mounted?"
+// tests below pass vacuously — the exact bug they exist to catch.
+const readiness = vi.fn();
+vi.mock("@/lib/pushNotifications", () => ({
+  pushReadiness: () => readiness(),
+  enablePush: vi.fn(),
+}));
+
 const navigate = vi.fn();
 vi.mock("wouter", () => ({
   useLocation: () => ["/", navigate],
@@ -62,6 +71,7 @@ interface Endpoints {
   followups?: Array<{ callbackDate: string }>;
   failPins?: boolean;
   failBoard?: boolean;
+  announcements?: { items: any[]; unread: number; latestId: number };
 }
 function renderToday(e: Endpoints = {}) {
   const pins = e.pins ?? [];
@@ -75,13 +85,38 @@ function renderToday(e: Endpoints = {}) {
     }
     if (url.startsWith("/api/clock/status")) return Promise.resolve({ json: () => Promise.resolve({ clockedIn: e.clockedIn ?? false, session: null }) });
     if (url.startsWith("/api/followups")) return Promise.resolve({ json: () => Promise.resolve(e.followups ?? []) });
+    if (url.startsWith("/api/announcements")) {
+      return Promise.resolve({ json: () => Promise.resolve(e.announcements ?? { items: [], unread: 0, latestId: 0 }) });
+    }
     return Promise.resolve({ json: () => Promise.resolve([]) });
   });
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const qc = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        // Mirrors the app's default queryFn (client/src/lib/queryClient.ts).
+        // Without it, any query declared without an explicit queryFn — such as
+        // useTeamFeed — hangs forever here while working fine in production.
+        queryFn: ({ queryKey }: any) => apiRequest("GET", String(queryKey[0])).then((r: any) => r.json()),
+      },
+    },
+  });
   return render(<QueryClientProvider client={qc}><Today /></QueryClientProvider>);
 }
 
-beforeEach(() => { apiRequest.mockReset(); navigate.mockReset(); knockLog.mockReset(); });
+beforeEach(() => {
+  apiRequest.mockReset(); navigate.mockReset(); knockLog.mockReset();
+  // Default: nothing to offer, so the card is absent unless a test says otherwise.
+  readiness.mockReset().mockReturnValue({ state: "granted", isIOS: false, isStandalone: true });
+});
+
+function announcement(over: any = {}) {
+  return {
+    id: 7, kind: "promo", actorRepId: -1, actorName: "HQ",
+    headline: "Double pay on Oak St until 6", body: "Every sale on Oak counts twice today",
+    createdAtMs: Date.now() - 60_000, ...over,
+  };
+}
 
 describe("Today — the rep's home", () => {
   it("greets the rep by first name", async () => {
@@ -156,5 +191,66 @@ describe("Today — the rep's home", () => {
     unmount();
     renderToday({ clockedIn: true, pins: [pin({ id: 1 })] });
     expect(await screen.findByTestId("today-clock-out")).toBeTruthy();
+  });
+});
+
+// ── Mounted at all ──────────────────────────────────────────────────────────
+//
+// These exist because the components did NOT: PushSetupCard and TeamFeed were
+// both written, reviewed and shipped while referenced from nowhere. The install
+// animation reached no one, and a manager could post an announcement that no rep
+// had any surface to read. Rendering correctly is worthless if nothing renders
+// you, so this block asserts placement, not appearance.
+describe("Today — announcements and the install prompt reach the rep", () => {
+  it("puts the install-and-notify card ABOVE the earnings header", async () => {
+    readiness.mockReturnValue({ state: "needs_install", isIOS: true, isStandalone: false });
+    renderToday();
+
+    const card = await screen.findByTestId("push-setup-card");
+    const header = await screen.findByTestId("today-greeting");
+    // Node.compareDocumentPosition: FOLLOWING means header comes after the card.
+    expect(card.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("on iPhone in a tab it teaches the install instead of asking for permission", async () => {
+    // Asking here would burn the single prompt iOS ever shows, permanently.
+    readiness.mockReturnValue({ state: "needs_install", isIOS: true, isStandalone: false });
+    renderToday();
+    await screen.findByTestId("push-setup-card");
+    expect(screen.getByTestId("a2hs-guide")).toBeTruthy();
+    expect(screen.queryByTestId("push-setup-enable")).toBeNull();
+  });
+
+  it("renders nothing once notifications are already granted", async () => {
+    readiness.mockReturnValue({ state: "granted", isIOS: false, isStandalone: true });
+    renderToday();
+    await screen.findByTestId("today-greeting");
+    expect(screen.queryByTestId("push-setup-card")).toBeNull();
+  });
+
+  it("shows the newest unread announcement at the top, above the header", async () => {
+    renderToday({ announcements: { items: [announcement()], unread: 1, latestId: 7 } });
+
+    const strip = await screen.findByTestId("team-feed-headline");
+    expect(strip.textContent).toContain("Double pay on Oak St until 6");
+    const header = screen.getByTestId("today-greeting");
+    expect(strip.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the strip out of the way when there is nothing unread", async () => {
+    renderToday({ announcements: { items: [announcement()], unread: 0, latestId: 7 } });
+    await screen.findByTestId("today-greeting");
+    expect(screen.queryByTestId("team-feed-headline")).toBeNull();
+  });
+
+  it("always offers the bell, so a read announcement is still reachable", async () => {
+    renderToday({ announcements: { items: [announcement()], unread: 0, latestId: 7 } });
+    expect(await screen.findByTestId("team-feed-bell")).toBeTruthy();
+  });
+
+  it("badges the bell with the unread count", async () => {
+    renderToday({ announcements: { items: [announcement()], unread: 3, latestId: 7 } });
+    const badge = await screen.findByTestId("team-feed-unread");
+    expect(badge.textContent).toBe("3");
   });
 });
