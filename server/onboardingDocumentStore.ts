@@ -37,6 +37,12 @@ export interface OnboardingDocumentRecord {
   completionEmailId: string | null;
   retentionUntil: string | null;
   failureReason: string | null;
+  /** Company counter-signature state: none (grandfathered / not yet signed by
+   *  the rep) → pending (rep signed; awaits the company) → completed (dual-signed). */
+  counterSignStatus: "none" | "pending" | "completed";
+  companySignerUserId: number | null;
+  companySignatureName: string | null;
+  companySignedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -92,6 +98,10 @@ function mapRecord(row: any): PrivateOnboardingDocument | null {
     completionEmailId: row.completion_email_id,
     retentionUntil: row.retention_until,
     failureReason: row.failure_reason,
+    counterSignStatus: row.counter_sign_status ?? "none",
+    companySignerUserId: row.company_signer_user_id ?? null,
+    companySignatureName: row.company_signature_name ?? null,
+    companySignedAt: row.company_signed_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     snapshot: parseJson<AgreementSnapshot>(row.document_snapshot_json)!,
@@ -117,6 +127,9 @@ const PUBLIC_DOCUMENT_KEYS = [
   "voidedAt", "statusChangedAt", "signatureName", "signatureTypedName", "signatureSha256",
   "electronicConsentVersion", "electronicConsentAt", "signedUserId",
   "completedPdfSha256", "completionEmailId", "retentionUntil", "failureReason",
+  // Counter-sign state is rep-visible (it answers "is my agreement fully
+  // executed?"); the company signer's USER ID stays server-side.
+  "counterSignStatus", "companySignatureName", "companySignedAt",
   "createdAt", "updatedAt",
 ] as const satisfies readonly (keyof OnboardingDocumentRecord)[];
 
@@ -402,12 +415,17 @@ export function completeSigning(input: {
     if (!["sent", "delivered"].includes(current.status)) throw new Error("Document is not available for signing");
     if (current.contentSha256 !== input.expectedContentSha256) throw new Error("Document content changed; reopen it before signing");
     const retentionUntil = new Date(new Date(input.signedAt).setUTCFullYear(new Date(input.signedAt).getUTCFullYear() + 7)).toISOString();
+    // The rep's signature completes the rep half; completion queues the COMPANY
+    // counter-signature ('none' → 'pending'). Documents completed before the
+    // counter-sign graft deployed keep 'none' forever (grandfathered — they
+    // were fully executed under the single-party ceremony and never queue).
     const changed = rawDb.prepare(
       `UPDATE onboarding_signing_documents
           SET status = 'completed', completed_at = ?, status_changed_at = ?,
               signature_name = ?, signature_typed_name = ?, signature_sha256 = ?, electronic_consent_version = ?,
               electronic_consent_at = ?, signed_user_id = ?, signed_ip = ?, signed_user_agent = ?,
               evidence_json = ?, completed_pdf = ?, completed_pdf_sha256 = ?,
+              counter_sign_status = 'pending',
               retention_until = ?, failure_reason = NULL, updated_at = ?
         WHERE id = ? AND status IN ('sent','delivered') AND content_sha256 = ?`,
     ).run(
@@ -509,6 +527,76 @@ export function voidSigningDocument(input: {
     });
     return getSigningDocument(input.id)!;
   }).immediate();
+}
+
+/**
+ * The company counter-signature — the SOLE write the immutability trigger
+ * permits on a completed document. It is deliberately narrow: only a document
+ * whose rep signature is complete and whose counter_sign_status is 'pending'
+ * can transition, the company fields move NULL → set exactly once (a second
+ * call matches no row and throws), and the dual-stamped PDF replaces the
+ * rep-only certificate atomically in the same UPDATE. The conditional UPDATE
+ * is the concurrency guard; the trigger is the defense-in-depth underneath it.
+ */
+export function counterSignDocument(input: {
+  id: number;
+  companySignerUserId: number;
+  companySignatureName: string;
+  signedAt: string;
+  pdf: Buffer;
+  pdfSha256: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+}): PrivateOnboardingDocument {
+  return rawDb.transaction(() => {
+    const current = getSigningDocument(input.id);
+    if (!current) throw new Error("Document not found");
+    if (current.status !== "completed" || current.counterSignStatus !== "pending") {
+      throw new Error("Document is not awaiting a company counter-signature");
+    }
+    const changed = rawDb.prepare(
+      `UPDATE onboarding_signing_documents
+          SET counter_sign_status = 'completed',
+              company_signer_user_id = ?, company_signature_name = ?, company_signed_at = ?,
+              completed_pdf = ?, completed_pdf_sha256 = ?, updated_at = ?
+        WHERE id = ? AND status = 'completed' AND counter_sign_status = 'pending'
+          AND company_signer_user_id IS NULL`,
+    ).run(
+      input.companySignerUserId,
+      input.companySignatureName,
+      input.signedAt,
+      input.pdf,
+      input.pdfSha256,
+      input.signedAt,
+      input.id,
+    );
+    if (!changed.changes) throw new Error("Document was already counter-signed");
+    appendEvent({
+      documentId: input.id,
+      eventType: "counter_signed",
+      actorUserId: input.companySignerUserId,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      payload: {
+        companySignatureName: input.companySignatureName,
+        signedAt: input.signedAt,
+        documentSha256: current.contentSha256,
+        completedPdfSha256: input.pdfSha256,
+      },
+      createdAt: input.signedAt,
+    });
+    return getSigningDocument(input.id)!;
+  }).immediate();
+}
+
+/** The manager's counter-sign queue: completed-by-the-rep documents in this
+ *  tenant still waiting on the company. Grandfathered 'none' rows never appear. */
+export function listCounterSignQueue(tenantId: number): OnboardingDocumentRecord[] {
+  return rawDb.prepare(
+    `SELECT * FROM onboarding_signing_documents
+      WHERE tenant_id = ? AND counter_sign_status = 'pending'
+      ORDER BY completed_at ASC, id ASC`,
+  ).all(tenantId).map(row => toPublicRecord(mapRecord(row)!));
 }
 
 export function getCompletedPdf(id: number): Buffer | null {

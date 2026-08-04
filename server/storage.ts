@@ -2456,6 +2456,83 @@ export function runMigrations() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_training_review_log_dedupe
        ON training_review_log(tenant_id, user_id, card_id, reviewed_at)`,
 
+    // ══ ONBOARD INTEGRATOR: company counter-sign graft + install-gated ═══════
+    // ══ commission hold — additive ALTERs, guarded trigger replacement. ══════
+    //
+    // Install-gated commission hold: NULL/NULL = held (when the tenant policy
+    // requires install confirmation). Status stays 'pending' — the installHold
+    // flag is computed at read time (shared/commissionHold.ts), never a new
+    // lifecycle status.
+    `ALTER TABLE commissions ADD COLUMN install_confirmed_at TEXT`,
+    `ALTER TABLE commissions ADD COLUMN payable_after TEXT`,
+    // Per-tenant pay policy knobs (absent row = defaults: require install
+    // confirm, 90-day hold).
+    `CREATE TABLE IF NOT EXISTS tenant_pay_policy (
+       tenant_id INTEGER PRIMARY KEY,
+       require_install_confirm INTEGER NOT NULL DEFAULT 1,
+       hold_days INTEGER NOT NULL DEFAULT 90,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    // Company counter-signature on the EXISTING signing chain. The rep's
+    // signature still completes the document (status 'completed'); completion
+    // now also flips counter_sign_status 'none' → 'pending', which queues the
+    // document for a manager's company counter-signature (→ 'completed').
+    // GRANDFATHERING: rows completed before this deploy keep the 'none'
+    // default and behave exactly as before — they never enter the queue and
+    // cannot be counter-signed (they were fully executed under the
+    // then-current single-party ceremony).
+    `ALTER TABLE onboarding_signing_documents ADD COLUMN company_signer_user_id INTEGER`,
+    `ALTER TABLE onboarding_signing_documents ADD COLUMN company_signature_name TEXT`,
+    `ALTER TABLE onboarding_signing_documents ADD COLUMN company_signed_at TEXT`,
+    `ALTER TABLE onboarding_signing_documents ADD COLUMN counter_sign_status TEXT NOT NULL DEFAULT 'none'
+       CHECK (counter_sign_status IN ('none','pending','completed'))`,
+    `CREATE INDEX IF NOT EXISTS idx_signing_doc_counter_queue
+       ON onboarding_signing_documents(tenant_id, counter_sign_status, completed_at)
+       WHERE counter_sign_status = 'pending'`,
+    // The immutability trigger must be REPLACED, not just created-if-missing:
+    // existing DBs already carry the original predicate, and CREATE TRIGGER IF
+    // NOT EXISTS would silently keep it. The counter-sign write (company
+    // columns + the dual-stamped PDF) is the SOLE post-completion mutation the
+    // new predicate permits — every rep-side evidence column stays frozen
+    // unconditionally. See the full rationale on the trigger body itself.
+    `DROP TRIGGER IF EXISTS trg_onboarding_signed_document_immutable`,
+    `CREATE TRIGGER trg_onboarding_signed_document_immutable
+       BEFORE UPDATE ON onboarding_signing_documents
+       WHEN OLD.status = 'completed' AND (
+         -- Rep-side evidence: frozen forever, no exceptions.
+            NEW.status IS NOT OLD.status
+         OR NEW.completed_at IS NOT OLD.completed_at
+         OR NEW.evidence_json IS NOT OLD.evidence_json
+         OR NEW.content_sha256 IS NOT OLD.content_sha256
+         OR NEW.signature_sha256 IS NOT OLD.signature_sha256
+         OR NEW.document_snapshot_json IS NOT OLD.document_snapshot_json
+         OR NEW.signature_name IS NOT OLD.signature_name
+         OR NEW.signature_typed_name IS NOT OLD.signature_typed_name
+         OR (
+           -- The completed PDF and the counter-sign columns may change
+           -- post-completion ONLY as the single counter-sign transition
+           -- ('pending' → 'completed', company fields NULL → set, dual-stamped
+           -- PDF present). Any other write to them aborts.
+              NEW.completed_pdf IS NOT OLD.completed_pdf
+           OR NEW.completed_pdf_sha256 IS NOT OLD.completed_pdf_sha256
+           OR NEW.counter_sign_status IS NOT OLD.counter_sign_status
+           OR NEW.company_signer_user_id IS NOT OLD.company_signer_user_id
+           OR NEW.company_signature_name IS NOT OLD.company_signature_name
+           OR NEW.company_signed_at IS NOT OLD.company_signed_at
+         ) AND NOT (
+              OLD.counter_sign_status = 'pending'
+           AND NEW.counter_sign_status = 'completed'
+           AND OLD.company_signer_user_id IS NULL
+           AND OLD.company_signature_name IS NULL
+           AND OLD.company_signed_at IS NULL
+           AND NEW.company_signer_user_id IS NOT NULL
+           AND NEW.company_signature_name IS NOT NULL
+           AND NEW.company_signed_at IS NOT NULL
+           AND NEW.completed_pdf IS NOT NULL
+           AND NEW.completed_pdf_sha256 IS NOT NULL
+         )
+       )
+       BEGIN SELECT RAISE(ABORT, 'a completed onboarding signature is immutable'); END`,
+
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

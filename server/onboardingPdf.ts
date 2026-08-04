@@ -57,7 +57,18 @@ function addFooter(doc: PDFKit.PDFDocument, label = "Home Front Sign") {
   }
 }
 
-export function renderSignedAgreementPdf(snapshot: AgreementSnapshot, evidence: SignatureEvidence): Promise<Buffer> {
+export interface CounterSignEvidence {
+  /** The company signer's typed name (matched to their account name). */
+  companySignatureName: string;
+  companySignedAt: string;
+  companySignerUserId: number;
+}
+
+export function renderSignedAgreementPdf(
+  snapshot: AgreementSnapshot,
+  evidence: SignatureEvidence,
+  counterSign?: CounterSignEvidence,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
       Title: `${snapshot.title} — ${snapshot.signerName}`,
@@ -95,6 +106,22 @@ export function renderSignedAgreementPdf(snapshot: AgreementSnapshot, evidence: 
       .text(`Authenticated account: ${evidence.signerEmail} (user ${evidence.authenticatedUserId})`, 74, signY + 82)
       .text(`IP: ${evidence.ipAddress} • Browser: ${evidence.userAgent.slice(0, 90)}`, 74, signY + 98, { width: 455 });
     doc.y = signY + 146;
+
+    // The COMPANY counter-signature block — present only on the final,
+    // dual-stamped copy issued when a manager counter-signs on behalf of the
+    // company. The rep-signed-only certificate omits it, so the two artifacts
+    // are visually distinguishable at a glance.
+    if (counterSign) {
+      doc.moveDown(0.7).roundedRect(58, doc.y, 496, 92, 8).fillAndStroke("#f0f8f6", "#cfe7e0");
+      const counterY = doc.y + 15;
+      doc.fillColor("#617081").font("Helvetica-Bold").fontSize(8).text("COMPANY COUNTER-SIGNATURE", 74, counterY);
+      doc.fillColor("#12314c").font("Helvetica-Oblique").fontSize(17)
+        .text(counterSign.companySignatureName, 74, counterY + 15, { width: 460 });
+      doc.font("Helvetica").fontSize(9).fillColor("#263746")
+        .text(`Counter-signed for ${snapshot.companyName} (user ${counterSign.companySignerUserId})`, 74, counterY + 44, { width: 455 })
+        .text(`Counter-signed: ${new Date(counterSign.companySignedAt).toISOString()}`, 74, counterY + 60);
+      doc.y = counterY + 100;
+    }
 
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#12314c").text("Tamper-evident record identifiers");
     doc.moveDown(0.35).font("Courier").fontSize(7.2).fillColor("#263746")

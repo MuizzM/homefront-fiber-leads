@@ -18,6 +18,8 @@ import {
   type CommissionTier, type RetroResult, DEFAULT_RETRO_TIERS,
 } from "@shared/commissionTiers";
 import { hourlyPayForWeek, type WeekHourlyPay } from "./hourlyPay";
+import { getTenantPayPolicy } from "./payPolicyStore";
+import { isCommissionHeld } from "@shared/commissionHold";
 
 // ── Typed domain errors ───────────────────────────────────────────────────────
 export type CommissionErrorCode =
@@ -196,14 +198,96 @@ function loadTiers(tenantId: number, versionId: number): CommissionTier[] {
 
 // Aggregate qualified sales for a rep+week via the composite index — one query,
 // no rows loaded into JS, no N+1. Half-open [weekStart, nextWeekStart).
-function countQualifiedSales(tenantId: number, repId: number, basis: QualificationBasis, bounds: WeekBounds): number {
+//
+// ── Install-hold overlay (tenant_pay_policy) ─────────────────────────────────
+// Semantics mirror shared/commissionHold.ts (the pure read-side math), applied
+// here at the ONE aggregation point every pay surface funnels through
+// (statements → week-overview → week-export.csv → NACHA), so the money math
+// itself is never forked. Under a require-install-confirm policy a QUALIFIED
+// sale with a linked legacy commissions row is hold-gated:
+//   • install never confirmed (payable_after NULL) → never payable;
+//   • confirmed but now < payable_after → still inside the hold window;
+//   • released (now >= payable_after) → the sale counts in the week containing
+//     payable_after — necessarily a current-or-future (OPEN) week at confirm
+//     time, so released money cannot strand inside a week that FINALIZED
+//     without it. (Edge: a manager who FINALIZES mid-week can outrun a
+//     payable_after landing later in that same week — a sequencing error the
+//     frozen statement surfaces, not something the hold silently "fixes".)
+// Sales with NO linked commissions row (API-booked, lead_id NULL) are not
+// hold-gated — the hold is a knock-sale control; managers booking sales
+// directly are the control there. requireInstallConfirm=false collapses the
+// overlay to the legacy query, byte for byte.
+function countQualifiedSales(tenantId: number, repId: number, basis: QualificationBasis, bounds: WeekBounds, now: Date = new Date()): number {
+  const col = BASIS_COLUMN[basis];
+  const policy = getTenantPayPolicy(tenantId);
+  if (!policy.requireInstallConfirm) {
+    const row = rawDb.prepare(
+      `SELECT COUNT(*) AS c FROM commission_sales
+       WHERE tenant_id = ? AND rep_id = ? AND status = 'QUALIFIED'
+         AND ${col} IS NOT NULL AND ${col} >= ? AND ${col} < ?`
+    ).get(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any;
+    return Number(row?.c ?? 0);
+  }
+  // The CASE below is the SQL rendering of isCommissionHeld() (pending status,
+  // unconfirmed install, or now < payable_after) plus the release-week rule —
+  // only a HELD linked commission gates the sale; any other lifecycle status
+  // (approved/paid/disputed) follows the legacy basis exactly as before.
+  const row = rawDb.prepare(
+    `SELECT COUNT(*) AS c FROM (
+       SELECT CASE
+         WHEN cm_status IS NULL THEN basis_ts          -- no linked commission: not hold-gated
+         WHEN cm_status != 'pending' THEN basis_ts     -- held is a pending-only flag
+         WHEN hold_payable_after IS NULL THEN NULL     -- install never confirmed: never payable
+         WHEN hold_payable_after > ? THEN NULL         -- inside the hold window: not yet payable
+         ELSE hold_payable_after                       -- released: pays in the payable_after week
+       END AS effective_ts
+       FROM (
+         SELECT cs.${col} AS basis_ts,
+           (SELECT cm.status FROM commissions cm
+             WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
+               AND cm.status != 'superseded'
+             ORDER BY cm.id DESC LIMIT 1) AS cm_status,
+           (SELECT cm.payable_after FROM commissions cm
+             WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
+               AND cm.status != 'superseded'
+             ORDER BY cm.id DESC LIMIT 1) AS hold_payable_after
+         FROM commission_sales cs
+         WHERE cs.tenant_id = ? AND cs.rep_id = ? AND cs.status = 'QUALIFIED'
+       )
+     )
+     WHERE effective_ts >= ? AND effective_ts < ?`
+  ).get(now.toISOString(), tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any;
+  return Number(row?.c ?? 0);
+}
+
+/** Read-model projection of the hold overlay: QUALIFIED sales whose natural
+ *  basis falls in this week but which the install hold currently excludes from
+ *  the statement. Display only — the money exclusion itself lives in
+ *  countQualifiedSales above. */
+function installHeldSalesForWeek(tenantId: number, repId: number, basis: QualificationBasis, bounds: WeekBounds, now: Date = new Date()): {
+  saleCount: number; earliestPayableAfter: string | null;
+} {
+  const policy = getTenantPayPolicy(tenantId);
+  if (!policy.requireInstallConfirm) return { saleCount: 0, earliestPayableAfter: null };
   const col = BASIS_COLUMN[basis];
   const row = rawDb.prepare(
-    `SELECT COUNT(*) AS c FROM commission_sales
-     WHERE tenant_id = ? AND rep_id = ? AND status = 'QUALIFIED'
-       AND ${col} IS NOT NULL AND ${col} >= ? AND ${col} < ?`
-  ).get(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any;
-  return Number(row?.c ?? 0);
+    `SELECT COUNT(*) AS c, MIN(hold_payable_after) AS earliest FROM (
+       SELECT
+         (SELECT cm.status FROM commissions cm
+           WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
+             AND cm.status != 'superseded'
+           ORDER BY cm.id DESC LIMIT 1) AS cm_status,
+         (SELECT cm.payable_after FROM commissions cm
+           WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
+             AND cm.status != 'superseded'
+           ORDER BY cm.id DESC LIMIT 1) AS hold_payable_after
+       FROM commission_sales cs
+       WHERE cs.tenant_id = ? AND cs.rep_id = ? AND cs.status = 'QUALIFIED'
+         AND COALESCE(cs.${col}, cs.sold_at) >= ? AND COALESCE(cs.${col}, cs.sold_at) < ?
+     )
+     WHERE cm_status = 'pending' AND (hold_payable_after IS NULL OR hold_payable_after > ?)`
+  ).get(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc, now.toISOString()) as any;
+  return { saleCount: Number(row?.c ?? 0), earliestPayableAfter: row?.earliest ?? null };
 }
 
 function sumApprovedAdjustments(tenantId: number, statementId: number): number {
@@ -1090,11 +1174,16 @@ export interface WeekOverviewRepRow {
   nextTierRateCents: number | null;
   nextTierProjectedCommissionCents: number | null;
   marginalJumpCents: number | null;     // payroll delta if this rep reaches the next tier
+  // Install-hold read model (additive): QUALIFIED sales this week currently
+  // EXCLUDED from the statement by the install hold, with the earliest release
+  // date (null = install never confirmed). Named installHold so it can never
+  // be read as the chargeback-reserve "holdback" — a different concept.
+  installHold: { saleCount: number; earliestPayableAfter: string | null };
 }
 
 export function getWeekOverview(tenantId: number, actorId: number | null, weekReference: Date | string | number, repIds: number[] | null): {
   bounds: WeekBounds; weekEnded: boolean; rows: WeekOverviewRepRow[];
-  totals: { projectedPayrollCents: number; finalizedPayrollCents: number; paidPayrollCents: number; exposureCents: number; qualifiedSales: number; repsWithSales: number };
+  totals: { projectedPayrollCents: number; finalizedPayrollCents: number; paidPayrollCents: number; exposureCents: number; qualifiedSales: number; repsWithSales: number; installHoldSales: number };
   exceptions: Array<{ type: string; repId: number; repName: string; detail: string }>;
 } {
   const config = loadOrgConfig(tenantId);
@@ -1140,6 +1229,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
       hourlyPayCents: hp.payCents, openClockSessions: hp.openSessionCount,
       salesUntilNextTier: null, nextTierRateCents: null,
       nextTierProjectedCommissionCents: null, marginalJumpCents: null,
+      installHold: installHeldSalesForWeek(tenantId, rep.id, config.qualificationBasis, bounds),
     };
 
     // Auto-close rule: an ended week with a forgotten open clock-in can never
@@ -1256,7 +1346,11 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
   rows.sort((a, b) => b.finalCommissionCents - a.finalCommissionCents || a.repName.localeCompare(b.repName));
   return {
     bounds, weekEnded, rows,
-    totals: { projectedPayrollCents: projected, finalizedPayrollCents: finalized, paidPayrollCents: paid, exposureCents: exposure, qualifiedSales, repsWithSales },
+    totals: {
+      projectedPayrollCents: projected, finalizedPayrollCents: finalized, paidPayrollCents: paid,
+      exposureCents: exposure, qualifiedSales, repsWithSales,
+      installHoldSales: rows.reduce((sum, row) => sum + row.installHold.saleCount, 0),
+    },
     exceptions,
   };
 }
@@ -1368,14 +1462,39 @@ export function listWeekSalesForRep(tenantId: number, repId: number, weekReferen
   const config = loadOrgConfig(tenantId);
   const bounds = weekBoundsFor(weekReference, config);
   const basisCol = BASIS_COLUMN[config.qualificationBasis];
-  return rawDb.prepare(
+  const rows = rawDb.prepare(
     `SELECT cs.id, cs.external_id, cs.status, cs.sold_at, cs.qualified_at, cs.reversed_at,
-            cs.lead_id, cs.house_amount_cents, l.address, l.city
+            cs.lead_id, cs.house_amount_cents, l.address, l.city,
+            (SELECT cm.status FROM commissions cm
+              WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
+                AND cm.status != 'superseded'
+              ORDER BY cm.id DESC LIMIT 1) AS cm_status,
+            (SELECT cm.install_confirmed_at FROM commissions cm
+              WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
+                AND cm.status != 'superseded'
+              ORDER BY cm.id DESC LIMIT 1) AS cm_install_confirmed_at,
+            (SELECT cm.payable_after FROM commissions cm
+              WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
+                AND cm.status != 'superseded'
+              ORDER BY cm.id DESC LIMIT 1) AS cm_payable_after
      FROM commission_sales cs LEFT JOIN leads l ON l.id = cs.lead_id
      WHERE cs.tenant_id = ? AND cs.rep_id = ?
        AND COALESCE(cs.${basisCol}, cs.sold_at) >= ? AND COALESCE(cs.${basisCol}, cs.sold_at) < ?
      ORDER BY COALESCE(cs.${basisCol}, cs.sold_at) DESC`
   ).all(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any[];
+  // Per-sale install-hold flag (same pure predicate the payable math uses) so
+  // the rep-facing "what counts" list can show a held sale WITH its release
+  // date instead of letting it vanish unexplained from the statement.
+  const policy = getTenantPayPolicy(tenantId);
+  return rows.map(row => {
+    const linked = row.cm_status != null;
+    const installHold = linked && isCommissionHeld(
+      { status: row.cm_status, installConfirmedAt: row.cm_install_confirmed_at, payableAfter: row.cm_payable_after },
+      policy,
+    );
+    const { cm_status, cm_install_confirmed_at, cm_payable_after, ...sale } = row;
+    return { ...sale, installHold, payableAfter: installHold ? (row.cm_payable_after ?? null) : null };
+  });
 }
 
 // ── Reserve (holdback) read model ─────────────────────────────────────────────

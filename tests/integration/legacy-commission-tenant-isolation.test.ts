@@ -43,6 +43,16 @@ beforeAll(async () => {
   } as any);
   tenantBId = tenantB.id;
 
+  // This suite pins the pre-hold legacy commission API contract; the
+  // install hold is default-ON (tenant_pay_policy), so opt both fixture
+  // tenants OUT — the hold has dedicated coverage in
+  // tests/integration/commission-hold.test.ts.
+  for (const tid of [1, tenantBId]) {
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 0, 90, datetime('now'))",
+    ).run(tid);
+  }
+
   const tenantARep = storage.createTeamMember({
     name: "Tenant A Commission Rep",
     email: "legacy-commission-rep-a@example.test",

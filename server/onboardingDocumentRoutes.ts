@@ -19,9 +19,11 @@ import { renderAgreementPreviewPdf, renderSignedAgreementPdf } from "./onboardin
 import { loadW9Template } from "./w9Pdf";
 import {
   completeSigning,
+  counterSignDocument,
   declineSigning,
   getCompletedPdf,
   getSigningDocument,
+  listCounterSignQueue,
   listRepDocuments,
   markCompletionEmail,
   markDocumentViewed,
@@ -79,6 +81,9 @@ const signSchema = z.object({
 }).strict();
 const declineSchema = z.object({ reason: z.string().trim().min(2).max(500) }).strict();
 const voidSchema = z.object({ reason: z.string().trim().min(2).max(500) }).strict();
+const counterSignSchema = z.object({
+  signatureName: z.string().trim().min(2).max(120),
+}).strict();
 
 function sha256(value: string | Buffer): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -668,6 +673,79 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     } catch (error: any) {
       const status = /already processed|not available|changed/.test(error?.message ?? "") ? 409 : 500;
       res.status(status).json({ error: error?.message || "Could not complete signature" });
+    }
+  });
+
+  // ── Company counter-signature ─────────────────────────────────────────────
+  // The rep's signature completes the rep half and queues the document for the
+  // company (counterSignStatus 'pending'); a manager counter-signs here to
+  // execute it fully. The capability is the same HIGH_RISK
+  // onboarding.documents.manage that issues and voids agreements — team_lead
+  // deliberately does NOT hold it, so a team lead can never bind the company.
+  // SELF-DEAL GUARD: the company signer must be a different person than the
+  // rep who signed — one human may not execute both halves of a contract.
+  app.get("/api/onboarding/documents/counter-sign-queue", requireAuth, requireCapability("onboarding.documents.manage"), (req, res) => {
+    res.json({ queue: listCounterSignQueue(tenantId(req)) });
+  });
+
+  app.post("/api/onboarding/documents/:id/counter-sign", requireAuth, requireCapability("onboarding.documents.manage"), async (req, res) => {
+    const parsedId = documentIdSchema.safeParse(req.params.id);
+    const parsedBody = counterSignSchema.safeParse(req.body);
+    if (!parsedId.success || !parsedBody.success) return res.status(400).json({ error: "Type your full legal name to counter-sign for the company" });
+    const record = getSigningDocument(parsedId.data);
+    const uid = userId(req);
+    if (!record || record.tenantId !== tenantId(req) || !uid) return res.status(404).json({ error: "Document not found" });
+    if (record.status !== "completed") return res.status(409).json({ error: "Only a signed agreement can be counter-signed" });
+    if (record.counterSignStatus === "none") {
+      // Grandfathered: completed before the counter-sign step existed. It was
+      // fully executed under the then-current ceremony and stays as-is.
+      return res.status(409).json({ error: "This agreement predates company counter-signing and is already fully executed" });
+    }
+    if (record.counterSignStatus !== "pending") return res.status(409).json({ error: "This agreement is already counter-signed" });
+    // Self-deal: the company signer must not be the rep who signed.
+    if (record.signedUserId === uid || (record.repId && record.repId === myRepId(req))) {
+      return res.status(403).json({ error: "You cannot counter-sign your own agreement", code: "COUNTER_SIGN_SELF_DEAL" });
+    }
+    const signer = storage.getUserById(uid);
+    if (!signer) return res.status(404).json({ error: "Document not found" });
+    if (!signerNameMatches(signer.name, parsedBody.data.signatureName)) {
+      return res.status(400).json({ error: `Type your full name exactly as ${signer.name}` });
+    }
+
+    try {
+      const signedAt = new Date().toISOString();
+      // Re-stamp the certificate with the company block: the final PDF carries
+      // BOTH signatures, rendered by the same builder from the same frozen
+      // snapshot and rep evidence, so the dual-stamped copy cannot drift from
+      // the rep-signed one it replaces.
+      const repEvidence = { ...(record.evidence ?? {}), signatureSha256: record.signatureSha256 } as any;
+      const pdf = await renderSignedAgreementPdf(record.snapshot, repEvidence, {
+        companySignatureName: parsedBody.data.signatureName,
+        companySignedAt: signedAt,
+        companySignerUserId: uid,
+      });
+      const pdfSha256 = sha256(pdf);
+      const counterSigned = counterSignDocument({
+        id: record.id,
+        companySignerUserId: uid,
+        companySignatureName: parsedBody.data.signatureName,
+        signedAt,
+        pdf,
+        pdfSha256,
+        ipAddress: ip(req),
+        userAgent: userAgent(req),
+      });
+      storage.logActivity(uid, "onboarding.document.counter_signed", "onboarding_document", record.id,
+        { documentType: record.documentType, recordId: record.recordId, repId: record.repId, contentSha256: record.contentSha256, pdfSha256, provider: "homefront_sign" }, req.ip);
+      res.json({
+        counterSigned: true,
+        completedPdfSha256: pdfSha256,
+        document: toPublicRecord(counterSigned),
+        verification: verifyDocumentChain(record.id),
+      });
+    } catch (error: any) {
+      const status = /already counter-signed|not awaiting/.test(error?.message ?? "") ? 409 : 500;
+      res.status(status).json({ error: error?.message || "Could not counter-sign this agreement" });
     }
   });
 

@@ -72,6 +72,10 @@ export function buildNachaFile(params: {
   const odfi8 = company.dfiRouting.slice(0, 8);
 
   // THE money-math reuse point: identical computation to /api/commission/week-export.csv.
+  // Install-hold exclusion is INHERITED from here: a sale inside its install
+  // hold never reaches a statement (countQualifiedSales gates the one
+  // aggregation point), so held money cannot appear in a FINALIZED row and
+  // therefore can never enter this file. No NACHA-side fork of the math.
   const overview = svc.getWeekOverview(tenantId, actorId, weekReference, null);
 
   // APPROVED = the closeout handshake locked the statement (FINALIZED), or money

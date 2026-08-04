@@ -384,7 +384,9 @@ describe("payroll CSV — appended hourly money-plane columns reconcile to the s
     expect(res.headers.get("content-type")).toContain("text/csv");
     const text = await res.text();
     const lines = text.trim().split("\n");
-    expect(lines[1]).toBe("Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total");
+    // The install-hold columns are APPENDED after Total (same additive rule as
+    // the hourly money-plane columns); every pre-existing column is untouched.
+    expect(lines[1]).toBe("Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total,Install Hold Sales,Install Hold Payable After");
 
     const row = lines.find(l => l.includes("Hourly Rep One"))!;
     const cells = row.split(",");
@@ -396,6 +398,9 @@ describe("payroll CSV — appended hourly money-plane columns reconcile to the s
     expect(cells[11]).toBe("50.00");
     expect(cells[12]).toBe((expectedReserve / 100).toFixed(2));
     expect(cells[13]).toBe((expectedTotal / 100).toFixed(2));
+    // An API-booked sale has no linked legacy commission → never install-held.
+    expect(cells[14]).toBe("0");
+    expect(cells[15]).toBe('""');
 
     // Total row reconciles: Σ(hourly pay + gross + adjustments + spiffs − reserve).
     const totalRow = lines[lines.length - 1].split(",");

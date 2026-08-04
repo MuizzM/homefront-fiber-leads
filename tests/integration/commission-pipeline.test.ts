@@ -130,6 +130,16 @@ beforeAll(async () => {
     ownerEmail: "owner-c@commission-pipeline.example.test", brandName: "Org C",
   } as any).id;
 
+  // This suite pins the pre-hold legacy commission lifecycle (approve/pay
+  // transitions). The install hold is default-ON (tenant_pay_policy), so opt
+  // every fixture tenant OUT — the hold has dedicated coverage in
+  // tests/integration/commission-hold.test.ts.
+  for (const tid of [TENANT_A, TENANT_B, TENANT_C]) {
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 0, 90, datetime('now'))",
+    ).run(tid);
+  }
+
   mgrA = person("Pipe Mgr A", "manager", TENANT_A);
   leadRoleA = person("Pipe Lead A", "team_lead", TENANT_A);
   repA = person("Pipe Rep A", "rep", TENANT_A);

@@ -80,6 +80,15 @@ beforeAll(async () => {
     ownerEmail: "owner-b@money-lane.example.test", brandName: "Org B",
   } as any).id;
 
+  // This suite pins the pre-hold money lanes; the install hold is default-ON
+  // (tenant_pay_policy), so opt both fixture tenants OUT — the hold has
+  // dedicated coverage in tests/integration/commission-hold.test.ts.
+  for (const tid of [1, TENANT_B]) {
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 0, 90, datetime('now'))",
+    ).run(tid);
+  }
+
   mgr1 = makePerson("Money Mgr One", "manager", 1);
   rep1 = makePerson("Money Rep One", "rep", 1);
   rep3 = makePerson("Money Rep Three", "rep", 1);

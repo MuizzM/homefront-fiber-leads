@@ -86,6 +86,16 @@ beforeAll(async () => {
     ownerEmail: "owner-b@pay-a2.example.test", brandName: "Org B",
   } as any).id;
 
+  // This suite reconciles the pre-hold pay run (statements ↔ CSV ↔ NACHA);
+  // the install hold is default-ON (tenant_pay_policy), so opt both fixture
+  // tenants OUT — the hold has dedicated coverage in
+  // tests/integration/commission-hold.test.ts.
+  for (const tid of [1, TENANT_B]) {
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 0, 90, datetime('now'))",
+    ).run(tid);
+  }
+
   admin1 = makePerson("Pay Admin One", "admin", 1);
   mgr1 = makePerson("Pay Mgr One", "manager", 1);
   rep1 = makePerson("Pay Rep One", "rep", 1);
@@ -360,8 +370,11 @@ describe("NACHA export", () => {
     const csv = await request(`/api/commission/week-export.csv?week=${WEEK_START}`, mgr1.session);
     expect(csv.status).toBe(200);
     const totalLine = (await csv.text()).trimEnd().split("\n").find(l => l.startsWith("Total,"))!;
-    // NACHA total credit (175000¢) === CSV Total row final column ($1,750.00).
-    expect(totalLine.endsWith(",1750.00")).toBe(true);
+    // NACHA total credit (175000¢) === CSV Total row's Total column ($1,750.00).
+    // (The install-hold columns are appended after Total, so match the column,
+    // not the line ending; nothing is install-held in this opt-out fixture.)
+    expect(totalLine.split(",")[13]).toBe("1750.00");
+    expect(totalLine.split(",")[14]).toBe("0");
   });
 
   it("is byte-stable for the same inputs and honors fileIdModifier", async () => {

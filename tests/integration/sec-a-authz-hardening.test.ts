@@ -91,6 +91,16 @@ beforeAll(async () => {
     ownerEmail: "owner-b@sec-a.example.test", brandName: "Org B",
   } as any).id;
 
+  // This suite pins pre-hold authz hardening on the legacy lifecycle; the
+  // install hold is default-ON (tenant_pay_policy), so opt both fixture
+  // tenants OUT — the hold has dedicated coverage in
+  // tests/integration/commission-hold.test.ts.
+  for (const tid of [1, TENANT_B]) {
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 0, 90, datetime('now'))",
+    ).run(tid);
+  }
+
   admin1 = makePerson("Seca Admin One", "admin", 1, "manager");
   mgr1 = makePerson("Seca Mgr One", "manager", 1, "manager");
   mgrOther = makePerson("Seca Mgr Two", "manager", 1, "manager");

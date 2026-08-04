@@ -100,6 +100,12 @@ import {
   markInviteRejected,
 } from "./onboardingRecruitingStore";
 import { ApplicationIntakeError, submitPublicApplication } from "./onboardingApplicationService";
+import {
+  confirmCommissionInstall,
+  getTenantPayPolicy,
+  upsertTenantPayPolicy,
+} from "./payPolicyStore";
+import { isCommissionHeld, payableAfterFor, HOLD_DAYS_MAX } from "@shared/commissionHold";
 import { getHrCheckpoint, listHrCheckpoints, setHrCheckpoint, summariseHr } from "./onboardingHrStore";
 import { gustoConfigured, verifyGustoConnection } from "./gustoAdapter";
 import {
@@ -8833,6 +8839,19 @@ export function registerSaasRoutes(app: any) {
         .filter(l => leadIds.has(l.id))
         .map(l => [l.id, { address: l.address, city: l.city }]),
     );
+    // Install-hold overlay (additive): under a require-install-confirm policy a
+    // sold-knock commission stays 'pending' but HELD until the install is
+    // confirmed AND payable_after has passed. installHold is computed at read
+    // time — never a persisted lifecycle status. The field is named
+    // installHold so it can never be conflated with the chargeback-reserve
+    // "holdback" (a different layer — statement-level reserve percentage).
+    // super_admin (no tenant) reads every org; per-row policy is per tenant.
+    const policyCache = new Map<number, ReturnType<typeof getTenantPayPolicy>>();
+    const policyFor = (tenant: number | null | undefined) => {
+      const key = tenant ?? 0;
+      if (!policyCache.has(key)) policyCache.set(key, getTenantPayPolicy(key));
+      return policyCache.get(key)!;
+    };
     res.json(comms.map(c => ({
       ...c,
       repName: (c.repId != null ? repNames.get(c.repId) : null) ?? null,
@@ -8842,6 +8861,7 @@ export function registerSaasRoutes(app: any) {
       // their payout was scored without exposing the editable structure config.
       calcType: (c as any).calcType ?? "flat",
       structureVersion: (c as any).structureVersion ?? null,
+      installHold: isCommissionHeld({ status: c.status, installConfirmedAt: (c as any).installConfirmedAt ?? null, payableAfter: (c as any).payableAfter ?? null }, policyFor(c.tenantId)),
     })));
   });
 
@@ -8906,6 +8926,22 @@ export function registerSaasRoutes(app: any) {
       && !hasCapability(user.role, "payouts.pay")) {
       return res.status(403).json({ error: "You cannot approve or pay your own commission", code: "COMMISSION_SELF_DEAL" });
     }
+    // Install-hold gate: a commission still inside its install-hold window can
+    // never be approved or paid — the hold exists precisely to keep uninstalled
+    // sales out of the payable pipeline. Releasing early is not a manager
+    // action; the window lifts when payable_after passes (or the tenant policy
+    // stops requiring install confirmation).
+    if ((parsed.data.status === "approved" || parsed.data.status === "paid")
+      && isCommissionHeld(
+        { status: commission.status, installConfirmedAt: (commission as any).installConfirmedAt ?? null, payableAfter: (commission as any).payableAfter ?? null },
+        getTenantPayPolicy(tenantId),
+      )) {
+      return res.status(409).json({
+        error: "This commission is inside its install-hold window — confirm the install and wait for payable_after before approving it",
+        code: "INSTALL_HELD",
+        payableAfter: (commission as any).payableAfter ?? null,
+      });
+    }
     const result = storage.transitionLegacyCommission({
       id: parsedId.data,
       tenantId,
@@ -8941,13 +8977,106 @@ export function registerSaasRoutes(app: any) {
     res.json(result.commission);
   });
 
+  // POST /api/commissions/:id/confirm-install — manager confirms the customer's
+  // install happened. Starts the hold clock: install_confirmed_at = now and
+  // payable_after = now + tenant hold_days. The commission keeps its 'pending'
+  // status; the computed installHold flag lifts when now >= payable_after.
+  // Idempotent (a second confirm returns the existing stamps, never moves the
+  // window).
+  app.post("/api/commissions/:id/confirm-install", requireManager, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = Number(user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(403).json({ error: "Organization required" });
+    }
+    const parsedId = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!parsedId.success) return res.status(400).json({ error: "Invalid commission ID" });
+    const existing = storage.getCommissionById(parsedId.data, tenantId);
+    if (!existing) return res.status(404).json({ error: "Not found" }); // cross-tenant = 404
+    if (existing.status !== "pending" && existing.status !== "approved") {
+      return res.status(409).json({ error: `Cannot confirm install for a ${existing.status} commission` });
+    }
+    const policy = getTenantPayPolicy(tenantId);
+    const now = new Date();
+    const result = confirmCommissionInstall({
+      id: parsedId.data,
+      tenantId,
+      holdDays: policy.holdDays,
+      confirmedAt: now.toISOString(),
+      payableAfter: payableAfterFor(now, policy.holdDays),
+    });
+    if (result.kind === "not_found") return res.status(404).json({ error: "Not found" });
+    const commission = result.commission;
+    if (result.kind === "confirmed") {
+      storage.logActivity(user.id, "pay.install.confirmed", "commission", parsedId.data, {
+        repId: existing.repId, leadId: existing.leadId, holdDays: policy.holdDays,
+        payableAfter: commission.payable_after,
+      }, req.ip);
+    }
+    res.json({
+      id: commission.id,
+      status: commission.status,
+      installConfirmedAt: commission.install_confirmed_at,
+      payableAfter: commission.payable_after,
+      alreadyConfirmed: result.kind === "already",
+      installHold: isCommissionHeld({ status: commission.status, installConfirmedAt: commission.install_confirmed_at, payableAfter: commission.payable_after }, policy),
+    });
+  });
+
   // GET /api/commissions/summary — earnings summary per rep (admin/manager)
   app.get("/api/commissions/summary", requireManager, (req: Request, res: Response) => {
     const tenantId = Number((req as any).user?.tenantId);
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
       return res.status(403).json({ error: "Organization required" });
     }
-    res.json(storage.getCommissionSummary(tenantId));
+    const base = storage.getCommissionSummary(tenantId);
+    // Install-hold overlay (additive): `installHold` is the dollar amount still
+    // inside the install/hold window and `payable` is the pending+approved
+    // money OUTSIDE it. The legacy `pending` total is unchanged so existing
+    // consumers and the chargeback-reserve math are unaffected — and the field
+    // is named installHold, never "hold", so it cannot be read as reserve
+    // holdback.
+    const policy = getTenantPayPolicy(tenantId);
+    const rows = storage.getCommissions(tenantId);
+    const heldByRep = new Map<number, number>();
+    for (const c of rows) {
+      if (c.repId == null) continue;
+      if (isCommissionHeld({ status: c.status, installConfirmedAt: (c as any).installConfirmedAt ?? null, payableAfter: (c as any).payableAfter ?? null }, policy)) {
+        heldByRep.set(c.repId, (heldByRep.get(c.repId) ?? 0) + c.amount);
+      }
+    }
+    res.json(base.map(row => {
+      const installHold = heldByRep.get(row.repId) ?? 0;
+      return { ...row, installHold, payable: Math.max(0, row.pending - installHold), payPolicy: { requireInstallConfirm: policy.requireInstallConfirm, holdDays: policy.holdDays } };
+    }));
+  });
+
+  // ── Tenant pay policy — install-gated commission hold knobs (admin) ────────
+  // requireInstallConfirm=false restores the legacy pay flow (no hold).
+  // holdDays is clamped 0–365. An absent row behaves as the defaults
+  // (require install confirm, 90 days).
+  app.get("/api/admin/pay-policy", requireAdmin, (req: Request, res: Response) => {
+    const tenantId = Number((req as any).user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    res.json(getTenantPayPolicy(tenantId));
+  });
+
+  app.put("/api/admin/pay-policy", requireAdmin, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = Number(user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    const parsed = z.object({
+      requireInstallConfirm: z.boolean().optional(),
+      holdDays: z.number().int().min(0).max(HOLD_DAYS_MAX).optional(),
+    }).strict().safeParse(req.body ?? {});
+    if (!parsed.success) return res.status(400).json({ error: `holdDays must be a whole number 0–${HOLD_DAYS_MAX}; requireInstallConfirm a boolean` });
+    const before = getTenantPayPolicy(tenantId);
+    const policy = upsertTenantPayPolicy(tenantId, parsed.data);
+    storage.logActivity(user.id, "pay.policy.updated", "tenant", tenantId, {
+      before: { requireInstallConfirm: before.requireInstallConfirm, holdDays: before.holdDays },
+      after: { requireInstallConfirm: policy.requireInstallConfirm, holdDays: policy.holdDays },
+    }, req.ip);
+    res.json(policy);
   });
 
   // GET /api/commission-rates — structure plans. Management-only: reps see

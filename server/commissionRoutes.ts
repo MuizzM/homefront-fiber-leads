@@ -410,6 +410,12 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   // The original 8 columns are STABLE (provider-compat); the hourly+spiff+
   // reserve+total money-plane columns are APPENDED after them. Per-row:
   // Total = Hourly Pay + Gross commissions + Adjustments + Spiffs − Reserve.
+  //
+  // Install-hold columns are APPENDED last (same additive rule): held sales
+  // are already EXCLUDED from Gross/Final/Total by the statement computation
+  // itself (countQualifiedSales in commissionService), so the money columns
+  // reconcile penny-for-penny with NACHA exactly as before; the two extra
+  // columns only EXPLAIN what is being held back and when it releases.
   app.get("/api/commission/week-export.csv", requireCapability("commission.read.all"), (req, res) => {
     const weekReference = parseWeekRef(req.query.week) ?? new Date().toISOString();
     try {
@@ -423,9 +429,10 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
         const totalCents = r.hourlyPayCents + r.grossCommissionCents + r.adjustmentCents + spiffCents - reserveCents;
         return { spiffCents, reserveCents, totalCents };
       };
+      const holdDate = (r: (typeof ov.rows)[number]) => r.installHold.earliestPayableAfter?.slice(0, 10) ?? "";
       const lines = [
         `Week,${csvCell(ov.bounds.localWeekLabel)}`,
-        "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total",
+        "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total,Install Hold Sales,Install Hold Payable After",
         ...ov.rows.map(r => {
           const m = rowMoney(r);
           return [
@@ -434,11 +441,12 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
             money(r.rateCents), money(r.grossCommissionCents), money(r.adjustmentCents), money(r.finalCommissionCents),
             r.hours.toFixed(2), r.hourlyRateCents != null ? money(r.hourlyRateCents) : "", money(r.hourlyPayCents),
             money(m.spiffCents), money(m.reserveCents), money(m.totalCents),
+            r.installHold.saleCount, csvCell(holdDate(r)),
           ].join(",");
         }),
         (() => {
           const sum = (f: (r: (typeof ov.rows)[number]) => number) => ov.rows.reduce((s, r) => s + f(r), 0);
-          return `Total,,,,,${money(sum(r => r.grossCommissionCents))},${money(sum(r => r.adjustmentCents))},${money(sum(r => r.finalCommissionCents))},${sum(r => r.hours).toFixed(2)},,${money(sum(r => r.hourlyPayCents))},${money(sum(r => rowMoney(r).spiffCents))},${money(sum(r => rowMoney(r).reserveCents))},${money(sum(r => rowMoney(r).totalCents))}`;
+          return `Total,,,,,${money(sum(r => r.grossCommissionCents))},${money(sum(r => r.adjustmentCents))},${money(sum(r => r.finalCommissionCents))},${sum(r => r.hours).toFixed(2)},,${money(sum(r => r.hourlyPayCents))},${money(sum(r => rowMoney(r).spiffCents))},${money(sum(r => rowMoney(r).reserveCents))},${money(sum(r => rowMoney(r).totalCents))},${sum(r => r.installHold.saleCount)},`;
         })(),
       ];
       storage.logActivity(uid(req), "commission.week.exported", "commission_statement", undefined, { week: ov.bounds.localWeekLabel, rows: ov.rows.length }, req.ip);

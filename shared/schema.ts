@@ -612,6 +612,14 @@ export const commissions = sqliteTable("commissions", {
   structureVersion: integer("structure_version"), // its version at sale time
   calcType: text("calc_type"),                  // "flat" | "percentage" | "tiered"
   saleAmount: real("sale_amount"),              // deal value the % / tier read
+  // ── Install-gated commission hold (tenant_pay_policy) ──
+  // When the tenant requires install confirmation, a sold-knock commission
+  // stays 'pending' with both columns NULL (install-hold) until a manager
+  // confirms the install; payable_after = install_confirmed_at + hold_days.
+  // The installHold flag is COMPUTED at read time (see shared/commissionHold.ts)
+  // — never a persisted lifecycle status.
+  installConfirmedAt: text("install_confirmed_at"),
+  payableAfter: text("payable_after"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export const insertCommissionSchema = createInsertSchema(commissions).omit({ id: true, createdAt: true });
@@ -921,3 +929,14 @@ export const companyProfile = sqliteTable("company_profile", {
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
 export type CompanyProfile = typeof companyProfile.$inferSelect;
+
+// ── Tenant pay policy — install-gated commission hold ────────────────────────
+// Per-tenant knobs for the install hold. An absent row behaves as the defaults
+// (require install confirm, 90-day hold), matching the SQL column defaults.
+export const tenantPayPolicy = sqliteTable("tenant_pay_policy", {
+  tenantId: integer("tenant_id").primaryKey(),
+  requireInstallConfirm: integer("require_install_confirm").notNull().default(1),
+  holdDays: integer("hold_days").notNull().default(90),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type TenantPayPolicy = typeof tenantPayPolicy.$inferSelect;
