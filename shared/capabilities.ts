@@ -59,6 +59,13 @@ const REP: readonly Capability[] = [
   "lead.read.assigned", "lead.disposition.update", "lead.note.write",
   "commission.read.self", "dashboard.read.self",
   "onboarding.documents.read.self",
+  // READ only — a rep works the numbers an area run already produced. This is
+  // safe to grant org-wide because the capability alone opens nothing: every
+  // area route pairs it with canManageArea, and a rep's leadVisibilityScope is
+  // [their own teamMemberId], so they reach the areas assigned to them and 404
+  // on every other one. Requesting a run stays team_lead+ — reading a worklist
+  // is field work, spending metered provider budget is a supervisory call.
+  "lead.skip_trace.read",
 ];
 // Deliberately NOT here: scan.submit. Address discovery spends metered upstream
 // geocoding budget, and choosing which streets are worth buying data for is a

@@ -784,3 +784,79 @@ describe("FCC-reported fiber chip", () => {
     expect(screen.getByTestId("fcc-fiber-chip")).toBeInTheDocument();
   });
 });
+
+// ── Skip-trace contacts ─────────────────────────────────────────────────────
+// The contact panel shipped reading `renderedLead.phones`, which comes from the
+// map pin payload — and MapPinRow carries no phones or ownerName, by design
+// (payload size, and it would broadcast every household's numbers to every
+// client). So the panel could never render. Contacts now come from the per-lead
+// fetch instead. These tests pin that, and pin the id guard that keeps one
+// door's numbers off another door's card.
+describe("LeadKnockSheet — traced contacts", () => {
+  const DAY = 86_400_000;
+  const CONTACTS = {
+    id: 7,
+    notes: null,
+    updatedAt: "2026-07-08T19:00:00.000Z",
+    ownerName: "Dana Reyes",
+    phones: [
+      { number: "+19195550142", lineType: "wireless", confidence: 0.9, dncFlags: {}, scrubbedAtMs: Date.now() - DAY },
+      { number: "+19195557788", lineType: "landline", confidence: 0.8, dncFlags: { federalDnc: true }, scrubbedAtMs: Date.now() - DAY },
+    ],
+  };
+
+  /** Serves the detail payload for ONE lead id, so a mismatch is observable. */
+  function renderWithContacts(detailForId: number) {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          queryFn: async ({ queryKey }) => {
+            const key = String(queryKey[0] ?? "");
+            if (key.endsWith("/history")) return [];
+            return { ...CONTACTS, id: detailForId };
+          },
+        },
+      },
+    });
+    return render(
+      <QueryClientProvider client={qc}>
+        <LeadKnockSheet
+          {...({
+            lead: baseLead(), onKnock: vi.fn(), onClose: vi.fn(),
+            onSaveNote: vi.fn().mockResolvedValue({ status: "saved" }),
+          } as any)}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("renders traced numbers from the per-lead fetch, not the pin payload", async () => {
+    renderWithContacts(7);
+    expect(await screen.findByTestId("knock-contacts")).toBeInTheDocument();
+    expect(screen.getByTestId("lead-phone-+19195550142")).toBeInTheDocument();
+  });
+
+  it("shows the traced owner name in the header so the rep knows who to ask for", async () => {
+    renderWithContacts(7);
+    expect(await screen.findByTestId("knock-owner-name")).toHaveTextContent("Dana Reyes");
+  });
+
+  it("makes a clear number tappable and a DNC number inert", async () => {
+    const { container } = renderWithContacts(7);
+    await screen.findByTestId("knock-contacts");
+    expect(screen.getByTestId("lead-phone-+19195550142").tagName).toBe("A");
+    expect(screen.getByTestId("lead-phone-+19195557788").closest("a")).toBeNull();
+    // One number cleared, one blocked — exactly one dialable link on the door.
+    expect(container.querySelectorAll('a[href^="tel:"]')).toHaveLength(1);
+  });
+
+  // The guard that matters: a rep must never see the PREVIOUS household's
+  // number under this door's address.
+  it("renders NO contacts when the detail payload is for a different lead", async () => {
+    renderWithContacts(999);
+    await screen.findByTestId("knock-status-grid");
+    expect(screen.queryByTestId("knock-contacts")).toBeNull();
+    expect(screen.queryByTestId("knock-owner-name")).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@
 // subcomponent. Server contracts — field names mirror the API responses.
 
 import type { VStatus } from "@/components/verification";
+import type { TracedPhone } from "@shared/tracerfy";
 
 export interface HistoryRow {
   id: string;
@@ -33,6 +34,14 @@ export interface LeadDetail {
   competitorName?: string | null; competitorTech?: string | null;
   freshConfirmedAt?: string | null; leadTag?: string | null;
   leadStatus?: string | null;
+  // Skip-trace contacts. These arrive ONLY from GET /api/leads/:id — the map
+  // pin feed carries no contact data by design (payload size, and it would
+  // broadcast every household's numbers to every client). The server sends raw
+  // flags plus scrubbedAtMs and NEVER a stored verdict, so the client derives
+  // dialability per render and a scrub that has aged out re-blocks the number
+  // from cache with nothing rewritten.
+  ownerName?: string | null;
+  phones?: TracedPhone[];
 }
 
 export interface TeamMember {

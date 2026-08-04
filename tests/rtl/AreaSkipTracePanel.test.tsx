@@ -184,3 +184,33 @@ describe("AreaSkipTracePanel — running it", () => {
     expect(await screen.findByTestId("skip-trace-error")).toHaveTextContent(/all batches failed/i);
   });
 });
+
+// ── Rep access ──────────────────────────────────────────────────────────────
+// A rep must be able to work the numbers an area run produced, but must never
+// be able to START one — that spends metered provider budget. The capability
+// alone opens nothing: every area route pairs it with canManageArea, and a
+// rep's leadVisibilityScope is [their own teamMemberId], so they reach the
+// areas assigned to them and 404 on every other one.
+describe("area skip trace capabilities", () => {
+  it("lets a rep READ a dialing list but never START a run", async () => {
+    const { can } = await import("../../shared/capabilities");
+    expect(can("rep", "lead.skip_trace.read")).toBe(true);
+    expect(can("rep", "lead.skip_trace.request")).toBe(false);
+  });
+
+  it("lets team_lead and above do both", async () => {
+    const { can } = await import("../../shared/capabilities");
+    for (const role of ["team_lead", "manager", "admin", "super_admin"]) {
+      expect(can(role, "lead.skip_trace.read"), role).toBe(true);
+      expect(can(role, "lead.skip_trace.request"), role).toBe(true);
+    }
+  });
+
+  it("keeps the run button hidden for a rep even though the panel renders", async () => {
+    // canRun is driven by lead.skip_trace.request, so a rep sees the worklist
+    // with no way to spend.
+    renderPanel({ canRun: false });
+    expect(await screen.findByTestId("dialing-list")).toBeInTheDocument();
+    expect(screen.queryByTestId("area-action-skip-trace")).toBeNull();
+  });
+});

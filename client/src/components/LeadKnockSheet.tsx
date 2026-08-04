@@ -650,6 +650,18 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   // confirm serviceability at the door. One inline amber chip under the
   // status line; no new card section.
   const fccReported = isFccReportedLead(renderedLead);
+  // Skip-trace contacts come from the per-lead fetch, not the pin payload —
+  // MapPinRow has no phones/ownerName, so renderedLead's copies are always
+  // undefined and the contact panel rendered from them never appeared.
+  //
+  // The id check is load-bearing, not defensive noise: the comment at the
+  // placeholderData guard below claims to protect a card swap, but `leadId` is
+  // derived from `renderedLead.id` one line above it, so that test is
+  // unconditionally true. This one is the real thing standing between a future
+  // `keepPreviousData` and a rep dialling the PREVIOUS house's number.
+  const detailForLead = detailQuery.data?.id === renderedLead.id ? detailQuery.data : undefined;
+  const contactPhones = detailForLead?.phones ?? renderedLead.phones;
+  const contactOwnerName = detailForLead?.ownerName ?? renderedLead.ownerName;
   const statusBadge: { text: string; className: string } | null = needsReview
     ? { text: "Needs review", className: "border-amber-400/35 bg-amber-400/10 text-amber-300" }
     : freshFiber
@@ -839,9 +851,9 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     {/* Who to ask for. Only when the trace actually returned a
                         name — the "Resident at …" fallback would just repeat
                         the address line above it. */}
-                    {renderedLead.ownerName && renderedLead.ownerName.trim().length >= 2 && (
+                    {contactOwnerName && contactOwnerName.trim().length >= 2 && (
                       <p className="mt-0.5 truncate text-[13px] font-medium text-white/70" data-testid="knock-owner-name">
-                        Ask for {leadDisplayName(renderedLead.ownerName, renderedLead.address)}
+                        Ask for {leadDisplayName(contactOwnerName, renderedLead.address)}
                       </p>
                     )}
                   </div>
@@ -955,12 +967,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               door the rep is talking, not dialling — putting the phone list up
               top would push the outcome grid below the fold to serve the rarer
               need. DNC rows render inert here exactly as on the map card. */}
-          {(renderedLead.phones?.length ?? 0) > 0 && (
+          {(contactPhones?.length ?? 0) > 0 && (
             <div hidden={!detailsShown} className="px-4 pb-1" data-testid="knock-contacts">
               <LeadContacts
-                ownerName={renderedLead.ownerName}
+                ownerName={contactOwnerName}
                 address={renderedLead.address}
-                phones={renderedLead.phones}
+                phones={contactPhones}
               />
             </div>
           )}
