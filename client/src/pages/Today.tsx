@@ -13,10 +13,8 @@ import { useToast } from "@/hooks/use-toast";
 import { captureFieldFix } from "@/lib/geoFix";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
-import { CampaignStrip } from "@/components/CampaignBoard";
-import { MilestoneCard } from "@/components/MilestoneCard";
-import { MomentumOffer } from "@/components/MomentumOffer";
-import { DoorDropCard } from "@/components/DoorDropCard";
+import { LiveSlot } from "@/components/LiveSlot";
+import { useLiveItems } from "@/hooks/useLiveItems";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
@@ -149,6 +147,9 @@ export default function Today() {
 
   // Today's progress — an honest read of two real numbers already on screen:
   // doors worked today vs doors still open. Mirrors a delivery driver's route bar.
+  // One resolver, fed by the four incentive queries this page already makes.
+  const liveItems = useLiveItems();
+
   const doorsDone = myRow?.knocksToday ?? 0;
   const doorsLeft = route.openCount;
   const routeTotal = doorsDone + doorsLeft;
@@ -229,20 +230,19 @@ export default function Today() {
             whether today is a grind or a coast — the contest they can still win
             in the next two hours belongs in that decision, not three taps away
             on the Spiffs tab. Renders nothing when nothing is running. */}
-        <div className="mt-4 space-y-3 empty:mt-0" data-testid="today-campaign">
-          {/* Momentum first. It is the only incentive here measured in MINUTES,
-              so it outranks a contest running until 6 PM and a ladder running
-              until Sunday — if the rep reads one card, it should be this one. */}
-          <MomentumOffer />
-          <CampaignStrip />
-          {/* The standing door bonus. It is on this screen every single day,
-              which is the point — a rep with a cold week still has a number to
-              chase, and the number is the input that produces sales. */}
-          <MilestoneCard compact />
-          {/* Last, and quietly. A drop is not a plan for the day — but a rep who
-              does not know the mechanic exists cannot be motivated by it, and
-              the line is one sentence. */}
-          <DoorDropCard compact />
+        {/* ONE live thing, not four.
+            This used to render MomentumOffer + CampaignStrip + MilestoneCard +
+            DoorDropCard unconditionally — roughly 440px of incentive cards
+            stacked under the header and stat block, which on a 390x740 phone
+            pushed the route, follow-ups and everything below it off the screen.
+            Five systems can each produce a card; rendering all of them at once
+            turns the home screen into a slot machine, and a slot machine gets
+            read like one.
+            shared/liveSlot.ts picks the single highest-priority live item —
+            urgency divided by reachability, started beats unstarted — and
+            collapses the rest to one tappable line. */}
+        <div className="mt-4 empty:mt-0" data-testid="today-campaign">
+          <LiveSlot items={liveItems} />
         </div>
 
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}
