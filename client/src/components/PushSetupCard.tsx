@@ -19,15 +19,29 @@ import { Bell, BellRing, Loader2, SquarePlus, X } from "lucide-react";
 import { AddToHomeScreen } from "@/components/AddToHomeScreen";
 import { enablePush, pushReadiness, type PushReadiness } from "@/lib/pushNotifications";
 
-const DISMISS_KEY = "hfs:push-card-dismissed";
+const DISMISS_KEY = "hfs:push-card-dismissed-until";
+
+// A dismissal EXPIRES rather than being permanent.
+//
+// Permanent was the obvious choice and it is wrong here: this card is the only
+// route to phone notifications, and on iPhone it is the only route to them
+// existing at all. A rep who taps X on their first morning — before they have
+// ever seen a $50 challenge go live — would be opted out forever, silently,
+// with no way back that they would ever find.
+//
+// Three days is long enough that it does not nag, short enough that the rep who
+// dismissed it in week one still gets asked once they have context.
+const DISMISS_DAYS = 3;
+
+function dismissedUntil(): number {
+  try { return Number(localStorage.getItem(DISMISS_KEY) ?? 0) || 0; } catch { return 0; }
+}
 
 export function PushSetupCard({ className }: { className?: string }) {
   const { toast } = useToast();
   const [readiness, setReadiness] = useState<PushReadiness | null>(null);
   const [busy, setBusy] = useState(false);
-  const [dismissed, setDismissed] = useState(() => {
-    try { return localStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; }
-  });
+  const [dismissed, setDismissed] = useState(() => Date.now() < dismissedUntil());
 
   // Read on mount and again when the app is brought back to the foreground: a
   // rep who follows the install instructions returns as a STANDALONE app, and
@@ -46,7 +60,9 @@ export function PushSetupCard({ className }: { className?: string }) {
 
   const dismiss = () => {
     setDismissed(true);
-    try { localStorage.setItem(DISMISS_KEY, "1"); } catch { /* private mode */ }
+    try {
+      localStorage.setItem(DISMISS_KEY, String(Date.now() + DISMISS_DAYS * 86_400_000));
+    } catch { /* private mode — it simply reappears next load, which is fine */ }
   };
 
   const turnOn = async () => {
