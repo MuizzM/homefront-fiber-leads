@@ -12,6 +12,7 @@ import { rawDb } from "./db";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import helmet from "helmet";
 import { scriptSrcElem, inlineScriptsAreHashed } from "./cspHashes";
+import { isAiCrawler, robotsTxt, X_ROBOTS_TAG } from "@shared/crawlerPolicy";
 import cors from "cors";
 import compression from "compression";
 import { structuredLog } from "./structuredLog";
@@ -182,6 +183,36 @@ app.use(helmet({
 console.log(inlineScriptsAreHashed()
   ? "[csp] inline scripts pinned by sha256 — 'unsafe-inline' is OFF for scripts"
   : "[csp] WARNING: could not hash index.html; script-src-elem is falling back to 'unsafe-inline'");
+
+// ── Crawlers, and AI crawlers in particular ─────────────────────────────────
+// Ordering note before anyone extends this: the REAL protection is that every
+// data route requires a session, so an anonymous crawler sees a login page and
+// a JS bundle. These two layers add (1) a request to stay out that honest
+// crawlers honour, and (2) an actual refusal for agents that name themselves.
+// Neither stops a scraper sending a Chrome user-agent, and neither should be
+// mistaken for one that does.
+app.use((req, res, next) => {
+  // Applies to every response, including the bundle and the login shell — the
+  // only two things an unauthenticated fetch can reach.
+  res.setHeader("X-Robots-Tag", X_ROBOTS_TAG);
+
+  if (isAiCrawler(req.get("user-agent"))) {
+    // 403 with a body a human reading logs can understand. Not 404: pretending
+    // the site does not exist invites a retry with a different agent, and being
+    // explicit is what makes the block auditable.
+    res.status(403).type("text/plain").send(
+      "This is a private application. Automated crawling and AI training use are not permitted.\n",
+    );
+    return;
+  }
+  next();
+});
+
+// Served from the app rather than a static file so it cannot drift from the
+// blocklist above — one source of truth for which agents are named.
+app.get("/robots.txt", (_req, res) => {
+  res.type("text/plain").send(robotsTxt());
+});
 
 // ── Trusted Types — REPORT-ONLY, deliberately ───────────────────────────────
 // `require-trusted-types-for 'script'` stops strings ever reaching a DOM

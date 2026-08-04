@@ -21,7 +21,7 @@ import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Flame, Timer, TrendingUp } from "lucide-react";
-import { offerCountdown, usd } from "@shared/momentumSpiff";
+import { usd, offerCountdownLabel as offerCountdown } from "@shared/moneyFormat";
 
 export interface MomentumCardData {
   enabled: boolean;

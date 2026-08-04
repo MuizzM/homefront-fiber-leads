@@ -121,7 +121,7 @@ import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
-import { publishSale, publishStreak, feedForUser, markRead } from "./teamFeedStore";
+import { publishSale, publishStreak, publishAuthored, feedForUser, markRead } from "./teamFeedStore";
 import { earningsToday } from "./earningsTodayStore";
 import { emitAnnouncement, onAnnouncement } from "./announcementBus";
 import { visibleTo, usd as feedUsd } from "@shared/teamFeed";
@@ -2044,6 +2044,43 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       Number(tenantId), userId, req.user?.teamMemberId ?? null,
       Number.isFinite(limit) ? limit : 40,
     ));
+  });
+
+  // POST /api/announcements — a manager posts a promo or an app update.
+  //
+  // Gated on commission.structure.manage (team_lead+): this writes to every
+  // phone in the org, so it sits with the other "spend the org's attention"
+  // powers rather than with ordinary rep actions.
+  app.post("/api/announcements", requireCapability("commission.structure.manage"), async (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    try {
+      const stored = publishAuthored(
+        Number(tenantId), req.user?.id ?? null, req.user?.name ?? null,
+        {
+          kind: req.body?.kind,
+          title: String(req.body?.title ?? ""),
+          body: String(req.body?.body ?? ""),
+          amountCents: req.body?.amountCents == null ? undefined : Math.trunc(Number(req.body.amountCents)),
+        },
+        Date.now(),
+      );
+      emitAnnouncement(Number(tenantId), stored);
+
+      // A PROMO interrupts — there is money attached and a rep should act now.
+      // An UPDATE does not: it is news, and news that buzzes a phone mid-pitch
+      // is exactly how people learn to turn notifications off. Both land in the
+      // feed either way.
+      if (stored && stored.kind === "promo") {
+        void pushToUsers(
+          Number(tenantId), tenantUserIds(Number(tenantId)),
+          { title: stored.headline, body: stored.body, url: "/spiffs", tag: `promo-${stored.id}` },
+        ).catch(() => { /* best effort */ });
+      }
+      res.status(201).json(stored);
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not post" });
+    }
   });
 
   // POST /api/announcements/read { upToId } — clears the bell.

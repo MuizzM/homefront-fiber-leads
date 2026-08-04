@@ -40,6 +40,23 @@ export default defineConfig({
     // silently re-enable it. (Minify defaults to esbuild, which also
     // mangles identifiers — accepted posture; no heavyweight obfuscator.)
     sourcemap: false,
+    // Strip console.* and debugger from the production bundle. Two reasons, and
+    // the second is the one that matters: console lines leak internal state and
+    // field names into anyone's devtools, and they cost real time on a mid-range
+    // Android during a knock burst.
+    //
+    // NOTE ON OBFUSCATION, deliberately not done here: esbuild already mangles
+    // local identifiers, but no minifier hides CONSTANTS — the odds, ceilings
+    // and caps stay readable as numbers whatever you rename around them. A
+    // heavyweight obfuscator would add 15–80% runtime cost on phones that must
+    // last a shift while leaving those same numbers legible. The effective fix
+    // is to stop SENDING logic the client does not render; see the audit in the
+    // PR that introduced this comment.
+    minify: "esbuild",
+  },
+  esbuild: {
+    drop: ["console", "debugger"],
+    legalComments: "none",
   },
   server: {
     fs: {

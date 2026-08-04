@@ -20,7 +20,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { usd } from "@shared/dailyUpside";
+import { usd } from "@shared/moneyFormat";
 
 export interface EarningsTodayData {
   bankedCents: number;

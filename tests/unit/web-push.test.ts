@@ -181,3 +181,35 @@ describe("the payload is encrypted the way a browser decrypts it", () => {
     expect(() => decryptAsBrowser(body, client, auth)).toThrow();
   });
 });
+
+describe("the short-scalar bug", () => {
+  it("pads a private key that node returned with leading zeros stripped", () => {
+    // createECDH().getPrivateKey() returns the scalar as a big-endian integer,
+    // so ~1 key in 256 comes back as 31 bytes (measured: 19 of 3000). The
+    // PKCS#8 template declares a fixed 32-byte OCTET STRING, so a short key
+    // produced DER that OpenSSL rejected with "not enough data".
+    //
+    // VAPID keys are generated ONCE and stored, so an org that minted a short
+    // key would have had every push fail forever, with an ASN.1 error nobody
+    // would connect to notifications not arriving.
+    //
+    // Simulated directly by handing vapidHeader a key with a leading zero.
+    const k = generateVapidKeys();
+    const raw = unb64u(k.privateKey);
+    raw[0] = 0;                                   // force a leading zero byte
+    const stripped = Buffer.from(raw.subarray(1)); // what node would have given us
+    const shortKey = {
+      publicKey: k.publicKey,
+      privateKey: b64u(stripped),
+      subject: "mailto:x@y.test",
+    };
+    expect(stripped.length).toBe(31);
+    expect(() => vapidHeader("https://web.push.apple.com/x", shortKey, Date.now())).not.toThrow();
+  });
+
+  it("always emits a 32-byte private key", () => {
+    for (let i = 0; i < 300; i += 1) {
+      expect(unb64u(generateVapidKeys().privateKey).length).toBe(32);
+    }
+  });
+});

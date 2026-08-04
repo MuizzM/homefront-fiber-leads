@@ -18,7 +18,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Footprints, ShieldCheck, Trophy } from "lucide-react";
-import { usd, type MilestoneRung, type MilestonePeriod } from "@shared/knockMilestones";
+import { usd } from "@shared/moneyFormat";
+// `import type` (not `import { type … }`) so the module is erased outright
+// rather than left as a side-effect import that still ships the ladder.
+import type { MilestoneRung, MilestonePeriod } from "@shared/knockMilestones";
 
 export interface MilestoneCardData {
   enabled: boolean;

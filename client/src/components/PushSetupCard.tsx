@@ -15,18 +15,33 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { useToast } from "@/hooks/use-toast";
-import { Bell, BellRing, Loader2, Share, SquarePlus, X } from "lucide-react";
+import { Bell, BellRing, Loader2, SquarePlus, X } from "lucide-react";
+import { AddToHomeScreen } from "@/components/AddToHomeScreen";
 import { enablePush, pushReadiness, type PushReadiness } from "@/lib/pushNotifications";
 
-const DISMISS_KEY = "hfs:push-card-dismissed";
+const DISMISS_KEY = "hfs:push-card-dismissed-until";
+
+// A dismissal EXPIRES rather than being permanent.
+//
+// Permanent was the obvious choice and it is wrong here: this card is the only
+// route to phone notifications, and on iPhone it is the only route to them
+// existing at all. A rep who taps X on their first morning — before they have
+// ever seen a $50 challenge go live — would be opted out forever, silently,
+// with no way back that they would ever find.
+//
+// Three days is long enough that it does not nag, short enough that the rep who
+// dismissed it in week one still gets asked once they have context.
+const DISMISS_DAYS = 3;
+
+function dismissedUntil(): number {
+  try { return Number(localStorage.getItem(DISMISS_KEY) ?? 0) || 0; } catch { return 0; }
+}
 
 export function PushSetupCard({ className }: { className?: string }) {
   const { toast } = useToast();
   const [readiness, setReadiness] = useState<PushReadiness | null>(null);
   const [busy, setBusy] = useState(false);
-  const [dismissed, setDismissed] = useState(() => {
-    try { return localStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; }
-  });
+  const [dismissed, setDismissed] = useState(() => Date.now() < dismissedUntil());
 
   // Read on mount and again when the app is brought back to the foreground: a
   // rep who follows the install instructions returns as a STANDALONE app, and
@@ -45,7 +60,9 @@ export function PushSetupCard({ className }: { className?: string }) {
 
   const dismiss = () => {
     setDismissed(true);
-    try { localStorage.setItem(DISMISS_KEY, "1"); } catch { /* private mode */ }
+    try {
+      localStorage.setItem(DISMISS_KEY, String(Date.now() + DISMISS_DAYS * 86_400_000));
+    } catch { /* private mode — it simply reappears next load, which is fine */ }
   };
 
   const turnOn = async () => {
@@ -94,22 +111,12 @@ export function PushSetupCard({ className }: { className?: string }) {
                 It opens full-screen like a real app — and it's the only way iPhone will let us
                 alert you when a SPIFF or a $50 challenge goes live.
               </p>
-              <ol className="mt-2.5 flex flex-col gap-1.5 text-[13px] text-foreground" data-testid="push-ios-steps">
-                <li className="flex items-center gap-2">
-                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">1</span>
-                  <span className="flex items-center gap-1">
-                    Tap <Share className="h-3.5 w-3.5" aria-hidden="true" /> <strong>Share</strong> at the bottom
-                  </span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">2</span>
-                  <span>Scroll and tap <strong>Add to Home Screen</strong></span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">3</span>
-                  <span>Open it from the new icon, then turn on alerts</span>
-                </li>
-              </ol>
+              {/* SHOWN, not described. "Tap Share, scroll, tap Add to Home
+                  Screen" names three taps in a sheet the rep has to recognise
+                  first, and the Share glyph is the one iOS control nobody can
+                  name. The animation plays the taps and ends on the destination
+                  — the icon sitting on a home screen. */}
+              <AddToHomeScreen className="mt-3" />
             </>
           ) : readiness.state === "denied" ? (
             <>
