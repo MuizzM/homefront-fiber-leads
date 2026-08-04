@@ -67,13 +67,25 @@ let seedBatch = 0;
  * and the trigger counted zero. The suite passed all afternoon and failed at
  * night, which is the worst possible shape for a flake.
  *
- * Constructed through the same helpers the product uses, so the test and the
- * code under test agree on what "today at 9am" means.
+ * The timezone-aware anchor fixed the DATE, but not the TIME OF DAY: between
+ * local midnight and `hourLocal` (00:00–09:00 Eastern — 04:00–13:00 UTC) a
+ * "9am today" stamp is hours in the FUTURE, and the counter's upper bound is
+ * `min(cutoff, now)`, so every trigger read zero and no award booked. The
+ * stamps must satisfy dayStart <= stamp < now at ANY run time, so the anchor
+ * is clamped into today-and-past and the knocks walk BACKWARD one second each
+ * from it. (Residual: a run starting in the first ~n seconds of the local day
+ * cannot seed n knocks that are simultaneously today and past — a ~10-second
+ * daily window, down from 9.5 hours.)
  */
 function seedKnocks(repId: number, _unusedLeadId: number, n: number, hourLocal = 9): void {
   const tz = DEFAULT_WORKWEEK.timezone;
-  const { y, mo, d } = localYmdParts(Date.now(), tz);
-  const at = new Date(localWallToUtcMs(y, mo, d, hourLocal, 0, tz));
+  const nowMs = Date.now();
+  const { y, mo, d } = localYmdParts(nowMs, tz);
+  const dayStartMs = localWallToUtcMs(y, mo, d, 0, 0, tz);
+  const anchorMs = Math.min(
+    Math.max(localWallToUtcMs(y, mo, d, hourLocal, 0, tz), dayStartMs + n * 1_000),
+    nowMs - 1_000,
+  );
   const batch = seedBatch += 1;
   for (let i = 0; i < n; i += 1) {
     const lead = storage.createLead({
@@ -83,7 +95,7 @@ function seedKnocks(repId: number, _unusedLeadId: number, n: number, hourLocal =
     rawDb.prepare(
       `INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, tenant_id, verification_status, superseded)
        VALUES (?,?,?,?,?,?,'verified',0)`,
-    ).run(lead.id, repId, "not_home", 0, new Date(at.getTime() + i * 1000).toISOString(), 1);
+    ).run(lead.id, repId, "not_home", 0, new Date(anchorMs - i * 1_000).toISOString(), 1);
   }
 }
 
