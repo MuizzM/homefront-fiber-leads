@@ -148,7 +148,12 @@ jobs:
           #    only returns the file's tail to the filesystem. Run through the
           #    LIVE container so it shares the app's connection and locking
           #    rather than fighting it from outside.
-          APP="$(docker ps --filter 'ancestor=homefront-app' --format '{{.ID}}' | head -n1 || true)"
+          # NOT --filter ancestor=homefront-app: images are tagged with the
+          # commit SHA (never :latest), and `ancestor` without a tag only
+          # matches :latest — so that filter silently found nothing and the
+          # checkpoint was skipped. Match on the compose service instead.
+          APP="$(docker compose -f docker-compose.production.yml ps -q app 2>/dev/null | head -n1 || true)"
+          [ -n "$APP" ] || APP="$(docker ps --format '{{.ID}} {{.Image}}' | awk '/homefront-app:/{print $1; exit}' || true)"
           if [ -n "$APP" ]; then
             echo "  wal_checkpoint(TRUNCATE):"
             docker exec "$APP" node -e "
