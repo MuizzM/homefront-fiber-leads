@@ -2,12 +2,10 @@ import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { queryClient, persistOptions } from "@/lib/queryClient";
-import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/auth";
-import { useSuperAdminEmails, isSuperAdmin } from "@/lib/appConfig";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Lock } from "lucide-react";
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, startTransition, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
@@ -60,6 +58,13 @@ const Coach = lazy(() => import("@/pages/Coach"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
 const CallingLead = lazy(() => import("@/pages/CallingLead"));
 
+// Radix Toast and the dismissable-layer/presence machinery behind it are ~9 KB
+// gzipped, and nothing renders a toast at first paint. The toast STORE lives in
+// hooks/use-toast.ts (types-only import of the primitive, so it stays cheap and
+// stays in the entry), which means a toast() fired before this chunk lands is
+// queued and rendered the moment it arrives — nothing is dropped.
+const Toaster = lazy(() => import("@/components/ui/toaster").then(m => ({ default: m.Toaster })));
+
 // On-brand fallback shown in the content area (the sidebar shell stays put)
 // while a page chunk loads — never a blank screen.
 function PageLoader() {
@@ -84,8 +89,9 @@ function PageLoader() {
   );
 }
 
-// Super-admin (SaaS tenant management) is gated by identity, not just role.
-// Server-owned via /api/config/app — never hardcode role lists client-side.
+// Super-admin (SaaS tenant management) is gated by identity, not just role —
+// on the immutable is_super_admin column the session carries, never on a role
+// list hardcoded client-side.
 
 function hasRole(userRole: string | undefined, ...allowed: AppRole[]) {
   return allowed.includes((userRole ?? "rep") as AppRole);
@@ -129,7 +135,6 @@ function AppRoutes() {
   const { user, isFirstRun, loading } = useAuth();
   const [location] = useHashLocation();
   const role = user?.role;
-  const { emails: superAdminEmails, settled: superAdminSettled } = useSuperAdminEmails();
 
   // Warm likely destinations only after the browser is idle. Save-Data and
   // slower cellular connections never prefetch the large Mapbox chunk: the
@@ -196,7 +201,14 @@ function AppRoutes() {
   }
 
   return (
-    <Router hook={useHashLocation}>
+    // aroundNav wraps every wouter navigation in a transition. Without it a tap
+    // on a route whose chunk is still downloading is an urgent update: React
+    // must commit immediately, so it tears the current screen down and paints
+    // the generic PageLoader skeleton for the whole download. Inside a
+    // transition React keeps the screen the rep is looking at — scrolled,
+    // populated and interactive — until the new one is ready to replace it.
+    // Warm chunks are unaffected (an already-resolved lazy renders synchronously).
+    <Router hook={useHashLocation} aroundNav={(nav, to, opts) => startTransition(() => nav(to, opts))}>
       <Layout>
         <ErrorBoundary resetKey={location}>
         <Suspense fallback={<PageLoader />}>
@@ -272,8 +284,12 @@ function AppRoutes() {
             <Guard role={role} allowed={["admin", "manager"]}><Diagnostics /></Guard>
           </Route>
           <Route path="/login-activity">
-            {/* Admin/team visibility into the org's auth trail (server scopes by tenant). */}
-            <Guard role={role} allowed={["admin", "manager", "team_lead"]}><LoginActivity /></Guard>
+            {/* Admin/manager visibility into the org's auth trail (server
+                scopes by tenant). Matches requireManager on
+                /api/auth/login-attempts — the page's only data source — which
+                does not admit team_lead. Widening the server would be wrong:
+                the endpoint returns the whole org's auth trail. */}
+            <Guard role={role} allowed={["admin", "manager"]}><LoginActivity /></Guard>
           </Route>
           <Route path="/governance">
             <Guard role={role} allowed={["admin"]}><Governance /></Guard>
@@ -344,16 +360,12 @@ function AppRoutes() {
                 admin who types the URL is redirected, not shown a dead shell.
                 The server independently enforces requireSuperAdmin on all data.
 
-                The flag now rides on the session user, so the gate resolves
-                immediately on a refresh. We only WAIT on the allowlist request
-                for a legacy user snapshot that predates the flag — otherwise a
-                slow or failed /api/config/app used to redirect the owner away
-                from their own console. */}
-            {user?.isSuperAdmin === undefined && !superAdminSettled
-              ? null
-              : isSuperAdmin(user, superAdminEmails)
-                ? <SuperAdmin />
-                : <Redirect to="/" />}
+                The immutable is_super_admin flag rides on the session user, so
+                this resolves synchronously. It used to also wait on an
+                /api/config/app allowlist fetch — an endpoint that no longer
+                returns a list, and that 403s for every non-admin who booted
+                the app. */}
+            {user?.isSuperAdmin ? <SuperAdmin /> : <Redirect to="/" />}
           </Route>
 
           <Route component={NotFound} />
@@ -371,7 +383,7 @@ function App() {
     <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
       <AuthProvider>
         <AppRoutes />
-        <Toaster />
+        <Suspense fallback={null}><Toaster /></Suspense>
         <UpdatePrompt />
       </AuthProvider>
     </PersistQueryClientProvider>

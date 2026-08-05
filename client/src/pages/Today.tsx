@@ -18,7 +18,9 @@ import { EarningsToday } from "@/components/EarningsToday";
 import { PushSetupCard } from "@/components/PushSetupCard";
 import { TeamFeedBell, TeamFeedHeadline } from "@/components/TeamFeed";
 import { useLiveItems } from "@/hooks/useLiveItems";
-import { WarmupStrip } from "@/components/training/WarmupStrip";import {
+import { WarmupStrip } from "@/components/training/WarmupStrip";
+import { unpackMapPins } from "@shared/mapPinsWire";
+import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
 } from "@shared/knock";
@@ -84,8 +86,19 @@ export default function Today() {
     return () => { alive = false; };
   }, []);
 
+  // Own cache key, NOT the bare ["/api/leads/map"] the field map uses.
+  // React Query keeps ONE queryFn per key — whichever observer mounted last
+  // wins — so sharing it meant a Map → Today → Map trip left MapView refetching
+  // through this function instead of its own, silently dropping the `view=`
+  // lens the map was filtered by. Two screens, two questions, two keys.
+  //
+  // `format=packed` is the same rows in the columnar wire format the map has
+  // used for a while; it is materially smaller than the object form this used
+  // to request, for byte-identical data after unpacking.
   const pinsQ = useQuery<{ pins: Pin[]; total: number }>({
-    queryKey: ["/api/leads/map"], queryFn: () => apiRequest("GET", "/api/leads/map").then(r => r.json()), staleTime: 20_000,
+    queryKey: ["/api/leads/map", "today-route"],
+    queryFn: async () => unpackMapPins<Pin>(await (await apiRequest("GET", "/api/leads/map?format=packed")).json()),
+    staleTime: 20_000,
   });
   const boardQ = useQuery<LeaderRow[]>({
     queryKey: ["/api/leaderboard"], queryFn: () => apiRequest("GET", "/api/leaderboard").then(r => r.json()), staleTime: 20_000,
@@ -120,15 +133,39 @@ export default function Today() {
   const pins = pinsQ.data?.pins ?? [];
 
   const [skip, setSkip] = useState<Set<number>>(new Set());
+  // The screen shows one hero door and six rows, so only the best seven need
+  // ordering. This used to filter, then map the whole open set into {p,d}
+  // objects, then sort all of them, then filter again for the open count —
+  // four passes plus an O(n log n) sort over every pin the rep can see, re-run
+  // on every "skip this door" tap and every GPS fix. One pass keeping a
+  // bounded top-N does the same job with no intermediate arrays.
   const route = useMemo(() => {
-    const isOpen = (p: Pin) => { const s = pinDisplayState(p); return (s === "unworked" || s === "not_home") && !skip.has(p.id); };
-    const open = pins.filter(isOpen);
-    const ordered = myLoc
-      ? open.map(p => ({ p, d: haversineMeters(myLoc, p) })).sort((a, b) => a.d - b.d).map(x => x.p)
-      : [...open].sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
-    const hero = myLoc ? (nearestUnworkedLead(myLoc, open as RoutablePin[], skip) as Pin | null) ?? ordered[0] ?? null : ordered[0] ?? null;
+    const WANTED = 7; // hero + 6 rows
+    const top: { p: Pin; d: number }[] = [];
+    let openCount = 0;
+
+    for (const p of pins) {
+      const state = pinDisplayState(p);
+      if (state !== "unworked" && state !== "not_home") continue;
+      openCount += 1;
+      if (skip.has(p.id)) continue;
+      // Without a fix, rank by lead score instead of distance; negate so the
+      // same "smaller is better" insertion below serves both orders.
+      const d = myLoc ? haversineMeters(myLoc, p) : -(p.leadScore ?? 0);
+      if (top.length === WANTED && d >= top[WANTED - 1].d) continue;
+      let i = top.length;
+      while (i > 0 && top[i - 1].d > d) i -= 1;
+      top.splice(i, 0, { p, d });
+      if (top.length > WANTED) top.pop();
+    }
+
+    const ordered = top.map(x => x.p);
+    // nearestUnworkedLead owns the "which door next" rule (it weighs more than
+    // raw distance), so keep it as the authority when we have a fix — the
+    // nearest-first list above is exactly the candidate set it needs.
+    const hero = (myLoc ? (nearestUnworkedLead(myLoc, ordered as RoutablePin[], skip) as Pin | null) : null)
+      ?? ordered[0] ?? null;
     const rest = ordered.filter(p => p.id !== hero?.id).slice(0, 6);
-    const openCount = pins.filter(p => { const s = pinDisplayState(p); return s === "unworked" || s === "not_home"; }).length;
     return { hero, rest, openCount };
   }, [pins, myLoc, skip]);
 

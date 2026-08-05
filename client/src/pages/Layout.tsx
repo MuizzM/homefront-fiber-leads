@@ -40,8 +40,7 @@ import { BottomTabs } from "@/components/BottomTabs";
 import { PaywallBanner } from "@/components/PaywallBanner";
 import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
-import { apiRequest } from "@/lib/queryClient";
-import { prefetchRoute } from "@/lib/routePrefetch";
+import { navIntentHandlers } from "@/lib/routePrefetch";
 import { TrainingLock, useTrainingGate } from "@/components/TrainingLock";
 import { useTheme } from "@/hooks/use-theme";
 import { can, type Role as AppRole } from "@shared/capabilities";
@@ -63,13 +62,9 @@ type NavItem = {
   href: string;
   label: string;
   icon: React.ElementType;
-  show: (role: AppRole, email?: string) => boolean;
+  show: (role: AppRole, user?: { isSuperAdmin?: boolean }) => boolean;
   group?: string;
 };
-
-// Server-owned super-admin list (was hardcoded here and in App.tsx).
-// Populated once at shell mount from /api/config/app; empty until then.
-export let SUPER_ADMIN_EMAILS: string[] = [];
 
 const NAV_ITEMS: NavItem[] = [
   // ── Core ──────────────────────────────────────────────────────────────────
@@ -113,12 +108,21 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/applications", label: "Rep Onboarding", icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   // ── Governance (Phase 2) ──────────────────────────────────────────────────
-  { href: "/login-activity", label: "Login Activity", icon: ShieldCheck, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Governance" },
+  // admin + manager only: /api/auth/login-attempts is behind requireManager,
+  // which does not admit team_lead, so a team lead tapping this landed on a
+  // "Couldn't load the audit trail" dead end with a Retry that could never work.
+  { href: "/login-activity", label: "Login Activity", icon: ShieldCheck, show: r => hasRole(r, "admin", "manager"), group: "Governance" },
   { href: "/diagnostics",  label: "Diagnostics",   icon: Activity,     show: r => hasRole(r, "admin", "manager"),      group: "Governance" },
   { href: "/governance",   label: "Permissions",   icon: ShieldCheck,  show: r => hasRole(r, "admin"),                 group: "Governance" },
   { href: "/billing",      label: "Billing",       icon: CreditCard,   show: r => hasRole(r, "admin"),                 group: "Governance" },
   // ── Admin ─────────────────────────────────────────────────────────────────
-  { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r: string, email?: string) => !!email && SUPER_ADMIN_EMAILS.includes(email.trim().toLowerCase()), group: "Admin" },
+  // Gated on the immutable is_super_admin column that rides on the session
+  // user. This used to compare the user's email against a list fetched from
+  // /api/config/app — but that endpoint stopped returning the list (it is a
+  // per-caller `{ youAreSuperAdmin }` now, deliberately: the apex email set is
+  // not something to disclose), so the list was permanently empty and this item
+  // was invisible to everyone, the platform owner included.
+  { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r, u) => !!u?.isSuperAdmin, group: "Admin" },
 ];
 
 // ── Role badge for sidebar footer ─────────────────────────────────────────────
@@ -161,17 +165,6 @@ function avatarBg(role: string) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [, setSuperAdminLoaded] = useState(0);
-  useEffect(() => {
-    // Populate the server-owned super-admin list once (nav gate re-renders).
-    let alive = true;
-    apiRequest("GET", "/api/config/app").then(r => r.json()).then((d: any) => {
-      if (!alive) return;
-      SUPER_ADMIN_EMAILS = Array.isArray(d?.superAdminEmails) ? d.superAdminEmails : [];
-      setSuperAdminLoaded(v => v + 1);
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreSheetRef = useRef<HTMLDivElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -269,7 +262,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // Listing links that 403 on tap is worse than hiding them: it reads as a
   // broken app rather than a locked one.
   const visibleNav = NAV_ITEMS
-    .filter(item => item.show(role, user?.email))
+    .filter(item => item.show(role, user ?? undefined))
     .filter(item => !gated || gateOpenPath(item.href));
 
   return (
@@ -326,8 +319,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         key={href}
                         href={href}
                         onClick={() => setMobileOpen(false)}
-                        onPointerEnter={() => prefetchRoute(href)}
-                        onFocus={() => prefetchRoute(href)}
+                        {...navIntentHandlers(href)}
                         className={cn(
                           "relative flex min-h-11 md:min-h-0 items-center gap-3 rounded-xl md:rounded-lg px-3 py-2.5 md:py-2 text-[14px] md:text-[13px] font-medium transition-colors",
                           isActive
@@ -484,7 +476,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 {visibleNav
                   .filter(item => !["/", "/today", "/leads", "/map", "/my-commission"].includes(item.href))
                   .map(({ href, label, icon: Icon }) => (
-                    <Link key={href} href={href} onClick={() => setMoreOpen(false)} onPointerEnter={() => prefetchRoute(href)} onFocus={() => prefetchRoute(href)} className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-border bg-background/55 px-3.5 py-3 text-left active:scale-[.98] transition hover:border-primary/25">
+                    <Link key={href} href={href} onClick={() => setMoreOpen(false)} {...navIntentHandlers(href)} className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-border bg-background/55 px-3.5 py-3 text-left active:scale-[.98] transition hover:border-primary/25">
                       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary"><Icon className="h-[19px] w-[19px]" /></span>
                       <span className="min-w-0 text-[13px] font-semibold leading-tight text-foreground">{label}</span>
                     </Link>

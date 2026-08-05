@@ -70,18 +70,28 @@ export function useMyCampaigns(enabled = true) {
 }
 
 /** A clock that re-renders once a minute so the countdown stays honest without
- *  a per-second render loop on a phone that is also drawing a map. */
-function useMinuteTick(): number {
+ *  a per-second render loop on a phone that is also drawing a map.
+ *
+ *  `active` is not optional by accident: this hook is called from CampaignCard,
+ *  so a board of N campaigns starts N independent timers. A campaign ending
+ *  next week has a label that will not change for days — it does not need one.
+ *  MomentumOffer and LiveSlot already take the same gate. */
+function useMinuteTick(active: boolean): number {
   const [, setTick] = useState(0);
   useEffect(() => {
+    if (!active) return;
     const t = setInterval(() => setTick(n => n + 1), 30_000);
     return () => clearInterval(t);
-  }, []);
+  }, [active]);
   return Date.now();
 }
 
+/** Countdown labels only move inside this window; past it the card reads
+ *  "3 days left" and a 30s timer changes nothing on screen. */
+const COUNTDOWN_LIVE_MS = 2 * 60 * 60_000;
+
 export function CampaignCard({ campaign, compact = false }: { campaign: RepCampaign; compact?: boolean }) {
-  const now = useMinuteTick();
+  const now = useMinuteTick(campaign.endsAtMs - Date.now() < COUNTDOWN_LIVE_MS);
   const remaining = Math.max(0, campaign.endsAtMs - now);
   const urgent = isUrgent(remaining);
   const { progress } = campaign;

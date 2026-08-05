@@ -14,13 +14,15 @@
 // server) to a persisted local rung map, so a full dead-zone shift leaves the
 // deck, the summary, and the ladder bar correct. The local corpus
 // (buildDrillDeck) ships in the JS bundle, so even a cold first launch with no
-// snapshot still drills.
+// snapshot still drills — via lib/trainingCorpus, which loads it dynamically so
+// it never rides on the route graph of every screen that imports this module.
 
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
-import { buildDrillDeck, type DrillCard } from "@shared/trainingCards";
+import type { DrillCard } from "@shared/trainingCards";
+import { useTrainingCorpus } from "@/lib/trainingCorpus";
 import { nextRung, MAX_RUNG, type Grade } from "@shared/trainingSchedule";
 import {
   getTrainingReviewQueue,
@@ -55,6 +57,7 @@ const EMPTY_SNAPSHOT: ReviewQueueSnapshot = { pendingCount: 0, online: true };
 /** How many fresh cards a fully-offline first launch deals as the new pile
  *  (matches the server's ≤10 new-card cap). */
 const LOCAL_NEW_CAP = 10;
+
 
 // ── Local ladder state ───────────────────────────────────────────────────────
 // Persisted per rep: the rung each card is believed to be on (optimistic,
@@ -179,6 +182,10 @@ export function useDueCards(): {
     staleTime: 60_000,
   });
 
+  // Only the no-server-no-snapshot path needs the bundled curriculum. Ask for
+  // it there and nowhere else, so the online majority never downloads it.
+  const localCorpus = useTrainingCorpus(!query.data && !query.isLoading)?.buildDrillDeck() ?? null;
+
   return useMemo(() => {
     if (query.data) {
       return {
@@ -196,19 +203,21 @@ export function useDueCards(): {
     if (query.isLoading) {
       return { due: [], newCards: [], dueCount: 0, newCount: 0, source: "local" as const, isLoading: true, isError: false };
     }
-    // Fully offline, no snapshot: the bundled corpus IS the fallback deck.
-    const corpus = buildDrillDeck();
-    const newCards = corpus.slice(0, LOCAL_NEW_CAP) as DrillCard[];
+    // Fully offline, no snapshot: the bundled corpus IS the fallback deck. It
+    // arrives one tick later now (dynamic chunk), so report isLoading until it
+    // lands — WarmupStrip renders nothing while loading, which is the same
+    // "no fake zero" behaviour it already had.
+    const newCards = (localCorpus?.slice(0, LOCAL_NEW_CAP) ?? []) as DrillCard[];
     return {
       due: [],
       newCards,
       dueCount: 0,
       newCount: newCards.length,
       source: "local" as const,
-      isLoading: false,
+      isLoading: localCorpus === null,
       isError: true,
     };
-  }, [query.data, query.isLoading, query.isFetchedAfterMount]);
+  }, [query.data, query.isLoading, query.isFetchedAfterMount, localCorpus]);
 }
 
 /** Record a grade: durably enqueue the review (offline-safe), apply the shared
@@ -288,6 +297,9 @@ export function useCoachSummary(): {
   const deck = useDueCards();
   const queue = useTrainingQueue();
   const snap = useTrainingQueueSnapshot();
+  // useDueCards already kicks the corpus load on the offline path; subscribing
+  // (without enabling) re-renders the summary with the real total once it lands.
+  const localCorpus = useTrainingCorpus(false)?.buildDrillDeck() ?? null;
 
   const query = useQuery<CoachSummaryResponse>({
     queryKey: ["/api/training/coach-summary"],
@@ -309,10 +321,12 @@ export function useCoachSummary(): {
       newCount: deck.newCount,
       streakDays: computeStreakDays(ladder.reviewDays),
       ladderCoverage: ladderCoverageFromRungs(ladder.rungs),
-      totalCards: buildDrillDeck().length,
+      // 0 until the lazily-loaded corpus lands (and on the online path, where
+      // the server's own totalCards is what renders).
+      totalCards: localCorpus?.length ?? 0,
       cardsReviewedTotal: ladder.reviewCount,
     };
     return { summary: local, source: "local" as const, isLoading: query.isLoading && deck.isLoading };
     // snap.pendingCount re-derives the local summary as offline grades land.
-  }, [query.data, query.isFetchedAfterMount, query.isLoading, deck.dueCount, deck.newCount, deck.isLoading, ladderKey, snap.pendingCount, queue]);
+  }, [query.data, query.isFetchedAfterMount, query.isLoading, deck.dueCount, deck.newCount, deck.isLoading, ladderKey, snap.pendingCount, queue, localCorpus]);
 }
