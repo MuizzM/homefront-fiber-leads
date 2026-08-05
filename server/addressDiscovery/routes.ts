@@ -35,6 +35,10 @@ import { planDiscoveryTiles } from "@shared/addressDiscovery";
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
 export interface DiscoveryRouteDeps {
+  /** Body parser for the one documented large-upload surface (CSV/GeoJSON
+   *  address datasets). Passed in rather than mounted app-level so it can sit
+   *  AFTER the capability check — see the /api/discovery/uploads route. */
+  uploadBodyParser: Middleware;
   requireAuth: Middleware;
   requireCapability: (capability: Capability) => Middleware;
   requireScanningAllowed: Middleware;
@@ -625,7 +629,18 @@ export function registerAddressDiscoveryRoutes(
 
   app.post(
     "/api/discovery/uploads",
+    // Capability FIRST, then the 10 MB body parser. Express runs route
+    // middleware in order, so an unauthenticated or unauthorised caller is
+    // rejected before a single byte of the body is buffered or parsed. This
+    // used to be an app-level `app.use("/api/discovery/uploads", express.json(
+    // {limit: 10MB}))` in server/index.ts — which runs during middleware
+    // traversal, i.e. before ANY route handler and therefore before this
+    // capability check. On a single-threaded better-sqlite3 server, a
+    // synchronous 10 MB JSON.parse from an anonymous POST stalls the event loop
+    // for every rep on the box, and the global bucket allowed 1200 of them per
+    // IP per 15 minutes.
     deps.requireCapability("scan.manage"),
+    deps.uploadBodyParser,
     (req, res) => {
       const parsed = uploadSchema.safeParse(req.body);
       if (!parsed.success)

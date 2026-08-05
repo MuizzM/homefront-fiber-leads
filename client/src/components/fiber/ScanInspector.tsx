@@ -180,8 +180,21 @@ export default function ScanInspector() {
     return rows.size ? c : (counters ?? c);
   }, [rows, counters]);
 
-  // 1s tick so relative times + blocked-stage detection stay live.
-  useEffect(() => { const t = setInterval(() => forceTick((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  // 1s tick so relative times + blocked-stage detection stay live — but ONLY
+  // while there is something live to keep honest, and only while the tab is on
+  // screen. This is mounted in Fiber Intelligence's Coverage tab, so an admin
+  // who leaves that tab open was re-rendering every row once a second, all day,
+  // for a clock nobody was reading with the pipeline idle.
+  const scanLive = rows.size > 0;
+  useEffect(() => {
+    if (!scanLive) return;
+    const t = setInterval(() => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") {
+        forceTick((n) => n + 1);
+      }
+    }, 1000);
+    return () => clearInterval(t);
+  }, [scanLive]);
 
   const control = async (action: string) => {
     try {

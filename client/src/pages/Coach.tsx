@@ -5,7 +5,7 @@
 // the Library (Training.tsx) teaches. This page NEVER shows connectivity:
 // the deck comes from the persisted snapshot or the bundled corpus, grades
 // ride the trainingReviewQueue outbox, and the numbers stay honest.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Zap, MessageSquare, BookOpen, Flame } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,12 +23,42 @@ import {
   useCoachSummary,
   type DeckMode,
 } from "@/lib/useTrainingEngine";
-import { cardsByStage, type DrillCard } from "@shared/trainingCards";
+import type { DrillCard } from "@shared/trainingCards";
+import { useTrainingCorpus } from "@/lib/trainingCorpus";
 import type { Grade } from "@shared/trainingSchedule";
 
-function hashQueryMode(): DeckMode | null {
-  const raw = new URLSearchParams(window.location.hash.split("?")[1] || "").get("mode");
+// Where the mode actually lands depends on how you got here, and both places
+// are real. wouter's hash navigate() splits a link's query OFF the hash and
+// assigns it to location.search — `<Link href="/coach?mode=warmup">` (Today's
+// WarmupStrip) produces `/?mode=warmup#/coach`, NOT `#/coach?mode=warmup`. A
+// hand-typed or shared `#/coach?mode=warmup` URL keeps it in the hash. Read
+// both, hash first, exactly as PropertyDetail does for its own param.
+function queryMode(): DeckMode | null {
+  const hashQuery = window.location.hash.split("?")[1] ?? "";
+  const raw = new URLSearchParams(hashQuery).get("mode")
+    ?? new URLSearchParams(window.location.search).get("mode");
   return raw === "warmup" || raw === "refresher" || raw === "debrief" ? raw : null;
+}
+
+/** Drop the consumed `mode` param so it cannot silently re-open the deck on a
+ *  later visit. wouter's navigate() only ASSIGNS location.search when the next
+ *  link carries one, so a stale `?mode=warmup` otherwise rides along through
+ *  every subsequent navigation. */
+function clearQueryMode(): void {
+  const url = new URL(window.location.href);
+  let touched = false;
+  if (url.searchParams.has("mode")) { url.searchParams.delete("mode"); touched = true; }
+  const [hashPath, hashQuery] = url.hash.split("?");
+  if (hashQuery) {
+    const params = new URLSearchParams(hashQuery);
+    if (params.has("mode")) {
+      params.delete("mode");
+      const rest = params.toString();
+      url.hash = rest ? `${hashPath}?${rest}` : hashPath;
+      touched = true;
+    }
+  }
+  if (touched) window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 }
 
 /** Refresher is ONE card between doors — due first, then new, so a rep with a
@@ -38,23 +68,37 @@ function refresherDeck(due: DrillCard[], newCards: DrillCard[]): DrillCard[] {
 }
 
 /** Debrief is the objection gauntlet when nothing is due: 5 objection cards
- *  rotated deterministically by the day-of-year (no RNG, offline-safe). */
-function debriefDeck(due: DrillCard[]): DrillCard[] {
+ *  rotated deterministically by the day-of-year (no RNG, offline-safe).
+ *  `corpus` is null only while the curriculum chunk is still in flight. */
+function debriefDeck(due: DrillCard[], corpus: CorpusModule): DrillCard[] {
   if (due.length > 0) return due.slice(0, 10);
-  const gauntlet = cardsByStage("objection");
+  if (!corpus) return [];
+  const gauntlet = corpus.cardsByStage("objection");
   if (gauntlet.length <= 5) return gauntlet;
   const start = Math.floor(Date.now() / 86_400_000) % gauntlet.length;
   return Array.from({ length: 5 }, (_, i) => gauntlet[(start + i) % gauntlet.length]);
 }
 
+type CorpusModule = ReturnType<typeof useTrainingCorpus>;
+
 export default function Coach() {
   const [, navigate] = useLocation();
-  const [mode, setMode] = useState<DeckMode | null>(() => hashQueryMode());
+  const [mode, setMode] = useState<DeckMode | null>(() => queryMode());
+  // Consumed on mount — the deck is open now, so the param has done its job.
+  useEffect(() => { clearQueryMode(); }, []);
   const [whatNextOpen, setWhatNextOpen] = useState(false);
   const [deckRunCount, setDeckRunCount] = useState(0);
   const [debriefDone, setDebriefDone] = useState(false);
 
   const deck = useDueCards();
+  // Warm the curriculum as soon as Coach opens, but OUT of the route's static
+  // graph: this page used to statically import @shared/trainingCards, which put
+  // the 139 KB gzipped corpus in front of first paint even though only the
+  // debrief deck and the what-to-say-next sheet ever read it. Loading it here
+  // means the hub paints immediately and the corpus streams in behind it — and
+  // by the time a rep taps into a deck or the sheet, it is there. Offline is
+  // unaffected: it is still bundled, and cached after one visit.
+  const corpus = useTrainingCorpus();
   const { recordReview } = useRecordReviews();
   const { summary, isLoading: summaryLoading } = useCoachSummary();
 
@@ -65,11 +109,11 @@ export default function Coach() {
       case "refresher":
         return refresherDeck(deck.due, deck.newCards);
       case "debrief":
-        return debriefDeck(deck.due);
+        return debriefDeck(deck.due, corpus);
       default:
         return [];
     }
-  }, [mode, deck.due, deck.newCards]);
+  }, [mode, deck.due, deck.newCards, corpus]);
 
   const onGrade = (card: DrillCard, grade: Grade, _m: DeckMode) => {
     recordReview(card, grade);
@@ -78,7 +122,8 @@ export default function Coach() {
 
   // ── Deck runner takes the whole screen ─────────────────────────────────────
   if (mode) {
-    if (deck.isLoading) {
+    // Debrief with an empty due pile needs the corpus before it has a deck.
+    if (deck.isLoading || (mode === "debrief" && deck.due.length === 0 && !corpus)) {
       return (
         <div className="min-h-full bg-background pb-24">
           <div className="mx-auto w-full max-w-lg px-4 pt-5" role="status" aria-label="Loading your deck">

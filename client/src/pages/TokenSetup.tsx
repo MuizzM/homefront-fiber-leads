@@ -19,7 +19,7 @@ export default function TokenSetup() {
   const expiresMin = status?.expiresIn ? Math.round(status.expiresIn / 60) : 0;
 
   const refreshMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/refresh-token", {}),
+    mutationFn: () => apiRequest("POST", "/api/internal/refresh-token", {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/token-status"] });
       refetch();

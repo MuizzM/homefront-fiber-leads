@@ -152,9 +152,18 @@ app.use(helmet({
       imgSrc:         ["'self'", "data:", "blob:", "https://*.mapbox.com", "https://*.mapbox.cn"],
       connectSrc:     ["'self'", "https://*.mapbox.com", "https://events.mapbox.com"],
       fontSrc:        ["'self'", "data:", "https://fonts.gstatic.com"],
-      objectSrc:      ["'none'"],
-      mediaSrc:       ["'none'"],
-      frameSrc:       ["'none'"],
+      // 'self' + blob: — NOT 'none'. Both PDF viewers render the document with
+      // <object data="blob:…" type="application/pdf"> (PdfReviewer,
+      // PdfReviewPane), and Chrome's built-in PDF plugin renders inside an
+      // internal frame, so frame-src gates it too. With 'none' a rep signing a
+      // W-9 under penalty of perjury saw the "this browser can't display PDFs"
+      // fallback instead of the document — on every browser. The blob is minted
+      // by URL.createObjectURL from bytes the client already fetched over an
+      // authenticated, tenant-walled API; no third-party origin is admitted.
+      objectSrc:      ["'self'", "blob:"],
+      // <audio src="blob:…"> plays back the training pitch recorder's take.
+      mediaSrc:       ["'self'", "blob:"],
+      frameSrc:       ["'self'", "blob:"],
       baseUri:        ["'self'"],
       formAction:     ["'self'"],
       // Standalone deployments frame only themselves. Set EMBED_ANCESTORS
@@ -289,9 +298,17 @@ app.use("/api", (_req, res, next) => {
 // LiveMap/geoFix/mapPins) is core to field reps. geolocation=(self) permits it for
 // THIS site only; empty () blocked it in every browser (iOS Safari most strictly).
 // Camera stays () — lead-photo uses a file-input (capture="environment"), not
-// getUserMedia, so it needs no grant. mic/payment/usb/FLoC stay disabled.
+// getUserMedia, so it needs no grant. payment/usb/FLoC stay disabled.
+//
+// microphone=(self), not (): the training pitch recorder
+// (components/training/PitchRecorder) calls getUserMedia({ audio: true }), and
+// an empty allowlist denies the capability to this origin itself — the call
+// rejected with NotAllowedError before the browser could even prompt. That
+// matters more than one broken component: requireAuth delegates to the training
+// gate, so a rep who cannot finish a pitch drill is locked out of the whole app.
+// (self) grants it to this origin only and still denies it to any embedded frame.
 app.use((_req, res, next) => {
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(self), payment=(), usb=(), interest-cohort=()");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=(self), payment=(), usb=(), interest-cohort=()");
   // Extra hardening headers not covered by Helmet defaults
   res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   res.setHeader("Cross-Origin-Resource-Policy", "same-site");
@@ -458,6 +475,23 @@ app.use("/api/leads/:id/knock", knockPostLimiter);
 app.use("/api/v1/calling/attempts/start", callingAttemptLimiter);
 app.use("/api/pay/nacha", moneyExportLimiter);
 app.use("/api/commission/week-export.csv", moneyExportLimiter);
+// Bulk-disclosure budgets on the rest of the surfaces that hand out a document
+// or a file per request. Role gating answers "may you read this one?"; it does
+// not answer "may you read all of them, now?" — and :id is sequential, so a
+// hijacked session could previously walk a whole roster inside the 1200/15min
+// global bucket. 20/hour per ACCOUNT (perUserKey) is far above real use and
+// turns roster-wide exfiltration into something slow and visible in the logs.
+//
+// The W-9 renders a COMPLETE 9-digit SSN (see sendW9Pdf in server/payRoutes.ts)
+// — it is the most sensitive document the app produces.
+app.use("/api/team-members/:id/w9/pdf", moneyExportLimiter);
+app.use("/api/me/w9/pdf", moneyExportLimiter);
+// Homeowner PII in bulk (address, city, owner and knock history).
+app.use("/api/monitor/knock-list.csv", moneyExportLimiter);
+app.use("/api/monitor/markets.csv", moneyExportLimiter);
+app.use("/api/sweeps/:id/knock-list.csv", moneyExportLimiter);
+// Per-request PDF rendering: a CPU amplifier on a single-threaded server.
+app.use("/api/commission/statements/:id/statement.pdf", moneyExportLimiter);
 
 declare module "http" {
   interface IncomingMessage {
@@ -473,16 +507,6 @@ declare module "http" {
 app.use(
   ["/api/billing/webhook/stripe", "/api/payouts/webhook/stripe"],
   express.json({ limit: "1mb", verify: (req, _res, buf) => { req.rawBody = buf; } }),
-);
-// Admin address-dataset uploads are explicitly capped at 10 MB and parsed
-// before the normal 64 KB API limit. Authorization still runs in the route;
-// this exception exists only for the documented CSV/GeoJSON ingestion surface.
-app.use(
-  "/api/discovery/uploads",
-  express.json({
-    limit: Math.max(64 * 1024, Math.min(10 * 1024 * 1024, Number(process.env.DISCOVERY_UPLOAD_MAX_BYTES) || 10 * 1024 * 1024)),
-    verify: (req, _res, buf) => { req.rawBody = buf; },
-  }),
 );
 app.use(
   express.json({

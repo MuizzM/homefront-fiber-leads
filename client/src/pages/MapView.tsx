@@ -563,6 +563,9 @@ function inBBox(lat: number, lng: number, b: BBox) {
 // Stable empty pin array — `mapPinData?.pins ?? EMPTY_PINS` must not allocate a
 // fresh [] per render, or every downstream useMemo re-runs until data lands.
 const EMPTY_PINS: MapPin[] = [];
+/** Stable empty index for the closed-search case — a fresh [] each render would
+ *  defeat the memo it feeds. */
+const EMPTY_SEARCH_INDEX: { l: MapPin; hay: string }[] = [];
 
 // ── Merging a pushed lead into a map pin ─────────────────────────────────────
 // The merge itself lives in @/lib/leadStreamMerge (pure, unit-tested): it
@@ -2456,12 +2459,30 @@ export default function MapView() {
   // ── Fetch Mapbox token from server (not in bundle) ──────────────────────────
   const [mapboxToken, setMapboxToken] = useState<string>("");
   const [mapTokenFailed, setMapTokenFailed] = useState(false);
+  // WHY the map is unavailable, so the card can say something true. "library"
+  // means the Mapbox GL script never arrived (offline, captive portal, CDN
+  // blocked) — a rep problem with a retry. "token" means the server has no
+  // MAPBOX_TOKEN — an admin problem no retry will fix.
+  const [mapFailureKind, setMapFailureKind] = useState<"library" | "token" | null>(null);
+  // Bumping this re-runs the loader effect — the Retry affordance on the
+  // failure card, so a rep who walked back into signal is one tap from a map.
+  const [mapboxRetry, setMapboxRetry] = useState(0);
+  const retryMapbox = useCallback(() => {
+    setMapTokenFailed(false);
+    setMapFailureKind(null);
+    (window as unknown as { __retryMapbox?: () => void }).__retryMapbox?.();
+    setMapboxRetry((n) => n + 1);
+  }, []);
 
   // Wait for mapboxgl CDN — uses onload callback from index.html, no polling
   useEffect(() => {
     let cancelled = false;
-    const init = () => {
+    const init = (err?: Error) => {
       if (cancelled) return;
+      // The library never arrived (CDN blocked, captive portal, dead LTE).
+      // Surface it: this is the only writer of mapTokenFailed, and without it
+      // the rep sat on an empty map container with no spinner and no error.
+      if (err) { setMapFailureKind("library"); setMapTokenFailed(true); return; }
       apiRequest("GET", "/api/config/map")
         .then((r) => r.json())
         .then((d: { token: string }) => {
@@ -2470,18 +2491,29 @@ export default function MapView() {
             (window as any).mapboxgl.accessToken = d.token;
             setMapboxToken(d.token);
           } else {
+            setMapFailureKind("token");
             setMapTokenFailed(true);
           }
         })
         .catch(() => {
-          if (!cancelled) setMapTokenFailed(true);
+          if (!cancelled) { setMapFailureKind("token"); setMapTokenFailed(true); }
         });
     };
     (window as any).__onMapboxReady(init);
+    // Belt and braces: a script tag that stalls without ever firing onload or
+    // onerror (some captive portals hold the connection open) would otherwise
+    // still hang forever. After 12s, call it.
+    const stallTimer = window.setTimeout(() => {
+      if (!cancelled && !(window as any).__mapboxReady && typeof (window as any).mapboxgl === "undefined") {
+        setMapFailureKind("library");
+        setMapTokenFailed(true);
+      }
+    }, 12_000);
     return () => {
       cancelled = true;
+      window.clearTimeout(stallTimer);
     };
-  }, []);
+  }, [mapboxRetry]);
 
   // ── Init Mapbox ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -5519,13 +5551,20 @@ export default function MapView() {
   // On-map search — lowercase haystack built ONCE per data load (O(n)), so a
   // keystroke never re-lowercases 50k addresses. A NUL separates the two
   // fields so a query can't falsely match across the address/city boundary.
+  // Gated on searchOpen: "once per data load" is far more often than it sounds
+  // — `leads` gets a new identity on every knock, every live push and every
+  // viewport merge (i.e. every pan). Reps who never open search were paying an
+  // object allocation and a toLowerCase per pin on every one of those, for an
+  // index nothing was going to read. Opening the panel builds it once.
   const searchIndex = useMemo(
     () =>
-      leads.map((l) => ({
-        l,
-        hay: (l.address + "\u0000" + (l.city ?? "")).toLowerCase(),
-      })),
-    [leads],
+      searchOpen
+        ? leads.map((l) => ({
+            l,
+            hay: (l.address + "\u0000" + (l.city ?? "")).toLowerCase(),
+          }))
+        : EMPTY_SEARCH_INDEX,
+    [leads, searchOpen],
   );
   // Deferred query: typing stays responsive; the scan lags a frame at worst.
   const deferredSearch = useDeferredValue(sidebarSearch);
@@ -6108,6 +6147,13 @@ export default function MapView() {
     const tick = (now: number) => {
       const flash = ringFlashRef.current;
       const fe = flash ? (now - flash.at) / FLASH_MS : 1; // 0..1 through the pop
+      // Nobody is looking: skip the paint writes entirely. Browsers usually
+      // pause rAF for a hidden tab, but Android WebViews and installed PWAs do
+      // not always, and each accepted frame forces a full GL repaint of the map.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
       // The rep dragging the knock sheet owns the frame budget — pause every
       // pulse paint-write for the whole drag (the ring simply freezes).
       if (isSheetDragActive()) {
@@ -6595,15 +6641,33 @@ export default function MapView() {
               paint on its first styled frame. The only full-cover state left
               is the unrecoverable missing-token config error below. */}
           {noToken && (
-            <div className="absolute inset-0 flex items-center justify-center bg-card/95 z-10">
+            <div className="absolute inset-0 flex items-center justify-center bg-card/95 z-10 px-6">
               <div className="text-center max-w-xs">
                 <MapIcon className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-40" />
-                <div className="text-sm font-medium mb-1">
-                  Mapbox token needed
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  Add MAPBOX_TOKEN to server .env
-                </div>
+                {mapFailureKind === "library" ? (
+                  <>
+                    <div className="text-sm font-medium mb-1">Map couldn't load</div>
+                    <div className="text-xs text-muted-foreground">
+                      The map library didn't download. Check your signal — your leads and
+                      knocks still work.
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="map-retry-button"
+                      onClick={retryMapbox}
+                      className="mt-4 inline-flex min-h-11 items-center rounded-xl bg-primary px-4 text-[13px] font-semibold text-primary-foreground active:scale-[.98] transition"
+                    >
+                      Try again
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-sm font-medium mb-1">Mapbox token needed</div>
+                    <div className="text-xs text-muted-foreground">
+                      Add MAPBOX_TOKEN to server .env
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}

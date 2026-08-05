@@ -52,6 +52,7 @@ vi.mock("wouter", () => ({
 }));
 
 import Today from "../../client/src/pages/Today";
+import { packMapPins } from "@shared/mapPinsWire";
 
 interface PinOver { id: number; leadStatus?: string; lastOutcome?: string | null; leadScore?: number; address?: string; }
 function pin(o: PinOver) {
@@ -78,7 +79,9 @@ function renderToday(e: Endpoints = {}) {
   const board = e.board ?? [{ rep: { id: 9, name: "Rae Rep", role: "rep" }, knocks: 40, sales: 12, knocksToday: 6, salesToday: 2 }];
   apiRequest.mockImplementation((_method: string, url: string) => {
     if (url.startsWith("/api/leads/map")) {
-      return e.failPins ? Promise.reject(new Error("boom")) : Promise.resolve({ json: () => Promise.resolve({ pins, total: pins.length }) });
+      // Today requests ?format=packed and unpacks — serve the real wire shape so
+      // the test exercises the same path production does.
+      return e.failPins ? Promise.reject(new Error("boom")) : Promise.resolve({ json: () => Promise.resolve(packMapPins(pins as never, { total: pins.length })) });
     }
     if (url.startsWith("/api/leaderboard")) {
       return e.failBoard ? Promise.reject(new Error("boom")) : Promise.resolve({ json: () => Promise.resolve(board) });

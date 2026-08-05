@@ -2,12 +2,18 @@
 // taps from anywhere to the verbatim words. No network, no AI: the corpus is
 // bundled and indexed in shared/trainingCards, so this works fully offline in
 // a dead zone, which is exactly when a rep needs it.
+//
+// The corpus is pulled through lib/trainingCorpus rather than imported
+// statically, so this sheet does not drag 139 KB gzipped into the route graph
+// of every screen that renders it. Coach warms it on mount, so by the time the
+// sheet opens it is already there — and it stays bundled, so offline holds.
 import { useMemo, useState } from "react";
 import { MessageSquare, ChevronLeft } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
-import { cardsByObjection, cardsByStage, type DoorStage, type DrillCard } from "@shared/trainingCards";
+import type { DoorStage, DrillCard } from "@shared/trainingCards";
+import { useTrainingCorpus } from "@/lib/trainingCorpus";
 import { OBJECTION_CARD_GAPS, type ObjectionKey } from "@shared/trainingObjections";
 import { ObjectionChips } from "./ObjectionChips";
 
@@ -47,11 +53,15 @@ export function WhatNextSheet({
 
   // Non-objection stages render their strongest cards straight; objections go
   // through the 14-key row first. Everything is an in-memory index hit.
+  const corpus = useTrainingCorpus(open);
   const stageCards = useMemo(
-    () => (stage === "objection" ? [] : cardsByStage(stage).slice(0, 4)),
-    [stage],
+    () => (stage === "objection" || !corpus ? [] : corpus.cardsByStage(stage).slice(0, 4)),
+    [stage, corpus],
   );
-  const answers = useMemo(() => (picked ? cardsByObjection(picked) : []), [picked]);
+  const answers = useMemo(
+    () => (picked && corpus ? corpus.cardsByObjection(picked) : []),
+    [picked, corpus],
+  );
   const gapNote = picked ? OBJECTION_CARD_GAPS[picked] : null;
 
   return (

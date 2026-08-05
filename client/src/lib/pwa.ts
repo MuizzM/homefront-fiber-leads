@@ -10,6 +10,15 @@ export function registerServiceWorker(): void {
   if (import.meta.env.DEV) return; // dev: no SW (HMR owns the page)
 
   window.addEventListener("load", () => {
+    // Captured BEFORE registering. On a first-ever launch there is no
+    // controller, so the worker installs, activates and calls clients.claim() —
+    // which fires controllerchange and, without this guard, hard-reloaded the
+    // page. Every new device and every post-storage-clear launch paid a second
+    // full React boot and auth round trip, with a white flash, at exactly the
+    // moment the route chunks were downloading. A first install has nothing to
+    // swap in: the page is already running the code the worker just cached.
+    const hadController = !!navigator.serviceWorker.controller;
+
     navigator.serviceWorker.register("/sw.js").then((reg) => {
       // A worker already waiting (returning user mid-deploy) → prompt now.
       if (reg.waiting) notifyUpdate(reg.waiting);
@@ -26,7 +35,7 @@ export function registerServiceWorker(): void {
     // The new worker took control → reload once to run fresh code atomically.
     let reloaded = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (reloaded) return;
+      if (reloaded || !hadController) return;
       reloaded = true;
       window.location.reload();
     });

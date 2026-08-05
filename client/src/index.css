@@ -1,6 +1,9 @@
-/* Self-hosted Inter (variable) — Vite bundles the woff2; no Google Fonts request */
+/* Self-hosted Geist (variable) — Vite bundles the woff2; no Google Fonts request.
+   Geist is the ONLY webfont: it was previously paired with Inter as a fallback,
+   but a browser downloads the first family in the stack that covers the
+   codepoint, and Geist's subsets cover everything this app renders — so Inter's
+   six woff2 subsets (~188 KB shipped) were never once requested. */
 @import "@fontsource-variable/geist";
-@import "@fontsource-variable/inter";
 
 @tailwind base;
 @tailwind components;
@@ -165,7 +168,7 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'Geist Variable', 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-family: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     /* App-wide guard against horizontal scroll at any width (QA: no page may
@@ -291,7 +294,7 @@
   border: 1px solid var(--map-chrome-border) !important;
   border-radius: 12px !important;
   padding: 12px 14px !important;
-  font-family: 'Geist Variable', 'Inter Variable', system-ui, sans-serif !important;
+  font-family: 'Geist Variable', system-ui, sans-serif !important;
   font-size: 13px !important;
   min-width: 200px;
   box-shadow: 0 12px 32px rgba(0,0,0,0.45) !important;
