@@ -54,7 +54,29 @@ ensureTrainingGateSchema();
 /** How many lessons this org requires. Defaults to the whole curriculum, which
  *  is what "they have to finish training" means; an admin can lower it without a
  *  deploy when the full course is more than a first week needs. */
+// The threshold is a per-tenant admin setting that changes about never, but
+// gateStateFor runs on EVERY authenticated request and storage.getSetting costs
+// two queries on a tenant miss (the tenant row, then the tenant_id=0 fallback).
+// A short TTL turns that into one lookup per tenant per second; setRequiredLessons
+// drops the entry so an admin's change takes effect immediately.
+const REQUIRED_LESSONS_TTL_MS = 30_000;
+const _requiredLessonsCache = new Map<number, { value: number; at: number }>();
+
+export function __clearRequiredLessonsCache(): void {
+  _requiredLessonsCache.clear();
+}
+
 export function requiredLessons(tenantId: number | null | undefined): number {
+  const key = tenantId ?? 0;
+  const hit = _requiredLessonsCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < REQUIRED_LESSONS_TTL_MS) return hit.value;
+  const value = readRequiredLessons(tenantId);
+  _requiredLessonsCache.set(key, { value, at: now });
+  return value;
+}
+
+function readRequiredLessons(tenantId: number | null | undefined): number {
   try {
     const raw = storage.getSetting(REQUIRED_SETTING, tenantId ?? null);
     if (raw == null || raw === "") return TOTAL_TRAINING_LESSONS;
@@ -68,6 +90,7 @@ export function setRequiredLessons(tenantId: number, actorId: number | null, val
   const problem = validateRequiredLessons(value, TOTAL_TRAINING_LESSONS);
   if (problem) throw Object.assign(new Error(problem), { httpStatus: 400 });
   storage.setSetting(REQUIRED_SETTING, String(Math.trunc(value)), actorId, tenantId);
+  _requiredLessonsCache.delete(tenantId ?? 0);
   storage.logActivity(actorId, "training.gate.threshold_set", "tenant", tenantId,
     { requiredLessons: Math.trunc(value), totalAvailable: TOTAL_TRAINING_LESSONS }, undefined);
   return Math.trunc(value);
@@ -87,7 +110,10 @@ export function trainingRequiredFor(userId: number): boolean {
   return Number(row?.r ?? 0) === 1;
 }
 
-/** Assemble the state the pure rule reads for one signed-in user. */
+/** Assemble the state the pure rule reads for one signed-in user. Always the
+ *  real numbers — statusFor reports progress from this, so it must stay exact
+ *  even for roles the gate can never lock. Use isUserTrainingGated for the
+ *  middleware check; it answers the same question without the reads. */
 export function gateStateFor(user: { id: number; role?: string | null; tenantId?: number | null }): TrainingGateState {
   return {
     role: user.role ?? null,
@@ -95,6 +121,37 @@ export function gateStateFor(user: { id: number; role?: string | null; tenantId?
     completedLessons: completedLessons(user.id, user.tenantId ?? null),
     requiredLessons: requiredLessons(user.tenantId ?? null),
   };
+}
+
+/**
+ * Is this user locked out right now? Same answer as
+ * isTrainingGated(gateStateFor(user)), reached without the reads that cannot
+ * change it.
+ *
+ * This is the hot path, not a micro-optimisation: requireAuth runs the gate on
+ * EVERY authenticated request and one section switch fires four to eight of
+ * those. Building the full state costs four queries — training_required, a
+ * COUNT over training_progress, and two for the tenant setting (the tenant row
+ * plus the tenant_id=0 fallback). Two of those cannot affect the outcome:
+ *
+ *   - an exempt role (admin, manager, team_lead, super_admin) is never gated,
+ *     so none of the three reads matter;
+ *   - with the requirement switched OFF — the backfilled default for everyone
+ *     who existed when the gate shipped — the lesson counts do not matter.
+ *
+ * That was twenty to forty pointless round trips through better-sqlite3, on the
+ * single Node thread, for every navigation in the app.
+ */
+export function isUserTrainingGated(user: { id: number; role?: string | null; tenantId?: number | null }): boolean {
+  const role = user.role ?? null;
+  if (isRoleExempt(role)) return false;
+  if (!trainingRequiredFor(user.id)) return false;
+  return isTrainingGated({
+    role,
+    trainingRequired: true,
+    completedLessons: completedLessons(user.id, user.tenantId ?? null),
+    requiredLessons: requiredLessons(user.tenantId ?? null),
+  });
 }
 
 /** THE check. One call site for the middleware, one for the rep's own status. */

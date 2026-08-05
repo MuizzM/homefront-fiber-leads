@@ -3275,12 +3275,29 @@ export class Storage implements IStorage {
   // auto-refresh pick up scan-added leads (the in-memory epoch alone can't see
   // writes from a separate process). Index-served via idx_leads_tenant_updated.
   getLeadsDataVersion(tenantId?: number): string {
+    // Memoised for one second. Three aggregates in one statement cannot each
+    // use an index optimisation, so SQLite walks the whole tenant range —
+    // measured ~5ms at 40k leads, and this runs BEFORE the ETag comparison, so
+    // even the zero-body 304 path (the entire point of the ETag) paid a full
+    // scan on every poll from every rep.
+    //
+    // Correctness is unchanged: the in-process epoch counters in routes.ts bust
+    // the ETag instantly for this process's own writes. This value exists only
+    // to catch CROSS-process writes (the scan runner, nightly cron), and a
+    // one-second lag on those is invisible against the 8s map cache TTL.
+    const key = tenantId ?? -1;
+    const now = Date.now();
+    const hit = this._leadsDataVersionCache.get(key);
+    if (hit && now - hit.at < 1000) return hit.value;
     const row = (tenantId != null
       ? rawDb.prepare("SELECT COUNT(*) c, COALESCE(MAX(id),0) mx, COALESCE(MAX(updated_at),'') mu FROM leads WHERE tenant_id = ?").get(tenantId)
       : rawDb.prepare("SELECT COUNT(*) c, COALESCE(MAX(id),0) mx, COALESCE(MAX(updated_at),'') mu FROM leads").get()
     ) as { c: number; mx: number; mu: string };
-    return `${row.c}.${row.mx}.${row.mu}`;
+    const value = `${row.c}.${row.mx}.${row.mu}`;
+    this._leadsDataVersionCache.set(key, { value, at: now });
+    return value;
   }
+  private _leadsDataVersionCache = new Map<number, { value: string; at: number }>();
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }> {
     const conds: string[] = [];
     const params: (number | string)[] = [];

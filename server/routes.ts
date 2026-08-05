@@ -119,9 +119,9 @@ import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
 import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
-import { isTrainingGated, pathAllowedWhileGated } from "@shared/trainingGate";
+import { pathAllowedWhileGated } from "@shared/trainingGate";
 import {
-  gateStateFor, statusFor as trainingGateStatus, setTrainingRequired,
+  isUserTrainingGated, statusFor as trainingGateStatus, setTrainingRequired,
   requiredLessons, setRequiredLessons, trainingRoster,
 } from "./trainingGateStore";
 import { awardCampaignsForRep } from "./spiffCampaignStore";
@@ -373,7 +373,7 @@ function trainingGate(req: Request, res: Response, next: NextFunction) {
   if (!user) return next();
   if (pathAllowedWhileGated(req.path)) return next();
   try {
-    if (!isTrainingGated(gateStateFor(user))) return next();
+    if (!isUserTrainingGated(user)) return next();
   } catch (e: any) {
     console.warn("[training-gate] check failed, allowing through:", e?.message);
     return next();
@@ -1434,6 +1434,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     dbMs: number;
     buildMs: number;
     packed?: PackedMapPins;
+    /** Serialized object-format body, memoised the same way `packed` is. The
+     *  packed form already cached its build; the object form handed the raw
+     *  array to res.json, so JSON.stringify re-ran over every pin on every
+     *  cache HIT — ~27ms of blocked single-thread time on a 20k-pin tenant,
+     *  paid by every rep's home screen and every map poll. Entries are dropped
+     *  wholesale by bustMapCache, so this string can never go stale. */
+    json?: string;
+    /** Same memo for the packed format's serialized body. */
+    packedJson?: string;
   }
   const _mapPinCache = new Map<string, MapPinCacheEntry>();
   const MAP_CACHE_TTL = 8_000; // 8s — fast enough for real-time feel
@@ -1809,10 +1818,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (req.headers["if-none-match"] === etag) return res.status(304).end();
     const result = getMapPins(tid, repFilter, dbVer, view as MapView | undefined);
     const packStarted = performance.now();
-    const payload = format === "packed"
-      ? (result.entry.packed ??= packMapPins(result.entry.pins))
-      : { pins: result.entry.pins, total: result.entry.pins.length };
-    const packMs = format === "packed" ? performance.now() - packStarted : 0;
+    const body = format === "packed"
+      ? (result.entry.packedJson ??= JSON.stringify(result.entry.packed ??= packMapPins(result.entry.pins)))
+      : (result.entry.json ??= JSON.stringify({ pins: result.entry.pins, total: result.entry.pins.length }));
+    const packMs = performance.now() - packStarted;
     res.set("X-Map-Cache", result.cacheHit ? "hit" : "miss");
     res.set("Server-Timing", [
       `leads_db;dur=${result.cacheHit ? 0 : result.entry.dbMs.toFixed(2)}`,
@@ -1831,7 +1840,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       packMs: Number(packMs.toFixed(2)),
       complexity: "O(L + K_scope)",
     });
-    res.json(payload);
+    res.type("application/json").send(body);
   });
 
   // Tenant-scoped invalidation stream. It carries no lead/address data: clients
@@ -5348,9 +5357,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!repCanAccessLead(user, _klead)) return res.status(404).json({ error: "Not found" });
     // History rows carry who made the change — the card renders "Sold · 3:12 PM
     // · M. Muhammad" without a second round-trip per row.
+    // One indexed team scan → O(1) name lookups per row, matching what
+    // /api/leads/:id/history below already does. This used to call
+    // getTeamMemberById inside the map, i.e. one SELECT per knock: opening a
+    // door with a dozen knocks cost a dozen extra queries.
+    const _kNames = new Map(storage.getTeamMembers(_ktid ?? undefined).map(m => [m.id, m.name]));
     const rows = storage.getKnocksByLead(Number(req.params.id)).map(k => ({
       ...k,
-      repName: (k.repId != null ? storage.getTeamMemberById(k.repId)?.name : null) ?? null,
+      repName: (k.repId != null ? _kNames.get(k.repId) : null) ?? null,
     }));
     res.json(rows);
   });
@@ -5399,7 +5413,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!lead || (_htid && lead.tenantId !== _htid)) return res.status(404).json({ error: "Not found" });
     if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     // One indexed team scan → O(1) name lookups per row (not a query per knock).
-    const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    // Tenant-scoped: an unscoped call hydrates every org's team members on every
+    // history read, and this endpoint is already tenant-walled above.
+    const repNames = new Map(storage.getTeamMembers(_htid ?? undefined).map(m => [m.id, m.name]));
     // WHO knocked is shared-area collaboration; WHERE THEY STOOD is not.
     //
     // An earlier revision of this redaction hid both, and broke the thing shared
