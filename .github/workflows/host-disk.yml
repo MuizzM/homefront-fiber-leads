@@ -163,6 +163,32 @@ jobs:
             echo "  no running app container found"
           fi
 
+          # ── Release assets ───────────────────────────────────────────────
+          # The onboarding PDFs embed the HFS logo, resolved from beside the
+          # bundle at runtime. If that asset never reaches the image the
+          # renderer degrades silently to a wordmark — which looks fine in
+          # review and wrong on a signed contract, so it is checked HERE, in
+          # the image that is actually serving.
+          hr; echo "BRANDING ASSETS"
+          if [ -n "$APP" ]; then
+            docker exec "$APP" node -e "
+              const fs=require('fs'), path=require('path');
+              const candidates=[path.resolve('/app/dist/public/hfs-logo-full.png'), path.resolve(process.cwd(),'dist/public/hfs-logo-full.png')];
+              const found=candidates.find(c=>{try{return fs.statSync(c).isFile()}catch{return false}});
+              console.log('  logo: ' + (found ? found + '  (' + fs.statSync(found).size + ' bytes)' : 'NOT FOUND — PDFs will fall back to a wordmark'));
+              try {
+                const { renderOnboardingPacketPdf } = require('/app/dist/index.cjs');
+                console.log('  (renderer not separately exported; size check below)');
+              } catch {}
+            " 2>&1 | sed 's/^/  /' || echo "  (could not inspect the image)"
+          else
+            echo "  no running app container"
+          fi
+
+          # ── Prune state ──────────────────────────────────────────────────
+          hr; echo "DB PRUNE"
+          docker logs --since 24h "$APP" 2>&1 | grep -a "db_prune" | tail -3 | sed 's/^/  /' || echo "  no db_prune log in the last 24h"
+
           if [ "$ACTION" = "report" ]; then
             hr; echo "Report only — nothing was changed."
             exit 0
