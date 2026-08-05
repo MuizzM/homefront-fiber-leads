@@ -133,7 +133,6 @@ import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
 import { publishSale, publishStreak, publishAuthored, feedForUser, markRead, sentAuthored, deleteAuthored } from "./teamFeedStore";
-import { postChatMessage, chatPageFor, markChatRead, deleteChatMessage } from "./floorChatStore";
 import { earningsToday } from "./earningsTodayStore";
 import { emitAnnouncement, onAnnouncement } from "./announcementBus";
 import { visibleTo, usd as feedUsd } from "@shared/teamFeed";
@@ -221,7 +220,7 @@ import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { getFiberChanges, getCopperPool } from "./fiberTransitions";
-import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter, chatPostLimiter } from "./limiters";
+import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter } from "./limiters";
 import { scanSseCaps } from "./scanSseCaps";
 import { otpRateBuckets } from "./otpRateBuckets";
 import { validateLeadPatch, rescanPoolPlan, clampActivityLogLimit, validateTerritoryRequestMessage, filterInChunks, RESCAN_POOL_MAX_TARGETS, RESCAN_POOL_CHUNK_SIZE as RESCAN_POOL_CHUNK } from "./routeInputPolicy";
@@ -2157,81 +2156,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const userId = Number(req.user?.id);
     if (!Number.isFinite(userId)) return res.status(401).json({ error: "Unauthenticated" });
     res.json({ lastReadId: markRead(userId, Number(req.body?.upToId ?? 0), Date.now()) });
-  });
-
-  // ── Floor chat ──────────────────────────────────────────────────────────────
-  // The two-way room next to the one-way feed. Every route here is gated on
-  // field.app.use, NOT bare requireAuth — deliberately stricter than GET
-  // /api/announcements. The feed admits desk roles because a broadcast is for
-  // everyone; the chat is the floor talking, and a calling/compliance identity
-  // that can never open the hub page should not be able to post into it from a
-  // script either. (Training-gated reps are refused upstream by the gate that
-  // rides requireAuth — a rep who hasn't finished training isn't on the floor
-  // yet, and hearing the room before then is a distraction, not an onboarding.)
-
-  // GET /api/chat?limit=&after= — the room, plus this viewer's unread count.
-  // `after` is the polling cursor: a quiet poll returns zero rows, not a page.
-  app.get("/api/chat", requireCapability("field.app.use"), (req: any, res: Response) => {
-    const tenantId = req.user?.tenantId;
-    const userId = Number(req.user?.id);
-    if (tenantId == null || !Number.isFinite(userId)) {
-      return res.json({ items: [], unread: 0, latestId: 0 });
-    }
-    const limit = Number(req.query.limit);
-    const afterId = Number(req.query.after);
-    res.json(chatPageFor(Number(tenantId), userId, {
-      limit: Number.isFinite(limit) ? limit : undefined,
-      afterId: Number.isFinite(afterId) ? afterId : undefined,
-    }));
-  });
-
-  // POST /api/chat { body } — say something to the floor.
-  //
-  // No push and no announcementBus frame: the house rule is that only money
-  // buzzes a phone (see the promo/update split above), and a chat message is
-  // conversation, not a "drop everything". The room updates by polling.
-  app.post("/api/chat", chatPostLimiter, requireCapability("field.app.use"), (req: any, res: Response) => {
-    const tenantId = req.user?.tenantId;
-    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
-    try {
-      const msg = postChatMessage(
-        Number(tenantId),
-        { userId: Number(req.user.id), memberId: req.user?.teamMemberId ?? null, name: req.user?.name ?? null },
-        req.body?.body, Date.now(),
-      );
-      // Your own message is not news to you: advance the watermark past it so
-      // the badge never counts what you just typed.
-      markChatRead(Number(req.user.id), msg.id, Date.now());
-      res.status(201).json(msg);
-    } catch (e: any) {
-      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Couldn't send" });
-    }
-  });
-
-  // POST /api/chat/read { upToId } — clears the room's badge. Monotonic in the
-  // store, same second-device contract as the announcement watermark.
-  app.post("/api/chat/read", requireCapability("field.app.use"), (req: any, res: Response) => {
-    const userId = Number(req.user?.id);
-    if (!Number.isFinite(userId)) return res.status(401).json({ error: "Unauthenticated" });
-    res.json({ lastReadId: markChatRead(userId, Number(req.body?.upToId ?? 0), Date.now()) });
-  });
-
-  // DELETE /api/chat/:id — remove a message: yours always, anyone's if you
-  // hold the same capability that moderates the feed. 404 (not 403) when the
-  // WHERE clause misses, so existence in another tenant is never confirmed.
-  app.delete("/api/chat/:id", requireCapability("field.app.use"), (req: any, res: Response) => {
-    const tenantId = req.user?.tenantId;
-    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "Bad id" });
-    const canModerate = hasCapability(req.user?.role, "commission.structure.manage");
-    if (!deleteChatMessage(Number(tenantId), id, Number(req.user.id), canModerate)) {
-      return res.status(404).json({ error: "Not found, or not a message you can remove" });
-    }
-    // Removing someone's words from a shared room is a governance act — logged
-    // like the feed's retractions, so "who deleted that?" has an answer.
-    storage.logActivity(req.user?.id ?? null, "chat.message.deleted", "tenant", Number(tenantId), { id }, undefined);
-    res.json({ ok: true });
   });
 
   // ── Phone notifications ─────────────────────────────────────────────────────
