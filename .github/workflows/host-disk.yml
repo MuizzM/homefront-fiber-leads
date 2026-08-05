@@ -226,6 +226,18 @@ jobs:
           # blind spot while being used to conclude the prune had not run.
           echo "  container started: $(docker inspect -f '{{.State.StartedAt}}' "$APP" 2>/dev/null || echo unknown)"
           echo "  deployed tag:      $(cat .deployed-tag 2>/dev/null || echo none)"
+          # The DURABLE answer first — db_prune_runs survives log rotation,
+          # restarts and redeploys, so "did it run" no longer depends on a line
+          # still being in a buffer the scanner is busy filling.
+          docker exec "$APP" node -e "
+            const D=require('better-sqlite3');
+            const db=new D(process.env.DATA_DIR+'/data.db',{readonly:true});
+            try {
+              const rows=db.prepare('SELECT ran_at, role, total_removed, removed_json FROM db_prune_runs ORDER BY id DESC LIMIT 3').all();
+              if (!rows.length) console.log('  db_prune_runs: table exists but EMPTY — never completed a run');
+              else for (const r of rows) console.log('  ' + r.ran_at + '  role=' + r.role + '  removed=' + r.total_removed + '  ' + r.removed_json);
+            } catch (e) { console.log('  db_prune_runs: ' + e.message + ' (pre-dates this release, or never ran)'); }
+          " 2>&1 | sed 's/^/  /' || echo "  (could not read prune history)"
           FOUND="$(docker logs --since 24h "$APP" 2>&1 | grep -aE "db_prune|db-prune" | tail -5 || true)"
           if [ -n "$FOUND" ]; then echo "$FOUND" | sed 's/^/  /'; else
             echo "  NO prune line of any kind (neither db_prune.done nor [db-prune] skipped)"

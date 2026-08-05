@@ -142,3 +142,37 @@ describe("runDbPrune wiring", () => {
     expect(rows.map((r) => r.dedupe_key)).toEqual(["stuck-forever"]);
   });
 });
+
+describe("prune leaves a durable record", () => {
+  it("writes a row saying it ran, what it removed, and from which role", () => {
+    // "Is the nightly prune running" was unanswerable for a month while the
+    // database grew to 18.8 GB, because the only evidence was a log line — and
+    // a log line competes with a chatty scanner for a rotating buffer, needs
+    // shell access nobody has, and says nothing when the scheduler was never
+    // reached at all.
+    seedRun("old_done", "done", 30 * DAY, 12);
+    prune.runDbPrune();
+
+    const row = rawDb.prepare(
+      "SELECT ran_at, role, total_removed, removed_json FROM db_prune_runs ORDER BY id DESC LIMIT 1",
+    ).get() as any;
+    expect(row).toBeTruthy();
+    expect(row.ran_at).toBeTruthy();
+    expect(row.total_removed).toBeGreaterThanOrEqual(12);
+    expect(JSON.parse(row.removed_json).scan_run_targets).toBe(12);
+  });
+
+  it("records a run that removed nothing — silence must not look like absence", () => {
+    prune.runDbPrune();
+    const before = (rawDb.prepare("SELECT COUNT(*) n FROM db_prune_runs").get() as any).n;
+    prune.runDbPrune();
+    const after = (rawDb.prepare("SELECT COUNT(*) n FROM db_prune_runs").get() as any).n;
+    expect(after).toBe(before + 1);
+  });
+
+  it("caps its own history so the record cannot become the problem", () => {
+    for (let i = 0; i < 70; i++) prune.runDbPrune();
+    const n = (rawDb.prepare("SELECT COUNT(*) n FROM db_prune_runs").get() as any).n;
+    expect(n).toBeLessThanOrEqual(60);
+  });
+});

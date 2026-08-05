@@ -159,5 +159,35 @@ export function runDbPrune(): void {
   } catch { /* */ }
   try { rawDb.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* */ }
   try { rawDb.pragma("incremental_vacuum(2000)"); } catch { /* */ }
+  recordPruneRun(out);
   structuredLog("db_prune.done", out);
+}
+
+// ── Did it actually run? ────────────────────────────────────────────────────
+// "Is the nightly prune running" was unanswerable for a month while the
+// database grew to 18.8 GB, because the ONLY evidence was a log line — and a
+// log line competes with a chatty scanner for a rotating 50 MB buffer, cannot
+// be read without shell access to the box, and says nothing at all when the
+// scheduler was never reached.
+//
+// A durable row answers it: last run, what it freed, and from which role. It
+// survives rotation, restarts, and redeploys, and the disk report reads it
+// without needing logs to still exist.
+function recordPruneRun(out: Record<string, number>): void {
+  try {
+    rawDb.exec(`CREATE TABLE IF NOT EXISTS db_prune_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ran_at TEXT NOT NULL DEFAULT (datetime('now')),
+      role TEXT,
+      removed_json TEXT,
+      total_removed INTEGER NOT NULL DEFAULT 0
+    )`);
+    const total = Object.values(out).reduce((sum, n) => sum + (Number(n) || 0), 0);
+    rawDb.prepare(
+      `INSERT INTO db_prune_runs (role, removed_json, total_removed) VALUES (?,?,?)`,
+    ).run(process.env.HF_ROLE ?? "single", JSON.stringify(out), total);
+    // Keep this table from becoming its own problem.
+    rawDb.prepare(`DELETE FROM db_prune_runs WHERE id NOT IN
+      (SELECT id FROM db_prune_runs ORDER BY id DESC LIMIT 60)`).run();
+  } catch { /* never let bookkeeping break the prune */ }
 }

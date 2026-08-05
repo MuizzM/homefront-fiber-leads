@@ -1382,8 +1382,17 @@ app.use((req, res, next) => {
       try {
         const { runDbPrune } = await import("./dbPrune");
         runDbPrune();
-      } catch (e: any) { console.warn("[db-prune] skipped:", e?.message); }
+      } catch (e: any) {
+        // Same token as the success event, so ONE grep finds either outcome.
+        structuredLog("db_prune.failed", { error: String(e?.message ?? e).slice(0, 200) }, "error");
+        console.warn("[db-prune] skipped:", e?.message);
+      }
     };
+    // Logged at REGISTRATION, not at fire time. "No prune line" previously could
+    // not distinguish "the scheduler was never reached" from "it ran and threw"
+    // from "it ran and the line rotated out of the log buffer" — three very
+    // different problems that looked identical from outside the box.
+    structuredLog("db_prune.scheduled", { role: process.env.HF_ROLE ?? "single", firstRunInMin: 30 });
     setTimeout(() => { void pruneTick(); }, 30 * 60_000);
     const pruneInterval = setInterval(() => { void pruneTick(); }, 24 * 3_600_000);
     if (typeof (pruneInterval as any).unref === "function") pruneInterval.unref();
