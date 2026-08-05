@@ -15,6 +15,8 @@ import {
 import { storage } from "./storage";
 import { gustoConfigured } from "./gustoAdapter";
 import { AGREEMENT_VERSION, buildAgreementSnapshot } from "./onboardingAgreementTemplates";
+import { resolveCommissionTerms, saveRepCommissionTerms } from "./commissionTermsResolver";
+import { normalizeCommissionTerms, type CommissionTerms } from "@shared/commissionTerms";
 import { renderAgreementPreviewPdf, renderSignedAgreementPdf } from "./onboardingPdf";
 import { loadW9Template } from "./w9Pdf";
 import {
@@ -58,8 +60,27 @@ interface Deps {
 
 const repIdSchema = z.coerce.number().int().positive();
 const documentIdSchema = z.coerce.number().int().positive();
+const tierSchema = z.object({
+  position: z.number().int().min(0).max(20),
+  minimumSales: z.number().int().min(1).max(10_000),
+  maximumSales: z.number().int().min(1).max(10_000).nullable(),
+  rateCents: z.number().int().min(0).max(100_000),
+  label: z.string().trim().max(60).default(""),
+}).strict();
+// The comp terms a manager may set AT THE MOMENT they send the paperwork —
+// which is the point of the feature: the agreement states this engagement's
+// numbers instead of incorporating "the portal" by reference. Same bounds as
+// the invite schema, so a rate that cannot be invited cannot be contracted.
+const compTermsSchema = z.object({
+  structure: z.enum(["FLAT", "TIERED"]).optional(),
+  flatRateCents: z.number().int().min(0).max(100_000).nullable().optional(),
+  tiers: z.array(tierSchema).min(1).max(12).optional(),
+  reservePercent: z.number().int().min(0).max(100).optional(),
+  reserveCapCents: z.number().int().min(0).max(100_000_000).optional(),
+}).strict();
 const sendSchema = z.object({
   documentTypes: z.array(z.enum(ONBOARDING_DOCUMENT_TYPES)).min(1).max(ONBOARDING_DOCUMENT_TYPES.length),
+  compTerms: compTermsSchema.optional(),
 }).strict();
 const recruitingInviteSchema = z.object({
   name: z.string().trim().min(2).max(120),
@@ -197,6 +218,11 @@ export async function issueOnboardingDocuments(input: {
   origin: string;
   forceEmail?: boolean;
   deliveryAttempt?: string;
+  /** Comp terms the manager set in the send-paperwork dialog. Resolved against
+   *  the rep's stored/inherited terms, persisted, then rendered into the
+   *  commission agreement — so the paperwork states this engagement's actual
+   *  numbers rather than incorporating "the portal" by reference. */
+  compTerms?: Partial<CommissionTerms> | null;
 }): Promise<IssueOnboardingDocumentsResult> {
   if (!resendConfigured()) throw new Error("Resend email is not configured yet");
   const rep = storage.getTeamMemberById(input.repId);
@@ -206,13 +232,23 @@ export async function issueOnboardingDocuments(input: {
   const tenant = storage.getTenantById(input.tenantId);
   const companyName = tenant?.companyName || "Home Front Solutions LLC";
   const issuedAt = new Date().toISOString();
+
+  // Resolve BEFORE building any document, and refuse an invalid ladder outright
+  // — a contract that states a tier ladder the commission engine would not pay
+  // against is worse than no contract.
+  const compTerms = resolveCommissionTerms(input.tenantId, rep.id, input.compTerms);
+  const check = normalizeCommissionTerms(compTerms);
+  if (!check.ok) throw new Error(`Commission terms are not valid: ${check.errors.join(" ")}`);
+  // Persisted so the portal pays what the paper says. Written once here, at the
+  // moment the terms become a commitment.
+  saveRepCommissionTerms(rep.id, check.normalized);
   const results: IssueOnboardingDocumentsResult["results"] = [];
   const created: Array<{ id: number; recordId: string; documentType: OnboardingDocumentType }> = [];
   const existingActive: Array<{ id: number; recordId: string; documentType: OnboardingDocumentType }> = [];
   const requestedTypes = [...new Set(input.documentTypes ?? ONBOARDING_DOCUMENT_TYPES)];
 
   for (const documentType of requestedTypes) {
-    const snapshot = buildAgreementSnapshot({ documentType, companyName, signerName: rep.name, signerEmail: rep.email, issuedAt });
+    const snapshot = buildAgreementSnapshot({ documentType, companyName, signerName: rep.name, signerEmail: rep.email, issuedAt, compTerms: check.normalized });
     const reservation = reserveSigningDocument({
       tenantId: input.tenantId,
       repId: rep.id,
@@ -465,10 +501,15 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     const application = invite.applicationId ? storage.getRepApplicationById(invite.applicationId) : null;
     const user = application?.userId ? storage.getUserById(application.userId) : null;
     if (!application || application.status !== "approved" || !user?.teamMemberId) return res.status(409).json({ error: "Approve the application before issuing agreements" });
+    // Terms are optional here; absent means "use whatever this rep already
+    // resolves to" rather than silently reverting them to the house default.
+    const parsedTerms = compTermsSchema.safeParse(req.body?.compTerms ?? {});
+    if (!parsedTerms.success) return res.status(400).json({ error: "Those commission terms aren't valid" });
     try {
       const issued = await issueOnboardingDocuments({
         tenantId: invite.tenantId, repId: user.teamMemberId, sentBy: userId(req), actorIp: ip(req), actorUserAgent: userAgent(req),
         origin: onboardingAppOrigin(req), forceEmail: true, deliveryAttempt: `pipeline-${invite.id}-${Date.now()}`,
+        compTerms: parsedTerms.success ? parsedTerms.data : null,
       });
       if (issued.results.length === ONBOARDING_DOCUMENT_TYPES.length && !issued.results.some(result => result.failed)) {
         markInviteAgreementsIssued(invite.id);
@@ -493,6 +534,17 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     res.json({ rep: { id: rep.id, name: rep.name, email: rep.email }, ...listPayload(tenantId(req), rep.id) });
   });
 
+  // What terms would this rep get if the paperwork went out right now? The
+  // editor opens on these rather than on a blank form, so a manager edits the
+  // real offer instead of unknowingly retyping it.
+  app.get("/api/onboarding/documents/reps/:repId/comp-terms", requireAuth, requireCapability("onboarding.documents.manage"), (req, res) => {
+    const parsed = repIdSchema.safeParse(req.params.repId);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid rep ID" });
+    const rep = storage.getTeamMemberById(parsed.data);
+    if (!rep || rep.tenantId !== tenantId(req)) return res.status(404).json({ error: "Rep not found" });
+    res.json({ terms: resolveCommissionTerms(tenantId(req), rep.id, null) });
+  });
+
   app.post("/api/onboarding/documents/reps/:repId/send", requireAuth, requireCapability("onboarding.documents.manage"), async (req, res) => {
     const parsedRepId = repIdSchema.safeParse(req.params.repId);
     const parsedBody = sendSchema.safeParse(req.body);
@@ -509,6 +561,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         actorIp: ip(req),
         actorUserAgent: userAgent(req),
         origin: onboardingAppOrigin(req),
+        compTerms: parsedBody.data.compTerms ?? null,
       });
       res.json({ ...issued, ...listPayload(tid, rep.id) });
     } catch (error: any) {

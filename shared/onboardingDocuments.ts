@@ -1,3 +1,5 @@
+import type { CommissionTerms } from "./commissionTerms";
+
 export const ONBOARDING_DOCUMENT_TYPES = [
   "independent_contractor",
   "commission_agreement",
@@ -62,6 +64,10 @@ export interface AgreementSnapshot {
   signerName: string;
   signerEmail: string;
   issuedAt: string;
+  /** Commission agreements only: the structured terms the prose was rendered
+   *  from, frozen with it. Absent on other document types and on agreements
+   *  issued before terms were stated in the document at all. */
+  compTerms?: CommissionTerms;
   sections: AgreementSection[];
 }
 

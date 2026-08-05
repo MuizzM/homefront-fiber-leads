@@ -2354,6 +2354,13 @@ export function runMigrations() {
     // runtime; these ALTERs are what actually create them.)
     `ALTER TABLE team_members ADD COLUMN reserve_percent INTEGER`,
     `ALTER TABLE team_members ADD COLUMN reserve_cap_cents INTEGER`,
+    // The FULL agreed comp structure (JSON CommissionTerms — rate or tier
+    // ladder plus the reserve fields), stored when the paperwork is sent so the
+    // agreement a rep signed and the plan the portal pays them under are the
+    // same object. The two reserve columns above predate it and stay
+    // authoritative for their own fields, so an existing override is never
+    // silently dropped. NULL = nothing agreed yet; inherit.
+    `ALTER TABLE team_members ADD COLUMN commission_terms TEXT`,
     // Org-level ceiling. NULL → the product default ($2,500); 0 → uncapped.
     `ALTER TABLE tenants ADD COLUMN commission_reserve_cap_cents INTEGER`,
 

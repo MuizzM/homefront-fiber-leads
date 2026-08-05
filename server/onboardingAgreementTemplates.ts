@@ -4,6 +4,10 @@ import {
   type AgreementSnapshot,
   type OnboardingDocumentType,
 } from "../shared/onboardingDocuments";
+import {
+  DEFAULT_COMMISSION_TERMS, describeCommissionTerms, type CommissionTerms,
+} from "../shared/commissionTerms";
+import { formatUsdCents } from "../shared/commissionTiers";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  INTERNAL LEGAL-REVIEW NOTE — NOT signer-facing. Do not remove.
@@ -16,17 +20,18 @@ import {
 // contractor signs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Bumped from 2026.07.1: the Commission Agreement changed materially (10%
-// chargeback reserve, representative-capacity signature, expanded validation
-// grounds). A version bump re-triggers acceptance for every rep — the system's
-// "sign the current version" gate is how material-term changes get re-consented.
-export const AGREEMENT_VERSION = "2026.08.1";
+// Bumped to 2026.08.2: the Commission Agreement now STATES the rep's actual
+// rate, tier ladder and reserve percentage instead of incorporating "the
+// structure assigned in the portal" by reference and printing no figure. That
+// is a material change to what a signer is agreeing to, so the version moves
+// and every rep re-signs — the "sign the current version" gate is how material
+// terms get re-consented.
+export const AGREEMENT_VERSION = "2026.08.2";
 
 // The Company's legal identity, stated once. Sections use "the Company"
 // thereafter, per the requirement to minimize use of the full legal name.
 const COMPANY_LEGAL_NAME = "HomeFront Solutions LLC";
 const COMPANY_ADDRESS = "605 Abbie Ave, High Point, NC 27263";
-const CHARGEBACK_RESERVE_PERCENT = 10;
 const RESERVE_RELEASE_DAYS = 90;
 
 interface TemplateContext {
@@ -34,6 +39,9 @@ interface TemplateContext {
   signerName: string;
   signerEmail: string;
   issuedAt: string;
+  /** The comp terms this rep is being offered. Optional only so an older
+   *  caller still renders; every issue path resolves and passes them. */
+  compTerms?: CommissionTerms;
 }
 
 function contractorSections({ companyName }: TemplateContext): AgreementSection[] {
@@ -78,12 +86,20 @@ function contractorSections({ companyName }: TemplateContext): AgreementSection[
   ];
 }
 
-function commissionSections(_ctx: TemplateContext): AgreementSection[] {
+function commissionSections(ctx: TemplateContext): AgreementSection[] {
+  // The terms the manager chose when sending this paperwork. Falling back to
+  // the house default keeps an older caller working, but every issue path now
+  // resolves and passes real terms — see resolveCommissionTerms.
+  const terms = ctx.compTerms ?? DEFAULT_COMMISSION_TERMS;
   return [
     {
       heading: "1. Parties and commission plan",
       paragraphs: [
-        `This Commission Agreement is between ${COMPANY_LEGAL_NAME}, ${COMPANY_ADDRESS} (the “Company”), and the signer (the “Contractor”). The Company will compensate the Contractor under the commission structure assigned to the Contractor in the Home Front portal. The portal’s effective-dated rate, tier ladder, qualification rule, carrier, territory, and commission statement are incorporated into this Agreement.`,
+        `This Commission Agreement is between ${COMPANY_LEGAL_NAME}, ${COMPANY_ADDRESS} (the “Company”), and the signer (the “Contractor”). The Company will compensate the Contractor on the terms stated in this Section, which were set for this engagement when this Agreement was issued.`,
+        // The numbers themselves. This is the change: the agreement used to
+        // incorporate the ladder "by reference" to the portal and print no
+        // figure at all, so a contractor could not read what they would be paid.
+        ...describeCommissionTerms(terms),
         "The Company may change the commission structure prospectively by a new written or electronic notice with an effective date. A commission already earned under a prior effective-dated structure will not be reduced solely because the structure changes afterward.",
       ],
     },
@@ -104,8 +120,10 @@ function commissionSections(_ctx: TemplateContext): AgreementSection[] {
     {
       heading: "4. Chargeback reserve",
       paragraphs: [
-        `The Company will withhold ${CHARGEBACK_RESERVE_PERCENT}% of otherwise payable commissions as a chargeback reserve. The remaining ${100 - CHARGEBACK_RESERVE_PERCENT}% is paid on the normal payout schedule. The reserve secures the Company against later chargebacks, reversals, and related amounts described in this Agreement.`,
-        `The reserve is calculated per pay period as ${CHARGEBACK_RESERVE_PERCENT}% of the Contractor’s otherwise payable commissions for that period, tracked as a running balance. Each contribution to, draw against, and release from the reserve is shown on the Contractor’s commission statements in the portal, so the balance can be reconciled against the underlying sales.`,
+        // The rate here is the one the manager set, not a constant. A rep on a
+        // 0% or 20% hold used to sign a document that said 10% regardless.
+        `The Company will withhold ${terms.reservePercent}% of otherwise payable commissions as a chargeback reserve. The remaining ${100 - terms.reservePercent}% is paid on the normal payout schedule. The reserve secures the Company against later chargebacks, reversals, and related amounts described in this Agreement.`,
+        `The reserve is calculated per pay period as ${terms.reservePercent}% of the Contractor’s otherwise payable commissions for that period, tracked as a running balance${terms.reserveCapCents > 0 ? ` and capped at ${formatUsdCents(terms.reserveCapCents)}` : ""}. Each contribution to, draw against, and release from the reserve is shown on the Contractor’s commission statements in the portal, so the balance can be reconciled against the underlying sales.`,
         "Valid chargebacks, reversals, offsets, debts owed to the Company, overpayments, and other deductions permitted by this Agreement and applicable law are drawn first against the reserve balance and are reflected on the statement that records them.",
         `Following termination of the engagement for any reason, the Company will pay any remaining reserve balance to the Contractor within ${RESERVE_RELEASE_DAYS} days after the effective termination date, less valid chargebacks, reversals, offsets, debts, overpayments, or other deductions permitted by this Agreement and applicable law. If permitted deductions exceed the reserve balance, the excess remains payable by the Contractor only to the extent applicable law allows. No deduction or offset will reduce compensation below any limit imposed by applicable law.`,
       ],
@@ -231,6 +249,13 @@ export function buildAgreementSnapshot(input: TemplateContext & { documentType: 
     signerName: input.signerName,
     signerEmail: input.signerEmail.toLowerCase(),
     issuedAt: input.issuedAt,
+    // Frozen alongside the prose it produced. The snapshot is already the
+    // immutable, audited record of what was signed; carrying the structured
+    // terms in it means "what was this rep actually promised" is answerable
+    // later by reading data, not by re-parsing a paragraph.
+    ...(input.documentType === "commission_agreement" && input.compTerms
+      ? { compTerms: input.compTerms }
+      : {}),
     sections: BUILDERS[input.documentType](input),
   };
 }

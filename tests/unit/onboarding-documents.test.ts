@@ -116,7 +116,12 @@ describe("Commission Agreement — required terms (spec)", () => {
   });
 
   it("bumped the version so existing reps must re-accept the material change", () => {
-    expect(AGREEMENT_VERSION).toBe("2026.08.1");
-    expect(commission.documentVersion).toBe("2026.08.1");
+    // 2026.08.1 → 2026.08.2 when the Commission Agreement started STATING the
+    // rep's rate, tier ladder and reserve percentage instead of incorporating
+    // "the structure assigned in the portal" by reference. This assertion is
+    // meant to fail on a material change — that is how the re-consent gate gets
+    // considered rather than skipped — so updating it is part of making one.
+    expect(AGREEMENT_VERSION).toBe("2026.08.2");
+    expect(commission.documentVersion).toBe("2026.08.2");
   });
 });
