@@ -8,9 +8,34 @@ import { visualizer } from "rollup-plugin-visualizer";
 // are unaffected.
 const analyze = process.env.ANALYZE === "1" || process.env.ANALYZE === "true";
 
+// ── Preload the one webfont the app actually renders in ──────────────────────
+// The @font-face rules live inside the 136 KB stylesheet, so the browser cannot
+// discover geist-latin until that sheet has been fetched, decompressed and
+// parsed — one extra serial round trip on LTE, and with font-display: swap the
+// result is a visible fallback-then-Geist reflow across the whole shell. A
+// hand-written tag is impossible because the filename is content-hashed, so the
+// tag is injected from the emitted bundle. Latin only: the other subsets are
+// unicode-range gated and genuinely should stay lazy.
+function preloadPrimaryFont(): import("vite").Plugin {
+  return {
+    name: "hfs-preload-primary-font",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler(html, ctx) {
+        const font = Object.keys(ctx.bundle ?? {}).find((f) => /geist-latin-wght-normal-[^/]*\.woff2$/.test(f));
+        if (!font) return html;
+        const tag = `<link rel="preload" as="font" type="font/woff2" href="/${font}" crossorigin>`;
+        return html.replace("</head>", `    ${tag}\n  </head>`);
+      },
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
+    preloadPrimaryFont(),
     ...(analyze
       ? [
           visualizer({
@@ -64,10 +89,17 @@ export default defineConfig({
     // silently re-enable it. (Minify defaults to esbuild, which also
     // mangles identifiers — accepted posture; no heavyweight obfuscator.)
     sourcemap: false,
-    // Strip console.* and debugger from the production bundle. Two reasons, and
-    // the second is the one that matters: console lines leak internal state and
-    // field names into anyone's devtools, and they cost real time on a mid-range
-    // Android during a knock burst.
+    // Strip the NOISY console levels and debugger from the production bundle:
+    // console lines leak internal state and field names into anyone's devtools,
+    // and they cost real time on a mid-range Android during a knock burst.
+    //
+    // console.error and console.warn deliberately SURVIVE. Dropping everything
+    // took the ErrorBoundary's own record with it: the recovery card tells a rep
+    // "Support code A1B2C3D4" while the console.error that emits that id was
+    // erased from the bundle, so the code mapped to nothing anywhere and every
+    // field crash was invisible. Same for the two "dropped undeliverable knock"
+    // lines in lib/knockQueue — the only record that a rep's knock was thrown
+    // away. See esbuild.pure below for the levels that still go.
     //
     // NOTE ON OBFUSCATION, deliberately not done here: esbuild already mangles
     // local identifiers, but no minifier hides CONSTANTS — the odds, ceilings
@@ -79,7 +111,9 @@ export default defineConfig({
     minify: "esbuild",
   },
   esbuild: {
-    drop: ["console", "debugger"],
+    drop: ["debugger"],
+    // Development chatter goes; the two levels that record a real failure stay.
+    pure: ["console.log", "console.debug", "console.info", "console.trace"],
     legalComments: "none",
   },
   server: {

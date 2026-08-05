@@ -121,7 +121,12 @@ export default function USAScanner() {
   const connectSse = useCallback((jobId: string, city: string, state: string) => {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const sid = getStoredSessionId() ?? (window as any).__sessionId ?? "";
+    // getStoredSessionId is the single source: setSessionId runs on every
+    // login and hydration path. The old `?? (window as any).__sessionId`
+    // fallback read a global that put the bearer token — which doubles as
+    // the CSRF token, so one read was a complete account takeover — in the
+    // page's namespace, and it outlived logout.
+    const sid = getStoredSessionId() ?? "";
 
     (async () => {
       try {

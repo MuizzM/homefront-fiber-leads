@@ -160,7 +160,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (existingSid) {
           setSid(existingSid);
           syncSessionToQueryClient(existingSid);
-          (window as any).__sessionId = existingSid; // expose for browser scanner
         }
       }
     } catch {
@@ -175,7 +174,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(snapshot);
           setSid(existingSid);
           syncSessionToQueryClient(existingSid);
-          (window as any).__sessionId = existingSid;
           window.addEventListener("online", () => void checkStatus(existingSid), { once: true });
         }
       }
@@ -191,7 +189,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writePersistedSession(newSid); // persist across page reloads (sessionStorage)
     setSid(newSid);
     syncSessionToQueryClient(newSid);
-    (window as any).__sessionId = newSid; // expose for browser scanner native fetch calls
     setUser(u);
     writePersistedUser(u); // offline-grace snapshot
     setIsFirstRun(false);

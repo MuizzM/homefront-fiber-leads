@@ -138,6 +138,7 @@ import {
 } from "./pushStore";
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
+import { discoveryUploadBodyParser } from "./bodyParsers";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerAreaSkipTraceRoutes } from "./areaSkipTraceRoutes";
 import { tracedPhonesForLead, cancelAreaSkipTraceRuns } from "./areaSkipTrace";
@@ -1150,7 +1151,7 @@ async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateA
 // ── Routes ────────────────────────────────────────────────────────────────────
 export function registerRoutes(_httpServer: Server, app: Express) {
 
-  registerAddressDiscoveryRoutes(app, { requireAuth, requireCapability, requireScanningAllowed });
+  registerAddressDiscoveryRoutes(app, { requireAuth, requireCapability, requireScanningAllowed, uploadBodyParser: discoveryUploadBodyParser });
   registerCallingRoutes(app, { requireAuth, requireCapability });
   // Area skip trace reuses the SAME ownership rule as every other territory
   // action, so a team lead can trace their own areas and nobody else's.

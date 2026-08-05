@@ -14,14 +14,15 @@
 // server) to a persisted local rung map, so a full dead-zone shift leaves the
 // deck, the summary, and the ladder bar correct. The local corpus
 // (buildDrillDeck) ships in the JS bundle, so even a cold first launch with no
-// snapshot still drills — see the lazy corpus loader below for how that corpus
-// reaches the page without riding on every screen that imports this module.
+// snapshot still drills — via lib/trainingCorpus, which loads it dynamically so
+// it never rides on the route graph of every screen that imports this module.
 
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import type { DrillCard } from "@shared/trainingCards";
+import { useTrainingCorpus } from "@/lib/trainingCorpus";
 import { nextRung, MAX_RUNG, type Grade } from "@shared/trainingSchedule";
 import {
   getTrainingReviewQueue,
@@ -57,50 +58,6 @@ const EMPTY_SNAPSHOT: ReviewQueueSnapshot = { pendingCount: 0, online: true };
  *  (matches the server's ≤10 new-card cap). */
 const LOCAL_NEW_CAP = 10;
 
-// ── Lazy offline corpus ──────────────────────────────────────────────────────
-// The bundled curriculum (shared/trainingContent.ts via shared/trainingCards.ts)
-// is ~428 KB of JS — 139 KB gzipped, the single largest chunk in the app. It is
-// read on exactly ONE path: a launch with no server and no persisted deck
-// snapshot. But this module is imported by WarmupStrip, which Today renders, so
-// a STATIC import put that 139 KB on the critical path of the rep's home screen
-// and its first bottom tab — a screen that never shows a single card from it.
-//
-// Importing it dynamically drops it out of Today's static dependency graph
-// entirely (Vite only preloads static deps of a route chunk) while keeping the
-// offline contract exactly: the moment a hook actually needs the fallback deck,
-// it asks for the corpus, and the chunk is already in the SW/HTTP cache for any
-// rep who has opened Training or Coach once.
-let corpus: readonly DrillCard[] | null = null;
-let corpusLoading: Promise<void> | null = null;
-const corpusListeners = new Set<() => void>();
-
-function subscribeCorpus(onChange: () => void): () => void {
-  corpusListeners.add(onChange);
-  return () => { corpusListeners.delete(onChange); };
-}
-function readCorpus(): readonly DrillCard[] | null {
-  return corpus;
-}
-
-/** Fetch the offline corpus chunk once. Idempotent and failure-tolerant: a
- *  failed load leaves `corpus` null, which every caller already handles as
- *  "no local fallback available". */
-function loadCorpus(): void {
-  if (corpus || corpusLoading) return;
-  corpusLoading = import("@shared/trainingCards")
-    .then((m) => {
-      corpus = m.buildDrillDeck();
-      for (const listener of corpusListeners) listener();
-    })
-    .catch(() => { corpusLoading = null; });
-}
-
-/** Test-only: drop the loaded corpus so a case can exercise the cold path. */
-export function __resetCorpusForTests(): void {
-  corpus = null;
-  corpusLoading = null;
-  corpusListeners.clear();
-}
 
 // ── Local ladder state ───────────────────────────────────────────────────────
 // Persisted per rep: the rung each card is believed to be on (optimistic,
@@ -227,9 +184,7 @@ export function useDueCards(): {
 
   // Only the no-server-no-snapshot path needs the bundled curriculum. Ask for
   // it there and nowhere else, so the online majority never downloads it.
-  const needsCorpus = !query.data && !query.isLoading;
-  useEffect(() => { if (needsCorpus) loadCorpus(); }, [needsCorpus]);
-  const localCorpus = useSyncExternalStore(subscribeCorpus, readCorpus, readCorpus);
+  const localCorpus = useTrainingCorpus(!query.data && !query.isLoading)?.buildDrillDeck() ?? null;
 
   return useMemo(() => {
     if (query.data) {
@@ -342,9 +297,9 @@ export function useCoachSummary(): {
   const deck = useDueCards();
   const queue = useTrainingQueue();
   const snap = useTrainingQueueSnapshot();
-  // useDueCards already kicks the corpus load on the offline path; this just
-  // re-renders the summary with the real card total once it lands.
-  const localCorpus = useSyncExternalStore(subscribeCorpus, readCorpus, readCorpus);
+  // useDueCards already kicks the corpus load on the offline path; subscribing
+  // (without enabling) re-renders the summary with the real total once it lands.
+  const localCorpus = useTrainingCorpus(false)?.buildDrillDeck() ?? null;
 
   const query = useQuery<CoachSummaryResponse>({
     queryKey: ["/api/training/coach-summary"],

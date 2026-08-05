@@ -151,7 +151,8 @@ export default function CityScanner() {
   const connectSseStream = useCallback(async (id: string) => {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const sessionId = getStoredSessionId() ?? (window as any).__sessionId ?? "";
+    // See USAScanner: the window.__sessionId fallback is gone deliberately.
+    const sessionId = getStoredSessionId() ?? "";
     try {
       const resp = await fetch(`${_API_BASE}/api/scan/stream/${id}`, {
         headers: { "x-session-id": sessionId, "x-csrf-token": sessionId },

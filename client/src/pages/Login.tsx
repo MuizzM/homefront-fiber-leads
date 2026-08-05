@@ -132,12 +132,24 @@ export default function Login() {
         <div className="rounded-2xl border border-border bg-card p-8 shadow-xl shadow-black/25 ring-1 ring-border/50">
           {/* Brand */}
           <div className="mb-8 text-center">
+            {/* This is the LCP element of every unauthenticated load, and the
+                session id lives in sessionStorage — so a PWA relaunch lands
+                here too. It used to point at hfs-logo-full.png: 420x512 and
+                209 KB, rendered into an ~66x80 CSS px box, i.e. ~4% of the
+                shipped pixels were used. hfs-logo-login.webp is the same mark
+                at 200x244 (3x the rendered box) for 21 KB. hfs-logo-full.png
+                stays in public/ — server/onboardingPdf.ts embeds it in
+                generated PDFs, where the full resolution is the point.
+                width/height carry the real aspect so the box is reserved
+                correctly; the h-20 class still decides the rendered size. */}
             <img
-              src="/hfs-logo-full.png"
+              src="/hfs-logo-login.webp"
               alt="Home Front Solutions"
               className="mx-auto mb-5 h-20 w-auto object-contain"
-              width={80}
-              height={80}
+              width={200}
+              height={244}
+              fetchPriority="high"
+              decoding="async"
             />
             <h1 className="text-[1.35rem] font-semibold tracking-tight text-foreground">Home Front Solutions</h1>
             <p className="mt-1.5 text-sm text-muted-foreground">Field Sales Intelligence</p>

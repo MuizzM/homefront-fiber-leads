@@ -23,7 +23,8 @@ import {
   useCoachSummary,
   type DeckMode,
 } from "@/lib/useTrainingEngine";
-import { cardsByStage, type DrillCard } from "@shared/trainingCards";
+import type { DrillCard } from "@shared/trainingCards";
+import { useTrainingCorpus } from "@/lib/trainingCorpus";
 import type { Grade } from "@shared/trainingSchedule";
 
 // Where the mode actually lands depends on how you got here, and both places
@@ -67,14 +68,18 @@ function refresherDeck(due: DrillCard[], newCards: DrillCard[]): DrillCard[] {
 }
 
 /** Debrief is the objection gauntlet when nothing is due: 5 objection cards
- *  rotated deterministically by the day-of-year (no RNG, offline-safe). */
-function debriefDeck(due: DrillCard[]): DrillCard[] {
+ *  rotated deterministically by the day-of-year (no RNG, offline-safe).
+ *  `corpus` is null only while the curriculum chunk is still in flight. */
+function debriefDeck(due: DrillCard[], corpus: CorpusModule): DrillCard[] {
   if (due.length > 0) return due.slice(0, 10);
-  const gauntlet = cardsByStage("objection");
+  if (!corpus) return [];
+  const gauntlet = corpus.cardsByStage("objection");
   if (gauntlet.length <= 5) return gauntlet;
   const start = Math.floor(Date.now() / 86_400_000) % gauntlet.length;
   return Array.from({ length: 5 }, (_, i) => gauntlet[(start + i) % gauntlet.length]);
 }
+
+type CorpusModule = ReturnType<typeof useTrainingCorpus>;
 
 export default function Coach() {
   const [, navigate] = useLocation();
@@ -86,6 +91,14 @@ export default function Coach() {
   const [debriefDone, setDebriefDone] = useState(false);
 
   const deck = useDueCards();
+  // Warm the curriculum as soon as Coach opens, but OUT of the route's static
+  // graph: this page used to statically import @shared/trainingCards, which put
+  // the 139 KB gzipped corpus in front of first paint even though only the
+  // debrief deck and the what-to-say-next sheet ever read it. Loading it here
+  // means the hub paints immediately and the corpus streams in behind it — and
+  // by the time a rep taps into a deck or the sheet, it is there. Offline is
+  // unaffected: it is still bundled, and cached after one visit.
+  const corpus = useTrainingCorpus();
   const { recordReview } = useRecordReviews();
   const { summary, isLoading: summaryLoading } = useCoachSummary();
 
@@ -96,11 +109,11 @@ export default function Coach() {
       case "refresher":
         return refresherDeck(deck.due, deck.newCards);
       case "debrief":
-        return debriefDeck(deck.due);
+        return debriefDeck(deck.due, corpus);
       default:
         return [];
     }
-  }, [mode, deck.due, deck.newCards]);
+  }, [mode, deck.due, deck.newCards, corpus]);
 
   const onGrade = (card: DrillCard, grade: Grade, _m: DeckMode) => {
     recordReview(card, grade);
@@ -109,7 +122,8 @@ export default function Coach() {
 
   // ── Deck runner takes the whole screen ─────────────────────────────────────
   if (mode) {
-    if (deck.isLoading) {
+    // Debrief with an empty due pile needs the corpus before it has a deck.
+    if (deck.isLoading || (mode === "debrief" && deck.due.length === 0 && !corpus)) {
       return (
         <div className="min-h-full bg-background pb-24">
           <div className="mx-auto w-full max-w-lg px-4 pt-5" role="status" aria-label="Loading your deck">
