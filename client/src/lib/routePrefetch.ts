@@ -72,8 +72,15 @@ const PREFIX_CHUNKS: Record<string, Thunk> = {
 // or parameterised (per-lead, per-week, per-statement) is deliberately absent —
 // warming the wrong parameter is worse than not warming at all.
 const ROUTE_QUERIES: Record<string, readonly string[]> = {
-  "/": ["/api/stats"],
-  "/today": ["/api/leads/map", "/api/clock/status", "/api/followups"],
+  // stats/saas and leaderboard are the Dashboard's other two above-the-fold
+  // queries — both single-segment, both previously cold on every visit.
+  "/": ["/api/stats", "/api/stats/saas", "/api/leaderboard"],
+  // NO "/api/leads/map" here: Today keys its feed ["/api/leads/map",
+  // "today-route"], so the bare-key warm never matched it — it just downloaded
+  // the full object-format map feed into MapView's cache slot on every Today
+  // tap, a few hundred KB aimed at the wrong page (and briefly able to serve
+  // lens-unfiltered pins inside MapView's staleTime).
+  "/today": ["/api/clock/status", "/api/followups"],
   "/leads": ["/api/leads"],
   "/followups": ["/api/followups"],
   "/areas": ["/api/territories/progress"],
