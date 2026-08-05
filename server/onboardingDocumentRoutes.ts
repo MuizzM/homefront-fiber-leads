@@ -48,6 +48,7 @@ import {
   markInviteLoginSent,
   markRecruitingInviteFailed,
   markRecruitingInviteSent,
+  normalizeInviteCompTerms,
   resolveRecruitingInviteToken,
   secureTokenForInvite,
 } from "./onboardingRecruitingStore";
@@ -90,6 +91,11 @@ const recruitingInviteSchema = z.object({
   // ceiling ≤ $1,000,000 — sane bounds so a typo can't set absurd pay.
   commissionStructure: z.enum(["FLAT", "TIERED"]).optional(),
   flatRateCents: z.number().int().min(0).max(100_000).optional(),
+  // The tier ladder a TIERED invite is actually offering. Same tierSchema and
+  // the same ≤12 bound as the agreements path, so a ladder that cannot be
+  // invited cannot be contracted — and a bounded array keeps an arbitrarily
+  // large blob off a row written before the candidate even has an account.
+  tiers: z.array(tierSchema).min(1).max(12).optional(),
   reservePercent: z.number().int().min(0).max(100).optional(),
   reserveCapCents: z.number().int().min(0).max(100_000_000).optional(),
 }).strict();
@@ -393,7 +399,31 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
 
   app.post("/api/onboarding/invitations", requireAuth, requireCapability("onboarding.documents.manage"), recruitingInviteLimiter, async (req, res) => {
     const parsed = recruitingInviteSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "Enter the candidate's full name and a valid email address" });
+    if (!parsed.success) {
+      // Say which half failed. The invite form now carries a full comp editor —
+      // a free reserve-cap field where there used to be a three-option select —
+      // so "a number is out of range" is a reachable mistake, and answering it
+      // with "check the name and email" sends the manager to the wrong field.
+      const compFields = new Set(["commissionStructure", "flatRateCents", "tiers", "reservePercent", "reserveCapCents"]);
+      const badTerms = parsed.error.issues.some(issue => compFields.has(String(issue.path[0])));
+      return res.status(400).json({
+        error: badTerms
+          ? "Check the commission terms — a rate, ladder or reserve is outside the allowed range."
+          : "Enter the candidate's full name and a valid email address",
+      });
+    }
+    // Comp terms get their own 400. Reported through the name/email message,
+    // a bad ladder would send a manager hunting for a typo in the email address.
+    // The verdict is normalizeCommissionTerms' — the same one the agreements
+    // path uses — plus the explicit refusal of a TIERED invite with no ladder,
+    // which normalizeCommissionTerms alone would answer "ok" to by silently
+    // substituting the house bands. That substitution IS the bug being fixed.
+    const compCheck = normalizeInviteCompTerms({
+      commissionStructure: parsed.data.commissionStructure ?? null,
+      flatRateCents: parsed.data.flatRateCents ?? null,
+      tiers: parsed.data.tiers ?? null,
+    });
+    if (!compCheck.ok) return res.status(400).json({ error: `Commission terms are not valid: ${compCheck.errors.join(" ")}` });
     if (!resendConfigured()) return res.status(503).json({ error: "Resend email is not configured yet" });
 
     const tid = tenantId(req);
@@ -408,6 +438,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         invitedBy: actorId,
         commissionStructure: parsed.data.commissionStructure ?? null,
         flatRateCents: parsed.data.flatRateCents ?? null,
+        tiers: parsed.data.tiers ?? null,
         reservePercent: parsed.data.reservePercent ?? null,
         reserveCapCents: parsed.data.reserveCapCents ?? null,
       });

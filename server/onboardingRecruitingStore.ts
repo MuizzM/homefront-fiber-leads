@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { rawDb } from "./db";
 import { createInviteToken, hashInviteToken, verifyInviteToken } from "./onboardingInviteToken";
+import { normalizeCommissionTerms } from "@shared/commissionTerms";
+import type { CommissionTier } from "@shared/commissionTiers";
 
 export type RecruitingInviteStatus =
   | "creating" | "invited" | "failed" | "under_review" | "approved"
@@ -30,10 +32,25 @@ export interface RecruitingInvite {
   flatRateCents: number | null;
   reservePercent: number | null;
   reserveCapCents: number | null;
+  /** TIERED only: the ladder the manager picked when sending the invite. This
+   *  is what the rep's agreement states and what approval assigns them to. NULL
+   *  means none was proposed — the org/house ladder is inherited instead. */
+  commissionTiers: CommissionTier[] | null;
   deliveryAttempts: number;
   failureReason: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Parse the stored ladder defensively: mapInvite runs over every row of
+ *  listRecruitingInvites, and one unreadable blob must not 500 a manager's
+ *  invitation list. Garbage reads as "no ladder proposed", which inherits. */
+function parseTiers(raw: unknown): CommissionTier[] | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length ? (parsed as CommissionTier[]) : null;
+  } catch { return null; }
 }
 
 function mapInvite(row: any): RecruitingInvite {
@@ -52,6 +69,7 @@ function mapInvite(row: any): RecruitingInvite {
     flatRateCents: row.flat_rate_cents == null ? null : Number(row.flat_rate_cents),
     reservePercent: row.reserve_percent == null ? null : Number(row.reserve_percent),
     reserveCapCents: row.reserve_cap_cents == null ? null : Number(row.reserve_cap_cents),
+    commissionTiers: parseTiers(row.commission_tiers_json),
     deliveryAttempts: Number(row.delivery_attempts ?? 0),
     failureReason: row.failure_reason ?? null, createdAt: String(row.created_at), updatedAt: String(row.updated_at),
   };
@@ -69,10 +87,82 @@ function persistToken(row: RecruitingInvite, expiresAt: string): string {
   return token;
 }
 
+/** Structure + the money behind it, as the invite row will store them. */
+export interface InviteCompTerms {
+  structure: "FLAT" | "TIERED" | null;
+  flatRateCents: number | null;
+  tiers: CommissionTier[] | null;
+}
+
+/**
+ * THE WRITE CONTRACT for an invite's comp terms.
+ *
+ * An invite used to be able to claim TIERED and carry nothing behind it, and
+ * every reader downstream substituted the house ladder without complaining —
+ * so the manager saw "Tiered", the rep signed the house bands, and the pay
+ * engine assigned the house plan version. A half-configured invite is the bug;
+ * it is refused here rather than stored and discovered at issuance, in front of
+ * the candidate.
+ *
+ * Ladder correctness is NOT re-implemented: normalizeCommissionTerms already
+ * owns it (via validateTiers), and it is the same verdict the agreements path
+ * uses — so terms that cannot be invited cannot be contracted either. The one
+ * thing it will not do is reject an EMPTY tiered ladder (it silently swaps in
+ * DEFAULT_RETRO_TIERS and returns ok), which is precisely this bug, so that
+ * case is checked explicitly first.
+ */
+export function normalizeInviteCompTerms(input: {
+  commissionStructure?: "FLAT" | "TIERED" | null;
+  flatRateCents?: number | null;
+  tiers?: CommissionTier[] | null;
+}): { ok: boolean; errors: string[]; terms: InviteCompTerms } {
+  const structure = input.commissionStructure === "FLAT" || input.commissionStructure === "TIERED"
+    ? input.commissionStructure : null;
+  const proposed = Array.isArray(input.tiers) && input.tiers.length ? input.tiers : null;
+
+  // No structure chosen = nothing proposed, inherit everything at approval.
+  if (!structure) return { ok: true, errors: [], terms: { structure: null, flatRateCents: null, tiers: null } };
+
+  if (structure === "TIERED" && !proposed) {
+    return {
+      ok: false,
+      errors: ["A tiered invitation needs a tier ladder — pick the bands the candidate will be paid on."],
+      terms: { structure, flatRateCents: null, tiers: null },
+    };
+  }
+
+  // Reserve values are deliberately NOT taken from this check: on an invite they
+  // may be null, meaning "inherit", and normalizeCommissionTerms would resolve
+  // that null into the house 10%/$2,500 and quietly turn an inherited reserve
+  // into an explicit one. Defaults go in only so they cannot raise errors.
+  const check = normalizeCommissionTerms({
+    structure,
+    flatRateCents: input.flatRateCents ?? null,
+    tiers: proposed ?? [],
+    reservePercent: 0,
+    reserveCapCents: 0,
+  });
+  if (!check.ok) return { ok: false, errors: check.errors, terms: { structure, flatRateCents: null, tiers: null } };
+
+  return {
+    ok: true,
+    errors: [],
+    terms: {
+      structure,
+      // Only a FLAT plan carries a per-rep rate; only a TIERED plan carries a
+      // ladder. Storing both would leave a second, stale set of numbers on the
+      // row for a later reader to pick the wrong one out of.
+      flatRateCents: structure === "FLAT" ? check.normalized.flatRateCents : null,
+      tiers: structure === "TIERED" ? check.normalized.tiers : null,
+    },
+  };
+}
+
 export function createRecruitingInvite(input: {
   tenantId: number; candidateName: string; candidateEmail: string; invitedBy: number | null;
   commissionStructure?: "FLAT" | "TIERED" | null;
   flatRateCents?: number | null;
+  tiers?: CommissionTier[] | null;
   reservePercent?: number | null;
   reserveCapCents?: number | null;
 }): RecruitingInvite {
@@ -85,19 +175,22 @@ export function createRecruitingInvite(input: {
   if (open) throw new Error("An open invitation already exists for this candidate");
   const recordId = crypto.randomUUID();
   const now = new Date().toISOString();
-  // Only persist a FLAT rate when the structure is FLAT (a TIERED plan uses the
-  // tenant's ladder, not a per-rep rate). Reserve fields ride through as given.
-  const structure = input.commissionStructure === "FLAT" || input.commissionStructure === "TIERED" ? input.commissionStructure : null;
-  const flatRateCents = structure === "FLAT" && input.flatRateCents != null ? Math.max(0, Math.trunc(input.flatRateCents)) : null;
+  // A FLAT plan carries a per-rep rate; a TIERED plan carries a ladder. Validated
+  // HERE and not only at the API boundary — JSON has no CHECK constraint, so if
+  // a bad ladder gets past this it sits in the row until issuance throws in
+  // front of the candidate. Reserve fields ride through as given (null = inherit).
+  const comp = normalizeInviteCompTerms(input);
+  if (!comp.ok) throw new Error(`Commission terms are not valid: ${comp.errors.join(" ")}`);
+  const { structure, flatRateCents, tiers } = comp.terms;
   const reservePercent = input.reservePercent == null ? null : Math.min(100, Math.max(0, Math.trunc(input.reservePercent)));
   const reserveCapCents = input.reserveCapCents == null ? null : Math.max(0, Math.trunc(input.reserveCapCents));
   const result = rawDb.prepare(
     `INSERT INTO onboarding_recruiting_invites
       (record_id, tenant_id, candidate_name, candidate_email, status, invited_by,
-       commission_structure, flat_rate_cents, reserve_percent, reserve_cap_cents, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?)`,
+       commission_structure, flat_rate_cents, commission_tiers_json, reserve_percent, reserve_cap_cents, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(recordId, input.tenantId, input.candidateName.trim(), candidateEmail, input.invitedBy,
-        structure, flatRateCents, reservePercent, reserveCapCents, now, now);
+        structure, flatRateCents, tiers ? JSON.stringify(tiers) : null, reservePercent, reserveCapCents, now, now);
   const row = getRecruitingInvite(Number(result.lastInsertRowid))!;
   persistToken(row, expiryFrom());
   return getRecruitingInvite(row.id)!;

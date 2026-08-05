@@ -1461,6 +1461,20 @@ export function runMigrations() {
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN flat_rate_cents INTEGER`,     // per-sale rate when FLAT
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN reserve_percent INTEGER`,     // whole percent 0..100 held back
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN reserve_cap_cents INTEGER`,   // reserve ceiling in cents; 0 = uncapped
+    // The TIER LADDER the manager picked at invite time, as JSON (a normalized
+    // CommissionTier[]). Before this, an invite could say TIERED and carry
+    // nothing behind it: the contract silently rendered the house ladder
+    // (normalizeCommissionTerms substitutes DEFAULT_RETRO_TIERS for an empty
+    // one) and approval silently assigned the house plan version, so a manager
+    // who invited 1–6 at $175 watched the rep sign — and get paid — $150.
+    // JSON, not a child table: every ladder read in this codebase is a
+    // whole-ladder read, and an invite ladder is a PROPOSAL, not a payable plan
+    // — it becomes a commission_plan_version only at approval. Same shape as
+    // team_members.commission_terms. NULL = none proposed (inherit).
+    // NOTE: once agreements are issued, saveRepCommissionTerms writes the rep
+    // row, which outranks the invite from then on — re-sending paperwork does
+    // NOT revert to this ladder, by design (last explicit decision wins).
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN commission_tiers_json TEXT`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_token
        ON onboarding_recruiting_invites(token_sha256) WHERE token_sha256 IS NOT NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_application

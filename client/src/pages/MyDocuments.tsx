@@ -295,6 +295,27 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                       <h3 className="text-sm font-bold text-slate-900">{section.heading}</h3>
                       {section.paragraphs.map((paragraph, index) => <p key={index} className="text-xs leading-6 mt-2">{paragraph}</p>)}
                       {!!section.bullets?.length && <ul className="list-disc pl-5 mt-2 space-y-1.5">{section.bullets.map(bullet => <li key={bullet} className="text-xs leading-5">{bullet}</li>)}</ul>}
+                      {/* The rate table, rendered here too. A table that exists
+                          only in the PDF would mean the document a rep scrolls
+                          before signing is not the document they sign. */}
+                      {!!section.rows?.length && (
+                        <table className="mt-3 w-full border-collapse text-xs" data-testid="agreement-rate-table">
+                          <thead>
+                            <tr className="border-b border-teal-200 text-2xs uppercase tracking-wide text-slate-500">
+                              <th scope="col" className="py-1.5 text-left font-bold">Qualified sales in a commission week</th>
+                              <th scope="col" className="py-1.5 text-right font-bold">Rate</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {section.rows.map(row => (
+                              <tr key={row.band} className="border-b border-slate-100 last:border-0">
+                                <td className="py-1.5 pr-3 text-slate-700">{row.band}</td>
+                                <td className="py-1.5 text-right font-bold tabular-nums text-slate-900">{row.rate}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
                     </section>
                   ))}
                 </div>

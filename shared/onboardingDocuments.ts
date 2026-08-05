@@ -53,6 +53,14 @@ export interface AgreementSection {
   heading: string;
   paragraphs: string[];
   bullets?: string[];
+  /** A rate table to print inside the section — the tier ladder, today. The
+   *  prose beside it states the same numbers (both are built from tierRows),
+   *  because the retroactive rule and the worked example are the legally
+   *  meaningful part; the table is so a signer can read the bands as bands
+   *  rather than out of a semicolon-joined sentence. Absent on every other
+   *  section and on agreements issued before the table existed, so all three
+   *  renderers — PDF body, packet cover, signing ceremony — tolerate undefined. */
+  rows?: Array<{ band: string; rate: string }>;
 }
 
 export interface AgreementSnapshot {

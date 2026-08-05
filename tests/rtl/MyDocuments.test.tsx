@@ -83,11 +83,13 @@ function documentsPayload(over: Partial<typeof ENVELOPE> | null = {}) {
 
 let signError: string | null = null;
 let declineError: string | null = null;
+/** Lets one test serve a different agreement body than the shared fixture. */
+let contentOverride: any = null;
 
 function mockApi(payload: any) {
   apiRequest.mockImplementation((method: string, url: string, body?: any) => {
     if (url === "/api/onboarding/documents/me") return Promise.resolve({ json: () => Promise.resolve(payload) });
-    if (url.endsWith("/content")) return Promise.resolve({ json: () => Promise.resolve(CONTENT) });
+    if (url.endsWith("/content")) return Promise.resolve({ json: () => Promise.resolve(contentOverride ?? CONTENT) });
     if (url.endsWith("/sign")) {
       if (signError) return Promise.reject(new Error(signError));
       return Promise.resolve({ json: () => Promise.resolve({ signed: true, receiptSent: true, completedPdfSha256: PDF_SHA, document: { id: 7, status: "completed" }, typed: body?.typedName }) });
@@ -145,6 +147,7 @@ beforeEach(() => {
   toast.mockReset();
   signError = null;
   declineError = null;
+  contentOverride = null;
 });
 
 describe("My Documents — the signing ceremony", () => {
@@ -271,6 +274,45 @@ describe("My Documents — the signing ceremony", () => {
     await waitFor(() => expect(bar.getAttribute("aria-valuenow")).toBe("100"));
     expect(screen.getByTestId("agreement-end-marker")).toHaveFocus();
     expect(screen.getByTestId("signature-panel").textContent).not.toContain("Scroll through the complete agreement");
+  });
+
+  it("prints the rate table the PDF prints, so the rep reads the document they sign", async () => {
+    // Three renderers consume AgreementSection — the PDF body, the packet
+    // cover, and this ceremony. A table that exists only in the PDF would break
+    // the stated invariant that the reviewed document and the signed document
+    // are the same instrument.
+    contentOverride = {
+      ...CONTENT,
+      snapshot: {
+        ...CONTENT.snapshot,
+        sections: [
+          {
+            heading: "1. Parties and commission plan",
+            paragraphs: ["Contractor is paid on a RETROACTIVE tier ladder."],
+            rows: [
+              { band: "1–6 qualified sales", rate: "$175 per sale" },
+              { band: "7+ qualified sales", rate: "$260 per sale" },
+            ],
+          },
+          ...CONTENT.snapshot.sections,
+        ],
+      },
+    };
+    renderPage();
+    await openSigningDialog();
+    const table = screen.getByTestId("agreement-rate-table");
+    expect(within(table).getByText("1–6 qualified sales")).toBeInTheDocument();
+    expect(within(table).getByText("$175 per sale")).toBeInTheDocument();
+    expect(within(table).getByText("7+ qualified sales")).toBeInTheDocument();
+    expect(within(table).getByText("$260 per sale")).toBeInTheDocument();
+  });
+
+  it("renders an agreement that has no rate table at all", async () => {
+    // Every non-commission agreement, and every agreement issued before the
+    // table existed.
+    renderPage();
+    await openSigningDialog();
+    expect(screen.queryByTestId("agreement-rate-table")).toBeNull();
   });
 
   it("shows the completed PDF hash so the rep can verify their own copy", async () => {
