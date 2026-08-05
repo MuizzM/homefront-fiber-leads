@@ -94,18 +94,26 @@ export default function Login() {
   async function verify(codeToUse: string) {
     if (codeToUse.length < 6 || loading) return;
     setLoading(true);
+    // The code is only WRONG when the server rejected it (401/400). A 429 or a
+    // 5xx (the server is briefly busy) says nothing about the digits the rep
+    // just read off their phone — wiping the boxes there makes them re-type a
+    // perfectly good code to retry.
+    let codeStillGood = false;
     try {
       const res = await apiFetch("/api/auth/otp/verify", {
         email: email.trim().toLowerCase(),
         code: codeToUse.trim(),
       });
+      // Set BEFORE parsing: a 502 from the proxy has an HTML body, so res.json()
+      // itself throws, and that is exactly a case where the code is still good.
+      codeStillGood = res.status === 429 || res.status >= 500;
       const data = await res.json();
       if (res.status === 429) throw new Error(data.error);
       if (!res.ok) throw new Error(data.error ?? "Invalid code");
       login(data.sessionId, data.user);
     } catch (err: any) {
       toast({ title: err.message || "Invalid code", variant: "destructive" });
-      setCode(""); // wrong code → clear the boxes so they can retype cleanly
+      if (!codeStillGood) setCode(""); // wrong code → clear the boxes so they can retype cleanly
     } finally {
       setLoading(false);
     }

@@ -40,6 +40,7 @@ const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
 const Spiffs = lazy(() => import("@/pages/Spiffs"));
+const Messages = lazy(() => import("@/pages/Messages"));
 const Applications = lazy(() => import("@/pages/Applications"));
 const MyCommission = lazy(() => import("@/pages/MyCommission"));
 const CommissionConsole = lazy(() => import("@/pages/CommissionConsole"));
@@ -251,6 +252,9 @@ function AppRoutes() {
               spiff feed + heat; the team heat leaderboard and admin approve/pay
               controls are gated inside the page and independently on the server. */}
           <Route path="/spiffs"><CapabilityGuard role={role} capability="field.app.use"><Spiffs /></CapabilityGuard></Route>
+          {/* Guarded on the capability the POST route enforces, so the page and
+              the API agree about who may write to the whole floor. */}
+          <Route path="/messages"><CapabilityGuard role={role} capability="commission.structure.manage"><Messages /></CapabilityGuard></Route>
           {/* My Territory removed — everyone knocks + manages via Field Map & Leads */}
           <Route path="/my-territory">
             <Redirect to="/map" />

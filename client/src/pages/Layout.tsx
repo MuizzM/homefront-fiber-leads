@@ -32,6 +32,7 @@ import {
   Gift,
   LayoutGrid,
   Zap,
+  MessagesSquare,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -104,6 +105,10 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/scanner-tools",label: "Scan Tools",    icon: TrendingUp,   show: r => hasRole(r, "admin"),                 group: "Fiber" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
+  // Capability, not a role list — this must show for exactly the people the
+  // POST /api/announcements route lets through, or a team lead gets a nav entry
+  // to a page that 403s (or, worse, no entry to a power they hold).
+  { href: "/messages",     label: "Messages",      icon: MessagesSquare, show: r => can(r, "commission.structure.manage"), group: "Manage" },
   { href: "/commission-console", label: "Commissions & Pay", icon: Banknote, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Rep Onboarding", icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },

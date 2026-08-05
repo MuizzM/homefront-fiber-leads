@@ -234,8 +234,15 @@ export function publishAuthored(
   const problem = validateAuthoredAnnouncement(input);
   if (problem) throw Object.assign(new Error(problem), { httpStatus: 400 });
 
+  // MAX(id), not COUNT(*): the sent log can DELETE a bad post, and a counting
+  // sequence would hand the next announcement a key a deleted one already used
+  // — silently colliding on the UNIQUE index, so the manager types a promo,
+  // sees nothing happen, and types it again. MAX(id) cannot do that: a row's
+  // seq is always <= its own id (AUTOINCREMENT hands out ids above every id
+  // that existed when the seq was read), so a fresh MAX(id)+1 is strictly
+  // greater than every live row's seq no matter what has been deleted.
   const row = rawDb.prepare(
-    `SELECT COUNT(*) AS n FROM team_announcements WHERE tenant_id = ? AND kind IN ('promo','update')`,
+    `SELECT MAX(id) AS n FROM team_announcements WHERE tenant_id = ?`,
   ).get(tenantId) as any;
   const seq = Number(row?.n ?? 0) + 1;
 
@@ -247,4 +254,72 @@ export function publishAuthored(
     }, undefined);
   }
   return stored;
+}
+
+
+// ── The sent log — what the floor has actually been told ────────────────────
+//
+// A manager writing to every phone in the org is the one action here with no
+// undo and no record. Without this they cannot answer "did I already post the
+// double-spiff thing?" — so they post it again, and the floor learns that the
+// feed repeats itself and stops reading it.
+//
+// AUTHORED KINDS ONLY. A sale is a record of something that happened; it is
+// not a thing anybody sent, and it is not a thing anybody may retract.
+
+export interface SentAnnouncement extends StoredAnnouncement {
+  /** People who have opened the feed past this one. */
+  readCount: number;
+  /** Active people in the org — the denominator readCount is out of. */
+  audience: number;
+}
+
+/**
+ * Read is derived from the SAME last_read_id the bell clears, so the number a
+ * manager sees is the number of people who actually opened the feed — not the
+ * number of phones we managed to buzz, which is a delivery stat dressed up as
+ * an attention stat.
+ */
+export function sentAuthored(tenantId: number, limit = 30): SentAnnouncement[] {
+  const cap = Math.max(1, Math.min(200, Math.trunc(limit) || 30));
+  const audience = Number((rawDb.prepare(
+    `SELECT COUNT(*) AS n FROM users WHERE tenant_id = ? AND active = 1`,
+  ).get(tenantId) as any)?.n ?? 0);
+
+  const rows = rawDb.prepare(
+    `SELECT a.*,
+            (SELECT COUNT(*)
+               FROM users u
+               JOIN team_announcement_reads r ON r.user_id = u.id
+              WHERE u.tenant_id = a.tenant_id AND u.active = 1
+                AND r.last_read_id >= a.id) AS read_count
+       FROM team_announcements a
+      WHERE a.tenant_id = ? AND a.kind IN ('promo','update')
+      ORDER BY a.id DESC LIMIT ?`,
+  ).all(tenantId, cap) as any[];
+
+  return rows.map(r => ({
+    ...mapRow(r),
+    // Capped at the audience: a user who read and then left the org would
+    // otherwise push "12 of 11 read" onto the screen.
+    readCount: Math.min(audience, Number(r.read_count ?? 0)),
+    audience,
+  }));
+}
+
+/**
+ * Retract a post. Tenant-scoped and kind-scoped in the WHERE clause rather than
+ * checked first and deleted second — a delete that takes its authorization from
+ * a separate query is a delete that runs when the two disagree.
+ *
+ * Nothing is done about the phones already buzzed. That is honest: a push
+ * notification cannot be recalled, and the UI says so rather than implying this
+ * unrings the bell.
+ */
+export function deleteAuthored(tenantId: number, id: number): boolean {
+  const info = rawDb.prepare(
+    `DELETE FROM team_announcements
+      WHERE tenant_id = ? AND id = ? AND kind IN ('promo','update')`,
+  ).run(tenantId, Math.trunc(Number(id) || 0));
+  return info.changes === 1;
 }

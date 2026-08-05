@@ -129,7 +129,7 @@ import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
-import { publishSale, publishStreak, publishAuthored, feedForUser, markRead } from "./teamFeedStore";
+import { publishSale, publishStreak, publishAuthored, feedForUser, markRead, sentAuthored, deleteAuthored } from "./teamFeedStore";
 import { earningsToday } from "./earningsTodayStore";
 import { emitAnnouncement, onAnnouncement } from "./announcementBus";
 import { visibleTo, usd as feedUsd } from "@shared/teamFeed";
@@ -2110,6 +2110,36 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } catch (e: any) {
       res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not post" });
     }
+  });
+
+  // GET /api/announcements/sent — the manager's own sent log.
+  //
+  // Same capability as posting, not requireAuth: this is the only surface that
+  // reports how many people READ a given announcement, and per-person attention
+  // data on the floor belongs with the people who decide what to send, not with
+  // everyone who receives it.
+  app.get("/api/announcements/sent", requireCapability("commission.structure.manage"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    if (tenantId == null) return res.json({ items: [] });
+    const limit = Number(req.query.limit);
+    res.json({ items: sentAuthored(Number(tenantId), Number.isFinite(limit) ? limit : 30) });
+  });
+
+  // DELETE /api/announcements/:id — retract a post.
+  //
+  // Pulls it from the feed for everyone who has not opened it yet. It does NOT
+  // recall a push that already went out — nothing can — and the UI says so
+  // rather than letting a manager believe the message was unsent.
+  app.delete("/api/announcements/:id", requireCapability("commission.structure.manage"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Bad id" });
+    if (!deleteAuthored(Number(tenantId), id)) {
+      return res.status(404).json({ error: "Not found, or not a post you can retract" });
+    }
+    storage.logActivity(req.user?.id ?? null, "announcement.deleted", "tenant", Number(tenantId), { id }, undefined);
+    res.json({ ok: true });
   });
 
   // POST /api/announcements/read { upToId } — clears the bell.
@@ -6368,8 +6398,30 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Universal OTP login — works for ALL roles (admin, manager, team_lead, rep) ──
 
+  // A TRANSIENT DATABASE FAILURE IS NOT "YOUR ACCOUNT IS BROKEN" (2026-08-05).
+  // Every step of sign-in writes (rate bucket, OTP row, session), and on the
+  // production box the scan firehose can hold the SQLite write lock past
+  // busy_timeout — better-sqlite3 then throws SQLITE_BUSY. Express 5 routes an
+  // async rejection to the global handler, so what a rep saw was a flat "An
+  // internal error occurred. Please try again." after a ~15s hang, with no hint
+  // that waiting a moment was the entire remedy. Answer honestly instead: 503
+  // (retryable, and it stays out of the 4xx auth-failure story) with the one
+  // instruction that helps. The cause is logged server-side.
+  function otpUnavailable(res: Response, stage: string, e: any) {
+    structuredLog("auth.otp_unavailable", {
+      stage,
+      code: e?.code ?? null,
+      error: String(e?.message ?? e).slice(0, 200),
+    }, "error");
+    return res.status(503).json({ error: "Sign-in is briefly unavailable — please try again in a moment." });
+  }
+
   // Step 1: Request OTP code (email)
   app.post("/api/auth/otp/request", async (req, res) => {
+    try { await otpRequestHandler(req, res); }
+    catch (e: any) { if (!res.headersSent) otpUnavailable(res, "request", e); }
+  });
+  async function otpRequestHandler(req: Request, res: Response) {
     const { email } = req.body;
     if (!email || typeof email !== "string" || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: "Valid email required" });
@@ -6450,10 +6502,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       emailDelivered: true,
       ...(delivery === "console" ? { developmentCode: code } : {}),
     });
-  });
+  }
 
   // Step 2: Verify OTP code
   app.post("/api/auth/otp/verify", (req, res) => {
+    try { otpVerifyHandler(req, res); }
+    catch (e: any) { if (!res.headersSent) otpUnavailable(res, "verify", e); }
+  });
+  function otpVerifyHandler(req: Request, res: Response) {
     const { email, code } = req.body;
     if (!email || typeof email !== "string" || email.length > 254) return res.status(400).json({ error: "Invalid request" });
     if (!code || typeof code !== "string" || !/^\d{6}$/.test(code.trim())) return res.status(400).json({ error: "Code must be 6 digits" });
@@ -6485,7 +6541,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     otpRateBuckets.reset("request", `email:${cleanEmail}`);
     const session = storage.createSession(user.id);
     res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId } });
-  });
+  }
 
   // Login-attempt audit (owner ask 2026-07-26): managers read the persistent
   // auth trail — recent attempts or the per-email summary. Requires manager+.

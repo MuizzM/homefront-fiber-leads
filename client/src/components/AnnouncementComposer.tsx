@@ -47,6 +47,9 @@ export function AnnouncementComposer({ className }: { className?: string }) {
     mutationFn: async () => (await apiRequest("POST", "/api/announcements", payload)).json(),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/announcements"] });
+      // The sent log sits directly under this form — it must not still be
+      // showing "nothing sent yet" a moment after the toast says it went.
+      qc.invalidateQueries({ queryKey: ["/api/announcements/sent"] });
       toast({
         title: kind === "promo" ? "Promo sent" : "Update posted",
         description: kind === "promo"

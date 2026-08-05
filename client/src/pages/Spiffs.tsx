@@ -28,7 +28,6 @@ import { DoorDropSection } from "@/components/DoorDropCard";
 import { MomentumOffer } from "@/components/MomentumOffer";
 import { MilestoneLadderEditor } from "@/components/MilestoneLadderEditor";
 import { DoorDropEditor } from "@/components/DoorDropEditor";
-import { AnnouncementComposer } from "@/components/AnnouncementComposer";
 import { CampaignLauncher } from "@/components/CampaignLauncher";
 import { useAuth } from "@/lib/auth";
 import { can, type Role as AppRole } from "@shared/capabilities";
@@ -665,7 +664,6 @@ export default function Spiffs() {
           carrying another rep's state. */}
       {canLaunch && <CampaignLauncher />}
       {canLaunch && <MilestoneLadderEditor />}
-      {canLaunch && <AnnouncementComposer />}
       {canLaunch && <DoorDropEditor />}
       <MySpiffs key={String(user?.teamMemberId ?? user?.id ?? "anon")}
                 repKey={user?.teamMemberId ?? user?.id ?? "anon"} />
