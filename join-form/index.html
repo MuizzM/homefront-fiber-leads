@@ -6,137 +6,174 @@
 <title>Apply — Home Front Solutions</title>
 <meta name="description" content="Apply to join Home Front Solutions' field sales team. Uncapped commission, paid certification, and a clear path from rep to area manager.">
 <meta name="robots" content="noindex">
+<link rel="icon" type="image/png" href="/hfs-logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --ink: #0F2A44;
-    --ink-soft: #1F3D5C;
-    --signal: #1E6D6B;
-    --signal-deep: #155159;
-    --signal-soft: #E4F0EE;
-    --accent: #F5B942;
+    --ink: #10263B;          /* deep navy from the logo mark */
+    --ink-2: #1B3A55;
+    --teal: #2E7F7C;         /* roofline teal */
+    --teal-deep: #1D5B5B;
+    --teal-tint: #E9F3F1;
+    --amber: #E98A3A;        /* the front door */
+    --amber-soft: #FCEFDF;
     --paper: #FFFFFF;
-    --paper-deep: #F6F8F9;
-    --rule: #E3E8ED;
-    --muted: #5A6B76;
-    --subtle: #8A96A0;
+    --ground: #F5F4F0;       /* warm paper, not gray */
+    --rule: #E4E4DE;
+    --muted: #5C6B76;
+    --subtle: #8C98A1;
     --red: #C2410C;
-    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    --display: 'Bricolage Grotesque', 'Instrument Sans', sans-serif;
+    --body: 'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    --ring: 0 0 0 3px rgba(46,127,124,.18);
   }
 
-  html { -webkit-text-size-adjust: 100%; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
   body {
-    font-family: var(--font);
-    background: var(--paper-deep);
+    font-family: var(--body);
+    background: var(--ground);
     color: var(--ink);
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
-    line-height: 1.5;
+    line-height: 1.55;
   }
+
+  /* ── Entry choreography — one staggered reveal on load ── */
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  .rise { animation: rise .6s cubic-bezier(.22,.8,.3,1) both; }
+  .d1 { animation-delay: .05s; } .d2 { animation-delay: .14s; } .d3 { animation-delay: .23s; } .d4 { animation-delay: .32s; }
 
   /* ── Header ── */
   header {
-    background: var(--paper);
+    background: rgba(255,255,255,.92);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--rule);
-    padding: 14px 20px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: sticky;
-    top: 0;
-    z-index: 100;
+    padding: 10px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
   }
-  .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--ink); }
-  .brand-mark {
-    width: 34px; height: 34px; border-radius: 9px;
-    background: var(--signal); color: #fff;
-    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-  }
-  .brand-name { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
-  .brand-sub { font-size: 11.5px; font-weight: 500; color: var(--muted); }
+  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink); }
+  .brand img { height: 40px; width: auto; display: block; }
+  .brand-name { font-family: var(--display); font-size: 15px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; display: block; }
+  .brand-sub { font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: .02em; }
   .back {
-    font-size: 13.5px; color: var(--signal); font-weight: 600; text-decoration: none;
-    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13.5px; color: var(--teal); font-weight: 600; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 8px;
+    transition: background .15s, color .15s;
   }
-  .back:hover { color: var(--signal-deep); }
-  @media (max-width: 420px) { .brand-sub, .back span { display: none; } }
+  .back:hover { color: var(--teal-deep); background: var(--teal-tint); }
+  @media (max-width: 460px) { .brand-sub, .back span { display: none; } }
 
   /* ── Hero ── */
   .hero {
-    background: linear-gradient(160deg, #0B2540 0%, #0F2A44 55%, #143A56 100%);
+    position: relative; overflow: hidden;
+    background:
+      radial-gradient(720px 340px at 82% -10%, rgba(46,127,124,.35), transparent 62%),
+      radial-gradient(520px 300px at -8% 108%, rgba(233,138,58,.16), transparent 60%),
+      linear-gradient(158deg, #0C1F31 0%, #10263B 52%, #16354E 100%);
     color: #fff;
-    padding: 52px 20px 64px;
+    padding: 56px 20px 76px;
   }
-  .hero-inner { max-width: 640px; margin: 0 auto; }
-  .hero-eyebrow { font-size: 13.5px; font-weight: 600; color: #6FC5B8; margin-bottom: 14px; }
+  /* Faint route lines — a nod to the territory maps reps work from */
+  .hero::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='420' viewBox='0 0 420 420'%3E%3Cg fill='none' stroke='%23FFFFFF' stroke-opacity='.05' stroke-width='1.4'%3E%3Cpath d='M-20 330 C 90 300 120 200 210 190 S 380 120 450 90'/%3E%3Cpath d='M-20 250 C 80 240 150 150 240 140 S 390 60 450 30'/%3E%3Cpath d='M-20 410 C 110 380 160 280 250 270 S 400 200 450 170'/%3E%3C/g%3E%3Cg fill='%23FFFFFF' fill-opacity='.09'%3E%3Ccircle cx='210' cy='190' r='2.5'/%3E%3Ccircle cx='240' cy='140' r='2.5'/%3E%3Ccircle cx='250' cy='270' r='2.5'/%3E%3C/g%3E%3C/svg%3E");
+  }
+  .hero-inner { position: relative; max-width: 660px; margin: 0 auto; }
+  .hero-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: #8FD4C9; background: rgba(46,127,124,.22); border: 1px solid rgba(143,212,201,.25);
+    padding: 6px 12px; border-radius: 999px; margin-bottom: 18px;
+  }
+  .hero-eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: #F0A03C; box-shadow: 0 0 0 3px rgba(240,160,60,.22); }
   .hero h1 {
-    font-size: clamp(28px, 6vw, 40px);
-    line-height: 1.06; font-weight: 700; letter-spacing: -0.025em;
-    color: #fff; margin-bottom: 14px; text-wrap: balance;
+    font-family: var(--display);
+    font-size: clamp(32px, 6.4vw, 46px);
+    line-height: 1.02; font-weight: 800; letter-spacing: -0.028em;
+    color: #fff; margin-bottom: 16px; text-wrap: balance;
   }
-  .hero p { font-size: 15.5px; color: rgba(255,255,255,.72); max-width: 46ch; line-height: 1.6; }
+  .hero h1 em { font-style: normal; color: #F0A03C; }
+  .hero p { font-size: 16px; color: rgba(255,255,255,.74); max-width: 47ch; line-height: 1.65; }
   .hero-stats {
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
-    margin-top: 30px; border-top: 1px solid rgba(255,255,255,.14); padding-top: 22px;
+    margin-top: 32px;
   }
-  .hero-stat-num { font-size: clamp(19px, 4.5vw, 24px); font-weight: 700; letter-spacing: -0.02em; color: #fff; }
+  .hero-stat {
+    background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 14px; padding: 14px 16px;
+  }
+  .hero-stat-num { font-family: var(--display); font-size: clamp(20px, 4.6vw, 26px); font-weight: 800; letter-spacing: -0.02em; color: #fff; }
   .hero-stat-label { font-size: 12px; font-weight: 500; color: rgba(255,255,255,.6); margin-top: 3px; }
+  @media (max-width: 440px) { .hero-stats { grid-template-columns: 1fr 1fr; } .hero-stat:last-child { grid-column: span 2; } }
 
   /* ── Form card ── */
-  .form-wrap { max-width: 640px; margin: -36px auto 56px; padding: 0 16px; }
+  .form-wrap { max-width: 660px; margin: -42px auto 60px; padding: 0 16px; position: relative; z-index: 2; }
   .form-card {
     background: var(--paper);
     border: 1px solid var(--rule);
-    border-radius: 16px;
-    box-shadow: 0 12px 40px rgba(15,42,68,.08);
-    padding: 32px 28px;
+    border-radius: 22px;
+    box-shadow: 0 1px 2px rgba(16,38,59,.05), 0 18px 50px -12px rgba(16,38,59,.16);
+    padding: 34px 28px;
   }
-  @media (min-width: 560px) { .form-card { padding: 40px 36px; } }
-  .form-title { font-size: 19px; font-weight: 700; letter-spacing: -0.015em; }
-  .form-subtitle { font-size: 14px; color: var(--muted); margin-top: 6px; margin-bottom: 8px; }
+  @media (min-width: 560px) { .form-card { padding: 44px 44px; } }
+  .form-title { font-family: var(--display); font-size: 23px; font-weight: 700; letter-spacing: -0.02em; }
+  .form-subtitle { font-size: 14.5px; color: var(--muted); margin-top: 7px; }
 
-  /* ── Progress hint ── */
-  .steps { display: flex; gap: 6px; margin: 18px 0 4px; }
-  .step-bar { height: 4px; flex: 1; border-radius: 99px; background: var(--rule); transition: background .3s ease; }
-  .step-bar.on { background: var(--signal); }
+  /* ── Progress ── */
+  .steps { display: flex; gap: 6px; margin: 20px 0 6px; }
+  .step-bar { height: 5px; flex: 1; border-radius: 99px; background: var(--rule); overflow: hidden; position: relative; }
+  .step-bar::after {
+    content: ""; position: absolute; inset: 0; border-radius: 99px;
+    background: linear-gradient(90deg, var(--teal), #3FA39A);
+    transform: scaleX(0); transform-origin: left; transition: transform .4s cubic-bezier(.22,.8,.3,1);
+  }
+  .step-bar.on::after { transform: scaleX(1); }
 
-  /* ── Section ── */
+  /* ── Sections ── */
   .section-label {
-    font-size: 13.5px; font-weight: 600; color: var(--signal);
-    margin: 28px 0 14px; padding-top: 22px; border-top: 1px solid var(--rule);
+    display: flex; align-items: baseline; gap: 10px;
+    margin: 30px 0 16px; padding-top: 24px; border-top: 1px solid var(--rule);
   }
+  .section-label.first { border-top: none; padding-top: 16px; }
+  .section-num {
+    font-family: var(--display); font-size: 12px; font-weight: 700; color: var(--amber);
+    letter-spacing: .06em;
+  }
+  .section-title { font-family: var(--display); font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
   fieldset { border: none; }
 
   /* ── Fields ── */
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
   .row.single { grid-template-columns: 1fr; }
   @media (max-width: 500px) { .row { grid-template-columns: 1fr; } }
-  .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-  .req { color: var(--signal); }
+  .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--ink-2); }
+  .req { color: var(--amber); }
   .field input[type="text"], .field input[type="email"], .field input[type="tel"],
   .field select, .field textarea {
-    width: 100%; border: 1.5px solid var(--rule); border-radius: 10px;
-    padding: 12px 14px; font-size: 15px; font-family: var(--font); color: var(--ink);
-    background: var(--paper); transition: border-color .18s, box-shadow .18s; outline: none;
+    width: 100%; border: 1.5px solid var(--rule); border-radius: 12px;
+    padding: 13px 15px; font-size: 15px; font-family: var(--body); color: var(--ink);
+    background: #FCFCFA; transition: border-color .16s, box-shadow .16s, background .16s; outline: none;
     -webkit-appearance: none; appearance: none;
   }
   .field select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%235A6B76' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%235C6B76' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 14px center; padding-right: 38px;
   }
   .field input::placeholder, .field textarea::placeholder { color: var(--subtle); }
   .field input:focus, .field select:focus, .field textarea:focus {
-    border-color: var(--signal); box-shadow: 0 0 0 3px rgba(30,109,107,.14);
+    border-color: var(--teal); background: #fff; box-shadow: var(--ring);
   }
   .field input[aria-invalid="true"], .field select[aria-invalid="true"], .field textarea[aria-invalid="true"] {
     border-color: var(--red); background: rgba(194,65,12,.03);
   }
-  .field textarea { resize: vertical; min-height: 84px; }
-  .err { font-size: 12px; color: var(--red); margin-top: 5px; display: none; }
+  .field textarea { resize: vertical; min-height: 88px; }
+  .err { font-size: 12.5px; color: var(--red); margin-top: 6px; display: none; font-weight: 500; }
   .err.show { display: block; }
   .hint { font-size: 12px; color: var(--subtle); margin-top: 5px; }
 
@@ -144,84 +181,91 @@
   .carriers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   @media (max-width: 420px) { .carriers { grid-template-columns: 1fr; } }
   .carrier {
-    display: flex; align-items: center; gap: 11px;
-    border: 1.5px solid var(--rule); border-radius: 11px; padding: 12px 14px;
-    cursor: pointer; transition: border-color .18s, background .18s; user-select: none;
+    display: flex; align-items: center; gap: 12px;
+    border: 1.5px solid var(--rule); border-radius: 13px; padding: 13px 15px; background: #FCFCFA;
+    cursor: pointer; transition: border-color .16s, background .16s, transform .1s; user-select: none;
   }
-  .carrier:has(input:checked) { border-color: var(--signal); background: var(--signal-soft); }
-  .carrier:focus-within { box-shadow: 0 0 0 3px rgba(30,109,107,.14); }
+  .carrier:hover { border-color: #C9CFC9; }
+  .carrier:active { transform: scale(.985); }
+  .carrier:has(input:checked) { border-color: var(--teal); background: var(--teal-tint); }
+  .carrier:focus-within { box-shadow: var(--ring); }
   .carrier input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .box {
-    width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--rule);
-    flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .18s;
+    width: 21px; height: 21px; border-radius: 7px; border: 1.5px solid #C9CFC9; background: #fff;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .16s;
   }
-  .carrier:has(input:checked) .box { background: var(--signal); border-color: var(--signal); }
-  .box svg { opacity: 0; }
-  .carrier:has(input:checked) .box svg { opacity: 1; }
-  .carrier-name { font-size: 14px; font-weight: 600; }
+  .carrier:has(input:checked) .box { background: var(--teal); border-color: var(--teal); }
+  .box svg { opacity: 0; transform: scale(.6); transition: all .16s; }
+  .carrier:has(input:checked) .box svg { opacity: 1; transform: scale(1); }
+  .carrier-name { font-size: 14px; font-weight: 600; display: block; }
   .carrier-sub { font-size: 12px; color: var(--muted); }
 
-  /* ── Experience toggle ── */
+  /* ── Yes/No segmented toggles ── */
   .toggle { display: flex; gap: 10px; }
   .toggle button {
-    flex: 1; border: 1.5px solid var(--rule); border-radius: 10px; padding: 12px;
-    background: var(--paper); font: inherit; font-size: 13.5px; font-weight: 600;
-    color: var(--muted); cursor: pointer; transition: all .18s;
+    flex: 1; border: 1.5px solid var(--rule); border-radius: 12px; padding: 13px;
+    background: #FCFCFA; font: inherit; font-size: 13.5px; font-weight: 600;
+    color: var(--muted); cursor: pointer; transition: all .16s;
   }
-  .toggle button[aria-pressed="true"] { border-color: var(--signal); background: var(--signal-soft); color: var(--signal-deep); }
-  .toggle button:focus-visible { box-shadow: 0 0 0 3px rgba(30,109,107,.14); outline: none; }
+  .toggle button:hover { border-color: #C9CFC9; }
+  .toggle button[aria-pressed="true"] { border-color: var(--teal); background: var(--teal-tint); color: var(--teal-deep); }
+  .toggle button:focus-visible { box-shadow: var(--ring); outline: none; }
 
   /* ── Upload ── */
   .upload {
-    border: 1.5px dashed var(--rule); border-radius: 12px; padding: 18px 14px;
-    text-align: center; cursor: pointer; transition: border-color .18s, background .18s; position: relative;
+    border: 1.5px dashed #C9CFC9; border-radius: 14px; padding: 20px 14px; background: #FCFCFA;
+    text-align: center; cursor: pointer; transition: border-color .16s, background .16s; position: relative;
   }
-  .upload:hover { border-color: var(--signal); background: rgba(30,109,107,.03); }
-  .upload.has { border-color: var(--signal); border-style: solid; background: var(--signal-soft); }
+  .upload:hover { border-color: var(--teal); background: rgba(46,127,124,.04); }
+  .upload.has { border-color: var(--teal); border-style: solid; background: var(--teal-tint); }
   .upload input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-  .upload .u-icon { color: var(--signal); margin-bottom: 8px; display: inline-flex; }
+  .upload .u-icon { color: var(--teal); margin-bottom: 8px; display: inline-flex; }
   .upload .u-text { font-size: 13.5px; font-weight: 600; }
   .upload .u-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .upload .u-file { font-size: 12.5px; font-weight: 600; color: var(--signal-deep); margin-top: 7px; display: none; word-break: break-all; }
+  .upload .u-file { font-size: 12.5px; font-weight: 600; color: var(--teal-deep); margin-top: 7px; display: none; word-break: break-all; }
   .upload.has .u-file { display: block; }
 
   /* ── Submit ── */
   .submit {
-    width: 100%; background: var(--signal); color: #fff; border: none; border-radius: 11px;
-    padding: 16px; font: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer;
-    margin-top: 28px; display: flex; align-items: center; justify-content: center; gap: 9px;
-    transition: background .18s, transform .1s;
+    width: 100%; border: none; border-radius: 13px;
+    background: linear-gradient(180deg, #34918D, var(--teal) 45%, var(--teal-deep));
+    color: #fff; padding: 17px; font: inherit; font-size: 16px; font-weight: 700; cursor: pointer;
+    font-family: var(--display); letter-spacing: .01em;
+    margin-top: 30px; display: flex; align-items: center; justify-content: center; gap: 9px;
+    box-shadow: 0 1px 2px rgba(16,38,59,.2), 0 10px 24px -8px rgba(29,91,91,.5);
+    transition: filter .16s, transform .1s, box-shadow .16s;
   }
-  .submit:hover { background: var(--signal-deep); }
+  .submit:hover { filter: brightness(1.06); }
   .submit:active { transform: scale(.99); }
-  .submit:disabled { background: var(--subtle); cursor: default; }
+  .submit:disabled { filter: grayscale(.6) brightness(1.05); cursor: default; box-shadow: none; }
   .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .legal { font-size: 12px; color: var(--muted); margin-top: 16px; line-height: 1.6; text-align: center; }
-  .legal a { color: var(--signal); text-decoration: none; }
+  .legal { font-size: 12px; color: var(--muted); margin-top: 18px; line-height: 1.6; text-align: center; }
+  .legal a { color: var(--teal); text-decoration: none; font-weight: 600; }
   .legal a:hover { text-decoration: underline; }
 
   /* ── Result states ── */
-  .result { display: none; text-align: center; padding: 24px 8px; }
-  .result.show { display: block; }
+  .result { display: none; text-align: center; padding: 26px 8px; }
+  .result.show { display: block; animation: rise .5s cubic-bezier(.22,.8,.3,1) both; }
   .result-badge {
-    width: 56px; height: 56px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    width: 60px; height: 60px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
     margin-bottom: 18px;
   }
-  .result-badge.ok { background: var(--signal-soft); color: var(--signal); }
-  .result-badge.bad { background: rgba(194,65,12,.1); color: var(--red); }
-  .result-title { font-size: 21px; font-weight: 700; letter-spacing: -0.015em; margin-bottom: 10px; }
-  .result-msg { font-size: 14.5px; color: var(--muted); line-height: 1.65; max-width: 40ch; margin: 0 auto; }
+  .result-badge.ok { background: var(--teal-tint); color: var(--teal); box-shadow: 0 0 0 8px rgba(46,127,124,.07); }
+  .result-badge.bad { background: rgba(194,65,12,.1); color: var(--red); box-shadow: 0 0 0 8px rgba(194,65,12,.05); }
+  .result-title { font-family: var(--display); font-size: 22px; font-weight: 700; letter-spacing: -0.015em; margin-bottom: 10px; }
+  .result-msg { font-size: 14.5px; color: var(--muted); line-height: 1.65; max-width: 42ch; margin: 0 auto; }
   .result-cta {
-    display: inline-flex; align-items: center; gap: 7px; margin-top: 22px;
-    background: var(--signal); color: #fff; text-decoration: none; padding: 12px 22px;
-    border-radius: 10px; font-size: 14px; font-weight: 600; border: none; cursor: pointer; font-family: var(--font);
+    display: inline-flex; align-items: center; gap: 7px; margin-top: 24px;
+    background: var(--teal); color: #fff; text-decoration: none; padding: 13px 24px;
+    border-radius: 11px; font-size: 14px; font-weight: 600; border: none; cursor: pointer; font-family: var(--body);
+    transition: background .16s;
   }
-  .result-cta:hover { background: var(--signal-deep); }
+  .result-cta:hover { background: var(--teal-deep); }
 
-  footer { background: var(--ink); color: rgba(255,255,255,.5); text-align: center; padding: 22px; font-size: 12.5px; }
-  footer a { color: rgba(255,255,255,.72); text-decoration: none; }
+  footer { background: var(--ink); color: rgba(255,255,255,.5); text-align: center; padding: 24px; font-size: 12.5px; }
+  footer a { color: rgba(255,255,255,.75); text-decoration: none; }
 
   /* Honeypot — hidden from humans, catches bots */
   .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
@@ -233,12 +277,10 @@
 
 <header>
   <a href="https://www.homefrontsolutionsllc.com" class="brand">
-    <span class="brand-mark" aria-hidden="true">
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M4 11 L12 4 L20 11 V20 H15 V14 H9 V20 H4 Z"/></svg>
-    </span>
+    <img src="/hfs-logo-login.webp" alt="" width="200" height="244" decoding="async">
     <span>
-      <span class="brand-name" style="display:block;">Home Front Solutions</span>
-      <span class="brand-sub">Nationwide field sales</span>
+      <span class="brand-name">Home Front Solutions</span>
+      <span class="brand-sub">Direct to your door</span>
     </span>
   </a>
   <a href="https://www.homefrontsolutionsllc.com/careers" class="back">← <span>Back to careers</span></a>
@@ -246,19 +288,19 @@
 
 <section class="hero">
   <div class="hero-inner">
-    <div class="hero-eyebrow">Now hiring field sales reps</div>
-    <h1>A real career in field sales.</h1>
-    <p>Uncapped commission paid weekly, paid certification before your first door, and a clear path from rep to team lead to area manager.</p>
-    <div class="hero-stats">
-      <div><div class="hero-stat-num">$150K+</div><div class="hero-stat-label">Top rep, year one</div></div>
-      <div><div class="hero-stat-num">5-day</div><div class="hero-stat-label">Paid certification</div></div>
-      <div><div class="hero-stat-num">Weekly</div><div class="hero-stat-label">Commission payouts</div></div>
+    <div class="hero-eyebrow rise d1"><span class="dot"></span>Now hiring field sales reps</div>
+    <h1 class="rise d2">A real career, <em>door by door.</em></h1>
+    <p class="rise d3">Uncapped commission paid weekly, paid certification before your first door, and a clear path from rep to team lead to area manager.</p>
+    <div class="hero-stats rise d4">
+      <div class="hero-stat"><div class="hero-stat-num">$150K+</div><div class="hero-stat-label">Top rep, year one</div></div>
+      <div class="hero-stat"><div class="hero-stat-num">5-day</div><div class="hero-stat-label">Paid certification</div></div>
+      <div class="hero-stat"><div class="hero-stat-num">Weekly</div><div class="hero-stat-label">Commission payouts</div></div>
     </div>
   </div>
 </section>
 
 <div class="form-wrap">
-  <div class="form-card">
+  <div class="form-card rise d4">
 
     <!-- Success -->
     <div class="result" id="successCard" role="status">
@@ -276,7 +318,7 @@
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8 v5"/><path d="M12 16.5 v.01"/><circle cx="12" cy="12" r="9"/></svg>
       </span>
       <div class="result-title">Something went wrong</div>
-      <div class="result-msg" id="errorMsg">We couldn't submit your application. Please try again, or email <a href="mailto:info@homefrontsolutionsllc.com" style="color:var(--signal)">info@homefrontsolutionsllc.com</a>.</div>
+      <div class="result-msg" id="errorMsg">We couldn't submit your application. Please try again, or email <a href="mailto:info@homefrontsolutionsllc.com" style="color:var(--teal)">info@homefrontsolutionsllc.com</a>.</div>
       <button type="button" class="result-cta" id="retryBtn">Try again</button>
     </div>
 
@@ -290,7 +332,7 @@
       </div>
 
       <fieldset>
-        <div class="section-label" style="border-top:none;padding-top:14px;">Your details</div>
+        <div class="section-label first"><span class="section-num">01</span><span class="section-title">Your details</span></div>
         <div class="row">
           <div class="field">
             <label for="fullName">Full name <span class="req">*</span></label>
@@ -325,18 +367,18 @@
       </fieldset>
 
       <fieldset>
-        <div class="section-label" id="carriers-label">Which carriers do you want to sell? <span class="req">*</span></div>
+        <div class="section-label"><span class="section-num">02</span><span class="section-title" id="carriers-label">Which carriers do you want to sell? <span class="req">*</span></span></div>
         <div class="carriers" role="group" aria-labelledby="carriers-label">
-          <label class="carrier"><input type="checkbox" name="carriers" value="Kinetic"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">Kinetic</span><span class="carrier-sub">Windstream fiber</span></span></label>
-          <label class="carrier"><input type="checkbox" name="carriers" value="Brightspeed"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">Brightspeed</span><span class="carrier-sub">Fiber internet</span></span></label>
-          <label class="carrier"><input type="checkbox" name="carriers" value="Frontier"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">Frontier</span><span class="carrier-sub">Fiber network</span></span></label>
-          <label class="carrier"><input type="checkbox" name="carriers" value="T-Fiber"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">T-Fiber</span><span class="carrier-sub">T-Mobile fiber</span></span></label>
+          <label class="carrier"><input type="checkbox" name="carriers" value="Kinetic"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name">Kinetic</span><span class="carrier-sub">Windstream fiber</span></span></label>
+          <label class="carrier"><input type="checkbox" name="carriers" value="Brightspeed"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name">Brightspeed</span><span class="carrier-sub">Fiber internet</span></span></label>
+          <label class="carrier"><input type="checkbox" name="carriers" value="Frontier"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name">Frontier</span><span class="carrier-sub">Fiber network</span></span></label>
+          <label class="carrier"><input type="checkbox" name="carriers" value="T-Fiber"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name">T-Fiber</span><span class="carrier-sub">T-Mobile fiber</span></span></label>
         </div>
         <div class="err" id="carriers-err">Please select at least one carrier</div>
       </fieldset>
 
       <fieldset>
-        <div class="section-label">Sales experience</div>
+        <div class="section-label"><span class="section-num">03</span><span class="section-title">About you</span></div>
         <div class="field">
           <label id="exp-label">Do you have prior sales experience?</label>
           <div class="toggle" role="group" aria-labelledby="exp-label">
@@ -351,10 +393,20 @@
             <textarea id="salesExpDetails" name="salesExperienceDetails" placeholder="e.g. 2 years door-to-door solar with SunPower…"></textarea>
           </div>
         </div>
+        <div class="field" style="margin-top:16px;">
+          <label id="transport-label">Do you have reliable transportation? <span class="req">*</span></label>
+          <div class="toggle" role="group" aria-labelledby="transport-label">
+            <button type="button" id="transportYes" aria-pressed="false">Yes</button>
+            <button type="button" id="transportNo" aria-pressed="false">No</button>
+          </div>
+          <input type="hidden" id="hasTransport" name="hasReliableTransportation" value="">
+          <div class="err" id="transport-err">Please tell us whether you have reliable transportation</div>
+          <div class="hint">Reps drive to their assigned territory daily — a dependable vehicle matters.</div>
+        </div>
       </fieldset>
 
       <fieldset>
-        <div class="section-label">Identity &amp; photo</div>
+        <div class="section-label"><span class="section-num">04</span><span class="section-title">Identity &amp; photo</span></div>
         <div class="row">
           <div class="field">
             <label for="headshotFile">Headshot photo <span class="req">*</span></label>
@@ -382,7 +434,7 @@
       </fieldset>
 
       <fieldset>
-        <div class="section-label">One more thing</div>
+        <div class="section-label"><span class="section-num">05</span><span class="section-title">One more thing</span></div>
         <div class="field">
           <label for="referralSource">How did you hear about us?</label>
           <select id="referralSource" name="referralSource">
@@ -468,6 +520,17 @@ function setExp(hasExp) {
 $("expNo").addEventListener("click", () => setExp(false));
 $("expYes").addEventListener("click", () => setExp(true));
 
+// ── Reliable transportation toggle — REQUIRED, so no default ─────────────────
+function setTransport(hasIt) {
+  $("hasTransport").value = hasIt ? "true" : "false";
+  $("transportYes").setAttribute("aria-pressed", String(hasIt));
+  $("transportNo").setAttribute("aria-pressed", String(!hasIt));
+  showErr("transport", false);
+  updateSteps();
+}
+$("transportYes").addEventListener("click", () => setTransport(true));
+$("transportNo").addEventListener("click", () => setTransport(false));
+
 // ── Live phone formatting → (xxx) xxx-xxxx ───────────────────────────────────
 $("phone").addEventListener("input", (e) => {
   const d = e.target.value.replace(/\D/g, "").slice(0, 10);
@@ -527,8 +590,8 @@ function updateSteps() {
     if (id==="zip") return /^\d{5}$/.test(v); return v.length>=2;
   });
   const s2 = document.querySelectorAll("input[name='carriers']:checked").length > 0;
-  const s3 = !!$("headshotFile").files[0];
-  const s4 = !!$("licenseFile").files[0];
+  const s3 = $("hasTransport").value !== "";
+  const s4 = !!$("headshotFile").files[0] && !!$("licenseFile").files[0];
   [["s1",s1],["s2",s2],["s3",s3],["s4",s4]].forEach(([id,on]) => $(id).classList.toggle("on", on));
 }
 document.getElementById("applyForm").addEventListener("input", updateSteps);
@@ -539,6 +602,7 @@ function validate() {
   ["fullName","email","phone","city","zip"].forEach(id => { if (!checkField(id)) ok = false; });
   const carriers = document.querySelectorAll("input[name='carriers']:checked").length;
   $("carriers-err").classList.toggle("show", carriers === 0); if (carriers === 0) ok = false;
+  if ($("hasTransport").value === "") { showErr("transport", true); ok = false; } else showErr("transport", false);
   if (!$("headshotFile").files[0]) { showErr("headshot", true); ok = false; } else showErr("headshot", false);
   if (!$("licenseFile").files[0]) { showErr("license", true); ok = false; } else showErr("license", false);
   return ok;
@@ -566,6 +630,7 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
   fd.append("state", "NC");
   fd.append("hasSalesExperience", $("hasSalesExp").value);
   fd.append("salesExperienceDetails", $("salesExpDetails").value.trim());
+  fd.append("hasReliableTransportation", $("hasTransport").value);
   fd.append("preferredCarriers", carriers.join(","));
   fd.append("referralSource", $("referralSource").value);
   fd.append("applicationSource", "public_join");

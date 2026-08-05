@@ -19,6 +19,8 @@ export interface ApplicationIntakeInput {
   state: string;
   hasSalesExperience: boolean;
   salesExperienceDetails?: string | null;
+  /** null/undefined = the submitting form never asked (careers site). */
+  hasReliableTransportation?: boolean | null;
   preferredCarriers: string;
   referralSource?: string | null;
   desiredRole?: string | null;
@@ -90,6 +92,7 @@ export function submitPublicApplication(input: ApplicationIntakeInput) {
     state: input.state.trim().toUpperCase() || "NC",
     hasSalesExperience: input.hasSalesExperience,
     salesExperienceDetails: input.salesExperienceDetails?.trim() || null,
+    hasReliableTransportation: input.hasReliableTransportation ?? null,
     preferredCarriers: input.preferredCarriers.trim(),
     referralSource: input.referralSource?.trim() || null,
     headshotPath: input.headshotPath ?? null,

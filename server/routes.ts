@@ -15,6 +15,7 @@ import { z } from "zod";
 import { packMapPins, type PackedMapPins } from "@shared/mapPinsWire";
 import { decideFreshFiber, type FreshFiberVerdict } from "@shared/freshFiberVerdict";
 import { structuredLog } from "./structuredLog";
+import { inlineScriptHashes } from "./cspHashes";
 import {
   recordAdminAudit, auditContext, queryAdminAudit, adminAuditFacets, ADMIN_AUDIT_OUTCOMES,
 } from "./adminAudit";
@@ -8135,6 +8136,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     html = html
       .replace("FIBER_SCOUT_SERVER_PLACEHOLDER", safeServerUrl)
       .replace("FIBER_SCOUT_ORG_PLACEHOLDER", safeSlug);
+    // The boot-time CSP hashes pin the SPA's index.html only, so the join
+    // form's inline <script> was blocked in production — submit, validation and
+    // invite hydration all dead. And its hash can't join the boot-time list:
+    // the placeholders above are substituted per response, so the script bytes
+    // only exist here. Hash the HTML actually being sent and widen this
+    // response's policy to allow exactly that script.
+    const csp = res.getHeader("Content-Security-Policy");
+    if (typeof csp === "string" && csp.length > 0) {
+      const hashes = inlineScriptHashes(html).join(" ");
+      if (hashes) {
+        // "script-src " (with the space) cannot match inside "script-src-elem"
+        // or "script-src-attr"; each directive is widened independently.
+        res.setHeader("Content-Security-Policy", csp
+          .replace("script-src ", `script-src ${hashes} `)
+          .replace("script-src-elem ", `script-src-elem ${hashes} `));
+      }
+    }
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/html");
     res.send(html);
@@ -8329,7 +8347,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     (req, res) => {
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { fullName, email, phone, city, zip, state, hasSalesExperience,
-              salesExperienceDetails, preferredCarriers, referralSource, orgSlug, inviteToken,
+              salesExperienceDetails, hasReliableTransportation, preferredCarriers,
+              referralSource, orgSlug, inviteToken,
               applicationSource, desiredRole, consent } = req.body;
 
       if (!fullName || !email || !phone || !city || !zip || !preferredCarriers) {
@@ -8369,6 +8388,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           fullName, email, phone, city, zip, state: state || "NC",
           hasSalesExperience: hasSalesExperience === "true" || hasSalesExperience === true,
           salesExperienceDetails: typeof salesExperienceDetails === "string" ? salesExperienceDetails.slice(0, 4_000) : null,
+          // Tri-state: absent/unrecognized → null (the form never asked),
+          // NOT false — a careers-site "No" must not be invented here.
+          hasReliableTransportation:
+            hasReliableTransportation === "true" || hasReliableTransportation === true ? true
+            : hasReliableTransportation === "false" || hasReliableTransportation === false ? false
+            : null,
           preferredCarriers: Array.isArray(preferredCarriers) ? preferredCarriers.join(",") : String(preferredCarriers),
           referralSource: typeof referralSource === "string" ? referralSource.slice(0, 200) : null,
           desiredRole: typeof desiredRole === "string" ? desiredRole : null,
@@ -8403,6 +8428,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               <tr><td style="padding:6px 12px;font-weight:bold;">City/Zip</td><td style="padding:6px 12px;">${esc(city)}, ${esc(state || "NC")} ${esc(zip)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Carriers</td><td style="padding:6px 12px;">${esc(Array.isArray(preferredCarriers) ? preferredCarriers.join(", ") : preferredCarriers)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Sales Exp.</td><td style="padding:6px 12px;">${hasSalesExperience === "true" ? "Yes" : "No"}${salesExperienceDetails ? " — " + esc(salesExperienceDetails) : ""}</td></tr>
+              <tr><td style="padding:6px 12px;font-weight:bold;">Transportation</td><td style="padding:6px 12px;">${hasReliableTransportation === "true" ? "Yes" : hasReliableTransportation === "false" ? "No" : "Not asked"}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Referred by</td><td style="padding:6px 12px;">${esc(referralSource || "—")}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Source</td><td style="padding:6px 12px;">${esc(app2.applicationSource)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Role</td><td style="padding:6px 12px;">${esc(app2.desiredRole || "Field Representative")}</td></tr>
