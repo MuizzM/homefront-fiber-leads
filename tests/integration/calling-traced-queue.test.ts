@@ -287,3 +287,109 @@ describe("the rep-facing badge", () => {
       .toMatchObject({ ready: true, label: "OK to call" });
   });
 });
+
+describe("every traced number on a door is workable", () => {
+  // The queue is UNIQUE(tenant_id,lead_id) with one phone_id, so a door with
+  // four traced numbers can only CARRY one. These cover the other three being
+  // reachable rather than stranded.
+  function multiNumberLead(): number {
+    const leadId = Number(rawDb.prepare(`INSERT INTO leads
+      (address,city,state,zip,fiber_status,lead_status,tenant_id,created_at,updated_at)
+      VALUES ('1400 Multi St','Lexington','NC','27292','available','prospect',?,?,?)`)
+      .run(tenantId, NOW.toISOString(), NOW.toISOString()).lastInsertRowid);
+    const add = (number: string, confidence: number, flags: Record<string, boolean> | null, lineType = "wireless") =>
+      rawDb.prepare(`INSERT INTO lead_traced_phones
+        (tenant_id,lead_id,number,line_type,confidence,dnc_flags,scrubbed_at_ms,dnc_source,updated_at)
+        VALUES (?,?,?,?,?,?,?,'tracerfy',?)`).run(tenantId, leadId, number, lineType, confidence,
+          flags ? JSON.stringify(flags) : null, NOW.getTime() - DAY_MS, NOW.toISOString());
+    add("+13365552001", 0.95, null);                          // best, clear
+    add("+13365552002", 0.80, null, "landline");              // second, clear
+    add("+13365552003", 0.70, { federalDnc: true });          // suppressed
+    return leadId;
+  }
+
+  it("lists all of them with a verdict each, marking the one in the queue", () => {
+    const leadId = multiNumberLead();
+    traced.syncTracedPhoneQueue(tenantId);
+
+    const options = traced.tracedPhoneOptions(tenantId, leadId, NOW.getTime());
+    expect(options).toHaveLength(3);
+    expect(options.filter(o => o.ready)).toHaveLength(2);
+    // Ranked best-first, and the queue took the best dialable one.
+    expect(options[0].active).toBe(true);
+    expect(options.filter(o => o.active)).toHaveLength(1);
+    // Masked, never the digits.
+    expect(options.every(o => !o.masked.includes("3365552"))).toBe(true);
+  });
+
+  it("moves the door onto another number and re-evaluates it", () => {
+    const leadId = multiNumberLead();
+    traced.syncTracedPhoneQueue(tenantId);
+    const before = traced.tracedPhoneOptions(tenantId, leadId, NOW.getTime());
+    const second = before.find(o => !o.active && o.ready)!;
+
+    traced.selectTracedPhone({ tenantId, leadId, tracedPhoneId: second.id, actorUserId });
+
+    const after = traced.tracedPhoneOptions(tenantId, leadId, NOW.getTime());
+    expect(after.find(o => o.id === second.id)!.active).toBe(true);
+    expect(after.filter(o => o.active)).toHaveLength(1);
+    // The switched-to number is clear, so the door is callable on it.
+    expect(decisionFor(leadId)).toBe("ELIGIBLE_MANUAL_CALL");
+  });
+
+  it("does not let switching launder a suppressed number", () => {
+    const leadId = multiNumberLead();
+    traced.syncTracedPhoneQueue(tenantId);
+    const blocked = traced.tracedPhoneOptions(tenantId, leadId, NOW.getTime()).find(o => !o.ready)!;
+
+    traced.selectTracedPhone({ tenantId, leadId, tracedPhoneId: blocked.id, actorUserId });
+    expect(decisionFor(leadId)).toBe("BLOCKED_NATIONAL_DNC");
+  });
+
+  it("invalidates an unused authorization when the number changes", () => {
+    const leadId = multiNumberLead();
+    traced.syncTracedPhoneQueue(tenantId);
+    const options = traced.tracedPhoneOptions(tenantId, leadId, NOW.getTime());
+    // A real authorization needs a real decision to point at, so evaluate first.
+    decisionFor(leadId);
+    const entry = rawDb.prepare(`SELECT contact_id AS contactId,phone_id AS phoneId,
+      last_decision_id AS decisionId FROM calling_queue_entries WHERE tenant_id=? AND lead_id=?`)
+      .get(tenantId, leadId) as any;
+    rawDb.prepare(`INSERT INTO call_authorizations
+      (id,tenant_id,user_id,lead_id,contact_id,phone_id,compliance_decision_id,action,
+       nonce_sha256,token_sha256,issued_at,expires_at)
+      VALUES ('auth-switch',?,?,?,?,?,?,'manual_call',?,?,?,?)`)
+      .run(tenantId, actorUserId, leadId, entry.contactId, entry.phoneId, entry.decisionId,
+        "e".repeat(64), "f".repeat(64), NOW.toISOString(),
+        new Date(NOW.getTime() + 120_000).toISOString());
+
+    const result = traced.selectTracedPhone({
+      tenantId, leadId, actorUserId,
+      tracedPhoneId: options.find(o => !o.active && o.ready)!.id,
+    });
+    expect(result.invalidatedAuthorizations).toBe(1);
+    expect(rawDb.prepare("SELECT invalidation_reason AS r FROM call_authorizations WHERE id='auth-switch'").get())
+      .toMatchObject({ r: "PHONE_CHANGED" });
+  });
+
+  it("is a no-op when the number is already the working one", () => {
+    const leadId = multiNumberLead();
+    traced.syncTracedPhoneQueue(tenantId);
+    const active = traced.tracedPhoneOptions(tenantId, leadId, NOW.getTime()).find(o => o.active)!;
+    expect(traced.selectTracedPhone({ tenantId, leadId, tracedPhoneId: active.id, actorUserId }))
+      .toMatchObject({ alreadyActive: true, invalidatedAuthorizations: 0 });
+  });
+
+  it("refuses a number traced for a different door", () => {
+    const leadA = multiNumberLead();
+    const leadB = multiNumberLead();
+    traced.syncTracedPhoneQueue(tenantId);
+    const foreign = traced.tracedPhoneOptions(tenantId, leadB, NOW.getTime())[0];
+
+    // The handle is a stored row id, so a caller cannot borrow another door's
+    // number — nor inject digits that were never traced for this address.
+    expect(() => traced.selectTracedPhone({
+      tenantId, leadId: leadA, tracedPhoneId: foreign.id, actorUserId,
+    })).toThrow(/not found/i);
+  });
+});

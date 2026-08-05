@@ -66,8 +66,25 @@ export interface CallingAuditEvent {
   createdAt: string;
 }
 
+/** One number the trace returned for a door. `id` is the stored row, never the
+ *  digits — selecting a number sends the id back and the server resolves it. */
+export interface TracedPhoneOption {
+  id: number;
+  masked: string;
+  lineType: string;
+  confidence: number;
+  ready: boolean;
+  label: string;
+  reasons: string[];
+  active: boolean;
+  selectable: boolean;
+}
+
 export interface CallingLeadDetail {
   candidate: CallingCandidate;
+  /** Every traced number for this door. The queue carries one at a time; a rep
+   *  moves the door onto another when the first is wrong-party or unreachable. */
+  tracedPhones: TracedPhoneOption[];
   timeline: CallingAuditEvent[];
   decision: {
     id: string;
@@ -395,7 +412,8 @@ export async function getCallingCallbacks(limit = 100): Promise<CallingCallback[
 export async function getCallingLead(leadId: number): Promise<CallingLeadDetail> {
   const payload = await json<{ lead: PublicCallingCandidate; timeline: CallingAuditEvent[];
     attempts?: CallingLeadDetail["attempts"]; callbacks?: CallingLeadDetail["callbacks"];
-    openAttempt?: CallingLeadDetail["openAttempt"]; consent?: CallingLeadDetail["consent"] }>(
+    openAttempt?: CallingLeadDetail["openAttempt"]; consent?: CallingLeadDetail["consent"];
+    tracedPhones?: TracedPhoneOption[] }>(
     apiRequest("GET", `${ROOT}/leads/${leadId}`),
   );
   const candidate = candidateFromApi(payload.lead);
@@ -407,7 +425,7 @@ export async function getCallingLead(leadId: number): Promise<CallingLeadDetail>
       decision = result.decision;
     } catch (e: any) { decision = null; decisionError = String(e?.message ?? "fetch failed"); }
   }
-  return { candidate, timeline: payload.timeline ?? [], decision, decisionError,
+  return { candidate, tracedPhones: payload.tracedPhones ?? [], timeline: payload.timeline ?? [], decision, decisionError,
     consent: payload.consent ?? { id: null, verified: false, revoked: false },
     attempts: payload.attempts ?? [], callbacks: payload.callbacks ?? [], openAttempt: payload.openAttempt ?? null };
 }
@@ -538,6 +556,16 @@ export function validateCallingPhone(leadId: number, input: {
 
 export function enrichCallingLead(leadId: number): Promise<unknown> {
   return json(apiRequest("POST", `${ROOT}/leads/${leadId}/enrich`, { idempotencyKey: newIdempotencyKey() }));
+}
+
+/** Move this door onto another traced number. Any unused call authorization is
+ *  invalidated server-side — one is issued against a specific phone. */
+export function selectTracedPhone(leadId: number, tracedPhoneId: number): Promise<{
+  invalidatedAuthorizations: number;
+  alreadyActive: boolean;
+  tracedPhones: TracedPhoneOption[];
+}> {
+  return json(apiRequest("POST", `${ROOT}/leads/${leadId}/traced-phones/${tracedPhoneId}/select`));
 }
 
 export function revokeCallingConsent(consentId: string, input: { scope: string; method: "live_call" | "written" | "email" | "in_person" | "other"; evidenceRef: string }): Promise<{ id: string }> {

@@ -14,12 +14,90 @@ import { CallingAvailability, CallingChrome, CallingPageSkeleton, CallingUnknown
 import { LeadScriptPanel } from "@/components/calling/LeadScriptPanel";
 import {
   addInternalOptOut, auditPhoneCopy, authorizeManualCall, enrichCallingLead, evaluateCallingLead, formatDecision, formatStage,
-  getCallingLead, getCallingQueue, getCallingStatus, newIdempotencyKey, revokeCallingConsent, saveConsent, saveDisposition, startManualCall,
+  getCallingLead, getCallingQueue, getCallingStatus, newIdempotencyKey, revokeCallingConsent, saveConsent, saveDisposition,
+  selectTracedPhone, startManualCall,
   validateCallingPhone, type CallingLeadDetail, type CallingStatus, type ConsentEvidence, type DispositionCode,
 } from "@/lib/callingApi";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { useCan } from "@/lib/capabilities";
+
+/**
+ * Every number the trace returned for this door.
+ *
+ * The queue carries ONE number per household — that is the right shape, since
+ * frequency, dispositions and callbacks are all per-door — but a trace often
+ * returns three or four. Without this panel a wrong-party answer on the
+ * imported number ended the door while untried numbers sat in the database.
+ *
+ * Selecting one repoints the queue entry through the full import path, so the
+ * new number gets its own association and its own compliance evaluation. The
+ * decision panel resets on purpose: a verdict for the previous number tells a
+ * rep nothing about this one.
+ */
+function TracedPhonePanel({ detail, onSwitched }: {
+  detail: CallingLeadDetail;
+  onSwitched: () => void;
+}) {
+  const { toast } = useToast();
+  const options = detail.tracedPhones ?? [];
+  const mutation = useMutation({
+    mutationFn: (tracedPhoneId: number) => selectTracedPhone(detail.candidate.leadId, tracedPhoneId),
+    onSuccess: result => {
+      toast({
+        title: result.alreadyActive ? "Already the working number" : "Switched to this number",
+        description: result.invalidatedAuthorizations > 0
+          ? "The previous call authorization was cancelled — run the compliance check again."
+          : "Run the compliance check before dialling.",
+      });
+      onSwitched();
+    },
+    onError: (error: Error) => toast({ title: "Could not switch number", description: error.message, variant: "destructive" }),
+  });
+
+  if (options.length <= 1) return null;
+  const dialable = options.filter(option => option.ready).length;
+
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4" data-testid="traced-phone-panel">
+      <div className="flex items-start gap-3">
+        <PhoneCall className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+        <div>
+          <h2 className="text-sm font-semibold">Other numbers for this address</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            The trace returned {options.length} numbers for this door, {dialable} of them clear of the registries.
+            Switching runs a fresh compliance check — a suppressed number stays suppressed.
+          </p>
+        </div>
+      </div>
+      <ul className="mt-3 space-y-2">
+        {options.map(option => (
+          <li key={option.id}
+            className={cn("flex items-center gap-3 rounded-xl border p-3",
+              option.active ? "border-primary/40 bg-primary/[0.06]" : "border-border bg-background/50")}
+            data-testid={`traced-phone-${option.id}`}>
+            <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", option.ready ? "bg-emerald-500" : "bg-red-500")} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-mono text-sm">{option.masked}</div>
+              <div className={cn("mt-0.5 truncate text-[11px]", option.ready ? "text-muted-foreground" : "text-red-500")}>
+                {option.lineType} · {option.label}
+              </div>
+            </div>
+            {option.active ? (
+              <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-primary">Working</span>
+            ) : (
+              <Button variant="outline" size="sm" className="shrink-0"
+                disabled={!option.selectable || mutation.isPending}
+                onClick={() => mutation.mutate(option.id)}>
+                {mutation.isPending ? "Switching…" : "Use this"}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 const DISPOSITIONS: Array<{ code: DispositionCode; label: string; tone?: string }> = [
   { code: "NO_ANSWER", label: "No answer" },
@@ -433,6 +511,11 @@ export default function CallingLead() {
                 <div className="bg-background/70 p-3"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Pipeline stage</div><div className="mt-1 truncate text-sm">{formatStage(candidate.queueStage)}</div></div>
               </div>
             </section>
+
+            {!activeAttempt && (
+              <TracedPhonePanel detail={detailQuery.data}
+                onSwitched={() => { setEvaluation(null); void detailQuery.refetch(); }} />
+            )}
 
             <LeadScriptPanel leadId={leadId} />
 

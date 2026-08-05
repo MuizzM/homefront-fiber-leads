@@ -49,7 +49,13 @@ import {
   validatePhoneManually,
   type CallingCandidate,
 } from "./store";
-import { syncTracedPhoneQueue, tracedBadgesForLeads, tracerfyProvider } from "./tracedPhones";
+import {
+  selectTracedPhone,
+  syncTracedPhoneQueue,
+  tracedBadgesForLeads,
+  tracedPhoneOptions,
+  tracerfyProvider,
+} from "./tracedPhones";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -688,9 +694,35 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
           maskedPhone: openAttempt.maskedPhone, script: { id: openAttempt.scriptId, version: openAttempt.scriptVersion,
             title: openAttempt.scriptTitle, body: openAttempt.scriptBody, disclosureSha256: openAttempt.disclosureSha256,
             sellerName: openAttempt.sellerName, companyName: openAttempt.companyName, purpose: openAttempt.purpose } } : null,
-        timeline: auditTimeline(tid, leadId), fullPhoneNumberExposed: false });
+        timeline: auditTimeline(tid, leadId), fullPhoneNumberExposed: false,
+        // Every number the trace returned for this door, not just the one the
+        // queue is carrying. Ids and masks only — the digits stay behind the
+        // authorize path.
+        tracedPhones: tracedPhoneOptions(tid, leadId, Date.now()) });
     } catch (error) { fail(res, error); }
   });
+
+  // Move the door onto a different traced number. Gated on attempt.manual
+  // because it is part of working a household, not an enrichment spend: the
+  // numbers are already stored, and nothing here calls a provider.
+  app.post("/api/v1/calling/leads/:leadId/traced-phones/:tracedPhoneId/select",
+    cap("calling.attempt.manual"), (req, res) => {
+      const tid = requireTenant(req, res); const leadId = parseLeadId(req, res); if (!tid || !leadId) return;
+      const tracedPhoneId = idSchema.safeParse(param(req, "tracedPhoneId"));
+      if (!tracedPhoneId.success) return res.status(400).json({ error: "Invalid traced number id" });
+      try {
+        if (!scopedCandidate(req, res, tid, leadId)) return;
+        const result = selectTracedPhone({ tenantId: tid, leadId,
+          tracedPhoneId: tracedPhoneId.data, actorUserId: userId(req) });
+        appendCallingAudit({ tenantId: tid, correlationId: correlationId(req),
+          eventType: "calling.traced_phone_selected", entityType: "lead", entityId: String(leadId),
+          actorUserId: userId(req), metadata: { leadId, tracedPhoneId: tracedPhoneId.data,
+            invalidatedAuthorizations: result.invalidatedAuthorizations, alreadyActive: result.alreadyActive } });
+        const candidate = getCallingCandidate(tid, leadId);
+        res.json({ ...result, lead: candidate ? publicCandidate(candidate) : null,
+          tracedPhones: tracedPhoneOptions(tid, leadId, Date.now()) });
+      } catch (error) { fail(res, error); }
+    });
 
   app.patch("/api/v1/calling/leads/:leadId/assignment", cap("calling.manage"), (req, res) => {
     const tid = requireTenant(req, res); const leadId = parseLeadId(req, res); if (!tid || !leadId) return;

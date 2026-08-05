@@ -25,7 +25,7 @@
 
 import crypto from "node:crypto";
 import { rawDb } from "../db";
-import { normalizeUsPhone } from "@shared/calling";
+import { maskPhone, normalizeUsPhone } from "@shared/calling";
 import {
   SCRUB_TTL_DAYS,
   dncExplanation,
@@ -349,6 +349,13 @@ export type TracedComplianceOverlay = {
  *
  * Returns null when the lead has no traced number, leaving the dataset-based
  * evaluation exactly as it was.
+ *
+ * The verdict must come from the number the queue is ACTUALLY CARRYING, not
+ * from the door's best one. A door commonly holds several traced numbers, and
+ * once a rep can move between them, evaluating "the best" would let a clean
+ * number vouch for a suppressed one the rep had just switched to — the exact
+ * laundering this overlay exists to prevent. Preferred-number selection is only
+ * the fallback for a door whose phone has not been imported yet.
  */
 export function tracedComplianceOverlay(
   tenantId: number,
@@ -360,7 +367,19 @@ export function tracedComplianceOverlay(
     WHERE (tenant_id IS NULL OR tenant_id=?) AND lead_id=?`).all(tenantId, leadId) as any[];
   if (rows.length === 0) return null;
 
-  const phone = preferredTracedPhone(rows.map(toTracedPhone), nowMs);
+  const activeHash = (rawDb.prepare(`SELECT p.phone_hash AS phoneHash
+    FROM calling_queue_entries q JOIN phone_numbers p ON p.id=q.phone_id AND p.tenant_id=q.tenant_id
+    WHERE q.tenant_id=? AND q.lead_id=?`).get(tenantId, leadId) as any)?.phoneHash ?? null;
+
+  const traced = rows.map(toTracedPhone);
+  const active = activeHash
+    ? traced.find(candidate => {
+        const normalized = normalizeUsPhone(candidate.number);
+        return normalized ? hashPhone(tenantId, normalized) === activeHash : false;
+      })
+    : undefined;
+
+  const phone = active ?? preferredTracedPhone(traced, nowMs);
   if (!phone) return null;
 
   const verdict = verdictForPhone(phone, nowMs);
@@ -427,4 +446,153 @@ export function tracedBadgesForLeads(
     }
   }
   return out;
+}
+
+// ── Working every number on a door ──────────────────────────────────────────
+//
+// calling_queue_entries is UNIQUE(tenant_id,lead_id) with a single phone_id:
+// the queue models a DOOR, not a phone line, and that is the right shape —
+// a rep works a household, and the frequency, disposition and callback rules
+// are all per-household. But a trace routinely returns three or four numbers
+// for one address, and the queue can only carry one. Before this, the other
+// numbers existed in lead_traced_phones and were simply unreachable from the
+// calling workspace: a wrong-party answer on the imported number ended the
+// door, even with two untried numbers sitting in the database.
+//
+// So the door stays one row and the rep gets to move it. Every traced number
+// is listed on the lead, and selecting one repoints the queue entry through
+// the same import path — which means the new number gets its own association,
+// its own validation record, and its own compliance evaluation. Switching is
+// not a shortcut around the gate; it re-enters it.
+
+export type TracedPhoneOption = {
+  /** lead_traced_phones.id — the handle the client sends back to select it.
+   *  Never the digits: the raw number stays behind the authorize path. */
+  id: number;
+  masked: string;
+  lineType: string;
+  confidence: number;
+  /** The scrub verdict. Advisory, exactly as on the queue badge. */
+  ready: boolean;
+  label: string;
+  reasons: string[];
+  /** True for the number the queue entry currently carries. */
+  active: boolean;
+  /** False when the number cannot be normalized to US E.164, so it can be
+   *  shown but never selected — the import would reject it anyway. */
+  selectable: boolean;
+};
+
+/** Every traced number for one door, ranked, with the scrub verdict on each. */
+export function tracedPhoneOptions(
+  tenantId: number,
+  leadId: number,
+  nowMs: number,
+): TracedPhoneOption[] {
+  const rows = rawDb.prepare(`SELECT id,number,line_type AS lineType,confidence,
+    dnc_flags AS dncFlags,scrubbed_at_ms AS scrubbedAtMs FROM lead_traced_phones
+    WHERE (tenant_id IS NULL OR tenant_id=?) AND lead_id=?`).all(tenantId, leadId) as any[];
+  if (rows.length === 0) return [];
+
+  const activeHash = (rawDb.prepare(`SELECT p.phone_hash AS phoneHash
+    FROM calling_queue_entries q JOIN phone_numbers p ON p.id=q.phone_id AND p.tenant_id=q.tenant_id
+    WHERE q.tenant_id=? AND q.lead_id=?`).get(tenantId, leadId) as any)?.phoneHash ?? null;
+
+  const byNumber = new Map<string, any>();
+  for (const row of rows) byNumber.set(String(row.number), row);
+
+  // Rank on the shared helper so this list and the queue's chosen number can
+  // never disagree about which phone is "best".
+  return rankPhones(rows.map(toTracedPhone)).map(phone => {
+    const row = byNumber.get(phone.number);
+    const verdict = verdictForPhone(phone, nowMs);
+    const normalized = normalizeUsPhone(phone.number);
+    return {
+      id: Number(row.id),
+      masked: normalized ? maskPhone(normalized) : "unusable number",
+      lineType: phone.lineType,
+      confidence: phone.confidence,
+      ready: !verdict.dnc,
+      label: dncExplanation(verdict.reasons),
+      reasons: verdict.reasons,
+      active: Boolean(normalized && activeHash && hashPhone(tenantId, normalized) === activeHash),
+      selectable: Boolean(normalized),
+    };
+  });
+}
+
+/**
+ * Point a door's queue entry at a different traced number.
+ *
+ * Takes the stored row id, never digits from the client — a caller cannot use
+ * this to inject a number that was never traced for this address, which is the
+ * whole reason the association and permitted-use records mean anything.
+ *
+ * Any unused authorization for this lead is invalidated. An authorization is
+ * issued against a specific phone; letting one survive a number change would
+ * let a rep authorize a clean line and then dial a suppressed one under it.
+ */
+export function selectTracedPhone(input: {
+  tenantId: number;
+  leadId: number;
+  tracedPhoneId: number;
+  actorUserId: number;
+}): { invalidatedAuthorizations: number; alreadyActive: boolean } {
+  const provider = tracerfyProvider(input.tenantId);
+  if (!provider.usable) throw Object.assign(new Error("Trace provider is not approved"), { status: 409 });
+
+  const row = rawDb.prepare(`SELECT p.id,p.number,p.line_type AS lineType,p.confidence,
+      p.dnc_flags AS dncFlags,p.scrubbed_at_ms AS scrubbedAtMs,
+      coalesce(nullif(trim(l.traced_owner_name),''),nullif(trim(l.owner_name),'')) AS ownerName
+    FROM lead_traced_phones p JOIN leads l ON l.id=p.lead_id
+    WHERE p.id=? AND p.lead_id=? AND (p.tenant_id IS NULL OR p.tenant_id=?) AND l.tenant_id=?`)
+    .get(input.tracedPhoneId, input.leadId, input.tenantId, input.tenantId) as any;
+  if (!row) throw Object.assign(new Error("Traced number not found for this lead"), { status: 404 });
+
+  const normalized = normalizeUsPhone(String(row.number));
+  if (!normalized) throw Object.assign(new Error("That traced number is not a usable US number"), { status: 400 });
+
+  const current = rawDb.prepare(`SELECT p.phone_hash AS phoneHash
+    FROM calling_queue_entries q JOIN phone_numbers p ON p.id=q.phone_id AND p.tenant_id=q.tenant_id
+    WHERE q.tenant_id=? AND q.lead_id=?`).get(input.tenantId, input.leadId) as any;
+  if (current?.phoneHash === hashPhone(input.tenantId, normalized)) {
+    return { invalidatedAuthorizations: 0, alreadyActive: true };
+  }
+
+  const phone = toTracedPhone(row);
+  storeManualContact({
+    tenantId: input.tenantId,
+    leadId: input.leadId,
+    phone: normalized,
+    name: row.ownerName ?? null,
+    relationship: row.ownerName ? "owner" : "unknown",
+    identityConfidence: Math.max(0, Math.min(1, phone.confidence)),
+    providerConfigId: provider.id,
+    providerRecordId: `tracerfy:${input.leadId}:${normalized}`,
+    humanVerified: false,
+    sourceMode: "provider_api",
+    associationValidDays: SCRUB_TTL_DAYS,
+  });
+
+  if (phone.lineType !== "unknown" && provider.usableForValidation) {
+    const phoneId = phoneIdFor(input.tenantId, normalized);
+    if (phoneId) {
+      validatePhoneManually({
+        tenantId: input.tenantId, leadId: input.leadId, phoneId,
+        providerConfigId: provider.id,
+        lineType: phone.lineType,
+        reachable: true,
+        reassignedRisk: false,
+        evidenceRef: `tracerfy:trace:${input.leadId}`,
+        validDays: SCRUB_TTL_DAYS,
+      });
+    }
+  }
+
+  const invalidatedAuthorizations = rawDb.prepare(`UPDATE call_authorizations
+    SET invalidated_at=datetime('now'),invalidation_reason='PHONE_CHANGED'
+    WHERE tenant_id=? AND lead_id=? AND used_at IS NULL AND invalidated_at IS NULL`)
+    .run(input.tenantId, input.leadId).changes;
+
+  return { invalidatedAuthorizations, alreadyActive: false };
 }
