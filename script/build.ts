@@ -39,6 +39,7 @@ async function buildAll() {
   await viteBuild();
 
   await stampServiceWorker();
+  await precompressStatics();
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
@@ -166,6 +167,59 @@ async function stampServiceWorker() {
   const digest = createHash("sha256").update(assets.join("\n")).digest("hex").slice(0, 12);
   await writeFile(swPath, source.replaceAll("__SW_BUILD__", digest), "utf-8");
   console.log(`stamped service worker version: ${digest}`);
+}
+
+// ── Precompressed static assets ──────────────────────────────────────────────
+// The app gzipped every response on the fly (server/index.ts compression
+// middleware), which cost CPU per request AND capped quality at gzip level 6.
+// It also made Caddy's `encode zstd gzip` a no-op, because a proxy will not
+// re-encode a response that already carries Content-Encoding.
+//
+// Compressing once here, at brotli quality 11, is strictly better: the bytes
+// are smaller than anything an online compressor can afford (measured on this
+// build: entry JS 108.5 KB gzip -> 93.8 KB brotli, CSS 26.5 -> 21.0), the
+// server just streams a file, and nothing burns CPU per request. A .gz sibling
+// is written for the rare client that does not advertise br.
+async function precompressStatics() {
+  const zlib = await import("node:zlib");
+  const { promisify } = await import("node:util");
+  const brotli = promisify(zlib.brotliCompress);
+  const gzip = promisify(zlib.gzip);
+
+  // index.html is deliberately absent: it is small, it is served by the SPA
+  // fallback as well as by express.static, and letting the compression
+  // middleware handle it keeps both paths on one code path.
+  const COMPRESSIBLE = /\.(js|css|svg|json|webmanifest|txt)$/;
+  const MIN_BYTES = 1024; // below this, the header overhead is most of the file
+
+  const files: string[] = [];
+  const walk = async (dir: string) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (COMPRESSIBLE.test(entry.name)) files.push(full);
+    }
+  };
+  await walk(path.resolve("dist/public"));
+
+  let saved = 0;
+  let count = 0;
+  for (const file of files) {
+    const raw = await readFile(file);
+    if (raw.byteLength < MIN_BYTES) continue;
+    const br = await brotli(raw, {
+      params: {
+        [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.byteLength,
+      },
+    });
+    const gz = await gzip(raw, { level: 9 });
+    await writeFile(`${file}.br`, br);
+    await writeFile(`${file}.gz`, gz);
+    saved += raw.byteLength - br.byteLength;
+    count += 1;
+  }
+  console.log(`precompressed ${count} assets (br+gz), ${(saved / 1024).toFixed(0)} KB saved on the wire`);
 }
 
 async function findMapFiles(dir: string): Promise<string[]> {

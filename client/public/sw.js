@@ -32,7 +32,14 @@ const RUNTIME_MAX_ENTRIES = 250;
 
 // The minimum needed to boot the app offline. Hashed JS/CSS are picked up at
 // runtime since their names change per build.
-const SHELL_ASSETS = ["/", "/index.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
+//
+// Deliberately NOT precached: "/" (the navigate handler below already stores
+// and serves the same document under /index.html) and icon-512.png, which is
+// 162 KB the OS only needs at Add-to-Home-Screen time. Install fires on
+// window.load — exactly when the app's own route chunks are downloading — so
+// precaching those two was ~200 KB competing with the screen the rep is
+// waiting for, on their very first visit.
+const SHELL_ASSETS = ["/index.html", "/manifest.webmanifest", "/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -164,12 +171,21 @@ self.addEventListener("push", (event) => {
 // map state intact, not in a fresh window that reloads everything.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = (event.notification.data && event.notification.data.url) || "/";
+  // The app is HASH-routed (client/src/main.tsx forces "#/" when the hash is
+  // empty), but push payloads carry plain route paths like "/spiffs". Opening
+  // "/spiffs" hits the SPA fallback, boots with no hash, and lands the rep on
+  // the dashboard instead of the screen the notification was about. Normalise
+  // here so every payload — including ones added later — routes correctly.
+  const raw = (event.notification.data && event.notification.data.url) || "/";
+  // "/" means "no particular destination" — focus the rep's existing tab and
+  // leave whatever they were doing alone, exactly as before.
+  const hasDestination = raw !== "/" && raw !== "/#/" && raw !== "#/";
+  const target = raw.startsWith("/#") || raw.startsWith("#") ? raw : `/#${raw}`;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       for (const client of list) {
         if ("focus" in client) {
-          if ("navigate" in client && target !== "/") client.navigate(target).catch(() => {});
+          if ("navigate" in client && hasDestination) client.navigate(target).catch(() => {});
           return client.focus();
         }
       }

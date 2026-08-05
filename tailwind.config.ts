@@ -112,7 +112,7 @@ export default {
       },
       fontFamily: {
         /* Real stacks — the old var(--font-*) custom properties were never defined */
-        sans: ["Geist Variable", "Inter Variable", "system-ui", "-apple-system", "sans-serif"],
+        sans: ["Geist Variable", "system-ui", "-apple-system", "sans-serif"],
         serif: ["Georgia", "serif"],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },

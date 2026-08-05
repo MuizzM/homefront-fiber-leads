@@ -4,7 +4,7 @@
  * or expanding. Address-level checks remain the only availability truth.
  * Click any market to scan it immediately. Leads auto-saved to map.
  */
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -87,6 +87,7 @@ export default function USAScanner() {
   const [activeScan, setActiveScan] = useState<ActiveScan | null>(null);
   const [completedScans, setCompletedScans] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -108,7 +109,14 @@ export default function USAScanner() {
   const stopAll = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
+
+  // Leaving this tab (or the /scanner-tools route) must stop the scan plumbing.
+  // Without this the fallback poll below kept hitting /api/scan/:id every 2s and
+  // the SSE reader loop kept calling setState on an unmounted tree — for the
+  // rest of the session, since Scanners.tsx swaps these panels conditionally.
+  useEffect(() => stopAll, [stopAll]);
 
   const connectSse = useCallback((jobId: string, city: string, state: string) => {
     const ctrl = new AbortController();
@@ -124,7 +132,7 @@ export default function USAScanner() {
 
         if (!resp.ok || !resp.body) {
           // Polling fallback
-          const pollId = setInterval(async () => {
+          pollRef.current = setInterval(async () => {
             try {
               const s = await (await apiRequest("GET", `/api/scan/${jobId}`)).json();
               setActiveScan(prev => prev ? {
@@ -134,7 +142,7 @@ export default function USAScanner() {
                 newFiber: s.summary?.fresh ?? s.summary?.new_fiber ?? 0,
               } : null);
               if (s.status === "done" || s.status === "error") {
-                clearInterval(pollId);
+                if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
                 qc.invalidateQueries({ queryKey: ["/api/leads"] });
                 qc.invalidateQueries({ queryKey: ["/api/stats"] });
                 setCompletedScans(prev => new Set([...prev, `${city},${state}`]));
@@ -149,7 +157,8 @@ export default function USAScanner() {
         const dec = new TextDecoder();
         let buf = "", evType = "";
 
-        while (true) {
+        // Exit when stopAll() aborts, not only when the server ends the stream.
+        while (!ctrl.signal.aborted) {
           const { done: d, value } = await reader.read();
           if (d) break;
           buf += dec.decode(value, { stream: true });

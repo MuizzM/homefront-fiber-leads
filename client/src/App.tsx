@@ -2,7 +2,6 @@ import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { queryClient, persistOptions } from "@/lib/queryClient";
-import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { useSuperAdminEmails, isSuperAdmin } from "@/lib/appConfig";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -59,6 +58,13 @@ const Training = lazy(() => import("@/pages/Training"));
 const Coach = lazy(() => import("@/pages/Coach"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
 const CallingLead = lazy(() => import("@/pages/CallingLead"));
+
+// Radix Toast and the dismissable-layer/presence machinery behind it are ~9 KB
+// gzipped, and nothing renders a toast at first paint. The toast STORE lives in
+// hooks/use-toast.ts (types-only import of the primitive, so it stays cheap and
+// stays in the entry), which means a toast() fired before this chunk lands is
+// queued and rendered the moment it arrives — nothing is dropped.
+const Toaster = lazy(() => import("@/components/ui/toaster").then(m => ({ default: m.Toaster })));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
 // while a page chunk loads — never a blank screen.
@@ -378,7 +384,7 @@ function App() {
     <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
       <AuthProvider>
         <AppRoutes />
-        <Toaster />
+        <Suspense fallback={null}><Toaster /></Suspense>
         <UpdatePrompt />
       </AuthProvider>
     </PersistQueryClientProvider>

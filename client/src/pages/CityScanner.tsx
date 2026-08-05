@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 
@@ -142,6 +142,11 @@ export default function CityScanner() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
+  // Same as USAScanner: Scanners.tsx swaps these panels conditionally, so a tab
+  // change unmounts this without any user-initiated stop. Tear the scan
+  // plumbing down here or the poll and the SSE reader outlive the component.
+  useEffect(() => stopAll, [stopAll]);
+
   // SSE stream connection — streams results in real time
   const connectSseStream = useCallback(async (id: string) => {
     const ctrl = new AbortController();
@@ -190,7 +195,8 @@ export default function CityScanner() {
         setJobStatus(prev => prev ? { ...prev, results: prev.results.concat(rows) } : null);
       };
 
-      while (true) {
+      // Exit when stopAll() aborts, not only when the server ends the stream.
+      while (!ctrl.signal.aborted) {
         const { done: streamDone, value } = await reader.read();
         if (streamDone) break;
         buf += decoder.decode(value, { stream: true });

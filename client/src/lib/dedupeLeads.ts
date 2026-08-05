@@ -38,7 +38,29 @@ import { canonicalAddressPart } from "@shared/addressKey";
 // arrows. Address-first fixes both directions: neighbours differ in house
 // number (never merge), spelling variants fold to one canonical key (always
 // merge). Coordinates only identify records with NO usable street address.
+// ── Key memoisation ──────────────────────────────────────────────────────────
+// canonicalAddressPart runs a Unicode NFKD normalisation plus three regex
+// passes per field, and houseKey calls it three times. dedupeLeads re-runs over
+// the WHOLE pin set every time the map's pin array gets a new identity — which
+// is every knock, every optimistic recolor, every live push. React Query's
+// structural sharing keeps the object identity of every pin that did NOT
+// change, so keying the cache on the pin object itself means a one-door knock
+// recomputes exactly one key instead of all of them. A genuinely new array from
+// a cold fetch still pays the full cost once, exactly as before.
+//
+// WeakMap: entries disappear with the pins, so nothing is pinned in memory.
+const HOUSE_KEYS = new WeakMap<object, string | null>();
+const ROOFTOP_KEYS = new WeakMap<object, string | null>();
+
 export function houseKey(lead: DedupableLead): string | null {
+  const cached = HOUSE_KEYS.get(lead as object);
+  if (cached !== undefined) return cached;
+  const computed = computeHouseKey(lead);
+  HOUSE_KEYS.set(lead as object, computed);
+  return computed;
+}
+
+function computeHouseKey(lead: DedupableLead): string | null {
   const addr = canonicalAddressPart(String(lead.address ?? ""));
   if (addr) {
     return `addr:${addr}|${canonicalAddressPart(String(lead.city ?? ""))}|${canonicalAddressPart(String(lead.state ?? ""))}`;
@@ -55,6 +77,14 @@ export function houseKey(lead: DedupableLead): string | null {
 // address keys) WITHOUT hiding real neighbours (a neighbour differs in house
 // number). Null when either part is missing.
 function rooftopKey(lead: DedupableLead): string | null {
+  const cached = ROOFTOP_KEYS.get(lead as object);
+  if (cached !== undefined) return cached;
+  const computed = computeRooftopKey(lead);
+  ROOFTOP_KEYS.set(lead as object, computed);
+  return computed;
+}
+
+function computeRooftopKey(lead: DedupableLead): string | null {
   const { lat, lng } = lead;
   if (typeof lat !== "number" || typeof lng !== "number" || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   const houseNum = String(lead.address ?? "").trim().split(/\s+/)[0] ?? "";

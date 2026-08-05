@@ -563,6 +563,9 @@ function inBBox(lat: number, lng: number, b: BBox) {
 // Stable empty pin array — `mapPinData?.pins ?? EMPTY_PINS` must not allocate a
 // fresh [] per render, or every downstream useMemo re-runs until data lands.
 const EMPTY_PINS: MapPin[] = [];
+/** Stable empty index for the closed-search case — a fresh [] each render would
+ *  defeat the memo it feeds. */
+const EMPTY_SEARCH_INDEX: { l: MapPin; hay: string }[] = [];
 
 // ── Merging a pushed lead into a map pin ─────────────────────────────────────
 // The merge itself lives in @/lib/leadStreamMerge (pure, unit-tested): it
@@ -5519,13 +5522,20 @@ export default function MapView() {
   // On-map search — lowercase haystack built ONCE per data load (O(n)), so a
   // keystroke never re-lowercases 50k addresses. A NUL separates the two
   // fields so a query can't falsely match across the address/city boundary.
+  // Gated on searchOpen: "once per data load" is far more often than it sounds
+  // — `leads` gets a new identity on every knock, every live push and every
+  // viewport merge (i.e. every pan). Reps who never open search were paying an
+  // object allocation and a toLowerCase per pin on every one of those, for an
+  // index nothing was going to read. Opening the panel builds it once.
   const searchIndex = useMemo(
     () =>
-      leads.map((l) => ({
-        l,
-        hay: (l.address + "\u0000" + (l.city ?? "")).toLowerCase(),
-      })),
-    [leads],
+      searchOpen
+        ? leads.map((l) => ({
+            l,
+            hay: (l.address + "\u0000" + (l.city ?? "")).toLowerCase(),
+          }))
+        : EMPTY_SEARCH_INDEX,
+    [leads, searchOpen],
   );
   // Deferred query: typing stays responsive; the scan lags a frame at worst.
   const deferredSearch = useDeferredValue(sidebarSearch);
@@ -6108,6 +6118,13 @@ export default function MapView() {
     const tick = (now: number) => {
       const flash = ringFlashRef.current;
       const fe = flash ? (now - flash.at) / FLASH_MS : 1; // 0..1 through the pop
+      // Nobody is looking: skip the paint writes entirely. Browsers usually
+      // pause rAF for a hidden tab, but Android WebViews and installed PWAs do
+      // not always, and each accepted frame forces a full GL repaint of the map.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
       // The rep dragging the knock sheet owns the frame budget — pause every
       // pulse paint-write for the whole drag (the ring simply freezes).
       if (isSheetDragActive()) {

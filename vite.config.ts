@@ -30,10 +30,34 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
-  base: "./",
+  // ABSOLUTE, not "./". The server serves index.html for every unmatched path
+  // (server/static.ts), so with a relative base a URL like /a/b resolves its
+  // script to /a/assets/index-<hash>.js — which the SPA fallback answers with
+  // index.html. The browser then fails to parse HTML as a module and the rep
+  // gets a blank screen with no way out. Nothing here is served from a subpath,
+  // so absolute URLs boot correctly at any depth.
+  base: "/",
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // ONE split, and only because it pays for itself across deploys: the
+        // React runtime is ~47 KB of the entry's ~108 KB gzip and changes only
+        // on a React upgrade, so parking it in its own chunk means a returning
+        // rep re-downloads 47 KB less after each release. Vite emits a
+        // modulepreload for it, so there is no waterfall.
+        //
+        // Deliberately NOT split: lucide-react (rollup already isolates the
+        // shared icons into ~59 sub-2KB chunks; forcing one chunk would pull
+        // all 82 KB into first paint) and @radix-ui (already correctly shared
+        // between the pages that use it, and absent from the entry).
+        manualChunks: (id: string) =>
+          /node_modules\/(react|react-dom|scheduler|use-sync-external-store)\//.test(id)
+            ? "vendor-react"
+            : undefined,
+      },
+    },
     // Hardening: never ship source maps to production — they reverse the
     // minification/mangling and expose original source. Vite defaults to
     // false, but pin it explicitly so a future config tweak can't
