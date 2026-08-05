@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowRight, Building2, Camera, Check, CheckCircle2, ClipboardCheck, Clock3, Copy,
-  DollarSign, Download, FileCheck2, FileText, Filter, Fingerprint, FlaskConical, KeyRound, Layers, Link2,
+  DollarSign, Download, FileCheck2, FileText, Filter, Fingerprint, FlaskConical, KeyRound, Link2,
   Loader2, Mail, MapPin, PlugZap, RefreshCw, RotateCw, Search, Send, ShieldAlert, ShieldCheck,
   TrendingUp, Upload, UserCheck, UserPlus, Users, Wallet, XCircle,
 } from "lucide-react";
@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { CompTermsEditor } from "@/components/onboarding/CompTermsEditor";
 import { DEFAULT_COMMISSION_TERMS, normalizeCommissionTerms, type CommissionTerms } from "@shared/commissionTerms";
+import type { CommissionTier } from "@shared/commissionTiers";
 import type { OnboardingDocumentType } from "@shared/onboardingDocuments";
 import { hrStatusLabel, type HrCheckpointKind, type HrCheckpointStatus } from "@shared/onboardingHr";
 
@@ -72,6 +73,14 @@ interface PipelineRecord {
   invite: null | {
     status: string; sentAt: string | null; expiresAt: string | null; deliveryAttempts: number;
     failureReason: string | null; secureUrl: string;
+    // What was OFFERED. The approval panel opens on these, so the terms that
+    // become pay are the terms the candidate was invited on unless a reviewer
+    // deliberately changes them.
+    commissionStructure: "FLAT" | "TIERED" | null;
+    flatRateCents: number | null;
+    reservePercent: number | null;
+    reserveCapCents: number | null;
+    commissionTiers: CommissionTier[] | null;
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -107,7 +116,6 @@ const STAGES: Record<PipelineStage, { label: string; tone: string; dot: string; 
 
 const FILTERS = ["all", "needs_action", "in_progress", "active", "closed"] as const;
 type FilterKey = typeof FILTERS[number];
-type Structure = "TIERED" | "FLAT";
 
 function StagePill({ stage }: { stage: PipelineStage }) {
   const meta = STAGES[stage];
@@ -182,8 +190,20 @@ export default function Applications() {
   const [inviteTerms, setInviteTerms] = useState<CommissionTerms>(DEFAULT_COMMISSION_TERMS);
   const inviteTermsCheck = normalizeCommissionTerms(inviteTerms);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [structure, setStructure] = useState<Structure>("TIERED");
-  const [flatRate, setFlatRate] = useState("150");
+  // Terms the approval commits the rep to. NOT a fresh house default: approval
+  // is where the offer becomes pay, so it opens on what the candidate was
+  // INVITED on (seeded below) and the reviewer edits from there.
+  //
+  // This used to be a TIERED/FLAT toggle and a flat-rate dollar string, with no
+  // ladder anywhere on it — the same hole the invite form had. It was worse
+  // here, because the console always sends a `commission` object on approve,
+  // and the server only falls back to the invite's stored ladder when that
+  // object is ABSENT. So `{ structure: "TIERED" }` from this panel out-ranked
+  // the invited bands and assignStructureToRep landed on the house ones: the
+  // rep signed 1-6 at $175 and was paid $150, which is precisely the divergence
+  // the invite ladder was built to end.
+  const [reviewTerms, setReviewTerms] = useState<CommissionTerms>(DEFAULT_COMMISSION_TERMS);
+  const reviewTermsCheck = normalizeCommissionTerms(reviewTerms);
   const [reviewNotes, setReviewNotes] = useState("");
   // Two-step reject (audit finding: reject mutated instantly and is
   // irreversible). First tap arms the button, which auto-disarms after 3s;
@@ -226,6 +246,34 @@ export default function Applications() {
 
   const selected = records.find(record => record.key === selectedKey) ?? null;
 
+  // ── The approval opens on the OFFER ───────────────────────────────────────
+  // Keyed on the invite's terms rather than on selectedKey alone, so a record
+  // selected before the pipeline query resolves still gets seeded when it does
+  // — otherwise the panel would sit on the house default and a reviewer who
+  // approved without touching it would quietly re-price the candidate.
+  //
+  // No stored terms (a careers/public applicant, or a pre-ladder invite) means
+  // the house default, which is what those candidates have always been given.
+  const invitedTermsKey = selected?.invite?.commissionStructure
+    ? JSON.stringify([
+        selected.invite.commissionStructure, selected.invite.flatRateCents,
+        selected.invite.reservePercent, selected.invite.reserveCapCents,
+        selected.invite.commissionTiers,
+      ])
+    : null;
+  useEffect(() => {
+    const invite = selected?.invite;
+    if (!invite?.commissionStructure) { setReviewTerms(DEFAULT_COMMISSION_TERMS); return; }
+    setReviewTerms(normalizeCommissionTerms({
+      structure: invite.commissionStructure,
+      flatRateCents: invite.flatRateCents,
+      tiers: invite.commissionTiers ?? [],
+      reservePercent: invite.reservePercent ?? DEFAULT_COMMISSION_TERMS.reservePercent,
+      reserveCapCents: invite.reserveCapCents ?? DEFAULT_COMMISSION_TERMS.reserveCapCents,
+    }).normalized);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, invitedTermsKey]);
+
   function refresh() {
     queryClient.invalidateQueries({ queryKey: ["/api/onboarding/pipeline"] });
     queryClient.invalidateQueries({ queryKey: ["/api/onboarding/applications"] });
@@ -262,8 +310,23 @@ export default function Applications() {
   const reviewMutation = useMutation({
     mutationFn: ({ status }: { status: "approved" | "rejected" }) => {
       if (!selected?.applicationId) throw new Error("Application not found");
+      // The whole instrument, not the word for it: structure, the LADDER, and
+      // the chargeback reserve. Sending `{ structure: "TIERED" }` alone is not
+      // "no opinion" to the server — it is an override that suppresses the
+      // invite fallback, so an incomplete object here silently becomes the
+      // house plan. Normalized first, for the same reason the invite is: what
+      // leaves must be a ladder the commission engine would pay against.
+      const terms = normalizeCommissionTerms(reviewTerms).normalized;
       const commission = status === "approved"
-        ? structure === "FLAT" ? { structure, flatRateCents: Math.round(Number(flatRate || 0) * 100) } : { structure }
+        ? {
+            structure: terms.structure,
+            ...(terms.structure === "FLAT"
+              ? { flatRateCents: terms.flatRateCents ?? 0 }
+              : { tiers: terms.tiers.map(({ position, minimumSales, maximumSales, rateCents, label }) =>
+                    ({ position, minimumSales, maximumSales, rateCents, label })) }),
+            reservePercent: terms.reservePercent,
+            reserveCapCents: terms.reserveCapCents,
+          }
         : undefined;
       return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}`, { status, reviewNotes: reviewNotes || null, commission }).then(response => response.json());
     },
@@ -473,7 +536,7 @@ export default function Applications() {
               {selected.invite && <div className="rounded-xl border border-border p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><Link2 className="h-4 w-4 text-sky-400" />{selected.milestones.applied ? "Invitation delivery" : "Private application link"}</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.applied ? `Application received ${formatDate(selected.timeline[1]?.at)}` : `Expires ${formatDate(selected.invite.expiresAt)}`} · {selected.invite.deliveryAttempts} delivery attempt{selected.invite.deliveryAttempts === 1 ? "" : "s"}</p></div>{!selected.milestones.applied && <div className="flex gap-2"><button onClick={() => copySecureLink(selected)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary" data-testid="copy-secure-invite">{copiedKey === selected.key ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}Copy</button>{["invited", "failed"].includes(selected.stage) && selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "invite", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground"><RotateCw className="h-3.5 w-3.5" />Resend</button>}</div>}</div>{selected.invite.failureReason && <p className="mt-2 rounded-lg bg-rose-500/8 px-3 py-2 text-xs text-rose-400">{selected.invite.failureReason}</p>}</div>}
 
               {selected.application && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><ClipboardCheck className="h-4 w-4 text-amber-400" />Application review</h3><span className="text-[11px] text-muted-foreground">Applied {formatDate(selected.application.createdAt)}</span></div><div className="mb-2 flex flex-wrap gap-2 text-2xs font-semibold uppercase tracking-wide"><span className="rounded-full bg-primary/10 px-2 py-1 text-primary">{selected.source === "careers" ? "Website careers" : selected.source === "invited" ? "Private invite" : "Public join link"}</span>{selected.desiredRole && <span className="rounded-full bg-secondary px-2 py-1 text-muted-foreground">{selected.desiredRole}</span>}</div><div className="grid gap-2 text-xs sm:grid-cols-2"><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Phone</span><div className="mt-0.5 font-medium text-foreground">{selected.application.phone}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Territory</span><div className="mt-0.5 font-medium text-foreground">{selected.application.city}, {selected.application.state} {selected.application.zip}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Carriers</span><div className="mt-0.5 font-medium text-foreground">{selected.application.preferredCarriers}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Sales experience</span><div className="mt-0.5 font-medium text-foreground">{selected.application.hasSalesExperience ? "Yes" : "No"}</div></div></div>{selected.application.salesExperienceDetails && <p className="mt-2 rounded-lg bg-secondary/50 p-3 text-xs text-muted-foreground">{selected.application.salesExperienceDetails}</p>}
-                {selected.stage === "under_review" && canReview && <div className="mt-4 border-t border-border pt-4"><h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commission structure</h4><div className="grid grid-cols-2 gap-2"><button onClick={() => setStructure("TIERED")} className={`rounded-xl border p-3 text-left ${structure === "TIERED" ? "border-primary bg-primary/5" : "border-border"}`}><div className="flex items-center gap-2 text-xs font-semibold"><Layers className="h-4 w-4 text-primary" />Tiered</div><p className="mt-1 text-[11px] text-muted-foreground">Weekly retroactive ladder</p></button><button onClick={() => setStructure("FLAT")} className={`rounded-xl border p-3 text-left ${structure === "FLAT" ? "border-primary bg-primary/5" : "border-border"}`}><div className="flex items-center gap-2 text-xs font-semibold"><DollarSign className="h-4 w-4 text-primary" />Flat</div><p className="mt-1 text-[11px] text-muted-foreground">One rate per sale</p></button></div>{structure === "FLAT" && <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">Rate per sale $<input type="number" min="1" value={flatRate} onChange={event => setFlatRate(event.target.value)} className="h-9 w-24 rounded-lg border border-border bg-background px-2 text-foreground" /></label>}<textarea value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} placeholder="Decision reason / internal review notes" maxLength={1000} className="mt-3 min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none focus:border-primary" /><div className="mt-3 flex gap-2"><button onClick={() => reviewMutation.mutate({ status: "approved" })} disabled={reviewMutation.isPending} className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground" data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}Approve & start onboarding</button><button onClick={() => {
+                {selected.stage === "under_review" && canReview && <div className="mt-4 border-t border-border pt-4" data-testid="review-comp-terms"><h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commission &amp; reserve (what this approval pays)</h4><p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.commissionStructure ? "Opened on the terms this candidate was invited on. Approving assigns exactly what is shown." : "No terms travelled with this application, so the house plan is shown. Approving assigns exactly what is shown."}</p><CompTermsEditor value={reviewTerms} onChange={setReviewTerms} disabled={reviewMutation.isPending} /><textarea value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} placeholder="Decision reason / internal review notes" maxLength={1000} className="mt-3 min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none focus:border-primary" /><div className="mt-3 flex gap-2"><button onClick={() => reviewMutation.mutate({ status: "approved" })} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}Approve &amp; start onboarding</button><button onClick={() => {
                   if (!rejectArmed) {
                     setRejectArmed(true);
                     if (rejectTimer.current) window.clearTimeout(rejectTimer.current);

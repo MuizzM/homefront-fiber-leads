@@ -340,4 +340,48 @@ describe("the invited ladder reaches the contract and the pay engine", () => {
     // The house ladder — correct here, because nobody chose anything else.
     expect(terms.tiers.map(t => t.rateCents)).toEqual([15_000, 20_000, 25_000, 30_000]);
   });
+
+  // ── The path the CONSOLE actually takes ────────────────────────────────────
+  // Every test above approves with `{ status: "approved" }` and no commission,
+  // which is the API path, not the UI one: the console has always sent a
+  // `commission` object, and the invite fallback is gated on that object being
+  // ABSENT. So the fallback proved nothing about the screen a manager clicks.
+  // These two pin the contract the approval panel now relies on.
+  async function approveWith(applicationId: number, commission: unknown) {
+    const response = await realFetch(`${baseUrl}/api/onboarding/applications/${applicationId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "x-session-id": adminSession },
+      body: JSON.stringify({ status: "approved", commission }),
+    });
+    return { status: response.status, body: await response.json() as any };
+  }
+
+  function paidTiers(email: string) {
+    const rep = rawDb.prepare("SELECT * FROM team_members WHERE email = ?").get(email) as any;
+    const assignments = commissionSvc.listRepAssignments(1, Number(rep.id));
+    return commissionSvc.getPlanVersionTiers(1, Number(assignments[0].commission_plan_version_id));
+  }
+
+  it("an explicit commission carrying the ladder is PAID that ladder", async () => {
+    const email = "explicit@ladder.example.com";
+    const { application } = invitedApplication(email, INVITED_LADDER);
+    const { status } = await approveWith(application.id, {
+      structure: "TIERED", tiers: INVITED_LADDER, reservePercent: 15, reserveCapCents: 300_000,
+    });
+    expect(status).toBe(200);
+    expect(paidTiers(email).map((t: any) => Number(t.rate_cents))).toEqual([17_500, 26_000]);
+  });
+
+  it("THE TRAP: a commission object with no ladder does NOT inherit — it becomes the house bands", async () => {
+    // Documented, not endorsed. `{ structure: "TIERED" }` outranks the invite's
+    // stored ladder because the fallback only fires when `commission` is
+    // absent, and assignStructureToRep then falls through to the standard
+    // version. This is exactly what the console used to send, and why the
+    // approval panel now states the whole instrument instead of the word.
+    const email = "bare@ladder.example.com";
+    const { application } = invitedApplication(email, INVITED_LADDER);
+    const { status } = await approveWith(application.id, { structure: "TIERED" });
+    expect(status).toBe(200);
+    expect(paidTiers(email).map((t: any) => Number(t.rate_cents))).toEqual([15_000, 20_000, 25_000, 30_000]);
+  });
 });

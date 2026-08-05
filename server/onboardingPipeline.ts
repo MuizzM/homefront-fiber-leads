@@ -1,3 +1,4 @@
+import type { CommissionTier } from "../shared/commissionTiers";
 import { ONBOARDING_DOCUMENT_META, ONBOARDING_DOCUMENT_TYPES, type OnboardingDocumentType } from "../shared/onboardingDocuments";
 import { HR_CHECKPOINT_META, type HrCheckpointKind, type HrCheckpointStatus } from "../shared/onboardingHr";
 import { rawDb } from "./db";
@@ -37,6 +38,11 @@ export interface OnboardingPipelineRecord {
     failureReason: string | null; secureUrl: string;
     commissionStructure: "FLAT" | "TIERED" | null;
     flatRateCents: number | null; reservePercent: number | null; reserveCapCents: number | null;
+    // The invited LADDER. The console's approval panel re-states the offer
+    // before it becomes pay, and it cannot re-state bands it was never sent —
+    // without this the reviewer sees "TIERED" and has to guess which tiers,
+    // which is how the invite carried a ladder nobody could confirm.
+    commissionTiers: CommissionTier[] | null;
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -174,6 +180,7 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
       flatRateCents: invite.flatRateCents ?? null,
       reservePercent: invite.reservePercent ?? null,
       reserveCapCents: invite.reserveCapCents ?? null,
+      commissionTiers: invite.commissionTiers ?? null,
     } : null,
     application: application ? {
       status: application.status, phone: application.phone, city: application.city, state: application.state, zip: application.zip,
