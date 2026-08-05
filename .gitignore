@@ -1,3 +1,6 @@
+# No trailing slash: with one, these match only directories, so a SYMLINK named
+# node_modules is not ignored. That is how a self-referential node_modules link
+# got committed once already — it resolves to itself on a checkout 
 node_modules
 node_modules/
 dist/

@@ -107,6 +107,7 @@ import {
   upsertTenantPayPolicy,
 } from "./payPolicyStore";
 import { isCommissionHeld, payableAfterFor, HOLD_DAYS_MAX } from "@shared/commissionHold";
+import type { CommissionTier } from "@shared/commissionTiers";
 import { getHrCheckpoint, listHrCheckpoints, setHrCheckpoint, summariseHr } from "./onboardingHrStore";
 import { gustoConfigured, verifyGustoConnection } from "./gustoAdapter";
 import {
@@ -8498,6 +8499,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       commission = {
         structure: recruitingInvite.commissionStructure,
         flatRateCents: recruitingInvite.flatRateCents ?? undefined,
+        // The LADDER, not just the word "TIERED". Without it, assignStructureToRep
+        // falls through to the standard tiered version and the rep is paid the
+        // house bands while their signed agreement states the invited ones.
+        tiers: recruitingInvite.commissionTiers ?? undefined,
         reservePercent: recruitingInvite.reservePercent ?? undefined,
         reserveCapCents: recruitingInvite.reserveCapCents ?? undefined,
       };
@@ -8582,10 +8587,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           const reserveCapCents = commission.reserveCapCents === undefined ? undefined
             : commission.reserveCapCents === null ? null
             : Number.isInteger(commission.reserveCapCents) ? Number(commission.reserveCapCents) : undefined;
+          // The invited ladder, forwarded. assignStructureToRep has always
+          // accepted `tiers` and routed a non-empty one to a custom plan
+          // version; this path just never handed it one, so every TIERED
+          // approval silently landed on the standard bands. Omitted when empty
+          // so "TIERED with nothing chosen" still inherits the house plan.
+          const tiers = structure === "TIERED" && Array.isArray(commission.tiers) && commission.tiers.length
+            ? (commission.tiers as CommissionTier[]) : undefined;
           commissionResult = commissionSvc.assignStructureToRep(tenantId, reviewer?.id ?? null, {
             repId: teamMemberId, structure, flatRateCents,
             commissionPlanVersionId: commission.commissionPlanVersionId ?? null,
             effectiveFrom: commission.effectiveFrom || undefined,
+            ...(tiers ? { tiers } : {}),
             ...(reservePercent !== undefined ? { reservePercent } : {}),
             ...(reserveCapCents !== undefined ? { reserveCapCents } : {}),
           });

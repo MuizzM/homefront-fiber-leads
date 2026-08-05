@@ -171,11 +171,16 @@ export default function Applications() {
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   // Comp terms the manager sets when sending the invite. These ride the invite →
-  // application and seed the rep's plan + chargeback reserve at approval.
-  const [inviteStructure, setInviteStructure] = useState<Structure>("TIERED");
-  const [inviteFlatRate, setInviteFlatRate] = useState("150");   // dollars per sale (FLAT only)
-  const [inviteHoldPct, setInviteHoldPct] = useState("0");       // whole-percent reserve
-  const [inviteCeiling, setInviteCeiling] = useState("2500");    // reserve ceiling in dollars; "0" = uncapped
+  // application and seed the rep's plan + chargeback reserve at approval, and
+  // they are what the candidate's commission agreement will state.
+  //
+  // ONE CommissionTerms object, edited by the same control the agreements panel
+  // uses. It replaces four dollar-STRING fields that could only express "tiered"
+  // as a word — there was nowhere to say WHICH tiers, so a TIERED invite carried
+  // no ladder and every reader downstream substituted the house one. Integer
+  // cents throughout now; the Math.round(Number(x) * 100) conversions are gone.
+  const [inviteTerms, setInviteTerms] = useState<CommissionTerms>(DEFAULT_COMMISSION_TERMS);
+  const inviteTermsCheck = normalizeCommissionTerms(inviteTerms);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [structure, setStructure] = useState<Structure>("TIERED");
   const [flatRate, setFlatRate] = useState("150");
@@ -228,16 +233,23 @@ export default function Applications() {
 
   const inviteMutation = useMutation({
     mutationFn: () => {
-      const dollarsToCents = (value: string) => Math.max(0, Math.round(Number(value || 0) * 100));
+      // Send the NORMALIZED terms — the same .ok / .normalized pattern the
+      // agreements panel uses — so the ladder that leaves here is one the
+      // commission engine would pay against, not raw editor state.
+      const terms = normalizeCommissionTerms(inviteTerms).normalized;
       const body: Record<string, unknown> = {
         name: inviteName.trim(),
         email: inviteEmail.trim(),
-        commissionStructure: inviteStructure,
-        reservePercent: Math.min(100, Math.max(0, Math.round(Number(inviteHoldPct || 0)))),
-        // "0" ceiling means uncapped — send 0 through (the engine reads 0 = uncapped).
-        reserveCapCents: dollarsToCents(inviteCeiling),
+        commissionStructure: terms.structure,
+        reservePercent: terms.reservePercent,
+        // 0 ceiling means uncapped — send 0 through (the engine reads 0 = uncapped).
+        reserveCapCents: terms.reserveCapCents,
       };
-      if (inviteStructure === "FLAT") body.flatRateCents = dollarsToCents(inviteFlatRate);
+      if (terms.structure === "FLAT") body.flatRateCents = terms.flatRateCents ?? 0;
+      // THE LADDER. `id` is stripped because the invite schema is .strict() and
+      // a ladder prefilled from an existing plan version carries one.
+      else body.tiers = terms.tiers.map(({ position, minimumSales, maximumSales, rateCents, label }) =>
+        ({ position, minimumSales, maximumSales, rateCents, label }));
       return apiRequest("POST", "/api/onboarding/invitations", body).then(response => response.json());
     },
     onSuccess: (data: any) => {
@@ -389,43 +401,27 @@ export default function Applications() {
 
       <section className="mb-4 rounded-2xl border border-border bg-card p-4" aria-label="Invite a candidate">
         <div className="flex items-start gap-3"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><UserPlus className="h-4 w-4" /></div><div><h2 className="text-sm font-semibold text-foreground">Invite a potential rep</h2><p className="mt-0.5 text-xs text-muted-foreground">Creates the onboarding record first, then emails a candidate-specific private link.</p></div></div>
-        <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); if (!inviteMutation.isPending) inviteMutation.mutate(); }}>
+        {/* Terms are checked on submit as well as on the button: pressing Enter
+            in the name field submits a form whose disabled button was never
+            clicked, and an invalid ladder must not become an offer either way. */}
+        <form className="mt-3 space-y-3" onSubmit={event => { event.preventDefault(); if (!inviteMutation.isPending && inviteTermsCheck.ok) inviteMutation.mutate(); }}>
           <div className="grid gap-2 sm:grid-cols-2">
             <div><label className="sr-only" htmlFor="invite-candidate-name">Candidate full name</label><input id="invite-candidate-name" value={inviteName} onChange={event => setInviteName(event.target.value)} required minLength={2} maxLength={120} placeholder="Candidate full name" className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" data-testid="input-candidate-name" /></div>
             <div><label className="sr-only" htmlFor="invite-candidate-email">Candidate email</label><input id="invite-candidate-email" type="email" value={inviteEmail} onChange={event => setInviteEmail(event.target.value)} required maxLength={254} placeholder="candidate@email.com" className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" data-testid="input-candidate-email" /></div>
           </div>
 
-          {/* Comp terms travel with the packet and seed the rep's plan + reserve at approval. */}
-          <div className="rounded-xl border border-border bg-background/40 p-3">
-            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><DollarSign className="h-3.5 w-3.5" />Commission &amp; reserve (sent with the packet)</div>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <div>
-                <span className="text-[11px] font-medium text-muted-foreground">Structure</span>
-                <div className="mt-1 grid grid-cols-2 gap-1">
-                  <button type="button" onClick={() => setInviteStructure("TIERED")} className={`h-9 rounded-lg border text-xs font-semibold ${inviteStructure === "TIERED" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`} data-testid="invite-structure-tiered">Tiered</button>
-                  <button type="button" onClick={() => setInviteStructure("FLAT")} className={`h-9 rounded-lg border text-xs font-semibold ${inviteStructure === "FLAT" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`} data-testid="invite-structure-flat">Flat</button>
-                </div>
-              </div>
-              {inviteStructure === "FLAT" && (
-                <label className="block"><span className="text-[11px] font-medium text-muted-foreground">Rate / sale ($)</span>
-                  <input type="number" min="0" step="1" value={inviteFlatRate} onChange={event => setInviteFlatRate(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-border bg-background px-2 text-sm outline-none focus:border-primary" data-testid="invite-flat-rate" /></label>
-              )}
-              <label className="block"><span className="text-[11px] font-medium text-muted-foreground">Hold %</span>
-                <input type="number" min="0" max="100" step="1" value={inviteHoldPct} onChange={event => setInviteHoldPct(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-border bg-background px-2 text-sm outline-none focus:border-primary" data-testid="invite-hold-pct" /></label>
-              <label className="block"><span className="text-[11px] font-medium text-muted-foreground">Reserve ceiling</span>
-                <select value={inviteCeiling} onChange={event => setInviteCeiling(event.target.value)} className="mt-1 h-9 w-full rounded-lg border border-border bg-background px-2 text-sm outline-none focus:border-primary" data-testid="invite-ceiling">
-                  <option value="1500">$1,500</option>
-                  <option value="2500">$2,500</option>
-                  <option value="0">Uncapped</option>
-                </select></label>
-            </div>
-            <p className="mt-2 text-[11px] text-muted-foreground" data-testid="invite-comp-summary">
-              {inviteStructure === "FLAT" ? `Flat $${Number(inviteFlatRate || 0).toLocaleString()}/sale` : "Tiered ladder"}
-              {Number(inviteHoldPct || 0) > 0 ? ` · hold ${Number(inviteHoldPct)}%${Number(inviteCeiling) > 0 ? ` up to $${Number(inviteCeiling).toLocaleString()}` : " (uncapped)"}` : " · no reserve"}
-            </p>
+          {/* The comp terms travel with the invite, state themselves in the
+              candidate's commission agreement, and seed the rep's plan +
+              reserve at approval. The SAME editor the agreements panel uses, so
+              a ladder can be chosen here — before, this was four fields that
+              could say "Tiered" but not which tiers, and the ladder was picked
+              after approval, by which point the offer had already been made. */}
+          <div className="rounded-xl border border-border bg-background/40 p-3" data-testid="invite-comp-terms">
+            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><DollarSign className="h-3.5 w-3.5" />Commission &amp; reserve (what the candidate will sign)</div>
+            <CompTermsEditor value={inviteTerms} onChange={setInviteTerms} disabled={inviteMutation.isPending} />
           </div>
 
-          <button type="submit" disabled={!pipeline.data?.configured || !inviteName.trim() || !inviteEmail.trim() || inviteMutation.isPending} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50 sm:w-auto" data-testid="send-candidate-invite">{inviteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}Send private invite</button>
+          <button type="submit" disabled={!pipeline.data?.configured || !inviteName.trim() || !inviteEmail.trim() || !inviteTermsCheck.ok || inviteMutation.isPending} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50 sm:w-auto" data-testid="send-candidate-invite">{inviteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}Send private invite</button>
         </form>
         {pipeline.data && !pipeline.data.configured && <p className="mt-2 text-xs text-amber-400">Resend must be connected before invitations can be sent.</p>}
       </section>

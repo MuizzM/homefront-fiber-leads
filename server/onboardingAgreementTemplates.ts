@@ -5,7 +5,7 @@ import {
   type OnboardingDocumentType,
 } from "../shared/onboardingDocuments";
 import {
-  DEFAULT_COMMISSION_TERMS, describeCommissionTerms, type CommissionTerms,
+  DEFAULT_COMMISSION_TERMS, describeCommissionTerms, tierRows, type CommissionTerms,
 } from "../shared/commissionTerms";
 import { formatUsdCents } from "../shared/commissionTiers";
 
@@ -51,7 +51,13 @@ import { formatUsdCents } from "../shared/commissionTiers";
 // is a material change to what a signer is agreeing to, so the version moves
 // and every rep re-signs — the "sign the current version" gate is how material
 // terms get re-consented.
-export const AGREEMENT_VERSION = "2026.08.3";
+//
+// Bumped to 2026.08.4: Section 1 now prints the rate table itself, and — the
+// substantive half — the ladder a manager picked when INVITING the candidate
+// now reaches this document. Before, an invite could say TIERED and carry no
+// ladder, so the agreement rendered the house bands and the signer had no way
+// to tell. Same gate, same reason: what a signer reads changed.
+export const AGREEMENT_VERSION = "2026.08.4";
 
 // The Company's legal identity, stated once. Sections use "the Company"
 // thereafter, per the requirement to minimize use of the full legal name.
@@ -201,6 +207,13 @@ function commissionSections(ctx: TemplateContext): AgreementSection[] {
         ...describeCommissionTerms(terms),
         "The Company may change the commission structure prospectively by a new written or electronic notice with an effective date. A commission already earned under a prior effective-dated structure will not be reduced solely because the structure changes afterward.",
       ],
+      // The same numbers as the prose above, as a table. Built from tierRows, so
+      // the two cannot state different bands — a document that contradicts
+      // itself about pay is worse than one that states it only once. A FLAT plan
+      // gets the single row the packet cover already uses.
+      rows: terms.structure === "FLAT" && terms.flatRateCents != null
+        ? [{ band: "Every qualified sale", rate: `${formatUsdCents(terms.flatRateCents)} per sale` }]
+        : tierRows(terms),
     },
     {
       heading: "2. When a commission is earned",

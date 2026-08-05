@@ -110,7 +110,47 @@ function renderAgreementBody(doc: PDFKit.PDFDocument, snapshot: AgreementSnapsho
     for (const bullet of section.bullets ?? []) {
       doc.moveDown(0.2).font("Helvetica").fontSize(9.5).fillColor(BRAND.ink).text(`•  ${bullet}`, { indent: 10, lineGap: 2.1 });
     }
+    if (section.rows?.length) renderRateTable(doc, section.rows, accent);
   }
+}
+
+/** The footer rule, and the text under it. Nothing may be drawn below this. */
+export const FOOTER_RULE_Y = 742;
+/** A table must finish above the footer with room to spare, or start a page. */
+const TABLE_SAFE_BOTTOM = 700;
+
+/**
+ * How tall a rate table is, and whether it fits where the flow currently sits.
+ *
+ * Pure and exported because this rule is the load-bearing part.
+ * renderAgreementBody flows continuously and lets pdfkit wrap TEXT across pages
+ * on its own; a fixed-height rectangle gets no such treatment, so a table that
+ * starts near a page bottom paints straight over the footer rule. A 12-band
+ * ladder — the schema maximum — is 256pt tall and lands there routinely.
+ */
+export function rateTableLayout(rowCount: number, currentY: number): { height: number; needsBreak: boolean } {
+  const height = 40 + rowCount * 18;
+  return { height, needsBreak: currentY + height > TABLE_SAFE_BOTTOM };
+}
+
+// The rate table inside an agreement section — the same box the packet cover
+// draws, so the money looks the same wherever a rep meets it.
+function renderRateTable(doc: PDFKit.PDFDocument, rows: Array<{ band: string; rate: string }>, accent: string) {
+  doc.moveDown(0.55);
+  const { height: boxHeight, needsBreak } = rateTableLayout(rows.length, doc.y);
+  if (needsBreak) doc.addPage();
+  const boxTop = doc.y;
+  doc.roundedRect(58, boxTop, 496, boxHeight, 8).fillAndStroke(BRAND.tealWash, BRAND.tealEdge);
+  doc.fillColor(accent).font("Helvetica-Bold").fontSize(9.5).text("Qualified sales in a commission week", 76, boxTop + 13, { width: 300 });
+  doc.font("Helvetica-Bold").fontSize(9.5).text("Rate", 380, boxTop + 13, { width: 150, align: "right" });
+  let rowY = boxTop + 32;
+  for (const row of rows) {
+    doc.font("Helvetica").fontSize(9.5).fillColor(BRAND.ink).text(row.band, 76, rowY, { width: 300 });
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(BRAND.navy).text(row.rate, 380, rowY, { width: 150, align: "right" });
+    rowY += 18;
+  }
+  doc.y = boxTop + boxHeight + 4;
+  doc.x = 58;
 }
 
 function addFooter(doc: PDFKit.PDFDocument, label = "Home Front Sign") {

@@ -50,20 +50,29 @@ function tenantDefaults(tenantId: number): Partial<CommissionTerms> {
   return out;
 }
 
-function inviteTerms(repId: number): Partial<CommissionTerms> {
+function inviteTerms(tenantId: number, repId: number): Partial<CommissionTerms> {
   // The invitation is keyed to the APPLICATION, and the application to the rep
-  // by email — the same join the pipeline uses.
+  // by email — the same join the pipeline uses. TENANT-SCOPED at both hops: the
+  // email match alone would let a same-address candidate in another org supply
+  // the terms rendered into this contract, and now that the invite carries a
+  // whole ladder that is a bigger thing to get from the wrong row.
   const rep = storage.getTeamMemberById(repId);
-  if (!rep?.email) return {};
+  if (!rep?.email || rep.tenantId !== tenantId) return {};
   const app = rawDb.prepare(
-    `SELECT id FROM rep_applications WHERE lower(email) = lower(?) ORDER BY id DESC LIMIT 1`,
-  ).get(rep.email) as { id: number } | undefined;
+    `SELECT id FROM rep_applications
+      WHERE lower(email) = lower(?) AND tenant_id = ? ORDER BY id DESC LIMIT 1`,
+  ).get(rep.email, tenantId) as { id: number } | undefined;
   if (!app) return {};
   const invite = getRecruitingInviteByApplication(app.id);
-  if (!invite) return {};
+  if (!invite || invite.tenantId !== tenantId) return {};
   const out: Partial<CommissionTerms> = {};
   if (invite.commissionStructure) out.structure = invite.commissionStructure;
   if (invite.flatRateCents != null) out.flatRateCents = invite.flatRateCents;
+  // THE LADDER. Without this the merge below starts from DEFAULT_COMMISSION_TERMS
+  // and an invite that says TIERED resolves to the HOUSE bands — so the rep
+  // signed a ladder nobody chose, and nothing errored, because
+  // normalizeCommissionTerms treats an absent ladder as "use the default".
+  if (invite.commissionTiers?.length) out.tiers = invite.commissionTiers;
   if (invite.reservePercent != null) out.reservePercent = invite.reservePercent;
   if (invite.reserveCapCents != null) out.reserveCapCents = invite.reserveCapCents;
   return out;
@@ -82,7 +91,7 @@ export function resolveCommissionTerms(
   const merged: Partial<CommissionTerms> = {
     ...DEFAULT_COMMISSION_TERMS,
     ...tenantDefaults(tenantId),
-    ...inviteTerms(repId),
+    ...inviteTerms(tenantId, repId),
     ...(storedRepTerms(repId) ?? {}),
     ...(override ?? {}),
   };
