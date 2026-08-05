@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Download, ExternalLink, FileText, Loader2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
-import { getStoredSessionId } from "@/lib/queryClient";
+import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 
 // ── Real-PDF review pane ─────────────────────────────────────────────────────
 // A signer is entitled to read the actual instrument — paginated, scrollable,
@@ -22,6 +22,45 @@ import { getStoredSessionId } from "@/lib/queryClient";
 // the same fetched document serve the viewer, the download, and the new-tab
 // open without three round trips.
 
+// ── Blob cache + prefetch ────────────────────────────────────────────────────
+// The list screen knows which documents the signer is about to open; fetching
+// their bytes while the list idles means the signing dialog opens onto a PDF
+// that is ALREADY here — the pane pops instead of spinning. Blobs are cached
+// (they are immutable: an envelope's PDF never changes under the same id);
+// object URLs stay per-mount so revocation keeps working.
+const pdfBlobCache = new Map<string, Promise<Blob>>();
+
+/** Logout / identity switch is a hard cache boundary everywhere else in the app
+ *  (auth.tsx clears the query + persisted caches); this cache holds signed-
+ *  agreement PDFs and must die with the session too. */
+export function clearPdfBlobCache(): void {
+  pdfBlobCache.clear();
+}
+
+function fetchPdfBlob(url: string, warm: boolean): Promise<Blob> {
+  const cached = pdfBlobCache.get(url);
+  if (cached) return cached;
+  const sid = getStoredSessionId();
+  // warm=1 tells the server this is a cache warm-up, not a human opening the
+  // document — it must not write a preview_opened audit row. Cached under the
+  // BASE url so the real open finds the warmed blob.
+  const requestUrl = warm ? `${url}${url.includes("?") ? "&" : "?"}warm=1` : url;
+  const promise = fetch(requestUrl, { credentials: "include", headers: { accept: "application/pdf", ...(sid ? { "x-session-id": sid } : {}) } })
+    .then(async response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.blob();
+    });
+  // A failure must not poison the cache — the next open retries the network.
+  promise.catch(() => { if (pdfBlobCache.get(url) === promise) pdfBlobCache.delete(url); });
+  pdfBlobCache.set(url, promise);
+  return promise;
+}
+
+/** Warm the cache for a document the user is likely to open. Fire-and-forget. */
+export function prefetchPdf(url: string): void {
+  void fetchPdfBlob(url, true).catch(() => {});
+}
+
 export interface PdfReviewPaneProps {
   /** Endpoint returning application/pdf. Fetched with credentials. */
   url: string;
@@ -31,13 +70,16 @@ export interface PdfReviewPaneProps {
   title: string;
   /** Fires once the document has been fetched and handed to the viewer. */
   onLoaded?: () => void;
+  /** POSTed (fire-and-forget) when this open was served from the warm cache, so
+   *  the server's audit trail still records the real open the network never saw. */
+  openBeaconUrl?: string;
   /** Rendered under the toolbar — e.g. an accessible text-version switch. */
   children?: React.ReactNode;
   testId?: string;
 }
 
 export function PdfReviewPane({
-  url, fileName, title, onLoaded, children, testId = "pdf-review-pane",
+  url, fileName, title, onLoaded, openBeaconUrl, children, testId = "pdf-review-pane",
 }: PdfReviewPaneProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -53,12 +95,15 @@ export function PdfReviewPane({
     setBlobUrl(null);
 
     // The API authenticates by x-session-id header, never by cookie — a bare
-    // credentialed fetch is a guaranteed 401 and an empty review pane.
-    const sid = getStoredSessionId();
-    fetch(url, { credentials: "include", headers: { accept: "application/pdf", ...(sid ? { "x-session-id": sid } : {}) } })
-      .then(async response => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const blob = await response.blob();
+    // credentialed fetch is a guaranteed 401 and an empty review pane. Cached
+    // (or prefetched) blobs resolve on the microtask queue, so a warmed pane
+    // renders its PDF in the same frame the dialog opens.
+    const servedFromCache = pdfBlobCache.has(url);
+    if (servedFromCache && openBeaconUrl) {
+      void apiRequest("POST", openBeaconUrl).catch(() => { /* audit beacon is best-effort */ });
+    }
+    fetchPdfBlob(url, false)
+      .then(blob => {
         if (cancelled) return;
         const next = URL.createObjectURL(blob);
         objectUrlRef.current = next;

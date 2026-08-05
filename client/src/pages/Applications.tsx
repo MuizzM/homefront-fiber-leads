@@ -525,7 +525,9 @@ export default function Applications() {
 
         <section className="min-w-0 rounded-2xl border border-border bg-card xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto" aria-label="Candidate onboarding details">
           {!selected && <div className="grid h-full min-h-96 place-items-center p-8 text-center"><div><UserCheck className="mx-auto mb-3 h-9 w-9 text-muted-foreground/30" /><p className="text-sm font-medium text-foreground">Select a candidate</p><p className="mt-1 text-xs text-muted-foreground">Their full onboarding state will appear here.</p></div></div>}
-          {selected && <>
+          {/* Keyed on the record so switching candidates re-runs the entrance —
+              the panel visibly answers "you are now looking at someone else". */}
+          {selected && <div key={selected.key} className="hf-rise">
             <div className="border-b border-border p-4 sm:p-5">
               <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="mb-2"><StagePill stage={selected.stage} /></div><h2 className="truncate text-xl font-semibold tracking-tight text-foreground">{selected.candidateName}</h2><div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="flex items-center gap-1"><Mail className="h-3 w-3" />{selected.candidateEmail}</span>{selected.application && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{selected.application.city}, {selected.application.state}</span>}</div></div>{selected.stage === "active" && <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-emerald-500/12 text-emerald-400"><CheckCircle2 className="h-5 w-5" /></div>}</div>
             </div>
@@ -633,7 +635,7 @@ export default function Applications() {
 
               {selected.stage === "active" && <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/8 p-4"><div className="flex gap-3"><CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" /><div><h3 className="text-sm font-semibold text-emerald-300">Onboarding complete</h3><p className="mt-1 text-xs text-emerald-200/70">All four required agreements are signed. The rep’s field-sales profile is active.</p></div></div></div>}
             </div>
-          </>}
+          </div>}
         </section>
       </div>
     </div>

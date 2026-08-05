@@ -712,8 +712,13 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     if (!record || record.tenantId !== tenantId(req) || record.repId !== myRepId(req)) return res.status(404).json({ error: "Document not found" });
     try {
       const pdf = await renderAgreementPreviewPdf(record.snapshot);
-      storage.logActivity(userId(req), "onboarding.document.preview_opened", "onboarding_document", record.id,
-        { documentType: record.documentType, contentSha256: record.contentSha256 }, req.ip);
+      // warm=1 is the list screen pre-warming its blob cache, not a human
+      // opening anything — the preview_opened audit row must record only real
+      // opens. A cache-served real open reports itself via the beacon below.
+      if (req.query.warm !== "1") {
+        storage.logActivity(userId(req), "onboarding.document.preview_opened", "onboarding_document", record.id,
+          { documentType: record.documentType, contentSha256: record.contentSha256 }, req.ip);
+      }
       res.setHeader("Content-Type", "application/pdf");
       // INLINE, not an attachment: the point is that it opens in the viewer the
       // rep is already looking at. A download prompt is a dead end mid-ceremony.
@@ -723,6 +728,20 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     } catch (error: any) {
       res.status(500).json({ error: "Could not render this document for review" });
     }
+  });
+
+  // A real open served from the client's warm blob cache never reaches the
+  // preview.pdf route, so the pane reports it here instead — log-only, same
+  // ownership check, no render. Without this, prefetching would trade one audit
+  // falsehood (opens that never happened) for another (opens that did, unrecorded).
+  app.post("/api/onboarding/documents/:id/preview-opened", requireAuth, requireCapability("onboarding.documents.read.self"), (req, res) => {
+    const parsed = documentIdSchema.safeParse(req.params.id);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid document ID" });
+    const record = getSigningDocument(parsed.data);
+    if (!record || record.tenantId !== tenantId(req) || record.repId !== myRepId(req)) return res.status(404).json({ error: "Document not found" });
+    storage.logActivity(userId(req), "onboarding.document.preview_opened", "onboarding_document", record.id,
+      { documentType: record.documentType, contentSha256: record.contentSha256, servedFrom: "prefetch_cache" }, req.ip);
+    res.json({ ok: true });
   });
 
   // The OFFICIAL IRS Form W-9 — the vendored template itself, all six pages
