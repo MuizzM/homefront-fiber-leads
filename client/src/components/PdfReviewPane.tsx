@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Download, ExternalLink, FileText, Loader2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
+import { getStoredSessionId } from "@/lib/queryClient";
 
 // ── Real-PDF review pane ─────────────────────────────────────────────────────
 // A signer is entitled to read the actual instrument — paginated, scrollable,
@@ -51,7 +52,10 @@ export function PdfReviewPane({
     if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = null; }
     setBlobUrl(null);
 
-    fetch(url, { credentials: "include", headers: { accept: "application/pdf" } })
+    // The API authenticates by x-session-id header, never by cookie — a bare
+    // credentialed fetch is a guaranteed 401 and an empty review pane.
+    const sid = getStoredSessionId();
+    fetch(url, { credentials: "include", headers: { accept: "application/pdf", ...(sid ? { "x-session-id": sid } : {}) } })
       .then(async response => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const blob = await response.blob();
