@@ -191,11 +191,26 @@ jobs:
               const candidates=[path.resolve('/app/dist/public/hfs-logo-full.png'), path.resolve(process.cwd(),'dist/public/hfs-logo-full.png')];
               const found=candidates.find(c=>{try{return fs.statSync(c).isFile()}catch{return false}});
               console.log('  logo: ' + (found ? found + '  (' + fs.statSync(found).size + ' bytes)' : 'NOT FOUND — PDFs will fall back to a wordmark'));
-              try {
-                const { renderOnboardingPacketPdf } = require('/app/dist/index.cjs');
-                console.log('  (renderer not separately exported; size check below)');
-              } catch {}
+              // NEVER require() the server bundle to probe it. dist/index.cjs is
+              // an ENTRY POINT: requiring it runs the whole app — a second
+              // instance inside the live container, sharing the production
+              // database and volume, starting schedulers, scan workers and cron
+              // ticks that spend real money. An earlier version of this file did
+              // exactly that and hung the diagnostic for twenty-five minutes.
+              // A diagnostic reads; it does not execute what it is inspecting.
             " 2>&1 | sed 's/^/  /' || echo "  (could not inspect the image)"
+          else
+            echo "  no running app container"
+          fi
+
+          # ── Processes in the app container ───────────────────────────────
+          # A `docker exec` can outlive the SSH session that started it. If a
+          # diagnostic ever executes rather than reads (see the note above), the
+          # stray it leaves behind is a SECOND app instance on the live
+          # database — so the check for one belongs here permanently.
+          hr; echo "APP CONTAINER PROCESSES"
+          if [ -n "$APP" ]; then
+            docker exec "$APP" ps -eo pid,etime,args 2>/dev/null | grep -a "node" | sed 's/^/  /' || echo "  (ps unavailable in image)"
           else
             echo "  no running app container"
           fi
