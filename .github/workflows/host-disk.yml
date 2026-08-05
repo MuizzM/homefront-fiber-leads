@@ -119,6 +119,46 @@ jobs:
             $SUDO du -ah "$VOL" 2>/dev/null | sort -rh | head -15 | sed 's/^/    /' || true
           fi
 
+          # ── Inside the database ──────────────────────────────────────────
+          # `du` says the FILE is 19 GB; it cannot say how much of that is live
+          # data and how much is free pages a delete already released. Those
+          # need very different responses — more retention vs. reclaiming — so
+          # measure before deciding. Read-only, on the live file.
+          APP="$(docker compose -f docker-compose.production.yml ps -q app 2>/dev/null | head -n1 || true)"
+          [ -n "$APP" ] || APP="$(docker ps --format '{{.ID}} {{.Image}}' | awk '/homefront-app:/{print $1; exit}' || true)"
+          hr; echo "DATABASE"
+          if [ -n "$APP" ]; then
+            docker exec "$APP" node -e "
+              const D = require('better-sqlite3');
+              const db = new D(process.env.DATA_DIR + '/data.db', { readonly: true });
+              const p = (k) => db.pragma(k, { simple: true });
+              const pageSize = p('page_size'), pageCount = p('page_count'), freelist = p('freelist_count');
+              const gb = (bytes) => (bytes / 1073741824).toFixed(2) + ' GB';
+              console.log('  page_size      ' + pageSize);
+              console.log('  file           ' + gb(pageSize * pageCount));
+              console.log('  free pages     ' + gb(pageSize * freelist) + '  (' + (100 * freelist / pageCount).toFixed(1) + '% of the file)');
+              console.log('  live data      ' + gb(pageSize * (pageCount - freelist)));
+              console.log('  auto_vacuum    ' + p('auto_vacuum') + '   (0=NONE 1=FULL 2=INCREMENTAL)');
+              console.log('  journal_mode   ' + p('journal_mode'));
+              console.log('');
+              try {
+                const rows = db.prepare(\"SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC LIMIT 15\").all();
+                console.log('  largest objects (table or index):');
+                for (const r of rows) console.log('    ' + gb(r.bytes).padStart(9) + '  ' + r.name);
+              } catch (e) {
+                console.log('  dbstat unavailable (' + e.message + ') — row counts instead:');
+                const tables = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'\").all();
+                const counts = tables.map((t) => {
+                  try { return { name: t.name, n: db.prepare('SELECT COUNT(*) n FROM \\\"' + t.name + '\\\"').get().n }; }
+                  catch { return { name: t.name, n: -1 }; }
+                }).sort((a, b) => b.n - a.n).slice(0, 15);
+                for (const c of counts) console.log('    ' + String(c.n).padStart(12) + '  ' + c.name);
+              }
+            " 2>&1 | sed 's/^/  /' || echo "  (could not read the database)"
+          else
+            echo "  no running app container found"
+          fi
+
           if [ "$ACTION" = "report" ]; then
             hr; echo "Report only — nothing was changed."
             exit 0
