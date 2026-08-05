@@ -134,10 +134,16 @@ describe("GET /api/territories/:id/progress — rep reads their own area", () =>
 
   it("matches the list route's numbers for the same area, field for field", async () => {
     // Same computation is the contract — the single-area card and the overview
-    // must never disagree about the same ground.
+    // must never disagree about the same ground. The single-area read carries
+    // console-only EXTRAS on top (polygon, briefing, lifecycle stamps) that the
+    // list deliberately omits for payload, so the assertion is "every field the
+    // list has, the single read has with the same value" — a superset, never a
+    // divergence.
     const one = await (await req(`/api/territories/${mineArea}/progress`, fx.repA.session)).json() as any;
     const list = await (await req("/api/territories/progress", fx.repA.session)).json() as any[];
-    expect(list.find((r) => r.id === mineArea)).toEqual(one);
+    expect(one).toMatchObject(list.find((r) => r.id === mineArea));
+    // And the console extras are genuinely present on the single read.
+    expect(Array.isArray(one.polygon)).toBe(true);
   });
 });
 

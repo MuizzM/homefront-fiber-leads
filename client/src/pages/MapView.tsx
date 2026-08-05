@@ -1152,6 +1152,7 @@ export default function MapView() {
   const canReclaim = roleCan(user?.role, "reclaim_territory");
   const canResetPass = roleCan(user?.role, "reset_territory_pass");
   const canReclaimAll = roleCan(user?.role, "reclaim_all_territories");
+  const canDelete = roleCan(user?.role, "delete_territory");
   // Admin, manager, and team lead can carve out areas and assign them to reps.
   const canAssign =
     user?.role === "super_admin" ||
@@ -1443,6 +1444,44 @@ export default function MapView() {
     },
     onError: (e: any) => toast({ title: e?.message ?? "Couldn't delete the area", variant: "destructive" }),
   });
+
+  // Mark an area done. POST /complete existed, was permission-tabled, and had
+  // ZERO client callers — the panel's Complete button only renders when this
+  // handler is passed, and nothing ever passed it, so the scan learning loop's
+  // main trigger (recordTerritoryOutcome on completion) was unreachable from
+  // the product. Two-tap confirm below, same pattern as delete: completing
+  // stamps a field outcome into market memory and shouldn't fire on a mis-tap.
+  const completeTerritoryMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/complete`, {});
+      return res.json() as Promise<{ ok: boolean; status: string }>;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      toast({
+        title: "Area marked complete",
+        description: "Its outcome was recorded for future scan prioritisation.",
+        severity: "success",
+      });
+    },
+    onError: (e: any) => toast({
+      title: "Couldn't complete the area",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
+  });
+  // Two-step Complete: first tap arms for 3s ("Sure?"), second commits.
+  const [confirmCompleteId, setConfirmCompleteId] = useState<number | null>(null);
+  const confirmCompleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armCompleteConfirm = (id: number) => {
+    if (confirmCompleteTimer.current) clearTimeout(confirmCompleteTimer.current);
+    setConfirmCompleteId(id);
+    confirmCompleteTimer.current = setTimeout(() => setConfirmCompleteId(null), 3000);
+  };
+  useEffect(() => () => {
+    if (confirmCompleteTimer.current) clearTimeout(confirmCompleteTimer.current);
+  }, []);
 
   // Territory selected by tapping its region on the map → detail panel
   const [selectedTerritoryId, setSelectedTerritoryId] = useState<number | null>(
@@ -2477,27 +2516,31 @@ export default function MapView() {
   // Wait for mapboxgl CDN — uses onload callback from index.html, no polling
   useEffect(() => {
     let cancelled = false;
+    // The token is a trivial env read; fetch it IN PARALLEL with the ~230KB
+    // mapbox-gl CDN download. Sequencing it inside the ready callback appended
+    // a whole API round trip to the tail of the script load on every cold
+    // open. Failures still surface only through init below, so the error UX
+    // (and the retry path) is unchanged.
+    const tokenPromise = apiRequest("GET", "/api/config/map")
+      .then((r) => r.json())
+      .then((d: { token: string }) => (d?.token ? String(d.token) : null))
+      .catch(() => null);
     const init = (err?: Error) => {
       if (cancelled) return;
       // The library never arrived (CDN blocked, captive portal, dead LTE).
       // Surface it: this is the only writer of mapTokenFailed, and without it
       // the rep sat on an empty map container with no spinner and no error.
       if (err) { setMapFailureKind("library"); setMapTokenFailed(true); return; }
-      apiRequest("GET", "/api/config/map")
-        .then((r) => r.json())
-        .then((d: { token: string }) => {
-          if (cancelled) return;
-          if (d?.token) {
-            (window as any).mapboxgl.accessToken = d.token;
-            setMapboxToken(d.token);
-          } else {
-            setMapFailureKind("token");
-            setMapTokenFailed(true);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) { setMapFailureKind("token"); setMapTokenFailed(true); }
-        });
+      void tokenPromise.then((token) => {
+        if (cancelled) return;
+        if (token) {
+          (window as any).mapboxgl.accessToken = token;
+          setMapboxToken(token);
+        } else {
+          setMapFailureKind("token");
+          setMapTokenFailed(true);
+        }
+      });
     };
     (window as any).__onMapboxReady(init);
     // Belt and braces: a script tag that stalls without ever firing onload or
@@ -4031,6 +4074,12 @@ export default function MapView() {
   );
   const teamNameRecord = useMemo(
     () => Object.fromEntries(team.map((m) => [m.id, m.name])),
+    [team],
+  );
+  // repId → persisted team_members.color. Without this the detail panel's rep
+  // chips fell back to the legacy repId-hash hue and disagreed with the pins.
+  const teamColorRecord = useMemo(
+    () => Object.fromEntries(team.map((m) => [m.id, (m as any).color ?? null])),
     [team],
   );
 
@@ -7623,6 +7672,7 @@ export default function MapView() {
                       }}
                       currentUser={{ role: user?.role ?? "rep" }}
                       teamNames={teamNames}
+                      teamColors={teamColorRecord}
                       progress={
                         // The operational numbers were on the wire the whole
                         // time and this literal dropped them. /progress returns
@@ -7666,6 +7716,23 @@ export default function MapView() {
                           : undefined
                       }
                       reclaimOpen={reclaimMenuId === t.id}
+                      onComplete={
+                        // Only an area somebody holds, still in play. The panel
+                        // additionally gates on reclaim_territory, matching the
+                        // server's canManageTerritory + requireTeamLead pair.
+                        !isPool && canManage && status !== "completed" && status !== "archived"
+                          ? () => {
+                              if (confirmCompleteId === t.id) {
+                                setConfirmCompleteId(null);
+                                completeTerritoryMutation.mutate(t.id);
+                              } else {
+                                armCompleteConfirm(t.id);
+                              }
+                            }
+                          : undefined
+                      }
+                      completeConfirming={confirmCompleteId === t.id}
+                      completing={completeTerritoryMutation.isPending}
                       onRename={
                         canManage
                           ? (name) => renameTerritoryMutation.mutate({ id: t.id, name })
@@ -8737,7 +8804,13 @@ export default function MapView() {
                               <Undo2 className="w-4 h-4" aria-hidden="true" />
                             </button>
                           )}
-                          {canManage && (
+                          {canDelete && (
+                            // delete_territory (admin), NOT canManage: the API
+                            // is requireAdmin, so showing this × to a team_lead
+                            // promised an action the server answers with 403 —
+                            // two taps ending in an error toast. Areas.tsx got
+                            // this right; the map now checks the same row of
+                            // the permission table the route enforces.
                             // Two-tap destructive confirm: first tap arms
                             // "Sure?" (3s revert), second tap deletes. A stray
                             // thumb can no longer erase an area in one hit.

@@ -27,6 +27,8 @@ const HANDLER_GATED_CONTROLS = [
   "onStartNextPass", // re-open the area for another sweep
   "onReclaim",       // pull the whole area back
   "onViewHistory",
+  "onComplete",      // mark the area done → records the scan-learning outcome
+  "teamColors",      // persisted rep hues — without it chips fall back to hash
 ] as const;
 
 describe("MapView ↔ TerritoryDetailPanel wiring", () => {
@@ -48,6 +50,7 @@ describe("MapView ↔ TerritoryDetailPanel wiring", () => {
   it("hits the real endpoints for the actions it wires", () => {
     expect(mapView).toMatch(/territories\/\$\{[^}]+\}\/unassign/);
     expect(mapView).toMatch(/territories\/\$\{[^}]+\}\/next-pass/);
+    expect(mapView).toMatch(/territories\/\$\{[^}]+\}\/complete/);
   });
 });
 
@@ -59,6 +62,15 @@ describe("UI gates follow the permission table, not hard-coded role lists", () =
     expect(mapView).toMatch(/roleCan\(\s*user\?\.role,\s*"assign_territory"\s*\)/);
     expect(mapView).toMatch(/roleCan\(\s*user\?\.role,\s*"reclaim_territory"\s*\)/);
     expect(mapView).toMatch(/roleCan\(\s*user\?\.role,\s*"reset_territory_pass"\s*\)/);
+  });
+
+  it("gates the sidebar delete on delete_territory, matching requireAdmin", () => {
+    // DELETE /api/territories/:id is admin-only. The × was gated on canManage
+    // (assign_territory → team_lead), so a team lead got a two-tap control
+    // whose only possible outcome was a 403 toast.
+    expect(mapView).toMatch(/roleCan\(\s*user\?\.role,\s*"delete_territory"\s*\)/);
+    expect(mapView).toMatch(/\{canDelete && \(/);
+    expect(mapView).not.toMatch(/\{canManage && \(\s*\/\/ delete/i);
   });
 
   it("no hard-coded admin/manager role comparison guards territory actions", () => {

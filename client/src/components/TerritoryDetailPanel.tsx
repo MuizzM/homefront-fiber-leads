@@ -57,6 +57,13 @@ export interface TerritoryDetailPanelProps {
    *  and closed is legible instead of a button that "does nothing" twice. */
   reclaimOpen?: boolean;
   onComplete?: () => void;
+  /** True while the two-step Complete confirm is armed — the button re-labels
+   *  to "Sure? Tap again" so the second tap is an informed one. Completing
+   *  stamps this area's outcome into market memory, so it must not fire on a
+   *  single mis-tap next to Reclaim. */
+  completeConfirming?: boolean;
+  /** True while the complete request is in flight — disables the button. */
+  completing?: boolean;
   onReassign?: () => void;
   onRename?: (name: string) => void;  // provided for manager+ — shows the pencil
   /** Change the area's colour. Provided only when the caller may edit the area;
@@ -95,7 +102,7 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamColors, progress, onReclaim, reclaimOpen = false, onComplete, onReassign, onRename, onRecolor, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamColors, progress, onReclaim, reclaimOpen = false, onComplete, completeConfirming = false, completing = false, onReassign, onRename, onRecolor, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
   // A person's hue: persisted team_members.color when the caller supplied the
@@ -481,9 +488,15 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
               type="button"
               data-testid="complete-btn"
               onClick={onComplete}
-              className={`flex-1 h-11 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors ${FOCUS}`}
+              disabled={completing}
+              aria-live="polite"
+              className={`flex-1 h-11 rounded-lg text-xs font-semibold transition-colors disabled:opacity-60 ${
+                completeConfirming
+                  ? "bg-emerald-500/30 text-emerald-300 ring-1 ring-emerald-400/50"
+                  : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
+              } ${FOCUS}`}
             >
-              Complete
+              {completing ? "Completing…" : completeConfirming ? "Sure? Tap again" : "Complete"}
             </button>
           )}
         </div>
