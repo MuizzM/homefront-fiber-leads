@@ -1364,9 +1364,20 @@ app.use((req, res, next) => {
     const learnInterval = setInterval(() => { void learnTick(); }, 24 * 3_600_000);
     if (typeof (learnInterval as any).unref === "function") learnInterval.unref();
 
-    // NIGHTLY DB PRUNE — the scan firehose grows the DB ~1GB/day; un-pruned
-    // it bloats the WAL (10GB observed) and fails every deploy backup.
-    // Batched deletes keep the write lock free. First pass at boot +30min.
+  }
+
+  // ── NIGHTLY DB PRUNE ────────────────────────────────────────────────────────
+  // UNGATED, and that is the point. This sat inside the
+  // `FRESH_HARVEST !== "off"` block above, so turning the scanner off — the
+  // sensible thing to do when proxy spend matters — also turned off the only
+  // thing keeping the database from eating the disk. That is how production
+  // reached 18.8 GB on a 38 GB volume, hit 100%, and took out a maintenance run
+  // with SQLITE_FULL while a "nightly prune" sat in the code looking healthy.
+  //
+  // Housekeeping must never be a child of a revenue feature flag. The tables it
+  // trims are written by more than the harvester, and a database still grows
+  // while the scanner is off. First pass at boot +30min, then daily.
+  {
     const pruneTick = async () => {
       try {
         const { runDbPrune } = await import("./dbPrune");

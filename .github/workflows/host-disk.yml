@@ -164,14 +164,15 @@ jobs:
                 for (const r of rows) console.log('    ' + gb(r.bytes).padStart(9) + '  ' + r.name);
               } catch (e) {
                 console.log('  per-object breakdown: ' + e.message);
-                if (process.env.DEEP !== '1') { db.close(); return; }
-                console.log('  row counts instead:');
-                const tables = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'\").all();
-                const counts = tables.map((t) => {
-                  try { return { name: t.name, n: db.prepare('SELECT COUNT(*) n FROM \\\"' + t.name + '\\\"').get().n }; }
-                  catch { return { name: t.name, n: -1 }; }
-                }).sort((a, b) => b.n - a.n).slice(0, 15);
-                for (const c of counts) console.log('    ' + String(c.n).padStart(12) + '  ' + c.name);
+                if (process.env.DEEP === '1') {
+                  console.log('  row counts instead:');
+                  const tables = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'\").all();
+                  const counts = tables.map((t) => {
+                    try { return { name: t.name, n: db.prepare('SELECT COUNT(*) n FROM \\\"' + t.name + '\\\"').get().n }; }
+                    catch { return { name: t.name, n: -1 }; }
+                  }).sort((a, b) => b.n - a.n).slice(0, 15);
+                  for (const c of counts) console.log('    ' + String(c.n).padStart(12) + '  ' + c.name);
+                }
               }
             " 2>&1 | sed 's/^/  /' || echo "  (could not read the database)"
           else
@@ -210,7 +211,8 @@ jobs:
           # database — so the check for one belongs here permanently.
           hr; echo "APP CONTAINER PROCESSES"
           if [ -n "$APP" ]; then
-            docker exec "$APP" ps -eo pid,etime,args 2>/dev/null | grep -a "node" | sed 's/^/  /' || echo "  (ps unavailable in image)"
+            # docker top reads from the HOST — the slim image has no ps.
+            docker top "$APP" -eo pid,etime,args 2>/dev/null | sed 's/^/  /' || echo "  (could not list processes)"
           else
             echo "  no running app container"
           fi
