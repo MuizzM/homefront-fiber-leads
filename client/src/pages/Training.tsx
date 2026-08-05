@@ -14,6 +14,7 @@ import {
   Check,
   CheckCircle2,
   Circle,
+  Flame,
   Lightbulb,
   Target,
   RefreshCw,
@@ -23,6 +24,8 @@ import {
   ArrowRight,
   MessageSquare,
 } from "lucide-react";
+import NumbersGame from "@/components/training/NumbersGame";
+import PsychologyDeck from "@/components/training/PsychologyDeck";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { FOCUS } from "@/lib/a11y";
@@ -49,6 +52,29 @@ type SummaryPayload = { totalLessons: number; reps: SummaryRow[] };
 
 const PROGRESS_KEY = ["/api/training/progress"];
 
+// ── Day streak — computed, not stored ─────────────────────────────────────────
+// Consecutive local days with at least one lesson completed, ending today or
+// yesterday (yesterday keeps the flame alive until tonight — the Duolingo rule,
+// because a streak that dies while you sleep teaches resentment, not habit).
+function dayStreak(rows: ProgressRow[], now = new Date()): number {
+  const days = new Set<string>();
+  for (const row of rows) {
+    const d = new Date(row.completedAt);
+    if (!Number.isFinite(d.getTime())) continue;
+    days.add(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`);
+  }
+  if (!days.size) return 0;
+  const cursor = new Date(now);
+  const key = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  if (!days.has(key(cursor))) cursor.setDate(cursor.getDate() - 1); // grace day
+  let streak = 0;
+  while (days.has(key(cursor))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
 // ── Progress ring — SVG, tokens only, number in tabular-nums ─────────────────
 function ProgressRing({ done, total, size = 44 }: { done: number; total: number; size?: number }) {
   const stroke = 3.5;
@@ -61,7 +87,7 @@ function ProgressRing({ done, total, size = 44 }: { done: number; total: number;
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} className="stroke-border" />
         <circle
           cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} strokeLinecap="round"
-          className={pct >= 1 ? "stroke-emerald-500" : "stroke-primary"}
+          className={cn("transition-[stroke-dashoffset] duration-500 ease-out", pct >= 1 ? "stroke-emerald-500" : "stroke-primary")}
           strokeDasharray={c} strokeDashoffset={c * (1 - pct)}
         />
       </svg>
@@ -419,6 +445,10 @@ export default function Training() {
   const { data, isLoading, isError, refetch } = useQuery<ProgressPayload>({
     queryKey: PROGRESS_KEY,
     queryFn: async () => (await apiRequest("GET", "/api/training/progress")).json(),
+    // Persisted (queryClient PERSISTED_QUERY_KEYS) + a short staleTime: after
+    // one warm visit the page paints its real numbers instantly from cache and
+    // reconciles in the background — no skeleton, no dash.
+    staleTime: 30_000,
   });
 
   const completedById = useMemo(() => {
@@ -465,6 +495,11 @@ export default function Training() {
 
   const doneCount = completedById.size;
   const total = TOTAL_TRAINING_LESSONS;
+  const streak = useMemo(() => dayStreak(data?.completed ?? []), [data]);
+  const avgQuiz = useMemo(() => {
+    const scores = (data?.completed ?? []).map(r => r.quizScore).filter((s): s is number => s != null);
+    return scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+  }, [data]);
   const openLesson = openLessonId ? getTrainingLesson(openLessonId) : undefined;
   const openModule = openLessonId ? getTrainingModuleForLesson(openLessonId) : undefined;
   // Surface the fast-start track while a rep is still ramping — once they have
@@ -472,7 +507,7 @@ export default function Training() {
   const showFastStart = doneCount < TRAINING_FAST_START.length;
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
+    <div className="hf-stagger mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
       {showPitchPractice ? (
         <PitchPracticeView onBack={() => setShowPitchPractice(false)} />
       ) : openLesson && openModule ? (
@@ -516,7 +551,8 @@ export default function Training() {
             }
           />
 
-          {/* Overall progress hero */}
+          {/* Overall progress hero — ring, streak flame, quiz average. Three
+              numbers a rep can move today, side by side, Opal-style. */}
           <div className="rounded-2xl border border-border bg-card p-4 md:p-5" data-testid="training-hero">
             <div className="flex items-center gap-4">
               <ProgressRing done={doneCount} total={total} size={56} />
@@ -528,9 +564,27 @@ export default function Training() {
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
                   <div
-                    className={cn("h-full rounded-full transition-all", doneCount >= total ? "bg-emerald-500" : "bg-primary")}
+                    className={cn("h-full rounded-full transition-all duration-500", doneCount >= total ? "bg-emerald-500" : "bg-primary")}
                     style={{ width: `${total > 0 ? Math.round((doneCount / total) * 100) : 0}%` }}
                   />
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <div
+                  className={cn(
+                    "flex flex-col items-center rounded-xl border px-3 py-2",
+                    streak > 0 ? "border-orange-500/30 bg-orange-500/10" : "border-border bg-secondary/40",
+                  )}
+                  data-testid="training-streak"
+                >
+                  <Flame className={cn("h-4 w-4", streak > 0 ? "text-orange-500" : "text-muted-foreground/50")} aria-hidden="true" />
+                  <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{streak}</span>
+                  <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">day streak</span>
+                </div>
+                <div className="hidden flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex" data-testid="training-avg-quiz">
+                  <Target className="h-4 w-4 text-primary" aria-hidden="true" />
+                  <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{avgQuiz != null ? `${avgQuiz}%` : "—"}</span>
+                  <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">avg quiz</span>
                 </div>
               </div>
             </div>
@@ -548,6 +602,11 @@ export default function Training() {
 
           {/* Fast-start track — "start here" for reps still ramping */}
           {showFastStart && <FastStartTrack completedById={completedById} onOpen={setOpenLessonId} />}
+
+          {/* The interactive layer — motivation as arithmetic, psychology as a
+              deck. These are the parts a rep opens twice. */}
+          <NumbersGame />
+          <PsychologyDeck />
 
           {/* Manager rollup */}
           {canSeeTeam && <TeamProgressTable />}

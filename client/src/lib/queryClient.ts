@@ -237,6 +237,9 @@ export const PERSISTED_QUERY_KEYS = new Set<string>([
   // CE-2 coaching engine: the drill-card deck snapshot makes the whole
   // coaching loop work offline after one warm visit.
   "/api/training/deck",
+  // Training progress: the hero ring, streak and module rings paint their real
+  // numbers instantly on revisit instead of a dash, then reconcile.
+  "/api/training/progress",
 ]);
 
 const QUERY_CACHE_STORAGE_KEY = "hf-query-cache-v1";
