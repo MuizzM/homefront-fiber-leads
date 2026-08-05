@@ -22,13 +22,13 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "report (read-only) or reclaim (frees space)"
+        description: "report (read-only), reclaim (frees space), compact (rewrites the DB file)"
         required: true
         default: report
         type: choice
-        options: [report, reclaim]
+        options: [report, reclaim, compact]
       confirm:
-        description: 'Required for reclaim: type RECLAIM'
+        description: 'Required for reclaim/compact: type RECLAIM or COMPACT'
         required: false
         type: string
 
@@ -57,6 +57,10 @@ jobs:
           set -euo pipefail
           if [ "$ACTION" = "reclaim" ] && [ "$CONFIRM" != "RECLAIM" ]; then
             echo "Refusing to reclaim: type RECLAIM in 'confirm'." >&2
+            exit 1
+          fi
+          if [ "$ACTION" = "compact" ] && [ "$CONFIRM" != "COMPACT" ]; then
+            echo "Refusing to compact: type COMPACT in 'confirm'." >&2
             exit 1
           fi
           echo "action=$ACTION"
@@ -161,6 +165,76 @@ jobs:
 
           if [ "$ACTION" = "report" ]; then
             hr; echo "Report only — nothing was changed."
+            exit 0
+          fi
+
+          # ── compact ──────────────────────────────────────────────────────
+          # Rewrite data.db so the freelist is actually returned to the disk.
+          # auto_vacuum is NONE, so nightly pruning only ever moves pages onto
+          # the freelist for reuse: the file stops growing but never shrinks.
+          # This is the deliberate, supervised way to shrink it — separate from
+          # `reclaim` because it needs the app STOPPED and free space equal to
+          # the live data, and it refuses rather than half-doing it.
+          if [ "$ACTION" = "compact" ]; then
+            hr; echo "COMPACT"
+            if [ -z "$APP" ]; then echo "  no app container found — aborting" >&2; exit 1; fi
+            VOL_DIR="$VOL"
+            LIVE_BYTES="$(docker exec "$APP" node -e "
+              const D=require('better-sqlite3');
+              const db=new D(process.env.DATA_DIR+'/data.db',{readonly:true});
+              const p=k=>db.pragma(k,{simple:true});
+              process.stdout.write(String(p('page_size')*(p('page_count')-p('freelist_count'))));
+            " 2>/dev/null || echo 0)"
+            AVAIL_BYTES=$(( $(df -k / | awk 'NR==2{print $4}') * 1024 ))
+            echo "  live data $(( LIVE_BYTES / 1073741824 )) GB · free disk $(( AVAIL_BYTES / 1073741824 )) GB"
+            # 20% head-room: the rewrite is not the only thing writing to this
+            # disk, and finishing with zero bytes spare is its own incident.
+            if [ "$LIVE_BYTES" -le 0 ] || [ "$AVAIL_BYTES" -lt $(( LIVE_BYTES * 12 / 10 )) ]; then
+              echo "  REFUSING: need ~$(( LIVE_BYTES * 12 / 10 / 1073741824 )) GB free to rewrite safely." >&2
+              echo "  Prune first (the nightly job now covers scan_run_targets), then retry." >&2
+              exit 1
+            fi
+
+            NEW="$VOL_DIR/data.compacting.db"
+            $SUDO rm -f "$NEW"
+            echo "  stopping app…"
+            docker compose -f docker-compose.production.yml stop app
+            # VACUUM INTO on the STOPPED database: no writer can race the copy,
+            # and a failure leaves the original untouched because the original
+            # is never modified — only replaced, after the copy is complete.
+            echo "  rewriting…"
+            if docker compose -f docker-compose.production.yml run --rm --no-deps --entrypoint node app \
+                 -e "const D=require('better-sqlite3');const db=new D(process.env.DATA_DIR+'/data.db');db.prepare('VACUUM INTO ?').run(process.env.DATA_DIR+'/data.compacting.db');"; then
+              OLD_SZ="$($SUDO stat -c %s "$VOL_DIR/data.db")"
+              NEW_SZ="$($SUDO stat -c %s "$NEW")"
+              echo "  $(( OLD_SZ / 1073741824 )) GB → $(( NEW_SZ / 1073741824 )) GB"
+              # Swap only after the rewrite succeeded, keeping the original
+              # under a .replaced name until the app is verified healthy.
+              $SUDO mv "$VOL_DIR/data.db" "$VOL_DIR/data.replaced.db"
+              $SUDO mv "$NEW" "$VOL_DIR/data.db"
+              $SUDO rm -f "$VOL_DIR/data.db-wal" "$VOL_DIR/data.db-shm"
+            else
+              echo "  rewrite FAILED — original untouched" >&2
+              $SUDO rm -f "$NEW"
+              docker compose -f docker-compose.production.yml up -d app
+              exit 1
+            fi
+            echo "  starting app…"
+            docker compose -f docker-compose.production.yml up -d app
+            for i in $(seq 1 30); do
+              sleep 5
+              if curl -fsS --max-time 5 http://127.0.0.1:5000/api/health >/dev/null 2>&1; then
+                echo "  healthy — removing the pre-compaction copy"
+                $SUDO rm -f "$VOL_DIR/data.replaced.db"
+                break
+              fi
+              [ "$i" = "30" ] && {
+                echo "  UNHEALTHY after compaction. The original is at data.replaced.db —" >&2
+                echo "  stop app, mv data.replaced.db data.db, start app." >&2
+                exit 1
+              }
+            done
+            df -h / | sed 's/^/  /'
             exit 0
           fi
 
