@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, copyFile, mkdir, readdir } from "node:fs/promises";
+import { rm, readFile, copyFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
 // server deps to bundle to reduce openat(2) syscalls

@@ -118,6 +118,29 @@ jobs:
 
           cd /srv/homefront
 
+          # ── Disk, before anything ────────────────────────────────────────
+          # The first APPLY attempt died with SQLITE_FULL three minutes into a
+          # whole-database VACUUM INTO. On a volume holding a multi-GB SQLite
+          # file there is not room for a second copy of it, and a half-written
+          # one is left behind eating the remainder. Print the facts every run,
+          # and sweep any abandoned snapshot before doing anything else.
+          echo "── disk ─────────────────────────────────────────────"
+          df -h / /var/lib/docker 2>/dev/null | sed 's/^/  /' || true
+          VOL="$(docker volume inspect homefront_app-data --format '{{.Mountpoint}}' 2>/dev/null || true)"
+          if [ -n "$VOL" ] && [ -d "$VOL" ]; then
+            sudo du -sh "$VOL" 2>/dev/null | sed 's/^/  volume  /' || du -sh "$VOL" 2>/dev/null | sed 's/^/  volume  /' || true
+            sudo ls -la "$VOL"/data.db* "$VOL"/data.before-area-reset-*.db 2>/dev/null | sed 's/^/  /' || true
+            # A partial snapshot from a failed run is dead weight; it is never
+            # a valid database and nothing reads it.
+            STALE="$(sudo find "$VOL" -maxdepth 1 -name 'data.before-area-reset-*.db' 2>/dev/null || true)"
+            if [ -n "$STALE" ]; then
+              echo "  removing abandoned snapshot(s):"; echo "$STALE" | sed 's/^/    /'
+              echo "$STALE" | xargs -r sudo rm -f
+              df -h / | sed 's/^/  after sweep  /'
+            fi
+          fi
+          echo "─────────────────────────────────────────────────────"
+
           # The image tag the LIVE release is running — deploy.sh records it in
           # .deployed-tag. Reused rather than rebuilt, so the reset runs against
           # exactly the code serving traffic.

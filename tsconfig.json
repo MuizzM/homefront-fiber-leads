@@ -1,6 +1,14 @@
 {
-  "include": ["client/src/**/*", "shared/**/*", "server/**/*"],
-  "exclude": ["node_modules", "build", "dist", "**/*.test.ts"],
+  "include": ["client/src/**/*", "shared/**/*", "server/**/*", "script/**/*"],
+  "exclude": [
+    "node_modules", "build", "dist", "**/*.test.ts",
+    // Pre-existing type error surfaced when script/ was first added to include:
+    // it asserts `snapshot().states.DISABLED > 0`, but AuthorizedTokenState has
+    // no DISABLED member — so that assertion reads `undefined > 0` and has been
+    // silently false. Fixing it means knowing which state the author meant, so
+    // it is quarantined rather than guessed at. Remove this line once fixed.
+    "script/load-test-authorized-scanner.ts",
+  ],
   "compilerOptions": {
     "incremental": true,
     "tsBuildInfoFile": "./node_modules/typescript/tsbuildinfo",

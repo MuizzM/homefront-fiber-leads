@@ -42,14 +42,17 @@
 //   tsx script/reset-areas.ts --tenant 1
 //   tsx script/reset-areas.ts --tenant 1 --apply
 //   tsx script/reset-areas.ts --all-tenants --apply
+//   tsx script/reset-areas.ts --undo <file>        # put the assignments back
 //
-// In production (Railway shell, where DATA_DIR=/data):
-//   npx tsx script/reset-areas.ts --tenant <id>          # look first
-//   npx tsx script/reset-areas.ts --tenant <id> --apply  # then commit
+// In PRODUCTION nobody has a shell — run it through
+// .github/workflows/reset-areas.yml, which executes the bundled build
+// (`node dist/reset-areas.cjs`) in a one-off container on the live /data volume.
 //
-// --apply takes a `VACUUM INTO` snapshot of the whole database next to it first
-// and prints the one-line restore. Litestream's 72h point-in-time window is the
-// second net; this is the one that does not need a redeploy to use.
+// --apply first writes a small UNDO FILE recording only the rows it is about to
+// change. It is deliberately not a copy of the database: the volume holds a
+// multi-gigabyte SQLite file with no room for a second one (the first attempt
+// died with SQLITE_FULL), and restoring a whole-database snapshot would also
+// erase every knock, sale and signature recorded since it was taken.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -72,12 +75,14 @@ const valueOf = (flag: string): string | null => {
 const apply = has("--apply");
 const allTenants = has("--all-tenants");
 const tenantArg = valueOf("--tenant");
+const undoArg = valueOf("--undo");
 
-if (!allTenants && !tenantArg) {
+if (!allTenants && !tenantArg && !undoArg) {
   console.error(
     "Refusing to guess the scope.\n" +
     "  --tenant <id>   reset ONE organization\n" +
     "  --all-tenants   reset every organization on this database\n" +
+    "  --undo <file>   put back the assignments an earlier --apply cleared\n" +
     "Add --apply to write; without it this is a dry run.",
   );
   process.exit(2);
@@ -88,23 +93,103 @@ if (tenantId != null && (!Number.isInteger(tenantId) || tenantId <= 0)) {
   process.exit(2);
 }
 
-// ── Snapshot ────────────────────────────────────────────────────────────────
-// VACUUM INTO writes a consistent copy of the live database without stopping
-// it. Taken BEFORE any write, so "put it back" is a file copy rather than a
-// point-in-time restore and a redeploy.
-function snapshot(): string {
+// ── Undo file ───────────────────────────────────────────────────────────────
+// NOT a copy of the database. The first production APPLY died with SQLITE_FULL
+// three minutes into `VACUUM INTO`: the volume holds a multi-gigabyte SQLite
+// file and there is no room for a second one.
+//
+// A targeted undo is the better instrument anyway, not merely the affordable
+// one. This reset writes exactly three things — a lead's assignment columns, a
+// ledger row's closing columns, and the territory rows themselves — so the undo
+// only has to carry those. That makes it kilobytes instead of gigabytes, and it
+// makes restoring SAFE: putting back a whole-database snapshot would also erase
+// every knock, sale and signature recorded between the snapshot and the
+// restore. This puts back the assignments and nothing else.
+//
+// Restore with:  node dist/reset-areas.cjs --undo <file>
+interface UndoFile {
+  schemaVersion: 1;
+  takenAt: string;
+  tenantIds: Array<number | null>;
+  leads: Array<{
+    id: number; assigned_rep_id: number | null; assigned_territory_id: number | null;
+    assignment_source: string | null; assigned_by: string | null;
+    assigned_at: string | null; unassigned_at: string | null;
+  }>;
+  ledger: Array<{ id: number }>;          // rows that were OPEN and will be closed
+  territories: Array<Record<string, unknown>>;  // full rows, so a deleted area comes back
+}
+
+function writeUndoFile(tids: Array<number | null>): string {
   const dataDir = process.env.DATA_DIR || process.cwd();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const target = path.join(dataDir, `data.before-area-reset-${stamp}.db`);
-  rawDb.prepare("VACUUM INTO ?").run(target);
+  const target = path.join(dataDir, `area-reset-undo-${stamp}.json`);
+
+  const scoped = (col = "tenant_id") =>
+    tids.includes(null) ? "" : ` AND ${col} IN (${tids.map((t) => Number(t) | 0).join(",")})`;
+
+  const undo: UndoFile = {
+    schemaVersion: 1,
+    takenAt: new Date().toISOString(),
+    tenantIds: tids,
+    leads: all(
+      `SELECT id, assigned_rep_id, assigned_territory_id, assignment_source,
+              assigned_by, assigned_at, unassigned_at
+         FROM leads
+        WHERE (assigned_rep_id IS NOT NULL OR assigned_territory_id IS NOT NULL)${scoped()}`),
+    ledger: all(
+      `SELECT id FROM territory_assignments WHERE unassigned_at IS NULL${scoped()}`),
+    territories: all(`SELECT * FROM territories WHERE 1=1${scoped()}`),
+  };
+
+  fs.writeFileSync(target, JSON.stringify(undo));
   const bytes = fs.statSync(target).size;
-  console.log(`\n  snapshot  ${target}  (${(bytes / 1_048_576).toFixed(1)} MB)`);
-  console.log(`  restore   cp ${JSON.stringify(target)} ${JSON.stringify(path.join(dataDir, "data.db"))}   # with the app stopped\n`);
+  console.log(`\n  undo file  ${target}  (${(bytes / 1024).toFixed(0)} KB)`);
+  console.log(`             ${undo.leads.length} lead assignments · ${undo.ledger.length} open ledger rows · ${undo.territories.length} areas`);
+  console.log(`  restore    node dist/reset-areas.cjs --undo ${JSON.stringify(target)}\n`);
   return target;
+}
+
+/** Put the assignments back, and ONLY the assignments. */
+function restoreUndo(file: string): void {
+  const undo = JSON.parse(fs.readFileSync(file, "utf8")) as UndoFile;
+  if (undo.schemaVersion !== 1) throw new Error(`unsupported undo file version ${undo.schemaVersion}`);
+  console.log(`\nRESTORING from ${file}`);
+  console.log(`  taken ${undo.takenAt} · ${undo.leads.length} leads · ${undo.ledger.length} ledger rows · ${undo.territories.length} areas`);
+
+  const apply = rawDb.transaction(() => {
+    let areas = 0;
+    for (const t of undo.territories) {
+      const cols = Object.keys(t);
+      const sql = `INSERT OR REPLACE INTO territories (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`;
+      rawDb.prepare(sql).run(...cols.map((c) => (t as any)[c]));
+      areas++;
+    }
+    let leads = 0;
+    const put = rawDb.prepare(
+      `UPDATE leads SET assigned_rep_id=?, assigned_territory_id=?, assignment_source=?,
+              assigned_by=?, assigned_at=?, unassigned_at=?, updated_at=?
+        WHERE id=?`);
+    const now = new Date().toISOString();
+    for (const l of undo.leads) {
+      leads += put.run(l.assigned_rep_id, l.assigned_territory_id, l.assignment_source,
+        l.assigned_by, l.assigned_at, l.unassigned_at, now, l.id).changes;
+    }
+    // Re-opening a closed ledger row is blocked by trigger
+    // (trg_terr_assign_closed_immutable) — history is immutable by design. The
+    // ids are recorded so an operator can see which tenures this reset ended,
+    // not so they can be un-ended.
+    return { areas, leads };
+  });
+  const r = apply.immediate() as { areas: number; leads: number };
+  console.log(`  restored ${r.areas} areas and ${r.leads} lead assignments`);
+  console.log(`  NOTE: closed ledger rows stay closed — territory_assignments is append-only by trigger.\n`);
 }
 
 const one = <T>(sql: string, ...args: unknown[]): T =>
   rawDb.prepare(sql).get(...args) as T;
+const all = <T>(sql: string, ...args: unknown[]): T[] =>
+  rawDb.prepare(sql).all(...args) as T[];
 
 function census(tid: number | null) {
   const scope = tid == null ? "" : " WHERE tenant_id = ?";
@@ -199,6 +284,11 @@ function resetTenant(tid: number | null, at: string) {
 // ── Run ─────────────────────────────────────────────────────────────────────
 runMigrations();
 
+if (undoArg) {
+  restoreUndo(undoArg);
+  process.exit(0);
+}
+
 const targets: Array<number | null> = allTenants
   ? (storage.getTenants().map((t) => t.id) as number[])
   : [tenantId];
@@ -232,7 +322,7 @@ if (!apply) {
   process.exit(0);
 }
 
-snapshot();
+writeUndoFile(targets);
 
 const at = new Date().toISOString();
 for (const tid of targets) {
