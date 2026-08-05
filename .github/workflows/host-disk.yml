@@ -41,7 +41,7 @@ concurrency:
 
 jobs:
   disk:
-    name: ${{ inputs.action == 'reclaim' && 'RECLAIM disk' || 'Report disk' }}
+    name: ${{ inputs.action == 'reclaim' && 'RECLAIM disk' || inputs.action == 'compact' && 'COMPACT database' || 'Report disk' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -100,7 +100,7 @@ jobs:
               "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$ACTION" <<'REMOTE'
           set -euo pipefail
           ACTION="$1"
-          [[ "$ACTION" =~ ^(report|reclaim)$ ]]
+          [[ "$ACTION" =~ ^(report|reclaim|compact)$ ]]
           cd /srv/homefront
           SUDO=""; command -v sudo >/dev/null && SUDO="sudo"
 
