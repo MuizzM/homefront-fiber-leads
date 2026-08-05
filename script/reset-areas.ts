@@ -162,10 +162,36 @@ function resetTenant(tid: number | null, at: string) {
         ${tid == null ? "" : "AND tenant_id = ?"}`,
   ).run(...(tid == null ? [at, at] : [at, at, tid])).changes;
 
+  // ── Open ledger rows for areas that no longer exist ──────────────────────
+  // The loop above only closes assignments for areas it can still see. Areas
+  // deleted under the OLD code left their rows OPEN — the ledger still claims a
+  // rep holds ground that is gone. Production had exactly this: zero areas, and
+  // nine open rows. Sweeping them is the same hygiene as clearing the doors,
+  // and without it a reset finishes and still reports "not fully clean".
+  //
+  // The table is append-only by trigger, so these are CLOSED, never deleted —
+  // the record of who worked that ground outlives the area, which is the point.
+  const orphanRows = rawDb.prepare(
+    `SELECT id, territory_id AS territoryId, rep_id AS repId FROM territory_assignments
+      WHERE unassigned_at IS NULL
+        AND territory_id NOT IN (SELECT id FROM territories)
+        ${tid == null ? "" : "AND tenant_id = ?"}`,
+  ).all(...(tid == null ? [] : [tid])) as Array<{ id: number; territoryId: number; repId: number }>;
+  let orphanAssignmentsClosed = 0;
+  for (const row of orphanRows) {
+    orphanAssignmentsClosed += rawDb.prepare(
+      `UPDATE territory_assignments
+          SET unassigned_at = ?, unassigned_by_user_id = NULL,
+              reason = COALESCE(reason, 'area reset — area already gone')
+        WHERE id = ? AND unassigned_at IS NULL`,
+    ).run(at, row.id).changes;
+    repIdsCleared.add(row.repId);
+  }
+
   return {
     areasDeleted: areas.length,
     detached, repCleared: repCleared + strayCleared, strayCleared,
-    assignmentsClosed, runsCancelled,
+    assignmentsClosed, orphanAssignmentsClosed, runsCancelled,
     repIdsCleared: [...repIdsCleared],
   };
 }
@@ -189,7 +215,14 @@ for (const tid of targets) {
   console.log(`  KEPT: ${before.reps} rep accounts, ${before.knocks} knocks, every lead and every sale`);
 
   if (!apply) {
+    const orphanRows = one<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM territory_assignments
+        WHERE unassigned_at IS NULL AND territory_id NOT IN (SELECT id FROM territories)
+          ${tid == null ? "" : "AND tenant_id = ?"}`, ...(tid == null ? [] : [tid])).n;
     console.log(`  → would delete ${before.areas} areas and unassign ${before.leadsWithRep} doors`);
+    if (orphanRows) {
+      console.log(`  → would close ${orphanRows} ledger row${orphanRows === 1 ? "" : "s"} still claiming a rep holds an area that is already gone`);
+    }
     continue;
   }
 }
@@ -218,7 +251,9 @@ for (const tid of targets) {
       areasDeleted: result.areasDeleted, detached: result.detached,
       repCleared: result.repCleared, strayCleared: result.strayCleared,
       repIdsCleared: result.repIdsCleared,
-      assignmentsClosed: result.assignmentsClosed, runsCancelled: result.runsCancelled,
+      assignmentsClosed: result.assignmentsClosed,
+      orphanAssignmentsClosed: result.orphanAssignmentsClosed,
+      runsCancelled: result.runsCancelled,
       reason: "reset to the crew-based area process",
     },
     tenantId: tid, outcome: "success",
@@ -229,7 +264,9 @@ for (const tid of targets) {
   console.log(`  doors detached       ${result.detached}`);
   console.log(`  doors unassigned     ${result.repCleared}  (${result.strayCleared} had no area)`);
   console.log(`  reps freed           ${result.repIdsCleared.length}`);
-  console.log(`  assignment rows closed ${result.assignmentsClosed}  ·  skip-trace runs closed ${result.runsCancelled}`);
+  console.log(`  assignment rows closed ${result.assignmentsClosed + result.orphanAssignmentsClosed}` +
+    `${result.orphanAssignmentsClosed ? ` (${result.orphanAssignmentsClosed} for areas already gone)` : ""}` +
+    `  ·  skip-trace runs closed ${result.runsCancelled}`);
   console.log(`  remaining: ${after.areas} areas, ${after.leadsWithArea} doors in an area, ${after.leadsWithRep} doors with a rep`);
   if (after.areas || after.leadsWithArea || after.leadsWithRep || after.openAssignments) {
     console.error(`  ⚠ NOT FULLY CLEAN — investigate before re-running`);
