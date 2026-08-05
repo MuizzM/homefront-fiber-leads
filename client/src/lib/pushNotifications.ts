@@ -15,6 +15,8 @@
 //
 // Android/Chrome subscribes fine from a tab, so it gets the direct ask.
 
+import { apiRequest } from "@/lib/queryClient";
+
 export type PushState =
   | "unsupported"        // no service worker or no Push API at all
   | "needs_install"      // iOS in a browser tab — must be added to Home Screen first
@@ -87,8 +89,12 @@ export async function enablePush(): Promise<boolean> {
       : await Notification.requestPermission();
     if (permission !== "granted") return false;
 
-    const res = await fetch("/api/push/key", { credentials: "include" });
-    if (!res.ok) return false;
+    // The API authenticates by x-session-id header, never by cookie — a bare
+    // credentialed fetch is a guaranteed 401. apiRequest attaches the session
+    // header (and the CSRF token on mutations, which the server requires on
+    // every non-exempt POST) and throws on failure, which the catch below
+    // already treats as "didn't happen".
+    const res = await apiRequest("GET", "/api/push/key");
     const { publicKey } = await res.json();
     if (!publicKey) return false;
 
@@ -104,16 +110,11 @@ export async function enablePush(): Promise<boolean> {
     const json = sub.toJSON() as { endpoint?: string; keys?: { p256dh?: string; auth?: string } };
     if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) return false;
 
-    const save = await fetch("/api/push/subscribe", {
-      method: "POST",
-      credentials: "include",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
-        userAgent: navigator.userAgent,
-      }),
+    await apiRequest("POST", "/api/push/subscribe", {
+      endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
+      userAgent: navigator.userAgent,
     });
-    return save.ok;
+    return true;
   } catch {
     return false;
   }
@@ -129,10 +130,6 @@ export async function disablePush(): Promise<void> {
     await sub.unsubscribe();
     // Tell the server too — an unsubscribed endpoint would otherwise linger
     // until it failed ten sends.
-    await fetch("/api/push/unsubscribe", {
-      method: "POST", credentials: "include",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ endpoint }),
-    });
+    await apiRequest("POST", "/api/push/unsubscribe", { endpoint });
   } catch { /* best effort */ }
 }
