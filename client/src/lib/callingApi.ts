@@ -26,6 +26,12 @@ export interface CallingCandidate {
   zip: string;
   freshConfirmedAt: string | null;
   freshConfidence: string | null;
+  /** Reached the queue through a skip trace rather than the fiber pipeline. */
+  traced: boolean;
+  /** The scrub verdict for a traced lead's best number. ADVISORY — it says the
+   *  registries do not forbid this number, not that the call is authorized.
+   *  Null for leads that arrived through the fiber pipeline. */
+  tracedBadge: { ready: boolean; label: string; reasons: string[] } | null;
   queueStage: CallingQueueStage | string;
   priority: number;
   assignedUserId: number | null;
@@ -198,6 +204,10 @@ export interface CallingRuntimeStatus {
     emergencyDisabled: boolean;
     policyVersion: number;
   };
+  /** Whether skip-traced doors can enter the queue at all. `available` is false
+   *  until an operator approves the trace provider's contract, and the queue
+   *  says so rather than rendering an unexplained empty list. */
+  tracedImport: { available: boolean; contractStatus: string };
   activeScript: { version: string; title: string } | null;
   activeRuleVersion: string | null;
   representativeHold: { id: string; reason: string; placedAt: string } | null;
@@ -265,7 +275,9 @@ export interface ConsentEvidence {
 
 type PublicCallingCandidate = {
   queueId: string; leadId: number; address: string; city: string; state: string; zip: string;
-  freshConfirmedAt: string | null; freshConfidence: string | null; stage: string; priority: number;
+  freshConfirmedAt: string | null; freshConfidence: string | null; traced?: boolean;
+  tracedBadge?: { ready: boolean; label: string; reasons: string[] } | null;
+  stage: string; priority: number;
   assignedUserId: number | null;
   contact: { id: number; status: string | null; name: string | null; residentStatus: string | null } | null;
   phone: { id: number; masked: string | null; validationStatus: string | null; verifiedAt: string | null;
@@ -278,7 +290,8 @@ type PublicCallingCandidate = {
 function candidateFromApi(value: PublicCallingCandidate): CallingCandidate {
   return {
     queueId: value.queueId, leadId: value.leadId, address: value.address, city: value.city, state: value.state, zip: value.zip,
-    freshConfirmedAt: value.freshConfirmedAt, freshConfidence: value.freshConfidence, queueStage: value.stage,
+    freshConfirmedAt: value.freshConfirmedAt, freshConfidence: value.freshConfidence,
+    traced: Boolean(value.traced), tracedBadge: value.tracedBadge ?? null, queueStage: value.stage,
     priority: Number(value.priority || 0), assignedUserId: value.assignedUserId,
     contactId: value.contact?.id ?? null, contactStatus: value.contact?.status ?? null,
     contactName: value.contact?.name ?? null, residentStatus: value.contact?.residentStatus ?? null,
@@ -307,6 +320,10 @@ export async function getCallingStatus(): Promise<CallingRuntimeStatus> {
       secretsReady: Boolean(status.environment?.secretsReady), emergencyDisabled: Boolean(status.environment?.emergencyDisabled),
     },
     organization: status.organization,
+    tracedImport: {
+      available: Boolean(status.tracedImport?.available),
+      contractStatus: String(status.tracedImport?.contractStatus ?? "unapproved"),
+    },
     activeScript: status.activeScript,
     activeRuleVersion: status.activeRuleVersion,
     representativeHold: status.representativeHold ?? null,
@@ -349,10 +366,13 @@ export async function getCallingComplianceStatus(): Promise<CallingStatus> {
   };
 }
 
-export async function getCallingQueue(options: { stage?: string; limit?: number } = {}): Promise<CallingCandidate[]> {
+export async function getCallingQueue(
+  options: { stage?: string; limit?: number; source?: "traced" | "fiber" } = {},
+): Promise<CallingCandidate[]> {
   const params = new URLSearchParams();
   if (options.stage) params.set("stage", options.stage);
   if (options.limit) params.set("limit", String(options.limit));
+  if (options.source) params.set("source", options.source);
   const payload = await json<{ queue: PublicCallingCandidate[] }>(
     apiRequest("GET", `${ROOT}/queue${params.size ? `?${params}` : ""}`),
   );

@@ -8,6 +8,7 @@ import {
 } from "@shared/calling";
 import { rawDb } from "../db";
 import { can, type Role } from "@shared/capabilities";
+import { tracedComplianceOverlay } from "./tracedPhones";
 import {
   callingEnvironment,
   sha256,
@@ -136,14 +137,36 @@ function buildEvaluation(
     && Boolean(candidate.validationProviderContractRef);
   const phoneValidationFresh = candidate.phoneValidationStatus === "VALID"
     && Boolean(candidate.phoneVerificationExpiresAt) && Date.parse(candidate.phoneVerificationExpiresAt!) > Date.parse(now);
+  // A skip-traced lead carries its own DNC evidence: Tracerfy scrubbed the
+  // number against the federal and state registries when it returned it. That
+  // scrub is folded into the SAME rules an imported dataset feeds, never into
+  // a parallel set — see calling/tracedPhones.ts. Null for leads that arrived
+  // through the fiber pipeline, which leaves the evaluation untouched.
+  const traced = tracedComplianceOverlay(tenantId, leadId, Date.parse(now));
   const policyInput = {
     evaluatedAt: now,
     featureEnabled: environment.moduleEnabled && environment.manualClickToCallEnabled
       && environment.secretsReady && profile.callingEnabled,
     emergencyDisabled: environment.emergencyDisabled || profile.emergencyDisabled,
     tenantAuthorized: environment.pilotAllowed,
-    leadStillQualified: candidate.freshConfidence === "cross_verified" && Boolean(candidate.freshConfirmedAt)
-      && Boolean(candidate.sourceScanTargetId) && !candidate.queueClosedAt
+    // Two ways to be callable, and a lead needs exactly one of them.
+    //
+    // Historically the only one was the fiber pipeline: cross-verified fresh
+    // fiber off a scan target. A skip-traced lead can never satisfy that — it
+    // was never scanned — so enqueuing traced doors without widening this rule
+    // would fill the queue with rows that evaluate BLOCKED_TENANT_POLICY the
+    // moment a rep opens them.
+    //
+    // The traced arm is NOT weaker, it rests on different evidence: a number a
+    // contracted provider associated with this address and scrubbed against
+    // both registries. The scrub's own freshness still gates the dial through
+    // dnc_screened below, so an area traced once and left for a month stops
+    // being callable on its own without anything writing to the database.
+    leadStillQualified: (
+      (candidate.freshConfidence === "cross_verified" && Boolean(candidate.freshConfirmedAt)
+        && Boolean(candidate.sourceScanTargetId))
+      || Boolean(traced)
+    ) && !candidate.queueClosedAt
       && !["sold", "not_interested"].includes(candidate.leadStatus),
     representativeAuthorized,
     representativeOnHold: Boolean(representativeHold),
@@ -170,13 +193,26 @@ function buildEvaluation(
     // organization explicitly enables that counsel-approved business policy.
     // Organization suppression is always checked independently.
     internalDnc: platformDncHit(tenantId, candidate.phoneId),
-    tenantDnc: internalDncHit(tenantId, candidate.phoneHash),
-    nationalDnc: dncHit(tenantId, nationalDataset?.id ?? null, candidate.phoneHash),
-    stateDnc: dncHit(tenantId, stateDataset?.id ?? null, candidate.phoneHash),
-    nationalDncFresh: environment.nationalDncEnabled && Boolean(nationalDataset?.fresh)
-      && Date.parse(now) - Date.parse(nationalDataset?.sourceAsOf ?? "") <= profile.dncMaxAgeDays * 86_400_000,
-    stateDncFresh: environment.stateDncEnabled && Boolean(stateDataset?.fresh)
-      && Date.parse(now) - Date.parse(stateDataset?.sourceAsOf ?? "") <= profile.dncMaxAgeDays * 86_400_000,
+    // A known TCPA serial litigator is suppressed at the organization level —
+    // the hardest block the engine has, and the one that short-circuits ahead
+    // of every configuration reason so it can never be masked by an unrelated
+    // gap in setup.
+    tenantDnc: internalDncHit(tenantId, candidate.phoneHash) || Boolean(traced?.tenantDnc),
+    // Every DNC signal ORs: a hit from either source is a hit. The traced flags
+    // can only ever ADD a block, never clear one an imported dataset found.
+    nationalDnc: dncHit(tenantId, nationalDataset?.id ?? null, candidate.phoneHash) || Boolean(traced?.nationalDnc),
+    stateDnc: dncHit(tenantId, stateDataset?.id ?? null, candidate.phoneHash) || Boolean(traced?.stateDnc),
+    // Screening COVERAGE, not hits. A current provider scrub is the evidence
+    // this rule asks for, so a traced lead is screened even in an organization
+    // holding no imported registry files. verdictForPhone fails closed on both
+    // "never scrubbed" and "scrub expired", so neither can satisfy it and the
+    // engine falls through to BLOCKED_STALE_DNC_DATA on its own.
+    nationalDncFresh: (environment.nationalDncEnabled && Boolean(nationalDataset?.fresh)
+      && Date.parse(now) - Date.parse(nationalDataset?.sourceAsOf ?? "") <= profile.dncMaxAgeDays * 86_400_000)
+      || Boolean(traced?.screened),
+    stateDncFresh: (environment.stateDncEnabled && Boolean(stateDataset?.fresh)
+      && Date.parse(now) - Date.parse(stateDataset?.sourceAsOf ?? "") <= profile.dncMaxAgeDays * 86_400_000)
+      || Boolean(traced?.screened),
     dncDatasetRef: [nationalDataset?.id, stateDataset?.id].filter(Boolean).join(",") || null,
     verifiedConsent: consent.verified,
     consentRevoked: consent.revoked,
@@ -208,6 +244,12 @@ function buildEvaluation(
     sellerAuthorizationId: sellerAuthorization?.id ?? null,
     ruleVersionId: ruleVersion?.id ?? null,
     nationalDatasetId: nationalDataset?.id ?? null, stateDatasetId: stateDataset?.id ?? null,
+    // The scrub behind a traced block, so an audit export can show WHICH
+    // registry condemned the number rather than only that something did.
+    tracedScrub: traced ? {
+      dncFlags: traced.verdict.dncFlags, reasons: traced.verdict.reasons,
+      dnc: traced.verdict.dnc, screened: traced.screened,
+    } : null,
     consentId: consent.id,
     representativeHoldId: representativeHold?.id ?? null,
     associationExpiresAt: candidate.associationExpiresAt,

@@ -49,6 +49,7 @@ import {
   validatePhoneManually,
   type CallingCandidate,
 } from "./store";
+import { syncTracedPhoneQueue, tracedBadgesForLeads, tracerfyProvider } from "./tracedPhones";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -71,6 +72,8 @@ function localMinute(value: string): number {
 const queueQuerySchema = z.object({
   stage: z.string().trim().min(1).max(80).regex(/^[A-Z0-9_]+$/).optional(),
   limit: z.coerce.number().int().min(1).max(250).default(100),
+  // Where the lead entered the queue: a skip trace, or the fiber pipeline.
+  source: z.enum(["traced", "fiber"]).optional(),
 }).strict();
 
 const manualContactSchema = z.object({
@@ -468,6 +471,7 @@ function publicCandidate(candidate: CallingCandidate): Record<string, unknown> {
     zip: candidate.zip,
     freshConfirmedAt: candidate.freshConfirmedAt,
     freshConfidence: candidate.freshConfidence,
+    traced: candidate.traced,
     stage: candidate.queueStage,
     priority: candidate.priority,
     assignedUserId: candidate.assignedUserId,
@@ -502,7 +506,14 @@ function publicCandidate(candidate: CallingCandidate): Record<string, unknown> {
 }
 
 function scopedCandidate(req: Request, res: Response, tid: number, leadId: number): CallingCandidate | null {
-  const candidate = getCallingCandidate(tid, leadId);
+  let candidate = getCallingCandidate(tid, leadId);
+  // A traced door reaches the queue on the queue read. Opening one by direct
+  // link — a bookmark, a shared URL, a callback notification — must not 404
+  // just because nobody loaded the list first.
+  if (!candidate) {
+    syncTracedPhoneQueue(tid);
+    candidate = getCallingCandidate(tid, leadId);
+  }
   if (!candidate || (!canInspectAllCallingRecords(req) && candidate.assignedUserId != null && candidate.assignedUserId !== userId(req))) {
     res.status(404).json({ error: "Calling lead not found" });
     return null;
@@ -611,6 +622,13 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
           stateRulesApproved: profile.stateRulesApproved,
           callerIdConfigured: profile.callerIdAuthorized && Boolean(profile.callerIdReference),
         },
+        // Deliberately NOT a blocker: an unapproved trace provider stops traced
+        // doors from entering the queue, it does not stop the fiber pipeline
+        // from calling. Reported so the queue can say which one is the case.
+        tracedImport: (() => {
+          const provider = tracerfyProvider(tid);
+          return { available: provider.usable, contractStatus: provider.contractStatus };
+        })(),
         activeScript: script ? { version: script.version, title: script.title } : null,
         activeRuleVersion: rules?.version ?? null,
         representativeHold: representativeHold ? {
@@ -629,8 +647,21 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
     if (!parsed.success) return res.status(400).json({ error: "Invalid queue query", details: parsed.error.flatten() });
     try {
       const synced = syncFreshFiberQueue(tid);
-      const queue = listCallingQueue(tid, userId(req), canInspectAllCallingRecords(req), parsed.data.stage, parsed.data.limit);
-      res.json({ queue: queue.map(publicCandidate), synced, fullPhoneNumbersExposed: false });
+      // Skip-traced doors join the queue on the same read. Reported separately
+      // rather than folded into `synced` so an operator can tell "the trace
+      // brought in nothing" from "the trace cannot import at all" — the latter
+      // is a provider approval they have to go make.
+      const tracedSync = syncTracedPhoneQueue(tid);
+      const queue = listCallingQueue(tid, userId(req), canInspectAllCallingRecords(req),
+        parsed.data.stage, parsed.data.limit, parsed.data.source);
+      const badges = tracedBadgesForLeads(tid, queue.filter(c => c.traced).map(c => c.leadId), Date.now());
+      res.json({
+        queue: queue.map(candidate => ({
+          ...publicCandidate(candidate),
+          tracedBadge: badges.get(candidate.leadId) ?? null,
+        })),
+        synced, tracedSync, fullPhoneNumbersExposed: false,
+      });
     } catch (error) { fail(res, error); }
   });
 

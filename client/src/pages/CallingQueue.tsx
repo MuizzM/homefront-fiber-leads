@@ -66,6 +66,50 @@ function stageDot(stage: string): string {
   return "bg-muted-foreground/40";
 }
 
+/**
+ * One traced door.
+ *
+ * The badge is the SCRUB verdict, not an authorization — a rep still gets the
+ * full compliance evaluation when they open the lead. A blocked row stays
+ * visible and inert rather than being dropped: the household is still a door
+ * worth knocking, and a rep who cannot see that the number was suppressed
+ * learns to distrust an empty list instead of the badge.
+ */
+function TracedRow({ candidate }: { candidate: CallingCandidate }) {
+  const ready = candidate.tracedBadge?.ready ?? false;
+  return (
+    <li className="render-lazy">
+      <Link href={`/calling/lead/${candidate.leadId}`} data-testid={`traced-lead-${candidate.leadId}`}
+        aria-label={`${candidate.address} — ${candidate.tracedBadge?.label ?? "Traced"}`}
+        className={cn("group flex items-center gap-3 px-4 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+          ready ? "hover:bg-secondary/40 active:bg-secondary/60" : "opacity-60 hover:bg-secondary/20")}>
+        <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ready ? "bg-emerald-500" : "bg-red-500")} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[13px] font-medium leading-5 text-foreground">{candidate.address}</span>
+            <span className={cn("inline-flex max-w-[55%] shrink-0 items-center rounded-full border px-2 py-px text-2xs font-medium uppercase tracking-wide",
+              ready ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                : "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400")}>
+              <span className="truncate">{ready ? "Ready to dial" : "Blocked"}</span>
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
+            {candidate.city}, {candidate.state} {candidate.zip}
+            {" "}<span aria-hidden="true">·</span> {candidate.contactName ?? "Name not traced"}
+            {candidate.maskedPhone ? <> <span aria-hidden="true">·</span> <span className="font-mono text-[11px] tabular-nums">{candidate.maskedPhone}</span></> : null}
+          </p>
+          {!ready && candidate.tracedBadge ? (
+            <p className="mt-0.5 truncate text-[11px] leading-4 text-red-600 dark:text-red-400">{candidate.tracedBadge.label}</p>
+          ) : null}
+        </div>
+        {ready
+          ? <PhoneCall aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
+          : <ArrowRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5" />}
+      </Link>
+    </li>
+  );
+}
+
 function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
   const eligible = candidate.queueStage === "ELIGIBLE_MANUAL_CALL";
   return (
@@ -144,9 +188,11 @@ export default function CallingQueue() {
     staleTime: 15_000,
     retry: 1,
   });
+  // Fiber-only. Traced doors get their own section below, and a lead that is
+  // both would otherwise render twice under two different orderings.
   const queueQuery = useQuery({
-    queryKey: ["/api/v1/calling/queue", stage],
-    queryFn: () => getCallingQueue({ stage: stage || undefined, limit: 150 }),
+    queryKey: ["/api/v1/calling/queue", stage, "fiber"],
+    queryFn: () => getCallingQueue({ stage: stage || undefined, limit: 150, source: "fiber" }),
     enabled: statusQuery.isSuccess,
     staleTime: 10_000,
     retry: 1,
@@ -161,8 +207,10 @@ export default function CallingQueue() {
   // Chip counts come from a separate UNFILTERED queue fetch — deriving them
   // from the stage-filtered result would zero out every other chip's count.
   const countsQuery = useQuery({
-    queryKey: ["/api/v1/calling/queue", "counts"],
-    queryFn: () => getCallingQueue({ limit: 250 }), // server cap — chips must not undercount
+    queryKey: ["/api/v1/calling/queue", "counts", "fiber"],
+    // Fiber-only, matching the list these chips filter — counting traced doors
+    // here would put a number on the chip that the list below can never reach.
+    queryFn: () => getCallingQueue({ limit: 250, source: "fiber" }), // server cap — chips must not undercount
     enabled: statusQuery.isSuccess,
     staleTime: 10_000,
     retry: 1,
@@ -190,6 +238,30 @@ export default function CallingQueue() {
     staleTime: 30_000,
     retry: 1,
   });
+  // Skip-traced doors, tenant-wide. A separate fetch rather than a slice of the
+  // main queue: these are ranked by whether the scrub cleared them, not by the
+  // queue stage, and mixing the two orderings made both unreadable.
+  const tracedQuery = useQuery({
+    queryKey: ["/api/v1/calling/queue", "traced"],
+    queryFn: () => getCallingQueue({ source: "traced", limit: 250 }),
+    enabled: statusQuery.isSuccess,
+    staleTime: 10_000,
+    retry: 1,
+  });
+  const tracedLeads = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const rows = (tracedQuery.data ?? []).filter(item => !needle
+      || [item.address, item.city, item.state, item.zip, item.contactName].some(value => value?.toLowerCase().includes(needle)));
+    // Dialable first, then by address so the order is stable across refetches.
+    return [...rows].sort((a, b) =>
+      Number(b.tracedBadge?.ready ?? false) - Number(a.tracedBadge?.ready ?? false)
+      || a.address.localeCompare(b.address));
+  }, [tracedQuery.data, search]);
+  const tracedReady = useMemo(
+    () => tracedLeads.filter(item => item.tracedBadge?.ready).length,
+    [tracedLeads],
+  );
+
   const callbackGroups = useMemo(() => {
     const rows = callbacksQuery.data ?? [];
     const now = Date.now();
@@ -283,6 +355,33 @@ export default function CallingQueue() {
                 })}
               </div>
             </div>
+
+            {!statusQuery.data.tracedImport?.available ? (
+              <section aria-label="Traced numbers unavailable" data-testid="traced-import-unavailable"
+                className="rounded-2xl border border-dashed border-amber-500/30 bg-card p-4">
+                <h2 className="text-[13px] font-semibold text-foreground">Traced numbers are not in the queue yet</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  The trace provider has been turned off for this organization, so skip-traced doors stay out of
+                  calling. Contract status: <span className="font-medium text-foreground">{statusQuery.data.tracedImport?.contractStatus ?? "unapproved"}</span>.
+                </p>
+              </section>
+            ) : tracedQuery.isLoading ? <QueueRowsSkeleton /> : tracedLeads.length ? (
+              <section aria-label="Traced numbers" className="overflow-hidden rounded-2xl border border-border bg-card" data-testid="traced-leads">
+                <header className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-2.5">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Traced numbers</h2>
+                  <span className="text-[11px] tabular-nums text-muted-foreground" data-testid="traced-ready-count">
+                    {tracedReady} ready · {tracedLeads.length} total
+                  </span>
+                </header>
+                <ul className="divide-y divide-border/60">
+                  {tracedLeads.map(item => <TracedRow key={item.queueId} candidate={item} />)}
+                </ul>
+                <p className="border-t border-border px-4 py-2 text-[11px] leading-4 text-muted-foreground">
+                  Scrubbed against the federal and state registries. Opening a lead still runs the full compliance check
+                  before any number can be dialled.
+                </p>
+              </section>
+            ) : null}
 
             {queueQuery.isLoading ? <QueueRowsSkeleton /> : queueQuery.isError ? (
               <div role="alert" className="rounded-2xl border border-red-500/25 bg-card p-5 text-center">

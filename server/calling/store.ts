@@ -47,6 +47,9 @@ export type CallingCandidate = {
   freshConfirmedAt: string | null;
   freshConfidence: string | null;
   sourceScanTargetId: number | null;
+  /** This lead has skip-traced numbers. It may have reached the queue through
+   *  the trace rather than the fiber pipeline — see calling/tracedPhones.ts. */
+  traced: boolean;
   leadStatus: string;
   queueStage: string;
   queueClosedAt: string | null;
@@ -373,6 +376,8 @@ const CANDIDATE_SELECT = `SELECT q.id AS queueId,q.tenant_id AS tenantId,q.lead_
   p.verification_expires_at AS phoneVerificationExpiresAt,p.line_type AS lineType,p.reassigned_risk AS reassignedRisk,
   coalesce(a.identity_confidence,0) AS identityConfidence,coalesce(a.wrong_party,0) AS wrongParty,
   a.expires_at AS associationExpiresAt,a.provider_config_id AS providerConfigId,pc.provider_name AS providerName,
+  coalesce(EXISTS(SELECT 1 FROM lead_traced_phones t WHERE t.lead_id=q.lead_id
+    AND (t.tenant_id IS NULL OR t.tenant_id=q.tenant_id)),0) AS traced,
   coalesce(pc.enabled,0) AS providerEnabled,
   coalesce(pc.permitted_use_approved,0) AS providerPermittedUseApproved,
   coalesce(EXISTS(SELECT 1 FROM json_each(pc.permitted_uses_json) WHERE value='telemarketing_contact_enrichment'),0) AS providerUseExplicit,
@@ -395,6 +400,7 @@ const CANDIDATE_SELECT = `SELECT q.id AS queueId,q.tenant_id AS tenantId,q.lead_
 function candidate(row: any): CallingCandidate {
   return {
     ...row,
+    traced: bool(row.traced),
     reassignedRisk: bool(row.reassignedRisk), wrongParty: bool(row.wrongParty),
     providerEnabled: bool(row.providerEnabled), providerPermittedUseApproved: bool(row.providerPermittedUseApproved),
     providerUseExplicit: bool(row.providerUseExplicit), validationProviderEnabled: bool(row.validationProviderEnabled),
@@ -404,12 +410,17 @@ function candidate(row: any): CallingCandidate {
   };
 }
 
-export function listCallingQueue(tenantId: number, userId: number, canManage: boolean, stage?: string, limit = 100): CallingCandidate[] {
+export function listCallingQueue(tenantId: number, userId: number, canManage: boolean, stage?: string, limit = 100,
+  source?: "traced" | "fiber"): CallingCandidate[] {
   syncFreshFiberQueue(tenantId);
   const conditions = ["q.tenant_id=?", "q.closed_at IS NULL"];
   const args: unknown[] = [tenantId];
   if (!canManage) { conditions.push("(q.assigned_user_id IS NULL OR q.assigned_user_id=?)"); args.push(userId); }
   if (stage) { conditions.push("q.stage=?"); args.push(stage); }
+  if (source) {
+    conditions.push(`${source === "traced" ? "" : "NOT "}EXISTS(SELECT 1 FROM lead_traced_phones t
+      WHERE t.lead_id=q.lead_id AND (t.tenant_id IS NULL OR t.tenant_id=q.tenant_id))`);
+  }
   args.push(Math.max(1, Math.min(250, limit)));
   const rows = rawDb.prepare(`${CANDIDATE_SELECT} WHERE ${conditions.join(" AND ")}
     ORDER BY CASE WHEN q.stage='CALLBACK_SCHEDULED' THEN 0 WHEN q.stage='ELIGIBLE_MANUAL_CALL' THEN 1 ELSE 2 END,
