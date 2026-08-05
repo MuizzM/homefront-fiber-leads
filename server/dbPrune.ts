@@ -137,6 +137,36 @@ export function pruneFinishedRunTargets(cutoffIso: string): number {
   return total;
 }
 
+/**
+ * Has a prune completed recently enough?
+ *
+ * The scheduler used to be a single 30-minute setTimeout, and in production it
+ * simply never fired: registered at 08:44:46, still nothing 38 uninterrupted
+ * minutes later, with neither a success nor a failure line. The control worker
+ * runs the producer/scorer loop, which the boot file itself documents as
+ * "blocks 20-25s during every scoring cycle" — a long one-shot timer on a
+ * saturated event loop is a promise nobody keeps.
+ *
+ * A DUE CHECK is robust to that, and to the two other things that were
+ * indistinguishable from it: a deploy restarting the container before the timer
+ * matured (six deploys in one day is enough to starve a 30-minute timer
+ * forever), and a log line rotating out of a buffer a chatty scanner is filling.
+ * Ask the database when the last prune finished; if it was long enough ago, run.
+ */
+export function isPruneDue(minHoursSince = 20): boolean {
+  try {
+    const row = rawDb.prepare(
+      `SELECT ran_at FROM db_prune_runs ORDER BY id DESC LIMIT 1`,
+    ).get() as { ran_at: string } | undefined;
+    if (!row?.ran_at) return true; // never run
+    const last = Date.parse(row.ran_at.includes("T") ? row.ran_at : row.ran_at.replace(" ", "T") + "Z");
+    if (!Number.isFinite(last)) return true;
+    return Date.now() - last >= minHoursSince * 3_600_000;
+  } catch {
+    return true; // no table yet — never pruned
+  }
+}
+
 export function runDbPrune(): void {
   const now = Date.now();
   const out: Record<string, number> = {};

@@ -1388,13 +1388,33 @@ app.use((req, res, next) => {
         console.warn("[db-prune] skipped:", e?.message);
       }
     };
-    // Logged at REGISTRATION, not at fire time. "No prune line" previously could
-    // not distinguish "the scheduler was never reached" from "it ran and threw"
-    // from "it ran and the line rotated out of the log buffer" — three very
-    // different problems that looked identical from outside the box.
-    structuredLog("db_prune.scheduled", { role: process.env.HF_ROLE ?? "single", firstRunInMin: 30 });
-    setTimeout(() => { void pruneTick(); }, 30 * 60_000);
-    const pruneInterval = setInterval(() => { void pruneTick(); }, 24 * 3_600_000);
+    // A DUE CHECK, not a one-shot timer. The previous scheduling was a single
+    // 30-minute setTimeout and in production it never fired: registered at
+    // 08:44:46, nothing 38 uninterrupted minutes later, no success line and no
+    // failure line. This worker runs the producer/scorer loop that the comment
+    // below documents as blocking 20-25s per cycle, and a long one-shot timer on
+    // a saturated event loop is a promise nobody keeps. Six deploys in a day
+    // would starve it just as effectively, since every restart reset the clock.
+    //
+    // So: wake up often and cheaply, ask the DATABASE whether a prune is
+    // actually due, and run only then. Robust to event-loop delay, to restarts,
+    // and to redeploys — and it self-heals, because a missed window is simply
+    // still due at the next tick rather than lost until tomorrow.
+    const CHECK_EVERY_MS = 5 * 60_000;
+    const dueTick = async () => {
+      try {
+        const { isPruneDue } = await import("./dbPrune");
+        if (!isPruneDue()) return;
+      } catch { /* no table yet — fall through and let the prune create it */ }
+      await pruneTick();
+    };
+    structuredLog("db_prune.scheduled", {
+      role: process.env.HF_ROLE ?? "single", firstRunInMin: 2, checkEveryMin: 5,
+    });
+    // First check at +2min, not +30: long enough to stay clear of the health
+    // gate, short enough that an ordinary deploy cadence cannot starve it.
+    setTimeout(() => { void dueTick(); }, 2 * 60_000);
+    const pruneInterval = setInterval(() => { void dueTick(); }, CHECK_EVERY_MS);
     if (typeof (pruneInterval as any).unref === "function") pruneInterval.unref();
   }
 

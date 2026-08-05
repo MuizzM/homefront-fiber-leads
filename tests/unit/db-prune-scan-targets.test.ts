@@ -176,3 +176,45 @@ describe("prune leaves a durable record", () => {
     expect(n).toBeLessThanOrEqual(60);
   });
 });
+
+describe("isPruneDue — scheduling that survives a busy box", () => {
+  beforeEach(() => { try { rawDb.prepare("DELETE FROM db_prune_runs").run(); } catch { /* not created yet */ } });
+
+  it("is due when nothing has ever run", () => {
+    expect(prune.isPruneDue()).toBe(true);
+  });
+
+  it("is NOT due immediately after a run", () => {
+    prune.runDbPrune();
+    expect(prune.isPruneDue()).toBe(false);
+  });
+
+  it("is due again once the window has passed", () => {
+    prune.runDbPrune();
+    rawDb.prepare("UPDATE db_prune_runs SET ran_at = ?").run(iso(25 * 3_600_000));
+    expect(prune.isPruneDue()).toBe(true);
+  });
+
+  it("THE POINT: a missed window is still due at the next tick, not lost", () => {
+    // The old scheduling was a one-shot 30-minute timer. If it did not fire —
+    // saturated event loop, or a deploy restarting the container first — the
+    // run was simply lost until the next 24h interval, which the next deploy
+    // would also reset. A due check self-heals: nothing ran, so it is still due.
+    rawDb.prepare("DELETE FROM db_prune_runs").run();
+    expect(prune.isPruneDue()).toBe(true);
+    expect(prune.isPruneDue()).toBe(true); // still due; checking is not running
+  });
+
+  it("treats an unparseable timestamp as due rather than skipping forever", () => {
+    prune.runDbPrune();
+    rawDb.prepare("UPDATE db_prune_runs SET ran_at = 'not-a-date'").run();
+    expect(prune.isPruneDue()).toBe(true);
+  });
+
+  it("honours a custom window", () => {
+    prune.runDbPrune();
+    rawDb.prepare("UPDATE db_prune_runs SET ran_at = ?").run(iso(3 * 3_600_000));
+    expect(prune.isPruneDue(20)).toBe(false);
+    expect(prune.isPruneDue(1)).toBe(true);
+  });
+});

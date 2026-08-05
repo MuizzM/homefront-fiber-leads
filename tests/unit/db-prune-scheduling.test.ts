@@ -18,10 +18,20 @@ import { describe, expect, it } from "vitest";
 const src = readFileSync(join(process.cwd(), "server/index.ts"), "utf8");
 
 describe("nightly DB prune scheduling", () => {
-  it("is scheduled at all", () => {
+  it("is scheduled as a recurring DUE CHECK, not a single long timer", () => {
+    // The one-shot 30-minute timer never fired in production: registered at
+    // 08:44:46, nothing 38 uninterrupted minutes later, no success and no
+    // failure line. A short repeating check that asks the database whether a
+    // prune is due survives a saturated event loop AND a deploy cadence that
+    // restarts the container before any long timer matures.
     expect(src).toContain("runDbPrune");
-    expect(src).toMatch(/setTimeout\(\(\) => \{ void pruneTick\(\); \}, 30 \* 60_000\)/);
-    expect(src).toMatch(/setInterval\(\(\) => \{ void pruneTick\(\); \}, 24 \* 3_600_000\)/);
+    expect(src).toContain("isPruneDue");
+    expect(src).toMatch(/setTimeout\(\(\) => \{ void dueTick\(\); \}, 2 \* 60_000\)/);
+    expect(src).toMatch(/setInterval\(\(\) => \{ void dueTick\(\); \}, CHECK_EVERY_MS\)/);
+  });
+
+  it("does not go back to a long one-shot timer", () => {
+    expect(src).not.toMatch(/setTimeout\([^)]*pruneTick[^)]*30 \* 60_000/);
   });
 
   it("THE REGRESSION: is NOT inside the FRESH_HARVEST block", () => {
