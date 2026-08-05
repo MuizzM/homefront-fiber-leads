@@ -28,11 +28,19 @@ const providerLatencyMs = bounded(process.env.LOAD_TEST_PROVIDER_LATENCY_MS, 1, 
 // refresh-due during the compressed multi-minute run.
 const refreshMarginMs = 1_000;
 const tokenLifetimeMs = simulatedMinuteMs + refreshMarginMs + 25;
+// The synthetic mint below is the only source of token material in this process,
+// so this prefix is a complete probe for a bearer string escaping into the pool
+// snapshot. Keep it shared with the mint so the probe cannot drift.
+const syntheticTokenPrefix = "load-test-token";
 
 ensureSchema();
+// Mirrors coordinatorBootClean(). The scanner has no persistent halt/pause
+// state: ensureSchema() drops the legacy halted/halt_reason/paused_until columns
+// and never recreates them, so naming them here threw SQLITE_ERROR "no such
+// column: halted" before a single assertion ran.
 rawDb.exec(`DELETE FROM provider_rate_events; DELETE FROM provider_admission_queue;
   DELETE FROM provider_address_locks; DELETE FROM provider_shared_result_cache;
-  UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL,next_start_at=0 WHERE id=1;`);
+  UPDATE provider_global_control SET next_start_at=0 WHERE id=1;`);
 
 // Capacity phase: 100 anonymous token slots × 100 distinct addresses each.
 let distributionActiveMints = 0;
@@ -92,7 +100,7 @@ const tokenPool = new AuthorizedTokenPool({
     activeMints--;
     mintedTokens++;
     return {
-      token: `load-test-token-${slotId}-${mintedTokens}`,
+      token: `${syntheticTokenPrefix}-${slotId}-${mintedTokens}`,
       expiresAt: Date.now() + tokenLifetimeMs,
     };
   },
@@ -141,6 +149,9 @@ await Promise.all(calls.map(async ({ key, source }) => {
   latencies.push(performance.now() - started);
 }));
 
+// Sampled while slots still hold live token material: stop() nulls every token,
+// which would make the redaction assertion below vacuously true.
+const warmPoolSnapshot = tokenPool.snapshot();
 tokenPool.stop();
 latencies.sort((a, b) => a - b);
 const maxStartsInWindow = maximumStartsInWindow(providerStarts, simulatedMinuteMs);
@@ -155,7 +166,11 @@ const assertions = {
   noDuplicateProviderRequests: providerCalls === uniqueChecks,
   noLostJobs: calls.length === uniqueChecks + duplicateCalls,
   noRefreshStorm: peakMints <= 2 && distributionPeakMints <= 2,
-  poolRedacted: tokenPool.snapshot().states.DISABLED > 0,
+  // getTokenStatus() embeds this exact snapshot in GET /api/token-status, so it
+  // must carry lifecycle and metrics only — never the bearer strings its slots
+  // are holding. `ready > 0` keeps the check honest: redaction proves nothing
+  // about a pool that was empty when it was sampled.
+  poolRedacted: warmPoolSnapshot.ready > 0 && !exposesTokenMaterial(warmPoolSnapshot),
 };
 
 console.log(JSON.stringify({
@@ -216,4 +231,11 @@ function bounded(value: string | undefined, min: number, max: number, fallback: 
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** True when any value reachable in the snapshot carries minted token material.
+ *  Scans the serialized form rather than known fields so a token leaking through
+ *  a newly added field is caught too. */
+function exposesTokenMaterial(snapshot: ReturnType<typeof tokenPool.snapshot>): boolean {
+  return JSON.stringify(snapshot).includes(syntheticTokenPrefix);
 }

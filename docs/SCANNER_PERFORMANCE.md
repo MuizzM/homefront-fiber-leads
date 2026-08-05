@@ -52,7 +52,10 @@ transport capacity, or a provider denial requires backoff.
 ## Verification coverage
 
 - Actual token expiry parsing and refresh 60 seconds early.
-- READY, REFRESHING, COOLDOWN, EXPIRED, DISABLED, and EMPTY lifecycle states.
+- EMPTY, READY, REFRESHING, and EXPIRED lifecycle states. There is no cooldown
+  or disabled state: a failed slot returns to EMPTY and is re-minted on demand.
+- Pool snapshots carry lifecycle and metrics only — never token material, since
+  `GET /api/token-status` serves one to every authenticated caller.
 - Least-loaded round-robin token leasing.
 - Per-token health, in-flight count, checks-used, and checks-remaining metrics.
 - Exact 10,000-address distribution with a hard over-capacity rejection.
