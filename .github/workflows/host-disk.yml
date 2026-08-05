@@ -219,7 +219,19 @@ jobs:
 
           # ── Prune state ──────────────────────────────────────────────────
           hr; echo "DB PRUNE"
-          docker logs --since 24h "$APP" 2>&1 | grep -a "db_prune" | tail -3 | sed 's/^/  /' || echo "  no db_prune log in the last 24h"
+          # Match SUCCESS *and* FAILURE. structuredLog writes "db_prune.done";
+          # the scheduler's catch writes "[db-prune] skipped". Grepping only the
+          # first makes a crashing prune indistinguishable from a healthy one —
+          # silence is not success, and this filter previously had that exact
+          # blind spot while being used to conclude the prune had not run.
+          echo "  container started: $(docker inspect -f '{{.State.StartedAt}}' "$APP" 2>/dev/null || echo unknown)"
+          echo "  deployed tag:      $(cat .deployed-tag 2>/dev/null || echo none)"
+          FOUND="$(docker logs --since 24h "$APP" 2>&1 | grep -aE "db_prune|db-prune" | tail -5 || true)"
+          if [ -n "$FOUND" ]; then echo "$FOUND" | sed 's/^/  /'; else
+            echo "  NO prune line of any kind (neither db_prune.done nor [db-prune] skipped)"
+            echo "  last 5 log lines, for context:"
+            docker logs --tail 5 "$APP" 2>&1 | sed 's/^/    /' || true
+          fi
 
           if [ "$ACTION" = "report" ]; then
             hr; echo "Report only — nothing was changed."
