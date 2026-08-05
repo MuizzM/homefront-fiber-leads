@@ -12,7 +12,7 @@
 // tests/unit/commission-terms.test.ts against the snapshot the PDF renders.
 import { describe, expect, it } from "vitest";
 import { buildAgreementSnapshot } from "../../server/onboardingAgreementTemplates";
-import { renderOnboardingPacketPdf } from "../../server/onboardingPdf";
+import { accentFor, BRAND, renderOnboardingPacketPdf } from "../../server/onboardingPdf";
 import { ONBOARDING_DOCUMENT_TYPES } from "@shared/onboardingDocuments";
 import { DEFAULT_COMMISSION_TERMS, type CommissionTerms } from "@shared/commissionTerms";
 
@@ -43,20 +43,22 @@ describe("the onboarding packet", () => {
     expect(pdf.length).toBeGreaterThan(15_000);
   });
 
-  it("THE REQUIREMENT: the document changes with the plan the manager chose", async () => {
-    // Same signer, same four agreements — only the terms differ. If the choice
-    // did not reach the paper, these would be byte-identical.
-    const tiered = await packet(DEFAULT_COMMISSION_TERMS);
-    const flat = await packet({
-      ...DEFAULT_COMMISSION_TERMS, structure: "FLAT", flatRateCents: 22_500, tiers: [], reservePercent: 15,
+  it("THE REQUIREMENT: the plan reaches the pages the PDF is built from", async () => {
+    // Asserted on the SNAPSHOT, not on rendered bytes: pdfkit stamps a creation
+    // timestamp, so two renders always differ and a byte comparison would pass
+    // even if the terms never reached the document. The snapshot is the exact
+    // input renderAgreementBody draws, so proving it carries the numbers proves
+    // the page does.
+    const flat = buildAgreementSnapshot({
+      ...base, documentType: "commission_agreement",
+      compTerms: { ...DEFAULT_COMMISSION_TERMS, structure: "FLAT", flatRateCents: 22_500, tiers: [], reservePercent: 15 },
     });
-    expect(flat.equals(tiered)).toBe(false);
-  });
-
-  it("a different reserve percentage produces a different document", async () => {
-    const ten = await packet({ ...DEFAULT_COMMISSION_TERMS, reservePercent: 10 });
-    const twenty = await packet({ ...DEFAULT_COMMISSION_TERMS, reservePercent: 20 });
-    expect(ten.equals(twenty)).toBe(false);
+    const text = flat.sections.flatMap((s) => s.paragraphs).join("\n");
+    expect(text).toContain("$225");
+    expect(text).toContain("15% of otherwise payable commissions");
+    // And it still renders.
+    const pdf = await packet({ ...DEFAULT_COMMISSION_TERMS, structure: "FLAT", flatRateCents: 22_500, tiers: [], reservePercent: 15 });
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
   });
 
   it("renders with no commission terms at all, for a rep issued before terms were stated", async () => {
@@ -74,6 +76,43 @@ describe("the onboarding packet", () => {
     // The cover reads the terms off the commission agreement; without one it
     // must still produce a document rather than throwing on a missing field.
     const pdf = await packet(DEFAULT_COMMISSION_TERMS, ["field_safety"] as const);
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+  });
+});
+
+describe("branding", () => {
+  it("embeds the logo — the asset must actually reach the production image", async () => {
+    // The logo ships to dist/public via Vite and is read from beside the bundle
+    // at runtime. If that path is ever wrong the renderer degrades silently to
+    // a wordmark, which looks fine in review and wrong on a signed contract.
+    // A text-only packet is ~40 KB; an embedded PNG takes it past 200 KB.
+    const pdf = await packet(DEFAULT_COMMISSION_TERMS);
+    expect(pdf.length).toBeGreaterThan(200_000);
+  });
+
+  // The accent is tested DIRECTLY rather than by diffing two rendered PDFs.
+  // pdfkit stamps a creation timestamp into every document, so any two renders
+  // differ byte-for-byte whatever their content — a comparison that "passes"
+  // tells you nothing about the colour. (An earlier version of this file made
+  // exactly that mistake and read as green.)
+  it("uses the tenant's own brand colour when one is set", () => {
+    expect(accentFor("#7C3AED")).toBe("#7C3AED");
+    expect(accentFor("  #7c3aed  ")).toBe("#7c3aed");
+  });
+
+  it("falls back to the house teal for anything unusable", () => {
+    for (const bad of ["", "red", "#GGGGGG", "#12345", "12345678", null, undefined]) {
+      expect(accentFor(bad as string | null)).toBe(BRAND.teal);
+    }
+  });
+
+  it("renders with a custom colour without throwing", async () => {
+    const snapshots = ONBOARDING_DOCUMENT_TYPES.map((documentType) =>
+      buildAgreementSnapshot({ ...base, documentType, compTerms: DEFAULT_COMMISSION_TERMS }));
+    const pdf = await renderOnboardingPacketPdf({
+      snapshots, signerName: base.signerName, signerEmail: base.signerEmail,
+      companyName: base.companyName, brandColor: "#7C3AED",
+    });
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
   });
 });

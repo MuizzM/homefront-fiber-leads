@@ -634,6 +634,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         signerName: rep.name,
         signerEmail: rep.email ?? "",
         companyName: tenant?.companyName || "Home Front Solutions LLC",
+        brandColor: (tenant as any)?.brandColor ?? null,
       }),
     };
   }
