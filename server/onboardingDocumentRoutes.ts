@@ -17,7 +17,7 @@ import { gustoConfigured } from "./gustoAdapter";
 import { AGREEMENT_VERSION, buildAgreementSnapshot } from "./onboardingAgreementTemplates";
 import { resolveCommissionTerms, saveRepCommissionTerms } from "./commissionTermsResolver";
 import { normalizeCommissionTerms, type CommissionTerms } from "@shared/commissionTerms";
-import { renderAgreementPreviewPdf, renderSignedAgreementPdf } from "./onboardingPdf";
+import { renderAgreementPreviewPdf, renderOnboardingPacketPdf, renderSignedAgreementPdf } from "./onboardingPdf";
 import { loadW9Template } from "./w9Pdf";
 import {
   completeSigning,
@@ -602,6 +602,77 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
   // deliberately available for any status a rep can legitimately look at,
   // including already-completed ones, because "let me re-read what I signed" is
   // a reasonable thing to want and the executed copy is a separate download.
+  // ── The whole packet, as one PDF ────────────────────────────────────────
+  // A rep had to open four separate agreements to see what they were joining.
+  // This is all of them in one file, cover sheet first with the commission
+  // terms on it, so "what am I agreeing to" is one read rather than four.
+  //
+  // Built from the rep's LIVE envelopes where they exist, so the packet shows
+  // the same documents the ceremony will ask them to sign — never a freshly
+  // rendered ideal that could differ from what was actually issued.
+  async function packetFor(tid: number, repId: number): Promise<{ pdf: Buffer; count: number } | null> {
+    const rep = storage.getTeamMemberById(repId);
+    if (!rep || rep.tenantId !== tid) return null;
+    const records = listRepDocuments(tid, repId);
+    // Newest envelope per type, in the catalogue's presentation order.
+    const latest = new Map<string, typeof records[number]>();
+    for (const record of records) if (!latest.has(record.documentType)) latest.set(record.documentType, record);
+    // listRepDocuments returns the envelope summary; the snapshot itself hangs
+    // off the full record, so re-read each by id.
+    const snapshots = ONBOARDING_DOCUMENT_TYPES
+      .map(type => {
+        const id = latest.get(type)?.id;
+        return id == null ? null : getSigningDocument(id)?.snapshot ?? null;
+      })
+      .filter((snapshot): snapshot is NonNullable<typeof snapshot> => Boolean(snapshot));
+    if (!snapshots.length) return null;
+    const tenant = storage.getTenantById(tid);
+    return {
+      count: snapshots.length,
+      pdf: await renderOnboardingPacketPdf({
+        snapshots,
+        signerName: rep.name,
+        signerEmail: rep.email ?? "",
+        companyName: tenant?.companyName || "Home Front Solutions LLC",
+      }),
+    };
+  }
+
+  function sendPacket(res: Response, packet: { pdf: Buffer; count: number }, who: string) {
+    res.setHeader("Content-Type", "application/pdf");
+    // Inline: it should open where the reader already is, not become a download.
+    res.setHeader("Content-Disposition", `inline; filename="homefront-onboarding-${who}.pdf"`);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(packet.pdf);
+  }
+
+  // The rep's own packet.
+  app.get("/api/onboarding/documents/me/packet.pdf", requireAuth, requireCapability("onboarding.documents.read.self"), async (req, res) => {
+    const repId = myRepId(req);
+    if (!repId) return res.status(404).json({ error: "No rep profile" });
+    try {
+      const packet = await packetFor(tenantId(req), repId);
+      if (!packet) return res.status(404).json({ error: "No agreements have been issued yet" });
+      storage.logActivity(userId(req), "onboarding.packet.opened", "team_member", repId, { documents: packet.count }, req.ip);
+      sendPacket(res, packet, "agreements");
+    } catch {
+      res.status(500).json({ error: "Could not build the agreement packet" });
+    }
+  });
+
+  // A manager reviewing what a given rep was sent.
+  app.get("/api/onboarding/documents/reps/:repId/packet.pdf", requireAuth, requireCapability("onboarding.documents.manage"), async (req, res) => {
+    const parsed = repIdSchema.safeParse(req.params.repId);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid rep ID" });
+    try {
+      const packet = await packetFor(tenantId(req), parsed.data);
+      if (!packet) return res.status(404).json({ error: "No agreements have been issued yet" });
+      sendPacket(res, packet, String(parsed.data));
+    } catch {
+      res.status(500).json({ error: "Could not build the agreement packet" });
+    }
+  });
+
   app.get("/api/onboarding/documents/:id/preview.pdf", requireAuth, requireCapability("onboarding.documents.read.self"), async (req, res) => {
     const parsed = documentIdSchema.safeParse(req.params.id);
     if (!parsed.success) return res.status(400).json({ error: "Invalid document ID" });

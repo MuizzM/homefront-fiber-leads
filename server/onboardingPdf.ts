@@ -4,6 +4,8 @@ import {
   ELECTRONIC_CONSENT_VERSION,
   type AgreementSnapshot,
 } from "../shared/onboardingDocuments";
+import { tierRows } from "../shared/commissionTerms";
+import { formatUsdCents } from "../shared/commissionTiers";
 
 export interface SignatureEvidence {
   recordId: string;
@@ -193,6 +195,101 @@ export function renderAgreementPreviewPdf(snapshot: AgreementSnapshot): Promise<
       doc.restore();
     }
     addFooter(doc, "Home Front Sign • REVIEW COPY — NOT SIGNED");
+    doc.end();
+  });
+}
+
+// ── The whole packet, as one PDF ─────────────────────────────────────────────
+//
+// A rep was handed four separate agreements to open, read and sign one at a
+// time, and had no way to see the engagement as a single document. "What am I
+// actually agreeing to" was spread across four downloads, which is how people
+// end up signing without reading.
+//
+// This renders every agreement in the packet into ONE file, in the order they
+// are presented, behind a cover sheet and a contents list — with the commission
+// terms lifted out onto the cover, because the rate is the thing a rep opens
+// this to find and it should not be on page nine.
+//
+// It is a REVIEW copy by construction. It carries no signature certificate and
+// says so on every page: the executed record stays per-agreement, one signature
+// bound to one document, which is what makes each signature meaningful.
+export function renderOnboardingPacketPdf(input: {
+  snapshots: AgreementSnapshot[];
+  signerName: string;
+  signerEmail: string;
+  companyName: string;
+}): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
+      Title: `Onboarding agreements — ${input.signerName}`,
+      Author: input.companyName,
+      Subject: "Onboarding agreement packet — review copy",
+    } });
+    const chunks: Buffer[] = [];
+    doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
+    doc.on("error", reject);
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+
+    // ── Cover ────────────────────────────────────────────────────────────
+    doc.font("Helvetica-Bold").fontSize(22).fillColor("#12314c").text("Your onboarding agreements", { align: "center" });
+    doc.moveDown(0.4).font("Helvetica").fontSize(11).fillColor("#617081")
+      .text(`${input.signerName} · ${input.signerEmail}`, { align: "center" });
+    doc.moveDown(0.15).fontSize(9)
+      .text(`Prepared by ${input.companyName} · ${new Date().toLocaleDateString("en-US", { timeZone: "America/New_York", dateStyle: "long" })}`, { align: "center" });
+
+    // The money, on the cover. A rep opens this to find out what they earn.
+    const commission = input.snapshots.find(s => s.documentType === "commission_agreement");
+    const terms = commission?.compTerms;
+    if (terms) {
+      doc.moveDown(1.6);
+      const boxTop = doc.y;
+      const rows = terms.structure === "FLAT" && terms.flatRateCents != null
+        ? [{ band: "Every qualified sale", rate: `${formatUsdCents(terms.flatRateCents)} per sale` }]
+        : tierRows(terms);
+      const boxHeight = 54 + rows.length * 18;
+      doc.roundedRect(58, boxTop, 496, boxHeight, 8).fillAndStroke("#f0f8f6", "#cfe7e0");
+      doc.fillColor("#12314c").font("Helvetica-Bold").fontSize(11)
+        .text(terms.structure === "FLAT" ? "Your commission — flat rate" : "Your commission — tiered", 76, boxTop + 14);
+      let rowY = boxTop + 34;
+      for (const row of rows) {
+        doc.font("Helvetica").fontSize(9.5).fillColor("#263746").text(row.band, 76, rowY, { width: 300 });
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#12314c").text(row.rate, 380, rowY, { width: 150, align: "right" });
+        rowY += 18;
+      }
+      doc.font("Helvetica").fontSize(8.5).fillColor("#617081").text(
+        terms.reservePercent > 0
+          ? `${terms.reservePercent}% held as a chargeback reserve · full terms in the Commission Agreement`
+          : "No chargeback reserve · full terms in the Commission Agreement",
+        76, rowY + 4, { width: 460 });
+      doc.y = boxTop + boxHeight + 10;
+    }
+
+    doc.moveDown(1.2).font("Helvetica-Bold").fontSize(11).fillColor("#12314c").text("What is in this packet");
+    input.snapshots.forEach((snapshot, index) => {
+      doc.moveDown(0.35).font("Helvetica").fontSize(10).fillColor("#263746")
+        .text(`${index + 1}.  ${snapshot.title}`, { indent: 8 });
+    });
+    doc.moveDown(1.4).font("Helvetica").fontSize(9).fillColor("#8a6100")
+      .text(
+        "This packet is for reading. Signing happens one agreement at a time in the portal, so each signature is bound to the agreement it belongs to — this copy is not signed and is not an executed agreement.",
+        { lineGap: 2 });
+
+    // ── Every agreement, in order ────────────────────────────────────────
+    for (const snapshot of input.snapshots) {
+      doc.addPage();
+      renderAgreementBody(doc, snapshot);
+    }
+
+    // ── The consent disclosure, once ─────────────────────────────────────
+    doc.addPage();
+    doc.font("Helvetica-Bold").fontSize(13).fillColor("#12314c").text(ELECTRONIC_CONSENT_DISCLOSURE.title);
+    doc.moveDown(0.2).font("Helvetica").fontSize(8).fillColor("#617081").text(`Version ${ELECTRONIC_CONSENT_VERSION}`);
+    for (const paragraph of ELECTRONIC_CONSENT_DISCLOSURE.paragraphs) {
+      doc.moveDown(0.35).font("Helvetica").fontSize(9.5).fillColor("#263746").text(paragraph, { lineGap: 2.2 });
+    }
+
+    addFooter(doc, "Home Front Sign · REVIEW COPY — not signed");
     doc.end();
   });
 }
