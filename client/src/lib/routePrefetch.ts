@@ -1,30 +1,43 @@
-// ── Route-chunk prefetch on navigation intent ────────────────────────────────
+// ── Route prefetch on navigation intent ──────────────────────────────────────
 // Every page in App.tsx is a React.lazy() route, so its JS chunk isn't fetched
 // until you click the link — the first paint of a new screen waits on a network
-// round-trip for the code itself. This warms that chunk the moment a user shows
-// intent (hovers/focuses/touches a nav link), so by the time they click, the
-// code is already in memory and the screen renders instantly.
+// round-trip for the code itself, and then a SECOND round-trip for the data the
+// screen needs. This module warms both the moment a user shows intent (hovers,
+// focuses, or puts a finger down on a nav target), so by the time the tap
+// completes the code is in memory and the first query is already in flight.
 //
 // The import specifiers here MUST match App.tsx's lazy() imports EXACTLY — Vite
 // keys one chunk per dynamically-imported module, so an identical specifier
 // dedupes to the same chunk lazy() will use (calling import() twice is cheap and
-// idempotent; the module cache returns the in-flight/[resolved promise). Paths
+// idempotent; the module cache returns the in-flight/resolved promise). Paths
 // with no heavy chunk (redirects, tiny pages) are simply omitted — a miss is a
 // no-op, never an error.
+import { queryClient } from "@/lib/queryClient";
+
 type Thunk = () => Promise<unknown>;
 
-// Longest-prefix match, so "/lead/123" and "/areas/7" resolve to their base
-// route's chunk. Order matters only for readability; lookup picks the longest.
-const ROUTE_CHUNKS: Record<string, Thunk> = {
+// Exact-match routes. "/" lives here and NOT in the prefix table: every path
+// starts with "/", so a prefix entry would make an unknown route warm the
+// dashboard chunk for no reason.
+const EXACT_CHUNKS: Record<string, Thunk> = {
+  "/": () => import("@/pages/Dashboard"),
+};
+
+// Longest-prefix match, so "/lead/123" and "/areas/7" resolve to the right
+// chunk. "/areas/" (detail) is a longer prefix than "/areas" (index), so the
+// detail page wins for "/areas/7" — that ordering is load-bearing, not cosmetic.
+const PREFIX_CHUNKS: Record<string, Thunk> = {
   "/today": () => import("@/pages/Today"),
   "/map": () => import("@/pages/MapView"),
   "/leads": () => import("@/pages/Leads"),
   "/lead/": () => import("@/pages/PropertyDetail"),
   "/followups": () => import("@/pages/FollowUps"),
   "/areas": () => import("@/pages/Areas"),
+  "/areas/": () => import("@/pages/AreaDetail"),
   "/leaderboard": () => import("@/pages/Leaderboard"),
   "/spiffs": () => import("@/pages/Spiffs"),
   "/training": () => import("@/pages/Training"),
+  "/coach": () => import("@/pages/Coach"),
   "/clock": () => import("@/pages/ClockIn"),
   "/my-commission": () => import("@/pages/MyCommission"),
   "/my-documents": () => import("@/pages/MyDocuments"),
@@ -36,17 +49,62 @@ const ROUTE_CHUNKS: Record<string, Thunk> = {
   "/applications": () => import("@/pages/Applications"),
   "/live-map": () => import("@/pages/LiveMap"),
   "/calling": () => import("@/pages/CallingQueue"),
+  "/calling/lead/": () => import("@/pages/CallingLead"),
   "/profile": () => import("@/pages/Profile"),
+  "/diagnostics": () => import("@/pages/Diagnostics"),
+  "/login-activity": () => import("@/pages/LoginActivity"),
+  "/governance": () => import("@/pages/Governance"),
+  "/billing": () => import("@/pages/Billing"),
+  "/super-admin": () => import("@/pages/SuperAdmin"),
+  "/token": () => import("@/pages/TokenSetup"),
 };
 
-// Fire each chunk at most once per session — a resolved import is cached by the
-// module system anyway, but skipping the repeat call avoids churn on rapid
-// hover-in/hover-out over a nav rail.
-const warmed = new Set<string>();
+// ── Data warm-up ─────────────────────────────────────────────────────────────
+// The chunk is only half the wait. These are the queries each screen fires on
+// mount, keyed the same way the page keys them so the mounted useQuery finds a
+// populated cache entry instead of starting from scratch. Single-segment keys
+// only: the app's default queryFn fetches queryKey[0], so a one-element key is
+// exactly the request the page will make.
+//
+// SAFETY: prefetch is only ever triggered from nav affordances that are already
+// role-filtered (Layout's NAV_ITEMS, BottomTabs' capability-gated TABS), so a
+// user can only warm endpoints they are allowed to call. Anything role-specific
+// or parameterised (per-lead, per-week, per-statement) is deliberately absent —
+// warming the wrong parameter is worse than not warming at all.
+const ROUTE_QUERIES: Record<string, readonly string[]> = {
+  "/": ["/api/stats"],
+  "/today": ["/api/leads/map", "/api/clock/status", "/api/followups"],
+  "/leads": ["/api/leads"],
+  "/followups": ["/api/followups"],
+  "/areas": ["/api/territories/progress"],
+  "/leaderboard": ["/api/leaderboard"],
+  "/spiffs": ["/api/spiffs/mine"],
+  "/training": ["/api/training/summary"],
+  "/clock": ["/api/clock/status", "/api/clock/sessions"],
+  "/my-commission": ["/api/commission/statements/me/current"],
+  "/my-documents": ["/api/onboarding/documents/me"],
+  "/team": ["/api/team", "/api/leaderboard"],
+  "/commission-console": ["/api/commission/week-overview"],
+  "/applications": ["/api/onboarding/pipeline"],
+  "/calling": ["/api/v1/calling/status"],
+};
+
+// Fire each chunk/query at most once per session — a resolved import is cached
+// by the module system anyway, but skipping the repeat call avoids churn on
+// rapid hover-in/hover-out over a nav rail.
+const warmedChunks = new Set<string>();
+
+/** Test-only: reset the once-per-session guard between cases. */
+export function __resetPrefetchForTests(): void {
+  warmedChunks.clear();
+  cancelPendingData();
+}
 
 function resolveThunk(path: string): [string, Thunk] | null {
+  const exact = EXACT_CHUNKS[path];
+  if (exact) return [path, exact];
   let best: [string, Thunk] | null = null;
-  for (const [prefix, thunk] of Object.entries(ROUTE_CHUNKS)) {
+  for (const [prefix, thunk] of Object.entries(PREFIX_CHUNKS)) {
     if ((path === prefix || path.startsWith(prefix)) && (!best || prefix.length > best[0].length)) {
       best = [prefix, thunk];
     }
@@ -54,17 +112,126 @@ function resolveThunk(path: string): [string, Thunk] | null {
   return best;
 }
 
+function resolveQueries(path: string): readonly string[] {
+  const exact = ROUTE_QUERIES[path];
+  if (exact) return exact;
+  let best: [string, readonly string[]] | null = null;
+  for (const [prefix, keys] of Object.entries(ROUTE_QUERIES)) {
+    // "/" is the dashboard's EXACT key; skip it here or it would match everything.
+    if (prefix === "/") continue;
+    if (path.startsWith(prefix) && (!best || prefix.length > best[0].length)) best = [prefix, keys];
+  }
+  return best ? best[1] : [];
+}
+
+/** True when the device/connection can afford speculative bytes. A rep on 3G or
+ *  with Data Saver on gets the screen they asked for and nothing else. */
+export function canPrefetch(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (navigator.onLine === false) return false;
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  if (connection?.saveData) return false;
+  return !["slow-2g", "2g", "3g"].includes(connection?.effectiveType ?? "");
+}
+
 /** Warm the code chunk for a route href (hash-router "/foo" form). Safe to call
- *  on every hover/focus; no-op for unknown paths and already-warmed chunks. */
+ *  on every hover/focus/pointerdown; no-op for unknown or already-warm paths. */
 export function prefetchRoute(href: string | undefined | null): void {
   if (!href) return;
   const path = href.replace(/^#/, "");
   const match = resolveThunk(path);
   if (!match) return;
-  const [prefix, thunk] = match;
-  if (warmed.has(prefix)) return;
-  warmed.add(prefix);
+  const [key, thunk] = match;
+  if (warmedChunks.has(key)) return;
+  warmedChunks.add(key);
+  // The map screen also needs the Mapbox GL library from the CDN. Kicking it
+  // here overlaps that ~230KB fetch with the route chunk instead of starting it
+  // only once the component mounts.
+  if (key === "/map" && canPrefetch()) {
+    (window as unknown as { __loadMapbox?: () => void }).__loadMapbox?.();
+  }
   // Never let a prefetch failure surface — the real navigation will retry the
   // import and show its own error boundary if the chunk is genuinely gone.
-  void thunk().catch(() => warmed.delete(prefix));
+  void thunk().catch(() => warmedChunks.delete(key));
+}
+
+/** Warm the queries a route fires on mount. Skipped entirely on metered or slow
+ *  connections. Failures are swallowed: a failed warm just leaves the page to
+ *  fetch normally when it mounts.
+ *
+ *  Deliberately NOT guarded by a once-per-session set the way chunks are. A
+ *  chunk is immutable, so warming it twice is pointless; data goes stale, and a
+ *  rep tapping Leads on their fourth trip of the shift deserves the same warm
+ *  start as the first. prefetchQuery is already the right gate: it no-ops while
+ *  the entry is fresh (staleTime matches the client default, so a warm entry is
+ *  used as-is on mount) and de-dupes against an in-flight fetch. */
+export function prefetchRouteData(href: string | undefined | null): void {
+  if (!href || !canPrefetch()) return;
+  const path = href.replace(/^#/, "");
+  for (const url of resolveQueries(path)) {
+    void queryClient.prefetchQuery({ queryKey: [url], staleTime: 60_000 }).catch(() => {});
+  }
+}
+
+// Hovering is a weaker signal than a finger going down: a mouse sweeping down a
+// nav rail crosses every item on its way to one of them. Chunks are warmed
+// immediately on hover (cheap, cached, no server load), but DATA waits out a
+// short dwell so a sweep doesn't fire a request per item it passed over.
+const HOVER_DWELL_MS = 140;
+let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPendingData(): void {
+  if (hoverTimer !== null) {
+    clearTimeout(hoverTimer);
+    hoverTimer = null;
+  }
+}
+
+/**
+ * Handlers to spread onto a nav link/button. Hover and focus warm the chunk at
+ * once and the data after a short dwell; a pointer going down means the tap is
+ * happening, so both fire immediately — that still lands ~100-300ms before the
+ * route renders, which is exactly the round-trip we are trying to hide.
+ */
+export function navIntentHandlers(href: string | undefined | null) {
+  return {
+    onPointerEnter: () => {
+      prefetchRoute(href);
+      cancelPendingData();
+      hoverTimer = setTimeout(() => {
+        hoverTimer = null;
+        prefetchRouteData(href);
+      }, HOVER_DWELL_MS);
+    },
+    onPointerLeave: cancelPendingData,
+    // pointerdown/touchstart land 80-150ms before the click that actually
+    // navigates — enough to have both the chunk and the first query in flight
+    // before the route commits. Both are wired because iOS Safari is the one
+    // that reliably fires touchstart; the once-per-session guards make the
+    // duplicate call free.
+    onPointerDown: () => {
+      cancelPendingData();
+      prefetchRouteAll(href);
+    },
+    onTouchStart: () => {
+      cancelPendingData();
+      prefetchRouteAll(href);
+    },
+    onFocus: () => {
+      prefetchRoute(href);
+      cancelPendingData();
+      hoverTimer = setTimeout(() => {
+        hoverTimer = null;
+        prefetchRouteData(href);
+      }, HOVER_DWELL_MS);
+    },
+  };
+}
+
+/** Warm code AND data for a route, right now. */
+export function prefetchRouteAll(href: string | undefined | null): void {
+  prefetchRoute(href);
+  prefetchRouteData(href);
 }

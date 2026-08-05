@@ -23,6 +23,7 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { Home, Map, DollarSign, MapPin, Menu } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { can, type Role } from "@shared/capabilities";
+import { navIntentHandlers, prefetchRoute, canPrefetch } from "@/lib/routePrefetch";
 
 // Each tab is capability-gated: roles without field.app.use (e.g. calling-only
 // or audit roles) never see dead field tabs, and Pay only shows when the role
@@ -127,6 +128,27 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
     prevActive.current = activeHref;
   }, [activeHref]);
 
+  // The four bottom destinations ARE the app for a rep — they switch between
+  // them all shift. Warm every visible tab's chunk once the browser goes idle so
+  // the second, third and fourth tap never wait on a network round-trip. Code
+  // only (a few tens of KB, cached immutably); data still warms on touch intent,
+  // where it is current rather than stale by the time it is read.
+  const tabHrefs = visibleTabs.map(t => t.href).join(",");
+  useEffect(() => {
+    if (!canPrefetch()) return;
+    const warm = () => { for (const href of tabHrefs.split(",")) prefetchRoute(href); };
+    const idle = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (idle.requestIdleCallback) {
+      const id = idle.requestIdleCallback(warm, { timeout: 4000 });
+      return () => idle.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(warm, 2500);
+    return () => window.clearTimeout(timer);
+  }, [tabHrefs]);
+
   return (
     <nav
       data-testid="bottom-tabs"
@@ -147,6 +169,7 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
             href={href}
             data-testid={`tab-${label.toLowerCase()}`}
             aria-current={active ? "page" : undefined}
+            {...navIntentHandlers(href)}
             className={`relative flex flex-col items-center justify-center gap-0.5 active:scale-[.94] transition-transform ${primary ? "-mt-2.5" : ""}`}
           >
             <span

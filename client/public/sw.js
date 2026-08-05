@@ -4,15 +4,34 @@
 // stay fresh and tenant-correct), and NEVER cache cross-origin (Mapbox tiles/JS
 // have their own headers + a token that must not be persisted here).
 //
-// Update flow: bump SW_VERSION on deploy → the new worker installs, the client
+// Update flow: the build stamps SW_VERSION → the new worker installs, the client
 // shows an "update ready" prompt, and skipWaiting()+reload swaps atomically.
+//
+// SW_VERSION IS STAMPED AT BUILD TIME (script/build.ts rewrites the __SW_BUILD__
+// token in dist/public/sw.js with a digest of the built assets). This is not
+// cosmetic: a browser only treats a worker as new if the FILE'S BYTES changed.
+// While this was a hardcoded literal, every deploy shipped a byte-identical
+// sw.js, no `updatefound` ever fired, and the whole update prompt in
+// client/src/lib/pwa.ts was unreachable. The literal below is the dev fallback
+// for `vite dev` / direct file loads, where no build step runs.
+const SW_VERSION = "__SW_BUILD__".startsWith("__") ? "dev" : "__SW_BUILD__";
 
-const SW_VERSION = "hfs-v1";
+// Versioned per build: the shell must be re-precached when index.html changes.
 const SHELL_CACHE = `shell-${SW_VERSION}`;
-const RUNTIME_CACHE = `runtime-${SW_VERSION}`;
+// DELIBERATELY NOT versioned. Everything in here is content-hashed by Vite, so
+// the URL already is the version — an unchanged chunk keeps its filename across
+// deploys and should stay cached. Versioning this would throw away the entire
+// warm cache on every deploy and re-download chunks that did not change.
+const RUNTIME_CACHE = "runtime-v2";
+// Bound on the runtime cache. Content-hashed names never collide, so without a
+// cap it accumulates every asset from every deploy forever; once the origin hits
+// the browser's quota Android evicts the WHOLE origin, taking the persisted
+// query cache (localStorage) with it. ~250 entries comfortably holds one full
+// build (about 120 chunks) plus the previous one.
+const RUNTIME_MAX_ENTRIES = 250;
 
 // The minimum needed to boot the app offline. Hashed JS/CSS are picked up at
-// runtime (stale-while-revalidate) since their names change per build.
+// runtime since their names change per build.
 const SHELL_ASSETS = ["/", "/index.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -41,6 +60,31 @@ function isCacheable(url) {
     && url.protocol.startsWith("http");
 }
 
+/** Vite emits every hashed build artifact under /assets/. The hash IS the
+ *  cache key, so these are immutable — matching the year-long immutable
+ *  Cache-Control the server sets for them (server/static.ts). */
+function isImmutableAsset(url) {
+  return url.pathname.startsWith("/assets/");
+}
+
+/** Keep the runtime cache bounded. cache.keys() returns insertion order, so the
+ *  oldest entries go first. Runs after a put, never in the response path. */
+async function trimRuntimeCache(cache) {
+  try {
+    const keys = await cache.keys();
+    if (keys.length <= RUNTIME_MAX_ENTRIES) return;
+    for (const req of keys.slice(0, keys.length - RUNTIME_MAX_ENTRIES)) await cache.delete(req);
+  } catch { /* quota/permission hiccup — the cache is an optimisation, not state */ }
+}
+
+async function putInRuntime(req, res) {
+  try {
+    const cache = await caches.open(RUNTIME_CACHE);
+    await cache.put(req, res);
+    await trimRuntimeCache(cache);
+  } catch { /* storage full or unavailable — serve from network and move on */ }
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -59,15 +103,31 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets (hashed JS/CSS, icons, images): stale-while-revalidate —
-  // instant from cache, refreshed in the background.
+  // Content-hashed build assets: cache-first with NO revalidation. A hit here
+  // can never be stale — a changed file gets a different filename. The old
+  // stale-while-revalidate path re-fetched every route chunk on every single
+  // navigation, so tapping Map returned the 287KB chunk from cache AND
+  // re-downloaded it, competing on LTE with the API calls the incoming screen
+  // was actually waiting on.
+  if (isImmutableAsset(url)) {
+    event.respondWith(
+      caches.open(RUNTIME_CACHE)
+        .then((cache) => cache.match(req))
+        .catch(() => undefined)
+        .then((cached) => cached || fetch(req).then((res) => {
+          if (res && res.status === 200) void putInRuntime(req, res.clone());
+          return res;
+        })),
+    );
+    return;
+  }
+
+  // Everything else same-origin and unhashed (icons, manifest, the join form):
+  // stale-while-revalidate — instant from cache, refreshed in the background.
   event.respondWith(
     caches.match(req).then((cached) => {
       const network = fetch(req).then((res) => {
-        if (res && res.status === 200) {
-          const copy = res.clone();
-          caches.open(RUNTIME_CACHE).then((c) => c.put(req, copy)).catch(() => {});
-        }
+        if (res && res.status === 200) void putInRuntime(req, res.clone());
         return res;
       }).catch(() => cached);
       return cached || network;

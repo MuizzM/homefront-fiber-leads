@@ -7,7 +7,7 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { useSuperAdminEmails, isSuperAdmin } from "@/lib/appConfig";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Lock } from "lucide-react";
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, startTransition, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
@@ -196,7 +196,14 @@ function AppRoutes() {
   }
 
   return (
-    <Router hook={useHashLocation}>
+    // aroundNav wraps every wouter navigation in a transition. Without it a tap
+    // on a route whose chunk is still downloading is an urgent update: React
+    // must commit immediately, so it tears the current screen down and paints
+    // the generic PageLoader skeleton for the whole download. Inside a
+    // transition React keeps the screen the rep is looking at — scrolled,
+    // populated and interactive — until the new one is ready to replace it.
+    // Warm chunks are unaffected (an already-resolved lazy renders synchronously).
+    <Router hook={useHashLocation} aroundNav={(nav, to, opts) => startTransition(() => nav(to, opts))}>
       <Layout>
         <ErrorBoundary resetKey={location}>
         <Suspense fallback={<PageLoader />}>

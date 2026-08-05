@@ -5,7 +5,7 @@
 // the Library (Training.tsx) teaches. This page NEVER shows connectivity:
 // the deck comes from the persisted snapshot or the bundled corpus, grades
 // ride the trainingReviewQueue outbox, and the numbers stay honest.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Zap, MessageSquare, BookOpen, Flame } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,9 +26,38 @@ import {
 import { cardsByStage, type DrillCard } from "@shared/trainingCards";
 import type { Grade } from "@shared/trainingSchedule";
 
-function hashQueryMode(): DeckMode | null {
-  const raw = new URLSearchParams(window.location.hash.split("?")[1] || "").get("mode");
+// Where the mode actually lands depends on how you got here, and both places
+// are real. wouter's hash navigate() splits a link's query OFF the hash and
+// assigns it to location.search — `<Link href="/coach?mode=warmup">` (Today's
+// WarmupStrip) produces `/?mode=warmup#/coach`, NOT `#/coach?mode=warmup`. A
+// hand-typed or shared `#/coach?mode=warmup` URL keeps it in the hash. Read
+// both, hash first, exactly as PropertyDetail does for its own param.
+function queryMode(): DeckMode | null {
+  const hashQuery = window.location.hash.split("?")[1] ?? "";
+  const raw = new URLSearchParams(hashQuery).get("mode")
+    ?? new URLSearchParams(window.location.search).get("mode");
   return raw === "warmup" || raw === "refresher" || raw === "debrief" ? raw : null;
+}
+
+/** Drop the consumed `mode` param so it cannot silently re-open the deck on a
+ *  later visit. wouter's navigate() only ASSIGNS location.search when the next
+ *  link carries one, so a stale `?mode=warmup` otherwise rides along through
+ *  every subsequent navigation. */
+function clearQueryMode(): void {
+  const url = new URL(window.location.href);
+  let touched = false;
+  if (url.searchParams.has("mode")) { url.searchParams.delete("mode"); touched = true; }
+  const [hashPath, hashQuery] = url.hash.split("?");
+  if (hashQuery) {
+    const params = new URLSearchParams(hashQuery);
+    if (params.has("mode")) {
+      params.delete("mode");
+      const rest = params.toString();
+      url.hash = rest ? `${hashPath}?${rest}` : hashPath;
+      touched = true;
+    }
+  }
+  if (touched) window.history.replaceState(null, "", url.pathname + url.search + url.hash);
 }
 
 /** Refresher is ONE card between doors — due first, then new, so a rep with a
@@ -49,7 +78,9 @@ function debriefDeck(due: DrillCard[]): DrillCard[] {
 
 export default function Coach() {
   const [, navigate] = useLocation();
-  const [mode, setMode] = useState<DeckMode | null>(() => hashQueryMode());
+  const [mode, setMode] = useState<DeckMode | null>(() => queryMode());
+  // Consumed on mount — the deck is open now, so the param has done its job.
+  useEffect(() => { clearQueryMode(); }, []);
   const [whatNextOpen, setWhatNextOpen] = useState(false);
   const [deckRunCount, setDeckRunCount] = useState(0);
   const [debriefDone, setDebriefDone] = useState(false);

@@ -1,7 +1,8 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile, copyFile, readdir } from "node:fs/promises";
+import { rm, readFile, writeFile, copyFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -36,6 +37,8 @@ async function buildAll() {
 
   console.log("building client...");
   await viteBuild();
+
+  await stampServiceWorker();
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
@@ -136,6 +139,33 @@ async function buildAll() {
     }
     console.log("copied W-9 template to dist/assets/ (sha256 verified)");
   }
+}
+
+// ── Service-worker versioning ────────────────────────────────────────────────
+// A browser decides a service worker is NEW by byte-comparing sw.js. The file
+// is copied verbatim out of client/public, so with a hardcoded version literal
+// every deploy shipped identical bytes: `updatefound` never fired and the
+// update prompt in client/src/lib/pwa.ts was dead code. Stamping a digest of
+// the build's own asset filenames makes sw.js change exactly when the app
+// changes — and not when it doesn't, so an unchanged rebuild won't nag reps to
+// reload for nothing.
+async function stampServiceWorker() {
+  const swPath = path.resolve("dist/public/sw.js");
+  let source: string;
+  try {
+    source = await readFile(swPath, "utf-8");
+  } catch {
+    throw new Error(`build: dist/public/sw.js is missing — the PWA shell would ship unversioned`);
+  }
+  if (!source.includes("__SW_BUILD__")) {
+    throw new Error("build: dist/public/sw.js has no __SW_BUILD__ token to stamp");
+  }
+  // Asset filenames are content hashes, so the sorted list is a faithful,
+  // reproducible fingerprint of the whole client build.
+  const assets = (await readdir(path.resolve("dist/public/assets")).catch(() => [])).sort();
+  const digest = createHash("sha256").update(assets.join("\n")).digest("hex").slice(0, 12);
+  await writeFile(swPath, source.replaceAll("__SW_BUILD__", digest), "utf-8");
+  console.log(`stamped service worker version: ${digest}`);
 }
 
 async function findMapFiles(dir: string): Promise<string[]> {
