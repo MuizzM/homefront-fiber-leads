@@ -1,0 +1,178 @@
+name: Host disk (production)
+
+# Look at — and reclaim — disk on the production box, without SSH.
+#
+# WHY THIS EXISTS
+# The production SSH key lives only as a repository secret, so nobody has a
+# shell. That is the right posture, but it meant that when an APPLY of the area
+# reset died with SQLITE_FULL there was no way to find out what was filling the
+# volume, let alone clear it. This is the missing tool: the same pinned-host-key
+# connection deploy.yml uses, doing read-only diagnostics by default.
+#
+# `report` (the default) writes NOTHING. `reclaim` removes only things that are
+# reproducible or already dead:
+#   · abandoned data.before-area-reset-*.db — partial VACUUM output from a
+#     failed run. Never a valid database, nothing reads it.
+#   · dangling docker images and build cache — rebuilt on demand.
+#   · the SQLite WAL, via a TRUNCATE checkpoint — the pages are already in the
+#     main database; this only returns the file's tail to the filesystem.
+# It never touches data.db, uploads, release images, or backups.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "report (read-only) or reclaim (frees space)"
+        required: true
+        default: report
+        type: choice
+        options: [report, reclaim]
+      confirm:
+        description: 'Required for reclaim: type RECLAIM'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-disk-production
+  cancel-in-progress: false
+
+jobs:
+  disk:
+    name: ${{ inputs.action == 'reclaim' && 'RECLAIM disk' || 'Report disk' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Validate inputs
+        env:
+          ACTION: ${{ inputs.action }}
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = "reclaim" ] && [ "$CONFIRM" != "RECLAIM" ]; then
+            echo "Refusing to reclaim: type RECLAIM in 'confirm'." >&2
+            exit 1
+          fi
+          echo "action=$ACTION"
+
+      - name: Connect and run
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          ACTION: ${{ inputs.action }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$ACTION" <<'REMOTE'
+          set -euo pipefail
+          ACTION="$1"
+          [[ "$ACTION" =~ ^(report|reclaim)$ ]]
+          cd /srv/homefront
+          SUDO=""; command -v sudo >/dev/null && SUDO="sudo"
+
+          hr() { echo "──────────────────────────────────────────────────────"; }
+          show_df() { df -h / 2>/dev/null | sed 's/^/  /'; }
+
+          hr; echo "FILESYSTEM"; show_df
+          hr; echo "DOCKER"
+          docker system df 2>/dev/null | sed 's/^/  /' || true
+          hr; echo "RELEASE IMAGES (deploy.sh keeps current + previous)"
+          echo "  .deployed-tag: $(cat .deployed-tag 2>/dev/null || echo none)"
+          echo "  .previous-tag: $(cat .previous-tag 2>/dev/null || echo none)"
+          docker images homefront-app --format '  {{.Tag}}  {{.Size}}  {{.CreatedSince}}' 2>/dev/null | head -20 || true
+
+          VOL="$(docker volume inspect homefront_app-data --format '{{.Mountpoint}}' 2>/dev/null || true)"
+          hr; echo "DATA VOLUME  ${VOL:-<not found>}"
+          if [ -n "$VOL" ]; then
+            $SUDO du -sh "$VOL" 2>/dev/null | sed 's/^/  total  /' || true
+            echo "  largest 15 entries:"
+            $SUDO du -ah "$VOL" 2>/dev/null | sort -rh | head -15 | sed 's/^/    /' || true
+          fi
+
+          if [ "$ACTION" = "report" ]; then
+            hr; echo "Report only — nothing was changed."
+            exit 0
+          fi
+
+          BEFORE_KB="$(df -k / | awk 'NR==2{print $4}')"
+          hr; echo "RECLAIMING"
+
+          # 1. Partial VACUUM output from a failed reset. Never a valid database.
+          if [ -n "$VOL" ]; then
+            STALE="$($SUDO find "$VOL" -maxdepth 1 -name 'data.before-area-reset-*.db' 2>/dev/null || true)"
+            if [ -n "$STALE" ]; then
+              echo "  abandoned snapshots:"; echo "$STALE" | sed 's/^/    /'
+              echo "$STALE" | xargs -r $SUDO rm -f
+            else
+              echo "  abandoned snapshots: none"
+            fi
+          fi
+
+          # 2. Dangling images + build cache — reproducible, nothing depends on them.
+          echo "  docker image prune (dangling only):"
+          docker image prune -f 2>/dev/null | sed 's/^/    /' || true
+          echo "  docker builder prune:"
+          docker builder prune -f 2>/dev/null | sed 's/^/    /' || true
+
+          # 3. WAL truncate. The pages are already in the main database — this
+          #    only returns the file's tail to the filesystem. Run through the
+          #    LIVE container so it shares the app's connection and locking
+          #    rather than fighting it from outside.
+          APP="$(docker ps --filter 'ancestor=homefront-app' --format '{{.ID}}' | head -n1 || true)"
+          if [ -n "$APP" ]; then
+            echo "  wal_checkpoint(TRUNCATE):"
+            docker exec "$APP" node -e "
+              const D=require('better-sqlite3');
+              const db=new D(process.env.DATA_DIR+'/data.db');
+              const r=db.pragma('wal_checkpoint(TRUNCATE)');
+              console.log('    '+JSON.stringify(r));
+            " 2>&1 | sed 's/^/    /' || echo "    (skipped — could not run in container)"
+          else
+            echo "  wal_checkpoint: skipped, no running app container found"
+          fi
+
+          AFTER_KB="$(df -k / | awk 'NR==2{print $4}')"
+          hr; echo "RESULT"
+          show_df
+          echo "  freed: $(( (AFTER_KB - BEFORE_KB) / 1024 )) MB"
+          REMOTE
+
+      - name: Next
+        if: success()
+        shell: bash
+        run: |
+          if [ "${{ inputs.action }}" = "reclaim" ]; then
+            echo "::notice::Space reclaimed. Re-run the area reset dry run to confirm there is now room for the undo file and the update."
+          else
+            echo "::notice::Read-only report. Re-run with action=reclaim and confirm=RECLAIM to free space."
+          fi
