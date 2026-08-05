@@ -22,6 +22,8 @@ const apiRequest = vi.fn();
 vi.mock("@/lib/queryClient", () => ({
   apiRequest: (...args: any[]) => apiRequest(...args),
   queryClient: undefined,
+  // PdfReviewPane attaches the session header to its PDF fetch.
+  getStoredSessionId: () => "test-session",
 }));
 
 import TaxAndPay from "../../client/src/pages/TaxAndPay";

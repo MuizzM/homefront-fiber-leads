@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient } from "@/lib/queryClient";
+import { clearPdfBlobCache } from "@/components/PdfReviewPane";
 import { toast } from "@/hooks/use-toast";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -136,6 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try { queryClient.clear(); } catch { /* */ }
         clearPersistedQueryCache();
         purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
+        clearPdfBlobCache(); // agreement PDFs are identity-scoped too
         setSid(null);
         syncSessionToQueryClient(null);
         setUser(null);
@@ -184,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function login(newSid: string, u: AuthUser) {
     // P1-11: a NEW identity is arriving — evict everything the previous
     // identity cached before the new session hydrates (user switch in one tab).
-    try { queryClient.clear(); clearPersistedQueryCache(); purgeSessionScopedKeys(); } catch { /* */ }
+    try { queryClient.clear(); clearPersistedQueryCache(); purgeSessionScopedKeys(); clearPdfBlobCache(); } catch { /* */ }
     _memSession = newSid;
     writePersistedSession(newSid); // persist across page reloads (sessionStorage)
     setSid(newSid);
@@ -209,6 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try { queryClient.clear(); } catch { /* */ }
     clearPersistedQueryCache(); // drop the on-disk dashboard SWR snapshot
     purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
+    clearPdfBlobCache(); // agreement PDFs are identity-scoped too
     setSid(null);
     syncSessionToQueryClient(null);
     setUser(null);

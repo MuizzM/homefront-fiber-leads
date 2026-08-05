@@ -90,6 +90,13 @@ let cached: string[] | null = null;
  * own HMR client inline, which no build-time hash could ever cover.
  */
 export function scriptHashesForCsp(): string[] {
+  // Dev never pins. Vite serves a TRANSFORMED index.html — it injects the
+  // react-refresh preamble inline and rewrites the first-party scripts — so no
+  // hash computed from a file on disk can match the bytes actually served. A
+  // stale dist/public/index.html on a dev machine would otherwise win the
+  // candidate scan below and pin production hashes against Vite's HTML, which
+  // blocks every inline script and boots the app black.
+  if (process.env.NODE_ENV === "development") return [];
   if (cached) return cached;
   for (const file of indexCandidates()) {
     try {

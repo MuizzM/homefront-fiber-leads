@@ -9,7 +9,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { PdfReviewPane } from "@/components/PdfReviewPane";
+import { PdfReviewPane, prefetchPdf } from "@/components/PdfReviewPane";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -237,6 +237,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
             {viewMode === "pdf" && (
               <PdfReviewPane
                 url={`/api/onboarding/documents/${record!.id}/preview.pdf`}
+                openBeaconUrl={`/api/onboarding/documents/${record!.id}/preview-opened`}
                 fileName={`${snapshot.title.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}-review.pdf`}
                 title={`${snapshot.title} — full document`}
                 testId="agreement-pdf-review"
@@ -382,6 +383,22 @@ export default function MyDocuments() {
     queryFn: () => apiRequest("GET", "/api/onboarding/documents/me").then(response => response.json()),
   });
 
+  // Warm the PDF bytes for whatever the signer is about to open, while they are
+  // still looking at the list — the signing dialog then opens onto a rendered
+  // document instead of a spinner. PDF ONLY, and via the warm=1 variant that
+  // writes no audit row: GET /content is deliberately NOT prefetched, because
+  // that endpoint IS the view-evidence recorder (markDocumentViewed, the
+  // hash-chained document_viewed event) and pre-firing it would both fabricate
+  // opens and, via the shared query cache, swallow the real one.
+  useEffect(() => {
+    const actionable = (query.data?.documents ?? []).filter(
+      document => document.envelope && (document.envelope.status === "sent" || document.envelope.status === "delivered"),
+    );
+    for (const document of actionable) {
+      prefetchPdf(`/api/onboarding/documents/${document.envelope!.id}/preview.pdf`);
+    }
+  }, [query.data]);
+
   const download = async (document: DocumentItem) => {
     if (!document.envelope) return;
     try {
@@ -414,7 +431,7 @@ export default function MyDocuments() {
   );
 
   return (
-    <div className="p-4 sm:p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-5">
+    <div className="hf-stagger p-4 sm:p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-5">
       <header>
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Rep onboarding</div>
         <h1 className="text-xl font-semibold tracking-tight text-foreground mt-0.5 flex items-center gap-2"><FileSignature className="w-5 h-5 text-primary" /> My documents</h1>
@@ -445,9 +462,24 @@ export default function MyDocuments() {
               </Button>
             </section>
           )}
+          {percentage === 100 && (
+            <section
+              className="hf-shine relative overflow-hidden rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-center gap-3"
+              aria-label="All agreements signed"
+              data-testid="all-signed-banner"
+            >
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-500/15 text-emerald-400">
+                <CheckCircle2 className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-foreground">Every agreement is signed — you're field-ready.</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Your executed PDFs live below, hash-verified, whenever you need them.</p>
+              </div>
+            </section>
+          )}
           <section className="rounded-2xl bg-card border border-border p-4" aria-label="Onboarding progress">
             <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${percentage === 100 ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
-            <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className="h-full bg-primary rounded-full transition-all" style={{ width: `${percentage}%` }} /></div>
+            <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${percentage === 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${percentage}%` }} /></div>
           </section>
           <section className="rounded-2xl bg-card border border-border overflow-hidden"><div className="divide-y divide-border">
             {/* The W-9 is onboarding paperwork the company requires before it can

@@ -385,3 +385,91 @@ describe("the invited ladder reaches the contract and the pay engine", () => {
     expect(paidTiers(email).map((t: any) => Number(t.rate_cents))).toEqual([15_000, 20_000, 25_000, 30_000]);
   });
 });
+
+describe("the terms a reviewer APPROVES are the terms the paper states", () => {
+  // The commission block already paid the approved instrument; issuance then
+  // re-resolved terms from scratch, where the invite row (and any stored terms
+  // from a prior engagement) outranked nothing — the approved object never
+  // reached the resolver. A reviewer who edited a band at approval re-priced
+  // the rep's PAY while the agreement they signed still stated the invited
+  // numbers. These tests pin paper == approved == paid.
+  async function approveWith(applicationId: number, commission: unknown) {
+    const response = await realFetch(`${baseUrl}/api/onboarding/applications/${applicationId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "x-session-id": adminSession },
+      body: JSON.stringify({ status: "approved", commission }),
+    });
+    return { status: response.status, body: await response.json() as any };
+  }
+
+  function commissionSnapshot(email: string) {
+    const rep = rawDb.prepare("SELECT * FROM team_members WHERE email = ?").get(email) as any;
+    const envelope = rawDb.prepare(
+      `SELECT document_snapshot_json FROM onboarding_signing_documents
+        WHERE rep_id = ? AND document_type = 'commission_agreement' ORDER BY id DESC LIMIT 1`,
+    ).get(Number(rep.id)) as { document_snapshot_json: string };
+    return { rep, snapshot: JSON.parse(envelope.document_snapshot_json) };
+  }
+
+  // Every rate differs from both the invited ladder and the house one, so
+  // neither substitution can pass as the reviewer's edit.
+  const EDITED_LADDER: CommissionTier[] = [
+    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 18_500, label: "1–6 sales" },
+    { position: 1, minimumSales: 7, maximumSales: null, rateCents: 27_000, label: "7+ sales" },
+  ];
+
+  it("THE REQUIREMENT: a reviewer's edited ladder reaches the CONTRACT, not just the pay engine", async () => {
+    const email = "edited-paper@ladder.example.com";
+    const { application } = invitedApplication(email, INVITED_LADDER);
+    const { status, body } = await approveWith(application.id, {
+      structure: "TIERED", tiers: EDITED_LADDER, reservePercent: 15, reserveCapCents: 300_000,
+    });
+    expect(status).toBe(200);
+    expect(body.onboardingWarning ?? null).toBeNull();
+
+    const { rep, snapshot } = commissionSnapshot(email);
+    // The frozen terms are the EDITED ones — the invited $175/$260 would mean
+    // the rep signs one ladder and is paid another.
+    expect(snapshot.compTerms.tiers.map((t: any) => t.rateCents)).toEqual([18_500, 27_000]);
+    expect(snapshot.compTerms.reservePercent).toBe(15);
+    expect(snapshot.compTerms.reserveCapCents).toBe(300_000);
+    const prose = snapshot.sections.flatMap((s: any) => s.paragraphs).join("\n");
+    expect(prose).toContain("$185");
+    expect(prose).not.toContain("$175");
+
+    // And the portal pays the same instrument the paper states.
+    const assignments = commissionSvc.listRepAssignments(1, Number(rep.id));
+    const paid = commissionSvc.getPlanVersionTiers(1, Number(assignments[0].commission_plan_version_id));
+    expect(paid.map((t: any) => Number(t.rate_cents))).toEqual([18_500, 27_000]);
+    // pays-what-the-paper-says: the persisted rep terms are the approved ones.
+    const stored = JSON.parse(String(rep.commission_terms));
+    expect(stored.tiers.map((t: any) => t.rateCents)).toEqual([18_500, 27_000]);
+  });
+
+  it("a REHIRE's stored terms from a prior engagement do not shadow the approved instrument", async () => {
+    const email = "rehire@ladder.example.com";
+    // A rep row left behind by an earlier engagement, with old agreed terms on
+    // it. storedRepTerms outranks inviteTerms in the resolver, so before the
+    // approved object was forwarded, THIS ladder — which nobody chose for the
+    // new engagement — is what the fresh paperwork would have stated.
+    storage.createTeamMember({ name: "Rehire", email, role: "rep", active: false, tenantId: 1 } as any);
+    rawDb.prepare("UPDATE team_members SET commission_terms = ? WHERE email = ?").run(JSON.stringify({
+      structure: "TIERED",
+      flatRateCents: null,
+      tiers: [{ position: 0, minimumSales: 1, maximumSales: null, rateCents: 9_900, label: "stale" }],
+      reservePercent: 25,
+      reserveCapCents: 999_000,
+    }), email);
+
+    const { application } = invitedApplication(email, INVITED_LADDER);
+    // The console approves with the seeded (invited) instrument.
+    const { status } = await approveWith(application.id, {
+      structure: "TIERED", tiers: INVITED_LADDER, reservePercent: 10, reserveCapCents: 250_000,
+    });
+    expect(status).toBe(200);
+
+    const { snapshot } = commissionSnapshot(email);
+    expect(snapshot.compTerms.tiers.map((t: any) => t.rateCents)).toEqual([17_500, 26_000]);
+    expect(snapshot.compTerms.tiers.map((t: any) => t.rateCents)).not.toContain(9_900);
+  });
+});

@@ -108,6 +108,7 @@ import {
 } from "./payPolicyStore";
 import { isCommissionHeld, payableAfterFor, HOLD_DAYS_MAX } from "@shared/commissionHold";
 import type { CommissionTier } from "@shared/commissionTiers";
+import type { CommissionTerms } from "@shared/commissionTerms";
 import { getHrCheckpoint, listHrCheckpoints, setHrCheckpoint, summariseHr } from "./onboardingHrStore";
 import { gustoConfigured, verifyGustoConnection } from "./gustoAdapter";
 import {
@@ -8524,6 +8525,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let teamMemberId: number | null = null;
     let commissionResult: any = null;
     let commissionWarning: string | null = null;
+    // The approved instrument, normalized, held for document issuance below —
+    // so the paper states what the reviewer approved, not what an earlier
+    // invite row (or a prior engagement's stored terms) happens to say.
+    let approvedCompTerms: Partial<CommissionTerms> | null = null;
     let onboardingDocuments: any = null;
     let onboardingWarning: string | null = null;
     let welcomeEmailId: string | null = null;
@@ -8650,6 +8655,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           // so "TIERED with nothing chosen" still inherits the house plan.
           const tiers = structure === "TIERED" && Array.isArray(commission.tiers) && commission.tiers.length
             ? (commission.tiers as CommissionTier[]) : undefined;
+          // The same normalized instrument, kept for issueOnboardingDocuments as
+          // the resolver override. Without it, issuance re-resolves from the
+          // invite row and a reviewer's edit changes the PAY below while the
+          // signed agreement still states the invited numbers — the same
+          // pay-vs-paper divergence the approval panel was just cured of, moved
+          // into the PDF. Reserve fields ride only when explicitly set: a null
+          // ("clear the override") is already persisted by assignStructureToRep,
+          // and the resolver reads the rep row + tenant default for the rest.
+          approvedCompTerms = {
+            structure,
+            ...(structure === "FLAT" ? { flatRateCents: flatRateCents ?? 0 } : {}),
+            ...(tiers ? { tiers } : {}),
+            ...(typeof reservePercent === "number" ? { reservePercent } : {}),
+            ...(typeof reserveCapCents === "number" ? { reserveCapCents } : {}),
+          };
           commissionResult = commissionSvc.assignStructureToRep(tenantId, reviewer?.id ?? null, {
             repId: teamMemberId, structure, flatRateCents,
             commissionPlanVersionId: commission.commissionPlanVersionId ?? null,
@@ -8713,6 +8733,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             actorIp: String(req.ip || req.socket.remoteAddress || "unknown").slice(0, 100),
             actorUserAgent: String(req.headers["user-agent"] ?? "unknown").slice(0, 500),
             origin: onboardingAppOrigin(req),
+            compTerms: approvedCompTerms,
           });
           const failedCount = onboardingDocuments.results.filter((result: any) => result.failed).length;
           if (failedCount) onboardingWarning = `Account created, but ${failedCount} onboarding document${failedCount === 1 ? "" : "s"} could not be emailed.`;

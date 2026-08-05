@@ -18,6 +18,8 @@ const apiRequest = vi.fn();
 vi.mock("@/lib/queryClient", () => ({
   apiRequest: (...a: any[]) => apiRequest(...a),
   queryClient: undefined,
+  // PdfReviewPane attaches the session header to its PDF fetch.
+  getStoredSessionId: () => "test-session",
 }));
 const toast = vi.fn();
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
