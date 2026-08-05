@@ -182,7 +182,7 @@ export function recordCorroboration(tenantId: number, rows: CorroborationInput[]
     }
     return { accepted, duplicates };
   });
-  const result = tx();
+  const result = tx.immediate();
   // Projection is retry-safe. Valid evidence can promote provisional flips
   // immediately; non-fiber/stale/negative evidence leaves them provisional.
   projectConfirmedFreshLeads(tenantId, rows.map((row) => row.scanTargetId));

@@ -280,7 +280,7 @@ async function expandRingInner(expansionId: string): Promise<void> {
       insMember.run(expansionId, tid, c.key, `${c.address}, ${c.city}`, Math.round(c.dist), ring, now);
     }
   });
-  tx();
+  tx.immediate();
   if (!targetIds.length) return;
 
   // Enqueue under runKind 'lead_expansion' → the EXPANSION admission class

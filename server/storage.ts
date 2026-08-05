@@ -4942,7 +4942,7 @@ export class Storage implements IStorage {
       }
       return n;
     });
-    return tx(addrs);
+    return tx.immediate(addrs);
   }
   // Oldest-scanned (and never-scanned) targets first — the re-scan queue. Skips
   // never-scanned rows that have been probed inconclusive `INCONCLUSIVE_GIVEUP`+

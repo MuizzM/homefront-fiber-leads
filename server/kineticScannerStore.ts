@@ -544,7 +544,7 @@ export function upsertKineticAddress(
       fresh: decision.fresh,
       transitionAction: decision.action,
     };
-  })();
+  }).immediate();
 }
 
 export function createKineticJob(input: {

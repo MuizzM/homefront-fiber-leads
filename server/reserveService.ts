@@ -211,7 +211,7 @@ export function recordWeeklyHold(input: {
     return { inserted, holdback, balanceCents: getReserveBalanceCents(tenantId, repId) };
   });
 
-  const result = run();
+  const result = run.immediate();
   if (result.inserted) {
     storage.logActivity(input.actorId, "reserve.hold.recorded", "team_member", repId, {
       tenantId, repId, weekStartUtc, statementId: input.statementId ?? null,

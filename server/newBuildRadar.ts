@@ -167,7 +167,7 @@ function ingestCandidates(cands: NewBuildCandidate[]): IngestOutcome {
       if (c.address) addressedFresh.push(c);
     }
   });
-  tx(cands);
+  tx.immediate(cands);
   return { fresh, addressedFresh, total: cands.length };
 }
 

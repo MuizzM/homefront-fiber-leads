@@ -403,7 +403,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const tx = rawDb.transaction(() => {
     for (const candidate of candidates) {
       try {
-        perCandidate(candidate);
+        perCandidate.immediate(candidate);
       } catch (error: any) {
         // The savepoint already rolled this one door back; record and move on.
         const reason = String(error?.message ?? error).slice(0, 200);

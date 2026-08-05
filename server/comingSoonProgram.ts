@@ -194,7 +194,7 @@ export function bridgeLegacyWatches(tenantId: number, limit = 500): number {
         now, now,
       ).changes;
     }
-  })();
+  }).immediate();
   return bridged;
 }
 

@@ -273,7 +273,7 @@ export function claimBoundaryJob(
     });
     return getDiscoveryJob(row.tenantId, row.id);
   });
-  return tx();
+  return tx.immediate();
 }
 
 export function markBoundaryRetry(job: DiscoveryJobRow, error: string): void {
@@ -825,7 +825,7 @@ export function mergeAddressEvidence(input: {
       duplicate: evidenceInserted === 0,
       inferred: normalized.inferred,
     };
-  })();
+  }).immediate();
   return result;
 }
 
