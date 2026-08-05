@@ -132,7 +132,7 @@ describe("the commission agreement states the terms", () => {
     // The "sign the current version" gate is how material term changes get
     // re-signed; stating numbers where there were none is material.
     const snap = buildAgreementSnapshot({ ...ctx, documentType: "commission_agreement" });
-    expect(snap.documentVersion).toBe("2026.08.2");
+    expect(snap.documentVersion).toBe("2026.08.3");
   });
 });
 
