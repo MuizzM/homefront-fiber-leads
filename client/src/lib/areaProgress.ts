@@ -71,14 +71,57 @@ export interface AreaPassesResponse {
   }>;
 }
 
-/** One immutable territory_events row — GET /api/territories/:id/history. */
+/** The single-area read (GET /api/territories/:id/progress) carries extras the
+ *  list route deliberately omits: the boundary itself, the scan briefing that
+ *  explains WHY this ground was cut, and the lifecycle stamps. All optional —
+ *  a cached list row is still a valid AreaProgressRow. */
+export interface AreaDetailRow extends AreaProgressRow {
+  /** [lng,lat][] open ring — the area's stored boundary. */
+  polygon?: [number, number][];
+  /** Server-authored deploy briefing ("why this area"), when scan-created.
+   *  Shape is buildDeployBriefing (server/routes.ts). */
+  briefing?: {
+    doors: number;
+    unworked: number;
+    avgScore: number;
+    topCompetitor: { name: string; count: number } | null;
+    competitorShare: number;
+    newFiber: number;
+    generatedAt: string;
+  } | null;
+  completionNotes?: string | null;
+  currentPass?: number;
+  assignedAt?: string | null;
+  completedAt?: string | null;
+  createdAt?: string | null;
+}
+
+/** One tenure row — GET /api/territories/:id/assignments (the roster ledger). */
+export interface AreaAssignmentRow {
+  id: number;
+  repId: number;
+  repName: string | null;
+  roleInTerritory: string;
+  assignedAt: string;
+  assignedByName: string | null;
+  unassignedAt: string | null;
+  unassignedByName: string | null;
+  reason: string | null;
+}
+
+/** One immutable territory_events row — GET /api/territories/:id/history.
+ *  Field names match storage.getTerritoryEvents EXACTLY ({type, actorUserId,
+ *  at}). This type used to describe a row the server never sent ({event,
+ *  actorId, createdAt}), so the event log crashed on `ev.event.replace(...)`
+ *  the moment an area had any history — which is every area that was ever
+ *  created through the API, since creation itself writes an event. */
 export interface AreaHistoryEvent {
   id: number;
   territoryId: number;
-  actorId: number | null;
-  event: string;
-  detail?: string | null;
-  createdAt: string;
+  actorUserId: number | null;
+  type: string;
+  payload?: unknown;
+  at: string;
 }
 
 export interface AreaStatusMeta {

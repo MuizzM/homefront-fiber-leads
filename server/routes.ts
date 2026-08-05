@@ -64,7 +64,8 @@ import { isTrainingLessonId, TOTAL_TRAINING_LESSONS } from "@shared/trainingCont
 import { computeTerritoryMetrics } from "@shared/territoryMetrics";
 import { repCanWorkLead } from "@shared/leadVisibility";
 import { cachedScopeLookup } from "./territoryScopeCache";
-import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
+import { polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
+import { validateRing, crossesAntimeridian } from "@shared/polygonGeometry";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
@@ -132,6 +133,7 @@ import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
 import { publishSale, publishStreak, publishAuthored, feedForUser, markRead, sentAuthored, deleteAuthored } from "./teamFeedStore";
+import { postChatMessage, chatPageFor, markChatRead, deleteChatMessage } from "./floorChatStore";
 import { earningsToday } from "./earningsTodayStore";
 import { emitAnnouncement, onAnnouncement } from "./announcementBus";
 import { visibleTo, usd as feedUsd } from "@shared/teamFeed";
@@ -145,7 +147,7 @@ import { discoveryUploadBodyParser } from "./bodyParsers";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerAreaSkipTraceRoutes } from "./areaSkipTraceRoutes";
 import { tracedPhonesForLead, cancelAreaSkipTraceRuns } from "./areaSkipTrace";
-import { closeAllAssignments } from "./territoryAssignments";
+import { closeAllAssignments, assignmentHistory } from "./territoryAssignments";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
 import { registerComingSoonRoutes } from "./comingSoonWatchlist";
 import { registerLeadRankingRoutes } from "./leadRanking";
@@ -219,7 +221,7 @@ import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { getFiberChanges, getCopperPool } from "./fiberTransitions";
-import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter } from "./limiters";
+import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter, chatPostLimiter } from "./limiters";
 import { scanSseCaps } from "./scanSseCaps";
 import { otpRateBuckets } from "./otpRateBuckets";
 import { validateLeadPatch, rescanPoolPlan, clampActivityLogLimit, validateTerritoryRequestMessage, filterInChunks, RESCAN_POOL_MAX_TARGETS, RESCAN_POOL_CHUNK_SIZE as RESCAN_POOL_CHUNK } from "./routeInputPolicy";
@@ -598,8 +600,11 @@ function canReassignLead(user: any, lead: any): boolean {
 //
 // Areas the rep ALREADY holds are excluded: re-sharing or re-confirming an area
 // they're on is not a new area, and counting it would refuse a no-op.
-function repAtAreaCap(repId: number, excludeTerritoryId?: number): string | null {
-  const active = storage.getTerritoriesByRep(repId).filter((x: any) =>
+// tenantId caps the COUNT to the caller's org: without it the scan crossed
+// tenants, so a rep id that happened to collide with a busy rep in another org
+// read as "at cap" here while genuinely holding nothing in this one.
+function repAtAreaCap(repId: number, excludeTerritoryId?: number, tenantId?: number): string | null {
+  const active = storage.getTerritoriesByRep(repId, tenantId).filter((x: any) =>
     (x.status === "active" || x.status === "shared") && x.id !== excludeTerritoryId);
   if (canRepTakeAnotherArea(active.length)) return null;
   const rep = storage.getTeamMemberById(repId);
@@ -610,10 +615,11 @@ function canManageTerritory(user: any, terr: any): boolean {
   const scope = leadVisibilityScope(user);
   if (scope === undefined) return true;  // manager+ — unrestricted
   if (!terr) return false;
-  let assignees: number[] = [];
-  try { assignees = JSON.parse(terr.assigneeIds || "[]"); } catch { /* legacy */ }
-  if ((terr.repId != null && (scope as number[]).includes(terr.repId))
-      || assignees.some(id => (scope as number[]).includes(id))) return true;
+  // territoryHeldByAny is THE holder rule (assignee_ids authoritative, repId
+  // legacy fallback only). This block was the fourth hand-rolled paraphrase of
+  // it — the shape that twice leaked reclaimed areas back to their old rep.
+  if (territoryHeldByAny(terr, scope as number[])) return true;
+  const assignees = parseAssigneeIds(terr.assigneeIds) ?? [];
 
   // An area nobody currently holds belongs to no team, so there is no team to
   // take it from. A team lead may pick one up out of the pool — the separate
@@ -2151,6 +2157,81 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const userId = Number(req.user?.id);
     if (!Number.isFinite(userId)) return res.status(401).json({ error: "Unauthenticated" });
     res.json({ lastReadId: markRead(userId, Number(req.body?.upToId ?? 0), Date.now()) });
+  });
+
+  // ── Floor chat ──────────────────────────────────────────────────────────────
+  // The two-way room next to the one-way feed. Every route here is gated on
+  // field.app.use, NOT bare requireAuth — deliberately stricter than GET
+  // /api/announcements. The feed admits desk roles because a broadcast is for
+  // everyone; the chat is the floor talking, and a calling/compliance identity
+  // that can never open the hub page should not be able to post into it from a
+  // script either. (Training-gated reps are refused upstream by the gate that
+  // rides requireAuth — a rep who hasn't finished training isn't on the floor
+  // yet, and hearing the room before then is a distraction, not an onboarding.)
+
+  // GET /api/chat?limit=&after= — the room, plus this viewer's unread count.
+  // `after` is the polling cursor: a quiet poll returns zero rows, not a page.
+  app.get("/api/chat", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const userId = Number(req.user?.id);
+    if (tenantId == null || !Number.isFinite(userId)) {
+      return res.json({ items: [], unread: 0, latestId: 0 });
+    }
+    const limit = Number(req.query.limit);
+    const afterId = Number(req.query.after);
+    res.json(chatPageFor(Number(tenantId), userId, {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      afterId: Number.isFinite(afterId) ? afterId : undefined,
+    }));
+  });
+
+  // POST /api/chat { body } — say something to the floor.
+  //
+  // No push and no announcementBus frame: the house rule is that only money
+  // buzzes a phone (see the promo/update split above), and a chat message is
+  // conversation, not a "drop everything". The room updates by polling.
+  app.post("/api/chat", chatPostLimiter, requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    try {
+      const msg = postChatMessage(
+        Number(tenantId),
+        { userId: Number(req.user.id), memberId: req.user?.teamMemberId ?? null, name: req.user?.name ?? null },
+        req.body?.body, Date.now(),
+      );
+      // Your own message is not news to you: advance the watermark past it so
+      // the badge never counts what you just typed.
+      markChatRead(Number(req.user.id), msg.id, Date.now());
+      res.status(201).json(msg);
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Couldn't send" });
+    }
+  });
+
+  // POST /api/chat/read { upToId } — clears the room's badge. Monotonic in the
+  // store, same second-device contract as the announcement watermark.
+  app.post("/api/chat/read", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const userId = Number(req.user?.id);
+    if (!Number.isFinite(userId)) return res.status(401).json({ error: "Unauthenticated" });
+    res.json({ lastReadId: markChatRead(userId, Number(req.body?.upToId ?? 0), Date.now()) });
+  });
+
+  // DELETE /api/chat/:id — remove a message: yours always, anyone's if you
+  // hold the same capability that moderates the feed. 404 (not 403) when the
+  // WHERE clause misses, so existence in another tenant is never confirmed.
+  app.delete("/api/chat/:id", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Bad id" });
+    const canModerate = hasCapability(req.user?.role, "commission.structure.manage");
+    if (!deleteChatMessage(Number(tenantId), id, Number(req.user.id), canModerate)) {
+      return res.status(404).json({ error: "Not found, or not a message you can remove" });
+    }
+    // Removing someone's words from a shared room is a governance act — logged
+    // like the feed's retractions, so "who deleted that?" has an answer.
+    storage.logActivity(req.user?.id ?? null, "chat.message.deleted", "tenant", Number(tenantId), { id }, undefined);
+    res.json({ ok: true });
   });
 
   // ── Phone notifications ─────────────────────────────────────────────────────
@@ -4216,8 +4297,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // probed. Then the team-scope check for team_leads.
       if (!rp || !repInCallerTenant(user, rid)) return res.status(404).json({ error: `rep ${rid} not found` });
       if (!repInVisibilityScope(user, rid)) return res.status(403).json({ error: "A chosen rep is not on your team", code: "OUT_OF_SCOPE" });
-      const active = storage.getTerritoriesByRep(rid).filter((x: any) => x.status === "active" || x.status === "shared").length;
-      if (!canRepTakeAnotherArea(active)) return res.status(409).json({ error: `${rp.name} already has ${active} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}).` });
+      const capMsg = repAtAreaCap(rid, undefined, t);
+      if (capMsg) return res.status(409).json({ error: capMsg });
     }
 
     // AUTHORITATIVE member set: exactly the cluster's leads (never over-enclose a
@@ -4228,9 +4309,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const idset = new Set(memberIds);
       enclosed = storage.getLeads(t).filter((l: any) => idset.has(l.id) && l.lat != null && l.lng != null && canReassignLead(user, l));
     } else {
-      const padded = padHull(polygon as [number, number][], 40);
+      // polygonCovers, the SAME enclosure rule as assign-area and the progress
+      // routes — boundary doors count within the shared epsilon. This path used
+      // strict pointInPolygon on a 40 m-padded ring, so the identical drawn
+      // shape enclosed a different door set depending on which route saved it.
       enclosed = storage.getLeads(t).filter((l: any) =>
-        l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, padded) && canReassignLead(user, l));
+        l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, polygon as [number, number][]) && canReassignLead(user, l));
     }
     if (enclosed.length === 0) return res.status(409).json({ error: "No assignable leads inside this cluster" });
 
@@ -4244,6 +4328,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       : subdivideCluster(enclosed.map((l: any) => ({ id: l.id, lat: l.lat, lng: l.lng })), reps.length);
 
     const results: Array<{ territory: any; repId: number; assigned: number; briefing: any }> = [];
+    // The whole deploy — every parcel's area AND its doors — commits or none of
+    // it does. Validation above is deliberately all-or-nothing; the writes used
+    // not to be, so a crash mid-split left rep 1 fielded and rep 2 with nothing.
+    // SSE after commit (a rollback has no retraction).
+    const pendingEmits: any[] = [];
+    rawDb.transaction(() => {
     parcelIdLists.forEach((ids, i) => {
       const rid = reps[Math.min(i, reps.length - 1)];
       const rp = storage.getTeamMemberById(rid)!;
@@ -4283,12 +4373,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         if (moved) {
           assigned++;
           storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rp.name, assignedBy: user?.name ?? null });
-          if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, t ?? l.tenantId);
+          if (pendingEmits.length < LEAD_EVENT_BULK_MAX) pendingEmits.push(moved);
         }
       }
       storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId: rid, assigned });
       results.push({ territory, repId: rid, assigned, briefing });
     });
+    }).immediate();
+    for (const moved of pendingEmits) emitLeadChange("assignment", moved, user, t ?? moved.tenantId);
 
     if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(t);
     // Back-compat single-rep shape; multi-rep adds `deployments`.
@@ -6794,12 +6886,82 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     return res.json(storage.getTerritoriesByRep(user.teamMemberId, user.tenantId ?? undefined));
   });
 
+  // POST /api/territories — the raw create. No client calls it today (the lasso
+  // uses /assign-area, scans use /scan/deploy), which is exactly how it shipped
+  // unvalidated: it accepted any polygon text, any colour, any rep id in any
+  // tenant, and client-supplied status/currentPass/briefing verbatim. It now
+  // enforces the SAME rules as its siblings — ring validation, colour
+  // normalisation, tenant + team scope on every rep, the active-area cap — and
+  // the row is built ONLY from validated fields; nothing else crosses over.
   app.post("/api/territories", requireTeamLead, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
     const parsed = insertTerritorySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    // Actor's org wins — a client-supplied tenantId is ignored (anti-spoofing).
-    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
-    res.status(201).json(storage.createTerritory({ ...parsed.data, tenantId } as any));
+
+    // Polygon arrives as JSON text (the column type) or a bare array; either
+    // way it must be a real ring — the same bar the lasso clears client-side.
+    let ring: unknown;
+    try {
+      ring = typeof parsed.data.polygon === "string" ? JSON.parse(parsed.data.polygon) : parsed.data.polygon;
+    } catch { return res.status(400).json({ error: "polygon is not valid JSON", code: "BAD_POLYGON" }); }
+    if (!Array.isArray(ring) || ring.some((p: any) => !Array.isArray(p) || p.length !== 2 || typeof p[0] !== "number" || typeof p[1] !== "number" || !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) {
+      return res.status(400).json({ error: "polygon must be [lng,lat][]", code: "BAD_POLYGON" });
+    }
+    if (crossesAntimeridian(ring as [number, number][])) {
+      return res.status(400).json({ error: "polygon crosses the antimeridian", code: "BAD_POLYGON" });
+    }
+    const ringCheck = validateRing(ring as [number, number][]);
+    if (!ringCheck.ok) return res.status(400).json({ error: `polygon rejected: ${ringCheck.reason}`, code: "BAD_POLYGON" });
+
+    if (parsed.data.color !== undefined && parsed.data.color !== null && normalizeTerritoryColor(parsed.data.color) === null) {
+      return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
+    }
+
+    // Crew: assigneeIds when supplied (JSON text or array), else the primary.
+    // Every member gets the full assign-area treatment BEFORE any write.
+    let crewIds: number[] = [];
+    if (parsed.data.assigneeIds != null) {
+      let rawCrew: unknown;
+      try {
+        rawCrew = typeof parsed.data.assigneeIds === "string" ? JSON.parse(parsed.data.assigneeIds) : parsed.data.assigneeIds;
+      } catch { return res.status(400).json({ error: "assigneeIds is not valid JSON", code: "BAD_ASSIGNEES" }); }
+      if (!Array.isArray(rawCrew) || rawCrew.some((v) => typeof v !== "number" || !Number.isInteger(v) || v <= 0)) {
+        return res.status(400).json({ error: "assigneeIds must be positive integers", code: "BAD_ASSIGNEES" });
+      }
+      crewIds = [...new Set(rawCrew as number[])];
+    } else if (parsed.data.repId != null) {
+      crewIds = [parsed.data.repId];
+    }
+    if (!crewIds.length) return res.status(400).json({ error: "repId or assigneeIds required" });
+    if (crewIds.length > MAX_AREA_ASSIGNEES) {
+      return res.status(400).json({ error: `An area can hold at most ${MAX_AREA_ASSIGNEES} reps`, code: "TOO_MANY_ASSIGNEES" });
+    }
+    const crew: TeamMember[] = [];
+    for (const id of crewIds) {
+      const member = storage.getTeamMemberById(id);
+      if (!member || (tid && member.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
+      if (!repInVisibilityScope(user, id)) return res.status(403).json({ error: `${member.name} is not on your team`, code: "OUT_OF_SCOPE" });
+      const capMsg = repAtAreaCap(id, undefined, tid);
+      if (capMsg) return res.status(409).json({ error: capMsg });
+      crew.push(member);
+    }
+    const primary = crew[0];
+
+    const at = new Date().toISOString();
+    const territory = storage.createTerritory({
+      // Actor's org wins — a client-supplied tenantId is ignored (anti-spoofing).
+      tenantId: tid ?? null,
+      name: (parsed.data.name && String(parsed.data.name).trim()) || (crew.length === 1 ? `${primary.name}'s area` : `${primary.name} +${crew.length - 1}`),
+      repId: primary.id,
+      polygon: JSON.stringify(ringCheck.ring),
+      color: normalizeTerritoryColor(parsed.data.color ?? undefined) ?? repColorOf(primary),
+      status: crew.length > 1 ? "shared" : "active",
+      assigneeIds: JSON.stringify(crewIds),
+      assignedAt: at, updatedAt: at,
+    } as any);
+    storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: primary.id, repIds: crewIds, name: territory.name });
+    res.status(201).json(territory);
   });
 
   // POST /api/territories/assign-area — the SalesRabbit move: draw an area, pick
@@ -6860,10 +7022,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // A team_lead may only assign an area to one of their own reps.
       if (!repInVisibilityScope(user, id)) return res.status(403).json({ error: `${member.name} is not on your team`, code: "OUT_OF_SCOPE" });
       // Max-active-areas guard (company rule; recommended 3–5)
-      const activeForRep = storage.getTerritoriesByRep(id).filter((t: any) => t.status === "active" || t.status === "shared").length;
-      if (!canRepTakeAnotherArea(activeForRep)) {
-        return res.status(409).json({ error: `${member.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}). Reclaim one first.` });
-      }
+      const capMsg = repAtAreaCap(id, undefined, tid);
+      if (capMsg) return res.status(409).json({ error: `${capMsg} Reclaim one first.` });
       crew.push(member);
     }
     const rep = crew[0];
@@ -6879,28 +7039,39 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const autoName = crew.length === 1
       ? `${rep.name}'s area`
       : `${rep.name} +${crew.length - 1}`;
-    const territory = storage.createTerritory({
-      tenantId: tid ?? null, name: (name && name.trim()) || autoName,
-      repId, polygon: JSON.stringify(polygon), color,
-      status: crew.length > 1 ? "shared" : "active",
-      assigneeIds: JSON.stringify(repIds), assignedAt: at, updatedAt: at,
-    } as any);
-    storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId, repIds, name: territory.name });
-
     // Only leads the caller may reassign (unassigned or own-team for a team_lead;
     // all for admin/manager) — an area draw never poaches another team's doors.
     const enclosed = storage.getLeads(tid).filter((l: any) =>
       l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, polygon) && canReassignLead(user, l));
+
+    // ONE transaction for the polygon and its doors — this route's whole
+    // promise is "save the area AND assign every enclosed lead atomically", and
+    // it used to be a createTerritory followed by an N-row loop, so a crash
+    // mid-loop left an area holding some of its doors. .immediate() takes the
+    // write lock up front (reads inside otherwise deadlock-upgrade under load).
+    // SSE emission stays OUTSIDE — a rollback has no retraction.
+    let territory!: ReturnType<typeof storage.createTerritory>;
     let assigned = 0;
-    for (const l of enclosed) {
-      const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid);
-      if (moved) {
-        assigned++;
-        storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
-        if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? l.tenantId);
+    const movedRows: any[] = [];
+    rawDb.transaction(() => {
+      territory = storage.createTerritory({
+        tenantId: tid ?? null, name: (name && name.trim()) || autoName,
+        repId, polygon: JSON.stringify(polygon), color,
+        status: crew.length > 1 ? "shared" : "active",
+        assigneeIds: JSON.stringify(repIds), assignedAt: at, updatedAt: at,
+      } as any);
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId, repIds, name: territory.name });
+      for (const l of enclosed) {
+        const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid);
+        if (moved) {
+          assigned++;
+          storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
+          if (movedRows.length < LEAD_EVENT_BULK_MAX) movedRows.push(moved);
+        }
       }
-    }
-    storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, repIds, assigned });
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, repIds, assigned });
+    }).immediate();
+    for (const moved of movedRows) emitLeadChange("assignment", moved, user, tid ?? moved.tenantId);
 
     res.status(201).json({
       territory, assigned, total: enclosed.length,
@@ -6969,7 +7140,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Checked BEFORE startNextPass: a refused hand-off must not have already
     // wiped the area's outcomes on its way to the 409.
     if (newRepId != null) {
-      const full = repAtAreaCap(newRepId, t.id);
+      const full = repAtAreaCap(newRepId, t.id, tid);
       if (full) return res.status(409).json({ error: full });
     }
     const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
@@ -7181,7 +7352,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (!repInCallerTenant(user, target) || !repInVisibilityScope(user, target)) {
         return res.status(404).json({ error: "rep not found" });
       }
-      const full = repAtAreaCap(target, t.id);
+      const full = repAtAreaCap(target, t.id, tid);
       if (full) return res.status(409).json({ error: full });
     }
 
@@ -7261,10 +7432,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
 
     // Max-active-areas guard
-    const activeForRep = storage.getTerritoriesByRep(repId).filter((x: any) => x.status === "active" || x.status === "shared").length;
-    if (!canRepTakeAnotherArea(activeForRep)) {
-      return res.status(409).json({ error: `${rep.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}).` });
-    }
+    const capMsg = repAtAreaCap(repId, t.id, tid);
+    if (capMsg) return res.status(409).json({ error: capMsg });
 
     const at = new Date().toISOString();
     let polygon: [number, number][] = [];
@@ -7272,27 +7441,34 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // Assign only leads inside the area that are currently UNASSIGNED — direct
     // assignments and other reps' pipelines are never touched.
+    const inside = polygon.length >= 3
+      ? storage.getLeads(tid).filter((l: any) =>
+          l.lat != null && l.lng != null && l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon))
+      : [];
+
+    // Doors + holder flip in ONE transaction (same contract as assign-area and
+    // DELETE): a crash mid-loop must not leave the area assigned with half its
+    // doors, or vice versa. SSE after commit — a rollback has no retraction.
     let assigned = 0;
-    if (polygon.length >= 3) {
-      const inside = storage.getLeads(tid).filter((l: any) =>
-        l.lat != null && l.lng != null && l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon));
+    const movedRows: any[] = [];
+    rawDb.transaction(() => {
       for (const l of inside) {
         const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid);
         if (moved) {
           assigned++;
           storage.addLeadEvent(l.id, "assignment", (req as any).user?.name ?? null, { assignedTo: rep.name, assignedBy: (req as any).user?.name ?? null });
-          if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? l.tenantId);
+          if (movedRows.length < LEAD_EVENT_BULK_MAX) movedRows.push(moved);
         }
       }
-    }
-
-    // Re-badge an auto-named area with the new owner's name (custom names kept).
-    const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
-    storage.updateTerritory(t.id, {
-      repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
-      color: retainedAreaColor(t, repId), assignedAt: at, updatedAt: at,
-    } as any, tid);
-    storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
+      // Re-badge an auto-named area with the new owner's name (custom names kept).
+      const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
+      storage.updateTerritory(t.id, {
+        repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
+        color: retainedAreaColor(t, repId), assignedAt: at, updatedAt: at,
+      } as any, tid);
+      storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
+    }).immediate();
+    for (const moved of movedRows) emitLeadChange("assignment", moved, user, tid ?? moved.tenantId);
 
     res.json({ ok: true, repId, assigned, status: "active" });
   });
@@ -7347,7 +7523,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const alreadyOn = new Set<number>(safeJson<number[]>((t as any).assigneeIds) ?? []);
     for (const r of repIds) {
       if (alreadyOn.has(r)) continue;
-      const full = repAtAreaCap(r, t.id);
+      const full = repAtAreaCap(r, t.id, tid);
       if (full) return res.status(409).json({ error: full });
     }
     // repIds is the COMPLETE set of who holds this area, not an addition to it.
@@ -7535,6 +7711,35 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(404).json({ error: "Not found" });
     }
     res.json(storage.getTerritoryEvents(Number(req.params.id)));
+  });
+
+  // GET /api/territories/:id/assignments — the tenure ledger, readable at last.
+  // territory_assignments answers "who held this ground, put there by whom,
+  // when, closed by whom" — and was written on every holder change since the
+  // table shipped while nothing ever read it back. Same guards as /history:
+  // the roster carries rep ids and removal reasons.
+  app.get("/api/territories/:id/assignments", requireTeamLead, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t || !sameTenantRead(t, tid ?? null, getDefaultTenantId()) || !canManageTerritory(user, t)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    const memberName = (id: number | null) =>
+      id == null ? null : (storage.getTeamMemberById(id, tid)?.name ?? `Rep #${id}`);
+    const userName = (id: number | null) =>
+      id == null ? null : (storage.getUserById(id)?.name ?? null);
+    res.json(assignmentHistory(t.id).map((a: any) => ({
+      id: a.id,
+      repId: a.repId,
+      repName: memberName(a.repId),
+      roleInTerritory: a.roleInTerritory ?? "assignee",
+      assignedAt: a.assignedAt,
+      assignedByName: userName(a.assignedByUserId ?? null),
+      unassignedAt: a.unassignedAt ?? null,
+      unassignedByName: userName(a.unassignedByUserId ?? null),
+      reason: a.reason ?? null,
+    })));
   });
 
   // PATCH /api/territories/:id { name?, color? } — edit an area's identity.
@@ -7851,8 +8056,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // shared area got no numbers for ground they were actively working — and
     // because repId still names the last holder after a reclaim, it kept showing
     // the card to whoever the area had been taken FROM. One rule fixes both.
+    //
+    // A team_lead ALSO gets the unassigned pool — the same scope GET
+    // /api/territories grants them. Without it the pool was on their map but
+    // absent from /areas, and a pool area's console URL 404'd on the exact
+    // screen whose primary action is "Assign". Reps never see the pool.
     const territories = Array.isArray(scope)
-      ? storage.getTerritories(tid).filter((territory) => territoryHeldByAny(territory, scope))
+      ? storage.getTerritories(tid).filter((territory) => territoryHeldByAny(territory, scope)
+          || (user.role === "team_lead" && territoryUnassigned(territory)))
       : storage.getTerritories(tid);
     if (territories.length === 0) return res.json([]);
 
@@ -7874,10 +8085,30 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const territory = storage.getTerritories(tid).find(t => t.id === Number(req.params.id));
     if (!territory) return res.status(404).json({ error: "Not found" });
     const scope = leadVisibilityScope(user);
-    if (Array.isArray(scope) && !territoryHeldByAny(territory as any, scope)) {
+    // Same rule as the list route above: holders always; the unassigned pool
+    // additionally for team_leads (they assign from this very screen).
+    if (Array.isArray(scope) && !territoryHeldByAny(territory as any, scope)
+        && !(user.role === "team_lead" && territoryUnassigned(territory as any))) {
       return res.status(404).json({ error: "Not found" });
     }
-    res.json(territoryProgressRow(territory, territoryProgressContext(tid)));
+    // The console's extras ride on the single-area read only — the list route
+    // stays lean (polygons at 800 points × 200 areas is real payload).
+    // briefing ("why this area") and completionNotes were written by deploy/
+    // complete and never re-read by anything; polygon is what lets the console
+    // finally draw the ground it is describing.
+    const row = territoryProgressRow(territory, territoryProgressContext(tid));
+    let polygon: [number, number][] = [];
+    try { polygon = JSON.parse((territory as any).polygon); } catch { polygon = []; }
+    res.json({
+      ...row,
+      polygon,
+      briefing: safeJson<any>((territory as any).briefing) ?? null,
+      completionNotes: (territory as any).completionNotes ?? null,
+      currentPass: (territory as any).currentPass ?? 1,
+      assignedAt: (territory as any).assignedAt ?? null,
+      completedAt: (territory as any).completedAt ?? null,
+      createdAt: (territory as any).createdAt ?? null,
+    });
   });
 
   // GET /api/territories/:id/activity — the location-verified History feed for a
@@ -8072,8 +8303,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const territories = storage.getTerritories(tid);
     const enriched = requests.map(r => {
       const member = team.find(m => m.id === r.repId);
-      // Find the territory currently assigned to this rep
-      const currentTerritory = territories.find(t => t.repId === r.repId);
+      // The territory this rep currently HOLDS — territoryHeldByAny, not repId:
+      // repId still names the last holder after a reclaim, so matching it named
+      // an area already taken off the rep as their "current area" on the very
+      // screen deciding whether they deserve a new one.
+      const currentTerritory = territories.find(t =>
+        (t as any).status !== "archived" && territoryHeldByAny(t as any, [r.repId]));
       return {
         ...r,
         notes: r.message,
@@ -9124,10 +9359,10 @@ export function registerSaasRoutes(app: any) {
       const visibleRepIds = new Set(scope);
       sessions = sessions.filter((session) => visibleRepIds.has(session.repId));
     }
-    const members = storage.getTeamMembers(tid);
+    const memberNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
     const result = sessions.map(s => ({
       ...s,
-      repName: members.find(m => m.id === s.repId)?.name ?? "Unknown",
+      repName: memberNames.get(s.repId) ?? "Unknown",
     }));
     res.json(result);
   });
@@ -9159,10 +9394,12 @@ export function registerSaasRoutes(app: any) {
     // Mobile entries read "sold date · rep · address, city" — enrich once here
     // (two Map builds, O(1) per row) instead of N client round-trips.
     const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
-    const leadIds = new Set(comms.map(c => c.leadId).filter((id): id is number => id != null));
+    const leadIds = [...new Set(comms.map(c => c.leadId).filter((id): id is number => id != null))];
+    // Fetch exactly the addresses these commissions reference — hydrating every
+    // lead in the tenant (68 columns × the whole table) to pluck two fields for
+    // a handful of ids was this endpoint's entire cost.
     const leadAddr = new Map(
-      storage.getLeads(user?.tenantId ?? undefined)
-        .filter(l => leadIds.has(l.id))
+      storage.getLeadAddressesByIds(leadIds, user?.tenantId ?? undefined)
         .map(l => [l.id, { address: l.address, city: l.city }]),
     );
     // Install-hold overlay (additive): under a require-install-confirm policy a
@@ -9571,44 +9808,72 @@ export function registerSaasRoutes(app: any) {
 
     // Reps see their own stats; team leads their team's; admins/managers tenant-wide.
     // EVERY source is tenant-scoped so the org-wide (scopeIds===null) path can never
-    // aggregate another tenant's knocks/commissions/hours/pipeline into this dashboard.
+    // aggregate another tenant's knocks/commissions/pipeline into this dashboard.
+    //
+    // AGGREGATES IN SQL, same as /api/stats after 9e50d70. This handler used to
+    // fully hydrate leads, knocks, commissions and every clock session in tenant
+    // history — plus one getActiveClockSession per member — to emit a dozen
+    // scalars, and the Dashboard re-pays it every 30 seconds per viewer. The
+    // walls and scope filters below are byte-for-byte the ones the hydrating
+    // accessors applied; an EMPTY scope set still matches nothing (fail-closed).
+    // Fields nothing renders (leads.total/sold, knocks.total, fieldHours) are
+    // gone — the Dashboard is this endpoint's only consumer.
     const tid = user?.tenantId ?? undefined; // super_admin (null) = platform-wide
-    const leads = storage.getLeads(tid, repScope);
-    const members = storage.getTeamMembers(tid).filter(m => m.active);
-    const scopedMembers = scopeIds ? members.filter(m => scopeIds.includes(m.id)) : members;
-    const allKnocks = storage.getKnocks(tid);
-    const knocks = scopeIds ? allKnocks.filter((k: any) => scopeIds.includes(k.repId)) : allKnocks;
+    const scopeSql = (col: string) =>
+      scopeIds ? (scopeIds.length ? ` AND ${col} IN (${scopeIds.map(() => "?").join(",")})` : ` AND ${col} = -1`) : "";
+    const scopeParams = scopeIds ?? [];
+    const wall = (col = "tenant_id") => (tid != null ? `WHERE ${col} = ?` : "WHERE 1=1");
+    const wallParams = tid != null ? [tid] : [];
+
+    const leadAgg = rawDb.prepare(
+      `SELECT SUM(CASE WHEN lead_tag='fresh_fiber_confirmed' AND fresh_confidence='cross_verified' THEN 1 ELSE 0 END) AS newFiber,
+              SUM(CASE WHEN assigned_rep_id IS NULL THEN 1 ELSE 0 END) AS unassigned
+         FROM leads ${wall()}${scopeSql("assigned_rep_id")}`,
+    ).get(...wallParams, ...scopeParams) as any;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const knockAgg = rawDb.prepare(
+      `SELECT SUM(CASE WHEN substr(knocked_at,1,10) = ? THEN 1 ELSE 0 END) AS today,
+              SUM(CASE WHEN substr(knocked_at,1,10) = ? AND outcome='sold' THEN 1 ELSE 0 END) AS todaySales,
+              SUM(CASE WHEN outcome='sold' AND knocked_at > ? THEN 1 ELSE 0 END) AS weekSales
+         FROM knock_log ${wall()}${scopeSql("rep_id")}`,
+    ).get(today, today, weekAgo, ...wallParams, ...scopeParams) as any;
+
+    const revenueAgg = rawDb.prepare(
+      `SELECT SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS totalPaid,
+              SUM(CASE WHEN status='approved' THEN amount ELSE 0 END) AS pendingPayout
+         FROM commissions ${wall()}${scopeSql("rep_id")}`,
+    ).get(...wallParams, ...scopeParams) as any;
+
     const kineticAddresses = tid == null
       ? rawDb.prepare(`SELECT COUNT(*) AS total,SUM(CASE WHEN is_live=1 THEN 1 ELSE 0 END) AS live FROM kinetic_addresses`).get() as any
       : rawDb.prepare(`SELECT COUNT(*) AS total,SUM(CASE WHEN is_live=1 THEN 1 ELSE 0 END) AS live FROM kinetic_addresses WHERE tenant_id=?`).get(tid) as any;
-    const allCommissions = storage.getCommissions(tid);
-    const commissions = scopeIds ? allCommissions.filter((c: any) => scopeIds.includes(c.repId)) : allCommissions;
-    const allSessions = storage.getAllClockSessions(undefined, tid);
-    const sessions = scopeIds ? allSessions.filter(s => scopeIds.includes(s.repId)) : allSessions;
 
-    const today = new Date().toISOString().slice(0, 10);
-    const todayKnocks = knocks.filter(k => k.knockedAt.slice(0, 10) === today);
-    const todaySales = todayKnocks.filter(k => k.outcome === "sold").length;
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const weekSales = knocks.filter(k => k.outcome === "sold" && k.knockedAt > weekAgo).length;
-
-    const totalRevenue = commissions.filter(c => c.status === "paid").reduce((s, c) => s + c.amount, 0);
-    const pendingPayout = commissions.filter(c => c.status === "approved").reduce((s, c) => s + c.amount, 0);
-
-    const activeClockedIn = (scopeIds ? scopedMembers : members).filter(m => storage.getActiveClockSession(m.id)).length;
+    const members = storage.getTeamMembers(tid).filter(m => m.active);
+    const scopedMembers = scopeIds ? members.filter(m => scopeIds.includes(m.id)) : members;
+    // One query instead of one per member: an open session is clocked_out IS NULL.
+    const memberIds = scopedMembers.map(m => m.id);
+    const activeClockedIn = memberIds.length
+      ? Number((rawDb.prepare(
+          `SELECT COUNT(DISTINCT rep_id) AS n FROM clock_sessions
+            WHERE clocked_out IS NULL AND rep_id IN (${memberIds.map(() => "?").join(",")})`,
+        ).get(...memberIds) as any)?.n ?? 0)
+      : 0;
 
     res.json({
       leads: {
-        total: leads.length,
-        newFiber: leads.filter(l => l.leadTag === "fresh_fiber_confirmed" && l.freshConfidence === "cross_verified").length,
-        sold: leads.filter(l => l.leadStatus === "sold").length,
-        unassigned: leads.filter(l => !l.assignedRepId).length,
+        newFiber: Number(leadAgg?.newFiber ?? 0),
+        unassigned: Number(leadAgg?.unassigned ?? 0),
       },
       team: isRep ? { total: 1, activeClockedIn } : { total: scopedMembers.length, activeClockedIn },
-      knocks: { total: knocks.length, today: todayKnocks.length, todaySales, weekSales },
+      knocks: {
+        today: Number(knockAgg?.today ?? 0),
+        todaySales: Number(knockAgg?.todaySales ?? 0),
+        weekSales: Number(knockAgg?.weekSales ?? 0),
+      },
       kinetic: { total: Number(kineticAddresses?.total ?? 0), live: Number(kineticAddresses?.live ?? 0) },
-      revenue: { totalPaid: totalRevenue, pendingPayout },
-      fieldHours: { total: sessions.reduce((s, c) => s + (c.durationMinutes ?? 0), 0) },
+      revenue: { totalPaid: Number(revenueAgg?.totalPaid ?? 0), pendingPayout: Number(revenueAgg?.pendingPayout ?? 0) },
     });
   });
 

@@ -39,11 +39,12 @@ import { AreaDeleteDialog } from "@/components/AreaDeleteDialog";
 import { can as roleCan } from "@shared/permissions";
 import { can as capCan } from "@shared/capabilities";
 import { AreaSkipTracePanel } from "@/components/area/AreaSkipTracePanel";
+import { AreaMiniMap } from "@/components/area/AreaMiniMap";
 import { repColorOf } from "@shared/repColors";
 import { shortDate, shortRep } from "@shared/territoryLabel";
 import {
   areaHolders, areaStatusMeta, initialsOf, isNotFoundError, isPoolArea,
-  type AreaHistoryEvent, type AreaPassesResponse, type AreaProgressRow,
+  type AreaAssignmentRow, type AreaHistoryEvent, type AreaPassesResponse, type AreaDetailRow,
 } from "@/lib/areaProgress";
 
 // Territory lifecycle authority lives in shared/permissions.ts, NOT in the
@@ -94,11 +95,19 @@ export default function AreaDetail() {
   const [confirmRemoveId, setConfirmRemoveId] = useState<number | null>(null);
   const [removingRepId, setRemovingRepId] = useState<number | null>(null);
 
-  const progressQuery = useQuery<AreaProgressRow>({
+  const progressQuery = useQuery<AreaDetailRow>({
     queryKey: [`/api/territories/${id}/progress`],
     enabled: validId,
   });
   const area = progressQuery.data;
+
+  // The tenure ledger (territory_assignments) — who held this ground, put
+  // there by whom, closed by whom. Team-lead+ like /history; loaded with the
+  // passes tab where it renders.
+  const assignmentsQuery = useQuery<AreaAssignmentRow[]>({
+    queryKey: [`/api/territories/${id}/assignments`],
+    enabled: validId && canAssign && tab === "passes",
+  });
 
   const passesQuery = useQuery<AreaPassesResponse>({
     queryKey: [`/api/territories/${id}/passes`],
@@ -435,6 +444,49 @@ export default function AreaDetail() {
             </div>
           </div>
 
+          {/* ── Why this area ─────────────────────────────────────────────────
+              The deploy briefing was captured at creation ("why this ground was
+              cut") and then never re-read by any screen — the one moment a rep
+              or manager could use it, it was invisible. Scan-created areas
+              render it here; hand-drawn areas simply have none. */}
+          {area.briefing && (
+            <div className="rounded-2xl border border-border bg-card p-4" data-testid="area-briefing">
+              <SectionLabel>Why this area</SectionLabel>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[13px] sm:grid-cols-3">
+                <div className="flex items-baseline justify-between gap-2 sm:block">
+                  <span className="text-muted-foreground">Unworked doors</span>
+                  <div className="font-semibold tabular-nums text-foreground">
+                    {area.briefing.unworked.toLocaleString()} of {area.briefing.doors.toLocaleString()}
+                  </div>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 sm:block">
+                  <span className="text-muted-foreground">Avg lead score</span>
+                  <div className="font-semibold tabular-nums text-foreground">{area.briefing.avgScore}</div>
+                </div>
+                <div className="flex items-baseline justify-between gap-2 sm:block">
+                  <span className="text-muted-foreground">New fiber</span>
+                  <div className="font-semibold tabular-nums text-foreground">{area.briefing.newFiber.toLocaleString()} confirmed</div>
+                </div>
+                {area.briefing.topCompetitor && (
+                  <div className="col-span-2 sm:col-span-3">
+                    <span className="text-muted-foreground">
+                      Top competitor: <span className="font-semibold text-foreground">{area.briefing.topCompetitor.name}</span>
+                      {" "}on {area.briefing.topCompetitor.count} doors ({area.briefing.competitorShare}% of the area).
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* The retrospective a manager wrote when they marked it done. */}
+          {area.completionNotes && (
+            <div className="rounded-2xl border border-sky-500/30 bg-sky-500/5 p-4" data-testid="area-completion-notes">
+              <SectionLabel>Completion notes</SectionLabel>
+              <p className="mt-1.5 whitespace-pre-wrap text-[13px] text-foreground">{area.completionNotes}</p>
+            </div>
+          )}
+
           {/* ── Who works this area ──────────────────────────────────────────
               An area is many-to-many everywhere else in the product; this card
               used to print exactly one name, so a crew read as one rep's ground
@@ -615,15 +667,65 @@ export default function AreaDetail() {
                   <li key={ev.id} className="flex items-baseline justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2.5">
                     <span className="min-w-0">
                       <span className="block truncate text-[13px] font-semibold text-foreground">
-                        {ev.event.replace(/[_:]/g, " ")}
+                        {String(ev.type ?? "event").replace(/[_:]/g, " ")}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {ev.actorId != null ? `by user #${ev.actorId}` : "system"}
+                        {ev.actorUserId != null ? `by user #${ev.actorUserId}` : "system"}
                       </span>
                     </span>
                     <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                      {shortDate(ev.createdAt) ?? ev.createdAt}
+                      {shortDate(ev.at) ?? ev.at}
                     </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+
+          {/* ── Assignment roster ──────────────────────────────────────────────
+              territory_assignments is the append-only tenure ledger — written on
+              every holder change since it shipped, read by nothing until now.
+              "Who held this ground, put there by whom, taken off by whom" is the
+              question a manager asks when an area goes wrong. */}
+          <div>
+            <SectionLabel className="mb-2">Assignment roster</SectionLabel>
+            {assignmentsQuery.isLoading ? (
+              <div className="space-y-2" data-testid="area-roster-loading">
+                {[0, 1].map(i => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}
+              </div>
+            ) : assignmentsQuery.isError ? (
+              <div role="alert" className="text-sm text-destructive">Couldn't load this area's roster.</div>
+            ) : (assignmentsQuery.data ?? []).length === 0 ? (
+              <EmptyState
+                icon={UserCog} bordered title="No tenures recorded yet"
+                description="Each rep's stint on this area — who put them on and who took them off — is recorded here."
+                testId="area-roster-empty"
+              />
+            ) : (
+              <ol className="space-y-2" data-testid="area-roster-list">
+                {(assignmentsQuery.data ?? []).map(a => (
+                  <li key={a.id} className="rounded-xl border border-border bg-card px-3 py-2.5">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="min-w-0 truncate text-[13px] font-semibold text-foreground">
+                        {a.repName ?? `Rep #${a.repId}`}
+                        {a.roleInTerritory === "primary" && (
+                          <span className="ml-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">primary</span>
+                        )}
+                      </span>
+                      <span className={cn(CHIP, "shrink-0", a.unassignedAt == null
+                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                        : "bg-secondary text-muted-foreground")}>
+                        {a.unassignedAt == null ? "Holding" : "Ended"}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      On {shortDate(a.assignedAt) ?? a.assignedAt}
+                      {a.assignedByName ? ` by ${a.assignedByName}` : ""}
+                      {a.unassignedAt
+                        ? <> · off {shortDate(a.unassignedAt) ?? a.unassignedAt}{a.unassignedByName ? ` by ${a.unassignedByName}` : ""}</>
+                        : ""}
+                      {a.reason ? ` · ${a.reason}` : ""}
+                    </div>
                   </li>
                 ))}
               </ol>
@@ -708,11 +810,31 @@ export default function AreaDetail() {
       {tab === "map" && (
         <section className="rounded-2xl border border-border bg-card p-4" data-testid="area-panel-map">
           <SectionLabel>Map</SectionLabel>
-          <p className="mt-2 text-[13px] text-muted-foreground">
-            The Field Map is the one place this area's boundary is drawn, edited, and knocked from.
-            It doesn't take an area in its URL yet, so this opens the map itself — select
-            {" "}<span className="font-semibold text-foreground">{area.name}</span> there to see its polygon and pins.
-          </p>
+          {Array.isArray(area.polygon) && area.polygon.length >= 3 ? (
+            <>
+              {/* The boundary itself — same paint rule as the Field Map, fitted
+                  to the area. Knocking and editing stay on the Field Map; this
+                  answers "where is it" without leaving the console. */}
+              <div className="mt-3">
+                <AreaMiniMap
+                  polygon={area.polygon}
+                  color={area.color}
+                  status={area.status}
+                  repId={area.repId}
+                  areaName={area.name}
+                />
+              </div>
+              <p className="mt-2 text-[12px] text-muted-foreground">
+                A preview of <span className="font-semibold text-foreground">{area.name}</span>'s boundary.
+                Knocking, pins, and boundary edits live on the Field Map.
+              </p>
+            </>
+          ) : (
+            <p className="mt-2 text-[13px] text-muted-foreground">
+              This area has no stored boundary to draw. The Field Map is where
+              boundaries are drawn and edited.
+            </p>
+          )}
           <Link href="/map" data-testid="area-map-link"
             className={cn("mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90", FOCUS)}>
             <MapIcon className="h-4 w-4" aria-hidden="true" /> Open the Field Map
