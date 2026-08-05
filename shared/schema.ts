@@ -421,6 +421,9 @@ export const repApplications = sqliteTable("rep_applications", {
   state: text("state").notNull().default("NC"),
   hasSalesExperience: integer("has_sales_experience", { mode: "boolean" }).notNull().default(false),
   salesExperienceDetails: text("sales_experience_details"),
+  // Nullable on purpose: null = the form never asked (careers site, legacy
+  // rows), which must stay distinguishable from an explicit "No".
+  hasReliableTransportation: integer("has_reliable_transportation", { mode: "boolean" }),
   preferredCarriers: text("preferred_carriers").notNull(),
   referralSource: text("referral_source"),
   headshotPath: text("headshot_path"),

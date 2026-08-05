@@ -47,6 +47,8 @@ export interface OnboardingPipelineRecord {
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
     preferredCarriers: string; hasSalesExperience: boolean; salesExperienceDetails: string | null;
+    // null = the submitting form never asked (careers site, legacy rows).
+    hasReliableTransportation: boolean | null;
     referralSource: string | null; headshotPath: string | null; licensePath: string | null;
     reviewNotes: string | null; createdAt: string;
   };
@@ -185,6 +187,7 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
     application: application ? {
       status: application.status, phone: application.phone, city: application.city, state: application.state, zip: application.zip,
       preferredCarriers: application.preferred_carriers, hasSalesExperience: Boolean(application.has_sales_experience),
+      hasReliableTransportation: application.has_reliable_transportation == null ? null : Boolean(application.has_reliable_transportation),
       salesExperienceDetails: application.sales_experience_details ?? null, referralSource: application.referral_source ?? null,
       headshotPath: application.headshot_path ?? null, licensePath: application.license_path ?? null,
       reviewNotes: application.review_notes ?? null, createdAt: application.created_at,
