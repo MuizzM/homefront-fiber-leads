@@ -1,6 +1,10 @@
-node_modules/
-dist/
-.vite/
+# No trailing slash: with one, these match only directories, so a SYMLINK named
+# node_modules is not ignored. That is how a self-referential node_modules link
+# got committed once already — it resolves to itself on a checkout at the path
+# it names, and then npm/tsc/vitest all die with ELOOP.
+node_modules
+dist
+.vite
 
 # Operator/runtime data dropped on the production host (not release content).
 # The deploy's dirty-checkout guard ignores gitignored paths, so this keeps an
