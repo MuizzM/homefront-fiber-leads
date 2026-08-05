@@ -192,7 +192,9 @@ app.use(helmet({
 // fails open without saying so is one nobody notices is off.
 console.log(inlineScriptsAreHashed()
   ? "[csp] inline scripts pinned by sha256 — 'unsafe-inline' is OFF for scripts"
-  : "[csp] WARNING: could not hash index.html; script-src-elem is falling back to 'unsafe-inline'");
+  : process.env.NODE_ENV === "development"
+    ? "[csp] dev: Vite rewrites the served HTML, so script-src-elem keeps 'unsafe-inline'"
+    : "[csp] WARNING: could not hash index.html; script-src-elem is falling back to 'unsafe-inline'");
 
 // ── Crawlers, and AI crawlers in particular ─────────────────────────────────
 // Ordering note before anyone extends this: the REAL protection is that every

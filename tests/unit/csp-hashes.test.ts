@@ -76,6 +76,20 @@ describe("the policy it produces", () => {
     expect(list).toContain("https://api.mapbox.com");
   });
 
+  it("never pins in development — Vite rewrites the HTML it serves", () => {
+    // A stale dist/public/index.html on a dev machine used to win the candidate
+    // scan and pin production hashes against Vite's transformed HTML, blocking
+    // every inline script (including the react-refresh preamble): black screen.
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    try {
+      expect(scriptHashesForCsp()).toEqual([]);
+      expect(scriptSrcElem()).toContain("'unsafe-inline'");
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
   it("covers every inline script in the real index.html", () => {
     // The end-to-end check: whatever the app actually ships, each inline script
     // in it has a matching token. Skipped when the source file is absent.
