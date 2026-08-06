@@ -58,8 +58,7 @@ function indexPrecompressed(root: string): Set<string> {
   return found;
 }
 
-export function serveStatic(app: Express) {
-  const distPath = path.resolve(__dirname, "public");
+export function serveStatic(app: Express, distPath = path.resolve(__dirname, "public")) {
   if (!fs.existsSync(distPath)) {
     throw new Error(
       `Could not find the build directory: ${distPath}, make sure to build the client first`,
@@ -83,22 +82,29 @@ export function serveStatic(app: Express) {
     );
     if (!chosen) return next();
 
-    const file = path.join(distPath, urlPath + chosen.ext);
-    // Defence in depth: the Set was built by walking distPath, so a hit already
-    // implies containment — but never hand a joined path to sendFile without
-    // confirming it did not escape the root.
-    if (!file.startsWith(distPath + path.sep)) return next();
-
     res.setHeader("Content-Encoding", chosen.encoding);
     // Content-Type comes from the ORIGINAL extension: the browser must see
     // application/javascript, not whatever ".br" maps to. sendFile leaves an
     // already-set Content-Type alone.
     res.type(path.extname(urlPath));
     res.setHeader("Cache-Control", cacheControlFor(urlPath));
-    res.sendFile(file, (err) => {
+    // MUST serve via { root }, never a pre-joined absolute path: send 1.x
+    // (express 5) applies its dotfiles policy to every component of a rootless
+    // path, so a checkout under a dot-directory (a worktree in .claude/, a
+    // deploy in ~/.local) 404s every asset before a byte is written. With root,
+    // the check covers only the URL part — and send enforces containment
+    // (rejects "..") itself.
+    res.sendFile(urlPath + chosen.ext, { root: distPath }, (err) => {
+      if (!err || res.headersSent) return;
       // Nothing written yet (a race with a deploy swapping dist) → fall through
-      // to express.static and serve the plain file.
-      if (err && !res.headersSent) next();
+      // and serve the plain file. Whatever answers next sends a DIFFERENT body,
+      // so every header staged above must go: a leftover Content-Encoding would
+      // make the browser try to brotli-decode plain bytes, and if the plain
+      // file is gone too, the index.html fallback would carry a js Content-Type.
+      res.removeHeader("Content-Encoding");
+      res.removeHeader("Content-Type");
+      res.removeHeader("Cache-Control");
+      next();
     });
   });
 
@@ -115,6 +121,7 @@ export function serveStatic(app: Express) {
   // fall through to index.html if the file doesn't exist
   app.use("/{*path}", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");
-    res.sendFile(path.resolve(distPath, "index.html"));
+    // { root } for the same dot-directory reason as the precompressed handler.
+    res.sendFile("index.html", { root: distPath });
   });
 }
