@@ -301,7 +301,6 @@ export function startNewBuildRadar(): void {
   if (typeof (_timer as any).unref === "function") (_timer as any).unref();
   structuredLog("newbuild.radar_started", { scopes: ALL_SCOPES.length, intervalMs }, "info");
 }
-export function stopNewBuildRadar(): void { if (_timer) { clearInterval(_timer); _timer = null; } }
 
 // ── Read paths (feed + coverage + clusters) ──────────────────────────────────
 export interface NewBuildRow {

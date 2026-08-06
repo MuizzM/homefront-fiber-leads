@@ -9,6 +9,14 @@
 //   because either port can be blocked by a host or dropped by the provider.
 //   MAIL_FROM="HomeFront Fiber <noreply@homefrontsolutionsllc.com>"   (a Resend-verified sender)
 // For Gmail/other, SMTP_USER is the address, so MAIL_FROM is optional.
+//
+// NOT a duplicate of server/resendMail.ts, and the two must not be merged. That
+// module is the Resend HTTP API rail (per-message Idempotency-Key, content_id
+// attachments, dev log-delivery), used only by the onboarding-signature flow.
+// This one is the SMTP rail, and its 587<->465 failover exists because of the
+// 2026-07-16 Resend port outage. Idempotency lives only on HTTP and failover
+// only on SMTP: folding either into the other changes delivery behaviour —
+// double-send risk on SMTP retries, or loss of failover on HTTP.
 
 import nodemailer from "nodemailer";
 import path from "path";
@@ -30,11 +38,6 @@ export function logoAttachment(): { filename: string; path: string; cid: string 
   return found ? { filename: "home-front-solutions-icon.png", path: found, cid: LOGO_CID } : null;
 }
 
-// Port 465 = implicit TLS; 587/25 = STARTTLS. Derive from the port so any
-// provider's config is correct without a separate flag.
-export function smtpSecure(): boolean {
-  return Number(process.env.SMTP_PORT ?? 587) === 465;
-}
 
 function transportFor(port: number): nodemailer.Transporter {
   return nodemailer.createTransport({
@@ -48,11 +51,6 @@ function transportFor(port: number): nodemailer.Transporter {
   });
 }
 
-// One configured transporter for every mail path. Timeouts fail fast so a stuck
-// SMTP connection never freezes a request (e.g. a blocked port hanging 30s).
-export function mailTransport(): nodemailer.Transporter {
-  return transportFor(Number(process.env.SMTP_PORT ?? 587));
-}
 
 // Connection-class failures only — auth/recipient errors must NOT retry on the
 // other port (same creds, same verdict; a blind resend could double-deliver).

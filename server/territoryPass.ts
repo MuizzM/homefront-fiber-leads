@@ -82,22 +82,9 @@ export function ensureTerritoryPassSchema(): void {
   schemaReady = true;
 }
 
-export function __resetTerritoryPassSchemaForTests(): void {
-  schemaReady = false;
-}
 
 /** Test-only: the append-only triggers block DELETE, so a suite that needs a
  *  clean ledger has to drop the table wholesale rather than truncate it. */
-export function __hardResetTerritoryPassesForTests(): void {
-  const r = raw();
-  try {
-    r.exec(`DROP TRIGGER IF EXISTS territory_passes_no_update`);
-    r.exec(`DROP TRIGGER IF EXISTS territory_passes_no_delete`);
-    r.exec(`DROP TABLE IF EXISTS territory_passes`);
-  } catch { /* nothing to drop */ }
-  schemaReady = false;
-  ensureTerritoryPassSchema();
-}
 
 // ── Reading the current pass ──────────────────────────────────────────────────
 

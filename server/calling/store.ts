@@ -353,7 +353,24 @@ export function releaseRepresentativeCallingHold(input: {
   return representativeHold(row);
 }
 
-export function syncFreshFiberQueue(tenantId: number): number {
+// Per-tenant debounce: this INSERT-OR-IGNORE-SELECT walks every confirmed-fresh
+// lead AND takes the SQLite write lock even when nothing changed, yet it used
+// to run on EVERY queue read (listCallingQueue + getCallingCandidate — the
+// enrichment flow calls the latter up to five times per lead). The projector
+// already syncs with force=true the moment a lead publishes, so per-read
+// syncing is redundant belt-and-suspenders; the 30s window only bounds how
+// long a NON-projector eligibility change (e.g. a lead_status revert) can
+// stay unenrolled. force=true is for the writers of record — the projector's
+// post-publish call and the queue route's explicit refresh (which reports the
+// count to the operator and must not silently say 0).
+const lastFreshFiberSync = new Map<number, number>();
+const FRESH_FIBER_SYNC_DEBOUNCE_MS = 30_000;
+
+export function syncFreshFiberQueue(tenantId: number, force = false): number {
+  const now = Date.now();
+  const last = lastFreshFiberSync.get(tenantId) ?? -Infinity;
+  if (!force && now - last >= 0 && now - last < FRESH_FIBER_SYNC_DEBOUNCE_MS) return 0;
+  lastFreshFiberSync.set(tenantId, now);
   const result = rawDb.prepare(`INSERT OR IGNORE INTO calling_queue_entries
     (id,tenant_id,lead_id,stage,priority,created_at,updated_at)
     SELECT lower(hex(randomblob(16))),l.tenant_id,l.id,'FRESH_FIBER_DETECTED',

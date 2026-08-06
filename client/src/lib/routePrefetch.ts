@@ -13,6 +13,7 @@
 // with no heavy chunk (redirects, tiny pages) are simply omitted — a miss is a
 // no-op, never an error.
 import { queryClient } from "@/lib/queryClient";
+import { LEADS_LIST_DEFAULTS, leadsListQueryOptions } from "@/lib/leadsListQuery";
 
 type Thunk = () => Promise<unknown>;
 
@@ -82,7 +83,11 @@ const ROUTE_QUERIES: Record<string, readonly string[]> = {
   // tap, a few hundred KB aimed at the wrong page (and briefly able to serve
   // lens-unfiltered pins inside MapView's staleTime).
   "/today": ["/api/clock/status", "/api/followups"],
-  "/leads": ["/api/leads"],
+  // NO "/api/leads" here: Leads keys its list by filters + page (an 8-element
+  // key with its own limit=100 fetcher), so the bare-key warm never matched —
+  // it downloaded the server's default 200-row page into a slot nothing reads,
+  // on every nav-intent, all session long. The real first-page key is warmed by
+  // warmLeadsList() below, which cannot drift from the page's key.
   "/followups": ["/api/followups"],
   "/areas": ["/api/territories/progress"],
   "/leaderboard": ["/api/leaderboard"],
@@ -135,6 +140,19 @@ function resolveQueries(path: string): readonly string[] {
   return best ? best[1] : [];
 }
 
+/** The one query on Leads that isn't a bare endpoint key: its first page is
+ *  keyed by filters + page and fetched with an explicit limit/offset. Key AND
+ *  fetcher come from the same helper the page mounts with, so this warms the
+ *  exact entry the page reads — the only way the two can't drift. staleTime
+ *  mirrors the page's own (30s), so the warm no-ops precisely when the mounted
+ *  query would have re-used the entry anyway. */
+function warmLeadsList(): void {
+  void queryClient.prefetchQuery({
+    ...leadsListQueryOptions(LEADS_LIST_DEFAULTS),
+    staleTime: 30_000,
+  }).catch(() => {});
+}
+
 /** True when the device/connection can afford speculative bytes. A rep on 3G or
  *  with Data Saver on gets the screen they asked for and nothing else. */
 export function canPrefetch(): boolean {
@@ -181,6 +199,7 @@ export function prefetchRoute(href: string | undefined | null): void {
 export function prefetchRouteData(href: string | undefined | null): void {
   if (!href || !canPrefetch()) return;
   const path = href.replace(/^#/, "");
+  if (path.startsWith("/leads")) warmLeadsList();
   for (const url of resolveQueries(path)) {
     void queryClient.prefetchQuery({ queryKey: [url], staleTime: 60_000 }).catch(() => {});
   }

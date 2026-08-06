@@ -182,6 +182,13 @@ function ensureIndexes(): void {
   // Partial index: the ranked pool is exactly "confirmed-fresh, newest first".
   rawDb.exec(`CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed
     ON leads(fresh_confirmed_at DESC) WHERE fresh_confirmed_at IS NOT NULL`);
+  // The pool query's actual shape: tenant equality + ORDER BY the replace()
+  // expression (mixed 'T'/' ' timestamp formats sort wrong as raw text). The
+  // index expression must match the query's ORDER BY byte-for-byte or SQLite
+  // will not stream the sort off it — without this the query walked the whole
+  // tenant and temp-b-tree-sorted every fresh-confirmed lead per request.
+  rawDb.exec(`CREATE INDEX IF NOT EXISTS idx_leads_fresh_ranked
+    ON leads(tenant_id, replace(fresh_confirmed_at, 'T', ' ') DESC) WHERE fresh_confirmed_at IS NOT NULL`);
   _indexReady = true;
 }
 
@@ -290,7 +297,7 @@ export function rankLeads(
   const clauses = ["fresh_confirmed_at IS NOT NULL", "lead_status NOT IN ('sold','not_interested','now_active')"];
   const params: unknown[] = [];
   if (tenantId != null) { clauses.push("tenant_id = ?"); params.push(tenantId); } // getLeadsForMap scoping idiom
-  // Visibility scope — the SAME idiom /api/leads and /api/leads/fresh compose:
+  // Visibility scope — the SAME idiom /api/leads composes:
   // a scoped caller (rep → self, team_lead → their team) sees only leads whose
   // assigned rep is in scope. An empty scope matches nothing (fail-closed).
   if (Array.isArray(scope)) {

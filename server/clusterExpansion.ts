@@ -439,7 +439,6 @@ export function startExpansionEngine(): void {
   if (typeof (_timer as any).unref === "function") (_timer as any).unref();
   structuredLog("expansion.engine_started", { tickMs: CFG.tickMs(), ringM: CFG.ringM(), maxRings: CFG.maxRings(), maxEmptyRings: CFG.maxEmptyRings() }, "info");
 }
-export function stopExpansionEngine(): void { if (_timer) { clearInterval(_timer); _timer = null; } }
 
 // Called from the scan engine after every classified batch: any just-checked
 // target that PROVES the pocket is lit seeds expansion —

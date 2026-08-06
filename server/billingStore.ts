@@ -464,9 +464,3 @@ export function changePlanFromStripe(tenantId: number, planKey: PlanKey): void {
 }
 
 /** Tenants whose past_due grace window has expired — the dunning cron suspends them. */
-export function pastDueGraceExpired(nowIso: string): number[] {
-  const rows = rawDb.prepare(
-    "SELECT tenant_id FROM tenant_billing WHERE state = 'past_due' AND grace_ends_at IS NOT NULL AND grace_ends_at < ?"
-  ).all(nowIso) as Array<{ tenant_id: number }>;
-  return rows.map(r => r.tenant_id);
-}

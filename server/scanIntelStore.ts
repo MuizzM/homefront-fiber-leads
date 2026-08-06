@@ -477,10 +477,6 @@ export function touchRun(runId: string): void {
   rawDb.prepare(`UPDATE scan_runs SET heartbeat_at=datetime('now'),updated_at=datetime('now') WHERE id=?`).run(runId);
 }
 
-// Legacy standalone bump kept for the resume/edge paths that only adjust counts.
-export function bumpRun(runId: string, delta: { verified?: number; newFiber?: number; newlyLive?: number; failed?: number; estBytes?: number }): void {
-  _finBump.run({ runId, verified: delta.verified ?? 0, newFiber: delta.newFiber ?? 0, newlyLive: delta.newlyLive ?? 0, failed: delta.failed ?? 0, estBytes: delta.estBytes ?? 0 });
-}
 
 export function setRunStatus(runId: string, status: string, error?: string | null): void {
   const done = status === "done" || status === "error" || status === "cancelled";

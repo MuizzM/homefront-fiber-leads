@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   dedupeAddressCandidates,
-  geometryBbox,
   normalizeAddress,
   planDiscoveryTiles,
   pointInDiscoveryGeometry,
@@ -447,7 +446,7 @@ export function validateOverpassEndpoint(endpoint: string, allowedHosts: readonl
   return url;
 }
 
-export function splitBbox(bbox: Bbox): Bbox[] {
+function splitBbox(bbox: Bbox): Bbox[] {
   const latMid = (bbox.south + bbox.north) / 2;
   const lngMid = (bbox.west + bbox.east) / 2;
   return [
@@ -765,10 +764,4 @@ export function bboxToGeometry(bbox: Bbox): DiscoveryGeometry {
   };
 }
 
-export function geometryForOverpassArea(area: Bbox | DiscoveryGeometry): DiscoveryGeometry {
-  return "type" in area ? validateDiscoveryGeometry(area) : bboxToGeometry(area);
-}
 
-export function overpassAreaBbox(area: Bbox | DiscoveryGeometry): Bbox {
-  return "type" in area ? geometryBbox(area) : area;
-}

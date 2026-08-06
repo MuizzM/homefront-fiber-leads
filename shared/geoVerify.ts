@@ -144,9 +144,6 @@ export const REASON_LABELS: Record<string, string> = {
   outside_radius: "Rep was outside the allowed distance from the lead",
 };
 
-export function describeReasons(reasons: string[]): string {
-  return reasons.map(r => REASON_LABELS[r] ?? r).join("; ");
-}
 
 // Does this activity count toward "Area Worked"? ONLY verified work does — the
 // single rule the whole percentage depends on, expressed once.

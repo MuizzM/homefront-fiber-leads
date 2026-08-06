@@ -54,6 +54,3 @@ export function onStage(listener: (evt: ScanStageEvent) => void): () => void {
 }
 
 /** Whether any subscriber is attached (lets emitters skip building payloads if idle). */
-export function hasStageSubscribers(): boolean {
-  return bus.listenerCount("stage") > 0;
-}

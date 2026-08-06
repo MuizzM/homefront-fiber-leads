@@ -11,7 +11,7 @@ import { estimateScanCost, bytesToUsd, MAX_CHECKS_PER_RUN, budgetTiers, type Cos
 import {
   getMarketAggregates, getKnownNewFiberPoints, getPoolTargetsForCity, getOpportunityPoints,
   createScanRun, enqueueRunTargets, getRun, listRuns, setRunStatus, countQueued,
-  computeTerritoryOutcome, accumulateMarketOutcome, clearTerritoryFromLeads, type ScanRunRow,
+  computeTerritoryOutcome, accumulateMarketOutcome, type ScanRunRow,
 } from "./scanIntelStore";
 import { runScanWorker, isRunActive } from "./scanEngine";
 import { readPressure } from "./resourcePressure";
@@ -205,9 +205,7 @@ export function recordTerritoryOutcome(tenantId: number, territoryId: number, cr
 
 // Unassign a deleted territory's leads from it (keep their rep) — fixes the
 // orphan bug where deleting a territory left leads pointing at a ghost.
-export function detachTerritoryLeads(territoryId: number): number {
-  return clearTerritoryFromLeads(territoryId);
-}
+export { clearTerritoryFromLeads as detachTerritoryLeads } from "./scanIntelStore";
 
 // The full delete-time release: drops the area link AND, for the doors the area
 // itself granted, the rep with it. See @shared/territory (areaGrantedRepIds,

@@ -7,7 +7,7 @@
 
 import crypto from "crypto";
 import { rawDb } from "./db";
-import { storage } from "./storage";
+import { storage, bumpTenantConfigVersion } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
 import { computeHoldback, rollupReserve, type Holdback, type ReserveLedger } from "@shared/commissionReserve";
 import {
@@ -17,7 +17,7 @@ import {
   validateTiers, calculateRetroactiveCommission, calculateFlatCommission, formatUsdCents,
   type CommissionTier, type RetroResult, DEFAULT_RETRO_TIERS,
 } from "@shared/commissionTiers";
-import { hourlyPayForWeek, type WeekHourlyPay } from "./hourlyPay";
+import { hourlyBlockForStatement, hourlyPayForWeek, type WeekHourlyPay } from "./hourlyPay";
 import { getTenantPayPolicy } from "./payPolicyStore";
 // Downline override ledger. Import direction mirrors hourlyPay: this service
 // imports the store; the store never imports this service.
@@ -935,6 +935,10 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
   if (sets.length) {
     params.push(nowIso(), tenantId);
     rawDb.prepare(`UPDATE tenants SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).run(...params);
+    // This raw UPDATE bypasses storage.updateTenant, so the tenant-config memo
+    // (commission_timezone feeds every "today" boundary) must be bumped here
+    // or leaderboards/announcements would keep the old org day until restart.
+    bumpTenantConfigVersion();
     storage.logActivity(actorId, "commission_config.updated", "tenant", tenantId, { fields: Object.keys(patch) }, undefined);
   }
   return loadOrgConfig(tenantId);
@@ -1383,6 +1387,10 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
         // block — NEVER the live read: backdating a rate before a frozen week
         // must not pay money the locked statement never had (CSV/overview
         // consume these fields).
+        // hourlyPay owns the hours-rounding rule, so this reads the SAME frozen
+        // block the statement itself renders and can never drift from it. The
+        // field names below are this view's own, hence the explicit map.
+        const hb = hourlyBlockForStatement(existing);
         row = { ...row,
           statementId: existing.id, status: existing.status,
           qualifiedSaleCount: existing.qualified_sale_count,
@@ -1392,11 +1400,11 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
           finalCommissionCents: existing.final_commission_cents,
           overridePayCents: existing.override_pay_cents ?? 0,
           overrideItemCount: existing.override_item_count ?? 0,
-          ...(existing.hourly_minutes != null ? {
-            hours: Math.round((existing.hourly_minutes / 60) * 100) / 100,
+          ...(hb ? {
+            hours: hb.hours,
             hourlyMinutes: existing.hourly_minutes,
-            hourlyRateCents: existing.hourly_rate_cents ?? null,
-            hourlyPayCents: existing.hourly_pay_cents ?? 0,
+            hourlyRateCents: hb.rateCents,
+            hourlyPayCents: hb.hourlyPayCents,
           } : {
             hours: 0, hourlyMinutes: 0, hourlyRateCents: null, hourlyPayCents: 0,
           }),

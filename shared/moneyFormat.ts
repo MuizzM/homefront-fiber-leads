@@ -20,9 +20,11 @@
 // variables around them are called. The only way to stop shipping a number is
 // to stop importing the module that holds it.
 //
-// Distinct from shared/money.ts, which is exact-arithmetic (basis points,
-// allocation, rounding policy) and belongs to the commission engine. This one
-// only turns numbers into strings.
+// Distinct from the exact-arithmetic modules that belong to the commission
+// engine — shared/commissionReserve.ts and shared/commissionTiers.ts (basis
+// points, allocation, rounding policy). This one only turns numbers into
+// strings. (Also distinct from client/src/lib/money.ts, a client-only Intl
+// formatter.)
 //
 // PURE and dependency-free, deliberately: anything added here ships to every
 // client, which is the exact problem it was created to solve.

@@ -438,8 +438,3 @@ export function startBuildIntel(): void {
   });
 }
 
-export function stopBuildIntel(): void {
-  if (newsTimer) { clearInterval(newsTimer); newsTimer = null; }
-  if (permitTimer) { clearInterval(permitTimer); permitTimer = null; }
-  if (promoTimer) { clearInterval(promoTimer); promoTimer = null; }
-}

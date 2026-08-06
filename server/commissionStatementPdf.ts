@@ -7,7 +7,7 @@
 // of totals, and a holdback panel. A pay document earns trust by being boring
 // and legible, not by being decorated.
 
-import PDFDocument from "pdfkit";
+import { renderPdfBuffer } from "./pdfCommon";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { formatCents, type StatementDocument, type StatementLine } from "@shared/commissionStatement";
@@ -73,22 +73,16 @@ function cell(doc: PDFKit.PDFDocument, text: string, col: Col, y: number) {
 }
 
 export function renderCommissionStatementPdf(docModel: StatementDocument): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const tz = docModel.period.timezone || "America/New_York";
-    const doc = new PDFDocument({
-      size: "LETTER", margins: { top: M.top, bottom: M.bottom, left: M.left, right: M.right },
-      bufferPages: true,
-      info: {
-        Title: `Commission Statement — ${docModel.rep.name} — ${docModel.period.label}`,
-        Author: docModel.company.name,
-        Subject: `Commission statement for ${docModel.period.label}`,
-      },
-    });
-    const chunks: Buffer[] = [];
-    doc.on("data", c => chunks.push(Buffer.from(c)));
-    doc.on("error", reject);
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-
+  const tz = docModel.period.timezone || "America/New_York";
+  return renderPdfBuffer({
+    size: "LETTER", margins: { top: M.top, bottom: M.bottom, left: M.left, right: M.right },
+    bufferPages: true,
+    info: {
+      Title: `Commission Statement — ${docModel.rep.name} — ${docModel.period.label}`,
+      Author: docModel.company.name,
+      Subject: `Commission statement for ${docModel.period.label}`,
+    },
+  }, doc => {
     const cols = columns(docModel.showHouseColumn);
 
     // ── Header ───────────────────────────────────────────────────────────────
@@ -301,7 +295,5 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
         .text(`Page ${i + 1} of ${range.count}`, M.left + CONTENT_W - 60, BODY_BOTTOM + 22, { width: 60, align: "right", lineBreak: false });
       doc.page.margins.bottom = restoreBottom;
     }
-
-    doc.end();
   });
 }

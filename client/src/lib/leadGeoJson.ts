@@ -80,6 +80,30 @@ export function leadFeatureSignature(
 import { colorForRep } from "@shared/repColors";
 export { colorForRep as repColorFor };
 
+// ── Per-object derivation cache ──────────────────────────────────────────────
+// Signature + halo props + rep colour for a lead depend only on (lead object,
+// repIdsFor identity, colorFor identity). React Query structural sharing keeps
+// the object identity of every pin that did NOT change (see the HOUSE_KEYS
+// memoisation rationale in dedupeLeads.ts, which this mirrors), and the
+// derivation pipeline above reconcile is filter-only — so keying on the lead
+// object itself means a one-door knock recomputes exactly one triple instead
+// of rebuilding a ~16-field signature string plus 2-3 halo arrays for every
+// door on every reconcile. The resolver function identities are the epoch: a
+// territories/team refetch hands the caller a new repIdsFor (and, where
+// injected, a new colorFor), which invalidates every entry wholesale — halo
+// membership and colours can move without the lead object changing, the
+// functions' inputs cannot change without THEIR identity changing.
+//
+// WeakMap: entries disappear with the pins, so nothing is pinned in memory.
+interface LeadDerived {
+  signature: string;
+  halo: HaloFeatureProps;
+  repColor: string;
+  repIdsEpoch: LeadRepIdsFn | undefined;
+  colorEpoch: RepColorFn;
+}
+const LEAD_DERIVED = new WeakMap<object, LeadDerived>();
+
 /**
  * Reconciles the next lead snapshot in O(n). Unchanged refetches reuse every
  * geometry/feature allocation even though the API produced new JS objects.
@@ -118,9 +142,20 @@ export function reconcileLeadFeatures(
     // resolver is supplied (tests, any caller without territory data) every door
     // reports haloCount 0 and carries no slot keys, so the halo layers filter to
     // nothing and the map behaves exactly as it did before halos existed.
-    const halo = repIdsFor ? haloFeatureProps(repIdsFor(lead), colorFor) : NO_HALO;
-    const repColor = colorFor(lead.assignedRepId);
-    const signature = leadFeatureSignature(lead, halo, repColor);
+    let derived = LEAD_DERIVED.get(lead as object);
+    if (!derived || derived.repIdsEpoch !== repIdsFor || derived.colorEpoch !== colorFor) {
+      const halo = repIdsFor ? haloFeatureProps(repIdsFor(lead), colorFor) : NO_HALO;
+      const repColor = colorFor(lead.assignedRepId);
+      derived = {
+        signature: leadFeatureSignature(lead, halo, repColor),
+        halo,
+        repColor,
+        repIdsEpoch: repIdsFor,
+        colorEpoch: colorFor,
+      };
+      LEAD_DERIVED.set(lead as object, derived);
+    }
+    const { signature, halo, repColor } = derived;
     let cached = cache.get(lead.id);
     if (!cached || cached.signature !== signature) {
       const ds = pinDisplayState(lead);
