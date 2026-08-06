@@ -7,6 +7,7 @@
 
 import type { Express, Request, Response, NextFunction } from "express";
 import { can } from "@shared/capabilities";
+import { downlineOf } from "@shared/teamHierarchy";
 import { storage } from "./storage";
 import * as svc from "./commissionService";
 import * as reserve from "./reserveService";
@@ -19,10 +20,19 @@ import { renderCommissionStatementPdf } from "./commissionStatementPdf";
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
 
-// Read scope from capabilities (fail-closed): all → whole tenant; team → self +
-// direct reports; self → own team-member only. `null` means "no rep filter".
+// Read scope from capabilities (fail-closed): all → whole tenant; downline →
+// self + the FULL reports-to subtree; team → self + direct reports; self → own
+// team-member only. `null` means "no rep filter".
 export function readScope(user: any): { repIds: number[] | null } {
   if (can(user?.role, "commission.read.all")) return { repIds: null };
+  // Downline before team, deliberately: team_lead holds BOTH grants, and full
+  // depth supersedes one level — the team branch now only serves roles that
+  // carry read.team without read.downline.
+  if (can(user?.role, "commission.read.downline")) {
+    const members = storage.getTeamMembers(user?.tenantId ?? undefined);
+    const ids = user?.teamMemberId ? [user.teamMemberId, ...downlineOf(user.teamMemberId, members as any)] : [];
+    return { repIds: [...new Set(ids)] };
+  }
   if (can(user?.role, "commission.read.team")) {
     const reports = storage.getTeamMembers(user?.tenantId ?? undefined)
       .filter((m: any) => m.reportsToId === user?.teamMemberId).map((m: any) => m.id);
@@ -409,13 +419,18 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   // Penny-exact payroll CSV for the week — what the payroll provider ingests.
   // The original 8 columns are STABLE (provider-compat); the hourly+spiff+
   // reserve+total money-plane columns are APPENDED after them. Per-row:
-  // Total = Hourly Pay + Gross commissions + Adjustments + Spiffs − Reserve.
+  // Total = Hourly Pay + Gross commissions + Adjustments + Overrides + Spiffs − Reserve.
   //
   // Install-hold columns are APPENDED last (same additive rule): held sales
   // are already EXCLUDED from Gross/Final/Total by the statement computation
   // itself (countQualifiedSales in commissionService), so the money columns
   // reconcile penny-for-penny with NACHA exactly as before; the two extra
   // columns only EXPLAIN what is being held back and when it releases.
+  //
+  // The Overrides column (downline override pay) is likewise APPENDED after
+  // the install-hold pair so no existing column moves. Overrides are already
+  // INSIDE Final (and therefore inside Reserve, which holds on final), so the
+  // column explains the Final/Total delta rather than adding a second rail.
   app.get("/api/commission/week-export.csv", requireCapability("commission.read.all"), (req, res) => {
     const weekReference = parseWeekRef(req.query.week) ?? new Date().toISOString();
     try {
@@ -426,13 +441,13 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       const rowMoney = (r: (typeof ov.rows)[number]) => {
         const spiffCents = spiffs.get(r.repId) ?? 0;
         const reserveCents = computeHoldback({ earnedCents: r.finalCommissionCents, reservePercent }).reserveCents;
-        const totalCents = r.hourlyPayCents + r.grossCommissionCents + r.adjustmentCents + spiffCents - reserveCents;
+        const totalCents = r.hourlyPayCents + r.grossCommissionCents + r.adjustmentCents + r.overridePayCents + spiffCents - reserveCents;
         return { spiffCents, reserveCents, totalCents };
       };
       const holdDate = (r: (typeof ov.rows)[number]) => r.installHold.earliestPayableAfter?.slice(0, 10) ?? "";
       const lines = [
         `Week,${csvCell(ov.bounds.localWeekLabel)}`,
-        "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total,Install Hold Sales,Install Hold Payable After",
+        "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total,Install Hold Sales,Install Hold Payable After,Overrides",
         ...ov.rows.map(r => {
           const m = rowMoney(r);
           return [
@@ -442,11 +457,12 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
             r.hours.toFixed(2), r.hourlyRateCents != null ? money(r.hourlyRateCents) : "", money(r.hourlyPayCents),
             money(m.spiffCents), money(m.reserveCents), money(m.totalCents),
             r.installHold.saleCount, csvCell(holdDate(r)),
+            money(r.overridePayCents),
           ].join(",");
         }),
         (() => {
           const sum = (f: (r: (typeof ov.rows)[number]) => number) => ov.rows.reduce((s, r) => s + f(r), 0);
-          return `Total,,,,,${money(sum(r => r.grossCommissionCents))},${money(sum(r => r.adjustmentCents))},${money(sum(r => r.finalCommissionCents))},${sum(r => r.hours).toFixed(2)},,${money(sum(r => r.hourlyPayCents))},${money(sum(r => rowMoney(r).spiffCents))},${money(sum(r => rowMoney(r).reserveCents))},${money(sum(r => rowMoney(r).totalCents))},${sum(r => r.installHold.saleCount)},`;
+          return `Total,,,,,${money(sum(r => r.grossCommissionCents))},${money(sum(r => r.adjustmentCents))},${money(sum(r => r.finalCommissionCents))},${sum(r => r.hours).toFixed(2)},,${money(sum(r => r.hourlyPayCents))},${money(sum(r => rowMoney(r).spiffCents))},${money(sum(r => rowMoney(r).reserveCents))},${money(sum(r => rowMoney(r).totalCents))},${sum(r => r.installHold.saleCount)},,${money(sum(r => r.overridePayCents))}`;
         })(),
       ];
       storage.logActivity(uid(req), "commission.week.exported", "commission_statement", undefined, { week: ov.bounds.localWeekLabel, rows: ov.rows.length }, req.ip);

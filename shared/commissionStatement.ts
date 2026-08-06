@@ -40,11 +40,15 @@ export interface StatementMoneyInput {
   adjustmentCents: number;
   /** Spiffs awarded in the week. */
   spiffCents: number;
+  /** Downline override pay folded into this statement (0 = none). Optional so
+   *  pre-override callers and frozen snapshots keep working unchanged. */
+  overrideCents?: number;
+  overrideItemCount?: number;
   /** Hourly pay for the week (0 for a commission-only rep). */
   hourlyPayCents: number;
   hourlyMinutes: number;
   hourlyRateCents: number | null;
-  /** The statement's authoritative final = gross + adjustments. */
+  /** The statement's authoritative final = gross + adjustments + overrides. */
   finalCommissionCents: number;
 }
 
@@ -104,6 +108,9 @@ export interface StatementTotals {
   grossCommissionCents: number;
   adjustmentCents: number;
   spiffCents: number;
+  /** Downline override earnings folded into this period (0 = none). */
+  overrideCents: number;
+  overrideItemCount: number;
   hourlyPayCents: number;
   /** Everything the rep earned this period, before the reserve is withheld. */
   earnedCents: number;
@@ -175,7 +182,7 @@ export function planLabelFor(input: Pick<StatementDocInput["statement"], "struct
  * Build the statement document.
  *
  * `earned` mirrors the payroll CSV's per-row total exactly
- * (hourly + gross + adjustments + spiffs), so the statement a rep reads and the
+ * (hourly + gross + adjustments + overrides + spiffs), so the statement a rep reads and the
  * file the payroll provider ingests can never disagree — the same money, named
  * the same way, in both places. The reserve is then withheld from that earned
  * amount and the remainder is the net pay.
@@ -221,8 +228,10 @@ export function buildStatementDocument(input: StatementDocInput): StatementDocum
 
   const adjustmentCents = cents(input.money.adjustmentCents);
   const spiffCents = cents(input.money.spiffCents);
+  const overrideCents = cents(input.money.overrideCents ?? 0);
+  const overrideItemCount = Math.max(0, cents(input.money.overrideItemCount ?? 0));
   const hourlyPayCents = cents(input.money.hourlyPayCents);
-  const earnedCents = hourlyPayCents + gross + adjustmentCents + spiffCents;
+  const earnedCents = hourlyPayCents + gross + adjustmentCents + overrideCents + spiffCents;
 
   const totals: StatementTotals = {
     countedSaleCount: countedSorted.length,
@@ -235,6 +244,8 @@ export function buildStatementDocument(input: StatementDocInput): StatementDocum
     grossCommissionCents: gross,
     adjustmentCents,
     spiffCents,
+    overrideCents,
+    overrideItemCount,
     hourlyPayCents,
     earnedCents,
   };

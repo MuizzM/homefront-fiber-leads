@@ -324,10 +324,22 @@ export const teamMembers = sqliteTable("team_members", {
   // 'pay.hourly_rate.changed' audit events (see server/hourlyPay.ts).
   hourlyRateCents: integer("hourly_rate_cents"),
   hourlyRateEffectiveFrom: text("hourly_rate_effective_from"),
+
+  // ── IMMUTABLE recruiting sponsor edge — set once at approval, from the
+  // invite's inviter. Distinct from reportsToId (operational, mutable, re-homed
+  // on offboard/demotion): the sponsor edge is recruiting metrics only, pay
+  // follows reportsTo. A DB trigger refuses any re-point (see storage.ts).
+  recruitedByMemberId: integer("recruited_by_member_id"),
+  recruitedByUserId: integer("recruited_by_user_id"),
+  recruitedAt: text("recruited_at"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export const insertTeamMemberSchema = createInsertSchema(teamMembers).omit({ id: true, createdAt: true });
+// The recruited_by_* columns are omitted so POST /api/team mass-assignment can
+// never forge a sponsor — the edge is only ever written by the approval route.
+export const insertTeamMemberSchema = createInsertSchema(teamMembers).omit({
+  id: true, createdAt: true, recruitedByMemberId: true, recruitedByUserId: true, recruitedAt: true,
+});
 export type InsertTeamMember = z.infer<typeof insertTeamMemberSchema>;
 export type TeamMember = typeof teamMembers.$inferSelect;
 

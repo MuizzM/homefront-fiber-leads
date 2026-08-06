@@ -79,6 +79,51 @@ export function wouldCreateReportsCycle(
   return true; // hop budget exhausted → chain already corrupt → fail closed
 }
 
+/** Minimal member shape for downline traversal — id plus the adjacency edge. */
+export interface DownlineMemberRef {
+  id: number;
+  reportsToId: number | null;
+}
+
+/**
+ * Every member strictly BELOW `rootId` in the reports-to tree (root excluded),
+ * in BFS order. The downward mirror of wouldCreateReportsCycle's upward walk:
+ * pure over plain member refs, cycle-safe via a visited set, and node-budgeted
+ * so corrupt data degrades to a partial result instead of an infinite walk.
+ *
+ * Contract note for money callers: overrides are computed from this chain as
+ * it stands at sale time and frozen onto the ledger row; a promotion or
+ * re-home affects only future sales. The recruited_by sponsor edge never
+ * drives pay and is not part of this walk.
+ */
+export function downlineOf(
+  rootId: number,
+  members: readonly DownlineMemberRef[],
+  maxNodes = 5000,
+): number[] {
+  const children = new Map<number, number[]>();
+  for (const m of members) {
+    if (m.reportsToId == null) continue;
+    const siblings = children.get(m.reportsToId);
+    if (siblings) siblings.push(m.id);
+    else children.set(m.reportsToId, [m.id]);
+  }
+  const out: number[] = [];
+  const visited = new Set<number>([rootId]);
+  const queue: number[] = [rootId];
+  while (queue.length > 0 && out.length < maxNodes) {
+    const parent = queue.shift() as number;
+    for (const child of children.get(parent) ?? []) {
+      if (visited.has(child)) continue; // cycle in corrupt data — skip, never loop
+      visited.add(child);
+      out.push(child);
+      queue.push(child);
+      if (out.length >= maxNodes) break;
+    }
+  }
+  return out;
+}
+
 /**
  * Is `supervisorRole` a valid supervisor for a member holding `memberRole`?
  * A supervisor must rank strictly above the member (reps report to team

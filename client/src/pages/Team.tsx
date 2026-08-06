@@ -578,6 +578,21 @@ export default function Team() {
                           <ChevronUp className="w-3 h-3" /> Reports to <span className="text-foreground/80 font-medium">{sup.name}</span>
                         </span>
                       )}
+                      {/* Recruited-by — the sponsor edge, read-only. It never
+                          drives pay or authority (the reports-to chain does),
+                          so it is a muted fact here and appears in NO form.
+                          Renders only when the roster carries the id AND the
+                          recruiter is still on the roster to name. */}
+                      {(() => {
+                        const recruiter = (member as any).recruitedByMemberId != null
+                          ? memberById.get((member as any).recruitedByMemberId)
+                          : undefined;
+                        return recruiter ? (
+                          <span className="inline-flex items-center gap-1" data-testid={`recruited-by-${member.id}`}>
+                            <UserPlus className="w-3 h-3" /> Recruited by <span className="text-foreground/80 font-medium">{recruiter.name}</span>
+                          </span>
+                        ) : null;
+                      })()}
                       {(directReportCountById.get(member.id) ?? 0) > 0 && (
                         <span className="inline-flex items-center gap-1" data-testid={`chip-reports-${member.id}`}>
                           <GitBranch className="w-3 h-3" />

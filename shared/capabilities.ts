@@ -37,10 +37,17 @@ export type Capability =
   | "calling.enrichment.request" | "calling.providers.manage" | "calling.dnc.manage"
   // Commissions
   | "commission.read.self" | "commission.read.team" | "commission.read.all"
+  // read.downline widens read.team from direct reports to the FULL reports-to
+  // subtree (multi-level). Distinct from read.all: a team_lead sees their own
+  // tree, never the whole tenant.
+  | "commission.read.downline"
   // structure.manage = plan/rate CONFIG only. Booking money (sales, adjustments)
   // and statement math are separate WRITE caps a team_lead never holds.
   | "commission.structure.manage"
   | "commission.sales.write" | "commission.adjustments.write" | "commission.statements.write"
+  // Resolving override-ledger exceptions (reversals against finalized weeks).
+  // Sits with the other money-write caps at manager+, never team_lead.
+  | "commission.overrides.manage"
   // Onboarding agreements
   | "onboarding.documents.read.self" | "onboarding.documents.manage"
   // Payouts — moving REAL money to reps. Owner/admin only, never a read/oversight role.
@@ -79,7 +86,7 @@ const REP: readonly Capability[] = [
 const TEAM_LEAD: readonly Capability[] = [
   ...REP,
   "lead.read.all", "lead.assign", "lead.reassign",
-  "commission.read.team", "commission.structure.manage",
+  "commission.read.team", "commission.read.downline", "commission.structure.manage",
   "dashboard.read.team", "audit.read.team",
   // Scanning starts here. These sets are unions of the tier below, not supersets
   // of REP — TEAM_LEAD spreads REP and MANAGER spreads TEAM_LEAD — so removing
@@ -112,6 +119,7 @@ const MANAGER: readonly Capability[] = [
   // view from their own jobs to every job in the org.
   "scan.manage",
   "commission.sales.write", "commission.adjustments.write", "commission.statements.write",
+  "commission.overrides.manage",
 ];
 
 // Admin (and super_admin) hold the full set including org policy + paying reps.
@@ -215,6 +223,8 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "commission.read.self": "commissions",
   "commission.read.team": "commissions",
   "commission.read.all": "commissions",
+  "commission.read.downline": "commissions",
+  "commission.overrides.manage": "commissions",
   "commission.structure.manage": "commissions",
   "commission.sales.write": "commissions",
   "commission.adjustments.write": "commissions",
@@ -237,6 +247,8 @@ export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capabilit
   // Spends metered provider budget on an entire area in one action.
   "lead.skip_trace.request",
   "commission.structure.manage", "commission.read.all",
+  // Multi-level pay visibility + resolving money exceptions on the override ledger.
+  "commission.read.downline", "commission.overrides.manage",
   "commission.sales.write", "commission.adjustments.write", "commission.statements.write",
   "onboarding.documents.manage",
   "scan.manage",

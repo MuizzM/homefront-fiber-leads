@@ -19,6 +19,10 @@ import {
 } from "@shared/commissionTiers";
 import { hourlyPayForWeek, type WeekHourlyPay } from "./hourlyPay";
 import { getTenantPayPolicy } from "./payPolicyStore";
+// Downline override ledger. Import direction mirrors hourlyPay: this service
+// imports the store; the store never imports this service.
+import * as overrides from "./overrideStore";
+import { validateOverridePatch } from "@shared/commissionOverrides";
 import { isCommissionHeld } from "@shared/commissionHold";
 
 // ── Typed domain errors ───────────────────────────────────────────────────────
@@ -28,7 +32,7 @@ export type CommissionErrorCode =
   | "STATEMENT_LOCKED" | "DUPLICATE_SALE" | "CROSS_TENANT_ACCESS"
   | "UNAUTHORIZED_COMMISSION_ACTION" | "INVALID_WORKWEEK" | "INVALID_ADJUSTMENT"
   | "CONCURRENT_STATEMENT_UPDATE" | "WEEK_KEY_FROZEN" | "OPEN_CLOCK_SESSION"
-  | "INVALID_HOUSE_AMOUNT";
+  | "INVALID_HOUSE_AMOUNT" | "INVALID_OVERRIDE_CONFIG";
 
 export class CommissionError extends Error {
   constructor(public code: CommissionErrorCode, message: string, public httpStatus = 400) {
@@ -50,6 +54,12 @@ export interface OrgCommissionConfig extends WorkweekConfig {
   /** What the company books for one qualified sale, in cents. 0 = not set, and
    *  the statement omits the house column instead of printing $0.00 per door. */
   houseAmountCents: number;
+  /** Downline overrides (upline pay on downline sales). Ships dark: disabled
+   *  with $0 rates until an admin flips it in the console. */
+  overridesEnabled: boolean;
+  overrideBasis: "FLAT_PER_SALE" | "PERCENT_OF_COMMISSION";
+  overrideTeamLeadCents: number;
+  overrideManagerCents: number;
 }
 export type QualificationBasis = "SOLD_AT" | "QUALIFIED_AT" | "INSTALLED_AT" | "ACTIVATED_AT";
 const BASIS_COLUMN: Record<QualificationBasis, string> = {
@@ -71,7 +81,11 @@ export function loadOrgConfig(tenantId: number): OrgCommissionConfig {
             commission_correction_window_days AS correctionWindowDays,
             commission_auto_finalize_enabled AS autoFinalizeEnabled,
             commission_reserve_percent AS reservePercent,
-            commission_house_amount_cents AS houseAmountCents
+            commission_house_amount_cents AS houseAmountCents,
+            commission_override_enabled AS overridesEnabled,
+            commission_override_basis AS overrideBasis,
+            commission_override_team_lead_cents AS overrideTeamLeadCents,
+            commission_override_manager_cents AS overrideManagerCents
      FROM tenants WHERE id = ?`
   ).get(tenantId) as any;
   const tz = row?.tz || DEFAULT_WORKWEEK.timezone;
@@ -90,6 +104,10 @@ export function loadOrgConfig(tenantId: number): OrgCommissionConfig {
     autoFinalizeEnabled: !!row?.autoFinalizeEnabled,
     reservePercent: Math.min(100, Math.max(0, Number(row?.reservePercent ?? 0))),
     houseAmountCents: Math.max(0, Math.trunc(Number(row?.houseAmountCents ?? 0))),
+    overridesEnabled: !!row?.overridesEnabled,
+    overrideBasis: row?.overrideBasis === "PERCENT_OF_COMMISSION" ? "PERCENT_OF_COMMISSION" : "FLAT_PER_SALE",
+    overrideTeamLeadCents: Math.max(0, Math.trunc(Number(row?.overrideTeamLeadCents ?? 0))),
+    overrideManagerCents: Math.max(0, Math.trunc(Number(row?.overrideManagerCents ?? 0))),
   };
 }
 
@@ -319,6 +337,8 @@ export interface StatementDTO {
   // The weekly HOURLY block (hybrid hourly+commission): hours from clock
   // sessions + punch corrections, priced at the rate effective at week start.
   hourly: WeekHourlyPay;
+  // The downline-override block folded into final_commission_cents.
+  override: { payCents: number; itemCount: number };
 }
 
 export function calculateOrRecalculateStatement(input: {
@@ -342,6 +362,11 @@ export function calculateOrRecalculateStatement(input: {
   // (clock sessions + corrections, rate effective at week start) so a re-run
   // always recomputes truthfully — never accumulated, never double-counted.
   const hourly = hourlyPayForWeek(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc);
+  // The downline-override block follows the same rule: summed from its ledger
+  // on every generation. The call also releases install-held rows whose
+  // payable_after has passed (they land in the release week, the rep-side rule).
+  const override = overrides.overrideBlockForWeek(tenantId, repId, bounds.weekStartUtc,
+    (ts) => weekBoundsFor(ts, config).weekStartUtc);
   const approvedAdjustmentCents = existing ? sumApprovedAdjustments(tenantId, existing.id) : 0;
 
   // Resolve the plan version effective for this week (tenant-scoped).
@@ -359,10 +384,13 @@ export function calculateOrRecalculateStatement(input: {
   if (!assignment) {
     // HOURLY-ONLY rep: no commission plan, but an hourly rate governs this
     // week → they still get a weekly statement (hourly pay + adjustments,
-    // commission zeros). A rep with NEITHER plan nor rate keeps the legacy
-    // NO_EFFECTIVE_PLAN_ASSIGNMENT behavior.
-    if (hourly.rateCents == null) throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT",
-      `No commission plan assigned to rep ${repId} for week ${bounds.localWeekLabel}.`);
+    // commission zeros). Same for an OVERRIDE-ONLY upline (a manager with no
+    // personal plan whose downline produced this week). A rep with NONE of
+    // plan/rate/overrides keeps the legacy NO_EFFECTIVE_PLAN_ASSIGNMENT.
+    if (hourly.rateCents == null && override.payCents === 0 && override.itemCount === 0) {
+      throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT",
+        `No commission plan assigned to rep ${repId} for week ${bounds.localWeekLabel}.`);
+    }
     comp = {
       qualifiedSaleCount: 0, tierId: null, tierLabel: null, rateCents: 0,
       grossCommissionCents: 0, adjustmentCents: approvedAdjustmentCents,
@@ -395,12 +423,18 @@ export function calculateOrRecalculateStatement(input: {
       qualificationBasis: basis,
     });
   }
+  // Fold the override block INTO final (unlike hourly, which settles on the
+  // payroll-CSV rail): overrides are commission money and ride the statement →
+  // NACHA → 1099 → reserve rails through final_commission_cents.
+  if (override.payCents !== 0) {
+    comp = { ...comp, finalCommissionCents: comp.finalCommissionCents + override.payCents };
+  }
   const now = new Date().toISOString();
 
   // No-op guard: if nothing material changed (count, money, plan version,
-  // hourly block), skip the write AND the audit entry — read-model views (the
-  // week console) recompute freely without bumping calculation_version or
-  // spamming the activity log.
+  // hourly block, override block), skip the write AND the audit entry —
+  // read-model views (the week console) recompute freely without bumping
+  // calculation_version or spamming the activity log.
   if (existing
     && existing.qualified_sale_count === comp.qualifiedSaleCount
     && existing.gross_commission_cents === comp.grossCommissionCents
@@ -409,8 +443,10 @@ export function calculateOrRecalculateStatement(input: {
     && existing.commission_plan_version_id === (version?.id ?? null)
     && existing.hourly_minutes === hourly.minutes
     && (existing.hourly_rate_cents ?? null) === hourly.rateCents
-    && (existing.hourly_pay_cents ?? 0) === hourly.payCents) {
-    return { statement: existing, computation: comp, bounds, hourly };
+    && (existing.hourly_pay_cents ?? 0) === hourly.payCents
+    && (existing.override_pay_cents ?? 0) === override.payCents
+    && (existing.override_item_count ?? 0) === override.itemCount) {
+    return { statement: existing, computation: comp, bounds, hourly, override };
   }
 
   // Transactional upsert — the unique (tenant,rep,week) index + synchronous
@@ -422,8 +458,9 @@ export function calculateOrRecalculateStatement(input: {
          commission_plan_id, commission_plan_version_id, plan_version_number, plan_snapshot,
          qualified_sale_count, tier_id, tier_label, rate_cents, gross_commission_cents, adjustment_cents,
          final_commission_cents, hourly_minutes, hourly_rate_cents, hourly_pay_cents,
+         override_pay_cents, override_item_count,
          calculation_version, status, calculated_at, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,1,'OPEN',?,?,?)
+       VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?,?,?,?, ?,?, 1,'OPEN',?,?,?)
        ON CONFLICT(tenant_id, rep_id, week_start_utc) DO UPDATE SET
          qualified_sale_count = excluded.qualified_sale_count,
          tier_id = excluded.tier_id, tier_label = excluded.tier_label, rate_cents = excluded.rate_cents,
@@ -433,6 +470,8 @@ export function calculateOrRecalculateStatement(input: {
          hourly_minutes = excluded.hourly_minutes,
          hourly_rate_cents = excluded.hourly_rate_cents,
          hourly_pay_cents = excluded.hourly_pay_cents,
+         override_pay_cents = excluded.override_pay_cents,
+         override_item_count = excluded.override_item_count,
          plan_snapshot = excluded.plan_snapshot,
          commission_plan_id = excluded.commission_plan_id,
          commission_plan_version_id = excluded.commission_plan_version_id,
@@ -443,7 +482,8 @@ export function calculateOrRecalculateStatement(input: {
       tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc, bounds.timezone, bounds.localWeekLabel, basis,
       plan?.id ?? null, version?.id ?? null, version?.version_number ?? null, planSnapshot,
       comp.qualifiedSaleCount, comp.tierId as any, comp.tierLabel, comp.rateCents, comp.grossCommissionCents, comp.adjustmentCents,
-      comp.finalCommissionCents, hourly.minutes, hourly.rateCents, hourly.payCents, now, now, now,
+      comp.finalCommissionCents, hourly.minutes, hourly.rateCents, hourly.payCents,
+      override.payCents, override.itemCount, now, now, now,
     );
   });
   tx();
@@ -454,9 +494,9 @@ export function calculateOrRecalculateStatement(input: {
 
   storage.logActivity(actorId, existing ? "commission.statement.recalculated" : "commission.statement.created",
     "commission_statement", (statement as any).id,
-    { requestId: input.requestId ?? null, repId, week: bounds.localWeekLabel, qualifiedSaleCount: comp.qualifiedSaleCount, finalCommissionCents: comp.finalCommissionCents, hourlyPayCents: hourly.payCents }, undefined);
+    { requestId: input.requestId ?? null, repId, week: bounds.localWeekLabel, qualifiedSaleCount: comp.qualifiedSaleCount, finalCommissionCents: comp.finalCommissionCents, hourlyPayCents: hourly.payCents, overridePayCents: override.payCents }, undefined);
 
-  return { statement, computation: comp, bounds, hourly };
+  return { statement, computation: comp, bounds, hourly, override };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -612,11 +652,23 @@ export function transitionSale(tenantId: number, actorId: number | null, externa
   // Best-effort recalculation of the affected week (skip if unassigned/locked).
   const config = loadOrgConfig(tenantId);
   const basisTs = updated[BASIS_COLUMN[config.qualificationBasis]] || updated.sold_at;
+  // Reconcile the override ledger BEFORE recomputing statements: QUALIFY opens
+  // earn pairs, REVERSE/DISQUALIFY/CANCEL closes them (a claw against a
+  // settled week becomes an EXCEPTION — the locked statement is never touched).
+  overrides.syncOverridesForSale(tenantId, sale.id, actorId, weekBoundsFor(basisTs, config).weekStartUtc);
   let statement: any = null;
   try {
     statement = calculateOrRecalculateStatement({ tenantId, repId: sale.rep_id, weekReference: basisTs, actorId, requestId: `sale:${externalId}:${action}` }).statement;
   } catch (e) {
     if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
+  }
+  // Each beneficiary's week refolds the fresh earn/claw (same best-effort rule).
+  for (const b of overrides.beneficiariesForSale(tenantId, sale.id)) {
+    try {
+      calculateOrRecalculateStatement({ tenantId, repId: b.repId, weekReference: b.weekStartUtc, actorId, requestId: `override:${externalId}:${action}` });
+    } catch (e) {
+      if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
+    }
   }
   return { sale: updated, statement };
 }
@@ -634,7 +686,10 @@ export function applyApprovedAdjustments(tenantId: number, statementId: number, 
   if (!stmt) throw new CommissionError("CROSS_TENANT_ACCESS", "Statement not found in tenant.", 404);
   if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID — money already moved; correct on a future week.", 409);
   const sum = sumApprovedAdjustments(tenantId, statementId);
-  const final = stmt.gross_commission_cents + sum; // gross FROZEN — never re-read from the ledger
+  // gross AND the override block are FROZEN — never re-read from the ledgers.
+  // Omitting the override column here would silently erase an upline's
+  // override component the first time a post-lock adjustment is approved.
+  const final = stmt.gross_commission_cents + sum + (stmt.override_pay_cents ?? 0);
   rawDb.prepare(
     `UPDATE commission_statements SET adjustment_cents = ?, final_commission_cents = ?, calculation_version = calculation_version + 1, updated_at = ? WHERE id = ?`
   ).run(sum, final, nowIso(), statementId);
@@ -779,10 +834,17 @@ export function transitionStatement(tenantId: number, actorId: number | null, st
     // Freeze the exact doors that composed this locked number, so the audit
     // drill-down always matches even if a sale is reversed afterward.
     const snapshot = JSON.stringify(listWeekSalesForRep(tenantId, stmt.rep_id, stmt.week_start_utc).filter((s: any) => s.status === "QUALIFIED"));
-    rawDb.prepare(`UPDATE commission_statements SET status='FINALIZED', finalized_at=?, finalized_by=?, contributing_sales=?, updated_at=? WHERE id=?`).run(now, actorId, snapshot, now, statementId);
+    // Same freeze for the override ledger: PAYABLE rows become SETTLED against
+    // this statement and their snapshot rides beside contributing_sales.
+    const frozenOverrides = overrides.markWeekSettled(tenantId, stmt.rep_id, stmt.week_start_utc, statementId);
+    rawDb.prepare(`UPDATE commission_statements SET status='FINALIZED', finalized_at=?, finalized_by=?, contributing_sales=?, contributing_overrides=?, updated_at=? WHERE id=?`)
+      .run(now, actorId, snapshot, frozenOverrides.length ? JSON.stringify(frozenOverrides) : null, now, statementId);
   } else if (action === "REOPEN") {
     if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Paid statements cannot be reopened.", 409);
-    rawDb.prepare(`UPDATE commission_statements SET status='OPEN', finalized_at=NULL, finalized_by=NULL, updated_at=? WHERE id=?`).run(now, statementId);
+    // Un-freeze the override rows too, or the reopened recompute would sum
+    // PAYABLE = 0 and silently zero the override component.
+    overrides.markStatementReopened(tenantId, statementId);
+    rawDb.prepare(`UPDATE commission_statements SET status='OPEN', finalized_at=NULL, finalized_by=NULL, contributing_overrides=NULL, updated_at=? WHERE id=?`).run(now, statementId);
   } else {
     if (stmt.status !== "FINALIZED") throw new CommissionError("STATEMENT_LOCKED", "Only FINALIZED statements can be marked PAID.", 409);
     rawDb.prepare(`UPDATE commission_statements SET status='PAID', paid_at=?, paid_by=?, updated_at=? WHERE id=?`).run(now, actorId, now, statementId);
@@ -812,7 +874,14 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
   commissionQualificationBasis: QualificationBasis; commissionFinalizationDelayHours: number;
   commissionCorrectionWindowDays: number; commissionAutoFinalizeEnabled: boolean;
   commissionHouseAmountCents: number;
+  overridesEnabled: boolean | null; overrideBasis: string;
+  overrideTeamLeadCents: number | null; overrideManagerCents: number | null;
 }>): OrgCommissionConfig {
+  // Override config validates through the shared tri-state parser (absent =
+  // keep, null = reset, value = set; PERCENT basis refused until executable).
+  const overridePatchInput = validateOverridePatch(patch);
+  if (overridePatchInput.error) throw new CommissionError("INVALID_OVERRIDE_CONFIG", overridePatchInput.error);
+  const overridePatch = overridePatchInput.patch;
   // House amount is display-only revenue reporting — it never enters a payout —
   // but a negative or fractional value would print nonsense on every statement.
   if (patch.commissionHouseAmountCents != null
@@ -854,6 +923,14 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
   for (const [k, col] of Object.entries(map)) {
     const val = (patch as any)[k];
     if (val !== undefined) { sets.push(`${col} = ?`); params.push(k === "commissionAutoFinalizeEnabled" ? (val ? 1 : 0) : val); }
+  }
+  const overrideColMap: Record<string, string> = {
+    overridesEnabled: "commission_override_enabled", overrideBasis: "commission_override_basis",
+    overrideTeamLeadCents: "commission_override_team_lead_cents", overrideManagerCents: "commission_override_manager_cents",
+  };
+  for (const [k, col] of Object.entries(overrideColMap)) {
+    const val = (overridePatch as any)[k];
+    if (val !== undefined) { sets.push(`${col} = ?`); params.push(k === "overridesEnabled" ? (val ? 1 : 0) : val); }
   }
   if (sets.length) {
     params.push(nowIso(), tenantId);
@@ -1112,12 +1189,29 @@ export function recordFieldSaleFromKnock(input: {
       { externalId, leadId, weekStartUtc: bounds.weekStartUtc, status: lockedStmt.status }, undefined);
     return;
   }
+  // Reconcile the downline-override ledger with the freshly QUALIFIED sale.
+  // The sync is an idempotent state reconciler, so a knock replay converges to
+  // the same rows; run inside the knock route's money transaction like the
+  // upsert above (better-sqlite3 is synchronous — no interleaving).
+  const savedSale = rawDb.prepare(
+    `SELECT id FROM commission_sales WHERE tenant_id = ? AND external_id = ?`
+  ).get(tenantId, externalId) as any;
+  if (savedSale) overrides.syncOverridesForSale(tenantId, savedSale.id, actorId, bounds.weekStartUtc);
   // Keep the rep's live week fresh (best-effort — a missing plan must never
   // block the knock).
   try {
     calculateOrRecalculateStatement({ tenantId, repId, weekReference: effectiveSoldAt, actorId, requestId: `field-sale:lead:${leadId}` });
   } catch (e) {
     if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
+  }
+  // And each override beneficiary's week (same best-effort contract — an
+  // upline recompute failure must never block a knock).
+  for (const b of savedSale ? overrides.beneficiariesForSale(tenantId, savedSale.id) : []) {
+    try {
+      calculateOrRecalculateStatement({ tenantId, repId: b.repId, weekReference: b.weekStartUtc, actorId, requestId: `override:lead:${leadId}` });
+    } catch (e) {
+      if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
+    }
   }
 }
 
@@ -1195,6 +1289,10 @@ export interface WeekOverviewRepRow {
   // date (null = install never confirmed). Named installHold so it can never
   // be read as the chargeback-reserve "holdback" — a different concept.
   installHold: { saleCount: number; earliestPayableAfter: string | null };
+  // Downline-override block folded into finalCommissionCents (0/0 for reps
+  // with no downline earnings this week).
+  overridePayCents: number;
+  overrideItemCount: number;
 }
 
 export function getWeekOverview(tenantId: number, actorId: number | null, weekReference: Date | string | number, repIds: number[] | null): {
@@ -1207,7 +1305,19 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
   const weekEnded = Date.now() >= Date.parse(bounds.nextWeekStartUtc);
 
   // Reps in scope: tenant roster (optionally narrowed by caller's read scope).
-  let reps = storage.getTeamMembers(tenantId).filter((m: any) => m.role !== "manager");
+  // Managers were excluded wholesale when they could earn nothing; downline
+  // overrides make them payable, so a manager appears IFF they have a payable
+  // surface this week (an hourly rate, an existing statement, a plan
+  // assignment, or override ledger rows) — dead roster rows stay out.
+  const managerHasPayableSurface = (m: any): boolean => {
+    if (m.hourlyRateCents != null) return true;
+    if (rawDb.prepare(`SELECT 1 FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ? LIMIT 1`)
+      .get(tenantId, m.id, bounds.weekStartUtc)) return true;
+    if (rawDb.prepare(`SELECT 1 FROM rep_commission_assignments WHERE tenant_id = ? AND rep_id = ? LIMIT 1`)
+      .get(tenantId, m.id)) return true;
+    return overrides.hasOverrideRowsForWeek(tenantId, m.id, bounds.weekStartUtc);
+  };
+  let reps = storage.getTeamMembers(tenantId).filter((m: any) => m.role !== "manager" || managerHasPayableSurface(m));
   if (repIds) reps = reps.filter((m: any) => repIds.includes(m.id));
 
   const rows: WeekOverviewRepRow[] = [];
@@ -1246,6 +1356,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
       salesUntilNextTier: null, nextTierRateCents: null,
       nextTierProjectedCommissionCents: null, marginalJumpCents: null,
       installHold: installHeldSalesForWeek(tenantId, rep.id, config.qualificationBasis, bounds),
+      overridePayCents: 0, overrideItemCount: 0,
     };
 
     // Auto-close rule: an ended week with a forgotten open clock-in can never
@@ -1279,6 +1390,8 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
           grossCommissionCents: existing.gross_commission_cents,
           adjustmentCents: existing.adjustment_cents,
           finalCommissionCents: existing.final_commission_cents,
+          overridePayCents: existing.override_pay_cents ?? 0,
+          overrideItemCount: existing.override_item_count ?? 0,
           ...(existing.hourly_minutes != null ? {
             hours: Math.round((existing.hourly_minutes / 60) * 100) / 100,
             hourlyMinutes: existing.hourly_minutes,
@@ -1312,6 +1425,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
           qualifiedSaleCount: c.qualifiedSaleCount, tierLabel: c.tierLabel,
           rateCents: c.rateCents, grossCommissionCents: c.grossCommissionCents,
           adjustmentCents: c.adjustmentCents, finalCommissionCents: c.finalCommissionCents,
+          overridePayCents: out.override.payCents, overrideItemCount: out.override.itemCount,
           salesUntilNextTier: c.retro?.salesUntilNextTier ?? null,
           nextTierRateCents: c.retro?.nextTierRateCents ?? null,
           nextTierProjectedCommissionCents: c.retro?.nextTierProjectedCommissionCents ?? null,
@@ -1357,6 +1471,22 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
     const rep = rows.find(r => r.repId === p.repId);
     exceptions.push({ type: "PENDING_ADJUSTMENT", repId: p.repId, repName: rep?.repName ?? `Rep ${p.repId}`,
       detail: `${p.c} pending adjustment(s) awaiting a decision.` });
+  }
+
+  // Open override-ledger exceptions for this week: a downline reversal against
+  // an already-settled upline statement, or an earn that landed in a locked
+  // week. Both need a manager adjustment + explicit resolve — never automatic.
+  for (const ex of overrides.listExceptions(tenantId)) {
+    if (ex.earnedWeekStartUtc !== bounds.weekStartUtc) continue;
+    if (repIds && !repIds.includes(ex.beneficiaryRepId)) continue;
+    const reversal = ex.reason === "OVERRIDE_REVERSED_AFTER_FINALIZE";
+    exceptions.push({
+      type: reversal ? "OVERRIDE_REVERSED_AFTER_FINALIZE" : "OVERRIDE_LOCKED_WEEK_EARN",
+      repId: ex.beneficiaryRepId, repName: ex.beneficiaryName,
+      detail: reversal
+        ? `${ex.downlineRepName}'s sale was un-sold after this week settled — book a ${formatUsdCents(Math.abs(ex.amountCents))} clawback adjustment, then resolve the override exception.`
+        : `A ${formatUsdCents(Math.abs(ex.amountCents))} override on ${ex.downlineRepName}'s sale landed in an already-locked week — book a manager adjustment, then resolve.`,
+    });
   }
 
   rows.sort((a, b) => b.finalCommissionCents - a.finalCommissionCents || a.repName.localeCompare(b.repName));
@@ -1407,6 +1537,22 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
         } else if (e instanceof CommissionError && e.code === "STATEMENT_LOCKED") {
           /* already locked — handled in the main loop below */
         } else { throw e; }
+      }
+    }
+    // Same guarantee for override beneficiaries: an upline whose only money
+    // this week is downline overrides may have no personal sales, and their
+    // statement must exist before the lock loop below or the week would close
+    // without paying them.
+    const overrideBeneficiaries = rawDb.prepare(
+      `SELECT DISTINCT beneficiary_rep_id AS repId FROM commission_overrides
+       WHERE tenant_id = ? AND earned_week_start_utc = ? AND status IN ('PAYABLE','HELD')`
+    ).all(tenantId, bounds.weekStartUtc) as any[];
+    for (const b of overrideBeneficiaries) {
+      if (repIds && !repIds.includes(b.repId)) continue;
+      try {
+        calculateOrRecalculateStatement({ tenantId, repId: b.repId, weekReference: bounds.weekStartUtc, actorId, requestId: "batch-finalize-ensure-override" });
+      } catch (e) {
+        if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
       }
     }
   }
