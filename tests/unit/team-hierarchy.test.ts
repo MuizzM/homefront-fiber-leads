@@ -5,6 +5,7 @@ import {
   hierarchyRank,
   isValidSupervisorRole,
   wouldCreateReportsCycle,
+  branchOwnerOf,
   HIRABLE_ROLES,
 } from "@shared/teamHierarchy";
 
@@ -125,5 +126,46 @@ describe("hierarchyRank", () => {
     expect(hierarchyRank("calling_rep")).toBeNull();
     expect(hierarchyRank("")).toBeNull();
     expect(hierarchyRank(undefined)).toBeNull();
+  });
+});
+
+describe("branchOwnerOf — whose people are these", () => {
+  // rep(3) → tl(2) → mgr(1); rep(4) directly under mgr(1); rep(5) unowned.
+  const roster = [
+    { id: 1, role: "manager", reportsToId: null, active: true },
+    { id: 2, role: "team_lead", reportsToId: 1, active: true },
+    { id: 3, role: "rep", reportsToId: 2, active: true },
+    { id: 4, role: "rep", reportsToId: 1, active: true },
+    { id: 5, role: "rep", reportsToId: null, active: true },
+  ];
+
+  it("walks past team leads to the manager at the top of the branch", () => {
+    expect(branchOwnerOf(3, roster)).toBe(1);
+    expect(branchOwnerOf(4, roster)).toBe(1);
+  });
+
+  it("a manager owns their own branch, so peers resolve to each other", () => {
+    expect(branchOwnerOf(1, roster)).toBe(1);
+  });
+
+  it("a top-level member is UNOWNED — adoptable rather than stranded", () => {
+    expect(branchOwnerOf(5, roster)).toBeNull();
+  });
+
+  it("an INACTIVE manager does not own a branch — their orphans stay reachable", () => {
+    const departed = roster.map(m => m.id === 1 ? { ...m, active: false } : m);
+    expect(branchOwnerOf(3, departed)).toBeNull();
+  });
+
+  it("a corrupt cycle reads as unowned instead of looping forever", () => {
+    const cyclic = [
+      { id: 1, role: "rep", reportsToId: 2, active: true },
+      { id: 2, role: "rep", reportsToId: 1, active: true },
+    ];
+    expect(branchOwnerOf(1, cyclic)).toBeNull();
+  });
+
+  it("an unknown member id is unowned, not an exception", () => {
+    expect(branchOwnerOf(999, roster)).toBeNull();
   });
 });
