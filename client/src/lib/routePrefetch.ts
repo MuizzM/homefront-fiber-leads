@@ -35,6 +35,7 @@ const PREFIX_CHUNKS: Record<string, Thunk> = {
   "/areas": () => import("@/pages/Areas"),
   "/areas/": () => import("@/pages/AreaDetail"),
   "/leaderboard": () => import("@/pages/Leaderboard"),
+  "/messages": () => import("@/pages/Messages"),
   "/spiffs": () => import("@/pages/Spiffs"),
   "/training": () => import("@/pages/Training"),
   "/coach": () => import("@/pages/Coach"),
@@ -91,6 +92,9 @@ const ROUTE_QUERIES: Record<string, readonly string[]> = {
   "/my-commission": ["/api/commission/statements/me/current"],
   "/my-documents": ["/api/onboarding/documents/me"],
   "/team": ["/api/team", "/api/leaderboard"],
+  // NO "/messages" entry: Layout's always-mounted 30s unread-badge poll keeps
+  // ["/api/chat"] fresh for everyone who can see the nav item, so a data warm
+  // here would never fire — the chunk warm above is the whole win.
   "/commission-console": ["/api/commission/week-overview"],
   "/applications": ["/api/onboarding/pipeline"],
   "/calling": ["/api/v1/calling/status"],

@@ -252,9 +252,11 @@ function AppRoutes() {
               spiff feed + heat; the team heat leaderboard and admin approve/pay
               controls are gated inside the page and independently on the server. */}
           <Route path="/spiffs"><CapabilityGuard role={role} capability="field.app.use"><Spiffs /></CapabilityGuard></Route>
-          {/* Guarded on the capability the POST route enforces, so the page and
-              the API agree about who may write to the whole floor. */}
-          <Route path="/messages"><CapabilityGuard role={role} capability="commission.structure.manage"><Messages /></CapabilityGuard></Route>
+          {/* Open to the whole field, like /leaderboard: the hub is the chat,
+              the feed, and the board for everyone who works the floor. The
+              MEGAPHONE inside it (composer, sent log, retraction) stays gated
+              on commission.structure.manage — in the page and on the API. */}
+          <Route path="/messages"><CapabilityGuard role={role} capability="field.app.use"><Messages /></CapabilityGuard></Route>
           {/* My Territory removed — everyone knocks + manages via Field Map & Leads */}
           <Route path="/my-territory">
             <Redirect to="/map" />

@@ -85,6 +85,11 @@ const NAV_ITEMS: NavItem[] = [
   // out, so the people who can assign are the people who can see the board.
   { href: "/areas",        label: "Areas",         icon: LayoutGrid,   show: r => roleCan(r, "assign_territory"),          group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
+  // The hub (chat + announcements + board) is a FIELD surface now — every rep
+  // reads and writes the room. Matches the route's field.app.use guard; the
+  // composer inside stays capability-gated, so this entry never advertises a
+  // power the API would refuse.
+  { href: "/messages",     label: "Messages",     icon: MessagesSquare, show: isFieldRole,                            group: "Field" },
   { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },
   { href: "/training",     label: "Training",     icon: GraduationCap,show: isFieldRole,                              group: "Field" },
   { href: "/coach",        label: "Coach",        icon: Zap,          show: isFieldRole,                              group: "Field" },
@@ -105,10 +110,6 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/scanner-tools",label: "Scan Tools",    icon: TrendingUp,   show: r => hasRole(r, "admin"),                 group: "Fiber" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
-  // Capability, not a role list — this must show for exactly the people the
-  // POST /api/announcements route lets through, or a team lead gets a nav entry
-  // to a page that 403s (or, worse, no entry to a power they hold).
-  { href: "/messages",     label: "Messages",      icon: MessagesSquare, show: r => can(r, "commission.structure.manage"), group: "Manage" },
   { href: "/commission-console", label: "Commissions & Pay", icon: Banknote, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Rep Onboarding", icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
@@ -241,6 +242,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   });
   const pendingTerritoryCount = (territoryRequests ?? []).filter(r => r.status === "pending").length;
 
+  // Floor-chat unread — the count on the Messages nav entry. Same query key
+  // the hub and its chat pane observe, so the sidebar, the tab badge, and the
+  // room can never disagree; this observer just sets the slow 30s baseline.
+  // Gated reps are excluded (the server would 403 the poll anyway).
+  const { data: chatPage } = useQuery<{ unread: number; threadsUnread?: number }>({
+    queryKey: ["/api/chat"],
+    refetchInterval: 30000,
+    enabled: isFieldRole(role) && !gated,
+  });
+  // Floor + DMs + groups — one number for the one nav entry they live behind.
+  const chatUnread = (chatPage?.unread ?? 0) + (chatPage?.threadsUnread ?? 0);
+
   // The caller's organization — real tenant branding, not a hardcode. Falls
   // back to the Home Front Solutions brand while loading / for legacy sessions.
   const { data: tenantMe } = useQuery<{ tenant: { companyName: string; tagline: string | null; plan: string } | null }>({
@@ -318,7 +331,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       : href === "/calling"
                         ? location === href || location.startsWith("/calling/lead/")
                         : location === href;
-                    const badgeCount = canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount : 0;
+                    const badgeCount =
+                      href === "/messages" ? chatUnread
+                      : canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount
+                      : 0;
                     return (
                       <Link
                         key={href}
@@ -338,7 +354,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         <span className="flex-1">{label}</span>
                         {badgeCount > 0 && (
                           <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-2xs font-bold text-black flex items-center justify-center px-1">
-                            {badgeCount}
+                            {badgeCount > 9 ? "9+" : badgeCount}
                           </span>
                         )}
                       </Link>
@@ -444,7 +460,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {lockThisPage ? <TrainingLock /> : children}
         </main>
-        {!onMap && !onCalling && !gated && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} moreDot={canManage && pendingTerritoryCount > 0} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
+        {!onMap && !onCalling && !gated && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} moreDot={(canManage && pendingTerritoryCount > 0) || chatUnread > 0} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
       </div>
 
       {/* The More sheet renders wherever the header does (everywhere but the
