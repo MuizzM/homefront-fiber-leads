@@ -110,6 +110,10 @@ const recruitingInviteSchema = z.object({
   // the org default. Never surfaced to the candidate.
   invitedOverrideTeamLeadCents: z.number().int().min(0).max(10_000_000).nullable().optional(),
   invitedOverrideManagerCents: z.number().int().min(0).max(10_000_000).nullable().optional(),
+  // Existing members the new LEADER hire brings under them at approval. Only
+  // meaningful for team_lead/manager invites; the handler validates every id
+  // against the tenant roster and the strictly-above rule.
+  invitedDownlineIds: z.array(z.number().int().positive()).max(200).optional(),
 }).strict();
 const signSchema = z.object({
   typedName: z.string().trim().min(2).max(120),
@@ -482,6 +486,30 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       invitedSupervisorId = supervisor.id;
     }
 
+    // Downline the new LEADER brings with them. Every entry must be an active
+    // in-tenant member the invited role would rank strictly above — the same
+    // rule a supervisor edge obeys, read in the other direction. The chosen
+    // supervisor can never also be in the downline (that loop would only
+    // surface at approval, as a cycle-check fallback — refuse it loudly now).
+    const invitedDownlineIds = [...new Set(parsed.data.invitedDownlineIds ?? [])];
+    if (invitedDownlineIds.length > 0) {
+      if (invitedRole === "rep") {
+        return res.status(400).json({ error: "A rep cannot be given a downline — only team leads and managers supervise", code: "INVALID_DOWNLINE" });
+      }
+      for (const downlineId of invitedDownlineIds) {
+        if (downlineId === invitedSupervisorId) {
+          return res.status(400).json({ error: "The new hire's supervisor cannot also report to them", code: "INVALID_DOWNLINE" });
+        }
+        const member = roster.find(candidate => candidate.id === downlineId);
+        if (!member || !member.active) {
+          return res.status(400).json({ error: "Every downline member must be an active member of your organization", code: "INVALID_DOWNLINE" });
+        }
+        if (!isValidSupervisorRole(member.role, invitedRole)) {
+          return res.status(400).json({ error: `A ${String(invitedRole).replace("_", " ")} cannot supervise ${member.name} (${String(member.role).replace("_", " ")})`, code: "INVALID_DOWNLINE" });
+        }
+      }
+    }
+
     const origin = onboardingAppOrigin(req);
     let invitation;
     try {
@@ -499,6 +527,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         invitedSupervisorId,
         invitedOverrideTeamLeadCents: parsed.data.invitedOverrideTeamLeadCents ?? null,
         invitedOverrideManagerCents: parsed.data.invitedOverrideManagerCents ?? null,
+        invitedDownlineIds,
       });
     } catch (error: any) {
       if (/open invitation|unique/i.test(error?.message ?? "")) {

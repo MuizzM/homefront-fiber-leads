@@ -1487,6 +1487,11 @@ export function runMigrations() {
     // the candidate — the upline's cut is not part of what the hire signs.
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_override_team_lead_cents INTEGER`,
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_override_manager_cents INTEGER`,
+    // A leader hire can bring their DOWNLINE with them: existing members the
+    // hirer picked to be re-homed under the new team_lead/manager at approval.
+    // JSON array of team_members ids; NULL/empty = nobody moves. Validated at
+    // send AND re-validated at approval (members go stale between the two).
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_downline_ids TEXT`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_token
        ON onboarding_recruiting_invites(token_sha256) WHERE token_sha256 IS NOT NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_application

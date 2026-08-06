@@ -125,6 +125,7 @@ async function postInvite(session: string, body: Record<string, unknown>) {
 function invitedApplication(email: string, opts: {
   invitedRole?: any; invitedSupervisorId?: number | null;
   invitedOverrideTeamLeadCents?: number | null; invitedOverrideManagerCents?: number | null;
+  invitedDownlineIds?: number[];
 } = {}) {
   const invite = recruitingStore.createRecruitingInvite({
     tenantId: 1, candidateName: "Override Candidate", candidateEmail: email, invitedBy: managerUser.id,
@@ -132,6 +133,7 @@ function invitedApplication(email: string, opts: {
     invitedSupervisorId: opts.invitedSupervisorId ?? null,
     invitedOverrideTeamLeadCents: opts.invitedOverrideTeamLeadCents ?? null,
     invitedOverrideManagerCents: opts.invitedOverrideManagerCents ?? null,
+    invitedDownlineIds: opts.invitedDownlineIds ?? null,
   });
   recruitingStore.markRecruitingInviteSent(invite.id, "resend-invite");
   const token = recruitingStore.secureTokenForInvite(invite.id);
@@ -445,5 +447,127 @@ describe("PATCH /api/commission/reps/:repId/override-rates — editing existing 
     expect(entry).toBeTruthy();
     expect(JSON.parse(entry.details).to.overrideTeamLeadCents).toBe(3300);
     await patchRates(managerSession, deepRepMember.id, { overrideTeamLeadCents: null });
+  });
+});
+
+describe("hire-time downline — a leader arrives with their team", () => {
+  const reportsToOf = (id: number): number | null =>
+    (rawDb.prepare("SELECT reports_to_id AS r FROM team_members WHERE id = ?").get(id) as any)?.r ?? null;
+
+  it("the invite POST validates every id and stores the list", async () => {
+    const ok = await postInvite(managerSession, {
+      name: "Leader One", email: "leader1@override.example.com",
+      invitedRole: "team_lead", invitedDownlineIds: [deepRepMember.id, strangerMember.id],
+    });
+    expect(ok.status).toBe(201);
+    const stored = rawDb.prepare("SELECT invited_downline_ids AS ids FROM onboarding_recruiting_invites WHERE id = ?")
+      .get(ok.body.invitation.id) as any;
+    expect(JSON.parse(stored.ids).sort()).toEqual([deepRepMember.id, strangerMember.id].sort());
+  });
+
+  it("refuses a downline for a rep hire, an inactive member, and one the role cannot outrank", async () => {
+    const forRep = await postInvite(managerSession, {
+      name: "Rep NoTeam", email: "repnoteam@override.example.com",
+      invitedRole: "rep", invitedDownlineIds: [deepRepMember.id],
+    });
+    expect(forRep.status).toBe(400);
+    expect(forRep.body.code).toBe("INVALID_DOWNLINE");
+
+    const inactive = await postInvite(managerSession, {
+      name: "Leader Two", email: "leader2@override.example.com",
+      invitedRole: "team_lead", invitedDownlineIds: [inactiveMember.id],
+    });
+    expect(inactive.status).toBe(400);
+
+    // A team lead cannot supervise another team lead (equal rank).
+    const equalRank = await postInvite(managerSession, {
+      name: "Leader Three", email: "leader3@override.example.com",
+      invitedRole: "team_lead", invitedDownlineIds: [tl2Member.id],
+    });
+    expect(equalRank.status).toBe(400);
+  });
+
+  it("refuses a downline entry that is also the hire's own supervisor", async () => {
+    const { status, body } = await postInvite(managerSession, {
+      name: "Loop Leader", email: "loop@override.example.com",
+      invitedRole: "team_lead", invitedSupervisorId: managerMember.id, invitedDownlineIds: [managerMember.id],
+    });
+    expect(status).toBe(400);
+    expect(body.code).toBe("INVALID_DOWNLINE");
+  });
+
+  it("APPROVAL re-homes the invited members under the new leader", async () => {
+    const { application } = invitedApplication("arrives@override.example.com", {
+      invitedRole: "team_lead", invitedSupervisorId: managerMember.id,
+      invitedDownlineIds: [strangerMember.id],
+    });
+    const { status, body } = await approve(application.id);
+    expect(status).toBe(200);
+    expect(body.hierarchyWarning ?? null).toBeNull();
+
+    const leader = memberByEmail("arrives@override.example.com");
+    expect(reportsToOf(strangerMember.id)).toBe(leader.id);
+    // The leader themself still reports to the supervisor from the invite.
+    expect(reportsToOf(leader.id)).toBe(managerMember.id);
+    // Audited.
+    const entry = rawDb.prepare(
+      "SELECT details FROM activity_log WHERE action = 'team.downline_assigned_at_hire' ORDER BY id DESC LIMIT 1",
+    ).get() as any;
+    expect(JSON.parse(entry.details).movedMemberIds).toContain(strangerMember.id);
+
+    rawDb.prepare("UPDATE team_members SET reports_to_id = NULL WHERE id = ?").run(strangerMember.id);
+  });
+
+  it("a stale INVITE pick degrades with a warning; the rest of the hire still lands", async () => {
+    const doomed = storage.createTeamMember({ name: "Doomed Rep", role: "rep", active: true, tenantId: 1 } as any);
+    const { application } = invitedApplication("stale@override.example.com", {
+      invitedRole: "team_lead", invitedDownlineIds: [doomed.id, strangerMember.id],
+    });
+    // Offboarded between send and approve.
+    rawDb.prepare("UPDATE team_members SET active = 0 WHERE id = ?").run(doomed.id);
+
+    const { status, body } = await approve(application.id);
+    expect(status).toBe(200);
+    expect(body.hierarchyWarning).toMatch(/no longer active/i);
+    const leader = memberByEmail("stale@override.example.com");
+    expect(reportsToOf(strangerMember.id)).toBe(leader.id);   // the good one moved
+    expect(reportsToOf(doomed.id)).toBeNull();                 // the stale one did not
+
+    rawDb.prepare("UPDATE team_members SET reports_to_id = NULL WHERE id = ?").run(strangerMember.id);
+  });
+
+  it("an explicit REVIEWER list out-ranks the invite's and fails loud when invalid", async () => {
+    const { application } = invitedApplication("reviewerlist@override.example.com", {
+      invitedRole: "team_lead", invitedDownlineIds: [strangerMember.id],
+    });
+    const bad = await approve(application.id, {
+      hierarchy: { role: "team_lead", reportsToId: null, downlineIds: [inactiveMember.id] },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe("INVALID_DOWNLINE");
+    // The 400 left the hire un-created (validation precedes every write).
+    expect(memberByEmail("reviewerlist@override.example.com")).toBeUndefined();
+
+    const good = await approve(application.id, {
+      hierarchy: { role: "team_lead", reportsToId: null, downlineIds: [deepRepMember.id] },
+    });
+    expect(good.status).toBe(200);
+    const leader = memberByEmail("reviewerlist@override.example.com");
+    expect(reportsToOf(deepRepMember.id)).toBe(leader.id);      // reviewer's pick
+    expect(reportsToOf(strangerMember.id)).not.toBe(leader.id); // invite's, overridden
+
+    rawDb.prepare("UPDATE team_members SET reports_to_id = ? WHERE id = ?").run(tl2Member.id, deepRepMember.id);
+  });
+
+  it("an empty reviewer list means nobody moves, even when the invite promised a team", async () => {
+    const { application } = invitedApplication("nobody@override.example.com", {
+      invitedRole: "team_lead", invitedDownlineIds: [strangerMember.id],
+    });
+    const { status } = await approve(application.id, {
+      hierarchy: { role: "team_lead", reportsToId: null, downlineIds: [] },
+    });
+    expect(status).toBe(200);
+    const leader = memberByEmail("nobody@override.example.com");
+    expect(reportsToOf(strangerMember.id)).not.toBe(leader.id);
   });
 });
