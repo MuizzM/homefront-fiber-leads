@@ -17,6 +17,10 @@ data.db
 data.db-shm
 data.db-wal
 data.db-journal
+# Local snapshots + the out-of-database high-water mark (server/dbSafetyNet.ts).
+# Whole copies of the database, so this must stay ignored for exactly the reason
+# the line above exists — and they are gigabyte-scale.
+backups/
 
 # Browser/E2E runtime artifacts
 test-results/

@@ -691,6 +691,17 @@ app.use((req, res, next) => {
   // would race) but still needs every migrated table to exist — which it does, since
   // the primary completed all migrations before forking this worker.
   if (!IS_CLUSTER_WORKER) runMigrations();
+  // ── THE SAFETY NET UNDER data.db ──────────────────────────────────────────
+  // Immediately after migrations and before anything writes a business row, so
+  // the "did this database come up blank" check reads the database as it was
+  // FOUND. A cluster worker skips it: its primary already ran the check, and a
+  // second opinion from a process that booted afterwards is not evidence.
+  //
+  // Nothing here can fail the boot — see server/dbSafetyNet.ts.
+  if (!IS_CLUSTER_WORKER) {
+    try { const { installDbSafetyNet } = await import("./dbSafetyNet"); installDbSafetyNet(); }
+    catch (e: any) { console.warn("[db-safety] not installed:", e?.message); }
+  }
   // Clear stale admission/lock/rate rows left by the previous container. This ran
   // implicitly inside the coordinator's ensureSchema() before; it now lives in an
   // explicit call so the cluster primary can run it EXACTLY ONCE before forking
