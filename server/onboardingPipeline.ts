@@ -43,6 +43,17 @@ export interface OnboardingPipelineRecord {
     // without this the reviewer sees "TIERED" and has to guess which tiers,
     // which is how the invite carried a ladder nobody could confirm.
     commissionTiers: CommissionTier[] | null;
+    // Role + upline chosen at invite time. Supervisor name/active come from
+    // the CURRENT roster so the console can flag a stale pick before approval.
+    // This endpoint is manager+ — unlike the public resolve endpoint, which
+    // exposes only a role label and never the supervisor.
+    invitedRole: string | null;
+    invitedSupervisorId: number | null;
+    invitedSupervisorName: string | null;
+    invitedSupervisorActive: boolean | null;
+    // Per-hire override rates chosen at invite time (null = inherit org).
+    invitedOverrideTeamLeadCents: number | null;
+    invitedOverrideManagerCents: number | null;
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -123,6 +134,12 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
   const isInvited = source === "invited";
   const completedMilestones = [isInvited ? Boolean(invite?.sentAt) : applied, applied, approved, loginCodeSent, agreementsIssued, fullySigned, active].filter(Boolean).length;
   const tenantRow = rawDb.prepare("SELECT slug FROM tenants WHERE id = ?").get(tenantId) as { slug?: string } | undefined;
+  // Tenant-scoped on purpose: a cross-tenant supervisor id (corrupt or forged
+  // row) resolves to "unknown" rather than leaking another org's name.
+  const invitedSupervisor = invite?.invitedSupervisorId != null
+    ? rawDb.prepare("SELECT name, active FROM team_members WHERE id = ? AND tenant_id = ?")
+        .get(invite.invitedSupervisorId, tenantId) as { name?: string; active?: number } | undefined
+    : undefined;
   const secureUrl = invite && !application
     ? `${origin}/join/${encodeURIComponent(tenantRow?.slug ?? "")}?invite=${encodeURIComponent(secureTokenForInvite(invite.id))}`
     : "";
@@ -183,6 +200,12 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
       reservePercent: invite.reservePercent ?? null,
       reserveCapCents: invite.reserveCapCents ?? null,
       commissionTiers: invite.commissionTiers ?? null,
+      invitedRole: invite.invitedRole,
+      invitedSupervisorId: invite.invitedSupervisorId,
+      invitedSupervisorName: invitedSupervisor?.name ?? null,
+      invitedSupervisorActive: invitedSupervisor ? Boolean(invitedSupervisor.active) : null,
+      invitedOverrideTeamLeadCents: invite.invitedOverrideTeamLeadCents,
+      invitedOverrideManagerCents: invite.invitedOverrideManagerCents,
     } : null,
     application: application ? {
       status: application.status, phone: application.phone, city: application.city, state: application.state, zip: application.zip,

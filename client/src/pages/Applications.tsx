@@ -15,6 +15,8 @@ import { DEFAULT_COMMISSION_TERMS, normalizeCommissionTerms, type CommissionTerm
 import type { CommissionTier } from "@shared/commissionTiers";
 import type { OnboardingDocumentType } from "@shared/onboardingDocuments";
 import { hrStatusLabel, type HrCheckpointKind, type HrCheckpointStatus } from "@shared/onboardingHr";
+import { HIRABLE_ROLES, isValidSupervisorRole, type MemberRole } from "@shared/teamHierarchy";
+import type { TeamMember } from "@shared/schema";
 
 type PipelineStage =
   | "invited" | "under_review" | "approved" | "login_code_sent"
@@ -81,6 +83,16 @@ interface PipelineRecord {
     reservePercent: number | null;
     reserveCapCents: number | null;
     commissionTiers: CommissionTier[] | null;
+    // The org-chart half of the offer: what role the candidate was invited AS,
+    // and who they were proposed to report to. Name + active ride along so the
+    // review panel can flag a since-offboarded supervisor without a lookup.
+    invitedRole: string | null;
+    invitedSupervisorId: number | null;
+    invitedSupervisorName: string | null;
+    invitedSupervisorActive: boolean | null;
+    // Per-hire override rates the hirer chose (null = inherit org default).
+    invitedOverrideTeamLeadCents: number | null;
+    invitedOverrideManagerCents: number | null;
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -128,6 +140,9 @@ function formatDate(value: string | null | undefined) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Not yet" : date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
+
+const MEMBER_ROLE_LABEL: Record<MemberRole, string> = { rep: "Sales Rep", team_lead: "Team Lead", manager: "Manager" };
+const memberRoleLabel = (role: string) => MEMBER_ROLE_LABEL[role as MemberRole] ?? role;
 
 function documentTone(status: string) {
   if (status === "completed") return "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
@@ -190,6 +205,21 @@ export default function Applications() {
   // cents throughout now; the Math.round(Number(x) * 100) conversions are gone.
   const [inviteTerms, setInviteTerms] = useState<CommissionTerms>(DEFAULT_COMMISSION_TERMS);
   const inviteTermsCheck = normalizeCommissionTerms(inviteTerms);
+  // The org-chart half of the offer. Role options come from HIRABLE_ROLES (the
+  // same strictly-above map the server enforces — a manager can't invite a
+  // manager), and the supervisor list is filtered by isValidSupervisorRole for
+  // the chosen role, exactly like the Team page's supervisor picker.
+  // `undefined` supervisor = "never touched" → defaults to the inviter's own
+  // member row whenever that row passes the filter; changing role resets to
+  // this default because eligibility changes with the role (Team page rule).
+  const [inviteRole, setInviteRole] = useState<MemberRole>("rep");
+  const [inviteSupervisorId, setInviteSupervisorId] = useState<number | null | undefined>(undefined);
+  // Per-hire override rates: what the team-lead / manager slots keep from each
+  // of THIS hire's qualified sales. Draft dollar strings (HouseAmountCard
+  // idiom); "" = inherit the org default, converted to integer cents ONCE at
+  // submit. Never part of what the candidate sees or signs.
+  const [inviteOverrideTlDollars, setInviteOverrideTlDollars] = useState("");
+  const [inviteOverrideMgrDollars, setInviteOverrideMgrDollars] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   // Terms the approval commits the rep to. NOT a fresh house default: approval
   // is where the offer becomes pay, so it opens on what the candidate was
@@ -205,6 +235,14 @@ export default function Applications() {
   // the invite ladder was built to end.
   const [reviewTerms, setReviewTerms] = useState<CommissionTerms>(DEFAULT_COMMISSION_TERMS);
   const reviewTermsCheck = normalizeCommissionTerms(reviewTerms);
+  // Role + upline the approval will create. Seeded from the invite (below) the
+  // same way the comp terms are — approval opens on the OFFER, not a default.
+  const [reviewRole, setReviewRole] = useState<MemberRole>("rep");
+  const [reviewSupervisorId, setReviewSupervisorId] = useState<number | null>(null);
+  // Same per-hire override drafts for the approval panel, seeded from the
+  // invite's choice (below) the way the comp terms are.
+  const [reviewOverrideTlDollars, setReviewOverrideTlDollars] = useState("");
+  const [reviewOverrideMgrDollars, setReviewOverrideMgrDollars] = useState("");
   const [reviewNotes, setReviewNotes] = useState("");
   // Two-step reject (audit finding: reject mutated instantly and is
   // irreversible). First tap arms the button, which auto-disarms after 3s;
@@ -227,6 +265,48 @@ export default function Applications() {
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
+
+  // The roster feeds both supervisor pickers (invite + review).
+  const teamQuery = useQuery<TeamMember[]>({
+    queryKey: ["/api/team"],
+    queryFn: () => apiRequest("GET", "/api/team").then(response => response.json()),
+    enabled: canManage,
+  });
+  // Org override defaults — placeholders for the per-hire rate inputs, so a
+  // blank field visibly means "inherit $X" rather than "zero".
+  const configQuery = useQuery<{ overridesEnabled?: boolean; overrideTeamLeadCents?: number; overrideManagerCents?: number }>({
+    queryKey: ["/api/commission/config"],
+    queryFn: () => apiRequest("GET", "/api/commission/config").then(response => response.json()),
+    enabled: canManage,
+    staleTime: 60_000,
+  });
+  const orgOverrideTlCents = configQuery.data?.overrideTeamLeadCents ?? 0;
+  const orgOverrideMgrCents = configQuery.data?.overrideManagerCents ?? 0;
+  // "" = inherit (null on the wire); a value = whole dollars → integer cents,
+  // converted ONCE here at the boundary (the reserveCapDollars convention).
+  const overrideDollarsToCents = (draft: string): number | null => {
+    const trimmed = draft.trim();
+    if (!trimmed) return null;
+    const dollars = Number(trimmed);
+    return Number.isFinite(dollars) && dollars >= 0 ? Math.round(dollars * 100) : null;
+  };
+  const centsToDollarsDraft = (cents: number | null | undefined): string =>
+    cents == null ? "" : String(cents % 100 === 0 ? cents / 100 : (cents / 100).toFixed(2));
+  const team = Array.isArray(teamQuery.data) ? teamQuery.data : [];
+  // Only ACTIVE members whose role ranks strictly above the chosen role may
+  // supervise — the same shared-module filter the Team page and server use.
+  const inviteSupervisors = team.filter(m => m.active && isValidSupervisorRole(inviteRole, m.role));
+  const allowedInviteRoles = (HIRABLE_ROLES[user?.role ?? ""] ?? ["rep"]) as readonly MemberRole[];
+  // Default supervisor = the inviter themself, when their own member row passes
+  // the filter for the chosen role. Resolved lazily so the default lands even
+  // when the roster arrives after first render.
+  const myMemberId = user?.teamMemberId ?? null;
+  const selfMember = myMemberId != null ? team.find(m => m.id === myMemberId) : undefined;
+  const selfSupervises = !!selfMember && selfMember.active && isValidSupervisorRole(inviteRole, selfMember.role);
+  const effectiveInviteSupervisorId: number | null =
+    inviteSupervisorId !== undefined ? inviteSupervisorId : (selfSupervises ? myMemberId : null);
+  // The review panel's supervisor list — same filter, keyed on the REVIEW role.
+  const reviewSupervisors = team.filter(m => m.active && isValidSupervisorRole(reviewRole, m.role));
 
   const records = pipeline.data?.records ?? [];
   const filtered = useMemo(() => records.filter(record => {
@@ -255,15 +335,27 @@ export default function Applications() {
   //
   // No stored terms (a careers/public applicant, or a pre-ladder invite) means
   // the house default, which is what those candidates have always been given.
-  const invitedTermsKey = selected?.invite?.commissionStructure
+  const invitedTermsKey = selected?.invite
     ? JSON.stringify([
         selected.invite.commissionStructure, selected.invite.flatRateCents,
         selected.invite.reservePercent, selected.invite.reserveCapCents,
         selected.invite.commissionTiers,
+        // Hierarchy is part of the same offer — in the key so a reselect (or a
+        // late-resolving pipeline query) reseeds the role/upline pickers too.
+        selected.invite.invitedRole, selected.invite.invitedSupervisorId,
+        selected.invite.invitedOverrideTeamLeadCents, selected.invite.invitedOverrideManagerCents,
       ])
     : null;
   useEffect(() => {
     const invite = selected?.invite;
+    // Role + upline seed from the invite whenever one exists; careers/public
+    // applicants (no invite) open on rep / top-level.
+    setReviewRole(((invite?.invitedRole ?? "rep") as MemberRole));
+    setReviewSupervisorId(invite?.invitedSupervisorId ?? null);
+    // Per-hire override rates open on the hirer's invite-time choice; blank =
+    // inherit the org default (matching what approval would stamp).
+    setReviewOverrideTlDollars(centsToDollarsDraft(invite?.invitedOverrideTeamLeadCents));
+    setReviewOverrideMgrDollars(centsToDollarsDraft(invite?.invitedOverrideManagerCents));
     if (!invite?.commissionStructure) { setReviewTerms(DEFAULT_COMMISSION_TERMS); return; }
     setReviewTerms(normalizeCommissionTerms({
       structure: invite.commissionStructure,
@@ -293,6 +385,13 @@ export default function Applications() {
         reservePercent: terms.reservePercent,
         // 0 ceiling means uncapped — send 0 through (the engine reads 0 = uncapped).
         reserveCapCents: terms.reserveCapCents,
+        // The org-chart half of the offer. The schema is .strict(): exactly
+        // these keys, id-or-null (null = top-level, reports to admin).
+        invitedRole: inviteRole,
+        invitedSupervisorId: effectiveInviteSupervisorId,
+        // Per-hire override rates (null = inherit the org default).
+        invitedOverrideTeamLeadCents: overrideDollarsToCents(inviteOverrideTlDollars),
+        invitedOverrideManagerCents: overrideDollarsToCents(inviteOverrideMgrDollars),
       };
       if (terms.structure === "FLAT") body.flatRateCents = terms.flatRateCents ?? 0;
       // THE LADDER. `id` is stripped because the invite schema is .strict() and
@@ -302,7 +401,9 @@ export default function Applications() {
       return apiRequest("POST", "/api/onboarding/invitations", body).then(response => response.json());
     },
     onSuccess: (data: any) => {
-      setInviteName(""); setInviteEmail(""); refresh();
+      setInviteName(""); setInviteEmail("");
+      setInviteOverrideTlDollars(""); setInviteOverrideMgrDollars("");
+      refresh();
       toast({ title: "Private invitation sent", description: `${data.invitation.candidateName} received a secure 14-day application link.` });
     },
     onError: (error: any) => toast({ title: "Invitation not sent", description: error.message, variant: "destructive" }),
@@ -329,7 +430,17 @@ export default function Applications() {
             reserveCapCents: terms.reserveCapCents,
           }
         : undefined;
-      return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}`, { status, reviewNotes: reviewNotes || null, commission }).then(response => response.json());
+      // Role + upline the approval creates — explicit like `commission`, so
+      // what the reviewer SEES is what the server assigns, never a fallback.
+      // The per-hire override rates ride the same object (null = inherit).
+      const hierarchy = status === "approved"
+        ? {
+            role: reviewRole, reportsToId: reviewSupervisorId,
+            overrideTeamLeadCents: overrideDollarsToCents(reviewOverrideTlDollars),
+            overrideManagerCents: overrideDollarsToCents(reviewOverrideMgrDollars),
+          }
+        : undefined;
+      return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}`, { status, reviewNotes: reviewNotes || null, commission, hierarchy }).then(response => response.json());
     },
     onSuccess: (data: any, variables) => {
       refresh();
@@ -474,6 +585,85 @@ export default function Applications() {
             <div><label className="sr-only" htmlFor="invite-candidate-email">Candidate email</label><input id="invite-candidate-email" type="email" value={inviteEmail} onChange={event => setInviteEmail(event.target.value)} required maxLength={254} placeholder="candidate@email.com" className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" data-testid="input-candidate-email" /></div>
           </div>
 
+          {/* Role + upline travel with the invite too. Options mirror the
+              server's strictly-above rules: HIRABLE_ROLES caps what THIS
+              inviter may offer, and the supervisor list holds only active
+              members ranking above the chosen role. Changing role resets the
+              supervisor to the default (the inviter, when eligible) because
+              eligibility changes with the role. */}
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <label htmlFor="invite-role" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Invited role</label>
+              <select
+                id="invite-role"
+                value={inviteRole}
+                onChange={event => { setInviteRole(event.target.value as MemberRole); setInviteSupervisorId(undefined); }}
+                className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                data-testid="invite-role-select"
+              >
+                {allowedInviteRoles.map(role => <option key={role} value={role}>{MEMBER_ROLE_LABEL[role]}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="invite-supervisor" className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Reports to</label>
+              <select
+                id="invite-supervisor"
+                value={effectiveInviteSupervisorId != null ? String(effectiveInviteSupervisorId) : "none"}
+                onChange={event => setInviteSupervisorId(event.target.value === "none" ? null : Number(event.target.value))}
+                className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                data-testid="invite-supervisor-select"
+              >
+                <option value="none">— None (reports to Admin) —</option>
+                {inviteSupervisors.map(member => (
+                  <option key={member.id} value={String(member.id)}>{member.name} · {memberRoleLabel(member.role)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Per-hire override rates — what the upline keeps from each of this
+              hire's qualified sales. Blank = inherit the org default (shown as
+              the placeholder). Hidden for manager invites: managers sit at the
+              top of the chain, so no slot above them ever pays. Not part of
+              what the candidate sees or signs. */}
+          {inviteRole !== "manager" && (
+            <div className="rounded-xl border border-border bg-background/40 p-3" data-testid="invite-override-rates">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Upline keep per sale (overrides — not shown to the candidate)</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="invite-override-tl" className="mb-1 block text-[11px] text-muted-foreground">Team lead keeps</label>
+                  <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                    <span className="mr-1 text-sm text-muted-foreground">$</span>
+                    <input
+                      id="invite-override-tl" inputMode="decimal"
+                      value={inviteOverrideTlDollars}
+                      onChange={event => setInviteOverrideTlDollars(event.target.value)}
+                      placeholder={`${(orgOverrideTlCents / 100).toFixed(2)} (org default)`}
+                      className="w-full bg-transparent text-sm text-foreground outline-none"
+                      data-testid="invite-override-tl"
+                    />
+                    <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">/sale</span>
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="invite-override-mgr" className="mb-1 block text-[11px] text-muted-foreground">Manager keeps</label>
+                  <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                    <span className="mr-1 text-sm text-muted-foreground">$</span>
+                    <input
+                      id="invite-override-mgr" inputMode="decimal"
+                      value={inviteOverrideMgrDollars}
+                      onChange={event => setInviteOverrideMgrDollars(event.target.value)}
+                      placeholder={`${(orgOverrideMgrCents / 100).toFixed(2)} (org default)`}
+                      className="w-full bg-transparent text-sm text-foreground outline-none"
+                      data-testid="invite-override-mgr"
+                    />
+                    <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">/sale</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* The comp terms travel with the invite, state themselves in the
               candidate's commission agreement, and seed the rep's plan +
               reserve at approval. The SAME editor the agreements panel uses, so
@@ -539,7 +729,85 @@ export default function Applications() {
               {selected.invite && <div className="rounded-xl border border-border p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><Link2 className="h-4 w-4 text-sky-400" />{selected.milestones.applied ? "Invitation delivery" : "Private application link"}</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.applied ? `Application received ${formatDate(selected.timeline[1]?.at)}` : `Expires ${formatDate(selected.invite.expiresAt)}`} · {selected.invite.deliveryAttempts} delivery attempt{selected.invite.deliveryAttempts === 1 ? "" : "s"}</p></div>{!selected.milestones.applied && <div className="flex gap-2"><button onClick={() => copySecureLink(selected)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary" data-testid="copy-secure-invite">{copiedKey === selected.key ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}Copy</button>{["invited", "failed"].includes(selected.stage) && selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "invite", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground"><RotateCw className="h-3.5 w-3.5" />Resend</button>}</div>}</div>{selected.invite.failureReason && <p className="mt-2 rounded-lg bg-rose-500/8 px-3 py-2 text-xs text-rose-400">{selected.invite.failureReason}</p>}</div>}
 
               {selected.application && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><ClipboardCheck className="h-4 w-4 text-amber-400" />Application review</h3><span className="text-[11px] text-muted-foreground">Applied {formatDate(selected.application.createdAt)}</span></div><div className="mb-2 flex flex-wrap gap-2 text-2xs font-semibold uppercase tracking-wide"><span className="rounded-full bg-primary/10 px-2 py-1 text-primary">{selected.source === "careers" ? "Website careers" : selected.source === "invited" ? "Private invite" : "Public join link"}</span>{selected.desiredRole && <span className="rounded-full bg-secondary px-2 py-1 text-muted-foreground">{selected.desiredRole}</span>}</div><div className="grid gap-2 text-xs sm:grid-cols-2"><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Phone</span><div className="mt-0.5 font-medium text-foreground">{selected.application.phone}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Territory</span><div className="mt-0.5 font-medium text-foreground">{selected.application.city}, {selected.application.state} {selected.application.zip}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Carriers</span><div className="mt-0.5 font-medium text-foreground">{selected.application.preferredCarriers}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Sales experience</span><div className="mt-0.5 font-medium text-foreground">{selected.application.hasSalesExperience ? "Yes" : "No"}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Reliable transportation</span><div className={`mt-0.5 font-medium ${selected.application.hasReliableTransportation === false ? "text-amber-400" : "text-foreground"}`}>{selected.application.hasReliableTransportation == null ? "Not asked" : selected.application.hasReliableTransportation ? "Yes" : "No"}</div></div></div>{selected.application.salesExperienceDetails && <p className="mt-2 rounded-lg bg-secondary/50 p-3 text-xs text-muted-foreground">{selected.application.salesExperienceDetails}</p>}
-                {selected.stage === "under_review" && canReview && <div className="mt-4 border-t border-border pt-4" data-testid="review-comp-terms"><h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commission &amp; reserve (what this approval pays)</h4><p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.commissionStructure ? "Opened on the terms this candidate was invited on. Approving assigns exactly what is shown." : "No terms travelled with this application, so the house plan is shown. Approving assigns exactly what is shown."}</p><CompTermsEditor value={reviewTerms} onChange={setReviewTerms} disabled={reviewMutation.isPending} /><textarea value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} placeholder="Decision reason / internal review notes" maxLength={1000} className="mt-3 min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none focus:border-primary" /><div className="mt-3 flex gap-2"><button onClick={() => reviewMutation.mutate({ status: "approved" })} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}Approve &amp; start onboarding</button><button onClick={() => {
+                {selected.stage === "under_review" && canReview && <div className="mt-4 border-t border-border pt-4" data-testid="review-comp-terms">
+                <div className="mb-4" data-testid="review-hierarchy">
+                  <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Role &amp; upline (what this approval creates)</h4>
+                  <p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.invitedRole ? "Opened on the role and supervisor this candidate was invited with." : "No hierarchy travelled with this application — approving as a top-level rep unless you change it."}</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="review-role" className="sr-only">Role</label>
+                      <select
+                        id="review-role"
+                        value={reviewRole}
+                        onChange={event => { setReviewRole(event.target.value as MemberRole); setReviewSupervisorId(null); }}
+                        disabled={reviewMutation.isPending}
+                        className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary disabled:opacity-50"
+                        data-testid="review-role-select"
+                      >
+                        {allowedInviteRoles.map(role => <option key={role} value={role}>{MEMBER_ROLE_LABEL[role]}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="review-supervisor" className="sr-only">Reports to</label>
+                      <select
+                        id="review-supervisor"
+                        value={reviewSupervisorId != null ? String(reviewSupervisorId) : "none"}
+                        onChange={event => setReviewSupervisorId(event.target.value === "none" ? null : Number(event.target.value))}
+                        disabled={reviewMutation.isPending}
+                        className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary disabled:opacity-50"
+                        data-testid="review-supervisor-select"
+                      >
+                        <option value="none">— None (top level) —</option>
+                        {reviewSupervisors.map(member => (
+                          <option key={member.id} value={String(member.id)}>{member.name} · {memberRoleLabel(member.role)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  {selected.invite?.invitedSupervisorActive === false && (
+                    <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-400" data-testid="review-supervisor-offboarded">
+                      The proposed supervisor{selected.invite.invitedSupervisorName ? ` (${selected.invite.invitedSupervisorName})` : ""} was offboarded — pick a replacement or approve as top-level.
+                    </p>
+                  )}
+                  {/* Per-hire override rates — approval stamps these onto the new
+                      member's row (blank = inherit the org default). Hidden for
+                      manager approvals: no slot above a manager ever pays. */}
+                  {reviewRole !== "manager" && (
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2" data-testid="review-override-rates">
+                      <div>
+                        <label htmlFor="review-override-tl" className="mb-1 block text-[11px] text-muted-foreground">Team lead keeps /sale</label>
+                        <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                          <span className="mr-1 text-sm text-muted-foreground">$</span>
+                          <input
+                            id="review-override-tl" inputMode="decimal"
+                            value={reviewOverrideTlDollars}
+                            onChange={event => setReviewOverrideTlDollars(event.target.value)}
+                            placeholder={`${(orgOverrideTlCents / 100).toFixed(2)} (org default)`}
+                            disabled={reviewMutation.isPending}
+                            className="w-full bg-transparent text-sm text-foreground outline-none disabled:opacity-50"
+                            data-testid="review-override-tl"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="review-override-mgr" className="mb-1 block text-[11px] text-muted-foreground">Manager keeps /sale</label>
+                        <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                          <span className="mr-1 text-sm text-muted-foreground">$</span>
+                          <input
+                            id="review-override-mgr" inputMode="decimal"
+                            value={reviewOverrideMgrDollars}
+                            onChange={event => setReviewOverrideMgrDollars(event.target.value)}
+                            placeholder={`${(orgOverrideMgrCents / 100).toFixed(2)} (org default)`}
+                            disabled={reviewMutation.isPending}
+                            className="w-full bg-transparent text-sm text-foreground outline-none disabled:opacity-50"
+                            data-testid="review-override-mgr"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commission &amp; reserve (what this approval pays)</h4><p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.commissionStructure ? "Opened on the terms this candidate was invited on. Approving assigns exactly what is shown." : "No terms travelled with this application, so the house plan is shown. Approving assigns exactly what is shown."}</p><CompTermsEditor value={reviewTerms} onChange={setReviewTerms} disabled={reviewMutation.isPending} /><textarea value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} placeholder="Decision reason / internal review notes" maxLength={1000} className="mt-3 min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none focus:border-primary" /><div className="mt-3 flex gap-2"><button onClick={() => reviewMutation.mutate({ status: "approved" })} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}Approve &amp; start onboarding</button><button onClick={() => {
                   if (!rejectArmed) {
                     setRejectArmed(true);
                     if (rejectTimer.current) window.clearTimeout(rejectTimer.current);

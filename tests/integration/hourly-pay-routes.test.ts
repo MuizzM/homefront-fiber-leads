@@ -385,8 +385,9 @@ describe("payroll CSV — appended hourly money-plane columns reconcile to the s
     const text = await res.text();
     const lines = text.trim().split("\n");
     // The install-hold columns are APPENDED after Total (same additive rule as
-    // the hourly money-plane columns); every pre-existing column is untouched.
-    expect(lines[1]).toBe("Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total,Install Hold Sales,Install Hold Payable After");
+    // the hourly money-plane columns), and the downline-override column after
+    // those; every pre-existing column is untouched.
+    expect(lines[1]).toBe("Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total,Install Hold Sales,Install Hold Payable After,Overrides");
 
     const row = lines.find(l => l.includes("Hourly Rep One"))!;
     const cells = row.split(",");
@@ -401,12 +402,15 @@ describe("payroll CSV — appended hourly money-plane columns reconcile to the s
     // An API-booked sale has no linked legacy commission → never install-held.
     expect(cells[14]).toBe("0");
     expect(cells[15]).toBe('""');
+    // No downline in this fixture → zero override pay.
+    expect(cells[16]).toBe("0.00");
 
-    // Total row reconciles: Σ(hourly pay + gross + adjustments + spiffs − reserve).
+    // Total row reconciles: Σ(hourly pay + gross + adjustments + overrides +
+    // spiffs − reserve); the override column sums like the other money columns.
     const totalRow = lines[lines.length - 1].split(",");
     const dataRows = lines.slice(2, -1).map(l => l.split(","));
     const colSum = (i: number) => dataRows.reduce((s, c) => s + Number(c[i] || 0), 0);
-    for (const i of [5, 6, 7, 10, 11, 12, 13]) {
+    for (const i of [5, 6, 7, 10, 11, 12, 13, 16]) {
       expect(Number(totalRow[i])).toBeCloseTo(colSum(i), 2);
     }
     // rep1b (a rate from the F1 test, but no hours THIS week) → zero hourly pay.

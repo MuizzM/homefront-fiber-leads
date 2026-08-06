@@ -3,6 +3,7 @@ import { rawDb } from "./db";
 import { createInviteToken, hashInviteToken, verifyInviteToken } from "./onboardingInviteToken";
 import { normalizeCommissionTerms } from "@shared/commissionTerms";
 import type { CommissionTier } from "@shared/commissionTiers";
+import { MEMBER_ROLES, type MemberRole } from "@shared/teamHierarchy";
 
 export type RecruitingInviteStatus =
   | "creating" | "invited" | "failed" | "under_review" | "approved"
@@ -36,6 +37,16 @@ export interface RecruitingInvite {
    *  is what the rep's agreement states and what approval assigns them to. NULL
    *  means none was proposed — the org/house ladder is inherited instead. */
   commissionTiers: CommissionTier[] | null;
+  /** Role + upline chosen at invite time — ride invite → approval like the comp
+   *  terms above. NULL role = legacy invite = 'rep'; NULL supervisor =
+   *  top-level. Hierarchy validation lives in the route; this is persistence. */
+  invitedRole: MemberRole | null;
+  invitedSupervisorId: number | null;
+  /** Per-hire override rates: what the team-lead / manager slots keep from each
+   *  of this hire's qualified sales. NULL = inherit the org default. Stamped
+   *  onto the member's roster row at approval; never shown to the candidate. */
+  invitedOverrideTeamLeadCents: number | null;
+  invitedOverrideManagerCents: number | null;
   deliveryAttempts: number;
   failureReason: string | null;
   createdAt: string;
@@ -70,6 +81,12 @@ function mapInvite(row: any): RecruitingInvite {
     reservePercent: row.reserve_percent == null ? null : Number(row.reserve_percent),
     reserveCapCents: row.reserve_cap_cents == null ? null : Number(row.reserve_cap_cents),
     commissionTiers: parseTiers(row.commission_tiers_json),
+    // Fail closed: a role string outside MEMBER_ROLES reads as "none chosen",
+    // which downstream treats as the legacy default ('rep').
+    invitedRole: MEMBER_ROLES.includes(row.invited_role) ? (row.invited_role as MemberRole) : null,
+    invitedSupervisorId: row.invited_supervisor_id == null ? null : Number(row.invited_supervisor_id),
+    invitedOverrideTeamLeadCents: row.invited_override_team_lead_cents == null ? null : Number(row.invited_override_team_lead_cents),
+    invitedOverrideManagerCents: row.invited_override_manager_cents == null ? null : Number(row.invited_override_manager_cents),
     deliveryAttempts: Number(row.delivery_attempts ?? 0),
     failureReason: row.failure_reason ?? null, createdAt: String(row.created_at), updatedAt: String(row.updated_at),
   };
@@ -165,6 +182,12 @@ export function createRecruitingInvite(input: {
   tiers?: CommissionTier[] | null;
   reservePercent?: number | null;
   reserveCapCents?: number | null;
+  // Validated in the route (canHireRole + tenant roster) — stored as given.
+  invitedRole?: MemberRole | null;
+  invitedSupervisorId?: number | null;
+  // Per-hire override rates (null = inherit org default); route-validated.
+  invitedOverrideTeamLeadCents?: number | null;
+  invitedOverrideManagerCents?: number | null;
 }): RecruitingInvite {
   const candidateEmail = input.candidateEmail.trim().toLowerCase();
   const open = rawDb.prepare(
@@ -187,10 +210,14 @@ export function createRecruitingInvite(input: {
   const result = rawDb.prepare(
     `INSERT INTO onboarding_recruiting_invites
       (record_id, tenant_id, candidate_name, candidate_email, status, invited_by,
-       commission_structure, flat_rate_cents, commission_tiers_json, reserve_percent, reserve_cap_cents, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       commission_structure, flat_rate_cents, commission_tiers_json, reserve_percent, reserve_cap_cents,
+       invited_role, invited_supervisor_id,
+       invited_override_team_lead_cents, invited_override_manager_cents, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(recordId, input.tenantId, input.candidateName.trim(), candidateEmail, input.invitedBy,
-        structure, flatRateCents, tiers ? JSON.stringify(tiers) : null, reservePercent, reserveCapCents, now, now);
+        structure, flatRateCents, tiers ? JSON.stringify(tiers) : null, reservePercent, reserveCapCents,
+        input.invitedRole ?? null, input.invitedSupervisorId ?? null,
+        input.invitedOverrideTeamLeadCents ?? null, input.invitedOverrideManagerCents ?? null, now, now);
   const row = getRecruitingInvite(Number(result.lastInsertRowid))!;
   persistToken(row, expiryFrom());
   return getRecruitingInvite(row.id)!;
