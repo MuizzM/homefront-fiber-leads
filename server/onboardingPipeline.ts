@@ -51,6 +51,9 @@ export interface OnboardingPipelineRecord {
     invitedSupervisorId: number | null;
     invitedSupervisorName: string | null;
     invitedSupervisorActive: boolean | null;
+    // Per-hire override rates chosen at invite time (null = inherit org).
+    invitedOverrideTeamLeadCents: number | null;
+    invitedOverrideManagerCents: number | null;
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -201,6 +204,8 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
       invitedSupervisorId: invite.invitedSupervisorId,
       invitedSupervisorName: invitedSupervisor?.name ?? null,
       invitedSupervisorActive: invitedSupervisor ? Boolean(invitedSupervisor.active) : null,
+      invitedOverrideTeamLeadCents: invite.invitedOverrideTeamLeadCents,
+      invitedOverrideManagerCents: invite.invitedOverrideManagerCents,
     } : null,
     application: application ? {
       status: application.status, phone: application.phone, city: application.city, state: application.state, zip: application.zip,

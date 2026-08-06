@@ -1482,6 +1482,13 @@ export function runMigrations() {
     // NULL supervisor = top-level. (No FK — the application_id pattern.)
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_role TEXT`,
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_supervisor_id INTEGER`,
+    // Per-hire override rates, ALSO chosen at invite time: what the team-lead
+    // and manager slots keep from each of THIS hire's qualified sales. NULL =
+    // inherit the org default (the tenants commission_override_* columns);
+    // approval stamps them onto the new member's roster row. Never shown to
+    // the candidate — the upline's cut is not part of what the hire signs.
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_override_team_lead_cents INTEGER`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_override_manager_cents INTEGER`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_token
        ON onboarding_recruiting_invites(token_sha256) WHERE token_sha256 IS NOT NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_application
@@ -2400,6 +2407,12 @@ export function runMigrations() {
        WHEN (OLD.recruited_by_member_id IS NOT NULL AND NEW.recruited_by_member_id IS NOT OLD.recruited_by_member_id)
          OR (OLD.recruited_by_user_id IS NOT NULL AND NEW.recruited_by_user_id IS NOT OLD.recruited_by_user_id)
        BEGIN SELECT RAISE(ABORT, 'the recruiting sponsor edge is immutable'); END`,
+    // Per-SELLER override rates: what the team-lead / manager slots keep from
+    // each of THIS member's qualified sales, chosen at invite time (or edited
+    // later). NULL = inherit the org default. Resolved per sale by the
+    // override engine; already-earned rows keep their frozen snapshot.
+    `ALTER TABLE team_members ADD COLUMN override_team_lead_cents INTEGER`,
+    `ALTER TABLE team_members ADD COLUMN override_manager_cents INTEGER`,
     // Org-level ceiling. NULL → the product default ($2,500); 0 → uncapped.
     `ALTER TABLE tenants ADD COLUMN commission_reserve_cap_cents INTEGER`,
 
@@ -2644,12 +2657,14 @@ export function runMigrations() {
     // ── DOWNLINE OVERRIDES — org config + statement fold columns ─────────────
     // The commission_overrides ledger itself self-creates in overrideStore.ts
     // (ensureOverrideSchema, the spiffStore pattern); these live here because
-    // they extend EXISTING tables. Ships dark: enabled=0 and $0 rates, so no
-    // tenant's payroll changes until an admin flips the config switch. The *_bp
+    // they extend EXISTING tables. Enabled by default but MONEY-dark: every
+    // rate defaults to $0 and a $0 slot pays nobody, so no tenant's payroll
+    // changes until someone sets a rate — in the console card, or per-hire on
+    // an invite. The enabled flag stays as the org kill-switch. The *_bp
     // columns (basis points) are headroom for the PERCENT_OF_COMMISSION basis,
     // whose execution path is deliberately not built yet (validateOverridePatch
     // refuses it — the PROGRESSIVE tier-mode precedent).
-    `ALTER TABLE tenants ADD COLUMN commission_override_enabled INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE tenants ADD COLUMN commission_override_enabled INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE tenants ADD COLUMN commission_override_basis TEXT NOT NULL DEFAULT 'FLAT_PER_SALE'`,
     `ALTER TABLE tenants ADD COLUMN commission_override_team_lead_cents INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE tenants ADD COLUMN commission_override_manager_cents INTEGER NOT NULL DEFAULT 0`,

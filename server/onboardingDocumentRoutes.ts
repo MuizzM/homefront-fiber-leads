@@ -105,6 +105,11 @@ const recruitingInviteSchema = z.object({
   // inviter's own roster row; explicit null = top-level.
   invitedRole: z.enum(MEMBER_ROLES).optional(),
   invitedSupervisorId: z.number().int().positive().nullable().optional(),
+  // Per-hire override rates: what the team-lead / manager slots keep from each
+  // of this hire's qualified sales. Whole integer cents; null/absent = inherit
+  // the org default. Never surfaced to the candidate.
+  invitedOverrideTeamLeadCents: z.number().int().min(0).max(10_000_000).nullable().optional(),
+  invitedOverrideManagerCents: z.number().int().min(0).max(10_000_000).nullable().optional(),
 }).strict();
 const signSchema = z.object({
   typedName: z.string().trim().min(2).max(120),
@@ -492,6 +497,8 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         reserveCapCents: parsed.data.reserveCapCents ?? null,
         invitedRole,
         invitedSupervisorId,
+        invitedOverrideTeamLeadCents: parsed.data.invitedOverrideTeamLeadCents ?? null,
+        invitedOverrideManagerCents: parsed.data.invitedOverrideManagerCents ?? null,
       });
     } catch (error: any) {
       if (/open invitation|unique/i.test(error?.message ?? "")) {

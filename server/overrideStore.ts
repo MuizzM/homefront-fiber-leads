@@ -35,6 +35,7 @@ import { getTenantPayPolicy } from "./payPolicyStore";
 import {
   computeFlatOverrides,
   resolveOverrideChain,
+  resolveSellerRates,
   type OverrideLedgerStatus,
   type OverrideRates,
   type OverrideRowWire,
@@ -188,12 +189,16 @@ export function syncOverridesForSale(
   const now = nowIso();
 
   if (sale.status === "QUALIFIED") {
-    const { enabled, rates } = loadOverrideRates(tenantId);
-    if (!enabled) return; // feature dark — earns only accrue while switched on
+    const { enabled, rates: orgRates } = loadOverrideRates(tenantId);
+    if (!enabled) return; // org kill-switch — earns only accrue while on
     const members = storage.getTeamMembers(tenantId);
     const membersById = new Map<number, UplineChainMemberInput>(
       members.map((m: any) => [m.id, { id: m.id, role: m.role, reportsToId: m.reportsToId ?? null, active: !!m.active }]),
     );
+    // The SELLER's per-hire rates (chosen at invite time) win over the org
+    // config; NULL inherits. Frozen into rate_snapshot with everything else.
+    const seller = members.find((m: any) => m.id === sale.rep_id) as any;
+    const rates = resolveSellerRates(orgRates, seller);
     const { chain, corrupt } = resolveOverrideChain(sale.rep_id, membersById);
     if (corrupt) {
       // Corrupt/cyclic tree: earn NOTHING (fail closed), audit once, and never

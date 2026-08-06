@@ -257,6 +257,36 @@ describe("locked upline week + kill switch", () => {
   });
 });
 
+describe("per-hire rates (chosen at invite time)", () => {
+  it("a seller's own override rates out-rank the org config; the frozen snapshot proves which applied", () => {
+    // The hirer chose: on THIS rep's sales the TL keeps $10 and the manager $99.
+    rawDb.prepare(`UPDATE team_members SET override_team_lead_cents = 1000, override_manager_cents = 9900 WHERE id = ?`)
+      .run(rep.memberId);
+    const lead = sell(rep.memberId);
+    const rows = ledgerFor(lead);
+    expect(rows.find(r => r.beneficiary_rep_id === tl.memberId)!.amount_cents).toBe(1000);
+    expect(rows.find(r => r.beneficiary_rep_id === mgr.memberId)!.amount_cents).toBe(9900);
+    expect(JSON.parse(rows[0].rate_snapshot)).toMatchObject({ teamLeadCents: 1000, managerCents: 9900 });
+
+    // Clearing back to NULL inherits the org config again — but only for NEW
+    // earns; the rows above keep their frozen amounts.
+    rawDb.prepare(`UPDATE team_members SET override_team_lead_cents = NULL, override_manager_cents = NULL WHERE id = ?`)
+      .run(rep.memberId);
+    const next = sell(rep.memberId);
+    expect(ledgerFor(next).find(r => r.beneficiary_rep_id === tl.memberId)!.amount_cents).toBe(2500);
+    expect(ledgerFor(lead).find(r => r.beneficiary_rep_id === tl.memberId)!.amount_cents).toBe(1000);
+  });
+
+  it("one column set, the other inherits — and a rep with NULL rates is byte-identical to before the feature", () => {
+    rawDb.prepare(`UPDATE team_members SET override_manager_cents = 5000 WHERE id = ?`).run(repDirect.memberId);
+    const lead = sell(repDirect.memberId);
+    const rows = ledgerFor(lead);
+    expect(rows).toHaveLength(1); // still no TL slot for a direct report
+    expect(rows[0].amount_cents).toBe(5000);
+    rawDb.prepare(`UPDATE team_members SET override_manager_cents = NULL WHERE id = ?`).run(repDirect.memberId);
+  });
+});
+
 describe("append-only enforcement", () => {
   it("money/attribution columns are frozen and deletes abort; lifecycle updates pass", () => {
     const anyRow = rawDb.prepare(`SELECT id FROM commission_overrides LIMIT 1`).get();

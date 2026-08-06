@@ -3,6 +3,7 @@ import { downlineOf, type DownlineMemberRef } from "@shared/teamHierarchy";
 import {
   computeFlatOverrides,
   resolveOverrideChain,
+  resolveSellerRates,
   validateOverridePatch,
   type OverrideRates,
   type UplineChainMemberInput,
@@ -123,6 +124,26 @@ describe("computeFlatOverrides — one award per slot, house keeps unfilled slot
     const { awards, chainSnapshot } = computeFlatOverrides(chain, RATES);
     expect(awards.filter(a => a.role === "manager")).toHaveLength(1);
     expect(chainSnapshot.find(n => n.repId === 5)?.skipReason).toBe("slot_filled");
+  });
+});
+
+describe("resolveSellerRates — per-hire rates win, NULL inherits", () => {
+  it("a seller's own rates replace the org defaults column by column", () => {
+    expect(resolveSellerRates(RATES, { overrideTeamLeadCents: 1000, overrideManagerCents: 9900 }))
+      .toEqual({ basis: "FLAT_PER_SALE", teamLeadCents: 1000, managerCents: 9900 });
+    // One column set, the other inherits.
+    expect(resolveSellerRates(RATES, { overrideTeamLeadCents: 1000, overrideManagerCents: null }))
+      .toEqual({ basis: "FLAT_PER_SALE", teamLeadCents: 1000, managerCents: 7500 });
+  });
+
+  it("no seller row (or all-NULL rates) = the org config, byte for byte", () => {
+    expect(resolveSellerRates(RATES, undefined)).toEqual(RATES);
+    expect(resolveSellerRates(RATES, {})).toEqual(RATES);
+    expect(resolveSellerRates(RATES, { overrideTeamLeadCents: null, overrideManagerCents: null })).toEqual(RATES);
+  });
+
+  it("an explicit $0 per-hire rate is a real choice, not an inherit", () => {
+    expect(resolveSellerRates(RATES, { overrideTeamLeadCents: 0 }).teamLeadCents).toBe(0);
   });
 });
 

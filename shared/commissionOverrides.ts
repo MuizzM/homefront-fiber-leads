@@ -49,6 +49,26 @@ export function slotRateCents(rates: OverrideRates, role: OverrideSlotRole): num
   return role === "team_lead" ? rates.teamLeadCents : rates.managerCents;
 }
 
+/** Per-seller rate overrides carried on the seller's roster row (chosen at
+ *  invite time). NULL/absent = inherit the org default. */
+export interface SellerOverrideRates {
+  overrideTeamLeadCents?: number | null;
+  overrideManagerCents?: number | null;
+}
+
+/**
+ * The rates governing ONE seller's sales: their own per-hire rates where set,
+ * the org config where not. Resolved at earn time and frozen into the row's
+ * rate_snapshot — a later edit to either layer never re-prices earned money.
+ */
+export function resolveSellerRates(org: OverrideRates, seller: SellerOverrideRates | undefined): OverrideRates {
+  return {
+    basis: org.basis,
+    teamLeadCents: seller?.overrideTeamLeadCents ?? org.teamLeadCents,
+    managerCents: seller?.overrideManagerCents ?? org.managerCents,
+  };
+}
+
 // ── Chain resolution (pure) ───────────────────────────────────────────────────
 
 /** Minimal roster shape the walk needs — plain data in, ids out. */

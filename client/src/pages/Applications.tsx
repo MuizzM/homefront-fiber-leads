@@ -90,6 +90,9 @@ interface PipelineRecord {
     invitedSupervisorId: number | null;
     invitedSupervisorName: string | null;
     invitedSupervisorActive: boolean | null;
+    // Per-hire override rates the hirer chose (null = inherit org default).
+    invitedOverrideTeamLeadCents: number | null;
+    invitedOverrideManagerCents: number | null;
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -211,6 +214,12 @@ export default function Applications() {
   // this default because eligibility changes with the role (Team page rule).
   const [inviteRole, setInviteRole] = useState<MemberRole>("rep");
   const [inviteSupervisorId, setInviteSupervisorId] = useState<number | null | undefined>(undefined);
+  // Per-hire override rates: what the team-lead / manager slots keep from each
+  // of THIS hire's qualified sales. Draft dollar strings (HouseAmountCard
+  // idiom); "" = inherit the org default, converted to integer cents ONCE at
+  // submit. Never part of what the candidate sees or signs.
+  const [inviteOverrideTlDollars, setInviteOverrideTlDollars] = useState("");
+  const [inviteOverrideMgrDollars, setInviteOverrideMgrDollars] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   // Terms the approval commits the rep to. NOT a fresh house default: approval
   // is where the offer becomes pay, so it opens on what the candidate was
@@ -230,6 +239,10 @@ export default function Applications() {
   // same way the comp terms are — approval opens on the OFFER, not a default.
   const [reviewRole, setReviewRole] = useState<MemberRole>("rep");
   const [reviewSupervisorId, setReviewSupervisorId] = useState<number | null>(null);
+  // Same per-hire override drafts for the approval panel, seeded from the
+  // invite's choice (below) the way the comp terms are.
+  const [reviewOverrideTlDollars, setReviewOverrideTlDollars] = useState("");
+  const [reviewOverrideMgrDollars, setReviewOverrideMgrDollars] = useState("");
   const [reviewNotes, setReviewNotes] = useState("");
   // Two-step reject (audit finding: reject mutated instantly and is
   // irreversible). First tap arms the button, which auto-disarms after 3s;
@@ -259,6 +272,26 @@ export default function Applications() {
     queryFn: () => apiRequest("GET", "/api/team").then(response => response.json()),
     enabled: canManage,
   });
+  // Org override defaults — placeholders for the per-hire rate inputs, so a
+  // blank field visibly means "inherit $X" rather than "zero".
+  const configQuery = useQuery<{ overridesEnabled?: boolean; overrideTeamLeadCents?: number; overrideManagerCents?: number }>({
+    queryKey: ["/api/commission/config"],
+    queryFn: () => apiRequest("GET", "/api/commission/config").then(response => response.json()),
+    enabled: canManage,
+    staleTime: 60_000,
+  });
+  const orgOverrideTlCents = configQuery.data?.overrideTeamLeadCents ?? 0;
+  const orgOverrideMgrCents = configQuery.data?.overrideManagerCents ?? 0;
+  // "" = inherit (null on the wire); a value = whole dollars → integer cents,
+  // converted ONCE here at the boundary (the reserveCapDollars convention).
+  const overrideDollarsToCents = (draft: string): number | null => {
+    const trimmed = draft.trim();
+    if (!trimmed) return null;
+    const dollars = Number(trimmed);
+    return Number.isFinite(dollars) && dollars >= 0 ? Math.round(dollars * 100) : null;
+  };
+  const centsToDollarsDraft = (cents: number | null | undefined): string =>
+    cents == null ? "" : String(cents % 100 === 0 ? cents / 100 : (cents / 100).toFixed(2));
   const team = Array.isArray(teamQuery.data) ? teamQuery.data : [];
   // Only ACTIVE members whose role ranks strictly above the chosen role may
   // supervise — the same shared-module filter the Team page and server use.
@@ -310,6 +343,7 @@ export default function Applications() {
         // Hierarchy is part of the same offer — in the key so a reselect (or a
         // late-resolving pipeline query) reseeds the role/upline pickers too.
         selected.invite.invitedRole, selected.invite.invitedSupervisorId,
+        selected.invite.invitedOverrideTeamLeadCents, selected.invite.invitedOverrideManagerCents,
       ])
     : null;
   useEffect(() => {
@@ -318,6 +352,10 @@ export default function Applications() {
     // applicants (no invite) open on rep / top-level.
     setReviewRole(((invite?.invitedRole ?? "rep") as MemberRole));
     setReviewSupervisorId(invite?.invitedSupervisorId ?? null);
+    // Per-hire override rates open on the hirer's invite-time choice; blank =
+    // inherit the org default (matching what approval would stamp).
+    setReviewOverrideTlDollars(centsToDollarsDraft(invite?.invitedOverrideTeamLeadCents));
+    setReviewOverrideMgrDollars(centsToDollarsDraft(invite?.invitedOverrideManagerCents));
     if (!invite?.commissionStructure) { setReviewTerms(DEFAULT_COMMISSION_TERMS); return; }
     setReviewTerms(normalizeCommissionTerms({
       structure: invite.commissionStructure,
@@ -348,9 +386,12 @@ export default function Applications() {
         // 0 ceiling means uncapped — send 0 through (the engine reads 0 = uncapped).
         reserveCapCents: terms.reserveCapCents,
         // The org-chart half of the offer. The schema is .strict(): exactly
-        // these two keys, id-or-null (null = top-level, reports to admin).
+        // these keys, id-or-null (null = top-level, reports to admin).
         invitedRole: inviteRole,
         invitedSupervisorId: effectiveInviteSupervisorId,
+        // Per-hire override rates (null = inherit the org default).
+        invitedOverrideTeamLeadCents: overrideDollarsToCents(inviteOverrideTlDollars),
+        invitedOverrideManagerCents: overrideDollarsToCents(inviteOverrideMgrDollars),
       };
       if (terms.structure === "FLAT") body.flatRateCents = terms.flatRateCents ?? 0;
       // THE LADDER. `id` is stripped because the invite schema is .strict() and
@@ -360,7 +401,9 @@ export default function Applications() {
       return apiRequest("POST", "/api/onboarding/invitations", body).then(response => response.json());
     },
     onSuccess: (data: any) => {
-      setInviteName(""); setInviteEmail(""); refresh();
+      setInviteName(""); setInviteEmail("");
+      setInviteOverrideTlDollars(""); setInviteOverrideMgrDollars("");
+      refresh();
       toast({ title: "Private invitation sent", description: `${data.invitation.candidateName} received a secure 14-day application link.` });
     },
     onError: (error: any) => toast({ title: "Invitation not sent", description: error.message, variant: "destructive" }),
@@ -389,8 +432,13 @@ export default function Applications() {
         : undefined;
       // Role + upline the approval creates — explicit like `commission`, so
       // what the reviewer SEES is what the server assigns, never a fallback.
+      // The per-hire override rates ride the same object (null = inherit).
       const hierarchy = status === "approved"
-        ? { role: reviewRole, reportsToId: reviewSupervisorId }
+        ? {
+            role: reviewRole, reportsToId: reviewSupervisorId,
+            overrideTeamLeadCents: overrideDollarsToCents(reviewOverrideTlDollars),
+            overrideManagerCents: overrideDollarsToCents(reviewOverrideMgrDollars),
+          }
         : undefined;
       return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}`, { status, reviewNotes: reviewNotes || null, commission, hierarchy }).then(response => response.json());
     },
@@ -573,6 +621,49 @@ export default function Applications() {
             </div>
           </div>
 
+          {/* Per-hire override rates — what the upline keeps from each of this
+              hire's qualified sales. Blank = inherit the org default (shown as
+              the placeholder). Hidden for manager invites: managers sit at the
+              top of the chain, so no slot above them ever pays. Not part of
+              what the candidate sees or signs. */}
+          {inviteRole !== "manager" && (
+            <div className="rounded-xl border border-border bg-background/40 p-3" data-testid="invite-override-rates">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Upline keep per sale (overrides — not shown to the candidate)</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="invite-override-tl" className="mb-1 block text-[11px] text-muted-foreground">Team lead keeps</label>
+                  <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                    <span className="mr-1 text-sm text-muted-foreground">$</span>
+                    <input
+                      id="invite-override-tl" inputMode="decimal"
+                      value={inviteOverrideTlDollars}
+                      onChange={event => setInviteOverrideTlDollars(event.target.value)}
+                      placeholder={`${(orgOverrideTlCents / 100).toFixed(2)} (org default)`}
+                      className="w-full bg-transparent text-sm text-foreground outline-none"
+                      data-testid="invite-override-tl"
+                    />
+                    <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">/sale</span>
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="invite-override-mgr" className="mb-1 block text-[11px] text-muted-foreground">Manager keeps</label>
+                  <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                    <span className="mr-1 text-sm text-muted-foreground">$</span>
+                    <input
+                      id="invite-override-mgr" inputMode="decimal"
+                      value={inviteOverrideMgrDollars}
+                      onChange={event => setInviteOverrideMgrDollars(event.target.value)}
+                      placeholder={`${(orgOverrideMgrCents / 100).toFixed(2)} (org default)`}
+                      className="w-full bg-transparent text-sm text-foreground outline-none"
+                      data-testid="invite-override-mgr"
+                    />
+                    <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">/sale</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* The comp terms travel with the invite, state themselves in the
               candidate's commission agreement, and seed the rep's plan +
               reserve at approval. The SAME editor the agreements panel uses, so
@@ -677,6 +768,43 @@ export default function Applications() {
                     <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-400" data-testid="review-supervisor-offboarded">
                       The proposed supervisor{selected.invite.invitedSupervisorName ? ` (${selected.invite.invitedSupervisorName})` : ""} was offboarded — pick a replacement or approve as top-level.
                     </p>
+                  )}
+                  {/* Per-hire override rates — approval stamps these onto the new
+                      member's row (blank = inherit the org default). Hidden for
+                      manager approvals: no slot above a manager ever pays. */}
+                  {reviewRole !== "manager" && (
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2" data-testid="review-override-rates">
+                      <div>
+                        <label htmlFor="review-override-tl" className="mb-1 block text-[11px] text-muted-foreground">Team lead keeps /sale</label>
+                        <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                          <span className="mr-1 text-sm text-muted-foreground">$</span>
+                          <input
+                            id="review-override-tl" inputMode="decimal"
+                            value={reviewOverrideTlDollars}
+                            onChange={event => setReviewOverrideTlDollars(event.target.value)}
+                            placeholder={`${(orgOverrideTlCents / 100).toFixed(2)} (org default)`}
+                            disabled={reviewMutation.isPending}
+                            className="w-full bg-transparent text-sm text-foreground outline-none disabled:opacity-50"
+                            data-testid="review-override-tl"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="review-override-mgr" className="mb-1 block text-[11px] text-muted-foreground">Manager keeps /sale</label>
+                        <div className="flex h-10 items-center rounded-xl border border-border bg-background px-3">
+                          <span className="mr-1 text-sm text-muted-foreground">$</span>
+                          <input
+                            id="review-override-mgr" inputMode="decimal"
+                            value={reviewOverrideMgrDollars}
+                            onChange={event => setReviewOverrideMgrDollars(event.target.value)}
+                            placeholder={`${(orgOverrideMgrCents / 100).toFixed(2)} (org default)`}
+                            disabled={reviewMutation.isPending}
+                            className="w-full bg-transparent text-sm text-foreground outline-none disabled:opacity-50"
+                            data-testid="review-override-mgr"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </div>
                 <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commission &amp; reserve (what this approval pays)</h4><p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.commissionStructure ? "Opened on the terms this candidate was invited on. Approving assigns exactly what is shown." : "No terms travelled with this application, so the house plan is shown. Approving assigns exactly what is shown."}</p><CompTermsEditor value={reviewTerms} onChange={setReviewTerms} disabled={reviewMutation.isPending} /><textarea value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} placeholder="Decision reason / internal review notes" maxLength={1000} className="mt-3 min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none focus:border-primary" /><div className="mt-3 flex gap-2"><button onClick={() => reviewMutation.mutate({ status: "approved" })} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}Approve &amp; start onboarding</button><button onClick={() => {

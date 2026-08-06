@@ -8666,8 +8666,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // manager-chosen comp terms seed it (set just after the invite is loaded).
     let commission = req.body.commission;
     // Optional reviewer override of the invite's role/upline — mirrors how the
-    // `commission` object above outranks the invite's stored comp terms.
-    const hierarchy = req.body.hierarchy as { role?: string; reportsToId?: number | null } | undefined;
+    // `commission` object above outranks the invite's stored comp terms. The
+    // override*Cents keys are the per-hire override rates (what the TL/manager
+    // slots keep from this hire's sales); null = inherit the org default.
+    const hierarchy = req.body.hierarchy as {
+      role?: string; reportsToId?: number | null;
+      overrideTeamLeadCents?: number | null; overrideManagerCents?: number | null;
+    } | undefined;
+    for (const key of ["overrideTeamLeadCents", "overrideManagerCents"] as const) {
+      const v = hierarchy?.[key];
+      if (v !== undefined && v !== null && (!Number.isInteger(v) || v < 0 || v > 10_000_000)) {
+        return res.status(400).json({ error: `${key} must be a whole number of cents, or null to inherit the org default.` });
+      }
+    }
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
     }
@@ -8918,6 +8929,29 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             new Date().toISOString(),
             teamMemberId,
           );
+        }
+
+        // ── Per-hire override rates — reviewer's choice > invite's > inherit ─
+        // What the TL/manager slots keep from each of THIS hire's qualified
+        // sales. Stamped per COLUMN, and only where the member's rate is still
+        // NULL — an existing explicit rate on a reused roster member is a
+        // decision someone already made, never silently overwritten. Earned
+        // ledger rows carry frozen snapshots and are untouched either way.
+        if (teamMemberId != null) {
+          const resolvedTlCents = hierarchy?.overrideTeamLeadCents !== undefined
+            ? hierarchy.overrideTeamLeadCents
+            : (recruitingInvite?.invitedOverrideTeamLeadCents ?? null);
+          const resolvedMgrCents = hierarchy?.overrideManagerCents !== undefined
+            ? hierarchy.overrideManagerCents
+            : (recruitingInvite?.invitedOverrideManagerCents ?? null);
+          if (resolvedTlCents != null) {
+            rawDb.prepare(`UPDATE team_members SET override_team_lead_cents = ? WHERE id = ? AND override_team_lead_cents IS NULL`)
+              .run(resolvedTlCents, teamMemberId);
+          }
+          if (resolvedMgrCents != null) {
+            rawDb.prepare(`UPDATE team_members SET override_manager_cents = ? WHERE id = ? AND override_manager_cents IS NULL`)
+              .run(resolvedMgrCents, teamMemberId);
+          }
         }
 
         if (linkedRepNeedsRepair && userId != null && teamMemberId != null) {

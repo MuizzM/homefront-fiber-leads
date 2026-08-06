@@ -122,11 +122,16 @@ async function postInvite(session: string, body: Record<string, unknown>) {
 }
 
 /** Invite (as the manager) → apply on the invite token → attached application. */
-function invitedApplication(email: string, opts: { invitedRole?: any; invitedSupervisorId?: number | null } = {}) {
+function invitedApplication(email: string, opts: {
+  invitedRole?: any; invitedSupervisorId?: number | null;
+  invitedOverrideTeamLeadCents?: number | null; invitedOverrideManagerCents?: number | null;
+} = {}) {
   const invite = recruitingStore.createRecruitingInvite({
     tenantId: 1, candidateName: "Override Candidate", candidateEmail: email, invitedBy: managerUser.id,
     invitedRole: opts.invitedRole ?? null,
     invitedSupervisorId: opts.invitedSupervisorId ?? null,
+    invitedOverrideTeamLeadCents: opts.invitedOverrideTeamLeadCents ?? null,
+    invitedOverrideManagerCents: opts.invitedOverrideManagerCents ?? null,
   });
   recruitingStore.markRecruitingInviteSent(invite.id, "resend-invite");
   const token = recruitingStore.secureTokenForInvite(invite.id);
@@ -340,5 +345,58 @@ describe("commission.read.downline widens a team lead's read scope", () => {
       headers: { "x-session-id": teamLeadSession },
     });
     expect(stranger.status).toBe(403);
+  });
+});
+
+describe("per-hire override rates — chosen at invite time, stamped at approval", () => {
+  it("the invite POST accepts the rate keys and stores them on the invite", async () => {
+    const { status, body } = await postInvite(managerSession, {
+      name: "Rated Candidate", email: "rated@override.example.com",
+      invitedRole: "rep",
+      invitedOverrideTeamLeadCents: 1500,
+      invitedOverrideManagerCents: 5000,
+    });
+    expect(status).toBe(201);
+    const row = rawDb.prepare(
+      "SELECT invited_override_team_lead_cents AS tl, invited_override_manager_cents AS mgr FROM onboarding_recruiting_invites WHERE id = ?",
+    ).get(body.invitation.id) as any;
+    expect(row).toEqual({ tl: 1500, mgr: 5000 });
+  });
+
+  it("approval stamps the invite's rates onto the member row; NULL columns inherit the org default", async () => {
+    const { application } = invitedApplication("stamped@override.example.com", {
+      invitedRole: "rep",
+      invitedOverrideTeamLeadCents: 1500,
+      invitedOverrideManagerCents: null, // manager slot inherits
+    });
+    const { status } = await approve(application.id);
+    expect(status).toBe(200);
+    const member = memberByEmail("stamped@override.example.com");
+    expect(member.override_team_lead_cents).toBe(1500);
+    expect(member.override_manager_cents).toBeNull();
+  });
+
+  it("an explicit reviewer rate out-ranks the invite's, exactly like role and supervisor", async () => {
+    const { application } = invitedApplication("reviewed@override.example.com", {
+      invitedRole: "rep",
+      invitedOverrideTeamLeadCents: 1500,
+    });
+    const { status } = await approve(application.id, {
+      hierarchy: { role: "rep", reportsToId: null, overrideTeamLeadCents: 2200, overrideManagerCents: 8800 },
+    });
+    expect(status).toBe(200);
+    const member = memberByEmail("reviewed@override.example.com");
+    expect(member.override_team_lead_cents).toBe(2200);
+    expect(member.override_manager_cents).toBe(8800);
+  });
+
+  it("a garbage reviewer rate fails loud before any state changes", async () => {
+    const { application } = invitedApplication("garbage@override.example.com", { invitedRole: "rep" });
+    const { status } = await approve(application.id, {
+      hierarchy: { role: "rep", reportsToId: null, overrideTeamLeadCents: 25.5 },
+    });
+    expect(status).toBe(400);
+    // The 4xx left the application un-approved (the P0-1 ordering contract).
+    expect(memberByEmail("garbage@override.example.com")).toBeUndefined();
   });
 });
