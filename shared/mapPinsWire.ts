@@ -44,7 +44,6 @@ export const MAP_PIN_WIRE_FIELDS = [
 ] as const;
 
 export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];
-export type WirePin = Record<MapPinWireField, unknown>;
 
 export interface PackedMapPins {
   v: typeof MAP_PINS_WIRE_VERSION;

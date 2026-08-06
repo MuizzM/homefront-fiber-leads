@@ -128,22 +128,6 @@ export function classifyKnockLocation(input: KnockLocationInput, config: GeoConf
   return { status: "verified", distanceM, accuracyM, reasons: [] };
 }
 
-// Human-readable copy for each reason key (UI tooltips / review labels). Kept
-// beside the logic so a new reason can never ship without an explanation.
-export const REASON_LABELS: Record<string, string> = {
-  mock_location: "Mock or spoofed location detected on the device",
-  duplicate: "Duplicate submission for this lead",
-  timestamp_future: "Device clock reported a future time (possible tampering)",
-  impossible_speed: "Impossible travel speed since the previous mark",
-  location_unavailable: "Rep location was unavailable when marked",
-  lead_location_missing: "Lead has no stored coordinates to compare against",
-  offline_pending: "Marked offline — pending sync verification",
-  accuracy_unknown: "GPS accuracy was not reported",
-  poor_accuracy: "GPS accuracy was worse than the allowed threshold",
-  timestamp_missing: "No valid device timestamp for the mark",
-  outside_radius: "Rep was outside the allowed distance from the lead",
-};
-
 
 // Does this activity count toward "Area Worked"? ONLY verified work does — the
 // single rule the whole percentage depends on, expressed once.

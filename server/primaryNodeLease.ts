@@ -129,8 +129,3 @@ export function startPrimaryElection(): boolean {
   return isPrimary;
 }
 
-export function stopPrimaryElectionForTest(): void {
-  if (renewTimer) clearInterval(renewTimer);
-  renewTimer = null;
-  isPrimary = false;
-}

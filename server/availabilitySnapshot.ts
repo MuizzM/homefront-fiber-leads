@@ -248,8 +248,6 @@ function ensureLifecycleSchema(): void {
   }
   _lifecycleSchemaReady = true;
 }
-/** Test hook: a new DATA_DIR in the same process must re-ensure the schema. */
-export function __resetLifecycleSchemaCache(): void { _lifecycleSchemaReady = false; }
 
 // Informational dedup/debug key for watchlist rows. The REAL dedup key is the
 // UNIQUE scan_target_id; this stays a simple local canonicalization on purpose —

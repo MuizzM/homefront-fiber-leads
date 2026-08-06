@@ -8,9 +8,8 @@ import {
   users, sessions, otpCodes, territories, repApplications,
   territoryRequests, locationPings, clockSessions,
   commissions, commissionRates, activityLog, tenants,
-  activityOverrides, leadPhotos,
+  leadPhotos,
   type LeadPhoto,
-  type ActivityOverride,
   type Lead, type InsertLead,
   type FiberCheck, type InsertFiberCheck,
   type TeamMember, type InsertTeamMember,
@@ -27,7 +26,7 @@ import {
   type ActivityLogEntry,
   type Tenant, type InsertTenant,
 } from "@shared/schema";
-import { eq, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { eq, desc, or, and, gt, lt, isNull, inArray, sql } from "drizzle-orm";
 
 /** Statuses that BLOCK a new commission on the same door.
  *
@@ -290,6 +289,18 @@ export type LeadDeleteResult =
   | { deleted: false; reason: "not_found" }
   | { deleted: false; reason: "has_history"; knocks: number; commissions: number; photos: number };
 
+// What a set-based territory lead write actually did.
+//
+//  changed — the TRUE changed-row count (SQLite's .changes), which is what the
+//            routes hand back as leadsAffected/leadsReleased. It counts rows the
+//            statement moved, never rows it merely considered: each primitive's
+//            predicate IS the diff the per-lead loop used to walk, so a door
+//            already in the target state is not selected and not counted.
+//  leadIds — those same rows' ids, read in the same transaction as the write.
+//            The loops these replaced emitted one live assignment event per
+//            moved door; the caller replays exactly that set from this list.
+export interface TerritoryLeadWrite { changed: number; leadIds: number[] }
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
@@ -309,7 +320,6 @@ export interface IStorage {
   // the wide-zoom sampler's step calculation (only runs when a window
   // overflows the row cap, so the extra indexed count stays rare).
   getLeadsMapWindowCount(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapPinWindow): number;
-  getFreshLeads(tenantId: number | undefined, assignedRep: number | number[] | undefined, opts: { city?: string; state?: string; days: number }): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }>;
   getLeadsPage(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
@@ -386,7 +396,6 @@ export interface IStorage {
   setSetting(key: string, value: string, updatedBy?: number | null, tenantId?: number | null): void;
   getGeoConfig(tenantId?: number | null): GeoConfig;
   overrideKnockVerification(knockId: number, newStatus: string, reason: string, actorUserId: number | null, actorName: string | null): Knock | undefined;
-  getActivityOverrides(knockId: number): ActivityOverride[];
   getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
   // ── Leaderboard ────────────────────────────────────────────────────────────
   getLeaderboard(window?: { since?: string; until?: string }): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number; knocksToday: number; salesToday: number }[];
@@ -420,6 +429,17 @@ export interface IStorage {
    * assignment paperwork cleared; the territory link stays). Returns the
    * changed-row count. */
   bulkUnassignTerritoryLeads(opts: { territoryId: number; at: string }): number;
+  /** Hand an area's doors to `repId` — EXCEPT the ones a rep in `keepRepIds`
+   *  already holds, who keep theirs untouched. */
+  bulkAssignTerritoryLeadsExcept(opts: {
+    territoryId: number; repId: number; at: string; keepRepIds: number[];
+    assignmentSource?: string; tenantId?: number;
+  }): TerritoryLeadWrite;
+  /** Empty an area: every door still held goes back to the open pool — no rep
+   *  AND no area. */
+  bulkReturnTerritoryLeadsToPool(opts: { territoryId: number; at: string; tenantId?: number }): TerritoryLeadWrite;
+  /** Take ONE rep off an area's doors. The AREA keeps them. */
+  bulkReleaseTerritoryLeadsFromRep(opts: { territoryId: number; repId: number; at: string; tenantId?: number }): TerritoryLeadWrite;
   addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void;
   addLeadEvent(leadId: number, type: "assignment" | "note", actor: string | null, detail?: unknown): void;
   getLeadEvents(leadId: number, limit?: number): { id: number; leadId: number; type: string; actor: string | null; detail: any; at: string }[];
@@ -3634,52 +3654,6 @@ export class Storage implements IStorage {
     return rows;
   }
 
-  // Recently-discovered leads for the "fresh leads" feed: created within the last
-  // `days`, tenant + rep-scope filtered, optionally narrowed to a city/state.
-  // Newest first, capped. Slim projection — the map only needs point + status +
-  // competitor. Same scoping model as getLeadsForMap (fail-closed for reps).
-  getFreshLeads(
-    tenantId: number | undefined,
-    assignedRep: number | number[] | undefined,
-    opts: { city?: string; state?: string; days: number; status?: "available" | "coming_soon"; carrier?: string },
-  ): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null; carrier: string | null }> {
-    const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(Math.floor(opts.days), 365) : 30;
-    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
-    const conditions: any[] = [
-      sql`${leads.createdAt} >= ${cutoff}`,
-      eq(leads.leadTag, "fresh_fiber_confirmed"),
-      eq(leads.freshConfidence, "cross_verified"),
-      isNotNull(leads.sourceScanTargetId),
-      isNotNull(leads.freshConfirmedAt),
-    ];
-    if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
-    if (Array.isArray(assignedRep)) {
-      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
-    } else if (assignedRep != null) {
-      conditions.push(eq(leads.assignedRepId, assignedRep));
-    }
-    if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
-    if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
-    // Carrier filter: Kinetic and Frontier are separate product lines that share the
-    // fresh_fiber_confirmed tag. Without this the Kinetic Fresh feed would silently
-    // mix in Frontier (red) leads — the Durham confusion. 'kinetic' also matches the
-    // pre-carrier default so legacy rows aren't dropped.
-    if (opts.carrier === "kinetic") conditions.push(sql`(${leads.id} IS NOT NULL AND (carrier IS NULL OR carrier = 'kinetic'))`);
-    else if (opts.carrier) conditions.push(sql`carrier = ${opts.carrier}`);
-    // status filter: coming_soon = pre-launch fiber (leadTag), available = serviceable now.
-    if (opts.status === "coming_soon") conditions.push(eq(leads.leadTag, "coming_soon"));
-    else if (opts.status === "available") conditions.push(sql`(${leads.leadTag} IS NULL OR ${leads.leadTag} <> 'coming_soon')`);
-    return db.select({
-      id: leads.id, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
-      competitorName: leads.competitorName, address: leads.address, city: leads.city,
-      state: leads.state, createdAt: leads.createdAt, carrier: sql<string | null>`carrier`,
-    }).from(leads)
-      .where(and(...conditions))
-      .orderBy(sql`${leads.createdAt} DESC`)
-      .limit(2000)
-      .all();
-  }
-
   // Paged list query for /api/leads — filters + ORDER BY + LIMIT/OFFSET pushed
   // into SQL (the route used to hydrate EVERY tenant row to serve a 200-row
   // page). Count runs the same WHERE. Scope conditions identical to getLeads.
@@ -4461,10 +4435,6 @@ export class Storage implements IStorage {
       .set({ verificationStatus: newStatus, reviewReason: `override by ${actorName ?? "admin"}: ${reason}` })
       .where(eq(knockLog.id, knockId)).returning().get();
   }
-  getActivityOverrides(knockId: number): ActivityOverride[] {
-    return db.select().from(activityOverrides).where(eq(activityOverrides.knockId, knockId)).orderBy(desc(activityOverrides.at)).all();
-  }
-
   // Per-lead visit summary for the map: leadId → { count, lastOutcome, lastAt }.
   // Single window-function pass (was: a correlated subquery re-sorting each
   // lead's knocks per group — O(k·per-lead sort) and it scanned every tenant's
@@ -4720,7 +4690,10 @@ export class Storage implements IStorage {
     const condition = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
     return db.select().from(territories).where(condition).get();
   }
-  // Leads currently linked to a territory (area-sync). Used by reclaim.
+  // Leads currently linked to a territory (area-sync). Full-row hydration, so
+  // it is a READ helper, not the way to move an area's doors — the lifecycle
+  // routes used to hydrate the whole area here only to diff it and write it
+  // back one row at a time, and now use the set-based primitives below.
   getLeadsByTerritory(territoryId: number): Lead[] {
     return db.select().from(leads).where(eq(leads.assignedTerritoryId, territoryId)).all();
   }
@@ -4773,6 +4746,118 @@ export class Storage implements IStorage {
     const { changes, tenantId } = tx.immediate();
     if (changes > 0) bustPinCaches(tenantId);
     return changes;
+  }
+
+  // ── Set-based territory lead writes, part two ────────────────────────────
+  //
+  // The two primitives above move an area's WHOLE door list. The three below
+  // are the ones the lifecycle routes actually needed and could not express
+  // with a blanket update, so each kept its per-lead `updateLead` loop:
+  //
+  //   share    — must not touch a co-assignee's doors (a blanket update steals
+  //              them and resets their assigned_at);
+  //   reclaim  — return_to_pool must also clear the AREA LINK, which
+  //              bulkUnassignTerritoryLeads deliberately preserves;
+  //   unassign — must reach ONE rep's doors, and retires the assignment
+  //              paperwork (assigned_by/assigned_at) as well.
+  //
+  // All three share one shape: the WHERE clause IS the diff the loop used to
+  // walk row by row, so the count is honest without inspecting anything twice.
+  //
+  // NO leaderboard bump, on purpose. `updateLead` bumps it because it can flip
+  // lead_status, which the board's sold gate reads. computeLeaderboard groups
+  // knock_log by rep_id and touches exactly one leads column — lead_status —
+  // so moving an ASSIGNMENT cannot change a board number, and bumping would
+  // throw away every viewer's memoised aggregate for nothing.
+  //
+  /** SELECT the doors that move, then move them in ONE UPDATE driven by those
+   *  exact ids — both inside one transaction, so the ids the caller replays
+   *  events from and the rows the statement wrote are the same set, and one
+   *  pin-cache bust after it commits (never inside: a rollback would leave an
+   *  announced change that never happened). json_each carries the id list as a
+   *  single bound parameter, so a 20k-door area is still one statement. */
+  private moveTerritoryLeads(spec: {
+    where: string; whereParams: Record<string, unknown>;
+    set: string; setParams: Record<string, unknown>;
+  }): TerritoryLeadWrite {
+    const tx = rawDb.transaction((): TerritoryLeadWrite & { owner?: number | null } => {
+      const rows = rawDb.prepare(
+        `SELECT id, tenant_id AS tenantId FROM leads WHERE ${spec.where}`
+      ).all(spec.whereParams) as Array<{ id: number; tenantId: number | null }>;
+      if (rows.length === 0) return { changed: 0, leadIds: [] };
+      const leadIds = rows.map(r => r.id);
+      const changed = rawDb.prepare(
+        `UPDATE leads SET ${spec.set} WHERE id IN (SELECT value FROM json_each(@ids))`
+      ).run({ ...spec.setParams, ids: JSON.stringify(leadIds) }).changes;
+      return { changed, leadIds, owner: rows[0].tenantId };
+    });
+    const { changed, leadIds, owner } = tx.immediate();
+    if (changed > 0) bustPinCaches(owner);
+    return { changed, leadIds };
+  }
+  // Hand the area's doors to `repId` — but a door one of `keepRepIds` already
+  // holds is NOT a hand-off, it is that rep's work, and re-stamping it would
+  // both steal it and restart its "assigned since" clock. The crew that stays
+  // on the area keeps exactly what it had.
+  bulkAssignTerritoryLeadsExcept(opts: {
+    territoryId: number; repId: number; at: string; keepRepIds: number[];
+    assignmentSource?: string; tenantId?: number;
+  }): TerritoryLeadWrite {
+    const whereParams: Record<string, unknown> = {
+      territoryId: opts.territoryId,
+      keep: JSON.stringify(opts.keepRepIds.map(Number)),
+    };
+    if (opts.tenantId != null) whereParams.tenantId = opts.tenantId;
+    return this.moveTerritoryLeads({
+      // NOT IN never matches a NULL left operand, so an unheld door has to be
+      // named on its own — and those are precisely the doors a hand-off picks up.
+      where: `assigned_territory_id = @territoryId
+                ${opts.tenantId != null ? "AND tenant_id = @tenantId" : ""}
+                AND (assigned_rep_id IS NULL
+                     OR assigned_rep_id NOT IN (SELECT value FROM json_each(@keep)))`,
+      whereParams,
+      set: `assigned_rep_id = @repId, assigned_territory_id = @territoryId,
+            assignment_source = @source, assigned_at = @at, updated_at = @at`,
+      setParams: {
+        repId: Number(opts.repId), territoryId: opts.territoryId,
+        source: opts.assignmentSource ?? "territory-sync", at: opts.at,
+      },
+    });
+  }
+  // Empty the area: every door somebody still holds goes back to the open pool
+  // — no rep AND no area, because the area itself is being given up. (Contrast
+  // bulkUnassignTerritoryLeads, which keeps the link: there the area lives on.)
+  // A door already in the pool is not selected, so it keeps whatever link it
+  // has and never inflates the count.
+  bulkReturnTerritoryLeadsToPool(opts: { territoryId: number; at: string; tenantId?: number }): TerritoryLeadWrite {
+    const whereParams: Record<string, unknown> = { territoryId: opts.territoryId };
+    if (opts.tenantId != null) whereParams.tenantId = opts.tenantId;
+    return this.moveTerritoryLeads({
+      where: `assigned_territory_id = @territoryId AND assigned_rep_id IS NOT NULL
+              ${opts.tenantId != null ? "AND tenant_id = @tenantId" : ""}`,
+      whereParams,
+      set: `assigned_rep_id = NULL, assigned_territory_id = NULL,
+            assignment_source = NULL, unassigned_at = @at, updated_at = @at`,
+      setParams: { at: opts.at },
+    });
+  }
+  // Take ONE rep off the area's doors. The AREA KEEPS THEM: a shared patch the
+  // co-assignees still walk must not lose ground because one person left, so
+  // assigned_territory_id stays put and only the person goes. The assignment
+  // paperwork goes with them — assigned_by/assigned_at name a hand-off that is
+  // over, and left behind they print "assigned by Mona" under an empty owner.
+  bulkReleaseTerritoryLeadsFromRep(opts: { territoryId: number; repId: number; at: string; tenantId?: number }): TerritoryLeadWrite {
+    const whereParams: Record<string, unknown> = { territoryId: opts.territoryId, repId: Number(opts.repId) };
+    if (opts.tenantId != null) whereParams.tenantId = opts.tenantId;
+    return this.moveTerritoryLeads({
+      where: `assigned_territory_id = @territoryId AND assigned_rep_id = @repId
+              ${opts.tenantId != null ? "AND tenant_id = @tenantId" : ""}`,
+      whereParams,
+      set: `assigned_rep_id = NULL, assignment_source = NULL,
+            assigned_by = NULL, assigned_at = NULL,
+            unassigned_at = @at, updated_at = @at`,
+      setParams: { at: opts.at },
+    });
   }
   // Immutable territory history
   addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void {
