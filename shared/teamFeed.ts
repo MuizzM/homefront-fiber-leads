@@ -34,6 +34,8 @@
 //
 // PURE: no clock, no database, no I/O.
 
+import { usd } from "./moneyFormat";
+
 export type AnnouncementKind =
   /** A teammate closed one. Proof the street is live. */
   | "sale"
@@ -87,13 +89,10 @@ export function shortName(fullName: string | null | undefined): string {
   return `${parts[0]} ${parts[parts.length - 1]![0]!.toUpperCase()}.`;
 }
 
-export function usd(c: number): string {
-  const v = Math.trunc(Number.isFinite(c) ? c : 0);
-  const whole = Math.floor(Math.abs(v) / 100).toLocaleString("en-US");
-  const rem = Math.abs(v) % 100;
-  const body = rem === 0 ? `$${whole}` : `$${whole}.${String(rem).padStart(2, "0")}`;
-  return v < 0 ? `-${body}` : body;
-}
+/** The one definition lives in ./moneyFormat (dependency-free, see its header
+ *  for the bundle rationale). Re-exported here so existing importers keep
+ *  working — the import flows INTO this module, never out of it. */
+export { usd };
 
 export interface SaleFacts {
   repId: number;

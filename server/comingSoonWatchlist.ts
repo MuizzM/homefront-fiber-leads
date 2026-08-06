@@ -308,10 +308,6 @@ export function startComingSoonWatchlist(): NodeJS.Timeout | null {
 }
 
 /** Test/shutdown hook. */
-export function stopComingSoonWatchlist(): void {
-  if (timer) clearInterval(timer);
-  timer = null;
-}
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;

@@ -323,9 +323,6 @@ export function registerKineticEvidenceSource(
 ): void {
   gateway.register(adapter);
 }
-export function clearKineticEvidenceSource(): void {
-  gateway.clear();
-}
 export function setKineticEvidenceSourceForTest(
   adapter: KineticEvidenceSourceAdapter | null,
 ): void {

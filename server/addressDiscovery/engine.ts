@@ -806,9 +806,3 @@ export function startDiscoveryWorkers(): void {
   wakeDiscoveryWorkers();
 }
 
-export function stopDiscoveryWorkersForTest(): void {
-  if (scheduler) clearInterval(scheduler);
-  if (reconciler) clearInterval(reconciler);
-  scheduler = null;
-  reconciler = null;
-}

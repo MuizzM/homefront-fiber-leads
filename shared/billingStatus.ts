@@ -18,6 +18,3 @@ export function isActiveBilling(billing: unknown): boolean {
 }
 
 /** True for the Fresh-Lead billing signal: explicitly no active account. */
-export function isNoActiveBilling(billing: unknown): boolean {
-  return String(billing ?? "").trim().toUpperCase() === "N";
-}

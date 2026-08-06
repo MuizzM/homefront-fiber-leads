@@ -617,18 +617,6 @@ export function scannerState(tenantId: number): any {
   };
 }
 
-export function setScannerBounds(
-  tenantId: number,
-  current: number,
-  upper: number,
-): void {
-  rawDb
-    .prepare(
-      `INSERT INTO kinetic_scanner_state (tenant_id,current_sequential_id,upper_limit) VALUES (?,?,?)
-    ON CONFLICT(tenant_id) DO UPDATE SET current_sequential_id=excluded.current_sequential_id,upper_limit=excluded.upper_limit,updated_at=datetime('now')`,
-    )
-    .run(tenantId, current, upper);
-}
 
 export function stats(tenantId: number): any {
   const totals = rawDb

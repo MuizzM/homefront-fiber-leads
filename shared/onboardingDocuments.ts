@@ -41,10 +41,6 @@ export const ONBOARDING_DOCUMENT_STATUSES = [
 ] as const;
 export type OnboardingDocumentStatus = typeof ONBOARDING_DOCUMENT_STATUSES[number];
 
-export const ACTIVE_DOCUMENT_STATUSES = new Set<OnboardingDocumentStatus>([
-  "creating", "sent", "delivered",
-]);
-
 export function canOpenSigning(status: OnboardingDocumentStatus): boolean {
   return status === "sent" || status === "delivered";
 }

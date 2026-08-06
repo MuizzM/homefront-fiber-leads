@@ -391,6 +391,8 @@ const SANITIZE_EXEMPT_PATHS = new Set([
   // Fixed server-owned projection with no secret fields. Skipping the generic
   // recursive sanitizer avoids cloning up to 5,000+ rows before serialization.
   "/api/leads/map",
+  // Same justification: three numbers per cell, up to 5,000 cells per pan.
+  "/api/leads/map/grid",
   // These manager-only endpoints intentionally return the candidate-specific
   // application URL so an operator can copy it. The URL's HMAC token looks
   // JWT-like to the generic redactor but grants only one pre-account application.

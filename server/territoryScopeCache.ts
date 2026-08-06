@@ -29,9 +29,6 @@ export function bumpTerritoryVersion(): void {
   version++;
 }
 
-export function territoryVersion(): number {
-  return version;
-}
 
 interface Entry {
   version: number;
@@ -70,7 +67,3 @@ export function cachedScopeLookup(
 }
 
 /** Test seam. Production never needs this — the stamp handles invalidation. */
-export function resetTerritoryScopeCache(): void {
-  cache.clear();
-  version++;
-}

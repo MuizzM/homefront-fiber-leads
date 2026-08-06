@@ -112,7 +112,7 @@ import { isCommissionHeld, payableAfterFor, HOLD_DAYS_MAX } from "@shared/commis
 import type { CommissionTier } from "@shared/commissionTiers";
 import type { CommissionTerms } from "@shared/commissionTerms";
 import { getHrCheckpoint, listHrCheckpoints, setHrCheckpoint, summariseHr } from "./onboardingHrStore";
-import { gustoConfigured, verifyGustoConnection } from "./gustoAdapter";
+import { verifyGustoConnection } from "./gustoAdapter";
 import {
   HR_CHECKPOINT_META,
   isHrCheckpointKind,
@@ -226,7 +226,7 @@ import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { getFiberChanges, getCopperPool } from "./fiberTransitions";
-import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter, chatPostLimiter } from "./limiters";
+import { authorizedScanAdmission, onboardingLimiter, geocodeLimiter, rescanPoolLimiter, chatPostLimiter } from "./limiters";
 import { scanSseCaps } from "./scanSseCaps";
 import { otpRateBuckets } from "./otpRateBuckets";
 import { validateLeadPatch, rescanPoolPlan, clampActivityLogLimit, validateTerritoryRequestMessage, filterInChunks, RESCAN_POOL_MAX_TARGETS, RESCAN_POOL_CHUNK_SIZE as RESCAN_POOL_CHUNK } from "./routeInputPolicy";
@@ -241,7 +241,6 @@ import { flushFreshOpportunityAlerts, getStateMonitorStatus, runStateMonitorTick
 import { announcementSourceStatus, pollAnnouncementsIfDue } from "./announcementWatcher";
 import { CATALOG_OBSERVED_AT, KINETIC_DIRECTORY_URLS, refreshKineticLocationDirectory } from "./kineticMarketCatalog";
 import * as sweepService from "./sweepService";
-import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { validateScanBbox, adaptiveGridStep, pooledMap, backoffDelayMs, type BboxLL } from "./bboxScan";
@@ -272,6 +271,42 @@ function normalizeAddrForDedup(addr: string): string {
     .split(" ")
     .map(w => SUFFIX_MAP[w] ?? w)
     .join(" ");
+}
+
+// The scan/import dedup sites only ever need the normalized-address set — one
+// narrow single-column read instead of hydrating every ~45-column lead row
+// (plus an ORDER BY nothing consumed) through storage.getLeads. No tenantId
+// keeps the cross-tenant semantics the unscoped call sites had.
+function existingAddrDedupSet(tenantId?: number): Set<string> {
+  const rows = (tenantId != null
+    ? rawDb.prepare(`SELECT address FROM leads WHERE tenant_id = ?`).all(tenantId)
+    : rawDb.prepare(`SELECT address FROM leads`).all()) as Array<{ address: string | null }>;
+  return new Set(rows.map((r) => normalizeAddrForDedup(r.address || "")));
+}
+
+// Bbox prefilter for the polygon-enclosure scans: candidates come from an
+// indexed lat/lng window instead of hydrating every tenant lead, and
+// polygonCovers then makes the exact call on the survivors only. Rings are
+// stored [lng, lat] (shared/geo.ts). The box is padded by the same epsilon
+// that makes a boundary door count, so a door sitting a hair outside the box
+// but on the line is still tested. Rows with NULL coords fall out of BETWEEN
+// exactly as the callers' `lat != null && lng != null` guards dropped them.
+function leadsInRingBbox(polygon: [number, number][], tenantId: number | undefined, columns: string): any[] {
+  if (!Array.isArray(polygon) || polygon.length < 3) return [];
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  for (const p of polygon) {
+    const lng = p?.[0], lat = p?.[1];
+    if (lng < w) w = lng;
+    if (lng > e) e = lng;
+    if (lat < s) s = lat;
+    if (lat > n) n = lat;
+  }
+  const pad = BOUNDARY_EPSILON_DEG;
+  const tenantAnd = tenantId != null ? " AND tenant_id = ?" : "";
+  return rawDb.prepare(
+    `SELECT ${columns} FROM leads
+      WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?${tenantAnd}`,
+  ).all(s - pad, n + pad, w - pad, e + pad, ...(tenantId != null ? [tenantId] : []));
 }
 
 // ── Email (Resend/SMTP via env — see server/mail.ts; dev console fallback) ──
@@ -691,6 +726,17 @@ function emitLeadChangesBulk(type: LeadEventType, leadIds: number[], actor: any,
     emitLeadChangeById(type, leadIds[i], actor, tenantIdFallback);
   }
 }
+
+// Version stamp for each lead stream's memoised access inputs (visibility
+// scope roster + open-field flag) — same pattern as cachedScopeLookup: bumped
+// UNCONDITIONALLY on every team write and tenant-config write, never by
+// reasoning about which fields matter. Uncached, a team_lead subscriber
+// re-hydrated the tenant roster on EVERY event delivered — 200-400 DB reads
+// per second of pure fan-out on a busy floor with the stream cap full.
+// Module-level: the team routes live in registerRoutes, the tenant PATCH in
+// registerSaasRoutes, and both must move the same stamp.
+let streamAccessVersion = 1;
+function bumpStreamAccessVersion(): void { streamAccessVersion++; }
 
 // Tenant wall for rep-targeting writes (clock, pings, manual commissions):
 // a caller may only act on a team member inside their own org. Fail closed on
@@ -1976,9 +2022,32 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // The subscriber's scope roster and open-field flag are resolved ONCE at
+    // connect and reused per event, re-resolved only when the version stamp
+    // moves (team write / tenant-config write). The predicate itself is the
+    // same repCanAccessLead chain; territoryIdsForScope keeps its own
+    // territory-write stamp. Staleness beyond the stamps stays bounded by the
+    // existing safety net: the data-free map-changed ping + ETag poll re-apply
+    // full scoping on every refetch.
+    let accessVersion = -1;
+    let accessScope: number | number[] | undefined;
+    let accessOpenField = false;
     const deliver = (evt: LeadEvent) => {
       if (evt.tenantId !== tenantId) return;
-      if (!repCanAccessLead(user, evt.lead)) return;
+      if (accessVersion !== streamAccessVersion) {
+        accessVersion = streamAccessVersion;
+        accessScope = leadVisibilityScope(user);
+        accessOpenField = storage.openFieldEnabled(user?.tenantId);
+      }
+      if (accessScope !== undefined) {
+        if (!evt.lead) return;
+        if (!repCanWorkLead(
+          evt.lead,
+          accessScope as number[],
+          territoryIdsForScope(accessScope as number[], user?.tenantId),
+          accessOpenField,
+        )) return;
+      }
       send("lead", evt, `${evt.epoch}.${evt.seq}`);
     };
 
@@ -2505,35 +2574,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // minted URL, and deleting one only stops that device receiving.
     if (typeof endpoint === "string" && endpoint) removeSubscription(endpoint);
     res.json({ ok: true });
-  });
-
-  // GET /api/leads/fresh — confirmed fresh-fiber leads published within the last
-  // ?days (default 30, clamped 1..365), as slim GeoJSON for map pins. Row-level
-  // scoped exactly like /api/leads/map (reps see only their own). ?city & ?state
-  // narrow it (e.g. Lexington, NC). Properties are intentionally minimal:
-  // {id, status, competitor_flag} — the detail comes from GET /api/leads/:id on tap.
-  app.get("/api/leads/fresh", requireAuth, (req: any, res: any) => {
-    const user = req.user;
-    const tid = user?.tenantId ?? undefined;
-    const repFilter = leadVisibilityScope(user);
-    const q = req.query ?? {};
-    const city = typeof q.city === "string" && q.city.trim() ? String(q.city).trim().slice(0, 60) : undefined;
-    const state = typeof q.state === "string" && q.state.trim() ? String(q.state).trim().slice(0, 20) : undefined;
-    const daysN = Number(q.days);
-    const days = Number.isFinite(daysN) && daysN > 0 ? Math.min(Math.floor(daysN), 365) : 30;
-    const status = q.status === "available" || q.status === "coming_soon" ? q.status : undefined;
-    // carrier filter: 'kinetic' (default view for a Kinetic operation) | 'frontier' |
-    // omitted (all). Keeps Frontier a real line while never letting it read as Kinetic.
-    const carrier = typeof q.carrier === "string" && q.carrier.trim() ? String(q.carrier).trim().toLowerCase().slice(0, 20) : undefined;
-    const rows = storage.getFreshLeads(tid, repFilter, { city, state, days, status, carrier });
-    const features = rows
-      .filter((r) => r.lat != null && r.lng != null)
-      .map((r) => ({
-        type: "Feature" as const,
-        geometry: { type: "Point" as const, coordinates: [r.lng, r.lat] },
-        properties: { id: r.id, status: r.leadStatus, competitor_flag: r.competitorName ? 1 : 0, carrier: r.carrier ?? "kinetic" },
-      }));
-    res.json({ type: "FeatureCollection", features, count: features.length, days, city: city ?? null, state: state ?? null, status: status ?? null });
   });
 
   app.get("/api/leads", requireAuth, (req, res) => {
@@ -3673,7 +3713,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } catch {}
 
     // Dedup against existing leads so we don't re-scan/re-create known addresses.
-    const existingSet = new Set(storage.getLeads(tenantId).map((l: any) => normalizeAddrForDedup(l.address)));
+    const existingSet = existingAddrDedupSet(tenantId);
     const newAddrs = addresses.filter((a: any) => !existingSet.has(normalizeAddrForDedup(a.address || "")));
 
     // Homes ARE here, but every one is already in leads — a real, non-error state.
@@ -3795,7 +3835,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // Job-level dedupe: never re-scan an address across overlapping tile edges or
     // one already in leads — kills the cross-tile double-spend + inflated totals.
-    const seen = new Set<string>(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address || "")));
+    const seen = existingAddrDedupSet();
     let remaining = budget;
     const include = deep ? undefined : (["parcel", "rooftop", "overpass"] as const).slice();
 
@@ -3884,9 +3924,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           // Deduplicate against existing leads before scanning.
           // Use normalizeAddrForDedup() to expand abbreviations so
           // "Bell Ridge Court" (Mapbox) matches "Bell Ridge Ct" (DB canonical).
-          const existingAddrs = new Set(
-            storage.getLeads().map(l => normalizeAddrForDedup(l.address))
-          );
+          const existingAddrs = existingAddrDedupSet();
           const newAddresses = mapboxAddresses.filter(
             a => !existingAddrs.has(normalizeAddrForDedup(a.address))
           );
@@ -4089,7 +4127,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } catch {}
 
     // Dedup against existing leads (normalize suffixes for Court/Ct, Drive/Dr, etc.)
-    const existingSet = new Set(storage.getLeads(tenantId).map((l: any) => normalizeAddrForDedup(l.address)));
+    const existingSet = existingAddrDedupSet(tenantId);
     const newAddrs = addresses.filter((a: any) => !existingSet.has(normalizeAddrForDedup(a.address || "")));
 
     const jobId = `city_${city.toLowerCase().replace(/\s+/g, "_")}_${Date.now()}`;
@@ -4397,23 +4435,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }));
   });
 
-  // ═══ MARKET BIRTH RADAR — transition intelligence (read; manager+, tenant-scoped) ═══
-  // The command-center overview: monitored targets, freshness, and how many
-  // addresses are baseline / candidate / verified New Fiber. ZERO proxy.
-  app.get("/api/radar/overview", requireManager, (req: any, res) => {
-    res.json(radarStore.radarOverview(tid(req)));
-  });
-  // The "what changed" feed — transition episodes with their honest
-  // interval-censored detection window. Never leaks provider ids/credentials.
-  app.get("/api/radar/transitions", requireManager, (req: any, res) => {
-    res.json({ transitions: radarStore.radarTransitions(tid(req), { status: qstr(req.query.status) || undefined, limit: req.query.limit ? Number(req.query.limit) : undefined }) });
-  });
-  app.get("/api/radar/transitions/:id", requireManager, (req: any, res) => {
-    const ep = radarStore.radarTransition(tid(req), Number(req.params.id));
-    if (!ep) return res.status(404).json({ error: "Transition not found" });
-    res.json(ep);
-  });
-
   // Preview a budgeted run's cost — how many addresses would be verified and what
   // it would cost. NO spend. Estimate-first is a hard product rule (two prior
   // billing incidents). Admin only (it reveals spend controls).
@@ -4555,8 +4576,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // routes — boundary doors count within the shared epsilon. This path used
       // strict pointInPolygon on a 40 m-padded ring, so the identical drawn
       // shape enclosed a different door set depending on which route saved it.
-      enclosed = storage.getLeads(t).filter((l: any) =>
-        l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, polygon as [number, number][]) && canReassignLead(user, l));
+      // Candidates come from the ring's bbox (indexed), not a full-tenant walk;
+      // the projection carries exactly what the split/briefing below reads.
+      enclosed = leadsInRingBbox(polygon as [number, number][], t,
+        "id, lat, lng, assigned_rep_id AS assignedRepId, lead_score AS leadScore, competitor_name AS competitorName, lead_tag AS leadTag, fresh_confidence AS freshConfidence",
+      ).filter((l: any) => polygonCovers(l.lat, l.lng, polygon as [number, number][]) && canReassignLead(user, l));
     }
     if (enclosed.length === 0) return res.status(409).json({ error: "No assignable leads inside this cluster" });
 
@@ -4711,7 +4735,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Only re-check addresses that aren't already leads; confirmed transitions
     // are published by the evidence projector, never by this route. Built in
     // setImmediate chunks so a 10k-target pool never wedges the event loop.
-    const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
+    const existingSet = existingAddrDedupSet();
     const toScan = await filterInChunks(targets, RESCAN_POOL_CHUNK, (t: any) =>
       existingSet.has(normalizeAddrForDedup(t.address || ""))
         ? null
@@ -5023,6 +5047,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     console.error("[team-sync] login account sync failed:", (error as any)?.message ?? error);
     return res.status(500).json({ error: "Could not synchronize the team login." });
   };
+
+  // Every mutating /api/team response (create/patch/offboard/reactivate/
+  // delete) bumps the stream-access stamp once the write's response is out —
+  // blunt on purpose (an extra bump costs one recompute; a missed one would
+  // freeze a subscriber's roster).
+  app.use("/api/team", (req, res, next) => {
+    if (req.method !== "GET") res.on("finish", bumpStreamAccessVersion);
+    next();
+  });
 
   app.post("/api/team", requireTeamLead, (req, res) => {
     const parsed = insertTeamMemberSchema.safeParse(req.body);
@@ -6575,12 +6608,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/followups", requireAuth, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined; // super_admin (null) = all tenants
-    const rows = storage.getOpenCallbacks(tid);
     const scope = leadVisibilityScope(user); // undefined = org-wide (admin/manager)
-    const scoped = Array.isArray(scope)
-      ? rows.filter(r => r.assignedRepId != null && scope.includes(r.assignedRepId))
-      : rows;
-    res.json(scoped);
+    // Rep scope pushed into both SQL arms (assigned_rep_id IN (...)): a rep's
+    // request touches only their rows instead of computing every open callback
+    // org-wide and filtering in JS. Same predicate as the old filter — a NULL
+    // owner never matches, and an EMPTY scope matches nothing (fail-closed).
+    const rows = storage.getOpenCallbacks(tid, Array.isArray(scope) ? { repIds: scope } : undefined);
+    res.json(rows);
   });
 
   // ── Rep activity — the dashboard's rep card ──────────────────────────────────
@@ -6626,12 +6660,31 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Stats
   app.get("/api/stats", requireAuth, (req, res) => {
     const _su = (req as any).user;
-    // Narrow projection (9 columns) — the counting loop below never read the
-    // other ~30 lead fields the full hydration paid for (was ~275ms/request
-    // at 20k leads). Scoping semantics identical to getLeads.
-    const all = storage.getLeadStatsRows(_su?.tenantId ?? undefined, leadVisibilityScope(_su));
+    // Aggregated IN SQL — grouped counts plus SUM(CASE) scalars — instead of
+    // materializing every scoped lead row and folding counters in a JS loop
+    // (the narrowed 9-column hydration was still ~O(n) allocations per poll at
+    // 100k leads). Scope WHERE mirrors storage.getLeadStatsRows exactly:
+    // tenant wall, then assigned_rep_id IN (...) with an EMPTY array matching
+    // nothing (fail-closed), same as getLeads.
+    const tenantId = _su?.tenantId ?? undefined;
+    const scope = leadVisibilityScope(_su);
+    const conds: string[] = [];
+    const params: number[] = [];
+    let emptyScope = false;
+    if (tenantId != null) { conds.push("tenant_id = ?"); params.push(tenantId); }
+    if (Array.isArray(scope)) {
+      if (!scope.length) emptyScope = true;
+      else {
+        conds.push(`assigned_rep_id IN (${scope.map(() => "?").join(",")})`);
+        params.push(...scope);
+      }
+    } else if (scope != null) {
+      conds.push("assigned_rep_id = ?");
+      params.push(scope);
+    }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
     const stats: any = {
-      total: all.length,
+      total: 0,
       assigned: 0,
       unassigned: 0,
       qualified: 0,
@@ -6644,23 +6697,64 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       tenured: 0,
       sold: 0,
     };
-    const staleBefore = Date.now() - 14 * 86_400_000;
-    for (const l of all) {
-      stats.byStatus[l.leadStatus] = (stats.byStatus[l.leadStatus] || 0) + 1;
-      stats.byFiberStatus[l.fiberStatus] = (stats.byFiberStatus[l.fiberStatus] || 0) + 1;
-      if (l.isNewFiber) stats.newFiber++;
-      if (l.isTenured) stats.tenured++;
-      if (l.leadStatus === "sold") stats.sold++;
-      if (l.assignedRepId == null) stats.unassigned++;
-      else {
-        stats.assigned++;
-        stats.byRep[String(l.assignedRepId)] = (stats.byRep[String(l.assignedRepId)] || 0) + 1;
-      }
-      if (l.leadStatus === "interested" || l.leadStatus === "sold") stats.qualified++;
-      const activityAt = Date.parse(l.updatedAt || l.createdAt || "");
-      if (Number.isFinite(activityAt) && activityAt < staleBefore && !["sold", "not_interested"].includes(l.leadStatus)) stats.stale++;
-      const territory = [l.city, l.state].filter(Boolean).join(", ");
-      if (territory) stats.byTerritory[territory] = (stats.byTerritory[territory] || 0) + 1;
+    if (emptyScope) return res.json(stats);
+    // Same 14-day boundary the loop computed, and NULLIF/COALESCE mirrors the
+    // `updatedAt || createdAt` fallback (empty string falls through, both
+    // missing is never stale).
+    //
+    // Both sides are normalized to the space separator rather than following
+    // sqlTime.ts's ISO-threshold rule: that rule assumes leads columns are
+    // uniformly ISO, but ~17% of live rows still carry SQLite-default
+    // timestamps ("2026-08-05 03:32:12") from before the convention landed.
+    // Comparing those against an ISO threshold puts ' ' (0x20) before 'T'
+    // (0x54) and marks every legacy row on the boundary DATE stale — the JS
+    // loop this replaced used Date.parse and tolerated both. sqlTime's warning
+    // about functions on the column discarding indexes does not apply here:
+    // the stale counter is a SUM(CASE) over a set that is already being
+    // scanned, so the normalization is free.
+    const staleIso = new Date(Date.now() - 14 * 86_400_000).toISOString().replace("T", " ");
+    const agg = rawDb.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN assigned_rep_id IS NULL THEN 1 ELSE 0 END) AS unassigned,
+              SUM(CASE WHEN lead_status IN ('interested','sold') THEN 1 ELSE 0 END) AS qualified,
+              SUM(CASE WHEN is_new_fiber = 1 THEN 1 ELSE 0 END) AS newFiber,
+              SUM(CASE WHEN is_tenured = 1 THEN 1 ELSE 0 END) AS tenured,
+              SUM(CASE WHEN lead_status = 'sold' THEN 1 ELSE 0 END) AS sold,
+              SUM(CASE WHEN replace(NULLIF(COALESCE(NULLIF(updated_at, ''), created_at), ''), 'T', ' ') < ?
+                        AND (lead_status IS NULL OR lead_status NOT IN ('sold','not_interested'))
+                       THEN 1 ELSE 0 END) AS stale
+         FROM leads ${where}`,
+    ).get(staleIso, ...params) as any;
+    stats.total = Number(agg?.total ?? 0);
+    stats.unassigned = Number(agg?.unassigned ?? 0);
+    stats.assigned = stats.total - stats.unassigned;
+    stats.qualified = Number(agg?.qualified ?? 0);
+    stats.stale = Number(agg?.stale ?? 0);
+    stats.newFiber = Number(agg?.newFiber ?? 0);
+    stats.tenured = Number(agg?.tenured ?? 0);
+    stats.sold = Number(agg?.sold ?? 0);
+    const statusRows = rawDb.prepare(
+      `SELECT lead_status AS k, COUNT(*) AS n FROM leads ${where} GROUP BY lead_status`,
+    ).all(...params) as Array<{ k: string | null; n: number }>;
+    for (const r of statusRows) stats.byStatus[r.k as any] = r.n;
+    const fiberRows = rawDb.prepare(
+      `SELECT fiber_status AS k, COUNT(*) AS n FROM leads ${where} GROUP BY fiber_status`,
+    ).all(...params) as Array<{ k: string | null; n: number }>;
+    for (const r of fiberRows) stats.byFiberStatus[r.k as any] = r.n;
+    const repWhere = `WHERE ${[...conds, "assigned_rep_id IS NOT NULL"].join(" AND ")}`;
+    const repRows = rawDb.prepare(
+      `SELECT assigned_rep_id AS k, COUNT(*) AS n FROM leads ${repWhere} GROUP BY assigned_rep_id`,
+    ).all(...params) as Array<{ k: number; n: number }>;
+    for (const r of repRows) stats.byRep[String(r.k)] = r.n;
+    // Label built in JS (filter(Boolean).join) so NULL/empty city or state
+    // collapses exactly as the loop's `[city, state]` template did — distinct
+    // (city, state) groups sharing a label accumulate.
+    const terrRows = rawDb.prepare(
+      `SELECT city, state, COUNT(*) AS n FROM leads ${where} GROUP BY city, state`,
+    ).all(...params) as Array<{ city: string | null; state: string | null; n: number }>;
+    for (const r of terrRows) {
+      const territory = [r.city, r.state].filter(Boolean).join(", ");
+      if (territory) stats.byTerritory[territory] = (stats.byTerritory[territory] || 0) + r.n;
     }
     res.json(stats);
   });
@@ -7283,8 +7377,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       : `${rep.name} +${crew.length - 1}`;
     // Only leads the caller may reassign (unassigned or own-team for a team_lead;
     // all for admin/manager) — an area draw never poaches another team's doors.
-    const enclosed = storage.getLeads(tid).filter((l: any) =>
-      l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, polygon) && canReassignLead(user, l));
+    // Bbox-prefiltered candidates (indexed) before the exact enclosure test.
+    const enclosed = leadsInRingBbox(polygon, tid, "id, lat, lng, assigned_rep_id AS assignedRepId")
+      .filter((l: any) => polygonCovers(l.lat, l.lng, polygon) && canReassignLead(user, l));
 
     // ONE transaction for the polygon and its doors — this route's whole
     // promise is "save the area AND assign every enclosed lead atomically", and
@@ -7449,15 +7544,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
           // Detach the doors from the departing rep. Their knock history stays
           // attributed to them forever — this only changes who works it next.
-          for (const l of storage.getLeadsByTerritory(t.id)) {
-            storage.updateLead(l.id, {
-              assignedRepId: newRepId ?? null,
-              assignedTerritoryId: t.id,
-              assignmentSource: newRepId != null ? "territory-sync" : null,
-              [newRepId != null ? "assignedAt" : "unassignedAt"]: at,
-            } as any, tid);
-            movedByAction.push(l.id);
+          // ONE set-based write (a savepoint inside startNextPass's transaction)
+          // instead of an UPDATE + cache bust per door; the ids are read
+          // narrowly first so the post-commit assignment events still know
+          // which doors moved.
+          const movedIds = rawDb.prepare(`SELECT id FROM leads WHERE assigned_territory_id = ?`)
+            .all(t.id) as Array<{ id: number }>;
+          if (newRepId != null) {
+            storage.bulkAssignTerritoryLeads({ territoryId: t.id, repId: newRepId, at });
+          } else {
+            storage.bulkUnassignTerritoryLeads({ territoryId: t.id, at });
           }
+          for (const { id } of movedIds) movedByAction.push(id);
         },
       });
     } catch (e: any) {
@@ -7683,9 +7781,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // Assign only leads inside the area that are currently UNASSIGNED — direct
     // assignments and other reps' pipelines are never touched.
+    // Bbox-prefiltered candidates (indexed) before the exact enclosure test.
     const inside = polygon.length >= 3
-      ? storage.getLeads(tid).filter((l: any) =>
-          l.lat != null && l.lng != null && l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon))
+      ? leadsInRingBbox(polygon, tid, "id, lat, lng, assigned_rep_id AS assignedRepId")
+          .filter((l: any) => l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon))
       : [];
 
     // Doors + holder flip in ONE transaction (same contract as assign-area and
@@ -8376,9 +8475,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Narrow projections — this feed reads address/coords off the lead and the
     // verification fields off the knock; full-row hydration of every tenant
     // lead + knock was the bulk of the route's latency (same fix as the
-    // progress routes above).
+    // progress routes above). Candidates come from the ring's bbox (indexed),
+    // the same pre-rejection territoryProgressRow applies.
     const within = poly.length >= 3
-      ? storage.getLeadsForTerritoryProgress(tid).filter((l: any) => l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, poly))
+      ? leadsInRingBbox(poly, tid, "id, address, city, state, zip, lat, lng")
+          .filter((l: any) => polygonCovers(l.lat, l.lng, poly))
       : [];
     const leadById = new Map(within.map((l: any) => [l.id, l]));
     const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
@@ -8473,17 +8574,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.logActivity(user?.id ?? null, "verification.override", "knock", Number(req.params.id), { newStatus: status, reason: reason.trim() }, req.ip);
     res.json(updated);
   });
-  // Immutable override history for one activity (manager+).
-  app.get("/api/knocks/:id/overrides", requireManager, (req, res) => {
-    const user = (req as any).user;
-    const _ohKnock = storage.getKnockById(Number(req.params.id));
-    const _ohLead = _ohKnock ? storage.getLeadById(_ohKnock.leadId) : null;
-    if (!_ohLead || (user?.tenantId && _ohLead.tenantId !== user.tenantId)) {
-      return res.status(404).json({ error: "Not found" });
-    }
-    res.json(storage.getActivityOverrides(Number(req.params.id)));
-  });
-
 
   // ── Territory Requests ────────────────────────────────────────────────────
   // Rep submits a request for a new territory
@@ -8945,22 +9035,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(storage.getRepApplications(status, tid));
   });
 
-  // GET /api/onboarding/join-link — the caller's per-tenant recruiting link.
-  // Applicants who use it are routed straight to this org. Falls back to the
-  // default tenant's slug (or bare /join) so there's always a usable link.
-  app.get("/api/onboarding/join-link", requireManager, (req, res) => {
-    const user = (req as any).user;
-    const tenantId = user?.tenantId ?? getDefaultTenantId();
-    const tenant = tenantId != null ? storage.getTenantById(tenantId) : undefined;
-    const slug = tenant?.slug ?? "";
-    const origin = onboardingAppOrigin(req);
-    res.json({
-      slug,
-      companyName: tenant?.companyName ?? null,
-      path: slug ? `/join/${slug}` : "/join",
-      url: slug ? `${origin}/join/${slug}` : `${origin}/join`,
-    });
-  });
   // PATCH /api/onboarding/applications/:id — approve or reject
   app.patch("/api/onboarding/applications/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
@@ -9415,14 +9489,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const account = application.email ? storage.getUserByEmail(application.email) : undefined;
     return { application, tenantId, repId: account?.teamMemberId ?? null };
   }
-
-  // GET the full checkpoint set + summary for one application.
-  app.get("/api/onboarding/applications/:id/hr", requireManager, (req: Request, res: Response) => {
-    const ctx = loadHrApplication(req, res);
-    if (!ctx) return;
-    const checkpoints = listHrCheckpoints(ctx.tenantId, Number(ctx.application.id));
-    res.json({ checkpoints, summary: summariseHr(checkpoints), gustoConfigured: gustoConfigured() });
-  });
 
   // PATCH one gate's status / provider / vendor case id / notes.
   app.patch("/api/onboarding/applications/:id/hr/:kind", requireManager, (req: Request, res: Response) => {
@@ -10030,9 +10096,10 @@ export function registerSaasRoutes(app: any) {
     // actor names, or client IPs.
     const entries = storage.getActivityLog(limit, tid);
     const users = storage.getAllUsers(tid);
+    const nameById = new Map(users.map(u => [u.id, u.name]));
     const result = entries.map(e => ({
       ...e,
-      userName: users.find(u => u.id === e.userId)?.name ?? "System",
+      userName: nameById.get(e.userId as any) ?? "System",
       details: e.details ? JSON.parse(e.details) : null,
     }));
     res.json(result);
@@ -10067,20 +10134,34 @@ export function registerSaasRoutes(app: any) {
     const wall = (col = "tenant_id") => (tid != null ? `WHERE ${col} = ?` : "WHERE 1=1");
     const wallParams = tid != null ? [tid] : [];
 
-    const leadAgg = rawDb.prepare(
-      `SELECT SUM(CASE WHEN lead_tag='fresh_fiber_confirmed' AND fresh_confidence='cross_verified' THEN 1 ELSE 0 END) AS newFiber,
-              SUM(CASE WHEN assigned_rep_id IS NULL THEN 1 ELSE 0 END) AS unassigned
-         FROM leads ${wall()}${scopeSql("assigned_rep_id")}`,
-    ).get(...wallParams, ...scopeParams) as any;
+    // Two indexed COUNTs instead of one SUM(CASE) pass over every tenant lead:
+    // the unassigned probe rides idx_leads_tenant_rep, and the fresh-fiber
+    // count touches only its qualifying rows. The scope fragment stays on both
+    // so scoped roles keep the exact same semantics (an IN(...) scope can never
+    // match a NULL rep, so `unassigned` stays 0 for them — as before).
+    const leadAgg = {
+      newFiber: (rawDb.prepare(
+        `SELECT COUNT(*) AS n FROM leads ${wall()}${scopeSql("assigned_rep_id")}
+            AND lead_tag='fresh_fiber_confirmed' AND fresh_confidence='cross_verified'`,
+      ).get(...wallParams, ...scopeParams) as any)?.n,
+      unassigned: (rawDb.prepare(
+        `SELECT COUNT(*) AS n FROM leads ${wall()}${scopeSql("assigned_rep_id")}
+            AND assigned_rep_id IS NULL`,
+      ).get(...wallParams, ...scopeParams) as any)?.n,
+    };
 
     const today = new Date().toISOString().slice(0, 10);
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    // knocked_at > weekAgo bounds the scan to one week of knocks (all three
+    // SUMs are week/day-bounded — today's date prefix is a subset of the
+    // week), so the aggregate rides idx_knock_log_tenant_time instead of
+    // walking the tenant's entire knock history every 30s poll.
     const knockAgg = rawDb.prepare(
       `SELECT SUM(CASE WHEN substr(knocked_at,1,10) = ? THEN 1 ELSE 0 END) AS today,
               SUM(CASE WHEN substr(knocked_at,1,10) = ? AND outcome='sold' THEN 1 ELSE 0 END) AS todaySales,
               SUM(CASE WHEN outcome='sold' AND knocked_at > ? THEN 1 ELSE 0 END) AS weekSales
-         FROM knock_log ${wall()}${scopeSql("rep_id")}`,
-    ).get(today, today, weekAgo, ...wallParams, ...scopeParams) as any;
+         FROM knock_log ${wall()}${scopeSql("rep_id")} AND knocked_at > ?`,
+    ).get(today, today, weekAgo, ...wallParams, ...scopeParams, weekAgo) as any;
 
     const revenueAgg = rawDb.prepare(
       `SELECT SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS totalPaid,
@@ -10284,6 +10365,8 @@ export function registerSaasRoutes(app: any) {
     // actually changed are recorded — an unchanged field is not history.
     const previous = storage.getTenantById(id);
     const updated = storage.updateTenant(id, safeTenant);
+    // Tenant config feeds the SSE streams' memoised open-field flag.
+    bumpStreamAccessVersion();
     if (!updated) {
       recordAdminAudit({
         ...auditContext(req), action: "tenant.updated", targetType: "tenant", targetId: id,
@@ -10345,19 +10428,6 @@ export function registerSaasRoutes(app: any) {
     const yourMrr  = summary.reduce((s, t) => s + (t.yourCut || 0), 0);
     res.json({ summary, totalMrr, yourMrr, tenantCount: allTenants.length });
   });
-
-  // Legacy owner lookup is permanently closed. It bypassed contract approval,
-  // budgets, identity matching, DNC, phone validation, encryption, and the
-  // Calling authorization boundary. Approved providers are configured and
-  // invoked only inside /api/v1/calling.
-  app.post("/api/leads/:id/owner-lookup", requireAuth, ownerLookupLimiter, (_req: Request, res: Response) => {
-    res.status(410).json({
-      error: "Legacy owner lookup has been retired. Use the Calling compliance module.",
-      code: "CALLING_MODULE_REQUIRED",
-    });
-  });
-
-
 
   // ── Nightly Cron Status + Manual Trigger ──────────────────────────────────────
   app.get("/api/cron/status", requireManager, (_req: Request, res: Response) => {

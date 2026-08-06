@@ -75,6 +75,15 @@ function requireRep(tenantId: number, repId: number): { id: number; reserve_perc
  *   cap     = rep override ?? org cap ?? $2,500 default;  0 = uncapped
  * A NULL override inherits — which is what every pre-existing row is, so an org
  * that never touches this screen keeps exactly the behaviour it has today.
+ *
+ * ── NOT the same resolver as commissionTermsResolver.resolveCommissionTerms ──
+ * Both read team_members.reserve_percent/reserve_cap_cents and the tenants
+ * defaults, and they look like duplicates. They are not, and unifying them
+ * CHANGES PAY. This one is PAYROLL-TIME: rep ?? org ?? $2,500, no invite layer,
+ * and 0 means uncapped. That one is CONTRACT-TIME and has a different, longer
+ * precedence chain (explicit override → rep row → invite → tenant → house
+ * default) because the invitation's terms are part of what the rep signed.
+ * Change either deliberately, never by "deduplicating" the pair.
  */
 export function resolveRepReserveConfig(tenantId: number, repId: number): RepReserveConfig {
   const rep = requireRep(tenantId, repId);

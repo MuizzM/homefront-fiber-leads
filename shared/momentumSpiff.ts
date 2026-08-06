@@ -43,6 +43,8 @@
 // PURE: no clock, no database. The caller supplies `nowMs` and the rep's live
 // signals, already resolved from verified field activity.
 
+import { usd } from "./moneyFormat";
+
 export interface MomentumConfig {
   /** Rolling window the signals are measured over. */
   windowMinutes: number;
@@ -268,13 +270,10 @@ export function streakHeadline(s: MomentumSignals): string {
   return `${s.doorsInWindow} doors and people are talking`;
 }
 
-export function usd(c: number): string {
-  const v = Math.trunc(Number.isFinite(c) ? c : 0);
-  const whole = Math.floor(Math.abs(v) / 100).toLocaleString("en-US");
-  const rem = Math.abs(v) % 100;
-  const body = rem === 0 ? `$${whole}` : `$${whole}.${String(rem).padStart(2, "0")}`;
-  return v < 0 ? `-${body}` : body;
-}
+/** The one definition lives in ./moneyFormat (dependency-free, see its header
+ *  for the bundle rationale). Re-exported here so existing importers keep
+ *  working — the import flows INTO this module, never out of it. */
+export { usd };
 
 /** The ledger line, and what the rep reads on their statement weeks later. */
 export function momentumReason(amountCents: number): string {

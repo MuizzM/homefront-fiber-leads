@@ -76,9 +76,6 @@ export function ensureAdminAuditSchema(): void {
 }
 
 /** Test-only: forget the memoised schema flag when the DB is rebuilt. */
-export function __resetAdminAuditSchemaForTests(): void {
-  schemaReady = false;
-}
 
 export interface AdminAuditActor {
   id?: number | null;

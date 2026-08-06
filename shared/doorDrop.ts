@@ -47,6 +47,8 @@
 //
 // PURE: no clock, no database, no Math.random.
 
+import { usd } from "./moneyFormat";
+
 export interface DoorDropConfig {
   enabled: boolean;
   /** Base chance per verified door, as 1-in-N. */
@@ -326,13 +328,10 @@ export function evaluateDoorDrop(
   };
 }
 
-export function usd(c: number): string {
-  const v = Math.trunc(Number.isFinite(c) ? c : 0);
-  const whole = Math.floor(Math.abs(v) / 100).toLocaleString("en-US");
-  const rem = Math.abs(v) % 100;
-  const body = rem === 0 ? `$${whole}` : `$${whole}.${String(rem).padStart(2, "0")}`;
-  return v < 0 ? `-${body}` : body;
-}
+/** The one definition lives in ./moneyFormat (dependency-free, see its header
+ *  for the bundle rationale). Re-exported here so existing importers keep
+ *  working — the import flows INTO this module, never out of it. */
+export { usd };
 
 /**
  * The line on the rep's card between drops.

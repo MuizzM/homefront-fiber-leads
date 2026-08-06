@@ -146,17 +146,6 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
         );
     res.json({ ...result, ...gateway.status() });
   });
-  app.get("/api/kinetic-scanner/provider-health", read, (req, res) => {
-    const tid = requireTenant(req, res);
-    if (!tid) return;
-    res.json({
-      items: rawDb
-        .prepare(
-          `SELECT provider_name AS provider,ok,latency_ms AS latencyMs,status_code AS statusCode,message,checked_at AS checkedAt FROM kinetic_provider_health WHERE tenant_id=? ORDER BY checked_at DESC LIMIT 100`,
-        )
-        .all(tid),
-    });
-  });
   app.get("/api/kinetic-scanner/evidence/config", read, (req, res) => {
     const tid = requireTenant(req, res);
     if (!tid) return;
@@ -224,20 +213,10 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
       });
     }
   });
-  app.get("/api/kinetic-scanner/worker-status", read, (req, res) => {
-    const tid = requireTenant(req, res);
-    if (tid) {
-      const s = scannerState(tid);
-      res.json({ scanWorker: s.scanWorker, recheckWorker: s.recheckWorker });
-    }
-  });
   app.get("/api/kinetic-scanner/stats", read, (req, res) => {
     const tid = requireTenant(req, res);
     if (tid) res.json(stats(tid));
   });
-  app.get("/api/kinetic-scanner/states", read, (_req, res) =>
-    res.json(KINETIC_STATES),
-  );
   app.post(
     "/api/kinetic-scanner/evidence/qualify",
     manage,
@@ -561,30 +540,6 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
       })),
     });
   });
-  app.get("/api/kinetic-scanner/map", read, (req, res) => {
-    const tid = requireTenant(req, res);
-    if (!tid) return;
-    const rows = rawDb
-      .prepare(
-        `SELECT a.id,a.latitude,a.longitude,a.is_live AS isLive,a.is_coming_soon AS isComingSoon,a.is_copper_upgrade_candidate AS isCopperUpgradeCandidate,s.discovery_state AS discoveryState FROM kinetic_addresses a LEFT JOIN kinetic_address_state s ON s.address_id=a.id WHERE a.tenant_id=? AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL LIMIT 10000`,
-      )
-      .all(tid) as any[];
-    res.json({
-      type: "FeatureCollection",
-      features: rows.map((r) => ({
-        type: "Feature",
-        id: r.id,
-        geometry: { type: "Point", coordinates: [r.longitude, r.latitude] },
-        properties: {
-          id: r.id,
-          isLive: r.isLive,
-          isComingSoon: r.isComingSoon,
-          isCopperUpgradeCandidate: r.isCopperUpgradeCandidate,
-          discoveryState: r.discoveryState,
-        },
-      })),
-    });
-  });
   app.get("/api/kinetic-scanner/addresses/:id", read, (req, res) => {
     const tid = requireTenant(req, res),
       id = idSchema.safeParse(req.params.id);
@@ -765,44 +720,6 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
       .all(tid, limit);
     res.json({ items });
   });
-  app.get("/api/kinetic-scanner/changes/stats", read, (req, res) => {
-    const tid = requireTenant(req, res);
-    if (!tid) return;
-    res.json(
-      rawDb
-        .prepare(
-          `SELECT COUNT(*) total,SUM(CASE WHEN observed_at>=datetime('now','-24 hours') THEN 1 ELSE 0 END) last24Hours FROM kinetic_address_changes WHERE tenant_id=?`,
-        )
-        .get(tid),
-    );
-  });
-  app.get("/api/kinetic-scanner/transitions", read, (req, res) => {
-    const tid = requireTenant(req, res);
-    if (!tid) return;
-    const items = rawDb
-      .prepare(
-        `SELECT e.id,e.address_id AS addressId,e.episode_sequence AS episodeSequence,e.status,e.detection_from AS detectionFrom,e.detection_to AS detectionTo,e.confirmation_count AS confirmationCount,e.model_version AS modelVersion,e.candidate_at AS candidateAt,e.verified_at AS verifiedAt,e.regressed_at AS regressedAt,a.address,a.city,a.state,a.zip,a.latitude,a.longitude FROM kinetic_transition_episodes e JOIN kinetic_addresses a ON a.id=e.address_id AND a.tenant_id=e.tenant_id WHERE e.tenant_id=? ORDER BY e.candidate_at DESC LIMIT 500`,
-      )
-      .all(tid);
-    res.json({
-      items,
-      claim:
-        "First observed by HomeFront; provider change time is interval-censored.",
-    });
-  });
-  app.get("/api/kinetic-scanner/jobs/:id/items", read, (req, res) => {
-    const tid = requireTenant(req, res),
-      jobId = z.string().uuid().safeParse(req.params.id);
-    if (!tid) return;
-    if (!jobId.success)
-      return res.status(400).json({ error: "Invalid job id" });
-    const items = rawDb
-      .prepare(
-        `SELECT id,item_key AS itemKey,sequential_id AS sequentialId,kinetic_address_id AS kineticAddressId,priority,status,attempts,available_at AS availableAt,lease_owner AS leaseOwner,lease_expires_at AS leaseExpiresAt,last_error AS lastError,completed_at AS completedAt FROM kinetic_scan_job_items WHERE tenant_id=? AND job_id=? ORDER BY id DESC LIMIT 500`,
-      )
-      .all(tid, jobId.data);
-    res.json({ items });
-  });
   app.get("/api/kinetic-scanner/hotspots", read, (req, res) => {
     const tid = requireTenant(req, res);
     if (!tid) return;
@@ -812,16 +729,6 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
       )
       .all(tid);
     res.json({ hotspots });
-  });
-  app.get("/api/kinetic-scanner/live-clusters", read, (req, res) => {
-    const tid = requireTenant(req, res);
-    if (!tid) return;
-    const clusters = rawDb
-      .prepare(
-        `SELECT city,state,zip,COUNT(*) addressCount,AVG(latitude) latitude,AVG(longitude) longitude FROM kinetic_addresses WHERE tenant_id=? AND is_live=1 GROUP BY city,state,zip HAVING COUNT(*)>=2 ORDER BY addressCount DESC LIMIT 250`,
-      )
-      .all(tid);
-    res.json({ clusters });
   });
   app.get("/api/kinetic-scanner/export", read, (req, res) => {
     const tid = requireTenant(req, res);

@@ -30,6 +30,8 @@
 // watches "$25 earned" turn into "$25 earned" again at the next rung reads it as
 // a system that took something back.
 
+import { usd } from "./moneyFormat";
+
 export interface MilestoneRung {
   /** Distinct verified doors required in the period. */
   doors: number;
@@ -160,14 +162,11 @@ export function milestoneProgress(
   };
 }
 
-/** Integer cents → "$25" / "$27.50". No float ever reaches a rendered digit. */
-export function usd(c: number): string {
-  const v = Math.trunc(Number.isFinite(c) ? c : 0);
-  const whole = Math.floor(Math.abs(v) / 100).toLocaleString("en-US");
-  const rem = Math.abs(v) % 100;
-  const body = rem === 0 ? `$${whole}` : `$${whole}.${String(rem).padStart(2, "0")}`;
-  return v < 0 ? `-${body}` : body;
-}
+/** Integer cents → "$25" / "$27.50". No float ever reaches a rendered digit.
+ *  The one definition lives in ./moneyFormat (dependency-free, see its header
+ *  for the bundle rationale). Re-exported here so existing importers keep
+ *  working — the import flows INTO this module, never out of it. */
+export { usd };
 
 /** The ledger line, which is also what the rep reads on their pay statement six
  *  weeks later. It has to say what they DID, not which internal rung fired. */

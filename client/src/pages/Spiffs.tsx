@@ -31,6 +31,7 @@ import { DoorDropEditor } from "@/components/DoorDropEditor";
 import { CampaignLauncher } from "@/components/CampaignLauncher";
 import { useAuth } from "@/lib/auth";
 import { can, type Role as AppRole } from "@shared/capabilities";
+import { usd } from "@shared/moneyFormat";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -70,15 +71,8 @@ interface TeamResponse { reps: TeamHeatEntry[]; pending: (SpiffRow & { repName: 
 // `cents / 100` float ever reaches a rendered digit, and no cents are silently
 // rounded away (the old formatter used maximumFractionDigits: 0, which showed
 // $123.45 as "$123"). Whole-dollar amounts drop the ".00" because every spiff
-// lands on a $5 step.
-function usd(cents: number): string {
-  const v = Math.trunc(Number.isFinite(cents) ? cents : 0);
-  const sign = v < 0 ? "-" : "";
-  const abs = Math.abs(v);
-  const whole = Math.floor(abs / 100).toLocaleString("en-US");
-  const rem = abs % 100;
-  return rem === 0 ? `${sign}$${whole}` : `${sign}$${whole}.${String(rem).padStart(2, "0")}`;
-}
+// lands on a $5 step. `usd` is imported from @shared/moneyFormat (above) — the
+// one definition; the local copy that used to live here was output-identical.
 
 /** "Today" / "Yesterday" / "4 days ago" / a plain date. Never a raw ISO string. */
 function whenLabel(iso: string): string {

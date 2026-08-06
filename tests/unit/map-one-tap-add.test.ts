@@ -47,8 +47,9 @@ describe("one-tap add drops the pin BEFORE any network await", () => {
   });
 
   it("reconciles temp → real id in the query cache AND the GeoJSON feature map", () => {
-    // Cache: the temp pin is replaced in place with the server row.
-    expect(body).toContain("p.id === tempId");
+    // Cache: the temp pin is located by its temp id (O(1) via the per-array
+    // pin index) and replaced in place with the server row.
+    expect(body).toContain("pinIndexOf(old.pins, tempId)");
     expect(body).toContain("id: added.id");
     // GeoJSON: same refs handleDeleteLead uses, re-keyed to the real id.
     expect(body).toContain("featureByIdRef.current.get(tempId)");

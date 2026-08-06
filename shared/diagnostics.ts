@@ -132,5 +132,3 @@ export function buildDiagnostics(events: RawEvent[], nowMs: number, windowHours 
     totalEvents: inWindow.length,
   };
 }
-
-export const HIGH_RISK_ACTION_SET = HIGH_RISK_ACTIONS;
