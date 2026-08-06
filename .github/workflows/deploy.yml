@@ -9,6 +9,14 @@ on:
         description: Full 40-character commit SHA from the protected default branch
         required: true
         type: string
+      # The switch existed in deploy.sh but nothing could reach it: the workflow
+      # is the only way production is deployed, and it never passed the variable.
+      # A release you judge risky is exactly when you cannot SSH in to set it.
+      with_backup:
+        description: Take the encrypted offline DB snapshot inside this deploy (slower cutover — use for a risky release)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -85,6 +93,9 @@ jobs:
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           RELEASE_SHA: ${{ needs.validate-release.outputs.commit_sha }}
           DEFAULT_BRANCH: ${{ needs.validate-release.outputs.default_branch }}
+          # Not in the required-value loop below: absent means "no snapshot",
+          # which is the long-standing default, not a misconfiguration.
+          WITH_BACKUP: ${{ inputs.with_backup }}
         shell: bash
         run: |
           set -euo pipefail
@@ -128,11 +139,16 @@ jobs:
           )
 
           "${SSH[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            bash -s -- "$RELEASE_SHA" "$DEFAULT_BRANCH" <<'REMOTE'
+            bash -s -- "$RELEASE_SHA" "$DEFAULT_BRANCH" "${WITH_BACKUP:-false}" <<'REMOTE'
           set -euo pipefail
           RELEASE_SHA="$1"
           DEFAULT_BRANCH="$2"
+          WITH_BACKUP="${3:-false}"
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          # Whitelist rather than truthiness: anything unrecognised must read as
+          # "no snapshot" loudly, never as a silent yes on a release you meant
+          # to protect.
+          [[ "$WITH_BACKUP" =~ ^(true|false)$ ]]
           [[ "$DEFAULT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]
           [[ "$DEFAULT_BRANCH" != -* ]]
           git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null
@@ -214,7 +230,16 @@ jobs:
           : > "$RUN_DIR/log"
           # Own session + no inherited stdio: sshd teardown can never signal it.
           # deploy.sh itself also holds .deploy.lock (flock) against races.
-          env RELEASE_SHA="$RELEASE_SHA" RUN_DIR="$RUN_DIR" setsid bash -c '
+          # deploy.sh tests for the literal "1"; an if/then rather than a
+          # `[ ] && x=1`, whose non-zero status would abort under set -e.
+          if [ "$WITH_BACKUP" = "true" ]; then
+            DEPLOY_WITH_BACKUP=1
+            echo "[deploy] in-deploy offline snapshot: ENABLED for this release"
+          else
+            DEPLOY_WITH_BACKUP=0
+            echo "[deploy] in-deploy offline snapshot: deferred to the scheduled job"
+          fi
+          env RELEASE_SHA="$RELEASE_SHA" RUN_DIR="$RUN_DIR" DEPLOY_WITH_BACKUP="$DEPLOY_WITH_BACKUP" setsid bash -c '
             cd /srv/homefront
             scripts/deploy.sh "$RELEASE_SHA" >> "$RUN_DIR/log" 2>&1
             echo $? > "$RUN_DIR/status"

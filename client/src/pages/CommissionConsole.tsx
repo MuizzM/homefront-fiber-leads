@@ -11,6 +11,8 @@ import {
   Send, Loader2, XCircle, Landmark, History, ExternalLink, Info,
 } from "lucide-react";
 import { CommissionStatement } from "@/components/CommissionStatement";
+import { DownlineSheet } from "@/components/DownlineSheet";
+import { OverrideConfigCard } from "@/components/OverrideConfigCard";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -74,7 +76,8 @@ export default function CommissionConsole() {
   const canClose = useCan("commission.read.all");        // manager/admin: finalize, export, adjust
   const canPay = useCan("payouts.pay");                  // admin only: moves real money
   const canManageOrg = useCan("settings.manage.org");    // org settings (house amount)
-  const [section, setSection] = useState<"overview" | "pay">("overview");
+  const canDownline = useCan("commission.read.downline"); // team_lead+: multi-level override sheet
+  const [section, setSection] = useState<"overview" | "pay" | "downline">("overview");
   const [weekOffset, setWeekOffset] = useState(0);       // 0 = current, -1 = last week…
   const [drillRep, setDrillRep] = useState<OverviewRow | null>(null);
   const [confirmAction, setConfirmAction] = useState<"FINALIZE" | "MARK_PAID" | null>(null);
@@ -102,6 +105,9 @@ export default function CommissionConsole() {
         description: skipped > 0 ? `${skipped} already settled or skipped.` : "Every number on this week is now locked.",
       });
       qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] });
+      // Finalizing/paying settles override rows too — refresh both override surfaces.
+      qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] });
+      qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] });
       setConfirmAction(null);
     },
     onError: (e: any) => toast({ title: "Closeout failed", description: e.message, variant: "destructive" }),
@@ -170,6 +176,20 @@ export default function CommissionConsole() {
             data-testid="commission-tab-pay"
           >
             <Landmark className="w-3.5 h-3.5" /> Pay reps
+          </button>
+        )}
+        {/* Downline overrides — multi-level pay visibility. Omitted (never
+            disabled) below team lead, per the capability house rule. */}
+        {canDownline && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={section === "downline"}
+            onClick={() => setSection("downline")}
+            className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "downline" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            data-testid="commission-tab-downline"
+          >
+            <Users className="w-3.5 h-3.5" /> Downline
           </button>
         )}
       </div>
@@ -405,8 +425,13 @@ export default function CommissionConsole() {
       {section === "pay" && canClose && (
         <>
           {canManageOrg && <HouseAmountCard />}
+          {canManageOrg && <OverrideConfigCard />}
           <PayWorkspace key={weekRef} weekRef={weekRef} canPay={canPay} />
         </>
+      )}
+
+      {section === "downline" && canDownline && (
+        <DownlineSheet key={weekRef} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} />
       )}
 
       {/* Confirm closeout */}
@@ -449,7 +474,7 @@ export default function CommissionConsole() {
       </Dialog>
 
       {/* Statement drill-down */}
-      <StatementDrawer row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canClose} canMoveReserve={canPay} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); }} />
+      <StatementDrawer row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canClose} canMoveReserve={canPay} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] }); }} />
     </div>
   );
 }
@@ -633,6 +658,9 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canMoveReserve, o
       toast({ title: vars.decision === "APPROVE" ? "Adjustment approved — statement re-priced" : "Adjustment rejected" });
       qc.invalidateQueries({ queryKey: ["/api/commission/statements", row?.statementId] });
       qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] });
+      // An adjustment can resolve an override exception — refresh both surfaces.
+      qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] });
+      qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] });
     },
     onError: (e: any) => toast({ title: "Decision failed", description: e.message, variant: "destructive" }),
   });
@@ -987,6 +1015,8 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
       // Refresh both this panel AND the commission overview so paid statements flip to PAID.
       qc.invalidateQueries({ queryKey: ["/api/payouts/week"] });
       qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] });
+      qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] });
+      qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] });
     },
     // 503 (payouts disabled) or any transfer error lands here — never leaves the
     // dialog open pretending money moved.

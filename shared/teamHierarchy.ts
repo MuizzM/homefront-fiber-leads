@@ -79,6 +79,96 @@ export function wouldCreateReportsCycle(
   return true; // hop budget exhausted → chain already corrupt → fail closed
 }
 
+/** Minimal member shape for downline traversal — id plus the adjacency edge. */
+export interface DownlineMemberRef {
+  id: number;
+  reportsToId: number | null;
+}
+
+/**
+ * Every member strictly BELOW `rootId` in the reports-to tree (root excluded),
+ * in BFS order. The downward mirror of wouldCreateReportsCycle's upward walk:
+ * pure over plain member refs, cycle-safe via a visited set, and node-budgeted
+ * so corrupt data degrades to a partial result instead of an infinite walk.
+ *
+ * Contract note for money callers: overrides are computed from this chain as
+ * it stands at sale time and frozen onto the ledger row; a promotion or
+ * re-home affects only future sales. The recruited_by sponsor edge never
+ * drives pay and is not part of this walk.
+ */
+export function downlineOf(
+  rootId: number,
+  members: readonly DownlineMemberRef[],
+  maxNodes = 5000,
+): number[] {
+  const children = new Map<number, number[]>();
+  for (const m of members) {
+    if (m.reportsToId == null) continue;
+    const siblings = children.get(m.reportsToId);
+    if (siblings) siblings.push(m.id);
+    else children.set(m.reportsToId, [m.id]);
+  }
+  const out: number[] = [];
+  const visited = new Set<number>([rootId]);
+  const queue: number[] = [rootId];
+  while (queue.length > 0 && out.length < maxNodes) {
+    const parent = queue.shift() as number;
+    for (const child of children.get(parent) ?? []) {
+      if (visited.has(child)) continue; // cycle in corrupt data — skip, never loop
+      visited.add(child);
+      out.push(child);
+      queue.push(child);
+      if (out.length >= maxNodes) break;
+    }
+  }
+  return out;
+}
+
+/** Minimal member shape for the branch-owner walk. */
+export interface BranchMemberRef {
+  id: number;
+  role: string;
+  reportsToId: number | null;
+  active: boolean;
+}
+
+/**
+ * The ACTIVE manager at the top of a member's branch, or null when the branch
+ * is unowned — a top-level member, an orphan left behind by an offboard, or a
+ * member whose only managers above them are inactive.
+ *
+ * This is what "whose people are these?" means in a single-parent tree, and it
+ * is deliberately NOT the same question as `downlineOf`. A subtree test asks
+ * "is this member beneath me", which strands every top-level member in nobody's
+ * territory; this asks "does this member already belong to a DIFFERENT manager",
+ * which leaves unowned members adoptable by anyone senior enough.
+ *
+ * A member who is themselves an active manager owns their own branch, so peer
+ * managers resolve to each other rather than to a shared parent.
+ *
+ * Hop-budgeted like every walk here: a corrupt chain reads as unowned rather
+ * than looping. Unowned fails OPEN (anyone senior may act), which is the whole
+ * point — the rule exists to stop poaching between branches, not to make
+ * ownerless people unmanageable.
+ */
+export function branchOwnerOf(
+  memberId: number,
+  members: readonly BranchMemberRef[],
+  maxHops = 100,
+): number | null {
+  const byId = new Map(members.map(m => [m.id, m]));
+  let cursor = byId.get(memberId);
+  const seen = new Set<number>();
+  for (let hop = 0; hop < maxHops && cursor; hop++) {
+    if (seen.has(cursor.id)) return null;   // cycle — unowned, never loop
+    seen.add(cursor.id);
+    if (cursor.role === "manager" && cursor.active) return cursor.id;
+    if (cursor.reportsToId == null) return null;
+    cursor = byId.get(cursor.reportsToId);
+  }
+  return null;
+}
+
 /**
  * Is `supervisorRole` a valid supervisor for a member holding `memberRole`?
  * A supervisor must rank strictly above the member (reps report to team

@@ -1507,6 +1507,23 @@ export function runMigrations() {
     // row, which outranks the invite from then on — re-sending paperwork does
     // NOT revert to this ladder, by design (last explicit decision wins).
     `ALTER TABLE onboarding_recruiting_invites ADD COLUMN commission_tiers_json TEXT`,
+    // Role + upline chosen AT INVITE TIME, riding the invite → approval the
+    // same way the comp terms above do. NULL role = legacy invite = 'rep';
+    // NULL supervisor = top-level. (No FK — the application_id pattern.)
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_role TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_supervisor_id INTEGER`,
+    // Per-hire override rates, ALSO chosen at invite time: what the team-lead
+    // and manager slots keep from each of THIS hire's qualified sales. NULL =
+    // inherit the org default (the tenants commission_override_* columns);
+    // approval stamps them onto the new member's roster row. Never shown to
+    // the candidate — the upline's cut is not part of what the hire signs.
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_override_team_lead_cents INTEGER`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_override_manager_cents INTEGER`,
+    // A leader hire can bring their DOWNLINE with them: existing members the
+    // hirer picked to be re-homed under the new team_lead/manager at approval.
+    // JSON array of team_members ids; NULL/empty = nobody moves. Validated at
+    // send AND re-validated at approval (members go stale between the two).
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN invited_downline_ids TEXT`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_token
        ON onboarding_recruiting_invites(token_sha256) WHERE token_sha256 IS NOT NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_application
@@ -2407,6 +2424,30 @@ export function runMigrations() {
     // authoritative for their own fields, so an existing override is never
     // silently dropped. NULL = nothing agreed yet; inherit.
     `ALTER TABLE team_members ADD COLUMN commission_terms TEXT`,
+    // ── RECRUITING SPONSOR EDGE — IMMUTABLE ─────────────────────────────────
+    // Who recruited this member, set ONCE at approval from invite.invited_by.
+    // Distinct from reports_to_id, which is OPERATIONAL — mutable, re-homed on
+    // offboard/demotion. The sponsor edge is recruiting metrics only; pay
+    // follows the reports_to tree, never this. Both ids kept: the recruiter's
+    // login always exists (invited_by), their roster row may not.
+    `ALTER TABLE team_members ADD COLUMN recruited_by_member_id INTEGER`,
+    `ALTER TABLE team_members ADD COLUMN recruited_by_user_id INTEGER`,
+    `ALTER TABLE team_members ADD COLUMN recruited_at TEXT`,
+    // Set-once, enforced by the DATABASE (the signed-document precedent): the
+    // NULL → value write passes, any later re-point is refused no matter which
+    // code path — present or future — attempts it. Approval retries are also
+    // WHERE-guarded in the route, so they never even reach this trigger.
+    `CREATE TRIGGER IF NOT EXISTS trg_team_members_recruiter_immutable
+       BEFORE UPDATE ON team_members
+       WHEN (OLD.recruited_by_member_id IS NOT NULL AND NEW.recruited_by_member_id IS NOT OLD.recruited_by_member_id)
+         OR (OLD.recruited_by_user_id IS NOT NULL AND NEW.recruited_by_user_id IS NOT OLD.recruited_by_user_id)
+       BEGIN SELECT RAISE(ABORT, 'the recruiting sponsor edge is immutable'); END`,
+    // Per-SELLER override rates: what the team-lead / manager slots keep from
+    // each of THIS member's qualified sales, chosen at invite time (or edited
+    // later). NULL = inherit the org default. Resolved per sale by the
+    // override engine; already-earned rows keep their frozen snapshot.
+    `ALTER TABLE team_members ADD COLUMN override_team_lead_cents INTEGER`,
+    `ALTER TABLE team_members ADD COLUMN override_manager_cents INTEGER`,
     // Org-level ceiling. NULL → the product default ($2,500); 0 → uncapped.
     `ALTER TABLE tenants ADD COLUMN commission_reserve_cap_cents INTEGER`,
 
@@ -2647,6 +2688,33 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS migration_marks (
        key TEXT PRIMARY KEY,
        applied_at TEXT NOT NULL)`,
+
+    // ── DOWNLINE OVERRIDES — org config + statement fold columns ─────────────
+    // The commission_overrides ledger itself self-creates in overrideStore.ts
+    // (ensureOverrideSchema, the spiffStore pattern); these live here because
+    // they extend EXISTING tables. Enabled by default but MONEY-dark: every
+    // rate defaults to $0 and a $0 slot pays nobody, so no tenant's payroll
+    // changes until someone sets a rate — in the console card, or per-hire on
+    // an invite. The enabled flag stays as the org kill-switch. The *_bp
+    // columns (basis points) are headroom for the PERCENT_OF_COMMISSION basis,
+    // whose execution path is deliberately not built yet (validateOverridePatch
+    // refuses it — the PROGRESSIVE tier-mode precedent).
+    `ALTER TABLE tenants ADD COLUMN commission_override_enabled INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE tenants ADD COLUMN commission_override_basis TEXT NOT NULL DEFAULT 'FLAT_PER_SALE'`,
+    `ALTER TABLE tenants ADD COLUMN commission_override_team_lead_cents INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE tenants ADD COLUMN commission_override_manager_cents INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE tenants ADD COLUMN commission_override_team_lead_bp INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE tenants ADD COLUMN commission_override_manager_bp INTEGER NOT NULL DEFAULT 0`,
+    // Override block persisted on the weekly statement, exactly like hourly_*:
+    // recomputed from the ledger on every calc, frozen at FINALIZE. Unlike
+    // hourly it is INSIDE final_commission_cents (overrides are commission
+    // money and must ride the ACH/1099/reserve rails); the dedicated columns
+    // keep the CSV/PDF explainable and the no-op guard cheap.
+    `ALTER TABLE commission_statements ADD COLUMN override_pay_cents INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE commission_statements ADD COLUMN override_item_count INTEGER NOT NULL DEFAULT 0`,
+    // Frozen snapshot of the ledger rows inside a FINALIZED statement (mirrors
+    // contributing_sales) so a locked week's drill-down stays truthful forever.
+    `ALTER TABLE commission_statements ADD COLUMN contributing_overrides TEXT`,
 
   ];
   for (const stmt of stmts) {
@@ -3254,6 +3322,19 @@ function bustPinCaches(tenantId?: number | null) {
 let leaderboardEpoch = 0;
 function bumpLeaderboardEpoch(): void {
   leaderboardEpoch++;
+}
+
+// Roster shape ONLY — who exists and who reports to whom. Deliberately separate
+// from leaderboardEpoch, which every knock and lead-status write also moves: a
+// consumer that re-derives a REPORTING TREE wants to recompute when the tree
+// changes, not on every sale. routes.ts's SSE lead stream memoises each
+// subscriber's leadVisibilityScope() against this, and that scope is authority
+// (it decides which reps' leads reach a team_lead), so the bump lives on the
+// storage writes rather than on any route: a reports_to edge moved by a route
+// that nobody thought to instrument must still reach an open stream.
+let teamRosterEpoch = 0;
+function bumpTeamRosterEpoch(): void {
+  teamRosterEpoch++;
 }
 
 /** UTC instant of midnight in the org's local day.
@@ -4093,6 +4174,7 @@ export class Storage implements IStorage {
     const color = member.color != null ? member.color : this.allocateMemberColor(member.tenantId ?? null);
     const row = db.insert(teamMembers).values({ ...member, color, createdAt: new Date().toISOString() }).returning().get();
     bumpLeaderboardEpoch(); // the roster shapes the board's rows
+    bumpTeamRosterEpoch(); // a new member can land under an existing lead
     return row;
   }
   private allocateMemberColor(tenantId: number | null): string | null {
@@ -4109,6 +4191,7 @@ export class Storage implements IStorage {
       : eq(teamMembers.id, id);
     const row = db.update(teamMembers).set(updates).where(condition).returning().get();
     bumpLeaderboardEpoch(); // active flag / name changes reach the board
+    bumpTeamRosterEpoch(); // reports_to moves re-shape a team_lead's scope
     return row;
   }
   deleteTeamMember(id: number, tenantId?: number): boolean {
@@ -4116,9 +4199,13 @@ export class Storage implements IStorage {
       ? and(eq(teamMembers.id, id), eq(teamMembers.tenantId, tenantId))
       : eq(teamMembers.id, id);
     const deleted = db.delete(teamMembers).where(condition).run().changes > 0;
-    if (deleted) bumpLeaderboardEpoch();
+    if (deleted) { bumpLeaderboardEpoch(); bumpTeamRosterEpoch(); }
     return deleted;
   }
+  /** Monotonic stamp of the roster's SHAPE — bumped by every create/update/
+   *  delete above. Read by consumers that cache a derived reporting tree; a
+   *  changed value means "re-derive", it carries no other meaning. */
+  teamRosterEpoch(): number { return teamRosterEpoch; }
 
   // ── Knock log ──────────────────────────────────────────────────────────────
   // Default LIMIT pushed into SQL (mirrors getRecentKnocksByRep): knock_log

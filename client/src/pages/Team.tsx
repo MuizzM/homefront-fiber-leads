@@ -306,6 +306,20 @@ export default function Team() {
   const qc = useQueryClient();
   const canManageCommission = useCan("commission.structure.manage");
   const canManageDocuments = useCan("onboarding.documents.manage");
+  const canManageOverrides = useCan("commission.overrides.manage");
+  // Per-member override rates (what uplines keep on this seller's sales), as
+  // draft dollar strings; "" = inherit the org default. Seeded when the edit
+  // dialog opens, saved through their own endpoint — pay is its own decision,
+  // same reasoning as the Commission section below.
+  const [overrideTlDollars, setOverrideTlDollars] = useState("");
+  const [overrideMgrDollars, setOverrideMgrDollars] = useState("");
+  useEffect(() => {
+    const centsDraft = (cents: number | null | undefined) =>
+      cents == null ? "" : String(cents % 100 === 0 ? cents / 100 : (cents / 100).toFixed(2));
+    setOverrideTlDollars(centsDraft((editMember as any)?.overrideTeamLeadCents));
+    setOverrideMgrDollars(centsDraft((editMember as any)?.overrideManagerCents));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editMember?.id]);
 
   // HONESTY FIX: a query failure used to paint "No team members yet" + an Add
   // CTA (inviting duplicates after a transient error). Distinguish the two.
@@ -317,6 +331,28 @@ export default function Team() {
     rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number;
   }[]>({
     queryKey: ["/api/leaderboard"],
+  });
+
+  const overrideRatesMutation = useMutation({
+    mutationFn: async () => {
+      // "" = inherit (null on the wire); dollars → integer cents ONCE here.
+      const toCents = (draft: string): number | null => {
+        const trimmed = draft.trim();
+        if (!trimmed) return null;
+        const dollars = Number(trimmed);
+        return Number.isFinite(dollars) && dollars >= 0 ? Math.round(dollars * 100) : null;
+      };
+      const res = await apiRequest("PATCH", `/api/commission/reps/${editMember!.id}/override-rates`, {
+        overrideTeamLeadCents: toCents(overrideTlDollars),
+        overrideManagerCents: toCents(overrideMgrDollars),
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/team"] });
+      toast({ title: "Override rates updated", description: "Applies to future sales only — settled weeks keep their frozen amounts." });
+    },
+    onError: (error: any) => toast({ title: "Rates not saved", description: error.message, variant: "destructive" }),
   });
 
   const createMutation = useMutation({
@@ -578,6 +614,21 @@ export default function Team() {
                           <ChevronUp className="w-3 h-3" /> Reports to <span className="text-foreground/80 font-medium">{sup.name}</span>
                         </span>
                       )}
+                      {/* Recruited-by — the sponsor edge, read-only. It never
+                          drives pay or authority (the reports-to chain does),
+                          so it is a muted fact here and appears in NO form.
+                          Renders only when the roster carries the id AND the
+                          recruiter is still on the roster to name. */}
+                      {(() => {
+                        const recruiter = (member as any).recruitedByMemberId != null
+                          ? memberById.get((member as any).recruitedByMemberId)
+                          : undefined;
+                        return recruiter ? (
+                          <span className="inline-flex items-center gap-1" data-testid={`recruited-by-${member.id}`}>
+                            <UserPlus className="w-3 h-3" /> Recruited by <span className="text-foreground/80 font-medium">{recruiter.name}</span>
+                          </span>
+                        ) : null;
+                      })()}
                       {(directReportCountById.get(member.id) ?? 0) > 0 && (
                         <span className="inline-flex items-center gap-1" data-testid={`chip-reports-${member.id}`}>
                           <GitBranch className="w-3 h-3" />
@@ -1017,6 +1068,65 @@ export default function Team() {
                 </span>
                 <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground" />
               </button>
+            </div>
+          )}
+
+          {/* OVERRIDE RATES — what the upline keeps from each of this member's
+              qualified sales, the same knobs the invite form sets for new
+              hires, editable here for everyone who predates them. Hidden for
+              manager rows (no slot above a manager ever pays) and gated on the
+              same capability as every other override money write. Future sales
+              only: earned ledger rows carry frozen snapshots. */}
+          {editMember && canManageOverrides && editMember.role !== "manager" && editMember.id !== myMemberId && (
+            <div className="mt-1 border-t border-border pt-3" data-testid="override-rates-section">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                  <DollarSign className="w-3.5 h-3.5" />
+                </span>
+                <div className="min-w-0">
+                  <span className="block text-xs font-semibold">Upline keep per sale</span>
+                  <span className="block text-2xs text-muted-foreground">Overrides on this member's sales · blank = org default</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label htmlFor="override-tl-rate" className="text-2xs text-muted-foreground">Team lead keeps</Label>
+                  <div className="mt-1 flex h-9 items-center rounded-lg border border-border bg-background px-2.5">
+                    <span className="mr-1 text-sm text-muted-foreground">$</span>
+                    <input
+                      id="override-tl-rate" inputMode="decimal"
+                      value={overrideTlDollars}
+                      onChange={e => setOverrideTlDollars(e.target.value)}
+                      placeholder="org default"
+                      className="w-full bg-transparent text-sm text-foreground outline-none"
+                      data-testid="override-tl-rate"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="override-mgr-rate" className="text-2xs text-muted-foreground">Manager keeps</Label>
+                  <div className="mt-1 flex h-9 items-center rounded-lg border border-border bg-background px-2.5">
+                    <span className="mr-1 text-sm text-muted-foreground">$</span>
+                    <input
+                      id="override-mgr-rate" inputMode="decimal"
+                      value={overrideMgrDollars}
+                      onChange={e => setOverrideMgrDollars(e.target.value)}
+                      placeholder="org default"
+                      className="w-full bg-transparent text-sm text-foreground outline-none"
+                      data-testid="override-mgr-rate"
+                    />
+                  </div>
+                </div>
+              </div>
+              <Button
+                type="button" size="sm" variant="secondary"
+                onClick={() => overrideRatesMutation.mutate()}
+                disabled={overrideRatesMutation.isPending}
+                className="mt-2 w-full"
+                data-testid="save-override-rates"
+              >
+                {overrideRatesMutation.isPending ? "Saving…" : "Save override rates"}
+              </Button>
             </div>
           )}
         </DialogContent>

@@ -7,10 +7,13 @@ import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
   FileSignature, CheckCircle2, Home, FileText, Printer,
   Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown, PiggyBank, Sparkles, Check,
+  GitBranch,
 } from "lucide-react";
 import { CommissionStatement } from "@/components/CommissionStatement";
+import { OverrideStatusPill } from "@/components/DownlineSheet";
 import { calculateRetroactiveCommission } from "@shared/commissionTiers";
 import { rankProgress, type Rank } from "@shared/commissionRanks";
+import type { MyOverrideWeekResponse } from "@shared/commissionOverrides";
 
 // The statement opens by ID and pulls its own server-assembled document, so the
 // rep's paper copy is the same document the PDF renders — house amounts,
@@ -425,6 +428,108 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
   );
 }
 
+// ── Override earnings — what my downline earned me this week ──────────────────
+// Self-fetching and self-gating, like GetPaidSection: a plain rep with no
+// downline and no ledger rows must see NOTHING — no empty card, no explainer
+// about a program that doesn't apply to them. Loading and errors also render
+// null: this is a bonus layer on the page, never a hole in it.
+// Payable and held are SEPARATE figures (the EarningsToday rule: certain and
+// uncertain money never share a number), and the statement footer reconciles
+// this card against the frozen statement whenever one exists.
+function OverrideEarningsCard() {
+  const { data, isLoading, isError } = useQuery<MyOverrideWeekResponse>({
+    queryKey: ["/api/commission/overrides/me"],
+    queryFn: () => apiRequest("GET", "/api/commission/overrides/me").then(r => r.json()),
+  });
+
+  if (isLoading || isError || !data) return null;
+  // Optional-chained: a payload without the wire shape (older server, proxy
+  // error page) must degrade to "no card", never to a crash on a money screen.
+  const rows = data.rows ?? [];
+  if (!data.hasDownline && rows.length === 0) return null;
+  const totals = data.totals ?? { rowCount: 0, payableCents: 0, heldCents: 0, settledCents: 0 };
+
+  const roleLabel: Record<string, string> = { rep: "Rep", team_lead: "Team Lead", manager: "Manager" };
+
+  return (
+    <section className="rounded-xl bg-card border border-border overflow-hidden" data-testid="override-earnings-card">
+      <header className="px-4 py-3 border-b border-border flex items-center gap-2">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-primary/10 text-primary">
+          <GitBranch className="w-4 h-4" aria-hidden="true" />
+        </span>
+        <span className="text-sm font-semibold tracking-tight text-foreground">Override earnings</span>
+        <span className="ml-auto text-[11px] text-muted-foreground">from your downline's sales</span>
+      </header>
+
+      {/* Payable is the headline; held and settled stand apart as their own
+          muted figures — never blended into one number. */}
+      <div className="px-4 py-3 flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Payable this week</div>
+          <div className="mt-0.5 text-2xl font-semibold tracking-tight tabular-nums text-foreground" data-testid="override-payable">
+            {usd(totals.payableCents)}
+          </div>
+        </div>
+        <div className="flex items-center gap-4 text-right">
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">On hold</div>
+            <div className="mt-0.5 text-sm font-semibold tabular-nums text-muted-foreground" data-testid="override-held">
+              {usd(totals.heldCents)}
+            </div>
+          </div>
+          {totals.settledCents > 0 && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Settled</div>
+              <div className="mt-0.5 text-sm font-semibold tabular-nums text-muted-foreground" data-testid="override-settled">
+                {usd(totals.settledCents)}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="px-4 py-3 border-t border-border text-xs text-muted-foreground" data-testid="override-no-rows">
+          No override earnings this week — they appear as your downline closes doors.
+        </div>
+      ) : (
+        <div className="divide-y divide-border border-t border-border">
+          {rows.map(r => (
+            <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-3" data-testid={`override-row-${r.id}`}>
+              <div className="min-w-0">
+                <div className="text-sm text-foreground truncate">
+                  {r.downlineRepName}
+                  <span className="text-muted-foreground"> · {roleLabel[r.downlineRoleAtEarn] ?? r.downlineRoleAtEarn}</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                  {r.soldAt
+                    ? new Date(r.soldAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
+                    : "—"}
+                  {r.saleStatus && <SaleChip status={r.saleStatus} />}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`text-sm font-semibold tabular-nums ${r.amountCents < 0 ? "text-rose-400" : "text-foreground"}`}>
+                  {r.amountCents < 0 ? `−${usd(Math.abs(r.amountCents))}` : usd(r.amountCents)}
+                </span>
+                <OverrideStatusPill status={r.status} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Reconciliation against the frozen statement — only when one exists. */}
+      {data.statementOverrideCents != null && (
+        <footer className="px-4 py-2.5 border-t border-border bg-secondary/30 flex items-center justify-between text-xs" data-testid="override-statement-footer">
+          <span className="text-muted-foreground">Included in your statement</span>
+          <span className="tabular-nums font-semibold text-foreground">{usd(data.statementOverrideCents)}</span>
+        </footer>
+      )}
+    </section>
+  );
+}
+
 // ── Rank presentation ─────────────────────────────────────────────────────────
 // Metal tints tuned for the dark card at AA. Presentation ONLY — names and
 // math come from shared/commissionRanks, which projects the same ladder the
@@ -735,6 +840,11 @@ function WeekView({ data }: { data: WeekResponse }) {
           </div>
         );
       })()}
+
+      {/* Override earnings — money the rep's DOWNLINE produced for them. A
+          separate additive layer, so it gets its own card between the week
+          strip and the reserve; it never folds into the hero number silently. */}
+      <OverrideEarningsCard />
 
       {/* Reserve holdback — this week's earned/held/paid split + running balance.
           Renders only when the tenant runs a reserve; numbers are authoritative. */}
