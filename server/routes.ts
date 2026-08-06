@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { sendMailResilient, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { storage, getDefaultTenantId, orgTimezoneFor, type MapPinRow, type MapPinWindow, type MapView } from "./storage";
+import { storage, getDefaultTenantId, orgTimezoneFor, type MapPinRow, type MapPinWindow, type MapView, type TerritoryLeadWrite } from "./storage";
 import { localWallToUtcMs, localYmdParts } from "@shared/workweek";
 import { billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
@@ -7719,13 +7719,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   function applyReclaimTransition(
     t: any, mode: ReclaimMode, newRepId: number | undefined, user: any, tid: number | undefined, at: string,
   ): { status: TerritoryStatus; leadsAffected: number } {
-    const before = storage.getLeadsByTerritory(t.id);
     const prev: TerritoryState = {
       id: t.id,
       status: ((t as any).status ?? "active") as TerritoryStatus,
       repIds: safeJson((t as any).assigneeIds) ?? [t.repId],
       color: t.color,
-      leads: before.map((l: any) => ({ id: l.id, assignedRepId: l.assignedRepId })),
+      // The transition decides status and repIds from the HOLDERS alone — it
+      // reads state.leads only to project them forward — and its lead rule is
+      // the same one target for the whole area (see the mode switch below), so
+      // the door half is applied set-based instead of hydrating every row in
+      // the area to diff it one at a time.
+      leads: [],
       history: [],
     };
     const next = reclaimTerritory(prev, mode, { actorId: user?.id ?? null, at, newRepId });
@@ -7749,24 +7753,39 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       assignedAt: next.repIds.length ? at : null,
     } as any, tid);
 
-    // Persist only the leads whose rep actually changed
-    const beforeById = new Map(before.map((l: any) => [l.id, l.assignedRepId]));
-    let leadsAffected = 0;
-    for (const l of next.leads) {
-      if (beforeById.get(l.id) !== l.assignedRepId) {
-        const moved = storage.updateLead(l.id, {
-          assignedRepId: l.assignedRepId,
-          assignedTerritoryId: l.assignedRepId == null ? null : t.id,
-          assignmentSource: l.assignedRepId == null ? null : "territory-sync",
-          [l.assignedRepId == null ? "unassignedAt" : "assignedAt"]: at,
-        } as any, tid);
-        leadsAffected++;
-        // next.leads elements are pure {id, assignedRepId} domain objects from
-        // @shared/territory with no tenant on them — the tenant comes from the
-        // persisted row, or the request's as a fallback.
-        if (moved && leadsAffected <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid);
+    // Persist only the leads whose rep actually changed — the DIFF, not the area.
+    //
+    // reclaimTerritory gives every door in the area the SAME destination (its
+    // own docblock is the contract):
+    //   keep_leads     → doors untouched              → nothing to write
+    //   return_to_pool → every door's rep → null      → the pool, area link cleared
+    //   reassign       → every door's rep → newRepId  → one owner
+    // A uniform destination makes the row-by-row diff a predicate, so each mode
+    // is ONE UPDATE whose WHERE selects exactly the rows the loop used to pick:
+    // "not already in the pool", "not already this rep". Doors already at the
+    // destination are not selected, so leadsAffected counts what moved and
+    // never inflates to the area's door count. The switch is exhaustive — a new
+    // ReclaimMode fails to compile here rather than silently writing nothing.
+    let moved: TerritoryLeadWrite = { changed: 0, leadIds: [] };
+    switch (mode) {
+      case "keep_leads": break;
+      case "return_to_pool":
+        moved = storage.bulkReturnTerritoryLeadsToPool({ territoryId: t.id, at, tenantId: tid });
+        break;
+      case "reassign":
+        // "except the doors newRepId already holds" IS the diff: re-stamping
+        // those would reset an assigned_at the loop left alone.
+        moved = storage.bulkAssignTerritoryLeadsExcept({
+          territoryId: t.id, repId: Number(newRepId), at, keepRepIds: [Number(newRepId)], tenantId: tid,
+        });
+        break;
+      default: {
+        const unreachable: never = mode;
+        throw new Error(`unknown reclaim mode: ${String(unreachable)}`);
       }
     }
+    const leadsAffected = moved.changed;
+    emitLeadChangesBulk("assignment", moved.leadIds, user, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected });
     return { status: next.status, leadsAffected };
   }
@@ -8018,18 +8037,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // Doors follow the area. A rep dropped from the assignment must stop seeing
     // its leads, and the incoming primary must start — otherwise the area moves
-    // but the work doesn't.
-    let handedOver = 0;
-    for (const l of storage.getLeadsByTerritory(t.id)) {
-      const holder = (l as any).assignedRepId;
-      if (holder != null && merged.includes(holder)) continue; // already on the area
-      const moved = storage.updateLead(l.id, {
-        assignedRepId: newPrimary, assignedTerritoryId: t.id,
-        assignmentSource: "territory-sync", assignedAt: at,
-      } as any, tid);
-      handedOver++;
-      if (moved && handedOver <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? (l as any).tenantId);
-    }
+    // but the work doesn't. The reps who STAY on the crew are the exception, and
+    // the reason this can't be a blanket update: re-stamping a co-assignee's
+    // door would steal it and restart its "assigned since" clock.
+    //
+    // ONE UPDATE for the area instead of an UPDATE + pin-cache bust per door
+    // (a 2,000-door patch used to pay 2,000 of each on the request thread); the
+    // ids come back from the same transaction, so the assignment events still
+    // name exactly the doors that moved, capped exactly as the loop capped them.
+    const handover = storage.bulkAssignTerritoryLeadsExcept({
+      territoryId: t.id, repId: newPrimary, at, keepRepIds: merged, tenantId: tid,
+    });
+    emitLeadChangesBulk("assignment", handover.leadIds, user, tid);
 
     storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
     res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: retainedAreaColor(t, newPrimary) });
@@ -8063,23 +8082,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const at = new Date().toISOString();
-    const before = storage.getLeadsByTerritory(t.id);
+    const releaseLeads = req.body?.releaseLeads !== false;
     const prev: TerritoryState = {
       id: t.id,
       status: ((t as any).status ?? "active") as TerritoryStatus,
       repIds: safeJson<number[]>((t as any).assigneeIds) ?? [t.repId],
       color: t.color,
-      leads: before.map((l: any) => ({ id: l.id, assignedRepId: l.assignedRepId })),
+      // The transition decides the new status and holder list from repIds
+      // alone; its lead rule is "the departing rep's doors, and only theirs"
+      // (see unassignRep), which is applied set-based below rather than by
+      // hydrating the whole area to diff it row by row.
+      leads: [],
       history: [],
     };
     if (!prev.repIds.includes(repId)) {
       return res.status(409).json({ error: "that rep is not assigned to this area", code: "NOT_ASSIGNED" });
     }
 
-    const next = unassignRep(prev, repId, {
-      actorId: user?.id ?? null, at,
-      releaseLeads: req.body?.releaseLeads !== false,
-    });
+    const next = unassignRep(prev, repId, { actorId: user?.id ?? null, at, releaseLeads });
 
     // Keep repId (the primary owner used for colour/history) pointing at someone
     // who is still on the area; fall back to the removed rep only when nobody is
@@ -8106,27 +8126,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // to the area's own door count. Taking one person off a crew must leave the
     // work with the crew. The link is only cleared when the AREA itself goes
     // away (delete) or is explicitly emptied (reclaim to pool).
-    const beforeById = new Map(before.map((l: any) => [l.id, l.assignedRepId]));
-    let leadsReleased = 0;
-    for (const l of next.leads) {
-      if (beforeById.get(l.id) !== l.assignedRepId) {
-        const moved = storage.updateLead(l.id, {
-          assignedRepId: l.assignedRepId,
-          assignedTerritoryId: t.id,
-          assignmentSource: l.assignedRepId == null ? null : "territory-sync",
-          // The paperwork describes an assignment that is over; leaving it
-          // behind prints "assigned by Mona" under an empty owner.
-          ...(l.assignedRepId == null ? { assignedBy: null, assignedAt: null } : {}),
-          unassignedAt: l.assignedRepId == null ? at : null,
-        } as any, tid);
-        leadsReleased++;
-        // Released doors go back to the pool, so the post-write row authorizes
-        // only org-wide roles — the removed rep's own copy is retired by the
-        // map-changed ping, which is the only safe way to tell someone about a
-        // lead they can no longer see.
-        if (moved && leadsReleased <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid);
-      }
-    }
+    //
+    // ONE UPDATE restricted to the departing rep's doors — which is exactly the
+    // diff unassignRep computes, since a co-assignee's door is never in it — so
+    // leadsReleased is still the number of doors that actually moved. Doors the
+    // rep never held are not selected and cannot inflate it.
+    // releaseLeads:false means the hand-off already happened out of band: the
+    // transition leaves every door where it is, so there is nothing to write.
+    const released = releaseLeads
+      ? storage.bulkReleaseTerritoryLeadsFromRep({ territoryId: t.id, repId, at, tenantId: tid })
+      : { changed: 0, leadIds: [] as number[] };
+    const leadsReleased = released.changed;
+    // Released doors go back to the pool, so the post-write row authorizes only
+    // org-wide roles — the removed rep's own copy is retired by the map-changed
+    // ping, which is the only safe way to tell someone about a lead they can no
+    // longer see.
+    emitLeadChangesBulk("assignment", released.leadIds, user, tid);
 
     const removed = storage.getTeamMemberById(repId, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "unassigned", { repId, repName: removed?.name ?? null, leadsReleased });

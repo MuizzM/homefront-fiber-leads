@@ -15,8 +15,6 @@
 // "gross ÷ sales" is the only honest per-door number, and it must re-sum to
 // gross to the cent. See allocateCents.
 
-export type SaleStatus = "QUALIFIED" | "PENDING" | "REVERSED" | "DISQUALIFIED" | "CANCELLED";
-
 export interface StatementSaleInput {
   saleId: number;
   externalId: string;

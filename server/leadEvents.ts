@@ -287,14 +287,3 @@ export function leadEventListenerCount(): number {
   return bus.listenerCount(EVENT);
 }
 
-/** Full reset between tests. Listeners are dropped too: a stream leaked by an
- *  earlier test would otherwise keep firing into the next one's assertions, and
- *  the leak checks above are only meaningful from a known-zero baseline. The
- *  epoch is regenerated with the seq space so a cursor captured before the reset
- *  is correctly rejected rather than silently re-validated by the new numbering. */
-export function __resetLeadEventsForTests(): void {
-  _ring.length = 0;
-  _seq = 0;
-  _epoch = newEpoch();
-  bus.removeAllListeners(EVENT);
-}

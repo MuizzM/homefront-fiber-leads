@@ -5,8 +5,6 @@
 // NOT progressive (7×$150 + 1×$200). All money is integer cents — never binary
 // floating point. Server is authoritative; the client uses this only to preview.
 
-export type TierMode = "RETROACTIVE_WEEKLY" | "PROGRESSIVE";
-
 export interface CommissionTier {
   id?: number | string;
   position: number;           // 0-based order (sorted by minimumSales)

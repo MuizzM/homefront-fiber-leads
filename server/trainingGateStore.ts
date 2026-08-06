@@ -154,11 +154,6 @@ export function isUserTrainingGated(user: { id: number; role?: string | null; te
   });
 }
 
-/** THE check. One call site for the middleware, one for the rep's own status. */
-export function isGated(user: { id: number; role?: string | null; tenantId?: number | null }): boolean {
-  return isTrainingGated(gateStateFor(user));
-}
-
 export interface GateStatus {
   gated: boolean;
   exempt: boolean;
@@ -246,9 +241,4 @@ export function trainingRoster(tenantId: number): RosterRow[] {
       gated: trainingRequired && !isRoleExempt(role) && completed < need,
     };
   });
-}
-
-/** Back-compat: just the people currently locked out. */
-export function gatedRoster(tenantId: number): RosterRow[] {
-  return trainingRoster(tenantId).filter(r => r.gated);
 }
