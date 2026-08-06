@@ -27,6 +27,16 @@
 //
 // Use these for ISO columns (leads). Columns written by SQLite's own default
 // must keep using datetime() — mixing the two is what caused this.
+//
+// CAVEAT, measured 2026-08-06: `leads` is not uniformly ISO. ~17% of live rows
+// (1051 of 6048 `updated_at`, 836 `created_at`) still hold SQLite-default
+// timestamps from before this convention landed, so an ISO threshold misjudges
+// those rows for the whole boundary day — the same failure described above,
+// pointing the other way. A threshold-vs-column test still cannot see it.
+// Where the query is an unindexed aggregate (no index to protect), normalizing
+// BOTH sides with replace(col,'T',' ') is exact and costs nothing; /api/stats'
+// stale counter does this. Where an index must be preserved, prefer these
+// helpers and accept the legacy-row edge until the column is backfilled.
 
 /** ISO-formatted "N days ago", for comparison against ISO TEXT columns.
  *

@@ -27,7 +27,6 @@ export const CAMPAIGN_TRIGGER_KINDS = [
   "per_sale", "knocks_by_time", "sale_by_time", "sales_in_day", "knock_streak",
   "knocks_and_sale_by_time",
 ] as const;
-export type CampaignTriggerKind = typeof CAMPAIGN_TRIGGER_KINDS[number];
 
 export type CampaignTrigger =
   /** Every qualifying sale inside the window pays the reward. */

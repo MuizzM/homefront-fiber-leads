@@ -34,6 +34,7 @@
 // safety posture: the expensive failure is a number that gets dialled because
 // nobody checked, not one that sits undialled for a day.
 import { setTimeout as delay } from "node:timers/promises";
+import { isBlankCsvRow, parseCsvRows } from "./csv";
 import { normalizeUsPhone } from "@shared/calling";
 import type { DncFlags, LineType } from "@shared/tracerfy";
 
@@ -114,33 +115,15 @@ async function pollQueue(path: string, nowMs: () => number): Promise<any> {
 }
 
 /** Minimal RFC-4180 CSV → row objects. Handles quoted fields containing commas
- *  and escaped quotes, which owner names ("Smith, John Jr.") routinely do. */
+ *  and escaped quotes, which owner names ("Smith, John Jr.") routinely do.
+ *
+ *  Header adapter over the shared tokenizer (./csv) — this file's state machine
+ *  WAS that tokenizer, so nothing about the parse changed. Blank rows are
+ *  dropped before the header is taken (their exports end with stray newlines),
+ *  and both headers and values are trimmed: a provider writes ", Mobile" and a
+ *  space must not become part of a phone number. */
 export function parseCsv(text: string): Array<Record<string, string>> {
-  const rows: string[][] = [];
-  let row: string[] = [], field = "", quoted = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text[i]!;
-    if (quoted) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i += 1; } else quoted = false;
-      } else field += c;
-      continue;
-    }
-    if (c === '"') { quoted = true; continue; }
-    if (c === ",") { row.push(field); field = ""; continue; }
-    if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i += 1;
-      row.push(field); field = "";
-      if (row.some(v => v !== "")) rows.push(row);
-      row = [];
-      continue;
-    }
-    field += c;
-  }
-  row.push(field);
-  if (row.some(v => v !== "")) rows.push(row);
-
-  const [header, ...body] = rows;
+  const [header, ...body] = parseCsvRows(text).filter(r => !isBlankCsvRow(r));
   if (!header) return [];
   return body.map(r => {
     const o: Record<string, string> = {};

@@ -652,7 +652,9 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
     const parsed = queueQuerySchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ error: "Invalid queue query", details: parsed.error.flatten() });
     try {
-      const synced = syncFreshFiberQueue(tid);
+      // force=true: this endpoint reports `synced` to the operator — a
+      // debounced 0 here would read as "the sync brought in nothing".
+      const synced = syncFreshFiberQueue(tid, true);
       // Skip-traced doors join the queue on the same read. Reported separately
       // rather than folded into `synced` so an operator can tell "the trace
       // brought in nothing" from "the trace cannot import at all" — the latter

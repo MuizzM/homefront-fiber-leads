@@ -47,9 +47,6 @@ export function isRevenueAdmissionClass(source: ProviderRequestPriority): boolea
 // held below the concurrency + per-window rate ceilings, leaving reserved capacity
 // only CRITICAL can occupy — bulk work can never consume the last slots.
 export const CRITICAL_PRIORITY_CUTOFF = priorityValue.new_build; // 380
-export function isCriticalPriority(source: ProviderRequestPriority): boolean {
-  return priorityValue[source] >= CRITICAL_PRIORITY_CUTOFF;
-}
 
 /**
  * Thrown when a request waits past the admission deadline without being admitted.

@@ -1,3 +1,16 @@
+// ── The Resend HTTP API rail ────────────────────────────────────────────────
+//
+// NOT a duplicate of server/mail.ts, and the two must not be merged. That
+// module is the nodemailer/SMTP rail with 587<->465 port failover (built after
+// the 2026-07-16 Resend port outage) and carries the branded HTML shell for
+// OTP and alert mail. This one is the Resend HTTP API, used only by the
+// onboarding-signature flow, and the per-message Idempotency-Key below plus the
+// content_id attachment mapping exist ONLY on this path. Merging the transports
+// changes delivery behaviour: double-send risk on SMTP retries, or loss of
+// failover on HTTP. The shared knowledge is the credential convention only —
+// apiKey() falls back to SMTP_PASS when SMTP_HOST=smtp.resend.com, the same
+// convention mail.ts documents in its header.
+
 interface ResendAttachment {
   filename: string;
   content: Buffer;

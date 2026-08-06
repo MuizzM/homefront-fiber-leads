@@ -3,7 +3,71 @@ import { estimateScanCost, bytesToUsd, budgetTiers, MAX_CHECKS_PER_RUN } from ".
 import { scoreMarket, type MarketAggregate } from "../../shared/marketIntel";
 import { clusterOpportunities, convexHull, padHull, subdivideCluster, type OppPoint } from "../../shared/opportunity";
 import { rankTargets, type PoolTarget } from "../../shared/scanPriority";
-import { classifyAvailabilityTransition } from "../../shared/fiberDetect";
+
+// ── Inlined from the retired shared/fiberDetect.ts ────────────────────────────
+// The module was deleted (its production consumer was replaced by
+// server/kineticResponseParser.ts on 2026-07-16), but the product law it encodes
+// — a FAILED check is never a negative — is still the law the scanner obeys, so
+// the assertions below are kept verbatim against a local copy of the classifier.
+type AvailabilityStatus =
+  | "unknown"
+  | "check_failed"
+  | "checked_unavailable"
+  | "checked_available"
+  | "newly_live"
+  | "still_available"
+  | "went_stale";
+
+interface ScanSnapshot {
+  everScanned: boolean;
+  wasLive: boolean;
+}
+
+interface ScanResult {
+  isNewFiber: boolean;
+  fiberAvailable: boolean;
+  billingStatus: string | null;
+  checkFailed?: boolean;
+}
+
+interface TransitionOutcome {
+  status: AvailabilityStatus;
+  isNewlyLive: boolean;
+  shouldCreateLead: boolean;
+  recordSnapshot: boolean;
+  reason: string;
+}
+
+function isHotFiber(r: ScanResult): boolean {
+  return !r.checkFailed && r.isNewFiber && r.billingStatus === "N" && r.fiberAvailable;
+}
+
+function classifyAvailabilityTransition(prev: ScanSnapshot, result: ScanResult): TransitionOutcome {
+  // FAILED CHECK GUARD (product law): a timeout/error tells us nothing. Do not
+  // record it, do not count it as unavailable, do not fire "went stale".
+  if (result.checkFailed) {
+    return { status: "check_failed", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: false, reason: "check failed — no signal, will recheck" };
+  }
+
+  const hot = isHotFiber(result);
+
+  if (!prev.everScanned) {
+    return hot
+      ? { status: "checked_available", isNewlyLive: false, shouldCreateLead: true, recordSnapshot: true, reason: "first scan — already live" }
+      : { status: "checked_unavailable", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "first scan — not serviceable" };
+  }
+
+  if (hot && !prev.wasLive) {
+    return { status: "newly_live", isNewlyLive: true, shouldCreateLead: true, recordSnapshot: true, reason: "flipped unavailable → live" };
+  }
+  if (hot && prev.wasLive) {
+    return { status: "still_available", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "already known live" };
+  }
+  if (!hot && prev.wasLive) {
+    return { status: "went_stale", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "was live, now unavailable — review" };
+  }
+  return { status: "checked_unavailable", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "still not serviceable" };
+}
 
 // ── Economics — the cost an operator sees must be deterministic ───────────────
 describe("scanEconomics", () => {

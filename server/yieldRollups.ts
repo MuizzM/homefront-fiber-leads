@@ -28,8 +28,6 @@
  * reports pressure. The yield engine keeps using its ORIGINAL query until
  * every readiness flag is set, then switches. Kill-switch: YIELD_ROLLUPS=off.
  */
-import fs from "fs";
-import path from "path";
 import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
 import { readPressure, PRESSURE_ORDER } from "./resourcePressure";
@@ -283,18 +281,3 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
   _resetYieldRollupReadyForTests();
 }
 
-// Evidence helper for ops: sizes the rollup state without heavy reads.
-export function yieldRollupStatus(): Record<string, unknown> {
-  const dataDir = process.env.DATA_DIR || process.cwd();
-  const walPath = path.join(dataDir, "data.db-wal");
-  let walMb = 0;
-  try { walMb = Math.round(fs.statSync(walPath).size / 1_048_576); } catch { /* absent */ }
-  return {
-    ready: yieldRollupsReady(),
-    streetkeyDone: getState("streetkey_done") === "1",
-    negstreakDone: getState("negstreak_done") === "1",
-    negstreakCursor: getState("negstreak_cursor"),
-    indexes: INDEXES.map((i) => ({ name: i.name, exists: indexExists(i.name) })),
-    walMb,
-  };
-}

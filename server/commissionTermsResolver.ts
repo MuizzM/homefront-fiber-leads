@@ -14,6 +14,15 @@
 // One precedence order, stated once, so the agreement a rep signs and the
 // portal that pays them are reading the same answer. Most specific wins:
 // explicit override → rep row → invite → tenant → house default.
+//
+// ── NOT the same resolver as reserveService.resolveRepReserveConfig ─────────
+// Both read team_members.reserve_percent/reserve_cap_cents and the tenants
+// defaults, so the pair reads like duplication. It is not, and unifying them
+// CHANGES PAY. This one is CONTRACT-TIME and carries the invite layer above,
+// because the terms in the invitation are part of what the rep signed. That one
+// is PAYROLL-TIME with a shorter chain (rep ?? org ?? $2,500 default) and its
+// own zero-handling (0 = uncapped). Change either deliberately, never by
+// "deduplicating" the pair.
 
 import { rawDb } from "./db";
 import { storage } from "./storage";

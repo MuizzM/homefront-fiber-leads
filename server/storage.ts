@@ -8,9 +8,8 @@ import {
   users, sessions, otpCodes, territories, repApplications,
   territoryRequests, locationPings, clockSessions,
   commissions, commissionRates, activityLog, tenants,
-  activityOverrides, leadPhotos,
+  leadPhotos,
   type LeadPhoto,
-  type ActivityOverride,
   type Lead, type InsertLead,
   type FiberCheck, type InsertFiberCheck,
   type TeamMember, type InsertTeamMember,
@@ -27,7 +26,7 @@ import {
   type ActivityLogEntry,
   type Tenant, type InsertTenant,
 } from "@shared/schema";
-import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { eq, desc, or, and, gt, lt, isNull, inArray, sql } from "drizzle-orm";
 
 /** Statuses that BLOCK a new commission on the same door.
  *
@@ -290,6 +289,18 @@ export type LeadDeleteResult =
   | { deleted: false; reason: "not_found" }
   | { deleted: false; reason: "has_history"; knocks: number; commissions: number; photos: number };
 
+// What a set-based territory lead write actually did.
+//
+//  changed — the TRUE changed-row count (SQLite's .changes), which is what the
+//            routes hand back as leadsAffected/leadsReleased. It counts rows the
+//            statement moved, never rows it merely considered: each primitive's
+//            predicate IS the diff the per-lead loop used to walk, so a door
+//            already in the target state is not selected and not counted.
+//  leadIds — those same rows' ids, read in the same transaction as the write.
+//            The loops these replaced emitted one live assignment event per
+//            moved door; the caller replays exactly that set from this list.
+export interface TerritoryLeadWrite { changed: number; leadIds: number[] }
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
@@ -309,12 +320,11 @@ export interface IStorage {
   // the wide-zoom sampler's step calculation (only runs when a window
   // overflows the row cap, so the extra indexed count stays rare).
   getLeadsMapWindowCount(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapPinWindow): number;
-  getFreshLeads(tenantId: number | undefined, assignedRep: number | number[] | undefined, opts: { city?: string; state?: string; days: number }): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }>;
   getLeadsPage(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
     opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
-  ): { rows: Lead[]; total: number };
+  ): { rows: LeadListRow[]; total: number };
   getLeadById(id: number): Lead | undefined;
   findLeadByAddress(tenantId: number | null, address: string, city: string, state: string, zip: string): Lead | undefined;
   createLead(lead: InsertLead): Lead;
@@ -337,7 +347,6 @@ export interface IStorage {
   // uses; returns the updated row, or undefined when the row is not adoptable
   // (worked/sold/non-fcc/foreign/another rep's) so the caller keeps honest-exists.
   adoptFccLead(leadId: number, tenantId: number, opts: { repId: number | null; lat?: number | null; lng?: number | null }): Lead | undefined;
-  searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[];
   searchLeadsPage(
     query: string,
     tenantId: number | undefined,
@@ -345,7 +354,6 @@ export interface IStorage {
     opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
   ): { rows: Lead[]; total: number };
   // ── Fiber checks ───────────────────────────────────────────────────────────
-  getFiberChecks(): FiberCheck[];
   createFiberCheck(check: InsertFiberCheck): FiberCheck;
   getRecentChecks(limit?: number, tenantId?: number): FiberCheck[];
   // ── Team members ───────────────────────────────────────────────────────────
@@ -355,7 +363,7 @@ export interface IStorage {
   updateTeamMember(id: number, updates: Partial<InsertTeamMember>, tenantId?: number): TeamMember | undefined;
   deleteTeamMember(id: number, tenantId?: number): boolean;
   // ── Knock log ──────────────────────────────────────────────────────────────
-  getKnocks(tenantId?: number): Knock[];
+  getKnocks(tenantId?: number, limit?: number): Knock[];
   getKnocksByLead(leadId: number): Knock[];
   /** Newest-first (id DESC) slice of a rep's knocks, LIMIT pushed into SQL —
    * the rep-activity card needs 50 rows, not the rep's full hydrated history. */
@@ -364,7 +372,7 @@ export interface IStorage {
    * picked by one indexed seek instead of hydrating + sorting every knock the
    * rep has ever logged on the hot knock-write path. */
   getLatestLocatedKnockByRep(repId: number): { repLat: number; repLng: number; deviceTs: string | null; knockedAt: string } | undefined;
-  getOpenCallbacks(tenantId?: number): OpenCallback[];
+  getOpenCallbacks(tenantId?: number, opts?: { repIds?: number[] }): OpenCallback[];
   /** Narrow tenant-scoped projections for the territory progress/activity
    * computations — same rows getLeads/getKnocks return, minus the wide-column
    * hydration those O(all-rows) reads paid on every request. */
@@ -388,7 +396,6 @@ export interface IStorage {
   setSetting(key: string, value: string, updatedBy?: number | null, tenantId?: number | null): void;
   getGeoConfig(tenantId?: number | null): GeoConfig;
   overrideKnockVerification(knockId: number, newStatus: string, reason: string, actorUserId: number | null, actorName: string | null): Knock | undefined;
-  getActivityOverrides(knockId: number): ActivityOverride[];
   getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
   // ── Leaderboard ────────────────────────────────────────────────────────────
   getLeaderboard(window?: { since?: string; until?: string }): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number; knocksToday: number; salesToday: number }[];
@@ -415,6 +422,24 @@ export interface IStorage {
   getTerritoriesByRep(repId: number, tenantId?: number): Territory[];
   getTerritoryById(id: number): Territory | undefined;
   getLeadsByTerritory(territoryId: number): Lead[];
+  /** Set-based territory hand-off: one UPDATE, one transaction, one cache
+   * bust. Returns the changed-row count. */
+  bulkAssignTerritoryLeads(opts: { territoryId: number; repId: number; at: string; assignmentSource?: string }): number;
+  /** Set-based release of an area's doors back to the pool (rep +
+   * assignment paperwork cleared; the territory link stays). Returns the
+   * changed-row count. */
+  bulkUnassignTerritoryLeads(opts: { territoryId: number; at: string }): number;
+  /** Hand an area's doors to `repId` — EXCEPT the ones a rep in `keepRepIds`
+   *  already holds, who keep theirs untouched. */
+  bulkAssignTerritoryLeadsExcept(opts: {
+    territoryId: number; repId: number; at: string; keepRepIds: number[];
+    assignmentSource?: string; tenantId?: number;
+  }): TerritoryLeadWrite;
+  /** Empty an area: every door still held goes back to the open pool — no rep
+   *  AND no area. */
+  bulkReturnTerritoryLeadsToPool(opts: { territoryId: number; at: string; tenantId?: number }): TerritoryLeadWrite;
+  /** Take ONE rep off an area's doors. The AREA keeps them. */
+  bulkReleaseTerritoryLeadsFromRep(opts: { territoryId: number; repId: number; at: string; tenantId?: number }): TerritoryLeadWrite;
   addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void;
   addLeadEvent(leadId: number, type: "assignment" | "note", actor: string | null, detail?: unknown): void;
   getLeadEvents(leadId: number, limit?: number): { id: number; leadId: number; type: string; actor: string | null; detail: any; at: string }[];
@@ -441,8 +466,6 @@ export interface IStorage {
   clockOut(sessionId: number): ClockSession | undefined;
   getActiveClockSession(repId: number): ClockSession | undefined;
   getAllClockSessions(date?: string, tenantId?: number): ClockSession[];
-  wasDeepSeeded(city: string, state: string): boolean;
-  markDeepSeeded(city: string, state: string, addressCount: number): void;
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null; canonicalKey?: string | null; dfAddressId?: string | null; scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null }>): number;
   getScanTargetsToRescan(limit: number): any[];
@@ -452,8 +475,6 @@ export interface IStorage {
    * address already has a conclusive answer — the ledger only counts while
    * it has never been answered). */
   bumpScanTargetInconclusive(ref: { id?: number; address?: string }): number;
-  getScanTargetExhaustedCount(city?: string, zip?: string): number;
-  getFirstSeenLive(sinceHours: number, limit?: number, tenantId?: number): any[];
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(tenantId?: number, repId?: number): Commission[];
@@ -476,7 +497,6 @@ export interface IStorage {
   getTenants(): Tenant[];
   getTenantById(id: number): Tenant | undefined;
   getTenantBySlug(slug: string): Tenant | undefined;
-  getTenantByOwnerEmail(email: string): Tenant | undefined;
   createTenant(t: InsertTenant): Tenant;
   updateTenant(id: number, updates: Partial<Tenant>): Tenant | undefined;
   deleteTenant(id: number): void;
@@ -960,6 +980,10 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_leads_tenant_created ON leads(tenant_id, created_at DESC)`,
     // (tenant_id, lead_status): status-filtered list pages without a tenant scan.
     `CREATE INDEX IF NOT EXISTS idx_leads_tenant_status ON leads(tenant_id, lead_status)`,
+    // (tenant_id, state, city): getLeadFacets' DISTINCT city,state ORDER BY
+    // state,city becomes an in-order covering index walk — no temp b-tree for
+    // the DISTINCT and none for the sort.
+    `CREATE INDEX IF NOT EXISTS idx_leads_tenant_state_city ON leads(tenant_id, state, city)`,
     // (lead_id, knocked_at): serves per-lead knock history reads.
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead_time ON knock_log(lead_id, knocked_at)`,
     // DESC-matched to the visit-summary window's ORDER BY (knocked_at DESC,
@@ -970,6 +994,10 @@ export function runMigrations() {
     // Follow-ups (getOpenCallbacks): a partial index over just the scheduled-callback
     // rows so the outer query SEEKS candidates instead of scanning all of knock_log.
     `CREATE INDEX IF NOT EXISTS idx_knock_log_open_callback ON knock_log(lead_id) WHERE outcome = 'callback' AND callback_date IS NOT NULL`,
+    // Widened covering variant: getOpenCallbacks' arm-1 driver reads knocked_at,
+    // rep_id and the schedule columns off every scheduled-callback row, so the
+    // scan of the partial index never touches the table for non-matching rows.
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_open_callback2 ON knock_log(lead_id, knocked_at, rep_id, callback_date, callback_time) WHERE outcome = 'callback' AND callback_date IS NOT NULL`,
     // Field photo evidence attached to a door (see shared/schema.ts leadPhotos).
     `CREATE TABLE IF NOT EXISTS lead_photos (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, lead_id INTEGER NOT NULL, user_id INTEGER, rep_id INTEGER, path TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_lead_photos_lead ON lead_photos(lead_id)`,
@@ -984,6 +1012,10 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_team_members_tenant_name ON team_members(tenant_id, name)`,
     `CREATE INDEX IF NOT EXISTS idx_territories_tenant ON territories(tenant_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_tenant_time ON knock_log(tenant_id, knocked_at DESC)`,
+    // (tenant_id, lead_id): tenant-walled per-lead knock probes (territory
+    // progress, dependent-row checks) without walking the tenant's whole
+    // knock history in time order.
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_tenant_lead ON knock_log(tenant_id, lead_id)`,
 
     // ── SCAN INTELLIGENCE — persistent, resumable, budgeted verification runs ──
     // A scan is no longer an in-memory job that dies on restart. Each run is a
@@ -3196,23 +3228,6 @@ export function getDefaultTenantId(): number | null {
   return _defaultTenantId;
 }
 
-const SUFFIX_MAP_SHARED: Record<string, string> = {
-  court: "ct", drive: "dr", street: "st", avenue: "ave",
-  boulevard: "blvd", lane: "ln", road: "rd", place: "pl",
-  circle: "cir", trail: "trl", way: "wy", terrace: "ter",
-  parkway: "pkwy", highway: "hwy", loop: "lp",
-};
-
-function normalizeAddress(s: string): string {
-  return s.trim().toLowerCase()
-    .replace(/[.,#]/g, "")
-    .replace(/\s+/g, " ")
-    .split(" ")
-    .map((w: string) => SUFFIX_MAP_SHARED[w] ?? w)
-    .join(" ");
-}
-
-
 // Invalidate the map-pin cache + ETag data version (registered by routes.ts on
 // globalThis). Called from the LEAD MUTATION CHOKE POINTS below (create/update/
 // delete/upsert) so no route can mutate pins and forget to bust — a stale 304
@@ -3222,6 +3237,23 @@ function normalizeAddress(s: string): string {
 function bustPinCaches(tenantId?: number | null) {
   const bust = (globalThis as any).__bustMapCache;
   if (typeof bust === "function") bust(tenantId ?? undefined);
+}
+
+// ── Leaderboard write epoch ──────────────────────────────────────────────────
+// getLeaderboard's grouped aggregate walks the tenant's full applied-knock
+// history; the Leaderboard page polls it every 30s PER VIEWER and the "/"
+// prefetch adds more, so N viewers used to pay N identical full-history
+// aggregates per window. The memo below shares one compute per (tenant,
+// window) while nothing it reads has moved. "Moved" is tracked by this epoch,
+// bumped UNCONDITIONALLY by every write that can change a board number:
+// knock inserts, lead updates (a central disposition flips lead_status with
+// no knock row — the sold gate reads it), the CAS outcome flip, and roster
+// writes (active flags and new reps shape the returned rows). The short TTL
+// bounds what the epoch cannot see (raw SQL writers, the org-midnight
+// boundary drifting under the today counters).
+let leaderboardEpoch = 0;
+function bumpLeaderboardEpoch(): void {
+  leaderboardEpoch++;
 }
 
 /** UTC instant of midnight in the org's local day.
@@ -3239,6 +3271,44 @@ function localDayStartMs(tenantId: number | undefined | null, nowMs: number): nu
   return localWallToUtcMs(y, mo, d, 0, 0, tz);
 }
 
+// ── Tenant-config memo ───────────────────────────────────────────────────────
+// openFieldEnabled / orgTimezoneFor / getGeoConfig are each a cheap indexed
+// point read, but together they run 3-5 times per hot request (map poll
+// composes the scope predicate three times; every knock write reads the geo
+// thresholds twice) for values that change only through a handful of admin
+// writes. Same discipline as territoryScopeCache: ONE version stamp, bumped
+// UNCONDITIONALLY by every tenant-config write path (updateTenant, setSetting,
+// and commissionService's raw org-config UPDATE) — never "when the relevant
+// field changed", because a bump that reasons about which fields matter is a
+// bump that will eventually reason wrong. The short TTL is the backstop for
+// writers this process cannot see (another process, a hand-run SQL fix): a
+// stale answer can outlive a bypassed bump by at most a few seconds.
+let tenantConfigVersion = 0;
+
+/** Called by every tenant-config write. Cheap enough that "call it always" is
+ *  the rule. */
+export function bumpTenantConfigVersion(): void {
+  tenantConfigVersion++;
+}
+
+interface TenantConfigEntry { version: number; at: number; tz?: string; openField?: boolean; geo?: GeoConfig }
+const TENANT_CONFIG_TTL_MS = 5_000;
+const TENANT_CONFIG_MAX_ENTRIES = 500;
+const tenantConfigCache = new Map<number, TenantConfigEntry>();
+
+function tenantConfigEntry(key: number): TenantConfigEntry {
+  const now = Date.now();
+  const hit = tenantConfigCache.get(key);
+  const age = hit ? now - hit.at : Infinity;
+  if (hit && hit.version === tenantConfigVersion && age >= 0 && age < TENANT_CONFIG_TTL_MS) return hit;
+  // Full clear on overflow, mirroring territoryScopeCache: entries are only
+  // valid for one version anyway, so clever eviction buys nothing.
+  if (tenantConfigCache.size >= TENANT_CONFIG_MAX_ENTRIES) tenantConfigCache.clear();
+  const fresh: TenantConfigEntry = { version: tenantConfigVersion, at: now };
+  tenantConfigCache.set(key, fresh);
+  return fresh;
+}
+
 /** The org's IANA timezone, or the default workweek zone when unknown.
  *
  *  Exported because date-range filters are built in the route layer and must
@@ -3246,11 +3316,40 @@ function localDayStartMs(tenantId: number | undefined | null, nowMs: number): nu
  *  the WHERE clause and another in the SELECT is worse than either alone. */
 export function orgTimezoneFor(tenantId: number | undefined | null): string {
   if (tenantId == null) return DEFAULT_WORKWEEK.timezone;
-  try {
-    const row = rawDb.prepare(`SELECT commission_timezone AS tz FROM tenants WHERE id = ?`).get(tenantId) as any;
-    return row?.tz || DEFAULT_WORKWEEK.timezone;
-  } catch { return DEFAULT_WORKWEEK.timezone; }
+  const entry = tenantConfigEntry(tenantId);
+  let tz = entry.tz;
+  if (tz === undefined) {
+    try {
+      const row = rawDb.prepare(`SELECT commission_timezone AS tz FROM tenants WHERE id = ?`).get(tenantId) as any;
+      tz = String(row?.tz || DEFAULT_WORKWEEK.timezone);
+      entry.tz = tz;
+    } catch { return DEFAULT_WORKWEEK.timezone; } // transient failure — answer the default, never cache it
+  }
+  return tz;
 }
+
+// Wire DTO for the /api/leads list page: exactly the fields the list UI
+// renders PLUS the two the edit dialog seeds from the LIST row (contactEmail,
+// notes — LeadForm reads them off `initial`, so omitting them would blank
+// stored values on the next save). The other ~38 columns — free-text blobs
+// (deploymentNotes, freshSources), briefing and enrichment fields — ride only
+// on /api/leads/:id, which the detail drawer already fetches. Cuts both the
+// hydration and the response-sanitizer clone roughly 3x per page.
+const LEAD_LIST_COLUMNS = {
+  id: leads.id, address: leads.address, city: leads.city, state: leads.state, zip: leads.zip,
+  lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus, fiberStatus: leads.fiberStatus,
+  lastOutcome: leads.lastOutcome, leadScore: leads.leadScore,
+  assignedRepId: leads.assignedRepId, assignedAt: leads.assignedAt, assignmentSource: leads.assignmentSource,
+  contactName: leads.contactName, contactEmail: leads.contactEmail, notes: leads.notes,
+  ownerName: leads.ownerName, ownerEmail: leads.ownerEmail,
+  isNewFiber: leads.isNewFiber, maxDownloadMbps: leads.maxDownloadMbps, dfAddressId: leads.dfAddressId,
+  createdAt: leads.createdAt, updatedAt: leads.updatedAt,
+};
+export type LeadListRow = Pick<Lead,
+  "id" | "address" | "city" | "state" | "zip" | "lat" | "lng" | "leadStatus" | "fiberStatus" |
+  "lastOutcome" | "leadScore" | "assignedRepId" | "assignedAt" | "assignmentSource" |
+  "contactName" | "contactEmail" | "notes" | "ownerName" | "ownerEmail" |
+  "isNewFiber" | "maxDownloadMbps" | "dfAddressId" | "createdAt" | "updatedAt">;
 
 export class Storage implements IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
@@ -3340,13 +3439,19 @@ export class Storage implements IStorage {
   // extends — so the full feed, bbox windows, the count probe, and the
   // density grid all apply the identical "latest" predicate (no forked
   // builder). Absent view = the byte-stable unfiltered predicate.
-  /** Does this tenant let reps work unowned ground? Off unless switched on. */
+  /** Does this tenant let reps work unowned ground? Off unless switched on.
+   *  Memoised on the tenant-config version stamp — mapScopeWhere consults this
+   *  up to three times per map request. */
   openFieldEnabled(tenantId?: number): boolean {
     if (tenantId == null) return false;
-    try {
-      const row = rawDb.prepare(`SELECT open_field_enabled AS v FROM tenants WHERE id = ?`).get(tenantId) as any;
-      return !!row?.v;
-    } catch { return false; }
+    const entry = tenantConfigEntry(tenantId);
+    if (entry.openField === undefined) {
+      try {
+        const row = rawDb.prepare(`SELECT open_field_enabled AS v FROM tenants WHERE id = ?`).get(tenantId) as any;
+        entry.openField = !!row?.v;
+      } catch { return false; } // transient failure — fail closed, never cache it
+    }
+    return entry.openField;
   }
 
   private mapScopeWhere(tenantId?: number, assignedRep?: number | number[], view?: MapView): { where: string; params: any[] } {
@@ -3549,52 +3654,6 @@ export class Storage implements IStorage {
     return rows;
   }
 
-  // Recently-discovered leads for the "fresh leads" feed: created within the last
-  // `days`, tenant + rep-scope filtered, optionally narrowed to a city/state.
-  // Newest first, capped. Slim projection — the map only needs point + status +
-  // competitor. Same scoping model as getLeadsForMap (fail-closed for reps).
-  getFreshLeads(
-    tenantId: number | undefined,
-    assignedRep: number | number[] | undefined,
-    opts: { city?: string; state?: string; days: number; status?: "available" | "coming_soon"; carrier?: string },
-  ): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null; carrier: string | null }> {
-    const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(Math.floor(opts.days), 365) : 30;
-    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
-    const conditions: any[] = [
-      sql`${leads.createdAt} >= ${cutoff}`,
-      eq(leads.leadTag, "fresh_fiber_confirmed"),
-      eq(leads.freshConfidence, "cross_verified"),
-      isNotNull(leads.sourceScanTargetId),
-      isNotNull(leads.freshConfirmedAt),
-    ];
-    if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
-    if (Array.isArray(assignedRep)) {
-      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
-    } else if (assignedRep != null) {
-      conditions.push(eq(leads.assignedRepId, assignedRep));
-    }
-    if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
-    if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
-    // Carrier filter: Kinetic and Frontier are separate product lines that share the
-    // fresh_fiber_confirmed tag. Without this the Kinetic Fresh feed would silently
-    // mix in Frontier (red) leads — the Durham confusion. 'kinetic' also matches the
-    // pre-carrier default so legacy rows aren't dropped.
-    if (opts.carrier === "kinetic") conditions.push(sql`(${leads.id} IS NOT NULL AND (carrier IS NULL OR carrier = 'kinetic'))`);
-    else if (opts.carrier) conditions.push(sql`carrier = ${opts.carrier}`);
-    // status filter: coming_soon = pre-launch fiber (leadTag), available = serviceable now.
-    if (opts.status === "coming_soon") conditions.push(eq(leads.leadTag, "coming_soon"));
-    else if (opts.status === "available") conditions.push(sql`(${leads.leadTag} IS NULL OR ${leads.leadTag} <> 'coming_soon')`);
-    return db.select({
-      id: leads.id, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
-      competitorName: leads.competitorName, address: leads.address, city: leads.city,
-      state: leads.state, createdAt: leads.createdAt, carrier: sql<string | null>`carrier`,
-    }).from(leads)
-      .where(and(...conditions))
-      .orderBy(sql`${leads.createdAt} DESC`)
-      .limit(2000)
-      .all();
-  }
-
   // Paged list query for /api/leads — filters + ORDER BY + LIMIT/OFFSET pushed
   // into SQL (the route used to hydrate EVERY tenant row to serve a 200-row
   // page). Count runs the same WHERE. Scope conditions identical to getLeads.
@@ -3602,7 +3661,7 @@ export class Storage implements IStorage {
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
     opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
-  ): { rows: Lead[]; total: number } {
+  ): { rows: LeadListRow[]; total: number } {
     const conditions = [];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
     if (Array.isArray(assignedRep)) {
@@ -3619,7 +3678,7 @@ export class Storage implements IStorage {
     if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
     const where = conditions.length === 0 ? undefined
       : conditions.length === 1 ? conditions[0] : and(...conditions);
-    const listQ = db.select().from(leads);
+    const listQ = db.select(LEAD_LIST_COLUMNS).from(leads);
     const rows = (where ? listQ.where(where) : listQ)
       .orderBy(desc(leads.createdAt)).limit(opts.limit).offset(opts.offset).all();
     const countQ = db.select({ c: sql<number>`count(*)` }).from(leads);
@@ -3661,7 +3720,6 @@ export class Storage implements IStorage {
   // Dedup-safe insert: returns existing lead if address already in DB, otherwise creates new one.
   // Uses indexed address lookup — O(log n) not O(n) full table scan.
   upsertLeadByAddress(lead: InsertLead & LegacyScanFields): { lead: Lead; created: boolean } {
-    const normalizedAddr = normalizeAddress(lead.address ?? "");
     const leadTenantId = lead.tenantId ?? getDefaultTenantId();
     // Canonical identity — the SAME key the UNIQUE index enforces, so "Farrell
     // Road" and "FARRELL RD" resolve to ONE lead. Check it FIRST (indexed) so
@@ -3678,13 +3736,20 @@ export class Storage implements IStorage {
     const exactHit = rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND address = ? LIMIT 1")
       .get(leadTenantId, lead.address ?? "") as Lead | undefined;
     if (exactHit) return { lead: exactHit, created: false };
-    const prefix = normalizedAddr.split(" ")[0];
-    if (prefix) {
-      const candidates = rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND address LIKE ? LIMIT 20")
-        .all(leadTenantId, prefix + "%") as Lead[];
-      const existingLead = candidates.find(l => normalizeAddress(l.address ?? "") === normalizedAddr);
-      if (existingLead) return { lead: existingLead, created: false };
-    }
+    // Case/whitespace-insensitive probe on the functional index idx_leads_addr_ci
+    // (the expression must match the index's byte-for-byte). This replaces a
+    // prefix-LIKE fallback that could not use ANY address index (case-insensitive
+    // LIKE vs BINARY collation) and so walked the whole tenant on every net-new
+    // insert — the scanner's hot path. Deliberate narrowing: the LIKE arm also
+    // caught same-tenant street-SUFFIX variants ("Farrell Road" vs "FARRELL RD")
+    // filed under a DIFFERENT city; the canonical-key probe above already folds
+    // suffix/case variants whenever city+state agree, and the cross-city twin is
+    // the projector's geo-guard's job, so that residual fuzzy match is dropped
+    // rather than paid for with an O(tenant) walk per new address.
+    const ciHit = rawDb.prepare(
+      "SELECT * FROM leads WHERE tenant_id IS ? AND lower(trim(address)) = lower(trim(?)) LIMIT 1"
+    ).get(leadTenantId, lead.address ?? "") as Lead | undefined;
+    if (ciHit) return { lead: ciHit, created: false };
 
     // ── Insert: use raw prepared statement for reliability ──────────────────
     const now = new Date().toISOString();
@@ -3770,7 +3835,10 @@ export class Storage implements IStorage {
       : eq(leads.id, id);
     const row = db.update(leads).set({ ...updates, updatedAt: new Date().toISOString() })
       .where(condition).returning().get();
-    if (row) bustPinCaches(row.tenantId); // pins changed → cache + ETag version must move
+    if (row) {
+      bustPinCaches(row.tenantId); // pins changed → cache + ETag version must move
+      bumpLeaderboardEpoch(); // lead_status feeds the board's sold gate
+    }
     return row;
   }
   // P1-1: compare-and-set outcome flip. A stale offline knock (knockedAt OLDER
@@ -3800,7 +3868,10 @@ export class Storage implements IStorage {
         ),
       ),
     )).returning().get();
-    if (row) bustPinCaches(row.tenantId);
+    if (row) {
+      bustPinCaches(row.tenantId);
+      bumpLeaderboardEpoch(); // the CAS flips lead_status — the sold gate reads it
+    }
     return row;
   }
   deleteLead(id: number, tenantId?: number): LeadDeleteResult {
@@ -3950,10 +4021,6 @@ export class Storage implements IStorage {
     })();
   }
 
-  searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[] {
-    return this.searchLeadsPage(query, tenantId, assignedRep, { limit: 500, offset: 0 }).rows;
-  }
-
   // Search with filters + pagination pushed into SQL. The filters MUST live in
   // the WHERE (not post-filter a capped set): a review proved the naive
   // `LIKE ... LIMIT 500` + JS-filter version silently returned 0 results for
@@ -3994,9 +4061,6 @@ export class Storage implements IStorage {
   }
 
   // ── Fiber checks ───────────────────────────────────────────────────────────
-  getFiberChecks(): FiberCheck[] {
-    return db.select().from(fiberChecks).orderBy(desc(fiberChecks.checkedAt)).all();
-  }
   createFiberCheck(check: InsertFiberCheck): FiberCheck {
     return db.insert(fiberChecks).values({ ...check, checkedAt: new Date().toISOString() }).returning().get();
   }
@@ -4027,31 +4091,43 @@ export class Storage implements IStorage {
     // hue reserved. Palette exhausted → NULL, and repColorOf degrades to the
     // hash exactly as it did before the column existed.
     const color = member.color != null ? member.color : this.allocateMemberColor(member.tenantId ?? null);
-    return db.insert(teamMembers).values({ ...member, color, createdAt: new Date().toISOString() }).returning().get();
+    const row = db.insert(teamMembers).values({ ...member, color, createdAt: new Date().toISOString() }).returning().get();
+    bumpLeaderboardEpoch(); // the roster shapes the board's rows
+    return row;
   }
   private allocateMemberColor(tenantId: number | null): string | null {
-    const actives = db.select().from(teamMembers).where(eq(teamMembers.active, true)).all()
-      .filter((m) => (m.tenantId ?? null) === tenantId);
+    // Tenant wall in SQL (isNull matches the legacy tenant-less rows the JS
+    // `?? null` compare used to keep), not a cross-tenant scan filtered here.
+    const actives = tenantId == null
+      ? db.select().from(teamMembers).where(and(eq(teamMembers.active, true), isNull(teamMembers.tenantId))).all()
+      : db.select().from(teamMembers).where(and(eq(teamMembers.active, true), eq(teamMembers.tenantId, tenantId))).all();
     return allocateRepColor(actives.map((m) => repColorOf(m)));
   }
   updateTeamMember(id: number, updates: Partial<InsertTeamMember>, tenantId?: number): TeamMember | undefined {
     const condition = tenantId != null
       ? and(eq(teamMembers.id, id), eq(teamMembers.tenantId, tenantId))
       : eq(teamMembers.id, id);
-    return db.update(teamMembers).set(updates).where(condition).returning().get();
+    const row = db.update(teamMembers).set(updates).where(condition).returning().get();
+    bumpLeaderboardEpoch(); // active flag / name changes reach the board
+    return row;
   }
   deleteTeamMember(id: number, tenantId?: number): boolean {
     const condition = tenantId != null
       ? and(eq(teamMembers.id, id), eq(teamMembers.tenantId, tenantId))
       : eq(teamMembers.id, id);
-    return db.delete(teamMembers).where(condition).run().changes > 0;
+    const deleted = db.delete(teamMembers).where(condition).run().changes > 0;
+    if (deleted) bumpLeaderboardEpoch();
+    return deleted;
   }
 
   // ── Knock log ──────────────────────────────────────────────────────────────
-  getKnocks(tenantId?: number): Knock[] {
+  // Default LIMIT pushed into SQL (mirrors getRecentKnocksByRep): knock_log
+  // grows without bound, so an unbounded reader is a footgun every new call
+  // site would inherit. Newest-first, so the cap keeps the recent slice.
+  getKnocks(tenantId?: number, limit = 1000): Knock[] {
     const q = db.select().from(knockLog);
     return (tenantId != null ? q.where(eq(knockLog.tenantId, tenantId)) : q)
-      .orderBy(desc(knockLog.knockedAt)).all();
+      .orderBy(desc(knockLog.knockedAt)).limit(limit).all();
   }
   getKnocksByLead(leadId: number): Knock[] {
     return db.select().from(knockLog).where(eq(knockLog.leadId, leadId)).orderBy(desc(knockLog.knockedAt)).all();
@@ -4171,20 +4247,33 @@ export class Storage implements IStorage {
   //      from last_outcome_at's LOCAL date (falls in Today/Overdue, never
   //      vanishing from the date-grouped client); NULL-safe at every step.
   //
-  // Arm 1's driver seeks scheduled-callback rows via the partial
-  // idx_knock_log_open_callback; the correlated "latest knock" subquery rides
+  // Arm 1's driver is the scheduled-callback partial index
+  // (idx_knock_log_open_callback2): the CROSS JOIN pins the join order so the
+  // few callback rows drive and leads is the inner PK seek — the planner used
+  // to flip it and walk EVERY tenant lead per poll, probing knock_log per
+  // lead. (CROSS JOIN is plain inner-join semantics in SQLite; only the order
+  // is forced.) The correlated "latest knock" subquery rides
   // idx_knock_log_lead_time_desc (lead_id, knocked_at DESC, id DESC).
-  // Rep-scoping is applied by the route (by the door's CURRENT owner).
-  getOpenCallbacks(tenantId?: number): OpenCallback[] {
+  // Rep-scoping by the door's CURRENT owner can be pushed into both arms via
+  // opts.repIds (same predicate the route's JS filter applies: NULL owner
+  // never matches, empty scope matches nothing — fail-closed).
+  getOpenCallbacks(tenantId?: number, opts?: { repIds?: number[] }): OpenCallback[] {
+    const repIds = opts?.repIds;
+    if (repIds && repIds.length === 0) return [];
     const tenantAnd = tenantId != null ? "AND l.tenant_id = ?" : "";
-    const params = tenantId != null ? [tenantId, tenantId] : [];
+    const repAnd = repIds ? `AND l.assigned_rep_id IN (${repIds.map(() => "?").join(",")})` : "";
+    const armParams = [
+      ...(tenantId != null ? [tenantId] : []),
+      ...(repIds ?? []),
+    ];
+    const params = [...armParams, ...armParams];
     const rows = rawDb.prepare(`
       WITH open_knock_callbacks AS (
         SELECT
           k.lead_id AS leadId, k.rep_id AS repId, k.callback_date AS callbackDate,
           k.callback_time AS callbackTime, k.notes AS notes, k.knocked_at AS setAt
         FROM knock_log k
-        JOIN leads l ON l.id = k.lead_id
+        CROSS JOIN leads l ON l.id = k.lead_id
         WHERE k.id = (
           SELECT k2.id FROM knock_log k2
           WHERE k2.lead_id = k.lead_id
@@ -4199,6 +4288,7 @@ export class Storage implements IStorage {
           OR l.last_outcome IN ('callback', 'follow_up')
         )
         ${tenantAnd}
+        ${repAnd}
       )
       SELECT
         l.id AS leadId, l.address AS address, l.city AS city, l.state AS state, l.zip AS zip,
@@ -4222,6 +4312,7 @@ export class Storage implements IStorage {
       FROM leads l
       WHERE l.lead_status = 'follow_up'
         ${tenantAnd}
+        ${repAnd}
         -- Lead columns are the LATEST word on this door: no knock at all, or
         -- every knock is older than the lead-level disposition.
         AND NOT EXISTS (
@@ -4274,13 +4365,15 @@ export class Storage implements IStorage {
     // route means every writer (online tap, offline queue flush, backfill) lands
     // in the right pass without having to know passes exist.
     const passNumber = currentPassForLead(knock.leadId);
-    return db.insert(knockLog).values({
+    const row = db.insert(knockLog).values({
       ...knock,
       tenantId,
       passNumber,
       knockedAt: safeTs,
       ...(verdict ?? {}),
     }).returning().get();
+    bumpLeaderboardEpoch();
+    return row;
   }
   getKnockById(id: number): Knock | undefined {
     return db.select().from(knockLog).where(eq(knockLog.id, id)).get();
@@ -4312,15 +4405,22 @@ export class Storage implements IStorage {
       `INSERT INTO app_settings (tenant_id, key, value, updated_at, updated_by) VALUES (?,?,?,?,?)
        ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
     ).run(tid, key, value, new Date().toISOString(), updatedBy ?? null);
+    bumpTenantConfigVersion(); // always — see the memo's "bump always" rule
   }
   // Effective geo thresholds: stored override → platform default → code default.
+  // Memoised on the tenant-config version stamp (setSetting bumps it) — this
+  // runs two app_settings lookups on every knock write otherwise.
   getGeoConfig(tenantId?: number | null): GeoConfig {
-    const d = Number(this.getSetting("geo.max_distance_m", tenantId));
-    const a = Number(this.getSetting("geo.max_accuracy_m", tenantId));
-    return {
-      maxDistanceM: Number.isFinite(d) && d > 0 ? d : DEFAULT_GEO_CONFIG.maxDistanceM,
-      maxAccuracyM: Number.isFinite(a) && a > 0 ? a : DEFAULT_GEO_CONFIG.maxAccuracyM,
-    };
+    const entry = tenantConfigEntry(tenantId ?? 0);
+    if (entry.geo === undefined) {
+      const d = Number(this.getSetting("geo.max_distance_m", tenantId));
+      const a = Number(this.getSetting("geo.max_accuracy_m", tenantId));
+      entry.geo = {
+        maxDistanceM: Number.isFinite(d) && d > 0 ? d : DEFAULT_GEO_CONFIG.maxDistanceM,
+        maxAccuracyM: Number.isFinite(a) && a > 0 ? a : DEFAULT_GEO_CONFIG.maxAccuracyM,
+      };
+    }
+    return entry.geo;
   }
 
   // ── Verification override (admin-only path; original capture is never mutated
@@ -4335,10 +4435,6 @@ export class Storage implements IStorage {
       .set({ verificationStatus: newStatus, reviewReason: `override by ${actorName ?? "admin"}: ${reason}` })
       .where(eq(knockLog.id, knockId)).returning().get();
   }
-  getActivityOverrides(knockId: number): ActivityOverride[] {
-    return db.select().from(activityOverrides).where(eq(activityOverrides.knockId, knockId)).orderBy(desc(activityOverrides.at)).all();
-  }
-
   // Per-lead visit summary for the map: leadId → { count, lastOutcome, lastAt }.
   // Single window-function pass (was: a correlated subquery re-sorting each
   // lead's knocks per group — O(k·per-lead sort) and it scanned every tenant's
@@ -4376,6 +4472,20 @@ export class Storage implements IStorage {
   // hydration, no cross-tenant scan (the old version SELECT *'d every knock of every
   // rep of EVERY tenant then filtered in JS on every poll). Uses idx_knock_log_rep.
   getLeaderboard(window?: { since?: string; until?: string }, tenantId?: number) {
+    // Concurrent pollers share one compute per (tenant, window): valid while
+    // the write epoch is unchanged AND the entry is young (see the epoch's
+    // comment for what each leg covers). Callers never mutate the rows.
+    const memoKey = `${tenantId ?? "all"}|${window?.since ?? ""}|${window?.until ?? ""}`;
+    const now = Date.now();
+    const hit = this._leaderboardCache.get(memoKey);
+    if (hit && hit.epoch === leaderboardEpoch && now - hit.at >= 0 && now - hit.at < 10_000) return hit.value;
+    const value = this.computeLeaderboard(window, tenantId);
+    if (this._leaderboardCache.size >= 200) this._leaderboardCache.clear();
+    this._leaderboardCache.set(memoKey, { epoch: leaderboardEpoch, at: now, value });
+    return value;
+  }
+  private _leaderboardCache = new Map<string, { epoch: number; at: number; value: { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number; knocksToday: number; salesToday: number }[] }>();
+  private computeLeaderboard(window?: { since?: string; until?: string }, tenantId?: number) {
     const reps = this.getTeamMembers(tenantId).filter(r => r.active);
     if (reps.length === 0) return [];
     // Midnight in the ORG's timezone, not the container's.
@@ -4580,9 +4690,174 @@ export class Storage implements IStorage {
     const condition = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
     return db.select().from(territories).where(condition).get();
   }
-  // Leads currently linked to a territory (area-sync). Used by reclaim.
+  // Leads currently linked to a territory (area-sync). Full-row hydration, so
+  // it is a READ helper, not the way to move an area's doors — the lifecycle
+  // routes used to hydrate the whole area here only to diff it and write it
+  // back one row at a time, and now use the set-based primitives below.
   getLeadsByTerritory(territoryId: number): Lead[] {
     return db.select().from(leads).where(eq(leads.assignedTerritoryId, territoryId)).all();
+  }
+  // Set-based territory hand-offs: ONE UPDATE inside one transaction, replacing
+  // the per-lead updateLead loops the territory lifecycle routes ran — a
+  // 2,000-door area used to pay 2,000 UPDATE..RETURNING statements plus 2,000
+  // pin-cache busts on the synchronous thread. Field semantics mirror those
+  // loops exactly:
+  //   assign   — assigned_rep_id = repId, assignment_source (defaults to
+  //              'territory-sync'), assigned_at = at; unassigned_at untouched.
+  //   unassign — assigned_rep_id + assignment_source cleared, unassigned_at =
+  //              at; assigned_at untouched, and the territory LINK kept —
+  //              released doors STAY LINKED to the area (see /unassign's crew
+  //              rule; only delete/reclaim-to-pool clears the link).
+  // updated_at = at moves the cross-process leads data version the same way
+  // updateLead's stamp does; the pin caches are busted ONCE, after the write,
+  // with the rows' own tenant. Both ride idx_leads_assigned_territory and
+  // return the changed-row count.
+  bulkAssignTerritoryLeads(opts: { territoryId: number; repId: number; at: string; assignmentSource?: string }): number {
+    const tx = rawDb.transaction((): { changes: number; tenantId: number | null | undefined } => {
+      const owner = rawDb.prepare(
+        `SELECT tenant_id AS tenantId FROM leads WHERE assigned_territory_id = ? LIMIT 1`
+      ).get(opts.territoryId) as { tenantId: number | null } | undefined;
+      const changes = rawDb.prepare(
+        `UPDATE leads SET assigned_rep_id = @repId, assigned_territory_id = @territoryId,
+                assignment_source = @source, assigned_at = @at, updated_at = @at
+          WHERE assigned_territory_id = @territoryId`
+      ).run({
+        repId: opts.repId, territoryId: opts.territoryId,
+        source: opts.assignmentSource ?? "territory-sync", at: opts.at,
+      }).changes;
+      return { changes, tenantId: owner?.tenantId };
+    });
+    const { changes, tenantId } = tx.immediate();
+    if (changes > 0) bustPinCaches(tenantId);
+    return changes;
+  }
+  bulkUnassignTerritoryLeads(opts: { territoryId: number; at: string }): number {
+    const tx = rawDb.transaction((): { changes: number; tenantId: number | null | undefined } => {
+      const owner = rawDb.prepare(
+        `SELECT tenant_id AS tenantId FROM leads WHERE assigned_territory_id = ? LIMIT 1`
+      ).get(opts.territoryId) as { tenantId: number | null } | undefined;
+      const changes = rawDb.prepare(
+        `UPDATE leads SET assigned_rep_id = NULL, assignment_source = NULL,
+                unassigned_at = @at, updated_at = @at
+          WHERE assigned_territory_id = @territoryId`
+      ).run({ territoryId: opts.territoryId, at: opts.at }).changes;
+      return { changes, tenantId: owner?.tenantId };
+    });
+    const { changes, tenantId } = tx.immediate();
+    if (changes > 0) bustPinCaches(tenantId);
+    return changes;
+  }
+
+  // ── Set-based territory lead writes, part two ────────────────────────────
+  //
+  // The two primitives above move an area's WHOLE door list. The three below
+  // are the ones the lifecycle routes actually needed and could not express
+  // with a blanket update, so each kept its per-lead `updateLead` loop:
+  //
+  //   share    — must not touch a co-assignee's doors (a blanket update steals
+  //              them and resets their assigned_at);
+  //   reclaim  — return_to_pool must also clear the AREA LINK, which
+  //              bulkUnassignTerritoryLeads deliberately preserves;
+  //   unassign — must reach ONE rep's doors, and retires the assignment
+  //              paperwork (assigned_by/assigned_at) as well.
+  //
+  // All three share one shape: the WHERE clause IS the diff the loop used to
+  // walk row by row, so the count is honest without inspecting anything twice.
+  //
+  // NO leaderboard bump, on purpose. `updateLead` bumps it because it can flip
+  // lead_status, which the board's sold gate reads. computeLeaderboard groups
+  // knock_log by rep_id and touches exactly one leads column — lead_status —
+  // so moving an ASSIGNMENT cannot change a board number, and bumping would
+  // throw away every viewer's memoised aggregate for nothing.
+  //
+  /** SELECT the doors that move, then move them in ONE UPDATE driven by those
+   *  exact ids — both inside one transaction, so the ids the caller replays
+   *  events from and the rows the statement wrote are the same set, and one
+   *  pin-cache bust after it commits (never inside: a rollback would leave an
+   *  announced change that never happened). json_each carries the id list as a
+   *  single bound parameter, so a 20k-door area is still one statement. */
+  private moveTerritoryLeads(spec: {
+    where: string; whereParams: Record<string, unknown>;
+    set: string; setParams: Record<string, unknown>;
+  }): TerritoryLeadWrite {
+    const tx = rawDb.transaction((): TerritoryLeadWrite & { owner?: number | null } => {
+      const rows = rawDb.prepare(
+        `SELECT id, tenant_id AS tenantId FROM leads WHERE ${spec.where}`
+      ).all(spec.whereParams) as Array<{ id: number; tenantId: number | null }>;
+      if (rows.length === 0) return { changed: 0, leadIds: [] };
+      const leadIds = rows.map(r => r.id);
+      const changed = rawDb.prepare(
+        `UPDATE leads SET ${spec.set} WHERE id IN (SELECT value FROM json_each(@ids))`
+      ).run({ ...spec.setParams, ids: JSON.stringify(leadIds) }).changes;
+      return { changed, leadIds, owner: rows[0].tenantId };
+    });
+    const { changed, leadIds, owner } = tx.immediate();
+    if (changed > 0) bustPinCaches(owner);
+    return { changed, leadIds };
+  }
+  // Hand the area's doors to `repId` — but a door one of `keepRepIds` already
+  // holds is NOT a hand-off, it is that rep's work, and re-stamping it would
+  // both steal it and restart its "assigned since" clock. The crew that stays
+  // on the area keeps exactly what it had.
+  bulkAssignTerritoryLeadsExcept(opts: {
+    territoryId: number; repId: number; at: string; keepRepIds: number[];
+    assignmentSource?: string; tenantId?: number;
+  }): TerritoryLeadWrite {
+    const whereParams: Record<string, unknown> = {
+      territoryId: opts.territoryId,
+      keep: JSON.stringify(opts.keepRepIds.map(Number)),
+    };
+    if (opts.tenantId != null) whereParams.tenantId = opts.tenantId;
+    return this.moveTerritoryLeads({
+      // NOT IN never matches a NULL left operand, so an unheld door has to be
+      // named on its own — and those are precisely the doors a hand-off picks up.
+      where: `assigned_territory_id = @territoryId
+                ${opts.tenantId != null ? "AND tenant_id = @tenantId" : ""}
+                AND (assigned_rep_id IS NULL
+                     OR assigned_rep_id NOT IN (SELECT value FROM json_each(@keep)))`,
+      whereParams,
+      set: `assigned_rep_id = @repId, assigned_territory_id = @territoryId,
+            assignment_source = @source, assigned_at = @at, updated_at = @at`,
+      setParams: {
+        repId: Number(opts.repId), territoryId: opts.territoryId,
+        source: opts.assignmentSource ?? "territory-sync", at: opts.at,
+      },
+    });
+  }
+  // Empty the area: every door somebody still holds goes back to the open pool
+  // — no rep AND no area, because the area itself is being given up. (Contrast
+  // bulkUnassignTerritoryLeads, which keeps the link: there the area lives on.)
+  // A door already in the pool is not selected, so it keeps whatever link it
+  // has and never inflates the count.
+  bulkReturnTerritoryLeadsToPool(opts: { territoryId: number; at: string; tenantId?: number }): TerritoryLeadWrite {
+    const whereParams: Record<string, unknown> = { territoryId: opts.territoryId };
+    if (opts.tenantId != null) whereParams.tenantId = opts.tenantId;
+    return this.moveTerritoryLeads({
+      where: `assigned_territory_id = @territoryId AND assigned_rep_id IS NOT NULL
+              ${opts.tenantId != null ? "AND tenant_id = @tenantId" : ""}`,
+      whereParams,
+      set: `assigned_rep_id = NULL, assigned_territory_id = NULL,
+            assignment_source = NULL, unassigned_at = @at, updated_at = @at`,
+      setParams: { at: opts.at },
+    });
+  }
+  // Take ONE rep off the area's doors. The AREA KEEPS THEM: a shared patch the
+  // co-assignees still walk must not lose ground because one person left, so
+  // assigned_territory_id stays put and only the person goes. The assignment
+  // paperwork goes with them — assigned_by/assigned_at name a hand-off that is
+  // over, and left behind they print "assigned by Mona" under an empty owner.
+  bulkReleaseTerritoryLeadsFromRep(opts: { territoryId: number; repId: number; at: string; tenantId?: number }): TerritoryLeadWrite {
+    const whereParams: Record<string, unknown> = { territoryId: opts.territoryId, repId: Number(opts.repId) };
+    if (opts.tenantId != null) whereParams.tenantId = opts.tenantId;
+    return this.moveTerritoryLeads({
+      where: `assigned_territory_id = @territoryId AND assigned_rep_id = @repId
+              ${opts.tenantId != null ? "AND tenant_id = @tenantId" : ""}`,
+      whereParams,
+      set: `assigned_rep_id = NULL, assignment_source = NULL,
+            assigned_by = NULL, assigned_at = NULL,
+            unassigned_at = @at, updated_at = @at`,
+      setParams: { at: opts.at },
+    });
   }
   // Immutable territory history
   addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void {
@@ -4758,16 +5033,6 @@ export class Storage implements IStorage {
     return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(clockSessions.clockedIn)).all();
   }
 
-  // ── Deep-seed marker — a town's one-time Mapbox-grid seed happened. ──────────
-  wasDeepSeeded(city: string, state: string): boolean {
-    const key = `${city.trim().toLowerCase()}|${state.trim().toLowerCase()}`;
-    return !!rawDb.prepare("SELECT 1 FROM deep_seed_log WHERE city_key = ?").get(key);
-  }
-  markDeepSeeded(city: string, state: string, addressCount: number): void {
-    const key = `${city.trim().toLowerCase()}|${state.trim().toLowerCase()}`;
-    rawDb.prepare("INSERT OR REPLACE INTO deep_seed_log (city_key, city, state, address_count, seeded_at) VALUES (?,?,?,?,datetime('now'))")
-      .run(key, city.trim(), state.trim().toUpperCase(), addressCount);
-  }
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   // Insert harvested addresses once; duplicates are ignored (unique by
   // address + city + state — a same-street-name house in ANOTHER city is now a
@@ -4942,12 +5207,29 @@ export class Storage implements IStorage {
   // times (exhausted — Kinetic doesn't recognize them; re-probing burns proxy $ for
   // nothing). Already-scanned rows are never parked — the nightly moat keeps
   // re-checking them so a real unavailable→live flip is still caught.
+  // Two index-aligned arms replacing an OR predicate that forced a full-table
+  // sort per planning call (the WAL-pinning shape yieldRollups.ts documents).
+  // The predicate algebra is exact: (NULL ∧ attempts<giveup) ∪ (NOT NULL)
+  // ≡ (NOT NULL ∨ attempts<giveup). Arm 1 rides idx_scan_targets_reprobe,
+  // arm 2 idx_scan_targets_scanned; the outer ORDER BY re-sorts at most
+  // 2×limit rows and pins the original ordering contract — never-scanned
+  // first, then oldest-scanned ascending.
   getScanTargetsToRescan(limit: number): any[] {
+    // The union sits inside a subselect because a compound SELECT's ORDER BY
+    // may only name result columns, not expressions.
     return rawDb.prepare(
-      `SELECT * FROM scan_targets
-         WHERE last_scanned_at IS NOT NULL OR inconclusive_attempts < ?
-         ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC LIMIT ?`
-    ).all(INCONCLUSIVE_GIVEUP, limit);
+      `SELECT * FROM (
+         SELECT * FROM (
+           SELECT * FROM scan_targets
+            WHERE last_scanned_at IS NULL AND inconclusive_attempts < ?
+            ORDER BY last_scanned_at LIMIT ?)
+         UNION ALL
+         SELECT * FROM (
+           SELECT * FROM scan_targets
+            WHERE last_scanned_at IS NOT NULL
+            ORDER BY last_scanned_at ASC LIMIT ?)
+       ) ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC LIMIT ?`
+    ).all(INCONCLUSIVE_GIVEUP, limit, limit, limit);
   }
   // Pool lookup by city — lets scans reuse already-harvested addresses instead
   // of re-geocoding (harvest once, re-scan free).
@@ -5044,42 +5326,19 @@ export class Storage implements IStorage {
         : []) as Array<{ inconclusive_attempts: number }>;
     return rows.reduce((m, r) => Math.max(m, r.inconclusive_attempts), 0);
   }
-  // How many pooled addresses are exhausted (parked out of re-probe) — for honest
-  // "STILL QUEUED vs GIVEN UP" reporting so a silenced address is never a silent gap.
-  getScanTargetExhaustedCount(city?: string, zip?: string): number {
-    const where = ["last_scanned_at IS NULL", "inconclusive_attempts >= ?"];
-    const args: any[] = [INCONCLUSIVE_GIVEUP];
-    if (city) { where.push("lower(city) = lower(?)"); args.push(city); }
-    if (zip) { where.push("(zip = ? OR zip IS NULL)"); args.push(zip); }
-    return (rawDb.prepare(
-      `SELECT COUNT(*) c FROM scan_targets WHERE ${where.join(" AND ")}`
-    ).get(...args) as any).c;
-  }
-  // First-to-market feed: addresses that FLIPPED live within the window, newest
-  // first. Indexed scan on first_seen_live_at; capped. Tenant-scoped when a
-  // tenantId is given. Legacy unowned pool rows are deliberately excluded;
-  // shared mutable scan state is never a safe multi-tenant read model.
-  getFirstSeenLive(sinceHours: number, limit = 200, tenantId?: number): any[] {
-    const scope = tenantId != null ? "AND tenant_id = ?" : "";
-    const args: any[] = [`-${Math.max(1, Math.floor(sinceHours))} hours`];
-    if (tenantId != null) args.push(tenantId);
-    args.push(limit);
-    return rawDb.prepare(
-      `SELECT id, address, city, state, zip, lat, lng, first_seen_live_at AS firstSeenLiveAt,
-              last_availability_status AS availabilityStatus, converted_to_lead_id AS leadId, last_scanned_at AS lastScannedAt
-         FROM scan_targets
-        WHERE first_seen_live_at IS NOT NULL
-          AND first_seen_live_at >= datetime('now', ?) ${scope}
-        ORDER BY first_seen_live_at DESC LIMIT ?`
-    ).all(...args);
-  }
+  // One pass for the three counters (the unindexed last_is_new_fiber test made
+  // the old shape pay a separate full table scan on top of the two index
+  // walks); MAX stays its own statement so it keeps the O(log N) seek off
+  // idx_scan_targets_scanned instead of joining the scan.
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null } {
-    const g = (q: string) => (rawDb.prepare(q).get() as any);
-    const total = g("SELECT COUNT(*) c FROM scan_targets").c;
-    const scanned = g("SELECT COUNT(*) c FROM scan_targets WHERE last_scanned_at IS NOT NULL").c;
-    const newFiber = g("SELECT COUNT(*) c FROM scan_targets WHERE last_is_new_fiber = 1").c;
-    const lastScannedAt = g("SELECT MAX(last_scanned_at) m FROM scan_targets").m ?? null;
-    return { total, scanned, neverScanned: total - scanned, newFiber, lastScannedAt };
+    const agg = rawDb.prepare(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(last_scanned_at IS NOT NULL), 0) AS scanned,
+              COALESCE(SUM(last_is_new_fiber = 1), 0) AS newFiber
+         FROM scan_targets`
+    ).get() as { total: number; scanned: number; newFiber: number };
+    const lastScannedAt = (rawDb.prepare("SELECT MAX(last_scanned_at) m FROM scan_targets").get() as any).m ?? null;
+    return { total: agg.total, scanned: agg.scanned, neverScanned: agg.total - agg.scanned, newFiber: agg.newFiber, lastScannedAt };
   }
 
   // ── Commissions ────────────────────────────────────────────────────────────
@@ -5206,20 +5465,24 @@ export class Storage implements IStorage {
     }
     return pending;
   }
+  // ONE grouped aggregate + a Map join, replacing a full-hydration query per
+  // rep. `status <> 'superseded'` matches drizzle ne()'s NULL-excluding
+  // semantics; reps with no commission rows keep their zero-filled entry.
   getCommissionSummary(tenantId: number) {
-    const reps = this.getTeamMembers(tenantId).filter(r => r.active);
-    return reps.map(rep => {
-      const repCommissions = db.select().from(commissions)
-        .where(and(
-          eq(commissions.tenantId, tenantId),
-          eq(commissions.repId, rep.id),
-          ne(commissions.status, "superseded"),
-        ))
-        .all();
-      const total = repCommissions.reduce((sum, c) => sum + c.amount, 0);
-      const paid = repCommissions.filter(c => c.status === "paid").reduce((sum, c) => sum + c.amount, 0);
-      const pending = repCommissions.filter(c => c.status === "pending" || c.status === "approved").reduce((sum, c) => sum + c.amount, 0);
-      return { repId: rep.id, repName: rep.name, total, paid, pending, sales: repCommissions.length };
+    const rows = rawDb.prepare(
+      `SELECT rep_id AS repId, COUNT(*) AS sales, COALESCE(SUM(amount), 0) AS total,
+              COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0) AS paid,
+              COALESCE(SUM(CASE WHEN status IN ('pending','approved') THEN amount ELSE 0 END), 0) AS pending
+         FROM commissions WHERE tenant_id = ? AND status <> 'superseded'
+        GROUP BY rep_id`
+    ).all(tenantId) as Array<{ repId: number; sales: number; total: number; paid: number; pending: number }>;
+    const byRep = new Map(rows.map(r => [r.repId, r]));
+    return this.getTeamMembers(tenantId).filter(r => r.active).map(rep => {
+      const c = byRep.get(rep.id);
+      return {
+        repId: rep.id, repName: rep.name,
+        total: c?.total ?? 0, paid: c?.paid ?? 0, pending: c?.pending ?? 0, sales: c?.sales ?? 0,
+      };
     });
   }
 
@@ -5305,24 +5568,28 @@ export class Storage implements IStorage {
   getTenantBySlug(slug: string): Tenant | undefined {
     return db.select().from(tenants).where(eq(tenants.slug, slug)).get();
   }
-  getTenantByOwnerEmail(email: string): Tenant | undefined {
-    return db.select().from(tenants).where(eq(tenants.ownerEmail, email)).get();
-  }
   createTenant(t: InsertTenant): Tenant {
     return db.insert(tenants).values({ ...t, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }).returning().get();
   }
   updateTenant(id: number, updates: Partial<Tenant>): Tenant | undefined {
-    return db.update(tenants).set({ ...updates, updatedAt: new Date().toISOString() }).where(eq(tenants.id, id)).returning().get();
+    const row = db.update(tenants).set({ ...updates, updatedAt: new Date().toISOString() }).where(eq(tenants.id, id)).returning().get();
+    bumpTenantConfigVersion(); // always — see the memo's "bump always" rule
+    return row;
   }
   deleteTenant(id: number): void {
     db.delete(tenants).where(eq(tenants.id, id)).run();
   }
+  // Grouped aggregates, no hydration: the super-admin tenant listing calls this
+  // once PER TENANT per page load, and the old shape drizzle-hydrated every
+  // lead in the org to read one status column. The leads aggregate is a
+  // covering read off idx_leads_tenant_status.
   getTenantStats(tenantId: number): { reps: number; leads: number; sold: number; territories: number } {
-    const reps = db.select().from(users).where(and(eq(users.tenantId, tenantId), eq(users.active, true))).all().length;
-    const allLeads = db.select().from(leads).where(eq(leads.tenantId, tenantId)).all();
-    const sold = allLeads.filter(l => l.leadStatus === 'sold').length;
-    const terrs = db.select().from(territories).where(eq(territories.tenantId, tenantId)).all().length;
-    return { reps, leads: allLeads.length, sold, territories: terrs };
+    const l = rawDb.prepare(
+      `SELECT COUNT(*) AS leads, COALESCE(SUM(lead_status = 'sold'), 0) AS sold FROM leads WHERE tenant_id = ?`
+    ).get(tenantId) as { leads: number; sold: number };
+    const reps = (rawDb.prepare(`SELECT COUNT(*) c FROM users WHERE tenant_id = ? AND active = 1`).get(tenantId) as any).c;
+    const terrs = (rawDb.prepare(`SELECT COUNT(*) c FROM territories WHERE tenant_id = ?`).get(tenantId) as any).c;
+    return { reps, leads: l.leads, sold: l.sold, territories: terrs };
   }
 
   // ── Training progress (D2D curriculum) ──────────────────────────────────────

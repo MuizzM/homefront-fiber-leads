@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { rawDb } from "./db";
+import { parseCsvRows } from "./csv";
 import {
   hashKineticEvidence,
   importedKineticEvidenceSchema,
@@ -56,42 +57,18 @@ export interface EvidenceIngestSummary {
   issues: Array<{ index: number; message: string }>;
 }
 
+// Header adapter over the shared row tokenizer. This importer's contract:
+// headers trimmed + lowercased, every cell trimmed, short rows padded to "".
+//
+// Blank-row handling deliberately does NOT use csv.ts's `isBlankCsvRow` — that
+// helper drops only literally-empty fields, whereas an uploaded evidence sheet
+// has always had its whitespace-only rows (" , ") dropped too. The filter runs
+// before the header is read, so a leading blank line is skipped and the first
+// row with content is the header, exactly as before.
 function parseCsv(text: string): Record<string, string>[] {
-  const rows: string[][] = [];
-  let row: string[] = [],
-    field = "",
-    quoted = false;
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') {
-        field += '"';
-        index++;
-      } else if (char === '"') quoted = false;
-      else field += char;
-      continue;
-    }
-    if (char === '"') {
-      quoted = true;
-      continue;
-    }
-    if (char === ",") {
-      row.push(field);
-      field = "";
-      continue;
-    }
-    if (char === "\n" || char === "\r") {
-      if (char === "\r" && text[index + 1] === "\n") index++;
-      row.push(field);
-      field = "";
-      if (row.some((value) => value.trim())) rows.push(row);
-      row = [];
-      continue;
-    }
-    field += char;
-  }
-  row.push(field);
-  if (row.some((value) => value.trim())) rows.push(row);
+  const rows = parseCsvRows(text).filter((row) =>
+    row.some((value) => value.trim()),
+  );
   if (!rows.length) return [];
   const headers = rows[0].map((value) => value.trim().toLowerCase());
   if (new Set(headers).size !== headers.length)

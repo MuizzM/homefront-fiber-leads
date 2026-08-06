@@ -99,9 +99,6 @@ function stickyProxyUrl(base: string): string {
 }
 
 /** Exposed for diagnostics: the current sticky session window (masked). */
-export function stickySessionInfo(): { id: string; untilMs: number } {
-  return { id: _stickyId.slice(0, 4) + "…", untilMs: Math.max(0, _stickyUntil - Date.now()) };
-}
 
 function buildAgent(proxyUrl: string) {
   return new _ProxyAgent({

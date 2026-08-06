@@ -288,6 +288,32 @@ interface MapPin {
 
 // Mapbox token is fetched from /api/config/map at runtime — not in bundle
 
+// ── Pin index (id → position) per pins-array identity ───────────────────────
+// applyLeadEvent, the central mark, the one-tap add reconcile, and the delete
+// path all need "where is lead X in old.pins" inside a setQueryData updater —
+// previously an O(n) findIndex/find scan per event at the full-feed pin
+// ceiling. A render-derived memo/ref CANNOT serve these updaters: a push
+// landing between setQueryData and the next render would read indexes for the
+// PREVIOUS array (double-appending a create-then-update burst for a new lead,
+// or patching a stale index onto the WRONG lead after a delete's filter).
+// Keying the index on the pins array identity itself — built lazily on first
+// lookup, WeakMap so it dies with the array — makes staleness structurally
+// impossible: a lookup always describes exactly the array being updated.
+const PIN_INDEXES = new WeakMap<readonly { id: number }[], Map<number, number>>();
+function pinIndexOf(pins: readonly { id: number }[], id: number): number {
+  let byId = PIN_INDEXES.get(pins);
+  if (!byId) {
+    byId = new Map<number, number>();
+    for (let i = 0; i < pins.length; i++) {
+      const pid = pins[i].id;
+      // First occurrence wins — exactly findIndex/find semantics.
+      if (!byId.has(pid)) byId.set(pid, i);
+    }
+    PIN_INDEXES.set(pins, byId);
+  }
+  return byId.get(id) ?? -1;
+}
+
 const ROCKWELL_CENTER: [number, number] = [-80.41, 35.545];
 
 // (The PIN_COLORS legend-dot map left with the floating dot-strip: search rows,
@@ -3595,25 +3621,22 @@ export default function MapView() {
             // Reconcile temp id → real id in the query cache…
             qc.setQueryData(["/api/leads/map"], (old: any) => {
               if (!old?.pins) return old;
-              return {
-                ...old,
-                pins: old.pins.map((p: any) =>
-                  p.id === tempId
-                    ? {
-                        ...p,
-                        id: added.id,
-                        address: finalAddress,
-                        city: added.city ?? resolved.city,
-                        state: added.state ?? resolved.state,
-                        zip: added.zip ?? resolved.zip,
-                        lat: added.lat ?? p.lat,
-                        lng: added.lng ?? p.lng,
-                        leadStatus: added.leadStatus ?? "prospect",
-                        assignedRepId: added.assignedRepId ?? null,
-                      }
-                    : p,
-                ),
+              const i = pinIndexOf(old.pins, tempId);
+              if (i < 0) return old; // temp pin already gone — nothing to rename
+              const pins = old.pins.slice();
+              pins[i] = {
+                ...pins[i],
+                id: added.id,
+                address: finalAddress,
+                city: added.city ?? resolved.city,
+                state: added.state ?? resolved.state,
+                zip: added.zip ?? resolved.zip,
+                lat: added.lat ?? pins[i].lat,
+                lng: added.lng ?? pins[i].lng,
+                leadStatus: added.leadStatus ?? "prospect",
+                assignedRepId: added.assignedRepId ?? null,
               };
+              return { ...old, pins };
             });
             // …and in the live GeoJSON feature maps, so the painted pin and
             // every id-keyed path (knock, delete, ring) agree immediately —
@@ -3634,7 +3657,23 @@ export default function MapView() {
             toast({ title: "Pin added", severity: "success", description: finalAddress });
           }
           // Durable reconcile for every other consumer (list, stats, map poll).
-          qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+          //
+          // The map feed is invalidated CONDITIONALLY. The duplicate/existed
+          // path merged nothing above — its "flash the real pin" affordance can
+          // depend on this refetch for a lead that entered scope inside the
+          // last poll window — so it always invalidates. The fresh-add/adopted
+          // path already reconciled the authoritative row into the query cache
+          // AND the live feature maps above; in viewport mode the invalidate
+          // bridge turns this into a cheap window refetch, so keep it, but in
+          // full-feed mode it would re-download the whole packed feed (the add
+          // bumped the data version, so the ETag cannot 304) just to re-learn
+          // the row that was merged. The only fields the merged pin lacks are
+          // server-joined extras (knockCount, freshConfidence, carrier), which
+          // the standing 60s poll reconciles within a minute anyway — skip it.
+          const mergedAuthoritativeRow = !(added.existed === true && added.adopted !== true);
+          if (!mergedAuthoritativeRow || viewportModeRef.current) {
+            qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+          }
           qc.invalidateQueries({ queryKey: ["/api/leads"] });
         } catch {
           removeTempPin();
@@ -5675,7 +5714,7 @@ export default function MapView() {
       // rebuilt collection, so there is nothing to paint imperatively.
       if (!pushed) {
         qc.setQueryData(["/api/leads/map"], (old: any) => {
-          if (!old?.pins?.some((p: MapPin) => p.id === evt.leadId)) return old;
+          if (!old?.pins || pinIndexOf(old.pins, evt.leadId) < 0) return old;
           return {
             ...old,
             total: Math.max(0, (old.total ?? old.pins.length) - 1),
@@ -5692,7 +5731,7 @@ export default function MapView() {
         // Cache not warm yet: the first GET is still in flight and will carry
         // this row itself. Seeding a lone pin here would render a map of one.
         if (!old?.pins) return old;
-        const index = old.pins.findIndex((p: MapPin) => p.id === pushed.id);
+        const index = pinIndexOf(old.pins, pushed.id);
         if (index < 0) {
           // A door that just entered this user's scope (assigned to their area,
           // or created by a scan). The server already ran repCanAccessLead
@@ -5888,14 +5927,20 @@ export default function MapView() {
         feature.properties.visited = 1;
         scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
       }
-      const prevPin = (qc.getQueryData<any>(["/api/leads/map"])?.pins ?? []).find((p: any) => p.id === lead.id);
+      const snapPins = qc.getQueryData<any>(["/api/leads/map"])?.pins as MapPin[] | undefined;
+      const prevPinIdx = snapPins ? pinIndexOf(snapPins, lead.id) : -1;
+      const prevPin = prevPinIdx >= 0 ? snapPins![prevPinIdx] : undefined;
       // lastOutcomeAt mirrors the server's CAS clock (central-disposition
       // stamps last_outcome_at with its own now()) so the stream merge's
       // recency comparison holds the mark against any older push in flight.
       const optimisticAt = new Date().toISOString();
       qc.setQueryData(["/api/leads/map"], (old: any) => {
         if (!old?.pins) return old;
-        return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome, lastOutcomeAt: optimisticAt } : p) };
+        const i = pinIndexOf(old.pins, lead.id);
+        if (i < 0) return old; // door not in this window — nothing to recolor
+        const pins = old.pins.slice();
+        pins[i] = { ...pins[i], leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome, lastOutcomeAt: optimisticAt };
+        return { ...old, pins };
       });
       try { navigator.vibrate?.(10); } catch { /* */ }
       toast({ title: "Marked centrally", severity: "success", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
@@ -5921,17 +5966,16 @@ export default function MapView() {
         // the local clock to server truth the moment the write lands.
         qc.setQueryData(["/api/leads/map"], (old: any) => {
           if (!old?.pins) return old;
-          return {
-            ...old,
-            pins: old.pins.map((p: any) => p.id === lead.id
-              ? {
-                  ...p,
-                  leadStatus: updated.leadStatus ?? nextLeadStatus,
-                  lastOutcome: updated.lastOutcome ?? outcome,
-                  lastOutcomeAt: updated.lastOutcomeAt ?? p.lastOutcomeAt,
-                }
-              : p),
+          const i = pinIndexOf(old.pins, lead.id);
+          if (i < 0) return old;
+          const pins = old.pins.slice();
+          pins[i] = {
+            ...pins[i],
+            leadStatus: updated.leadStatus ?? nextLeadStatus,
+            lastOutcome: updated.lastOutcome ?? outcome,
+            lastOutcomeAt: updated.lastOutcomeAt ?? pins[i].lastOutcomeAt,
           };
+          return { ...old, pins };
         });
         // The server writes a [central]-flagged knock row, so History HAS a new
         // entry — but the card fetched that query when it opened and nothing
@@ -5956,7 +6000,11 @@ export default function MapView() {
         if (prevPin) {
           qc.setQueryData(["/api/leads/map"], (old: any) => {
             if (!old?.pins) return old;
-            return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? prevPin : p) };
+            const i = pinIndexOf(old.pins, lead.id);
+            if (i < 0) return old;
+            const pins = old.pins.slice();
+            pins[i] = prevPin;
+            return { ...old, pins };
           });
         }
         toast({ title: "Central mark failed — reverted", description: String(e?.message ?? e), variant: "destructive" });

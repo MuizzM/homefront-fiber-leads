@@ -78,7 +78,6 @@ export const tenantBilling = sqliteTable("tenant_billing", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export type TenantBilling = typeof tenantBilling.$inferSelect;
 
 // Append-only credit ledger — one row per grant/consume/reset. dedupeKey makes a
 // lead-delivery consume idempotent (a retried write can't double-charge a lead).
@@ -94,7 +93,6 @@ export const leadCreditLedger = sqliteTable("lead_credit_ledger", {
   actor: text("actor"),
   at: text("at").notNull().default(new Date().toISOString()),
 });
-export type LeadCreditLedger = typeof leadCreditLedger.$inferSelect;
 
 
 // ── Users (admin + reps with secure login) ───────────────────────────────────
@@ -134,7 +132,6 @@ export const otpCodes = sqliteTable("otp_codes", {
   used: integer("used", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export type OtpCode = typeof otpCodes.$inferSelect;
 
 // ── Territories ───────────────────────────────────────────────────────────────
 export const territories = sqliteTable("territories", {
@@ -181,7 +178,6 @@ export const territoryEvents = sqliteTable("territory_events", {
   payload: text("payload"),                      // JSON
   at: text("at").notNull().default(new Date().toISOString()),
 });
-export type TerritoryEvent = typeof territoryEvents.$inferSelect;
 
 // ── Leads ─────────────────────────────────────────────────────────────────────
 export const leads = sqliteTable("leads", {
@@ -391,7 +387,6 @@ export const appSettings = sqliteTable("app_settings", {
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
   updatedBy: integer("updated_by"),
 });
-export type AppSetting = typeof appSettings.$inferSelect;
 
 // ── Verification override audit (immutable — one row per admin verdict change) ─
 export const activityOverrides = sqliteTable("activity_overrides", {
@@ -439,11 +434,6 @@ export const repApplications = sqliteTable("rep_applications", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export const insertRepApplicationSchema = createInsertSchema(repApplications).omit({
-  id: true, createdAt: true, updatedAt: true, reviewedBy: true,
-  reviewNotes: true, userId: true, status: true,
-});
-export type InsertRepApplication = z.infer<typeof insertRepApplicationSchema>;
 export type RepApplication = typeof repApplications.$inferSelect;
 
 // ── HR / compliance checkpoints ───────────────────────────────────────────────
@@ -469,7 +459,6 @@ export const repHrCheckpoints = sqliteTable("rep_hr_checkpoints", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export type RepHrCheckpoint = typeof repHrCheckpoints.$inferSelect;
 
 // ── Territory Requests ────────────────────────────────────────────────────────
 export const territoryRequests = sqliteTable("territory_requests", {
@@ -513,8 +502,6 @@ export const clockSessions = sqliteTable("clock_sessions", {
   notes: text("notes"),
   date: text("date").notNull(),                // "2026-07-06" for easy grouping
 });
-export const insertClockSessionSchema = createInsertSchema(clockSessions).omit({ id: true });
-export type InsertClockSession = z.infer<typeof insertClockSessionSchema>;
 
 // ── Punch corrections (append-only time audit) ────────────────────────────────
 // A manager's correction to a rep's recorded time. clock_sessions raw rows are
@@ -533,7 +520,6 @@ export const punchCorrections = sqliteTable("punch_corrections", {
   actorUserId: integer("actor_user_id"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export type PunchCorrection = typeof punchCorrections.$inferSelect;
 
 // ── Pay disputes (rep-facing) ─────────────────────────────────────────────────
 // A rep disputes ONE line of one week's pay (the hourly block, the commission
@@ -558,7 +544,6 @@ export const payDisputes = sqliteTable("pay_disputes", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   resolvedAt: text("resolved_at"),
 });
-export type PayDispute = typeof payDisputes.$inferSelect;
 export type ClockSession = typeof clockSessions.$inferSelect;
 
 // ── Scan targets — persistent address pool ───────────────────────────────────
@@ -595,9 +580,6 @@ export const scanTargets = sqliteTable("scan_targets", {
   convertedToLeadId: integer("converted_to_lead_id"),      // set when a change promoted it to a lead
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export const insertScanTargetSchema = createInsertSchema(scanTargets).omit({ id: true, createdAt: true });
-export type InsertScanTarget = z.infer<typeof insertScanTargetSchema>;
-export type ScanTarget = typeof scanTargets.$inferSelect;
 
 // ── Commissions ───────────────────────────────────────────────────────────────
 // Track each sale's commission — admin sets rate, rep sees their earnings
@@ -714,7 +696,6 @@ export const commissionPlans = sqliteTable("commission_plans", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export type CommissionPlan = typeof commissionPlans.$inferSelect;
 
 // Immutable version of a plan's financial rules. A rate/tier/type/basis change
 // creates a NEW version — never an in-place edit of an ACTIVE version.
@@ -732,7 +713,6 @@ export const commissionPlanVersions = sqliteTable("commission_plan_versions", {
   createdBy: integer("created_by"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export type CommissionPlanVersion = typeof commissionPlanVersions.$inferSelect;
 
 // Retroactive-weekly tiers for a plan version (validated by shared/commissionTiers.ts).
 export const commissionTiers = sqliteTable("commission_tiers", {
@@ -746,7 +726,6 @@ export const commissionTiers = sqliteTable("commission_tiers", {
   rateCents: integer("rate_cents").notNull(),            // > 0
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export type CommissionTierRow = typeof commissionTiers.$inferSelect;
 
 // Effective-dated assignment of a plan VERSION to a rep. No overlapping active
 // periods for a rep. Agreement acceptance snapshot captured on accept.
@@ -762,7 +741,6 @@ export const repCommissionAssignments = sqliteTable("rep_commission_assignments"
   agreementSnapshot: text("agreement_snapshot"),          // JSON, captured on acceptance
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export type RepCommissionAssignment = typeof repCommissionAssignments.$inferSelect;
 
 // Commissionable-sale ledger. NEW table (not knock_log): knock_log is an
 // append-only knock-event log with no sale-qualification lifecycle or
@@ -784,7 +762,6 @@ export const commissionSales = sqliteTable("commission_sales", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export type CommissionSale = typeof commissionSales.$inferSelect;
 
 // Immutable weekly statement. Snapshots timezone/basis/plan so it never changes
 // if org config changes later. finalCommissionCents = gross + adjustment.
@@ -838,7 +815,6 @@ export const commissionAdjustments = sqliteTable("commission_adjustments", {
   rejectedAt: text("rejected_at"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
-export type CommissionAdjustment = typeof commissionAdjustments.$inferSelect;
 
 // ── Chargeback reserve ledger — APPEND-ONLY, the ONE source of a rep's balance ─
 // Balance = SUM(amount_cents) computed in SQL, never folded in JS. Rows are
@@ -882,7 +858,6 @@ export const repBankDetails = sqliteTable("rep_bank_details", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export type RepBankDetails = typeof repBankDetails.$inferSelect;
 
 // ESIGN-compliant electronic W-9. TIN encrypted; signature evidence (typed
 // name, date, IP, user agent, consent flag) retained with the generated PDF.
@@ -936,7 +911,6 @@ export const companyProfile = sqliteTable("company_profile", {
   companyId: text("company_id").notNull(),               // NACHA company id (10)
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export type CompanyProfile = typeof companyProfile.$inferSelect;
 
 // ── Tenant pay policy — install-gated commission hold ────────────────────────
 // Per-tenant knobs for the install hold. An absent row behaves as the defaults
@@ -947,4 +921,3 @@ export const tenantPayPolicy = sqliteTable("tenant_pay_policy", {
   holdDays: integer("hold_days").notNull().default(90),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
-export type TenantPayPolicy = typeof tenantPayPolicy.$inferSelect;

@@ -73,5 +73,3 @@ export const parcelProvider: AddressProvider = {
   },
 };
 
-/** Test seam — reset the module cache. */
-export function __resetParcelCache() { _cache = null; }

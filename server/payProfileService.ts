@@ -200,13 +200,6 @@ export async function renderStoredW9(tenantId: number, row: W9Row): Promise<Uint
   return result.pdf;
 }
 
-/** INTERNAL ONLY — 1099 computation. Never expose through a route. */
-export function getW9Secrets(tenantId: number, repId: number): { tin: string; tinType: "ssn" | "ein" } | null {
-  const row = getLatestW9(tenantId, repId);
-  if (!row) return null;
-  return { tin: decryptPaySecret(row.tin_enc), tinType: row.tin_type };
-}
-
 // ── Company (originating ODFI) profile ───────────────────────────────────────
 export interface CompanyProfileRow {
   tenant_id: number; legal_name: string; ein_enc: string; dfi_account_enc: string;

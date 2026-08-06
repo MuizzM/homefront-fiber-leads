@@ -1,7 +1,11 @@
-import { useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import {
+  LEADS_PAGE_SIZE, isLeadsListKey, leadsListQueryOptions, type LeadsListResponse,
+} from "@/lib/leadsListQuery";
+import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -35,6 +39,15 @@ import { useCan } from "@/lib/capabilities";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
+
+// A lead changed: every cached PAGE of the list is now suspect, so mark them
+// stale (the active one refetches — that is what swaps an optimistic temp row
+// for the real server row). Deliberately NOT the bare ["/api/leads"] prefix:
+// that also matched ["/api/leads", id, "knocks"] / "enrichment", so renaming a
+// lead re-fetched the enrichment of whatever lead happened to be open.
+function invalidateLeadLists(qc: QueryClient): void {
+  void qc.invalidateQueries({ predicate: query => isLeadsListKey(query.queryKey) });
+}
 
 // Display label for a lead row honoring the lastOutcome disambiguator —
 // "already a customer" is STORED as not_interested + lastOutcome=already_customer,
@@ -207,7 +220,7 @@ function KnockLogger({ lead, team }: {
     onSuccess: () => {
       toast({ title: "Knock logged" });
       qc.invalidateQueries({ queryKey: ["/api/leads", lead.id, "knocks"] });
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      invalidateLeadLists(qc);
       qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
       qc.invalidateQueries({ queryKey: ["/api/followups"] });
       // Reset for the next log; fresh idempotency key for a genuinely new knock.
@@ -338,7 +351,7 @@ function AssignRepModal({ lead, team, onClose }: {
     },
     onSuccess: () => {
       toast({ title: "Lead assigned" });
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      invalidateLeadLists(qc);
       onClose();
     },
     // HONESTY FIX: silent failure — a server rejection used to say nothing.
@@ -473,7 +486,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
     onSuccess: () => {
       toast({ title: "Contact saved" });
       qc.invalidateQueries({ queryKey: ["/api/leads", lead.id, "enrichment"] });
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      invalidateLeadLists(qc);
       setEditContact(false);
     },
     // HONESTY FIX: silent failure — now surfaces the rejection.
@@ -747,6 +760,86 @@ function EnterpriseKpi({ label, value, helper, icon: Icon, tone = "text-primary"
   );
 }
 
+// ── List rows ─────────────────────────────────────────────────────────────────
+// Both rows are memoised on primitive props (never the Map/array they came
+// from), so typing in the search box, opening a dialog or flipping a filter
+// re-renders the page shell and leaves all 100 rows exactly as they are.
+
+const LeadTableRow = memo(function LeadTableRow({
+  lead, assignedName, onboardingStage, canAssign, canEdit, canDelete, canOpenCalling,
+  onOpen, onAssign, onEdit, onDelete,
+}: {
+  lead: Lead;
+  assignedName: string;
+  /** Onboarding stage of this row's assigned rep, if any — resolved by the page. */
+  onboardingStage?: string;
+  canAssign: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canOpenCalling: boolean;
+  onOpen: (lead: Lead) => void;
+  onAssign: (lead: Lead) => void;
+  onEdit: (lead: Lead) => void;
+  onDelete: (id: number) => void;
+}) {
+  const next = nextAction(lead);
+  const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
+  return (
+    <tr data-testid={`card-lead-${lead.id}`} className="group hover:bg-muted/35 transition-colors">
+      <td className="px-4 py-3"><button onClick={() => onOpen(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+      <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
+      <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
+      <td className="px-3 py-3"><button onClick={() => canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
+      <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-success" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
+      <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
+      <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
+      <td className="px-3 py-3">
+        <div className="flex items-center justify-end gap-0.5">
+          {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
+          {canAssign && <button onClick={() => onAssign(lead)} title="Assign" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" /></button>}
+          <button onClick={() => onOpen(lead)} title="Open details" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" /></button>
+          {canEdit && <button onClick={() => onEdit(lead)} title="Edit" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>}
+          {canDelete && <button onClick={() => onDelete(lead.id)} title="Delete" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>}
+        </div>
+      </td>
+    </tr>
+  );
+});
+
+const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOpen }: {
+  lead: Lead;
+  canOpenCalling: boolean;
+  onOpen: (lead: Lead) => void;
+}) {
+  const directions = lead.lat != null && lead.lng != null
+    ? `https://www.google.com/maps/dir/?api=1&destination=${lead.lat},${lead.lng}`
+    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`)}`;
+  const next = nextAction(lead);
+  return (
+    <article className="render-lazy px-4 py-4" data-testid={`mobile-lead-${lead.id}`}>
+      <button onClick={() => onOpen(lead)} className="w-full text-left">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
+            <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground"><MapPin className="h-3.5 w-3.5 shrink-0" />{lead.city}, {lead.state} {lead.zip}</div>
+          </div>
+          <Badge className={`shrink-0 border-0 text-2xs ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
+        </div>
+        <div className="mt-3 grid grid-cols-3 rounded-lg border border-border bg-background/45">
+          <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
+          <div className="border-x border-border px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
+          <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
+        </div>
+      </button>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <button onClick={() => onOpen(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5"><ArrowUpRight className="h-4 w-4" />Open</button>
+        {canOpenCalling ? <Link href={`/calling/lead/${lead.id}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4 text-primary" />Calling</Link> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4" />Protected</span>}
+        <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Navigation className="h-4 w-4 text-primary" />Route</a>
+      </div>
+    </article>
+  );
+});
+
 export default function Leads() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -776,26 +869,24 @@ export default function Leads() {
   const isRep = user?.role === "rep";
 
   const [page, setPage] = useState(0);
-  const PAGE_SIZE = 100;
+  const PAGE_SIZE = LEADS_PAGE_SIZE;
 
   // Debounce search so a query fires once typing pauses, not on every keystroke.
   const debouncedSearch = useDebounce(search, 300);
 
-  const { data: leadsResp, isLoading, isFetching, isError, refetch: refetchLeads } = useQuery<{ leads: Lead[]; total: number; limit: number; offset: number }>({
-    queryKey: ["/api/leads", debouncedSearch, filterStatus, filterCity, filterState, filterRep, filterFiber, page],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (debouncedSearch) params.set("search", debouncedSearch);
-      if (filterStatus !== "all") params.set("status", filterStatus);
-      if (filterCity !== "all") params.set("city", filterCity);
-      if (filterState !== "all") params.set("state", filterState);
-      if (filterRep !== "all") params.set("assignedRepId", filterRep);
-      if (filterFiber !== "all") params.set("fiberStatus", filterFiber);
-      params.set("limit", String(PAGE_SIZE));
-      params.set("offset", String(page * PAGE_SIZE));
-      const res = await apiRequest("GET", `/api/leads?${params}`);
-      return res.json();
-    },
+  // Key + fetcher come from the shared builder so the route warm (which fires
+  // before this page mounts) lands on exactly this entry, and the mutation
+  // invalidations recognise it.
+  const { data: leadsResp, isLoading, isFetching, isError, refetch: refetchLeads } = useQuery<LeadsListResponse>({
+    ...leadsListQueryOptions({
+      search: debouncedSearch,
+      status: filterStatus,
+      city: filterCity,
+      state: filterState,
+      rep: filterRep,
+      fiber: filterFiber,
+      page,
+    }),
     staleTime: 30000,
     placeholderData: keepPreviousData, // keep the current page visible while the next loads — no skeleton flash
   });
@@ -831,11 +922,16 @@ export default function Leads() {
   });
   const bs = leadStats?.byStatus ?? {};
 
-  // Distinct states + cities for the dropdowns (cities scoped to the chosen state)
-  const states = Array.from(new Set(facets.map(f => f.state).filter(Boolean))).sort();
-  const cities = Array.from(new Set(
+  // Distinct states + cities for the dropdowns (cities scoped to the chosen
+  // state). Memoised: this is a Set-dedup + sort over every facet row, and it
+  // has no business re-running on each keystroke in the search box.
+  const states = useMemo(
+    () => Array.from(new Set(facets.map(f => f.state).filter(Boolean))).sort(),
+    [facets],
+  );
+  const cities = useMemo(() => Array.from(new Set(
     facets.filter(f => filterState === "all" || f.state === filterState).map(f => f.city).filter(Boolean)
-  )).sort();
+  )).sort(), [facets, filterState]);
 
   const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"] });
   const { data: onboardingPipeline } = useQuery<{
@@ -846,10 +942,13 @@ export default function Leads() {
     enabled: canEdit,
     staleTime: 30_000,
   });
-  const onboardingByRep = new Map<number, string>();
-  for (const record of onboardingPipeline?.records ?? []) {
-    if (record.account?.repId != null) onboardingByRep.set(record.account.repId, record.stage);
-  }
+  const onboardingByRep = useMemo(() => {
+    const byRep = new Map<number, string>();
+    for (const record of onboardingPipeline?.records ?? []) {
+      if (record.account?.repId != null) byRep.set(record.account.repId, record.stage);
+    }
+    return byRep;
+  }, [onboardingPipeline]);
 
   // Optimistic-write helper for the paged list cache. The ["/api/leads", ...]
   // prefix also matches per-lead subqueries (["/api/leads", id, "knocks"] etc.),
@@ -892,7 +991,7 @@ export default function Leads() {
       toast({ title: `Couldn't add lead — ${String(e?.message ?? "request failed")}`, variant: "destructive" });
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      invalidateLeadLists(qc);
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
@@ -920,7 +1019,7 @@ export default function Leads() {
       toast({ title: e?.message ?? "Couldn't update lead", severity: "error" });
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      invalidateLeadLists(qc);
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
@@ -942,7 +1041,7 @@ export default function Leads() {
       toast({ title: "Couldn't delete lead — restored", variant: "destructive" });
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      invalidateLeadLists(qc);
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
     },
   });
@@ -967,8 +1066,33 @@ export default function Leads() {
     setMobileFiltersOpen(false);
   };
 
-  const assignmentName = (lead: Lead) => team.find(member => member.id === lead.assignedRepId)?.name ?? (lead.assignedRepId ? `Rep #${lead.assignedRepId}` : "Unassigned");
+  // One pass over the team instead of a team.find PER ROW (O(rows x team) on a
+  // 100-row page) — same lookup MapView uses for its pin labels.
+  const nameByRepId = useMemo(
+    () => new Map(team.map(member => [member.id, member.name] as const)),
+    [team],
+  );
+  const assignmentName = useCallback(
+    (lead: Lead) => (lead.assignedRepId != null ? nameByRepId.get(lead.assignedRepId) : undefined)
+      ?? (lead.assignedRepId ? `Rep #${lead.assignedRepId}` : "Unassigned"),
+    [nameByRepId],
+  );
   const fiberStatuses = Object.keys(leadStats?.byFiberStatus ?? {}).sort();
+
+  // Row callbacks are hoisted so the memoised rows below keep identical props
+  // across a keystroke or a dialog toggle. setState functions are already
+  // stable; these just give them a row-shaped signature.
+  const openLead = useCallback((lead: Lead) => setIntelLead(lead), []);
+  const openAssign = useCallback((lead: Lead) => setAssignLead(lead), []);
+  const openEdit = useCallback((lead: Lead) => setEditLead(lead), []);
+  const openDelete = useCallback((id: number) => setDeleteId(id), []);
+
+  // ONE tree, not two. The table and the card list used to both mount on every
+  // device with CSS hiding one — React still built and reconciled ~200 rows for
+  // a 100-row page, on every keystroke in the search box (the 300ms debounce
+  // gates the query, not the render). The hook's breakpoint IS the `lg:` the
+  // classes used, so what renders is unchanged.
+  const isDesktop = useIsDesktop();
 
   return (
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-7 space-y-5">
@@ -1035,90 +1159,55 @@ export default function Leads() {
         </div>
 
         {isLoading ? (
-          <>
-            {/* Desktop: 8-column row skeletons mirroring the real table grid. */}
-            <div className="hidden lg:block divide-y divide-border">
+          isDesktop ? (
+            /* Desktop: 8-column row skeletons mirroring the real table grid. */
+            <div className="divide-y divide-border">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="grid grid-cols-[27%_1fr_1fr_1fr_1fr_1fr_1fr_1fr] items-center gap-3 px-4 py-3">
                   {Array.from({ length: 8 }).map((_, j) => <Skeleton key={j} className="h-8" />)}
                 </div>
               ))}
             </div>
-            {/* Mobile: stacked card skeletons matching the card list. */}
-            <div className="lg:hidden space-y-3 px-4 py-4">
+          ) : (
+            /* Mobile: stacked card skeletons matching the card list. */
+            <div className="space-y-3 px-4 py-4">
               {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}
             </div>
-          </>
+          )
         ) : isError ? (
           <div className="py-16 px-6 text-center"><AlertTriangle className="w-7 h-7 text-rose-600 dark:text-rose-400 mx-auto" /><div className="text-sm font-semibold mt-3">Lead data could not be loaded</div><div className="text-xs text-muted-foreground mt-1">Your filters are preserved. Retry when the connection is restored.</div><Button variant="outline" size="sm" onClick={() => refetchLeads()} className="mt-4 h-8"><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry</Button></div>
         ) : filtered.length === 0 ? (
           <div className="py-16 px-6 text-center"><div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center mx-auto"><Users className="w-5 h-5 text-primary" /></div><div className="text-sm font-semibold mt-3">{activeFilters ? "No leads match this operational view" : "No leads have been added"}</div><div className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{activeFilters ? "Clear one or more filters to broaden the pipeline." : "Add a lead or run a market scan to start building the pipeline."}</div>{activeFilters && <Button variant="outline" size="sm" onClick={clearAllFilters} className="mt-4 h-8"><X className="w-3.5 h-3.5 mr-1" />Clear filters</Button>}</div>
+        ) : isDesktop ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1050px] border-collapse text-left">
+              <thead><tr className="border-b border-border bg-muted/20 text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
+              <tbody className="divide-y divide-border">
+                {filtered.map(lead => (
+                  <LeadTableRow
+                    key={lead.id}
+                    lead={lead}
+                    assignedName={assignmentName(lead)}
+                    onboardingStage={lead.assignedRepId ? onboardingByRep.get(lead.assignedRepId) : undefined}
+                    canAssign={canAssign}
+                    canEdit={canEdit}
+                    canDelete={canDelete}
+                    canOpenCalling={canOpenCalling}
+                    onOpen={openLead}
+                    onAssign={openAssign}
+                    onEdit={openEdit}
+                    onDelete={openDelete}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
-          <>
-            <div className="hidden lg:block overflow-x-auto">
-              <table className="w-full min-w-[1050px] border-collapse text-left">
-                <thead><tr className="border-b border-border bg-muted/20 text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
-                <tbody className="divide-y divide-border">
-                  {filtered.map(lead => {
-                    const next = nextAction(lead);
-                    const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
-                    return (
-                      <tr key={lead.id} data-testid={`card-lead-${lead.id}`} className="group hover:bg-muted/35 transition-colors">
-                        <td className="px-4 py-3"><button onClick={() => setIntelLead(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
-                        <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
-                        <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
-                        <td className="px-3 py-3"><button onClick={() => canAssign && setAssignLead(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignmentName(lead)}</button><div className="text-2xs text-muted-foreground mt-0.5">{lead.assignedRepId && onboardingByRep.get(lead.assignedRepId) ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingByRep.get(lead.assignedRepId)!] ?? onboardingByRep.get(lead.assignedRepId)}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
-                        <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-success" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
-                        <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
-                        <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
-                        <td className="px-3 py-3">
-                          <div className="flex items-center justify-end gap-0.5">
-                            {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
-                            {canAssign && <button onClick={() => setAssignLead(lead)} title="Assign" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" /></button>}
-                            <button onClick={() => setIntelLead(lead)} title="Open details" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" /></button>
-                            {canEdit && <button onClick={() => setEditLead(lead)} title="Edit" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>}
-                            {canDelete && <button onClick={() => setDeleteId(lead.id)} title="Delete" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="lg:hidden divide-y divide-border">
-              {filtered.map(lead => {
-                const directions = lead.lat != null && lead.lng != null
-                  ? `https://www.google.com/maps/dir/?api=1&destination=${lead.lat},${lead.lng}`
-                  : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`)}`;
-                const next = nextAction(lead);
-                return (
-                  <article key={lead.id} className="render-lazy px-4 py-4" data-testid={`mobile-lead-${lead.id}`}>
-                    <button onClick={() => setIntelLead(lead)} className="w-full text-left">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
-                          <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground"><MapPin className="h-3.5 w-3.5 shrink-0" />{lead.city}, {lead.state} {lead.zip}</div>
-                        </div>
-                        <Badge className={`shrink-0 border-0 text-2xs ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
-                      </div>
-                      <div className="mt-3 grid grid-cols-3 rounded-lg border border-border bg-background/45">
-                        <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
-                        <div className="border-x border-border px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
-                        <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
-                      </div>
-                    </button>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      <button onClick={() => setIntelLead(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5"><ArrowUpRight className="h-4 w-4" />Open</button>
-                      {canOpenCalling ? <Link href={`/calling/lead/${lead.id}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4 text-primary" />Calling</Link> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4" />Protected</span>}
-                      <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Navigation className="h-4 w-4 text-primary" />Route</a>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          </>
+          <div className="divide-y divide-border">
+            {filtered.map(lead => (
+              <LeadMobileCard key={lead.id} lead={lead} canOpenCalling={canOpenCalling} onOpen={openLead} />
+            ))}
+          </div>
         )}
 
         {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}

@@ -5,28 +5,19 @@ import { rawDb } from "./db";
 import { clusterFreshFiber, type FreshFiberPoint } from "@shared/freshFiberClusters";
 import { applyAuthoritativeMarketCatalog } from "./kineticMarketCatalog";
 import { projectConfirmedFreshLeads } from "./freshFiberProjector";
+import { isBlankCsvRow, parseCsvRows } from "./csv";
 export { toCsv } from "./csv";
 
 export const CORROBORATION_SOURCES = ["fcc_bdc_licensed", "carrier_partner_feed", "third_party_licensed", "field_verification"] as const;
 export type CorroborationSource = typeof CORROBORATION_SOURCES[number];
 
+/** Header adapter over the shared tokenizer (./csv). Headers are taken
+ *  VERBATIM — this file's CSV is repo-authored and its column names are the
+ *  record keys downstream, so no trimming or casing happens here. */
 function parseCsv(text: string): Record<string, string>[] {
-  const rows: string[][] = [];
-  let row: string[] = [], field = "", quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quoted) {
-      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
-      else if (ch === '"') quoted = false;
-      else field += ch;
-    } else if (ch === '"') quoted = true;
-    else if (ch === ",") { row.push(field); field = ""; }
-    else if (ch === "\n") { row.push(field.replace(/\r$/, "")); rows.push(row); row = []; field = ""; }
-    else field += ch;
-  }
-  if (field || row.length) { row.push(field.replace(/\r$/, "")); rows.push(row); }
+  const rows = parseCsvRows(text);
   const headers = rows.shift() ?? [];
-  return rows.filter((r) => r.some(Boolean)).map((values) => Object.fromEntries(headers.map((h, i) => [h, values[i] ?? ""])));
+  return rows.filter((r) => !isBlankCsvRow(r)).map((values) => Object.fromEntries(headers.map((h, i) => [h, values[i] ?? ""])));
 }
 
 export function seedStateMarkets(csvPath = path.resolve(process.cwd(), "data/nc_sc_kinetic_markets.csv")): { total: number; insertedOrUpdated: number; verifiedMarkets: number; expandingMarkets: number; syntheticMarkets: number } {

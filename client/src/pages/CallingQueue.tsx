@@ -143,6 +143,10 @@ function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
   );
 }
 
+// Rows the list asks the server for. The counts fetch above it takes the
+// server's 250-row cap; the list shows the first 150 of that same ordering.
+const QUEUE_LIST_LIMIT = 150;
+
 const SKELETON_WIDTHS = ["w-2/5", "w-1/2", "w-1/3", "w-3/5", "w-2/5", "w-1/2"] as const;
 
 function QueueRowsSkeleton() {
@@ -188,24 +192,8 @@ export default function CallingQueue() {
     staleTime: 15_000,
     retry: 1,
   });
-  // Fiber-only. Traced doors get their own section below, and a lead that is
-  // both would otherwise render twice under two different orderings.
-  const queueQuery = useQuery({
-    queryKey: ["/api/v1/calling/queue", stage, "fiber"],
-    queryFn: () => getCallingQueue({ stage: stage || undefined, limit: 150, source: "fiber" }),
-    enabled: statusQuery.isSuccess,
-    staleTime: 10_000,
-    retry: 1,
-  });
-  const filtered = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return queueQuery.data ?? [];
-    return (queueQuery.data ?? []).filter(item =>
-      [item.address, item.city, item.state, item.zip, item.contactName].some(value => value?.toLowerCase().includes(needle)),
-    );
-  }, [queueQuery.data, search]);
-  // Chip counts come from a separate UNFILTERED queue fetch — deriving them
-  // from the stage-filtered result would zero out every other chip's count.
+  // Chip counts come from an UNFILTERED queue fetch — deriving them from the
+  // stage-filtered result would zero out every other chip's count.
   const countsQuery = useQuery({
     queryKey: ["/api/v1/calling/queue", "counts", "fiber"],
     // Fiber-only, matching the list these chips filter — counting traced doors
@@ -215,6 +203,37 @@ export default function CallingQueue() {
     staleTime: 10_000,
     retry: 1,
   });
+  // Fiber-only, like the counts above: traced doors get their own section, and
+  // a lead that is both would otherwise render twice under two orderings.
+  //
+  // With no chip selected the list IS the head of the counts fetch: same
+  // endpoint, same source, same server ordering, just a shorter limit. Asking
+  // for it a second time re-ran the queue's server-side sync for rows we were
+  // already holding — so on the "All" view the list is sliced off the counts
+  // data (never a client-side stage filter, which would diverge from the
+  // server's own stage query past the 250-row cap), and this fetch only runs
+  // when a stage chip is actually selected. Coming back to "All" is then
+  // instant and fetch-free.
+  const queueQuery = useQuery({
+    queryKey: ["/api/v1/calling/queue", stage, "fiber"],
+    queryFn: () => getCallingQueue({ stage: stage || undefined, limit: QUEUE_LIST_LIMIT, source: "fiber" }),
+    enabled: statusQuery.isSuccess && stage !== "",
+    staleTime: 10_000,
+    retry: 1,
+  });
+  // Loading/error/retry for the list follow whichever query is feeding it.
+  const listQuery = stage === "" ? countsQuery : queueQuery;
+  const listRows = useMemo(
+    () => (stage === "" ? countsQuery.data?.slice(0, QUEUE_LIST_LIMIT) : queueQuery.data),
+    [stage, countsQuery.data, queueQuery.data],
+  );
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return listRows ?? [];
+    return (listRows ?? []).filter(item =>
+      [item.address, item.city, item.state, item.zip, item.contactName].some(value => value?.toLowerCase().includes(needle)),
+    );
+  }, [listRows, search]);
   const chipCounts = useMemo(() => {
     const rows = countsQuery.data;
     if (!rows) return null;
@@ -383,14 +402,14 @@ export default function CallingQueue() {
               </section>
             ) : null}
 
-            {queueQuery.isLoading ? <QueueRowsSkeleton /> : queueQuery.isError ? (
+            {listQuery.isLoading ? <QueueRowsSkeleton /> : listQuery.isError ? (
               <div role="alert" className="rounded-2xl border border-red-500/25 bg-card p-5 text-center">
                 <span className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-red-500/10">
                   <ShieldAlert aria-hidden="true" className="h-[18px] w-[18px] text-red-600 dark:text-red-400" />
                 </span>
                 <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">Queue unavailable</h2>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">No lead can be opened for calling while the queue is unknown.</p>
-                <button type="button" onClick={() => void queueQuery.refetch()}
+                <button type="button" onClick={() => void listQuery.refetch()}
                   className="mt-4 min-h-11 rounded-xl border border-border bg-card px-4 text-[13px] font-semibold transition-colors hover:bg-secondary/60">Retry</button>
               </div>
             ) : filtered.length ? (

@@ -15,14 +15,14 @@
 //      "hidden in the UI" is not hidden.
 
 import { rawDb } from "./db";
-import { storage } from "./storage";
+import { storage, orgTimezoneFor } from "./storage";
 import {
   announceSale, announceStreak, visibleTo, buildAuthoredAnnouncement,
   validateAuthoredAnnouncement,
   type Announcement, type AnnouncementKind, type SaleFacts, type StreakFacts,
   type AuthoredAnnouncementInput,
 } from "@shared/teamFeed";
-import { DEFAULT_WORKWEEK, localWallToUtcMs, localYmdParts } from "@shared/workweek";
+import { localWallToUtcMs, localYmdParts } from "@shared/workweek";
 
 export function ensureTeamFeedSchema(): void {
   rawDb.exec(`
@@ -99,11 +99,10 @@ export function publish(tenantId: number, a: Announcement, nowMs: number): Store
 // Thin wrappers so the knock handler states WHAT happened and never has to
 // assemble copy inline. Both return null when the event was already announced.
 
+// The org timezone read is storage's memoized resolver (same value, same
+// fallback) rather than a third hand-rolled copy of the tenants query.
 function orgTimezone(tenantId: number): string {
-  try {
-    const row = rawDb.prepare(`SELECT commission_timezone AS tz FROM tenants WHERE id = ?`).get(tenantId) as any;
-    return row?.tz || DEFAULT_WORKWEEK.timezone;
-  } catch { return DEFAULT_WORKWEEK.timezone; }
+  return orgTimezoneFor(tenantId);
 }
 
 /** Sales counts for the org's LOCAL day — "3 today" must roll over at midnight
@@ -111,13 +110,17 @@ function orgTimezone(tenantId: number): string {
 function saleCounts(tenantId: number, repId: number, nowMs: number): { mine: number; team: number } {
   const { y, mo, d } = localYmdParts(nowMs, orgTimezone(tenantId));
   const startIso = new Date(localWallToUtcMs(y, mo, d, 0, 0, orgTimezone(tenantId))).toISOString();
+  // knock_log carries its own tenant_id (stamped from the lead at insert, and
+  // NULL-tenant legacy rows were adopted by bootstrapDefaultTenant), so the
+  // tenant wall reads straight off idx_knock_log_tenant_time as a range scan
+  // of today's rows. The old JOIN through leads made every sold-knock
+  // announcement walk the tenant's ENTIRE lead index just to apply the wall.
   const row = rawDb.prepare(
-    `SELECT COUNT(*) AS team, SUM(CASE WHEN k.rep_id = ? THEN 1 ELSE 0 END) AS mine
-       FROM knock_log k
-       JOIN leads l ON l.id = k.lead_id
-      WHERE l.tenant_id = ? AND k.outcome = 'sold'
-        AND COALESCE(k.superseded, 0) = 0
-        AND k.knocked_at >= ?`,
+    `SELECT COUNT(*) AS team, SUM(CASE WHEN rep_id = ? THEN 1 ELSE 0 END) AS mine
+       FROM knock_log
+      WHERE tenant_id = ? AND outcome = 'sold'
+        AND COALESCE(superseded, 0) = 0
+        AND knocked_at >= ?`,
   ).get(repId, tenantId, startIso) as any;
   return { mine: Number(row?.mine ?? 0), team: Number(row?.team ?? 0) };
 }

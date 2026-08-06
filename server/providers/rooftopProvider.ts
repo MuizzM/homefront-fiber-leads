@@ -67,5 +67,3 @@ export const rooftopProvider: AddressProvider = {
   },
 };
 
-/** Test seam — reset the module cache. */
-export function __resetRooftopCache() { _cache = null; }

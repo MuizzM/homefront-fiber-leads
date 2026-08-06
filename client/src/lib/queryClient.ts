@@ -212,9 +212,14 @@ export const queryClient = new QueryClient({
       // refetches in the background so other reps' knocks/assignments appear.
       // (Was Infinity — data never refreshed unless this tab mutated it.)
       staleTime: 60_000,
-      // Keep inactive query data for 24h so a persisted entry survives long
-      // enough to be rehydrated on the next launch (must be >= persister maxAge).
-      gcTime: 1000 * 60 * 60 * 24,
+      // How long an UNMOUNTED query's data is kept. 30min covers navigating
+      // away and back (including a screen read from cache while offline) and
+      // then lets it go: this default used to be 24h for everything, which on a
+      // long manager session pinned every paged/filtered Leads entry and every
+      // per-lead subquery in memory for the rest of the day. The entries that
+      // genuinely need to outlive it — the persisted ones, and the offline-first
+      // field screens — get their own 24h gcTime via setQueryDefaults below.
+      gcTime: 30 * 60_000,
       retry: shouldRetryQuery,
       retryDelay: queryRetryDelay,
     },
@@ -242,6 +247,26 @@ export const PERSISTED_QUERY_KEYS = new Set<string>([
   "/api/training/progress",
 ]);
 
+// Screens a rep reads with no signal. These are NOT persisted to disk (too
+// personal / too large for localStorage), so the ONLY thing keeping "Offline —
+// showing your last synced follow-ups" honest after a few hours away from the
+// screen is in-memory retention. They keep the old 24h gcTime; the global
+// default no longer does.
+const OFFLINE_RETAINED_QUERY_KEYS: readonly string[] = [
+  "/api/followups",
+  "/api/clock/status",
+];
+
+const DAY_MS = 1000 * 60 * 60 * 24;
+
+// Per-key retention. setQueryDefaults matches by key PREFIX, and every entry
+// below is the first (and for these, only) segment of the real query key — the
+// same segment shouldDehydrateQuery matches on — so a default set here lands on
+// exactly the query it names.
+for (const key of [...PERSISTED_QUERY_KEYS, ...OFFLINE_RETAINED_QUERY_KEYS]) {
+  queryClient.setQueryDefaults([key], { gcTime: DAY_MS });
+}
+
 const QUERY_CACHE_STORAGE_KEY = "hf-query-cache-v1";
 
 export const queryPersister =
@@ -255,8 +280,10 @@ export const queryPersister =
 
 export const persistOptions = {
   persister: queryPersister!,
-  // Must match the query gcTime so a restored entry isn't immediately evicted.
-  maxAge: 1000 * 60 * 60 * 24,
+  // Must match the gcTime of the keys that actually persist — the 24h
+  // setQueryDefaults applied to PERSISTED_QUERY_KEYS above, NOT the 30min
+  // global default — so a restored entry isn't immediately evicted.
+  maxAge: DAY_MS,
   // Bump to invalidate every persisted cache after a breaking response shape change.
   buster: "hf-cache-1",
   dehydrateOptions: {

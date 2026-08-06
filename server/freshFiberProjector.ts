@@ -50,20 +50,36 @@ export interface ProjectionResult {
 
 interface TerritoryAssignment { territoryId: number; repId: number }
 
-function territoryAssignmentFor(tenantId: number, lat: number | null, lng: number | null): TerritoryAssignment | null {
-  if (lat == null || lng == null) return null;
-  const matches = (rawDb.prepare(`SELECT id,rep_id,polygon FROM territories
-    WHERE tenant_id=? AND status IN ('active','shared')`).all(tenantId) as any[]).filter((territory) => {
-    try {
-      const ring = JSON.parse(territory.polygon) as [number, number][];
-      return Array.isArray(ring) && ring.length >= 3 && pointInPolygon(lat, lng, ring);
-    } catch { return false; }
-  });
-  // Overlaps require a manager decision; silently choosing a territory could
-  // leak a door across teams. A single unambiguous match is safe to auto-push.
-  return matches.length === 1
-    ? { territoryId: Number(matches[0].id), repId: Number(matches[0].rep_id) }
-    : null;
+// Active territories fetched and JSON.parsed ONCE per projector call (built
+// lazily on the first published candidate). The previous shape re-queried and
+// re-parsed every polygon — potentially thousands of vertices each — once PER
+// candidate, inside the write transaction: O(candidates × territories ×
+// vertices) synchronous parsing per batch. DB state is stable inside the
+// transaction, so parse-once is behavior-identical. Same pattern as the
+// cityLeadIndex cache below. Rings that fail to parse (or are not >=3-vertex
+// arrays) are dropped, exactly as the per-candidate catch treated them.
+function buildTerritoryAssignmentIndex(tenantId: number): (lat: number | null, lng: number | null) => TerritoryAssignment | null {
+  let areas: Array<{ id: number; repId: number; ring: [number, number][] }> | null = null;
+  return (lat, lng) => {
+    if (lat == null || lng == null) return null;
+    areas ??= (rawDb.prepare(`SELECT id,rep_id,polygon FROM territories
+      WHERE tenant_id=? AND status IN ('active','shared')`).all(tenantId) as any[])
+      .map((territory) => {
+        try {
+          const ring = JSON.parse(territory.polygon) as [number, number][];
+          return Array.isArray(ring) && ring.length >= 3
+            ? { id: Number(territory.id), repId: Number(territory.rep_id), ring }
+            : null;
+        } catch { return null; }
+      })
+      .filter((t): t is { id: number; repId: number; ring: [number, number][] } => t != null);
+    const matches = areas.filter((t) => pointInPolygon(lat, lng, t.ring));
+    // Overlaps require a manager decision; silently choosing a territory could
+    // leak a door across teams. A single unambiguous match is safe to auto-push.
+    return matches.length === 1
+      ? { territoryId: matches[0].id, repId: matches[0].repId }
+      : null;
+  };
 }
 
 /**
@@ -73,6 +89,13 @@ function territoryAssignmentFor(tenantId: number, lat: number | null, lng: numbe
  */
 export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[]): ProjectionResult {
   const ids = [...new Set((targetIds ?? []).filter((id) => Number.isInteger(id) && id > 0))];
+  // A caller that PROVIDED targets but none survived validation asked to
+  // project nothing — falling through would silently run the full tenant
+  // sweep (every scan_target × latest-snapshot seek). Only an explicit
+  // no-argument call may sweep.
+  if (targetIds && ids.length === 0) {
+    return { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, addressReview: 0, leadIds: [], errors: [] };
+  }
   const filter = ids.length ? `AND s.id IN (${ids.map(() => "?").join(",")})` : "";
   const candidates = rawDb.prepare(`
     SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,
@@ -151,6 +174,8 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     const k = normalizeKineticAddressKey(address, city, state, "");
     if (!idx.has(k)) idx.set(k, { id: lead.id, tenant_id: lead.tenant_id, assigned_rep_id: lead.assigned_rep_id, address });
   };
+  // Territories parsed once per call, not once per candidate (see the builder).
+  const territoryAssignmentFor = buildTerritoryAssignmentIndex(tenantId);
   const insert = rawDb.prepare(`INSERT INTO leads
     (address,city,state,zip,lat,lng,fiber_status,max_download_mbps,is_new_deployment,is_new_fiber,is_tenured,
      household_segment_type,billing_status,lead_status,notes,deployment_notes,lead_tag,lead_score,tenant_id,
@@ -314,7 +339,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         return;
       }
       result.published++;
-      const assignment = territoryAssignmentFor(tenantId, candidate.lat, candidate.lng);
+      const assignment = territoryAssignmentFor(candidate.lat, candidate.lng);
       if (!leadId) {
         const addressMatch = findByAddressNormalized(candidate.address, candidate.city, candidate.state);
         if (addressMatch && Number(addressMatch.tenant_id) !== tenantId) {
@@ -429,10 +454,12 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   if (result.published > 0) {
     const bust = (globalThis as any).__bustMapCache;
     if (typeof bust === "function") bust(tenantId);
-    // Auto-enroll every fresh drop into the calling queue the moment it publishes.
+    // Auto-enroll every fresh drop into the calling queue the moment it
+    // publishes. force=true: this is THE event-driven sync the read-side
+    // debounce leans on — it must never itself be debounced away.
     try {
       const { syncFreshFiberQueue } = require("./calling/store") as typeof import("./calling/store");
-      syncFreshFiberQueue(tenantId);
+      syncFreshFiberQueue(tenantId, true);
     } catch { /* calling module optional — never block lead publication */ }
     structuredLog("fresh_fiber.projected", {
       tenantId, confirmed: result.confirmed, created: result.created, linkedExisting: result.linkedExisting, published: result.published,

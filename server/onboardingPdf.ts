@@ -1,4 +1,4 @@
-import PDFDocument from "pdfkit";
+import { renderPdfBuffer } from "./pdfCommon";
 import {
   ELECTRONIC_CONSENT_DISCLOSURE,
   ELECTRONIC_CONSENT_VERSION,
@@ -175,18 +175,12 @@ export function renderSignedAgreementPdf(
   evidence: SignatureEvidence,
   counterSign?: CounterSignEvidence,
 ): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
-      Title: `${snapshot.title} — ${snapshot.signerName}`,
-      Author: snapshot.companyName,
-      Subject: "Electronically signed onboarding agreement",
-      CreationDate: new Date(evidence.signedAt),
-    } });
-    const chunks: Buffer[] = [];
-    doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
-    doc.on("error", reject);
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-
+  return renderPdfBuffer({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
+    Title: `${snapshot.title} — ${snapshot.signerName}`,
+    Author: snapshot.companyName,
+    Subject: "Electronically signed onboarding agreement",
+    CreationDate: new Date(evidence.signedAt),
+  } }, doc => {
     renderAgreementBody(doc, snapshot);
 
     doc.addPage();
@@ -239,7 +233,6 @@ export function renderSignedAgreementPdf(
       .text("The signature is logically associated with the exact document hash shown above. Home Front Sign retains the immutable document snapshot, authentication context, consent record, and hash-chained event history.", { lineGap: 2 });
 
     addFooter(doc);
-    doc.end();
   });
 }
 
@@ -260,17 +253,11 @@ export function renderSignedAgreementPdf(
  * downloaded preview can never be mistaken for an executed agreement.
  */
 export function renderAgreementPreviewPdf(snapshot: AgreementSnapshot): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
-      Title: `${snapshot.title} — REVIEW COPY`,
-      Author: snapshot.companyName,
-      Subject: "Unsigned onboarding agreement — review copy",
-    } });
-    const chunks: Buffer[] = [];
-    doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
-    doc.on("error", reject);
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-
+  return renderPdfBuffer({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
+    Title: `${snapshot.title} — REVIEW COPY`,
+    Author: snapshot.companyName,
+    Subject: "Unsigned onboarding agreement — review copy",
+  } }, doc => {
     renderAgreementBody(doc, snapshot);
 
     // The consent disclosure belongs in the review copy too — a rep should be
@@ -299,7 +286,6 @@ export function renderAgreementPreviewPdf(snapshot: AgreementSnapshot): Promise<
       doc.restore();
     }
     addFooter(doc, "Home Front Sign • REVIEW COPY — NOT SIGNED");
-    doc.end();
   });
 }
 
@@ -326,17 +312,11 @@ export function renderOnboardingPacketPdf(input: {
   /** The tenant's own brand colour; falls back to the house teal. */
   brandColor?: string | null;
 }): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
-      Title: `Onboarding agreements — ${input.signerName}`,
-      Author: input.companyName,
-      Subject: "Onboarding agreement packet — review copy",
-    } });
-    const chunks: Buffer[] = [];
-    doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
-    doc.on("error", reject);
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-
+  return renderPdfBuffer({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
+    Title: `Onboarding agreements — ${input.signerName}`,
+    Author: input.companyName,
+    Subject: "Onboarding agreement packet — review copy",
+  } }, doc => {
     // ── Cover ────────────────────────────────────────────────────────────
     const accent = accentFor(input.brandColor);
     letterhead(doc, input.companyName, accent);
@@ -400,6 +380,5 @@ export function renderOnboardingPacketPdf(input: {
     }
 
     addFooter(doc, `${input.companyName} · REVIEW COPY — not signed`);
-    doc.end();
   });
 }
