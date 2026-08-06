@@ -126,14 +126,27 @@ export interface OverrideAward {
  *  with it so a locked week can always explain itself. */
 export interface ChainSnapshotNode extends UplineChainNode {
   awardedCents: number;
-  skipReason: "inactive" | "slot_filled" | "not_a_slot_role" | "zero_rate" | null;
+  skipReason: "slot_filled" | "not_a_slot_role" | "zero_rate" | null;
 }
 
 /**
- * FLAT_PER_SALE: pay the first ACTIVE team_lead and the first ACTIVE manager
- * in the chain their configured cents. One award per slot; an inactive node
- * leaves its slot open for a higher node of the same role (defensive — a valid
- * tree has at most one of each). Unfilled slots pay nobody: house keeps it.
+ * FLAT_PER_SALE: pay the first team_lead and the first manager in the chain
+ * their configured cents. One award per slot; unfilled slots pay nobody, so
+ * the house keeps a slot the tree doesn't have.
+ *
+ * Deliberately NOT gated on `active`. This function used to skip an inactive
+ * upline, which sounded prudent and was wrong twice over:
+ *   · a DEPARTED leader is already out of every chain — offboard and delete
+ *     both re-home their reports (server/routes.ts), so they can never be
+ *     walked into; the check never protected against the case it was written
+ *     for; and
+ *   · the members it DID catch were newly approved hires, who sit at
+ *     active = 0 until their agreements are signed. Their downline was
+ *     assigned at hire and is out selling, and the money for managing that
+ *     team was quietly going to the house over signature timing.
+ * No other pay path gates on `active` either — an inactive rep's own
+ * commission still pays. `active` stays on the snapshot node as a record of
+ * what was true at earn time; it just no longer decides the money.
  */
 export function computeFlatOverrides(
   chain: readonly UplineChainNode[],
@@ -149,7 +162,6 @@ export function computeFlatOverrides(
     let skipReason: ChainSnapshotNode["skipReason"] = null;
     if (!slot) skipReason = "not_a_slot_role";
     else if (filled.has(slot)) skipReason = "slot_filled";
-    else if (!node.active) skipReason = "inactive";
     else {
       const rate = slotRateCents(rates, slot);
       if (rate <= 0) skipReason = "zero_rate";
