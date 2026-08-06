@@ -383,11 +383,11 @@ export function heatScore(perf: PerfSnapshot): number {
 /** Human label for a reason, reused by the rep feed and the admin console. */
 export function spiffReasonLabel(reason: SpiffReason | null): string {
   switch (reason) {
-    case "random": return "Lucky spiff";
+    case "random": return "Lucky drop";
     case "streak": return "Hot streak";
     case "improvement": return "On the rise";
     case "milestone": return "Milestone sale";
-    default: return "Spiff";
+    default: return "Bonus";
   }
 }
 

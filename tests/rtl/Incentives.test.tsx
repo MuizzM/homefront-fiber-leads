@@ -22,7 +22,7 @@ vi.mock("@/lib/queryClient", () => ({
 }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 
-import Spiffs from "../../client/src/pages/Spiffs";
+import Incentives from "../../client/src/pages/Incentives";
 
 const snapshot = {
   totalSales: 12, recentSalesCount: 5, windowDays: 7, salesVelocityPerDay: 1.2,
@@ -36,7 +36,7 @@ const band = {
     { reason: "milestone", title: "Milestone sale", how: "Every 10 career sales." },
     { reason: "streak", title: "Hot streak", how: "Sell on 3 days in a row." },
     { reason: "improvement", title: "On the rise", how: "Run 50% above your own trailing average." },
-    { reason: "random", title: "Lucky spiff", how: "Roughly 1 in 8 sales drops one at random." },
+    { reason: "random", title: "Lucky drop", how: "Roughly 1 in 8 sales drops one at random." },
   ],
 };
 // Deliberately DIFFERENT amounts — the old flat-$50 UI could not have told them
@@ -78,7 +78,7 @@ function renderPage(o: Overrides = {}) {
       },
     },
   });
-  return render(<QueryClientProvider client={qc}><Spiffs /></QueryClientProvider>);
+  return render(<QueryClientProvider client={qc}><Incentives /></QueryClientProvider>);
 }
 
 beforeEach(() => {
@@ -87,7 +87,7 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-describe("Spiffs — rep view", () => {
+describe("Incentives — rep view", () => {
   beforeEach(() => { mockAuth.user = { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 }; });
 
   it("shows the rep's own spiff feed and heat, but not the team surface", async () => {
@@ -154,7 +154,7 @@ describe("Spiffs — rep view", () => {
     expect(within(ladder).getAllByRole("listitem").map((li) => li.textContent))
       .toEqual(["$25", "$30", "$35", "$40", "$45", "$50"]);
     const triggers = screen.getByTestId("earn-triggers").textContent ?? "";
-    for (const phrase of ["Milestone sale", "Hot streak", "On the rise", "Lucky spiff"]) {
+    for (const phrase of ["Milestone sale", "Hot streak", "On the rise", "Lucky drop"]) {
       expect(triggers).toContain(phrase);
     }
   });
@@ -190,7 +190,7 @@ describe("Spiffs — rep view", () => {
 
     renderPage({ mine: { ...minePayload, spiffs: [], totals: { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 } } });
     const empty = await screen.findByTestId("my-spiffs-empty");
-    expect(empty.textContent).toContain("No spiffs yet");
+    expect(empty.textContent).toContain("No bonuses yet");
     expect(empty.textContent).toContain("$25–$50");
   });
 
@@ -201,7 +201,7 @@ describe("Spiffs — rep view", () => {
   });
 });
 
-describe("Spiffs — admin view", () => {
+describe("Incentives — admin view", () => {
   beforeEach(() => { mockAuth.user = { id: 3, name: "Ada Admin", role: "admin", teamMemberId: undefined }; });
 
   it("shows the team heat leaderboard and the approve queue", async () => {
@@ -237,7 +237,7 @@ describe("Spiffs — admin view", () => {
     renderPage();
     await userEvent.click(await screen.findByTestId("approve-7"));
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("POST", "/api/spiffs/7/approve"));
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Spiff approved" })));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Bonus approved" })));
   });
 
   it("bulk-approves only the EARNED rows in the selection", async () => {

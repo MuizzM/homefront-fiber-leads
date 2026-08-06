@@ -70,7 +70,7 @@ export function PushSetupCard({ className }: { className?: string }) {
     const ok = await enablePush();
     setBusy(false);
     if (ok) {
-      toast({ title: "Alerts on", description: "You'll hear about SPIFFs and challenges while they're live." });
+      toast({ title: "Alerts on", description: "You'll hear about bonuses and challenges while they're live." });
       setReadiness(pushReadiness());
     } else {
       toast({
@@ -109,7 +109,7 @@ export function PushSetupCard({ className }: { className?: string }) {
                   more than any number of instructions. */}
               <p className="mt-0.5 text-[13px] text-muted-foreground">
                 It opens full-screen like a real app — and it's the only way iPhone will let us
-                alert you when a SPIFF or a $50 challenge goes live.
+                alert you when a bonus or a $50 challenge goes live.
               </p>
               {/* SHOWN, not described. "Tap Share, scroll, tap Add to Home
                   Screen" names three taps in a sheet the rep has to recognise
@@ -126,14 +126,14 @@ export function PushSetupCard({ className }: { className?: string }) {
                   than no button. Say where the switch actually lives. */}
               <p className="mt-0.5 text-[13px] text-muted-foreground">
                 Your phone is blocking notifications for Homefront. Turn them back on in
-                Settings → Notifications → Homefront, and you'll hear about live SPIFFs again.
+                Settings → Notifications → Homefront, and you'll hear about live bonuses again.
               </p>
             </>
           ) : (
             <>
               <p className="text-[13px] font-bold text-foreground">Get told when there's money on the table</p>
               <p className="mt-0.5 text-[13px] text-muted-foreground">
-                A ping when a SPIFF or a $50 challenge goes live, and when the team's closing.
+                A ping when a bonus or a $50 challenge goes live, and when the team's closing.
                 Nothing else — no spam, and never outside your shift.
               </p>
               <button

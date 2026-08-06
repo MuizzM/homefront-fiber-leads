@@ -35,6 +35,29 @@ import type { Express, Request, Response } from "express";
 import { rawDb } from "./db";
 import { buildDrillDeck, getDrillCard, isDrillCardId, type DrillCard } from "@shared/trainingCards";
 import { GRADES, nextDueAt, nextRung, type Grade } from "@shared/trainingSchedule";
+import { awardRampForRep } from "./rampBonusStore";
+
+/**
+ * Pay the new-hire ramp bonus for whatever this rep has now finished — the
+ * day's cards, or the whole curriculum.
+ *
+ * Best-effort by construction: a bonus must never be able to fail a review
+ * batch or a lesson completion, which are the rep's actual work. It needs BOTH
+ * identities — the user id that owns the training rows and the team-member id
+ * the ledger pays — so a session missing either simply earns nothing rather
+ * than paying the wrong person.
+ */
+export function payRampBonus(user: any, nowMs: number = Date.now()): void {
+  try {
+    const tenantId = Number(user?.tenantId);
+    const repId = Number(user?.teamMemberId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return;
+    if (!Number.isInteger(repId) || repId <= 0) return;
+    awardRampForRep({ tenantId, userId: Number(user.id), repId }, nowMs);
+  } catch (e: any) {
+    console.warn("[incentive-ramp] award failed (non-fatal):", e?.message);
+  }
+}
 
 /** Rung new cards seed at when their source lesson is complete: the lesson
  *  read IS the first exposure, so the first review starts from rung 1. */
@@ -287,6 +310,10 @@ export function registerTrainingEngineRoutes(app: Express, auth: TrainingEngineA
     }
 
     const results = applyReviews(user.id, user.tenantId, validated);
+    // The day's cards may have just been cleared. Evaluated after the batch
+    // lands so it reads the state the rep actually finished in, and idempotent
+    // on the local day, so the next batch re-evaluates rather than re-paying.
+    payRampBonus(user);
     res.json({
       applied: results.filter((r) => !r.duplicate).length,
       duplicates: results.filter((r) => r.duplicate).length,

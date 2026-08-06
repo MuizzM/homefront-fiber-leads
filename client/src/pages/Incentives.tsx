@@ -1,4 +1,4 @@
-// Spiffs — the sales-incentive recognition surface.
+// Incentives — every bonus a rep can earn, on one surface.
 //
 // A rep sees the money first: a running total, then every award with its dollar
 // amount, why it fired in plain language, and when. A NEW award since their last
@@ -9,10 +9,13 @@
 // A manager/admin sees the team HEAT leaderboard (the algorithm data) plus, for
 // admins, the approval queue: pending money up top where it cannot be missed,
 // bulk approve, and a "mark paid" action that is the single, terminal
-// settlement — a spiff is paid exactly once (see server/spiffStore.ts).
+// settlement — a bonus is paid exactly once (see server/spiffStore.ts).
 //
-// Spiffs are a recognition ledger tracked earned -> approved -> paid; nothing
-// here is commission or payroll.
+// Every bonus on this page rides ONE ledger, tracked earned -> approved -> paid;
+// nothing here is commission or payroll. The ledger is still called `spiffs` in
+// the database and the API — renaming a money table to match a label would be a
+// migration with no upside — so "spiff" survives in the types and the routes and
+// nowhere a rep can read it.
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { FOCUS } from "@/lib/a11y";
@@ -25,6 +28,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { CampaignBoard } from "@/components/CampaignBoard";
 import { MilestoneSection } from "@/components/MilestoneCard";
 import { DoorDropSection } from "@/components/DoorDropCard";
+import { RampBonusSection } from "@/components/RampBonusCard";
+import { DoorDaySection } from "@/components/DoorDayCard";
+import { AchievementSection } from "@/components/AchievementLadder";
 import { MomentumOffer } from "@/components/MomentumOffer";
 import { MilestoneLadderEditor } from "@/components/MilestoneLadderEditor";
 import { DoorDropEditor } from "@/components/DoorDropEditor";
@@ -69,7 +75,7 @@ interface TeamResponse { reps: TeamHeatEntry[]; pending: (SpiffRow & { repName: 
 // Integer cents in, string out, with the split done in INTEGER arithmetic — no
 // `cents / 100` float ever reaches a rendered digit, and no cents are silently
 // rounded away (the old formatter used maximumFractionDigits: 0, which showed
-// $123.45 as "$123"). Whole-dollar amounts drop the ".00" because every spiff
+// $123.45 as "$123"). Whole-dollar amounts drop the ".00" because every bonus
 // lands on a $5 step.
 function usd(cents: number): string {
   const v = Math.trunc(Number.isFinite(cents) ? cents : 0);
@@ -144,7 +150,7 @@ function HeatMeter({ heat, testId }: { heat: number; testId?: string }) {
 }
 
 // ── "New since you last looked" ───────────────────────────────────────────────
-// Remembers the highest spiff id the rep has already seen so a fresh award gets
+// Remembers the highest bonus id the rep has already seen so a fresh award gets
 // exactly ONE reveal, not a re-run on every poll. localStorage can throw (private
 // mode, disabled storage), so every access is guarded — a broken store must never
 // break the page.
@@ -174,7 +180,7 @@ function NewAwardReveal({ spiff, onDismiss }: { spiff: SpiffRow; onDismiss: () =
         <Icon className="h-6 w-6" aria-hidden="true" />
       </span>
       <div className="min-w-0 flex-1">
-        <SectionLabel>New spiff</SectionLabel>
+        <SectionLabel>New bonus</SectionLabel>
         <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="text-2xl font-bold tabular-nums tracking-tight text-primary" data-testid="spiff-reveal-amount">
             {usd(spiff.amountCents)}
@@ -187,7 +193,7 @@ function NewAwardReveal({ spiff, onDismiss }: { spiff: SpiffRow; onDismiss: () =
         type="button"
         onClick={onDismiss}
         data-testid="spiff-reveal-dismiss"
-        aria-label="Dismiss new spiff"
+        aria-label="Dismiss new bonus"
         className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-secondary", FOCUS)}
       >
         <X className="h-4 w-4" aria-hidden="true" />
@@ -203,13 +209,13 @@ function EarnGuide({ band }: { band: AwardBand }) {
       <CardContent className="p-4">
         <SectionLabel className="mb-2">What you can earn</SectionLabel>
         <p className="text-sm text-foreground">
-          Every spiff is worth{" "}
+          Every recognition bonus is worth{" "}
           <span className="font-bold tabular-nums" data-testid="earn-band">
             {usd(band.minCents)}–{usd(band.maxCents)}
           </span>
-          , drawn in {usd(band.incrementCents)} steps. The harder a spiff is to earn, the more the draw leans to the top of the band.
+          , drawn in {usd(band.incrementCents)} steps. The harder one is to earn, the more the draw leans to the top of the band.
         </p>
-        <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="earn-ladder" aria-label="Possible spiff amounts">
+        <ul className="mt-2 flex flex-wrap gap-1.5" data-testid="earn-ladder" aria-label="Possible bonus amounts">
           {band.ladderCents.map((c) => (
             <li key={c} className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
               {usd(c)}
@@ -238,7 +244,7 @@ function EarnGuide({ band }: { band: AwardBand }) {
 }
 
 // ── Rep's own feed ────────────────────────────────────────────────────────────
-function MySpiffs({ repKey }: { repKey: number | string }) {
+function MyIncentives({ repKey }: { repKey: number | string }) {
   const { data, isLoading, isError } = useQuery<MineResponse>({
     queryKey: ["/api/spiffs/mine"],
     refetchInterval: 60_000,
@@ -283,7 +289,21 @@ function MySpiffs({ repKey }: { repKey: number | string }) {
           a deadline in minutes. */}
       <MomentumOffer />
 
+      {/* The ramp bonus sits at the very top for the two weeks it exists. For a
+          new hire it is the only bonus on this page they can actually clear
+          today, so burying it under contests aimed at closers would hide the
+          one thing that is theirs. It disappears on day 15. */}
+      <RampBonusSection />
+
       <CampaignBoard />
+
+      {/* The two standing, reachable bonuses: a full day on the doors, and the
+          sales ladder. Both are always on and neither needs anyone to launch
+          it, which is exactly why they belong above the ledger of what has
+          already been won. */}
+      <DoorDaySection />
+
+      <AchievementSection />
 
       {/* The standing ladder, under the contests. A campaign may or may not be
           running; this one always is, which is exactly why it belongs on the
@@ -311,23 +331,23 @@ function MySpiffs({ repKey }: { repKey: number | string }) {
           <SectionLabel className="mb-2">Your heat</SectionLabel>
           <HeatMeter heat={data?.heat ?? 0} testId="my-heat" />
           <p className="mt-2 text-[13px] text-muted-foreground">
-            The algorithm reads your streak, pace, and improvement. The hotter you run, the more spiffs it triggers.
+            The algorithm reads your streak, pace, and improvement. The hotter you run, the more surprise bonuses it triggers.
           </p>
         </CardContent>
       </Card>
 
       <div>
-        <SectionLabel className="mb-2">Recent spiffs</SectionLabel>
+        <SectionLabel className="mb-2">Recent bonuses</SectionLabel>
         {isLoading ? (
           <div className="space-y-2" data-testid="my-spiffs-loading" aria-busy="true">
             {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[72px] w-full rounded-2xl" />)}
           </div>
         ) : isError ? (
-          <EmptyState icon={AlertTriangle} title="Couldn't load your spiffs" bordered testId="my-spiffs-error"
-            description="Something went wrong reading the spiff ledger. Pull to refresh, or try again in a moment." />
+          <EmptyState icon={AlertTriangle} title="Couldn't load your bonuses" bordered testId="my-spiffs-error"
+            description="Something went wrong reading the bonus ledger. Pull to refresh, or try again in a moment." />
         ) : !data || data.spiffs.length === 0 ? (
-          <EmptyState icon={Gift} title="No spiffs yet" bordered testId="my-spiffs-empty"
-            description={`Log a sale and you're in the running for a ${usd(band.minCents)}–${usd(band.maxCents)} spiff. Some drop at random; the rest come from streaks, milestones, and beating your own average.`} />
+          <EmptyState icon={Gift} title="No bonuses yet" bordered testId="my-spiffs-empty"
+            description={`Log a sale and you're in the running for a ${usd(band.minCents)}–${usd(band.maxCents)} bonus. Some drop at random; the rest come from streaks, milestones, and beating your own average.`} />
         ) : (
           <ul className="space-y-2" data-testid="my-spiff-list">
             {data.spiffs.map((s) => {
@@ -424,9 +444,9 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
     },
     onSuccess: (_row, { action }) => {
       invalidate();
-      toast({ title: action === "approve" ? "Spiff approved" : "Spiff marked paid" });
+      toast({ title: action === "approve" ? "Bonus approved" : "Bonus marked paid" });
     },
-    onError: (err: any) => toast({ title: "Couldn't update spiff", description: String(err?.message ?? err), variant: "destructive" }),
+    onError: (err: any) => toast({ title: "Couldn't update bonus", description: String(err?.message ?? err), variant: "destructive" }),
   });
 
   const bulk = useMutation({
@@ -441,8 +461,8 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
       const skipped = result?.skipped?.length ?? 0;
       toast({
         title: action === "approve"
-          ? `Approved ${n} spiff${n === 1 ? "" : "s"} — ${usd(result?.totalCents ?? 0)}`
-          : `Marked ${n} spiff${n === 1 ? "" : "s"} paid — ${usd(result?.totalCents ?? 0)}`,
+          ? `Approved ${n} bonus${n === 1 ? "" : "es"} — ${usd(result?.totalCents ?? 0)}`
+          : `Marked ${n} bonus${n === 1 ? "" : "es"} paid — ${usd(result?.totalCents ?? 0)}`,
         description: skipped > 0 ? `${skipped} already handled by someone else.` : undefined,
       });
     },
@@ -461,7 +481,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
           <StatTile label="Approved — owed" testId="queue-total-approved"
             value={usd(approvedCents)} icon={Wallet}
             delta={<span className="text-[11px] font-semibold tabular-nums text-muted-foreground">{approvedRows.length}</span>} />
-          <StatTile label="Open spiff money" testId="queue-total-open"
+          <StatTile label="Open bonus money" testId="queue-total-open"
             value={usd(earnedCents + approvedCents)} icon={Gift} />
         </StatStrip>
       )}
@@ -480,7 +500,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[560px] border-separate border-spacing-y-1.5 text-sm">
-              <caption className="sr-only">Rep heat scores and spiff totals</caption>
+              <caption className="sr-only">Rep heat scores and bonus totals</caption>
               <thead>
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                   <th scope="col" className="px-3 py-1">Rep</th>
@@ -488,7 +508,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                   <th scope="col" className="px-3 py-1 text-right">Streak</th>
                   <th scope="col" className="px-3 py-1 text-right">Pace/day</th>
                   <th scope="col" className="px-3 py-1 text-right">Recent</th>
-                  <th scope="col" className="px-3 py-1 text-right">Spiffs</th>
+                  <th scope="col" className="px-3 py-1 text-right">Bonuses</th>
                 </tr>
               </thead>
               <tbody>
@@ -525,7 +545,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
             </div>
           ) : pending.length === 0 ? (
             <EmptyState icon={CheckCheck} title="Nothing to approve" tone="positive" bordered testId="spiff-queue-empty"
-              description="Every spiff is settled. New ones land here the moment the algorithm awards them." />
+              description="Every bonus is settled. New ones land here the moment they are awarded." />
           ) : (
             <div className="rounded-2xl border border-border bg-card">
               {/* Bulk bar — the whole queue is drivable from the keyboard: tab to
@@ -535,7 +555,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                   <Checkbox
                     checked={allSelected}
                     onCheckedChange={(v) => toggleAll(v === true)}
-                    aria-label="Select every spiff in the queue"
+                    aria-label="Select every bonus in the queue"
                     data-testid="queue-select-all"
                     className={FOCUS}
                   />
@@ -584,7 +604,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                       <Checkbox
                         checked={checked}
                         onCheckedChange={(v) => toggle(s.id, v === true)}
-                        aria-label={`Select ${usd(s.amountCents)} spiff for ${s.repName ?? `rep ${s.repId}`}`}
+                        aria-label={`Select ${usd(s.amountCents)} bonus for ${s.repName ?? `rep ${s.repId}`}`}
                         data-testid={`queue-select-${s.id}`}
                         className={FOCUS}
                       />
@@ -640,7 +660,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-export default function Spiffs() {
+export default function Incentives() {
   const { user } = useAuth();
   const role = user?.role;
   const isManager = role === "manager" || role === "admin" || role === "super_admin";
@@ -650,14 +670,13 @@ export default function Spiffs() {
   // above, which would silently hide it from the team leads who hold the
   // permission on the server.
   const canLaunch = can(role as AppRole | undefined, "commission.structure.manage");
-  const band = spiffAmountBand(DEFAULT_SPIFF_CONFIG);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6 p-4 pt-5 pb-24 md:p-6">
       <PageHeader
-        title="Spiffs"
+        title="Incentives"
         icon={Gift}
-        subtitle={`${usd(band.minCents)}–${usd(band.maxCents)} recognition bonuses on sales — some random, more when you're locked in.`}
+        subtitle="Every bonus you can earn — training, doors, sales — on top of commission."
       />
       {/* Keyed on identity: if auth resolves late (or the viewer changes), the
           "already seen" bookmark is re-read for the RIGHT person rather than
@@ -665,7 +684,7 @@ export default function Spiffs() {
       {canLaunch && <CampaignLauncher />}
       {canLaunch && <MilestoneLadderEditor />}
       {canLaunch && <DoorDropEditor />}
-      <MySpiffs key={String(user?.teamMemberId ?? user?.id ?? "anon")}
+      <MyIncentives key={String(user?.teamMemberId ?? user?.id ?? "anon")}
                 repKey={user?.teamMemberId ?? user?.id ?? "anon"} />
       {isManager && <TeamHeat isAdmin={isAdmin} />}
     </div>

@@ -39,7 +39,7 @@ const FiberIntelligence = lazy(() => import("@/pages/FiberIntelligence"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
-const Spiffs = lazy(() => import("@/pages/Spiffs"));
+const Incentives = lazy(() => import("@/pages/Incentives"));
 const Messages = lazy(() => import("@/pages/Messages"));
 const Applications = lazy(() => import("@/pages/Applications"));
 const MyCommission = lazy(() => import("@/pages/MyCommission"));
@@ -248,10 +248,14 @@ function AppRoutes() {
           <Route path="/areas/:id"><CapabilityGuard role={role} capability="field.app.use"><AreaDetail /></CapabilityGuard></Route>
           <Route path="/areas"><CapabilityGuard role={role} capability="field.app.use"><Areas /></CapabilityGuard></Route>
           <Route path="/leaderboard"><CapabilityGuard role={role} capability="field.app.use"><Leaderboard /></CapabilityGuard></Route>
-          {/* Spiffs — the sales-incentive surface. Every field role sees their own
-              spiff feed + heat; the team heat leaderboard and admin approve/pay
-              controls are gated inside the page and independently on the server. */}
-          <Route path="/spiffs"><CapabilityGuard role={role} capability="field.app.use"><Spiffs /></CapabilityGuard></Route>
+          {/* Incentives — every bonus a rep can earn. Each field role sees their
+              own feed + heat; the team heat leaderboard and admin approve/pay
+              controls are gated inside the page and independently on the server.
+              /spiffs is the surface's old path and still resolves: it is baked
+              into shipped push payloads and reps' bookmarks, and a dead link is
+              a worse outcome than a redirect nobody notices. */}
+          <Route path="/incentives"><CapabilityGuard role={role} capability="field.app.use"><Incentives /></CapabilityGuard></Route>
+          <Route path="/spiffs"><Redirect to="/incentives" /></Route>
           {/* Open to the whole field, like /leaderboard: the hub is the chat,
               the feed, and the board for everyone who works the floor. The
               MEGAPHONE inside it (composer, sent log, retraction) stays gated

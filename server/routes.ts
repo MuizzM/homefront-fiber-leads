@@ -132,6 +132,8 @@ import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
+import { awardDoorDayForRep } from "./genuineDoorBonusStore";
+import { awardAchievementsForRep } from "./salesAchievementStore";
 import { publishSale, publishStreak, publishAuthored, feedForUser, markRead, sentAuthored, deleteAuthored } from "./teamFeedStore";
 import {
   postChatMessage, chatPageFor, markChatRead, deleteChatMessage,
@@ -157,7 +159,7 @@ import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
 import { registerComingSoonRoutes } from "./comingSoonWatchlist";
 import { registerLeadRankingRoutes } from "./leadRanking";
 import { registerKineticScannerRoutes } from "./kineticScannerRoutes";
-import { registerTrainingEngineRoutes } from "./trainingEngine";
+import { registerTrainingEngineRoutes, payRampBonus } from "./trainingEngine";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -2116,7 +2118,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (stored && stored.kind === "promo") {
         void pushToUsers(
           Number(tenantId), tenantUserIds(Number(tenantId)),
-          { title: stored.headline, body: stored.body, url: "/spiffs", tag: `promo-${stored.id}` },
+          { title: stored.headline, body: stored.body, url: "/incentives", tag: `promo-${stored.id}` },
         ).catch(() => { /* best effort */ });
       }
       res.status(201).json(stored);
@@ -6237,6 +6239,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // retry can never pay twice and a campaign failure can never fail a knock.
     let campaignAwards: ReturnType<typeof awardCampaignsForRep> = [];
     let milestoneAwards: ReturnType<typeof awardMilestonesForRep> = [];
+    let doorDayAward: ReturnType<typeof awardDoorDayForRep> = null;
+    let achievementAwards: ReturnType<typeof awardAchievementsForRep> = [];
     let momentumArmed: ReturnType<typeof armMomentumOffer> = null;
     let momentumWin: ReturnType<typeof convertMomentumOffer> = null;
     let doorDrop: ReturnType<typeof rollDoorDrop> = null;
@@ -6265,6 +6269,34 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         }
       } catch (e: any) {
         console.warn("[spiff-milestone] award failed (non-fatal):", e?.message);
+      }
+      // ── THE GENUINE-DAY BONUS — "60 real doors today → $50" ───────────────
+      // Only evaluated on a knock the geo check rated `verified`: nothing else
+      // can move the counted set, so a needs_review knock would buy a day query
+      // and change nothing. The rules that decide whether the day was GENUINE
+      // (spacing, the rolling-hour ceiling, how long the day took) live in
+      // shared/genuineDoors.ts and read server clocks, not the rep's claim —
+      // marking a door does not produce a counted door.
+      //
+      // Its own try, so a failure here cannot swallow the milestone the rep
+      // genuinely earned above, or the other way round.
+      try {
+        if (bonusTenant != null && verdict.status === "verified") {
+          doorDayAward = awardDoorDayForRep(bonusTenant, parsed.data.repId, Date.parse(serverTs));
+        }
+      } catch (e: any) {
+        console.warn("[incentive-door-day] award failed (non-fatal):", e?.message);
+      }
+      // ── ACHIEVEMENT LADDER — the reachable one ("2 today → $25") ──────────
+      // Sales only. It counts QUALIFIED rows in commission_sales (written by
+      // the money bundle above), so it inherits that table's anti-gaming: one
+      // sale per door, frozen owner, server-placed sale time.
+      try {
+        if (bonusTenant != null && parsed.data.outcome === "sold") {
+          achievementAwards = awardAchievementsForRep(bonusTenant, parsed.data.repId, Date.parse(serverTs));
+        }
+      } catch (e: any) {
+        console.warn("[incentive-achievement] award failed (non-fatal):", e?.message);
       }
       // ── MOMENTUM: catch this rep while they are hot ───────────────────────
       // Order matters. A SALE tries to convert an offer the rep is already
@@ -6310,7 +6342,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             if (a) {
               void pushToUsers(
                 bonusTenant, tenantUserIds(bonusTenant),
-                { title: a.headline, body: a.body, url: "/spiffs", tag: "team-sale" },
+                { title: a.headline, body: a.body, url: "/incentives", tag: "team-sale" },
                 (req as any).user?.id ?? null,   // never buzz the rep who closed it
               ).catch(() => { /* best effort */ });
             }
@@ -6330,7 +6362,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             if (streak) {
               void pushToUsers(
                 bonusTenant, tenantUserIds(bonusTenant),
-                { title: streak.headline, body: streak.body, url: "/spiffs", tag: "team-streak" },
+                { title: streak.headline, body: streak.body, url: "/incentives", tag: "team-streak" },
                 (req as any).user?.id ?? null,
               ).catch(() => { /* best effort */ });
             }
@@ -6342,7 +6374,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               {
                 title: `You're running hot — ${feedUsd(momentumArmed.amountCents)} on the line`,
                 body: `Close one in the next ${Math.max(1, Math.round(momentumArmed.remainingMs / 60_000))} min and it's yours.`,
-                url: "/spiffs", tag: "my-streak",
+                url: "/incentives", tag: "my-streak",
               },
             ).catch(() => { /* best effort */ });
           }
@@ -6389,6 +6421,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       ...(doorDrop?.inserted
         ? [{ amountCents: doorDrop.amountCents, reason: doorDrop.reason, campaignName: "Door drop" }]
         : []),
+      ...(doorDayAward?.inserted
+        ? [{ amountCents: doorDayAward.amountCents, reason: doorDayAward.reason, campaignName: "Full day" }]
+        : []),
+      ...achievementAwards.filter(a => a.inserted)
+        .map(a => ({ amountCents: a.amountCents, reason: a.reason, campaignName: "Achievement" })),
     ];
     // A newly-armed offer rides the response too, so the rep is told AT THE
     // DOOR that they just went hot — the whole mechanic is worthless if they
@@ -9363,7 +9400,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
       quizScore = Math.round(n);
     }
-    res.json(storage.upsertLessonComplete(user.id, user.tenantId, lessonId, quizScore));
+    const progress = storage.upsertLessonComplete(user.id, user.tenantId, lessonId, quizScore);
+    // This lesson may have been the last one. Evaluated after the write so it
+    // sees the completed row, and idempotent on a per-rep key, so re-completing
+    // a lesson re-evaluates rather than re-paying. Never throws — finishing a
+    // lesson must not fail because a bonus could not be booked.
+    payRampBonus(user);
+    res.json(progress);
   });
 
   // Manager+ rollup (same gate as the other team-wide views): per-rep completed

@@ -90,7 +90,7 @@ const NAV_ITEMS: NavItem[] = [
   // composer inside stays capability-gated, so this entry never advertises a
   // power the API would refuse.
   { href: "/messages",     label: "Messages",     icon: MessagesSquare, show: isFieldRole,                            group: "Field" },
-  { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },
+  { href: "/incentives",   label: "Incentives",   icon: Gift,         show: isFieldRole,                              group: "Field" },
   { href: "/training",     label: "Training",     icon: GraduationCap,show: isFieldRole,                              group: "Field" },
   { href: "/coach",        label: "Coach",        icon: Zap,          show: isFieldRole,                              group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },

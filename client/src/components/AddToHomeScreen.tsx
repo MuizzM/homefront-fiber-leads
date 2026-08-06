@@ -128,7 +128,7 @@ export function AddToHomeScreenMini({ className }: { className?: string }) {
         Tap <Share className="inline h-3.5 w-3.5 -translate-y-px" aria-hidden="true" />{" "}
         <strong className="text-foreground">Share</strong>, then{" "}
         <strong className="text-foreground">Add to Home Screen</strong>. Open it from the new
-        icon and you'll get alerts when a SPIFF goes live.
+        icon and you'll get alerts when a bonus goes live.
       </p>
     </div>
   );

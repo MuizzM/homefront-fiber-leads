@@ -105,7 +105,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
         <Input
           id="announcement-title" value={title} maxLength={ANNOUNCEMENT_TITLE_MAX + 20}
           data-testid="announcement-title"
-          placeholder={kind === "promo" ? "Double spiffs tonight" : "New: door drops are live"}
+          placeholder={kind === "promo" ? "Double bonuses tonight" : "New: door drops are live"}
           onChange={e => setTitle(e.target.value)}
         />
         <CharCount value={title.length} max={ANNOUNCEMENT_TITLE_MAX} />
@@ -134,7 +134,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
           {/* Said plainly, because the alternative is a manager assuming this
               creates a bonus and reps assuming they've been paid one. */}
           <p className="mt-1 text-[12px] text-muted-foreground">
-            Shown on the card. It does not pay anything on its own — set up the SPIFF below.
+            Shown on the card. It does not pay anything on its own — set up the incentive below.
           </p>
         </div>
       )}

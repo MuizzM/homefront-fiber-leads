@@ -63,7 +63,7 @@ export function LiveSlot({ items, className }: { items: LiveItem[]; className?: 
   return (
     <div className={cn("space-y-2", className)} data-testid="live-slot">
       <Link
-        href="/spiffs"
+        href="/incentives"
         data-testid={`live-slot-${primary.kind}`}
         className={cn(
           "block rounded-2xl border p-4 transition-colors active:scale-[.99]",
@@ -129,7 +129,7 @@ export function LiveSlot({ items, className }: { items: LiveItem[]; className?: 
           through — "2 more active" alone is not a reason to do anything. */}
       {otherCount > 0 && (
         <Link
-          href="/spiffs"
+          href="/incentives"
           data-testid="live-slot-more"
           className={cn(
             "flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-[13px] text-muted-foreground transition-colors hover:bg-secondary/50",

@@ -31,6 +31,13 @@ import { validateMomentumConfig } from "@shared/momentumSpiff";
 import {
   getDoorDropConfig, setDoorDropConfig, repDoorDropCard, doorDropExposure,
 } from "./doorDropStore";
+import {
+  getDoorDayConfig, setDoorDayConfig, repDoorDayCard, doorDayExposure,
+} from "./genuineDoorBonusStore";
+import { getRampConfig, setRampConfig, repRampCard, rampExposure } from "./rampBonusStore";
+import {
+  getAchievementConfig, setAchievementConfig, repAchievementCard, achievementExposure,
+} from "./salesAchievementStore";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -186,6 +193,131 @@ export function registerSpiffCampaignRoutes(app: Express, deps: Deps) {
         maxCentsPerOrgPerDay: int(b.maxCentsPerOrgPerDay, current.maxCentsPerOrgPerDay),
       });
       res.json({ config: saved, exposure: doorDropExposure(tenantId, Date.now()) });
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not save" });
+    }
+  });
+
+  // ── The genuine-day bonus: 60 real doors in a day ─────────────────────────
+  // The card is served even before the rep has knocked, because the whole point
+  // is that they know the number they are chasing at 9am — and it shows what
+  // did NOT count and why, so a counter that credits 54 of 61 logged doors
+  // reads as a rule rather than a bug.
+  app.get("/api/me/door-day", requireCapability("field.app.use"), (req, res) => {
+    const tenantId = tid(req);
+    const repId = (req as any).user?.teamMemberId;
+    if (tenantId == null || repId == null) return res.json({ enabled: false, counted: 0, target: 0 });
+    res.json(repDoorDayCard(tenantId, Number(repId), Date.now()));
+  });
+
+  app.get("/api/incentives/door-day", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    res.json({ config: getDoorDayConfig(tenantId), exposure: doorDayExposure(tenantId, Date.now()) });
+  });
+
+  app.put("/api/incentives/door-day", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const b = req.body ?? {};
+    const current = getDoorDayConfig(tenantId);
+    const int = (v: unknown, d: number) => (v == null ? d : Math.trunc(Number(v)));
+    try {
+      const saved = setDoorDayConfig(tenantId, uid(req), {
+        ...current,
+        enabled: b.enabled !== false,
+        doors: int(b.doors, current.doors),
+        rewardCents: int(b.rewardCents, current.rewardCents),
+        minSpanMinutes: int(b.minSpanMinutes, current.minSpanMinutes),
+        maxPerRollingHour: int(b.maxPerRollingHour, current.maxPerRollingHour),
+        minGapSeconds: int(b.minGapSeconds, current.minGapSeconds),
+        voidOnTamper: b.voidOnTamper !== false,
+      });
+      res.json({ config: saved, exposure: doorDayExposure(tenantId, Date.now()) });
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not save" });
+    }
+  });
+
+  // ── The ramp bonus: a new hire's first two weeks ──────────────────────────
+  // Needs BOTH identities — the user id owns the training rows, the
+  // team-member id gets paid — and both come from the session, never the body.
+  app.get("/api/me/ramp-bonus", requireCapability("field.app.use"), (req, res) => {
+    const tenantId = tid(req);
+    const user = (req as any).user;
+    const repId = user?.teamMemberId;
+    if (tenantId == null || repId == null) return res.json({ visible: false });
+    res.json(repRampCard({ tenantId, userId: Number(user.id), repId: Number(repId) }, Date.now()));
+  });
+
+  app.get("/api/incentives/ramp", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    res.json({ config: getRampConfig(tenantId), exposure: rampExposure(tenantId, Date.now()) });
+  });
+
+  app.put("/api/incentives/ramp", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const b = req.body ?? {};
+    const current = getRampConfig(tenantId);
+    const int = (v: unknown, d: number) => (v == null ? d : Math.trunc(Number(v)));
+    try {
+      const saved = setRampConfig(tenantId, uid(req), {
+        ...current,
+        enabled: b.enabled !== false,
+        windowDays: int(b.windowDays, current.windowDays),
+        rewardCents: int(b.rewardCents, current.rewardCents),
+        minCardsPerDay: int(b.minCardsPerDay, current.minCardsPerDay),
+        minLessonsPerDay: int(b.minLessonsPerDay, current.minLessonsPerDay),
+        minSpanMinutes: int(b.minSpanMinutes, current.minSpanMinutes),
+        requireQueueCleared: b.requireQueueCleared !== false,
+        completionEnabled: b.completionEnabled !== false,
+        completionRewardCents: int(b.completionRewardCents, current.completionRewardCents),
+        completionInWindowBonusCents: int(b.completionInWindowBonusCents, current.completionInWindowBonusCents),
+      });
+      res.json({ config: saved, exposure: rampExposure(tenantId, Date.now()) });
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not save" });
+    }
+  });
+
+  // ── The achievement ladder: the reachable sales bonus ────────────────────
+  app.get("/api/me/achievements", requireCapability("field.app.use"), (req, res) => {
+    const tenantId = tid(req);
+    const repId = (req as any).user?.teamMemberId;
+    if (tenantId == null || repId == null) return res.json({ enabled: false, daily: [], career: [] });
+    res.json(repAchievementCard(tenantId, Number(repId), Date.now()));
+  });
+
+  app.get("/api/incentives/achievements", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    res.json({ config: getAchievementConfig(tenantId), exposure: achievementExposure(tenantId, Date.now()) });
+  });
+
+  app.put("/api/incentives/achievements", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const b = req.body ?? {};
+    const current = getAchievementConfig(tenantId);
+    // Numbers arrive as strings from some form libraries; everything the ladder
+    // branches on is coerced to an integer HERE so the engine never sees one.
+    const rungs = (raw: any, fallback: typeof current.daily) => (Array.isArray(raw)
+      ? raw.map((r: any) => ({ sales: Math.trunc(Number(r?.sales)), rewardCents: Math.trunc(Number(r?.rewardCents)) }))
+      : fallback);
+    try {
+      const saved = setAchievementConfig(tenantId, uid(req), {
+        ...current,
+        enabled: b.enabled !== false,
+        daily: rungs(b.daily, current.daily),
+        career: rungs(b.career, current.career),
+        excludeRampReps: b.excludeRampReps !== false,
+        maxCentsPerRepPerDay: b.maxCentsPerRepPerDay == null
+          ? current.maxCentsPerRepPerDay
+          : Math.trunc(Number(b.maxCentsPerRepPerDay)),
+      });
+      res.json({ config: saved, exposure: achievementExposure(tenantId, Date.now()) });
     } catch (e: any) {
       res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not save" });
     }

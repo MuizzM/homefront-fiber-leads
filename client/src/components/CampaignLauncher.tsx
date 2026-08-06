@@ -195,7 +195,7 @@ function LaunchDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
         <DialogHeader>
           <DialogTitle>Launch a SPIFF</DialogTitle>
           <DialogDescription>
-            Every rep sees it on their phone immediately, with live progress. Awards land in the spiff ledger for your normal approval.
+            Every rep sees it on their phone immediately, with live progress. Awards land in the bonus ledger for your normal approval.
           </DialogDescription>
         </DialogHeader>
 
@@ -370,7 +370,7 @@ export function CampaignLauncher() {
       <div className="flex items-center justify-between gap-3">
         <SectionLabel className="flex items-center gap-1.5">
           <Megaphone className="h-3.5 w-3.5" aria-hidden="true" />
-          SPIFF campaigns
+          Incentive campaigns
         </SectionLabel>
         <button type="button" onClick={() => setOpen(true)} data-testid="open-launcher"
           className={cn("inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground", FOCUS)}>
