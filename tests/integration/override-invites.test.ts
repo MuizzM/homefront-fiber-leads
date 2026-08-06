@@ -400,3 +400,50 @@ describe("per-hire override rates — chosen at invite time, stamped at approval
     expect(memberByEmail("garbage@override.example.com")).toBeUndefined();
   });
 });
+
+describe("PATCH /api/commission/reps/:repId/override-rates — editing existing members", () => {
+  async function patchRates(session: string, repId: number, body: Record<string, unknown>) {
+    const response = await realFetch(`${baseUrl}/api/commission/reps/${repId}/override-rates`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "x-session-id": session },
+      body: JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() as any };
+  }
+
+  it("sets, partially updates, and clears a member's rates tri-state", async () => {
+    const set = await patchRates(managerSession, deepRepMember.id, { overrideTeamLeadCents: 1200, overrideManagerCents: 6400 });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ overrideTeamLeadCents: 1200, overrideManagerCents: 6400 });
+
+    // Absent key = untouched; explicit null = back to inherit.
+    const partial = await patchRates(managerSession, deepRepMember.id, { overrideManagerCents: null });
+    expect(partial.status).toBe(200);
+    expect(partial.body).toMatchObject({ overrideTeamLeadCents: 1200, overrideManagerCents: null });
+
+    const row = rawDb.prepare("SELECT override_team_lead_cents AS tl, override_manager_cents AS mgr FROM team_members WHERE id = ?").get(deepRepMember.id) as any;
+    expect(row).toEqual({ tl: 1200, mgr: null });
+    await patchRates(managerSession, deepRepMember.id, { overrideTeamLeadCents: null });
+  });
+
+  it("refuses floats, an empty patch, and out-of-tenant members", async () => {
+    expect((await patchRates(managerSession, deepRepMember.id, { overrideTeamLeadCents: 12.5 })).status).toBe(400);
+    expect((await patchRates(managerSession, deepRepMember.id, {})).status).toBe(400);
+    expect((await patchRates(managerSession, foreignMember.id, { overrideTeamLeadCents: 1000 })).status).toBe(404);
+  });
+
+  it("is gated on commission.overrides.manage — a team lead holds no rate pen", async () => {
+    const { status } = await patchRates(teamLeadSession, deepRepMember.id, { overrideTeamLeadCents: 1000 });
+    expect(status).toBe(403);
+  });
+
+  it("writes the audit trail with from/to", async () => {
+    await patchRates(managerSession, deepRepMember.id, { overrideTeamLeadCents: 3300 });
+    const entry = rawDb.prepare(
+      `SELECT details FROM activity_log WHERE action = 'override.rates_updated' AND entity_id = ? ORDER BY id DESC LIMIT 1`,
+    ).get(String(deepRepMember.id)) as any;
+    expect(entry).toBeTruthy();
+    expect(JSON.parse(entry.details).to.overrideTeamLeadCents).toBe(3300);
+    await patchRates(managerSession, deepRepMember.id, { overrideTeamLeadCents: null });
+  });
+});

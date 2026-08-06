@@ -237,6 +237,63 @@ export function registerCommissionOverrideRoutes(app: Express, deps: Deps) {
     } catch (e) { fail(res, e); }
   });
 
+  // ── Per-member override rates ───────────────────────────────────────────────
+  // What the team-lead / manager slots keep from each of THIS seller's
+  // qualified sales — the same knobs the invite form sets for new hires, made
+  // editable for members who predate the feature (or whose deal changed).
+  // Tri-state like every money patch: absent = keep, null = clear back to
+  // "inherit the org default", integer = set. Future sales only — earned rows
+  // carry frozen snapshots and are never re-priced.
+  app.patch("/api/commission/reps/:repId/override-rates", requireCapability("commission.overrides.manage"), (req, res) => {
+    try {
+      const repId = Number(req.params.repId);
+      if (!Number.isInteger(repId) || repId <= 0) return res.status(400).json({ error: "repId must be a positive integer." });
+      if (!canReadRep((req as any).user, repId)) {
+        return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
+      }
+      const member = rawDb.prepare(
+        `SELECT id, role, override_team_lead_cents AS tl, override_manager_cents AS mgr
+         FROM team_members WHERE id = ? AND tenant_id = ?`
+      ).get(repId, tid(req)) as any;
+      if (!member) return res.status(404).json({ error: "Member not found in your organization." });
+
+      const patch: { tl?: number | null; mgr?: number | null } = {};
+      const fields = [
+        ["overrideTeamLeadCents", "tl"],
+        ["overrideManagerCents", "mgr"],
+      ] as const;
+      for (const [key, col] of fields) {
+        const v = (req.body ?? {})[key];
+        if (v === undefined) continue;
+        if (v === null) { patch[col] = null; continue; }
+        if (!Number.isInteger(v) || v < 0 || v > 10_000_000) {
+          return res.status(400).json({ error: `${key} must be a whole number of cents, or null to inherit the org default.`, code: "OVERRIDE_INVALID_RATE" });
+        }
+        patch[col] = v;
+      }
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ error: "Nothing to update — send overrideTeamLeadCents and/or overrideManagerCents.", code: "OVERRIDE_INVALID_RATE" });
+      }
+      if (patch.tl !== undefined) {
+        rawDb.prepare(`UPDATE team_members SET override_team_lead_cents = ? WHERE id = ?`).run(patch.tl, repId);
+      }
+      if (patch.mgr !== undefined) {
+        rawDb.prepare(`UPDATE team_members SET override_manager_cents = ? WHERE id = ?`).run(patch.mgr, repId);
+      }
+      storage.logActivity(uid(req), "override.rates_updated", "team_member", repId, {
+        from: { overrideTeamLeadCents: member.tl ?? null, overrideManagerCents: member.mgr ?? null },
+        to: {
+          overrideTeamLeadCents: patch.tl !== undefined ? patch.tl : (member.tl ?? null),
+          overrideManagerCents: patch.mgr !== undefined ? patch.mgr : (member.mgr ?? null),
+        },
+      }, req.ip);
+      const after = rawDb.prepare(
+        `SELECT override_team_lead_cents AS tl, override_manager_cents AS mgr FROM team_members WHERE id = ?`
+      ).get(repId) as any;
+      res.json({ repId, overrideTeamLeadCents: after.tl ?? null, overrideManagerCents: after.mgr ?? null });
+    } catch (e) { fail(res, e); }
+  });
+
   // ── Exceptions console ──────────────────────────────────────────────────────
   app.get("/api/commission/overrides/exceptions", requireCapability("commission.read.all"), (req, res) => {
     try { res.json({ exceptions: ov.listExceptions(tid(req)) }); } catch (e) { fail(res, e); }
