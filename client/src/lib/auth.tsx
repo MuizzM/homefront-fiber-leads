@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient } from "@/lib/queryClient";
-import { clearPdfBlobCache } from "@/components/PdfReviewPane";
+import { clearPdfBlobCache } from "@/lib/pdfBlobCache";
 import { toast } from "@/hooks/use-toast";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";

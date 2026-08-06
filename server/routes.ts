@@ -134,6 +134,12 @@ import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
 import { publishSale, publishStreak, publishAuthored, feedForUser, markRead, sentAuthored, deleteAuthored } from "./teamFeedStore";
+import {
+  postChatMessage, chatPageFor, markChatRead, deleteChatMessage,
+  openDm, createGroup, myThreads, threadPageFor, postThreadMessage,
+  markThreadRead, threadsUnreadTotal, updateGroupMembers, deleteGroupThread, leaveGroup,
+} from "./floorChatStore";
+import { GROUP_MEMBER_MAX } from "@shared/floorChat";
 import { earningsToday } from "./earningsTodayStore";
 import { emitAnnouncement, onAnnouncement } from "./announcementBus";
 import { visibleTo, usd as feedUsd } from "@shared/teamFeed";
@@ -221,7 +227,7 @@ import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { getFiberChanges, getCopperPool } from "./fiberTransitions";
-import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter } from "./limiters";
+import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter, rescanPoolLimiter, chatPostLimiter } from "./limiters";
 import { scanSseCaps } from "./scanSseCaps";
 import { otpRateBuckets } from "./otpRateBuckets";
 import { validateLeadPatch, rescanPoolPlan, clampActivityLogLimit, validateTerritoryRequestMessage, filterInChunks, RESCAN_POOL_MAX_TARGETS, RESCAN_POOL_CHUNK_SIZE as RESCAN_POOL_CHUNK } from "./routeInputPolicy";
@@ -2159,6 +2165,318 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const userId = Number(req.user?.id);
     if (!Number.isFinite(userId)) return res.status(401).json({ error: "Unauthenticated" });
     res.json({ lastReadId: markRead(userId, Number(req.body?.upToId ?? 0), Date.now()) });
+  });
+
+  // ── Floor chat ──────────────────────────────────────────────────────────────
+  // The two-way room next to the one-way feed. Every route here is gated on
+  // field.app.use, NOT bare requireAuth — deliberately stricter than GET
+  // /api/announcements. The feed admits desk roles because a broadcast is for
+  // everyone; the chat is the floor talking, and a calling/compliance identity
+  // that can never open the hub page should not be able to post into it from a
+  // script either. (Training-gated reps are refused upstream by the gate that
+  // rides requireAuth — a rep who hasn't finished training isn't on the floor
+  // yet, and hearing the room before then is a distraction, not an onboarding.)
+
+  // GET /api/chat?limit=&after=&before= — the room, plus this viewer's unread
+  // count. `after` is the polling cursor (a quiet poll returns zero rows, not
+  // a page); `before` pages backwards through history, which is what keeps
+  // the whole-room unread count an honest promise rather than a number bigger
+  // than anything the API would hand back.
+  app.get("/api/chat", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const userId = Number(req.user?.id);
+    if (tenantId == null || !Number.isFinite(userId)) {
+      return res.json({ items: [], unread: 0, latestId: 0 });
+    }
+    const limit = Number(req.query.limit);
+    const afterId = Number(req.query.after);
+    const beforeId = Number(req.query.before);
+    res.json({
+      ...chatPageFor(Number(tenantId), userId, {
+        limit: Number.isFinite(limit) ? limit : undefined,
+        afterId: Number.isFinite(afterId) ? afterId : undefined,
+        beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
+      }),
+      // Everything unread across DMs and groups, riding the poll the nav
+      // badge already makes — one request, one number, no second poll.
+      threadsUnread: threadsUnreadTotal(Number(tenantId), userId),
+    });
+  });
+
+  // POST /api/chat { body } — say something to the floor.
+  //
+  // No push and no announcementBus frame: the house rule is that only money
+  // buzzes a phone (see the promo/update split above), and a chat message is
+  // conversation, not a "drop everything". The room updates by polling.
+  app.post("/api/chat", chatPostLimiter, requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    try {
+      const msg = postChatMessage(
+        Number(tenantId),
+        { userId: Number(req.user.id), memberId: req.user?.teamMemberId ?? null, name: req.user?.name ?? null },
+        req.body?.body, Date.now(),
+      );
+      // Your own message is not news to you: advance the watermark past it so
+      // the badge never counts what you just typed.
+      markChatRead(Number(req.user.id), msg.id, Date.now());
+      res.status(201).json(msg);
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Couldn't send" });
+    }
+  });
+
+  // POST /api/chat/read { upToId } — clears the room's badge. Monotonic in the
+  // store, same second-device contract as the announcement watermark.
+  app.post("/api/chat/read", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const userId = Number(req.user?.id);
+    if (!Number.isFinite(userId)) return res.status(401).json({ error: "Unauthenticated" });
+    res.json({ lastReadId: markChatRead(userId, Number(req.body?.upToId ?? 0), Date.now()) });
+  });
+
+  // DELETE /api/chat/:id — remove a message: yours always, anyone's if you
+  // hold the same capability that moderates the feed. 404 (not 403) when the
+  // WHERE clause misses, so existence in another tenant is never confirmed.
+  app.delete("/api/chat/:id", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Bad id" });
+    const canModerate = hasCapability(req.user?.role, "commission.structure.manage");
+    const deleted = deleteChatMessage(Number(tenantId), id, Number(req.user.id), canModerate);
+    if (!deleted) {
+      return res.status(404).json({ error: "Not found, or not a message you can remove" });
+    }
+    // Removing someone's words from a SHARED room is a governance act — logged
+    // like the feed's retractions, with WHOSE words were removed (a hard
+    // delete leaves the audit row as the only answer to that question). The
+    // body is deliberately NOT logged: chat content must not outlive the
+    // room's own delete inside an activity log with different readers.
+    //
+    // A DM delete is NOT logged at all. It is always a self-delete (nobody
+    // else may touch a DM), so it is not governance — and a row carrying the
+    // DM's threadId would let a log reader pair up who talks privately to
+    // whom, the exact metadata the un-logged DM-creation path refuses to
+    // collect. Two careful rows and a join undo that refusal.
+    if (deleted.room !== "dm") {
+      storage.logActivity(req.user?.id ?? null, "chat.message.deleted", "tenant", Number(tenantId), {
+        id,
+        threadId: deleted.threadId,
+        authorUserId: deleted.authorUserId,
+        authorName: deleted.authorName,
+        moderated: deleted.authorUserId !== Number(req.user.id),
+      }, undefined);
+    }
+    res.json({ ok: true });
+  });
+
+  // ── Chat threads — DMs and groups next to the floor ────────────────────────
+  // Same field.app.use boundary as the floor. Membership is checked in the
+  // STORE's SQL on every read/write, and a miss is always 404, never 403 —
+  // a thread id must not confirm that somebody else's conversation exists.
+
+  // Compiled once — the member-resolution loops below would otherwise pay a
+  // statement compile per array element on client-controlled input.
+  const chatUserStmt = rawDb.prepare(
+    `SELECT id, role FROM users
+      WHERE tenant_id = ? AND team_member_id = ? AND active = 1 LIMIT 1`,
+  );
+
+  /** The user behind a roster row. The client picks people from /api/team
+   *  (team_members), but a thread member is a LOGIN — resolve or refuse. */
+  const chatUserByMemberId = (tenantId: number, memberId: number): { id: number; role: string } | null => {
+    const row = chatUserStmt.get(tenantId, Math.trunc(Number(memberId) || 0)) as any;
+    if (!row) return null;
+    // The room is the floor's: a target who can never open the page must not
+    // be enrollable into conversations they cannot see.
+    if (!hasCapability(String(row.role), "field.app.use")) return null;
+    return { id: Number(row.id), role: String(row.role) };
+  };
+
+  /** Bound and dedupe a client-sent member-id array BEFORE any lookup — each
+   *  element costs a synchronous SELECT on the one thread the org shares, and
+   *  no legitimate request names more people than a group may hold. Null
+   *  means "too many", which the caller turns into a 400. */
+  const boundedMemberIds = (raw: unknown): number[] | null => {
+    if (!Array.isArray(raw)) return [];
+    if (raw.length > GROUP_MEMBER_MAX) return null;
+    return [...new Set(raw.map(v => Math.trunc(Number(v) || 0)).filter(v => v > 0))];
+  };
+
+  /** Resolve every pick or refuse the request. Silently dropping the picks
+   *  that can't chat builds a group missing people its creator counted on —
+   *  a "Lexington crew" that quietly excludes half the crew. */
+  const resolveMemberIdsOrFail = (
+    tenantId: number, memberIds: number[], res: Response,
+  ): number[] | null => {
+    const pairs = memberIds.map(m => ({ m, u: chatUserByMemberId(tenantId, m) }));
+    const dropped = pairs.filter(p => !p.u).map(p => p.m);
+    if (dropped.length) {
+      res.status(400).json({ error: "Some of those picks can't use chat yet.", memberIds: dropped });
+      return null;
+    }
+    return pairs.map(p => p.u!.id);
+  };
+
+  // GET /api/chat/threads — this viewer's conversations, newest activity first.
+  app.get("/api/chat/threads", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const userId = Number(req.user?.id);
+    if (tenantId == null || !Number.isFinite(userId)) return res.json({ threads: [] });
+    res.json({ threads: myThreads(Number(tenantId), userId) });
+  });
+
+  // POST /api/chat/threads — open a DM or create a group.
+  //
+  //   { kind: "dm", memberId }              → any field user. Idempotent: the
+  //     pair's room is UNIQUE, so "message Bo" from two screens is one room.
+  //     Deliberately NOT activity-logged — who talks privately to whom is
+  //     metadata the org has no business collecting.
+  //   { kind: "group", name, memberIds[] }  → the floor's megaphone holders
+  //     (commission.structure.manage), because naming a crew and pulling
+  //     people into a room is org communication structure, not field work.
+  app.post("/api/chat/threads", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const meUserId = Number(req.user?.id);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const kind = String(req.body?.kind ?? "");
+
+    if (kind === "dm") {
+      const target = chatUserByMemberId(Number(tenantId), Number(req.body?.memberId));
+      if (!target) return res.status(400).json({ error: "They can't use chat yet." });
+      if (target.id === meUserId) return res.status(400).json({ error: "That's you." });
+      const { threadId, created } = openDm(Number(tenantId), meUserId, target.id, Date.now());
+      return res.status(created ? 201 : 200).json({ threadId, kind: "dm" });
+    }
+
+    if (kind === "group") {
+      if (!hasCapability(req.user?.role, "commission.structure.manage")) {
+        storage.logActivity(meUserId, "permission.denied", "capability", undefined,
+          { need: "commission.structure.manage", path: req.path, role: req.user?.role ?? null }, req.ip);
+        return res.status(403).json({ error: "Forbidden", need: "commission.structure.manage" });
+      }
+      const wanted = boundedMemberIds(req.body?.memberIds);
+      if (!wanted) return res.status(400).json({ error: `A group tops out at ${GROUP_MEMBER_MAX} people — past that, use the floor.` });
+      const resolved = resolveMemberIdsOrFail(Number(tenantId), wanted, res);
+      if (!resolved) return; // 400 already written, naming the bad picks
+      try {
+        const { threadId, name } = createGroup(Number(tenantId), meUserId, req.body?.name, resolved, Date.now());
+        storage.logActivity(meUserId, "chat.group.created", "tenant", Number(tenantId),
+          { threadId, name, members: resolved.length + 1 }, undefined);
+        return res.status(201).json({ threadId, kind: "group", name });
+      } catch (e: any) {
+        return res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Couldn't create it" });
+      }
+    }
+
+    return res.status(400).json({ error: "Pick dm or group." });
+  });
+
+  // GET /api/chat/threads/:id — one conversation, same page contract as the
+  // floor (limit / after / before).
+  app.get("/api/chat/threads/:id", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const userId = Number(req.user?.id);
+    const threadId = Number(req.params.id);
+    if (tenantId == null || !Number.isFinite(threadId)) return res.status(404).json({ error: "Not found" });
+    const limit = Number(req.query.limit);
+    const afterId = Number(req.query.after);
+    const beforeId = Number(req.query.before);
+    const page = threadPageFor(Number(tenantId), threadId, userId, {
+      limit: Number.isFinite(limit) ? limit : undefined,
+      afterId: Number.isFinite(afterId) ? afterId : undefined,
+      beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
+    });
+    if (!page) return res.status(404).json({ error: "Not found" });
+    res.json(page);
+  });
+
+  // POST /api/chat/threads/:id { body } — say something in a conversation.
+  // Same per-user post budget as the floor; the room changes, the thumb doesn't.
+  app.post("/api/chat/threads/:id", chatPostLimiter, requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const threadId = Number(req.params.id);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    if (!Number.isFinite(threadId)) return res.status(404).json({ error: "Not found" });
+    try {
+      const msg = postThreadMessage(
+        Number(tenantId), threadId,
+        { userId: Number(req.user.id), memberId: req.user?.teamMemberId ?? null, name: req.user?.name ?? null },
+        req.body?.body, Date.now(),
+      );
+      if (!msg) return res.status(404).json({ error: "Not found" });
+      res.status(201).json(msg);
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Couldn't send" });
+    }
+  });
+
+  // POST /api/chat/threads/:id/read { upToId } — clears one conversation's
+  // badge. Membership-checked like every other thread touch.
+  app.post("/api/chat/threads/:id/read", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const userId = Number(req.user?.id);
+    const threadId = Number(req.params.id);
+    if (tenantId == null || !Number.isFinite(threadId)) return res.status(404).json({ error: "Not found" });
+    // Reuse the page gate for the membership check — one rule, one place.
+    if (!threadPageFor(Number(tenantId), threadId, userId, { limit: 1 })) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    res.json({ lastReadId: markThreadRead(userId, threadId, Number(req.body?.upToId ?? 0), Date.now()) });
+  });
+
+  // POST /api/chat/threads/:id/members { addMemberIds[], removeUserIds[] } —
+  // re-crew a group. Structural, so it takes the group-management capability
+  // but not membership: fixing a room's roster doesn't read the room.
+  app.post("/api/chat/threads/:id/members", requireCapability("commission.structure.manage"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const threadId = Number(req.params.id);
+    if (tenantId == null || !Number.isFinite(threadId)) return res.status(404).json({ error: "Not found" });
+    const wanted = boundedMemberIds(req.body?.addMemberIds);
+    if (!wanted) return res.status(400).json({ error: `A group tops out at ${GROUP_MEMBER_MAX} people — past that, use the floor.` });
+    const add = wanted.length ? resolveMemberIdsOrFail(Number(tenantId), wanted, res) : [];
+    if (!add) return; // 400 already written
+    const remove = (Array.isArray(req.body?.removeUserIds) ? req.body.removeUserIds : [])
+      .slice(0, GROUP_MEMBER_MAX)
+      .map((v: unknown) => Math.trunc(Number(v) || 0))
+      .filter((v: number) => v > 0);
+    try {
+      const members = updateGroupMembers(Number(tenantId), threadId, add, remove, Number(req.user.id), Date.now());
+      if (!members) return res.status(404).json({ error: "Not found" });
+      storage.logActivity(req.user?.id ?? null, "chat.group.members_changed", "tenant", Number(tenantId),
+        { threadId, added: add.length, removed: remove.length }, undefined);
+      res.json({ members });
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Couldn't change the crew" });
+    }
+  });
+
+  // POST /api/chat/threads/:id/leave — walk out of a group yourself. No
+  // capability needed: staying in a room is the member's choice, not
+  // management's. Group only (the store refuses DMs), 404 on any miss, and
+  // the last one out dissolves the room rather than orphaning it.
+  app.post("/api/chat/threads/:id/leave", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const threadId = Number(req.params.id);
+    if (tenantId == null || !Number.isFinite(threadId)) return res.status(404).json({ error: "Not found" });
+    if (!leaveGroup(Number(tenantId), threadId, Number(req.user.id))) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    res.json({ ok: true });
+  });
+
+  // DELETE /api/chat/threads/:id — dissolve a group (messages and all).
+  // Group only: a DM is its two members' history, and no third party — with
+  // any capability — gets to erase it.
+  app.delete("/api/chat/threads/:id", requireCapability("commission.structure.manage"), (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId;
+    const threadId = Number(req.params.id);
+    if (tenantId == null || !Number.isFinite(threadId)) return res.status(404).json({ error: "Not found" });
+    if (!deleteGroupThread(Number(tenantId), threadId)) {
+      return res.status(404).json({ error: "Not found, or not a group" });
+    }
+    storage.logActivity(req.user?.id ?? null, "chat.group.deleted", "tenant", Number(tenantId), { threadId }, undefined);
+    res.json({ ok: true });
   });
 
   // ── Phone notifications ─────────────────────────────────────────────────────

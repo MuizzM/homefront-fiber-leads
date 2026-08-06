@@ -13,13 +13,15 @@ import {
 import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
 import { KpiTile } from "@/components/KpiTile";
 
+// Only the fields the tiles below actually render — the endpoint stopped
+// computing the rest (leads.total/sold, knocks.total, fieldHours) because
+// nothing anywhere read them.
 interface SaasStats {
-  leads: { total: number; newFiber: number; sold: number; unassigned: number };
+  leads: { newFiber: number; unassigned: number };
   team: { total: number; activeClockedIn: number };
-  knocks: { total: number; today: number; todaySales: number; weekSales: number };
+  knocks: { today: number; todaySales: number; weekSales: number };
   kinetic: { total: number; live: number };
   revenue: { totalPaid: number; pendingPayout: number };
-  fieldHours: { total: number };
 }
 
 interface ActivityEntry {
@@ -208,9 +210,13 @@ export default function Dashboard() {
     refetchInterval: 15000,
   });
 
+  // Every render site below filters to s.date === today, so ask the server for
+  // exactly that day — the unparameterized call downloaded the tenant's entire
+  // clock history to show one day's rows, and grew forever.
+  const sessionsDate = new Date().toISOString().slice(0, 10);
   const { data: clockSessions = [], isLoading: clockLoading } = useQuery<any[]>({
-    queryKey: ["/api/clock/sessions"],
-    queryFn: () => apiRequest("GET", "/api/clock/sessions").then(r => r.json()),
+    queryKey: ["/api/clock/sessions", sessionsDate],
+    queryFn: () => apiRequest("GET", `/api/clock/sessions?date=${sessionsDate}`).then(r => r.json()),
     enabled: isManager,
   });
 

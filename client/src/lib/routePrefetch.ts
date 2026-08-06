@@ -35,6 +35,7 @@ const PREFIX_CHUNKS: Record<string, Thunk> = {
   "/areas": () => import("@/pages/Areas"),
   "/areas/": () => import("@/pages/AreaDetail"),
   "/leaderboard": () => import("@/pages/Leaderboard"),
+  "/messages": () => import("@/pages/Messages"),
   "/spiffs": () => import("@/pages/Spiffs"),
   "/training": () => import("@/pages/Training"),
   "/coach": () => import("@/pages/Coach"),
@@ -72,8 +73,15 @@ const PREFIX_CHUNKS: Record<string, Thunk> = {
 // or parameterised (per-lead, per-week, per-statement) is deliberately absent —
 // warming the wrong parameter is worse than not warming at all.
 const ROUTE_QUERIES: Record<string, readonly string[]> = {
-  "/": ["/api/stats"],
-  "/today": ["/api/leads/map", "/api/clock/status", "/api/followups"],
+  // stats/saas and leaderboard are the Dashboard's other two above-the-fold
+  // queries — both single-segment, both previously cold on every visit.
+  "/": ["/api/stats", "/api/stats/saas", "/api/leaderboard"],
+  // NO "/api/leads/map" here: Today keys its feed ["/api/leads/map",
+  // "today-route"], so the bare-key warm never matched it — it just downloaded
+  // the full object-format map feed into MapView's cache slot on every Today
+  // tap, a few hundred KB aimed at the wrong page (and briefly able to serve
+  // lens-unfiltered pins inside MapView's staleTime).
+  "/today": ["/api/clock/status", "/api/followups"],
   "/leads": ["/api/leads"],
   "/followups": ["/api/followups"],
   "/areas": ["/api/territories/progress"],
@@ -84,6 +92,9 @@ const ROUTE_QUERIES: Record<string, readonly string[]> = {
   "/my-commission": ["/api/commission/statements/me/current"],
   "/my-documents": ["/api/onboarding/documents/me"],
   "/team": ["/api/team", "/api/leaderboard"],
+  // NO "/messages" entry: Layout's always-mounted 30s unread-badge poll keeps
+  // ["/api/chat"] fresh for everyone who can see the nav item, so a data warm
+  // here would never fire — the chunk warm above is the whole win.
   "/commission-console": ["/api/commission/week-overview"],
   "/applications": ["/api/onboarding/pipeline"],
   "/calling": ["/api/v1/calling/status"],

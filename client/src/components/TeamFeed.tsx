@@ -96,7 +96,9 @@ const KIND_TONE: Record<AnnouncementKind, string> = {
   update: "bg-secondary text-muted-foreground",
 };
 
-function FeedRow({ item, now }: { item: FeedItem; now: number }) {
+// Exported for the Messages hub's announcements tab — the same row the bell
+// sheet renders, so an announcement looks identical wherever it is read.
+export function FeedRow({ item, now }: { item: FeedItem; now: number }) {
   const Icon = KIND_ICON[item.kind] ?? PartyPopper;
   return (
     <li className="flex items-start gap-3 py-3" data-testid={`feed-item-${item.id}`}>

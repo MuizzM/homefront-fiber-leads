@@ -357,7 +357,6 @@ export interface IStorage {
   // ── Knock log ──────────────────────────────────────────────────────────────
   getKnocks(tenantId?: number): Knock[];
   getKnocksByLead(leadId: number): Knock[];
-  getKnocksByRep(repId: number): Knock[];
   /** Newest-first (id DESC) slice of a rep's knocks, LIMIT pushed into SQL —
    * the rep-activity card needs 50 rows, not the rep's full hydrated history. */
   getRecentKnocksByRep(repId: number, limit: number): Knock[];
@@ -441,7 +440,6 @@ export interface IStorage {
   clockIn(repId: number, userId: number, notes?: string): ClockSession;
   clockOut(sessionId: number): ClockSession | undefined;
   getActiveClockSession(repId: number): ClockSession | undefined;
-  getClockSessionsByRep(repId: number): ClockSession[];
   getAllClockSessions(date?: string, tenantId?: number): ClockSession[];
   wasDeepSeeded(city: string, state: string): boolean;
   markDeepSeeded(city: string, state: string, addressCount: number): void;
@@ -4121,9 +4119,6 @@ export class Storage implements IStorage {
   getKnocksByLead(leadId: number): Knock[] {
     return db.select().from(knockLog).where(eq(knockLog.leadId, leadId)).orderBy(desc(knockLog.knockedAt)).all();
   }
-  getKnocksByRep(repId: number): Knock[] {
-    return db.select().from(knockLog).where(eq(knockLog.repId, repId)).all();
-  }
   // LIMIT pushed into SQL: idx_knock_log_rep serves (rep_id = ?) and a reverse
   // scan of its rowid tail yields id DESC — the activity card reads 50 rows
   // instead of hydrating a season's worth of knocks per request.
@@ -4817,10 +4812,6 @@ export class Storage implements IStorage {
   getActiveClockSession(repId: number): ClockSession | undefined {
     return db.select().from(clockSessions)
       .where(and(eq(clockSessions.repId, repId), isNull(clockSessions.clockedOut))).get();
-  }
-  getClockSessionsByRep(repId: number): ClockSession[] {
-    return db.select().from(clockSessions).where(eq(clockSessions.repId, repId))
-      .orderBy(desc(clockSessions.clockedIn)).all();
   }
   getAllClockSessions(date?: string, tenantId?: number): ClockSession[] {
     const conds = [] as any[];

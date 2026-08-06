@@ -30,6 +30,34 @@ export function isScanWorkflowPath(path: string): boolean {
 }
 
 /**
+ * The floor chat polls every 4s while the pane is open, plus a 30s baseline
+ * from every field user's nav badge. Counted in the generic per-IP bucket,
+ * a handful of reps behind one carrier NAT with the room open would burn the
+ * whole team's budget and 429 the entire app — the exact failure the scan
+ * exemption exists to prevent. Chat paths skip the GLOBAL bucket and are
+ * metered by dedicated PER-USER budgets instead (chat limiters in limiters.ts
+ * plus the per-route post budget). Nothing under /api/chat is unmetered.
+ */
+export function isChatPath(path: string): boolean {
+  return path === "/api/chat" || path.startsWith("/api/chat/");
+}
+
+/** Per-user hourly budget for chat GETs (default 3600 ≈ the 4s poll for an
+ *  hour on two devices, with headroom for tab switches). */
+export function chatReadRateLimitMax(raw: string | undefined): number {
+  const configured = Number(raw);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 3_600;
+}
+
+/** Per-user hourly budget for chat writes that are NOT message posts —
+ *  read-marks and deletes. Read-marks fire at most once per new-message batch,
+ *  so 1200/hour clears even a nonstop room while capping scripted spam. */
+export function chatWriteRateLimitMax(raw: string | undefined): number {
+  const configured = Number(raw);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 1_200;
+}
+
+/**
  * Mobile map/polling traffic can legitimately exceed the old 150/15m ceiling.
  * Keep this environment-tunable, but use a practical default for shared NATs.
  */
@@ -117,5 +145,8 @@ export function rescanPoolRateLimitMax(raw: string | undefined): number {
 export function shouldSkipGlobalRateLimit(path: string, nodeEnv: string | undefined): boolean {
   if (isDedicatedAuthPath(path)) return true;
   if (isScanWorkflowPath(path)) return true;
+  // Same shared-NAT reasoning as scans; per-user chat budgets replace the
+  // global bucket for these paths (see isChatPath above).
+  if (isChatPath(path)) return true;
   return nodeEnv !== "production" && !path.startsWith("/api");
 }

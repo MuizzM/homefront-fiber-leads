@@ -35,7 +35,8 @@ import {
   markBoundaryRetry,
   mergeAddressEvidence,
   planDiscoveryTiles as persistTiles,
-  qualificationCandidates,
+  undispatchedQualificationCandidates,
+  qualificationCandidateCount,
   markQualificationDispatchComplete,
   publishQualificationMapCandidates,
   publishQualificationMapResults,
@@ -433,23 +434,20 @@ function beginQualification(job: DiscoveryJobRow): void {
  * discovery→qualification phase flip (finalize=true), which stamps
  * dispatch-complete and emits the qualification.started event.
  */
-function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true): void {
-  const candidates = qualificationCandidates(job.id);
+/** Returns the amount of dispatch work actually done this pass (new checks,
+ *  queued runs, published batches) so the reconciler can tell an active pass
+ *  from an idle one and pace itself accordingly. */
+function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true): number {
   // EVERY unique discovered address gets a live provider check — no reuse of
   // cached results, scan history, existing targets, or existing Leads. The only
-  // per-job dedupe below is dispatch idempotency (a check row already created
-  // for THIS job), never a reason to skip the live check itself.
-  const existingChecks = new Set(
-    (
-      rawDb
-        .prepare(
-          `SELECT canonical_address_id AS id FROM qualification_checks WHERE job_id=?`,
-        )
-        .all(job.id) as any[]
-    ).map((row) => Number(row.id)),
-  );
+  // per-job dedupe is dispatch idempotency, and it lives in the SQL: the
+  // anti-join returns only candidates with no check row for THIS job, so a
+  // fully dispatched job costs one empty indexed query here, not a re-walk of
+  // every address it ever discovered.
+  const candidates = undispatchedQualificationCandidates(job.id);
+  let work = 0;
   for (const candidate of candidates) {
-    if (existingChecks.has(Number(candidate.id))) continue;
+    work++;
     // The authorized Kinetic qualifier and fresh-lead projector support
     // GA/NC/SC. Discovery may still inventory a wider map geometry, but
     // unsupported states never consume a provider request that cannot be
@@ -566,21 +564,22 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true):
       );
       mapDiscoveryRun(job.id, runId, sequence++);
       void runScanWorker(runId, job.tenantId);
+      work += batch.length;
     }
     if (!finalize) {
       // Streaming pass mid-discovery: dispatched what exists so far; the phase
       // flip finalizes later. Publish map candidates so pins/coverage stream too.
-      while (publishQualificationMapCandidates(job) > 0) {
-        /* bounded event batches */
+      for (let n; (n = publishQualificationMapCandidates(job)) > 0; ) {
+        work += n; /* bounded event batches */
       }
-      return;
+      return work;
     }
     markQualificationDispatchComplete(job.id);
-    while (publishQualificationMapCandidates(job) > 0) {
-      /* bounded event batches */
+    for (let n; (n = publishQualificationMapCandidates(job)) > 0; ) {
+      work += n; /* bounded event batches */
     }
     appendDiscoveryEvent(job.tenantId, job.id, "qualification.started", {
-      observedCandidates: candidates.length,
+      observedCandidates: qualificationCandidateCount(job.id),
       queued: queued.length,
       runs: sequence,
       handoffCollisions:
@@ -604,26 +603,49 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true):
       { error: String(error?.message ?? error).slice(0, 300) },
     );
   }
+  return work;
 }
 
+// ── Reconciler pacing ────────────────────────────────────────────────────────
+// The reconciler shares the event loop with the API and (in dev) Vite. A parked
+// fleet of jobs that cannot progress — scan transports down, budget exhausted —
+// used to be re-walked at full price every second, forever; profiled at ~99%
+// CPU in Statement.get with a few hundred stuck jobs. Passes that do zero work
+// now back off one extra tick at a time (1s → 2s → … → 30s) and any wake —
+// a new job, a finished tile, a resumed run — snaps the cadence back to 1s.
+// A slow pass also never overlaps the next tick (`reconciling`).
+let reconciling = false;
+let reconcileIdleStreak = 0;
+let reconcileSkipsLeft = 0;
+
 function reconcile(): void {
+  if (reconciling) return;
+  if (reconcileSkipsLeft > 0) {
+    reconcileSkipsLeft--;
+    return;
+  }
+  reconciling = true;
+  let work = 0;
   try {
     // STREAMING: addresses enter provider checks as tiles complete — never
     // waiting for the whole OSM discovery to finish. Idempotent per pass
     // (only run_id IS NULL checks dispatch), finalized at the phase flip.
     for (const job of streamingDiscoveryJobs()) {
       try {
-        prepareAndDispatchQualification(job, false);
+        work += prepareAndDispatchQualification(job, false);
       } catch (error: any) {
         structuredLog("address_discovery.streaming_dispatch_failed", {
           jobId: job.id, error: String(error?.message ?? error).slice(0, 200),
         }, "warn");
       }
     }
-    for (const job of jobsReadyForQualification()) beginQualification(job);
+    for (const job of jobsReadyForQualification()) {
+      beginQualification(job);
+      work++;
+    }
     for (const job of activeQualificationJobs()) {
       if (!job.qualificationDispatchCompletedAt) {
-        prepareAndDispatchQualification(job);
+        work += prepareAndDispatchQualification(job);
         continue;
       }
       // A temporary failure is never final. Resurrect any targets a previous
@@ -642,17 +664,20 @@ function reconcile(): void {
           .prepare(`UPDATE scan_runs SET failed=MAX(0,failed-?), status='running', completed_at=NULL WHERE id=? AND tenant_id=?`)
           .run(revived, runId, job.tenantId);
         void runScanWorker(runId, job.tenantId);
+        work += revived;
       }
       const result = reconcileQualificationJob(job);
-      while (publishQualificationMapResults(job) > 0) {
-        /* bounded event batches */
+      for (let n; (n = publishQualificationMapResults(job)) > 0; ) {
+        work += n; /* bounded event batches */
       }
-      if (result.terminal)
+      if (result.terminal) {
+        work++;
         structuredLog("address_discovery.completed", {
           jobId: job.id,
           tenantId: job.tenantId,
           status: result.status,
         });
+      }
     }
     // No qualification-result cache: every discovered address always gets a
     // live provider check. Current truth comes from Kinetic, never a replay.
@@ -660,6 +685,15 @@ function reconcile(): void {
     structuredLog("address_discovery.reconcile_failed", {
       error: String(error?.message ?? error),
     });
+  } finally {
+    reconciling = false;
+    if (work === 0) {
+      reconcileIdleStreak = Math.min(reconcileIdleStreak + 1, 30);
+      reconcileSkipsLeft = reconcileIdleStreak;
+    } else {
+      reconcileIdleStreak = 0;
+      reconcileSkipsLeft = 0;
+    }
   }
 }
 
@@ -711,6 +745,11 @@ function schedule(): void {
 }
 
 export function wakeDiscoveryWorkers(): void {
+  // A wake is a signal that state changed — new job, finished tile, resumed
+  // run — so the idle backoff resets and the next reconcile tick runs at
+  // full 1s cadence again.
+  reconcileIdleStreak = 0;
+  reconcileSkipsLeft = 0;
   queueMicrotask(schedule);
 }
 

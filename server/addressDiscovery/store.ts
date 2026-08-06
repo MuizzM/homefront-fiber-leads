@@ -1038,16 +1038,40 @@ export function touchTileLease(tileId: string, leaseSeconds = 180): void {
     .run(`+${Math.max(30, leaseSeconds)} seconds`, tileId);
 }
 
-export function qualificationCandidates(jobId: string): any[] {
+/** Candidates for this job that do NOT yet have a qualification check row.
+ *  The anti-join is the point: the reconciler re-enters dispatch every second
+ *  for every active job, and it used to load EVERY candidate and skip the
+ *  dispatched ones one by one in JS — O(candidates) synchronous SQLite work
+ *  per job per second, forever, even when nothing was left to do. Steady state
+ *  must cost one indexed query that returns nothing. */
+export function undispatchedQualificationCandidates(jobId: string): any[] {
   return rawDb
     .prepare(
       `SELECT c.id,c.canonical_key AS canonicalKey,c.full_address AS fullAddress,c.house_number AS houseNumber,
     c.street,c.unit,c.city,c.state,c.postal_code AS postalCode,c.lat,c.lng,c.inferred_only AS inferredOnly,
     c.validation_status AS validationStatus,c.independent_sources AS independentSources,c.authoritative_sources AS authoritativeSources
     FROM discovery_job_addresses d JOIN canonical_addresses c ON c.id=d.canonical_address_id
-    WHERE d.job_id=? AND c.inferred_only=0 AND c.validation_status IN ('observed','validated')`,
+    LEFT JOIN qualification_checks qc ON qc.job_id=d.job_id AND qc.canonical_address_id=c.id
+    WHERE d.job_id=? AND c.inferred_only=0 AND c.validation_status IN ('observed','validated')
+      AND qc.id IS NULL`,
     )
     .all(jobId) as any[];
+}
+
+/** Total observable candidates — the number the qualification.started audit
+ *  event has always reported, kept as a COUNT so the event survives the
+ *  dispatch loop no longer loading the full list. */
+export function qualificationCandidateCount(jobId: string): number {
+  return Number(
+    (
+      rawDb
+        .prepare(
+          `SELECT COUNT(*) AS n FROM discovery_job_addresses d JOIN canonical_addresses c ON c.id=d.canonical_address_id
+    WHERE d.job_id=? AND c.inferred_only=0 AND c.validation_status IN ('observed','validated')`,
+        )
+        .get(jobId) as any
+    )?.n ?? 0,
+  );
 }
 
 export function attachScanTarget(

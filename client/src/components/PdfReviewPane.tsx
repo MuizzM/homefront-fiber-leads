@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Download, ExternalLink, FileText, Loader2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
-import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { fetchPdfBlob, hasPdfBlob } from "@/lib/pdfBlobCache";
 
 // ── Real-PDF review pane ─────────────────────────────────────────────────────
 // A signer is entitled to read the actual instrument — paginated, scrollable,
@@ -22,44 +23,11 @@ import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 // the same fetched document serve the viewer, the download, and the new-tab
 // open without three round trips.
 
-// ── Blob cache + prefetch ────────────────────────────────────────────────────
-// The list screen knows which documents the signer is about to open; fetching
-// their bytes while the list idles means the signing dialog opens onto a PDF
-// that is ALREADY here — the pane pops instead of spinning. Blobs are cached
-// (they are immutable: an envelope's PDF never changes under the same id);
-// object URLs stay per-mount so revocation keeps working.
-const pdfBlobCache = new Map<string, Promise<Blob>>();
-
-/** Logout / identity switch is a hard cache boundary everywhere else in the app
- *  (auth.tsx clears the query + persisted caches); this cache holds signed-
- *  agreement PDFs and must die with the session too. */
-export function clearPdfBlobCache(): void {
-  pdfBlobCache.clear();
-}
-
-function fetchPdfBlob(url: string, warm: boolean): Promise<Blob> {
-  const cached = pdfBlobCache.get(url);
-  if (cached) return cached;
-  const sid = getStoredSessionId();
-  // warm=1 tells the server this is a cache warm-up, not a human opening the
-  // document — it must not write a preview_opened audit row. Cached under the
-  // BASE url so the real open finds the warmed blob.
-  const requestUrl = warm ? `${url}${url.includes("?") ? "&" : "?"}warm=1` : url;
-  const promise = fetch(requestUrl, { credentials: "include", headers: { accept: "application/pdf", ...(sid ? { "x-session-id": sid } : {}) } })
-    .then(async response => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.blob();
-    });
-  // A failure must not poison the cache — the next open retries the network.
-  promise.catch(() => { if (pdfBlobCache.get(url) === promise) pdfBlobCache.delete(url); });
-  pdfBlobCache.set(url, promise);
-  return promise;
-}
-
-/** Warm the cache for a document the user is likely to open. Fire-and-forget. */
-export function prefetchPdf(url: string): void {
-  void fetchPdfBlob(url, true).catch(() => {});
-}
+// The blob cache itself lives in @/lib/pdfBlobCache — auth.tsx clears it at
+// identity boundaries, and lib code must be importable from the entry without
+// dragging this component along. Re-exported so existing call sites keep their
+// import path.
+export { prefetchPdf, clearPdfBlobCache } from "@/lib/pdfBlobCache";
 
 export interface PdfReviewPaneProps {
   /** Endpoint returning application/pdf. Fetched with credentials. */
@@ -98,7 +66,7 @@ export function PdfReviewPane({
     // credentialed fetch is a guaranteed 401 and an empty review pane. Cached
     // (or prefetched) blobs resolve on the microtask queue, so a warmed pane
     // renders its PDF in the same frame the dialog opens.
-    const servedFromCache = pdfBlobCache.has(url);
+    const servedFromCache = hasPdfBlob(url);
     if (servedFromCache && openBeaconUrl) {
       void apiRequest("POST", openBeaconUrl).catch(() => { /* audit beacon is best-effort */ });
     }

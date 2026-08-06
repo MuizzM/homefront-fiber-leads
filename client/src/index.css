@@ -317,15 +317,6 @@
   filter: invert(1);
 }
 
-/* Scan animation (used by FiberScanner) */
-@keyframes scan-line {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100vh); }
-}
-.scan-line {
-  animation: scan-line 2s linear infinite;
-}
-
 /* ── App-wide polish ──────────────────────────────────────────────────────
    Cross-cutting refinements that lift every page: keyboard focus rings that
    read on the dark theme, themed scrollbars, tidy text selection, and gentle

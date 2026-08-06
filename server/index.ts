@@ -21,7 +21,7 @@ import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPol
 import {
   scanWorkflowRateLimits, payoutTransitionLimiter, payDisputeLimiter,
   punchCorrectionLimiter, documentSignLimiter, knockPostLimiter,
-  callingAttemptLimiter, moneyExportLimiter,
+  callingAttemptLimiter, moneyExportLimiter, chatReadLimiter, chatWriteLimiter,
 } from "./limiters";
 import { BLOCKED_RESPONSE_FIELDS, scrubSecretText } from "./secretScrub";
 
@@ -464,6 +464,14 @@ app.use("/api/auth/otp/verify", authLimiter);
 // progress polls 3600/hour, other scan reads 600/hour. Nothing under /api/scan
 // or /api/sweeps is unmetered anymore.
 app.use(scanWorkflowRateLimits());
+
+// ── Floor-chat budgets ───────────────────────────────────────────────────────
+// /api/chat skips the global per-IP bucket (shared carrier NATs — see
+// rateLimitPolicy.isChatPath), so these per-user meters are its only ceiling:
+// reads for the room poll, writes for read-marks and deletes. Message posts
+// carry their own tighter budget on the route itself (chatPostLimiter).
+app.use("/api/chat", chatReadLimiter);
+app.use("/api/chat", chatWriteLimiter);
 
 // ── Money-mutation limiters (SEC-B) ─────────────────────────────────────────
 // Wired by PATH because the route handlers live in sibling-owned modules

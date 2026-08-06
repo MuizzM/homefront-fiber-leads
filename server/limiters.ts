@@ -8,7 +8,7 @@ import { can as hasCapability } from "@shared/capabilities";
 import {
   isScanMutationPath, isScanPollPath, isScanReadPath,
   scanMutationRateLimitMax, scanReadRateLimitMax, scanPollRateLimitMax,
-  rescanPoolRateLimitMax,
+  rescanPoolRateLimitMax, chatReadRateLimitMax, chatWriteRateLimitMax,
 } from "./rateLimitPolicy";
 
 // Scan routes are already authenticated, role-gated, and dispatched through the
@@ -152,6 +152,39 @@ export const knockPostLimiter = createPerUserLimiter({
   max: 60,
   methods: ["POST"],
   message: "Knock logging budget reached. Try again in an hour.",
+});
+
+// ── Floor-chat budgets ──────────────────────────────────────────────────────
+// Chat paths skip the GLOBAL per-IP bucket (rateLimitPolicy.isChatPath — the
+// 4s room poll behind one carrier NAT must never 429 a whole field team), so
+// like the scan workflow, every chat path is metered PER USER instead.
+
+// Message POSTs are conversation, not automation: 120/hour per account is a
+// message every 30 seconds sustained, which no thumb keeps up for an hour —
+// while capping what a hijacked session can spray into a room every phone in
+// the org polls. Rides the POST /api/chat route only (same inline pattern as
+// geocodeLimiter).
+export const chatPostLimiter = createPerUserLimiter({
+  max: 120,
+  methods: ["POST"],
+  message: "Slow down a moment — the floor can only read so fast.",
+});
+
+// The room poll. Sized like the scan progress poll: sustained refresh on a
+// couple of devices, never a workflow blocker.
+export const chatReadLimiter = createPerUserLimiter({
+  max: chatReadRateLimitMax(process.env.CHAT_READ_RATE_LIMIT_MAX),
+  methods: ["GET", "HEAD"],
+  message: "Chat refresh budget reached for this account. The room updates on its own — give it a moment.",
+});
+
+// Read-marks and deletes. Message posts also pass through here (same path
+// prefix) but their own 120/hour bucket above binds first, so this ceiling
+// only really governs POST /api/chat/read and DELETE /api/chat/:id.
+export const chatWriteLimiter = createPerUserLimiter({
+  max: chatWriteRateLimitMax(process.env.CHAT_WRITE_RATE_LIMIT_MAX),
+  methods: ["POST", "DELETE"],
+  message: "Too many chat actions. Try again shortly.",
 });
 
 // Manual calling attempt starts dial real phone numbers: 30/hour per account.
