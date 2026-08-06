@@ -479,6 +479,9 @@ const FIBER_SCOUT_SERVER = "FIBER_SCOUT_SERVER_PLACEHOLDER";
 const API_ENDPOINT = FIBER_SCOUT_SERVER + "/api/onboarding/apply";
 const ORG_SLUG = "FIBER_SCOUT_ORG_PLACEHOLDER";
 const INVITE_TOKEN = new URLSearchParams(window.location.search).get("invite") || "";
+// Role label from the resolved invite (e.g. "Team Lead") — the application
+// records the role the invite offered, not a hardcoded default.
+let INVITE_ROLE_LABEL = "";
 
 const $ = (id) => document.getElementById(id);
 
@@ -491,6 +494,7 @@ async function hydrateSecureInvite() {
     });
     const invite = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(invite.error || "Invitation unavailable");
+    INVITE_ROLE_LABEL = invite.roleLabel || "";
     $("fullName").value = invite.name || "";
     $("email").value = invite.email || "";
     $("email").readOnly = true;
@@ -634,7 +638,7 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
   fd.append("preferredCarriers", carriers.join(","));
   fd.append("referralSource", $("referralSource").value);
   fd.append("applicationSource", "public_join");
-  fd.append("desiredRole", "Field Representative");
+  fd.append("desiredRole", INVITE_ROLE_LABEL || "Field Representative");
   if (ORG_SLUG) fd.append("orgSlug", ORG_SLUG);
   if (INVITE_TOKEN) fd.append("inviteToken", INVITE_TOKEN);
   if ($("headshotFile").files[0]) fd.append("headshot", $("headshotFile").files[0]);

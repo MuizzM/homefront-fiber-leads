@@ -5,8 +5,20 @@ The retroactive weekly rep-commission module. It answers one question precisely:
 makes that answer reproducible, auditable, and immutable once finalized.
 
 > This is deliberately **isolated** from the legacy `commissions` / `commission_rates`
-> tables and from any MLM / override / payout-tree system. Nothing here reads or
-> writes those. Money is **integer cents** end-to-end — never floats.
+> tables. Money is **integer cents** end-to-end — never floats.
+>
+> **Downline overrides** are the one sanctioned adjacent layer: an APPEND-ONLY
+> per-sale ledger (`commission_overrides`, [`server/overrideStore.ts`](../server/overrideStore.ts) +
+> pure rules in [`shared/commissionOverrides.ts`](../shared/commissionOverrides.ts))
+> that pays the seller's first active team lead / manager a flat per-sale amount
+> when a sale QUALIFIES. Each row freezes the upline chain and the rate config
+> at earn time (the tree and config are mutable; earned rows are not). The
+> block folds INTO `commission_statements.final_commission_cents` at statement
+> calc — exactly how hourly pay folds in — so NACHA, 1099, reserve, and Stripe
+> read one number and there is never a second payment instruction. Reversals
+> append CLAWBACK rows; against a FINALIZED week they surface as exceptions for
+> a manager adjustment, never a silent re-price. Ships dark
+> (`commission_override_enabled = 0`) until an admin sets rates in the console.
 
 ## Layers
 

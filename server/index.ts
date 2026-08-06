@@ -487,6 +487,7 @@ app.use("/api/leads/:id/knock", knockPostLimiter);
 app.use("/api/v1/calling/attempts/start", callingAttemptLimiter);
 app.use("/api/pay/nacha", moneyExportLimiter);
 app.use("/api/commission/week-export.csv", moneyExportLimiter);
+app.use("/api/commission/overrides/sheet-export.csv", moneyExportLimiter);
 // Bulk-disclosure budgets on the rest of the surfaces that hand out a document
 // or a file per request. Role gating answers "may you read this one?"; it does
 // not answer "may you read all of them, now?" — and :id is sequential, so a

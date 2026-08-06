@@ -70,7 +70,7 @@ import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenantRead, sameTenantWrite } from "./tenantGuard";
-import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
+import { canActOnMember, canHireRole, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
 import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, areaGrantedRepIds, parseAreaDeleteRepPolicy, parseAssigneeIds, MAX_ACTIVE_AREAS_PER_REP, MAX_AREA_ASSIGNEES, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
@@ -86,6 +86,7 @@ import {
 } from "@shared/capabilities";
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
 import { registerCommissionRoutes } from "./commissionRoutes";
+import { registerCommissionOverrideRoutes } from "./commissionOverrideRoutes";
 import { registerHourlyPayRoutes } from "./hourlyPayRoutes";
 import { registerPayoutRoutes } from "./payoutRoutes";
 import { registerPayRoutes } from "./payRoutes";
@@ -1234,6 +1235,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
   registerCommissionRoutes(app, { requireAuth, requireCapability });
+  // Downline override sheet + exceptions console — same injected auth.
+  registerCommissionOverrideRoutes(app, { requireAuth, requireCapability });
   // Hourly pay plane (rates, punch corrections, pay disputes) — same injected auth.
   registerHourlyPayRoutes(app, { requireAuth, requireCapability });
   registerPayoutRoutes(app, { requireAuth, requireCapability });
@@ -5219,26 +5222,65 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const updated = storage.updateTeamMember(id, safeUpdate, tenantId);
         if (!updated) return null;
         syncLoginAccount(updated as any);
+        const roleChanged = typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role;
         // A demotion can leave direct reports pointing at a supervisor who no
         // longer outranks them (reps reporting to a rep). Re-home those
         // subordinates to the edited member's own supervisor so the org chart
         // never holds an invalid edge.
-        if (typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role) {
+        const reHomedReports: number[] = [];
+        if (roleChanged) {
           const invalidated = members.filter((member) =>
             (member as any).reportsToId === id && !isValidSupervisorRole(member.role, safeUpdate.role as string));
           for (const subordinate of invalidated) {
             storage.updateTeamMember(subordinate.id, { reportsToId: (existing as any).reportsToId ?? null } as any, tenantId);
+            reHomedReports.push(subordinate.id);
           }
         }
-        return updated;
+        // ...and the mirror case, LOOKING UP. A PROMOTION can leave the edited
+        // member pointing at a supervisor who no longer outranks THEM — promote
+        // a rep who reports to a team lead and you get a manager whose
+        // supervisor is a team lead. The reports-to validation above only fires
+        // when the caller SENDS a supervisor, so a role-only PATCH slipped past
+        // it and left that inverted edge in the tree.
+        //
+        // It is not cosmetic: override chains walk UPWARD from the seller, so
+        // the stale edge let a team lead sitting BELOW the promoted manager
+        // collect the team-lead override on every one of their reps' sales.
+        // Promoting to manager always lands top-level — no field role outranks
+        // a manager — which is why this clears rather than re-points.
+        let supervisorCleared = false;
+        const priorSupervisorId = (existing as any).reportsToId ?? null;
+        if (roleChanged
+            && !Object.prototype.hasOwnProperty.call(safeUpdate, "reportsToId")
+            && priorSupervisorId != null) {
+          const priorSupervisor = members.find((member) => member.id === priorSupervisorId);
+          if (!priorSupervisor || !isValidSupervisorRole(safeUpdate.role as string, priorSupervisor.role)) {
+            // Re-read: `updated` was captured before this second write, so
+            // returning it would report a supervisor the row no longer has.
+            const relocated = storage.updateTeamMember(id, { reportsToId: null } as any, tenantId);
+            supervisorCleared = true;
+            return { updated: relocated ?? updated, reHomedReports, supervisorCleared, priorSupervisorId };
+          }
+        }
+        return { updated, reHomedReports, supervisorCleared, priorSupervisorId };
       });
-      const updated = tx.immediate();
-      if (!updated) return res.status(404).json({ error: "Not found" });
+      const result = tx.immediate();
+      if (!result) return res.status(404).json({ error: "Not found" });
+      const { updated, reHomedReports, supervisorCleared, priorSupervisorId } = result;
       // Audit every login-email retarget with old + new + actor: this is the
       // trail that distinguishes a legitimate mailbox fix from a hijack.
       if (emailRetargeted) {
         storage.logActivity(actor.id, "team.login_email_retargeted", "team_member", id, {
           oldEmail, newEmail: email, actorRole: actor.role, linkedUserId: linkedLogin?.id ?? null,
+        }, req.ip);
+      }
+      // A role change is an org-authority change — audit who moved whom where,
+      // and which reports the demotion re-homed along the way.
+      if (typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role) {
+        storage.logActivity(actor.id, "team.member.role_changed", "team_member", id, {
+          from: existing.role, to: safeUpdate.role, reHomedReports,
+          // A promotion that outgrew its own supervisor moved to top level.
+          ...(supervisorCleared ? { supervisorCleared: true, priorSupervisorId } : {}),
         }, req.ip);
       }
       res.json(updated);
@@ -5311,7 +5353,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // revokes its sessions as part of that mirror.
         const sync = syncLoginAccount(updated as any);
         // Re-home direct reports to the offboarded member's own supervisor so
-        // nobody is left reporting to a deactivated member.
+        // nobody is left reporting to a deactivated member. (recruited_by_* is
+        // deliberately NOT re-homed — the sponsor edge records history, not the
+        // org chart, and the DB trigger would refuse a rewrite anyway.)
         const newSupervisorId = (target as any).reportsToId ?? null;
         const reassigned = rawDb.prepare(
           "UPDATE team_members SET reports_to_id = ? WHERE reports_to_id = ? AND tenant_id = ?",
@@ -9057,6 +9101,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Mutable: when the reviewer doesn't pass explicit terms, the invite's
     // manager-chosen comp terms seed it (set just after the invite is loaded).
     let commission = req.body.commission;
+    // Optional reviewer override of the invite's role/upline — mirrors how the
+    // `commission` object above outranks the invite's stored comp terms. The
+    // override*Cents keys are the per-hire override rates (what the TL/manager
+    // slots keep from this hire's sales); null = inherit the org default.
+    const hierarchy = req.body.hierarchy as {
+      role?: string; reportsToId?: number | null;
+      overrideTeamLeadCents?: number | null; overrideManagerCents?: number | null;
+      downlineIds?: number[];
+    } | undefined;
+    for (const key of ["overrideTeamLeadCents", "overrideManagerCents"] as const) {
+      const v = hierarchy?.[key];
+      if (v !== undefined && v !== null && (!Number.isInteger(v) || v < 0 || v > 10_000_000)) {
+        return res.status(400).json({ error: `${key} must be a whole number of cents, or null to inherit the org default.` });
+      }
+    }
+    if (hierarchy?.downlineIds !== undefined
+        && (!Array.isArray(hierarchy.downlineIds) || hierarchy.downlineIds.some(v => !Number.isInteger(v) || v <= 0))) {
+      return res.status(400).json({ error: "downlineIds must be an array of member ids." });
+    }
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
     }
@@ -9121,6 +9184,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // so the paper states what the reviewer approved, not what an earlier
     // invite row (or a prior engagement's stored terms) happens to say.
     let approvedCompTerms: Partial<CommissionTerms> | null = null;
+    // The role/upline the reviewer approved (resolved just after the invite is
+    // loaded). hierarchyWarning surfaces a stale INVITE choice that was safely
+    // degraded — explicit reviewer input never degrades, it 400s.
+    let approvedRole: string = "rep";
+    let resolvedSupervisorId: number | null = null;
+    // Existing members this leader hire takes over — re-homed once the new
+    // member row exists (below), so a hire can arrive with their team already
+    // reporting to them instead of the reviewer re-parenting each one by hand.
+    let resolvedDownlineIds: number[] = [];
+    let hierarchyWarning: string | null = null;
+    const addHierarchyWarning = (message: string) => {
+      hierarchyWarning = hierarchyWarning ? `${hierarchyWarning} ${message}` : message;
+    };
     let onboardingDocuments: any = null;
     let onboardingWarning: string | null = null;
     let welcomeEmailId: string | null = null;
@@ -9142,6 +9218,103 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const recruitingInvite = getRecruitingInviteByApplication(application.id);
+
+    // ── Role + upline for the new member ─────────────────────────────────────
+    // Reviewer override > invite's choice > the legacy default ('rep'). All
+    // validation runs BEFORE any state change (the P0-1 lesson above): a 4xx
+    // here must leave the invite un-approved and the application pending.
+    if (status === "approved") {
+      approvedRole = hierarchy?.role ?? recruitingInvite?.invitedRole ?? "rep";
+      // Approval IS the hire, so the REVIEWER must hold the authority to hire
+      // this role even when it came from the invite — the inviter's authority
+      // was checked at invite time, and roles can change in between. Unknown
+      // role strings fail closed here too. super_admin approves with admin's
+      // hiring authority (the requireAdmin comment above: the apex identity is
+      // included in every tier, and HIRABLE_ROLES deliberately has no row for it).
+      const reviewerHireRole = reviewer?.role === "super_admin" ? "admin" : reviewer?.role;
+      if (!canHireRole(reviewerHireRole, approvedRole)) {
+        return res.status(403).json({ error: `Your role cannot approve a ${String(approvedRole).replace("_", " ")}`, code: "HIERARCHY_FORBIDDEN" });
+      }
+      // Supervisor: explicit reviewer input (including an explicit null =
+      // top-level) outranks the invite's stored choice.
+      const reviewerOverrodeSupervisor = hierarchy?.reportsToId !== undefined;
+      const proposedSupervisorId = reviewerOverrodeSupervisor
+        ? (hierarchy!.reportsToId == null ? null : Number(hierarchy!.reportsToId))
+        : (recruitingInvite?.invitedSupervisorId ?? null);
+      if (proposedSupervisorId != null) {
+        const supervisor = storage.getTeamMembers(tenantId).find((member: any) => member.id === proposedSupervisorId);
+        if (supervisor && supervisor.active && isValidSupervisorRole(approvedRole, supervisor.role)) {
+          resolvedSupervisorId = proposedSupervisorId;
+        } else if (reviewerOverrodeSupervisor) {
+          // Explicit input fails LOUD — the POST /api/team contract.
+          return res.status(400).json({ error: "Supervisor must be an active member of your organization who ranks above the new member", code: "INVALID_SUPERVISOR" });
+        } else {
+          // The INVITE's choice can go stale between send and approval (the
+          // supervisor was offboarded, demoted, …). Approve top-level and say
+          // so, rather than blocking the hire on weeks-old data.
+          addHierarchyWarning("The supervisor chosen on the invitation is no longer available, so the new member was placed at top level.");
+        }
+      }
+
+      // ── The downline this leader arrives with ──────────────────────────────
+      // Same precedence as everything else on this offer: an explicit reviewer
+      // list (including an explicit empty one = "nobody") outranks the invite's
+      // stored picks. Every entry is re-validated NOW, because weeks can pass
+      // between send and approve: the member may have been offboarded,
+      // promoted past the new leader, or become the leader's own supervisor.
+      //
+      // Explicit reviewer input fails LOUD (the POST /api/team contract);
+      // invite-carried entries degrade — the named member is skipped with a
+      // warning rather than blocking a hire on weeks-old data.
+      const reviewerOverrodeDownline = hierarchy?.downlineIds !== undefined;
+      const proposedDownlineIds = [...new Set(
+        (reviewerOverrodeDownline ? hierarchy!.downlineIds! : (recruitingInvite?.invitedDownlineIds ?? [])).map(Number),
+      )];
+      if (proposedDownlineIds.length > 0) {
+        if (approvedRole === "rep") {
+          const message = "A rep cannot be given a downline — only team leads and managers supervise";
+          if (reviewerOverrodeDownline) return res.status(400).json({ error: message, code: "INVALID_DOWNLINE" });
+          addHierarchyWarning("The invitation listed a downline, but the approved role is rep — nobody was moved.");
+        } else {
+          const roster = storage.getTeamMembers(tenantId);
+          for (const downlineId of proposedDownlineIds) {
+            const member = roster.find((candidate: any) => candidate.id === downlineId);
+            const refuse = (reason: string, warning: string) => {
+              if (reviewerOverrodeDownline) { res.status(400).json({ error: reason, code: "INVALID_DOWNLINE" }); return true; }
+              addHierarchyWarning(warning);
+              return false;
+            };
+            if (!member || !member.active) {
+              if (refuse("Every downline member must be an active member of your organization",
+                `${member?.name ?? `Member #${downlineId}`} is no longer active, so they were not moved under the new hire.`)) return;
+              continue;
+            }
+            if (downlineId === resolvedSupervisorId) {
+              if (refuse("The new hire's supervisor cannot also report to them",
+                `${member.name} is the new hire's own supervisor, so they were not moved under them.`)) return;
+              continue;
+            }
+            // Strictly-below, by EFFECTIVE role (a low field role must not
+            // shield a higher login) — the same authority the roster edit uses.
+            if (!isValidSupervisorRole(effectiveMemberRole(tenantId, member), approvedRole)) {
+              if (refuse(`A ${String(approvedRole).replace("_", " ")} cannot supervise ${member.name} (${String(member.role).replace("_", " ")})`,
+                `${member.name} no longer ranks below the new hire, so they were not moved.`)) return;
+              continue;
+            }
+            // The REVIEWER must also be allowed to act on this member — moving
+            // someone's reporting line is a roster edit, and approval is not a
+            // side door around the strictly-above rule.
+            if (!canActOnMember(reviewer?.role === "super_admin" ? "admin" : reviewer?.role, effectiveMemberRole(tenantId, member))) {
+              if (refuse(`You can only reassign members below your own role (${member.name})`,
+                `${member.name} outranks your authority, so they were not moved under the new hire.`)) return;
+              continue;
+            }
+            resolvedDownlineIds.push(downlineId);
+          }
+        }
+      }
+    }
+
     if (recruitingInvite && status === "approved") markInviteApproved(recruitingInvite.id);
     // Terms chosen by the manager AT INVITE TIME are the source of truth for the
     // rep's commission plan + chargeback reserve. The reviewer can still override
@@ -9168,10 +9341,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         userId = existing.id;
         // Claim only an unassigned pre-membership login; never move an account
         // from another tenant. A stale/foreign rep link is detached, not moved.
-        // Keep login active so the applicant can sign.
+        // Keep login active so the applicant can sign. Role: the guard above
+        // ensures a claimed account is a plain rep, so setting the approved
+        // role is only ever a lateral keep or a promotion — never a demotion.
         storage.updateUser(existing.id, {
           active: true,
           tenantId,
+          role: approvedRole,
           ...(linkedRepNeedsRepair ? { teamMemberId: null } : {}),
         } as any);
         if (existingLinkedRep && existingLinkedRep.tenantId == null) {
@@ -9182,7 +9358,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           name: application.fullName,
           email: application.email,
           passwordHash: "",   // OTP-only system — no password
-          role: "rep",
+          role: approvedRole,
           active: true,
           tenantId: tenantId ?? undefined,
         } as any);
@@ -9200,11 +9376,38 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           // Reuse an existing team member with this email in the tenant if present.
           const roster = storage.getTeamMembers(tenantId ?? undefined);
           const match = roster.find((m: any) => (m.email || "").toLowerCase() === application.email.toLowerCase());
+          if (match) {
+            // A REUSED profile (usually a rehire) keeps what it already has:
+            // the role only ever moves UP — silent demotion is never an
+            // approval side-effect — and an existing reports-to edge is
+            // respected. A NEW edge must not close a loop through the member's
+            // own direct reports (the PATCH /api/team precedent).
+            const patch: Record<string, unknown> = {};
+            if ((hierarchyRank(approvedRole) ?? -1) > (hierarchyRank(match.role) ?? -1)) patch.role = approvedRole;
+            else if (approvedRole !== match.role) {
+              addHierarchyWarning(`The existing profile keeps its ${match.role.replace("_", " ")} role — approval never demotes.`);
+            }
+            if (resolvedSupervisorId != null && (match as any).reportsToId == null) {
+              const chain = new Map<number, number | null>(roster.map((m: any) => [m.id, m.reportsToId ?? null]));
+              if (wouldCreateReportsCycle(match.id, resolvedSupervisorId, chain)) {
+                addHierarchyWarning("The chosen supervisor reports up through this member, so the reporting line was left unchanged.");
+              } else {
+                patch.reportsToId = resolvedSupervisorId;
+              }
+            }
+            if (Object.keys(patch).length) storage.updateTeamMember(match.id, patch as any, tenantId ?? undefined);
+            // users.role mirrors team_members.role string-for-string (the
+            // syncLoginAccount invariant) — when the reused profile kept a
+            // HIGHER role than the approval proposed, the login follows it.
+            const finalRole = (patch.role as string | undefined) ?? match.role;
+            if (userId != null && finalRole !== approvedRole) storage.updateUser(userId, { role: finalRole } as any);
+          }
           const member = match ?? storage.createTeamMember({
             name: application.fullName,
             phone: application.phone || null,
             email: application.email,
-            role: "rep",
+            role: approvedRole,
+            reportsToId: resolvedSupervisorId,
             active: false,
             tenantId: tenantId ?? undefined,
           } as any);
@@ -9212,6 +9415,79 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           if (userId != null) storage.updateUser(userId, { teamMemberId } as any);
         }
         if (teamMemberId != null) storage.updateTeamMember(teamMemberId, { active: false }, tenantId ?? undefined);
+
+        // ── The recruiting sponsor edge — set ONCE, from the invite ──────────
+        // recruited_by_* answers "who brought this person in" for recruiting
+        // metrics; pay and authority keep following reports_to. Raw SQL with a
+        // NULL-guarded WHERE so an approval retry matches zero rows instead of
+        // re-writing (the DB trigger would abort a rewrite anyway). No invite,
+        // or an invite with no attributable inviter → no sponsor.
+        if (teamMemberId != null && recruitingInvite?.invitedBy != null) {
+          rawDb.prepare(
+            `UPDATE team_members SET recruited_by_member_id = ?, recruited_by_user_id = ?, recruited_at = ?
+              WHERE id = ? AND recruited_by_member_id IS NULL AND recruited_by_user_id IS NULL`,
+          ).run(
+            storage.getUserById(recruitingInvite.invitedBy)?.teamMemberId ?? null,
+            recruitingInvite.invitedBy,
+            new Date().toISOString(),
+            teamMemberId,
+          );
+        }
+
+        // ── Per-hire override rates — reviewer's choice > invite's > inherit ─
+        // What the TL/manager slots keep from each of THIS hire's qualified
+        // sales. Stamped per COLUMN, and only where the member's rate is still
+        // NULL — an existing explicit rate on a reused roster member is a
+        // decision someone already made, never silently overwritten. Earned
+        // ledger rows carry frozen snapshots and are untouched either way.
+        if (teamMemberId != null) {
+          const resolvedTlCents = hierarchy?.overrideTeamLeadCents !== undefined
+            ? hierarchy.overrideTeamLeadCents
+            : (recruitingInvite?.invitedOverrideTeamLeadCents ?? null);
+          const resolvedMgrCents = hierarchy?.overrideManagerCents !== undefined
+            ? hierarchy.overrideManagerCents
+            : (recruitingInvite?.invitedOverrideManagerCents ?? null);
+          if (resolvedTlCents != null) {
+            rawDb.prepare(`UPDATE team_members SET override_team_lead_cents = ? WHERE id = ? AND override_team_lead_cents IS NULL`)
+              .run(resolvedTlCents, teamMemberId);
+          }
+          if (resolvedMgrCents != null) {
+            rawDb.prepare(`UPDATE team_members SET override_manager_cents = ? WHERE id = ? AND override_manager_cents IS NULL`)
+              .run(resolvedMgrCents, teamMemberId);
+          }
+        }
+
+        // ── Hand the new leader their downline ──────────────────────────────
+        // Every id was validated above; the only thing that cannot be checked
+        // until the member row EXISTS is the cycle, so it runs here against the
+        // live chain and skips (never throws) — a hire must not fail because
+        // one reassignment would have looped. Overrides follow automatically:
+        // from the next sale on, these members' uplines are the new leader's
+        // chain. Already-earned ledger rows keep their frozen attribution.
+        if (teamMemberId != null && resolvedDownlineIds.length > 0) {
+          const moved: number[] = [];
+          const skippedForCycle: number[] = [];
+          for (const downlineId of resolvedDownlineIds) {
+            if (downlineId === teamMemberId) continue; // never self-report
+            const chain = new Map<number, number | null>(
+              storage.getTeamMembers(tenantId).map((m: any) => [m.id, m.reportsToId ?? null]),
+            );
+            if (wouldCreateReportsCycle(downlineId, teamMemberId, chain)) {
+              skippedForCycle.push(downlineId);
+              continue;
+            }
+            storage.updateTeamMember(downlineId, { reportsToId: teamMemberId } as any, tenantId ?? undefined);
+            moved.push(downlineId);
+          }
+          if (skippedForCycle.length > 0) {
+            addHierarchyWarning(`${skippedForCycle.length} member(s) were not moved because the change would have created a reporting loop.`);
+          }
+          if (moved.length > 0) {
+            storage.logActivity(reviewer?.id ?? null, "team.downline_assigned_at_hire", "team_member", teamMemberId, {
+              applicationId: application.id, movedMemberIds: moved, skippedForCycle,
+            }, req.ip, tenantId);
+          }
+        }
 
         if (linkedRepNeedsRepair && userId != null && teamMemberId != null) {
           storage.logActivity(reviewer?.id ?? null, "onboarding.rep_profile_link_repaired", "user", userId, {
@@ -9355,6 +9631,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       inviteId: recruitingInvite?.id ?? null,
       userId: userId ?? null,
       repId: teamMemberId,
+      role: status === "approved" ? approvedRole : null,
+      reportsToId: status === "approved" ? resolvedSupervisorId : null,
+      hierarchyWarning,
       loginCodeSent: Boolean(welcomeEmailId),
       agreementsCreated: onboardingDocuments?.createdCount ?? 0,
       agreementsFailed: onboardingDocuments?.results?.filter((result: any) => result.failed).length ?? 0,
@@ -9364,6 +9643,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       ...updated,
       commission: commissionResult,
       commissionWarning,
+      hierarchyWarning,
       onboardingDocuments,
       onboardingWarning,
       welcomeEmailId,

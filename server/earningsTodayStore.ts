@@ -93,6 +93,13 @@ export interface EarningsToday {
   pendingCents: number | null;
   /** Why pending is null, for the UI to say something useful. */
   pendingBasis: "flat" | "unknown_structure" | "needs_sale_amounts" | "no_sales";
+  /**
+   * Downline override earnings booked today for this member as an UPLINE
+   * (net of same-day clawbacks). Pending by nature — the downline sale can
+   * still reverse or charge back — so it is its own labelled figure, folded
+   * into neither bankedCents nor pendingCents. 0 for members with no downline.
+   */
+  overridePendingCents: number;
 }
 
 /** Minutes clocked today, including an OPEN session counted up to now — a rep
@@ -134,6 +141,20 @@ function spiffsToday(tenantId: number, repId: number, startIso: string, endIso: 
         AND created_at >= ? AND created_at < ?`,
   ).get(tenantId, repId, startIso, endIso) as any;
   return Math.max(0, Number(row?.c ?? 0));
+}
+
+/** Net override cents booked today for this beneficiary. PAYABLE rows only —
+ *  HELD money is inside an install hold and EXCEPTION money needs a human;
+ *  quoting either as "today's earnings" would promise pay that may never come. */
+function overridesToday(tenantId: number, repId: number, startIso: string, endIso: string): number {
+  try {
+    const row = rawDb.prepare(
+      `SELECT COALESCE(SUM(amount_cents), 0) AS c FROM commission_overrides
+        WHERE tenant_id = ? AND beneficiary_rep_id = ?
+          AND status = 'PAYABLE' AND created_at >= ? AND created_at < ?`,
+    ).get(tenantId, repId, startIso, endIso) as any;
+    return Number(row?.c ?? 0);
+  } catch { return 0; } // table self-creates on overrideStore import — absent ⇒ no overrides
 }
 
 function salesToday(tenantId: number, repId: number, startIso: string, endIso: string): number {
@@ -196,5 +217,6 @@ export function earningsToday(tenantId: number, repId: number, nowMs: number): E
     hourlyCents, hourlyMinutes, spiffCents,
     salesToday: sales,
     pendingCents, pendingBasis,
+    overridePendingCents: overridesToday(tenantId, repId, startIso, endIso),
   };
 }

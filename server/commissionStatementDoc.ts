@@ -113,6 +113,11 @@ export function buildStatementDocumentFor(
       grossCommissionCents: Number(stmt.gross_commission_cents ?? 0),
       adjustmentCents: Number(stmt.adjustment_cents ?? 0),
       spiffCents,
+      // Frozen with the statement (recomputed live for OPEN weeks by the calc
+      // itself) — the doc never re-reads the override ledger, so a re-print of
+      // a locked week can never disagree with what was paid.
+      overrideCents: Number(stmt.override_pay_cents ?? 0),
+      overrideItemCount: Number(stmt.override_item_count ?? 0),
       hourlyPayCents: hourly?.hourlyPayCents ?? 0,
       hourlyMinutes: Number(stmt.hourly_minutes ?? 0),
       hourlyRateCents: hourly?.rateCents ?? null,

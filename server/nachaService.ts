@@ -225,7 +225,10 @@ export function get1099Summary(tenantId: number, year: number): Array<{
   ).all(tenantId, `${year}-01-01T00:00:00.000Z`, `${year + 1}-01-01T00:00:00.000Z`) as any[];
   const grossByRep = new Map<number, number>(rows.map(r => [Number(r.rep_id), Number(r.gross)]));
 
-  const reps = (storage.getTeamMembers(tenantId) as any[]).filter(m => m.role !== "manager");
+  // Managers are 1099 payees now that downline overrides make them payable
+  // (their overrides land in final_commission_cents like all commission money);
+  // members with zero paid gross fall out of overThreshold naturally.
+  const reps = storage.getTeamMembers(tenantId) as any[];
   return reps.map(rep => {
     const w9 = getW9Status(tenantId, rep.id);
     const bank = getBankRow(tenantId, rep.id);

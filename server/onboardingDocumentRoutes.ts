@@ -3,6 +3,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import type { Capability } from "../shared/capabilities";
 import { can } from "../shared/capabilities";
+import { MEMBER_ROLES, canHireRole, isValidSupervisorRole } from "../shared/teamHierarchy";
 import {
   ELECTRONIC_CONSENT_DISCLOSURE,
   ELECTRONIC_CONSENT_VERSION,
@@ -98,6 +99,21 @@ const recruitingInviteSchema = z.object({
   tiers: z.array(tierSchema).min(1).max(12).optional(),
   reservePercent: z.number().int().min(0).max(100).optional(),
   reserveCapCents: z.number().int().min(0).max(100_000_000).optional(),
+  // Role + upline chosen at invite time. The schema only shapes them — the
+  // POST handler validates against the actor's own hiring authority and the
+  // tenant roster. Absent role = 'rep'; absent supervisor = default to the
+  // inviter's own roster row; explicit null = top-level.
+  invitedRole: z.enum(MEMBER_ROLES).optional(),
+  invitedSupervisorId: z.number().int().positive().nullable().optional(),
+  // Per-hire override rates: what the team-lead / manager slots keep from each
+  // of this hire's qualified sales. Whole integer cents; null/absent = inherit
+  // the org default. Never surfaced to the candidate.
+  invitedOverrideTeamLeadCents: z.number().int().min(0).max(10_000_000).nullable().optional(),
+  invitedOverrideManagerCents: z.number().int().min(0).max(10_000_000).nullable().optional(),
+  // Existing members the new LEADER hire brings under them at approval. Only
+  // meaningful for team_lead/manager invites; the handler validates every id
+  // against the tenant roster and the strictly-above rule.
+  invitedDownlineIds: z.array(z.number().int().positive()).max(200).optional(),
 }).strict();
 const signSchema = z.object({
   typedName: z.string().trim().min(2).max(120),
@@ -378,6 +394,12 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     res.json({ configured: resendConfigured(), provider: "homefront_sign", emailProvider: "resend", documents: publicCatalog() });
   });
 
+  // What the join page may show a candidate about the role they were invited
+  // to. Display copy only — this endpoint is PUBLIC (token-gated, no session),
+  // so the supervisor id/name is deliberately NEVER exposed here: that is org
+  // structure behind an unauthenticated token.
+  const ROLE_LABELS: Record<string, string> = { rep: "Field Representative", team_lead: "Team Lead", manager: "Manager" };
+
   app.get("/api/onboarding/invitations/resolve", inviteResolveLimiter, (req, res) => {
     const token = typeof req.query.token === "string" ? req.query.token : "";
     const invite = token ? resolveRecruitingInviteToken(token) : null;
@@ -390,6 +412,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       expiresAt: invite.expiresAt,
       organization: tenant?.companyName ?? "Home Front Solutions",
       orgSlug: tenant?.slug ?? "",
+      roleLabel: ROLE_LABELS[invite.invitedRole ?? "rep"] ?? "Field Representative",
     });
   });
 
@@ -428,6 +451,65 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
 
     const tid = tenantId(req);
     const actorId = userId(req);
+
+    // ── Role + upline, decided AT INVITE TIME ────────────────────────────────
+    // Same authority rule as POST /api/team: you may only invite a role you
+    // could also hire directly, so a manager can never invite a fellow manager.
+    const actor = (req as any).user;
+    const invitedRole = parsed.data.invitedRole ?? "rep";
+    if (!canHireRole(actor?.role, invitedRole)) {
+      return res.status(403).json({ error: `Your role cannot invite a ${invitedRole.replace("_", " ")}` });
+    }
+    // Supervisor: field ABSENT → default the hire under the inviter's own
+    // roster row when it exists, is active, and outranks the invited role
+    // (else top-level). Explicit null → top-level. Explicit id → the POST
+    // /api/team rule: in-tenant, active, ranks strictly above the new member.
+    const roster = storage.getTeamMembers(tid);
+    let invitedSupervisorId: number | null = null;
+    if (parsed.data.invitedSupervisorId === undefined) {
+      const mine = actor?.teamMemberId ? roster.find(member => member.id === actor.teamMemberId) : undefined;
+      invitedSupervisorId = mine && mine.active && isValidSupervisorRole(invitedRole, mine.role) ? mine.id : null;
+    } else if (parsed.data.invitedSupervisorId !== null) {
+      // A team lead may only build under themselves. Inert while invitations
+      // are manager+; live the day the capability widens. Reject, not rewrite —
+      // a silently re-homed hire is worse than a refused form.
+      if (actor?.role === "team_lead" && parsed.data.invitedSupervisorId !== actor?.teamMemberId) {
+        return res.status(400).json({ error: "A team lead can only place new hires under themselves", code: "INVALID_SUPERVISOR" });
+      }
+      const supervisor = roster.find(member => member.id === parsed.data.invitedSupervisorId);
+      if (!supervisor || !supervisor.active) {
+        return res.status(400).json({ error: "Supervisor must be an active member of your organization", code: "INVALID_SUPERVISOR" });
+      }
+      if (!isValidSupervisorRole(invitedRole, supervisor.role)) {
+        return res.status(400).json({ error: "A supervisor must rank above the member they manage", code: "INVALID_SUPERVISOR" });
+      }
+      invitedSupervisorId = supervisor.id;
+    }
+
+    // Downline the new LEADER brings with them. Every entry must be an active
+    // in-tenant member the invited role would rank strictly above — the same
+    // rule a supervisor edge obeys, read in the other direction. The chosen
+    // supervisor can never also be in the downline (that loop would only
+    // surface at approval, as a cycle-check fallback — refuse it loudly now).
+    const invitedDownlineIds = [...new Set(parsed.data.invitedDownlineIds ?? [])];
+    if (invitedDownlineIds.length > 0) {
+      if (invitedRole === "rep") {
+        return res.status(400).json({ error: "A rep cannot be given a downline — only team leads and managers supervise", code: "INVALID_DOWNLINE" });
+      }
+      for (const downlineId of invitedDownlineIds) {
+        if (downlineId === invitedSupervisorId) {
+          return res.status(400).json({ error: "The new hire's supervisor cannot also report to them", code: "INVALID_DOWNLINE" });
+        }
+        const member = roster.find(candidate => candidate.id === downlineId);
+        if (!member || !member.active) {
+          return res.status(400).json({ error: "Every downline member must be an active member of your organization", code: "INVALID_DOWNLINE" });
+        }
+        if (!isValidSupervisorRole(member.role, invitedRole)) {
+          return res.status(400).json({ error: `A ${String(invitedRole).replace("_", " ")} cannot supervise ${member.name} (${String(member.role).replace("_", " ")})`, code: "INVALID_DOWNLINE" });
+        }
+      }
+    }
+
     const origin = onboardingAppOrigin(req);
     let invitation;
     try {
@@ -441,6 +523,11 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         tiers: parsed.data.tiers ?? null,
         reservePercent: parsed.data.reservePercent ?? null,
         reserveCapCents: parsed.data.reserveCapCents ?? null,
+        invitedRole,
+        invitedSupervisorId,
+        invitedOverrideTeamLeadCents: parsed.data.invitedOverrideTeamLeadCents ?? null,
+        invitedOverrideManagerCents: parsed.data.invitedOverrideManagerCents ?? null,
+        invitedDownlineIds,
       });
     } catch (error: any) {
       if (/open invitation|unique/i.test(error?.message ?? "")) {
