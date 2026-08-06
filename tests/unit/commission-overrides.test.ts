@@ -103,11 +103,21 @@ describe("computeFlatOverrides — one award per slot, house keeps unfilled slot
     expect(awards.map(a => a.repId)).toEqual([1]);
   });
 
-  it("an inactive upline is skipped with a named reason — nobody inherits their slot money silently", () => {
+  // A newly APPROVED hire sits at active = 0 until their agreements are signed.
+  // Their downline was assigned at hire and is already selling, so skipping
+  // them handed the money to the house over signature timing. A truly departed
+  // leader never reaches this function at all: offboard and delete both re-home
+  // their reports, which takes them out of every chain.
+  it("a not-yet-activated upline still earns — signature timing is not a pay decision", () => {
     const { chain } = resolveOverrideChain(3, roster({ 2: { active: false } }));
     const { awards, chainSnapshot } = computeFlatOverrides(chain, RATES);
-    expect(awards.map(a => a.repId)).toEqual([1]); // manager still paid
-    expect(chainSnapshot.find(n => n.repId === 2)).toMatchObject({ awardedCents: 0, skipReason: "inactive" });
+    expect(awards).toEqual([
+      { repId: 2, role: "team_lead", level: 1, amountCents: 2500 },
+      { repId: 1, role: "manager", level: 2, amountCents: 7500 },
+    ]);
+    // The snapshot still RECORDS what was true at earn time; it just no longer
+    // decides the money.
+    expect(chainSnapshot.find(n => n.repId === 2)).toMatchObject({ active: false, awardedCents: 2500, skipReason: null });
   });
 
   it("a zero rate pays nothing and says why", () => {

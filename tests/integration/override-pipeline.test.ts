@@ -349,3 +349,30 @@ describe("install hold", () => {
     ).run(TENANT);
   });
 });
+
+describe("a leader mid-onboarding still earns on their team's sales", () => {
+  // THE BUG THIS PINS: approval creates the hire at active = 0 (agreements
+  // unsigned) and can hand them a downline in the same breath. That team sells
+  // immediately. The override math used to skip an inactive upline, so the
+  // leader's cut quietly went to the house until they got round to signing —
+  // while the manager ABOVE them was paid for the very same sale.
+  it("pays the not-yet-activated team lead, not the house", () => {
+    const pending = member("Ovr Pending Lead", "team_lead", mgr.memberId);
+    rawDb.prepare(`UPDATE team_members SET active = 0 WHERE id = ?`).run(pending.memberId);
+    const seller = member("Ovr Pending Rep", "rep", pending.memberId);
+
+    const lead = sell(seller.memberId);
+    const rows = ledgerFor(lead);
+    expect(rows.find(r => r.beneficiary_rep_id === pending.memberId)).toMatchObject({
+      amount_cents: 2500, beneficiary_role: "team_lead", status: "PAYABLE",
+    });
+    // The manager above is unaffected — both slots pay, as the tree says.
+    expect(rows.find(r => r.beneficiary_rep_id === mgr.memberId)?.amount_cents).toBe(7500);
+
+    // And it reaches the statement, so it is real money rather than a row.
+    const stmt = svc.calculateOrRecalculateStatement({
+      tenantId: TENANT, repId: pending.memberId, weekReference: new Date(), actorId: null,
+    });
+    expect(stmt.statement.override_pay_cents).toBe(2500);
+  });
+});

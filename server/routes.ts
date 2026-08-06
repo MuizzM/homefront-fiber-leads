@@ -8990,12 +8990,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const hierarchy = req.body.hierarchy as {
       role?: string; reportsToId?: number | null;
       overrideTeamLeadCents?: number | null; overrideManagerCents?: number | null;
+      downlineIds?: number[];
     } | undefined;
     for (const key of ["overrideTeamLeadCents", "overrideManagerCents"] as const) {
       const v = hierarchy?.[key];
       if (v !== undefined && v !== null && (!Number.isInteger(v) || v < 0 || v > 10_000_000)) {
         return res.status(400).json({ error: `${key} must be a whole number of cents, or null to inherit the org default.` });
       }
+    }
+    if (hierarchy?.downlineIds !== undefined
+        && (!Array.isArray(hierarchy.downlineIds) || hierarchy.downlineIds.some(v => !Number.isInteger(v) || v <= 0))) {
+      return res.status(400).json({ error: "downlineIds must be an array of member ids." });
     }
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
@@ -9066,6 +9071,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // degraded — explicit reviewer input never degrades, it 400s.
     let approvedRole: string = "rep";
     let resolvedSupervisorId: number | null = null;
+    // Existing members this leader hire takes over — re-homed once the new
+    // member row exists (below), so a hire can arrive with their team already
+    // reporting to them instead of the reviewer re-parenting each one by hand.
+    let resolvedDownlineIds: number[] = [];
     let hierarchyWarning: string | null = null;
     const addHierarchyWarning = (message: string) => {
       hierarchyWarning = hierarchyWarning ? `${hierarchyWarning} ${message}` : message;
@@ -9126,6 +9135,64 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           // supervisor was offboarded, demoted, …). Approve top-level and say
           // so, rather than blocking the hire on weeks-old data.
           addHierarchyWarning("The supervisor chosen on the invitation is no longer available, so the new member was placed at top level.");
+        }
+      }
+
+      // ── The downline this leader arrives with ──────────────────────────────
+      // Same precedence as everything else on this offer: an explicit reviewer
+      // list (including an explicit empty one = "nobody") outranks the invite's
+      // stored picks. Every entry is re-validated NOW, because weeks can pass
+      // between send and approve: the member may have been offboarded,
+      // promoted past the new leader, or become the leader's own supervisor.
+      //
+      // Explicit reviewer input fails LOUD (the POST /api/team contract);
+      // invite-carried entries degrade — the named member is skipped with a
+      // warning rather than blocking a hire on weeks-old data.
+      const reviewerOverrodeDownline = hierarchy?.downlineIds !== undefined;
+      const proposedDownlineIds = [...new Set(
+        (reviewerOverrodeDownline ? hierarchy!.downlineIds! : (recruitingInvite?.invitedDownlineIds ?? [])).map(Number),
+      )];
+      if (proposedDownlineIds.length > 0) {
+        if (approvedRole === "rep") {
+          const message = "A rep cannot be given a downline — only team leads and managers supervise";
+          if (reviewerOverrodeDownline) return res.status(400).json({ error: message, code: "INVALID_DOWNLINE" });
+          addHierarchyWarning("The invitation listed a downline, but the approved role is rep — nobody was moved.");
+        } else {
+          const roster = storage.getTeamMembers(tenantId);
+          for (const downlineId of proposedDownlineIds) {
+            const member = roster.find((candidate: any) => candidate.id === downlineId);
+            const refuse = (reason: string, warning: string) => {
+              if (reviewerOverrodeDownline) { res.status(400).json({ error: reason, code: "INVALID_DOWNLINE" }); return true; }
+              addHierarchyWarning(warning);
+              return false;
+            };
+            if (!member || !member.active) {
+              if (refuse("Every downline member must be an active member of your organization",
+                `${member?.name ?? `Member #${downlineId}`} is no longer active, so they were not moved under the new hire.`)) return;
+              continue;
+            }
+            if (downlineId === resolvedSupervisorId) {
+              if (refuse("The new hire's supervisor cannot also report to them",
+                `${member.name} is the new hire's own supervisor, so they were not moved under them.`)) return;
+              continue;
+            }
+            // Strictly-below, by EFFECTIVE role (a low field role must not
+            // shield a higher login) — the same authority the roster edit uses.
+            if (!isValidSupervisorRole(effectiveMemberRole(tenantId, member), approvedRole)) {
+              if (refuse(`A ${String(approvedRole).replace("_", " ")} cannot supervise ${member.name} (${String(member.role).replace("_", " ")})`,
+                `${member.name} no longer ranks below the new hire, so they were not moved.`)) return;
+              continue;
+            }
+            // The REVIEWER must also be allowed to act on this member — moving
+            // someone's reporting line is a roster edit, and approval is not a
+            // side door around the strictly-above rule.
+            if (!canActOnMember(reviewer?.role === "super_admin" ? "admin" : reviewer?.role, effectiveMemberRole(tenantId, member))) {
+              if (refuse(`You can only reassign members below your own role (${member.name})`,
+                `${member.name} outranks your authority, so they were not moved under the new hire.`)) return;
+              continue;
+            }
+            resolvedDownlineIds.push(downlineId);
+          }
         }
       }
     }
@@ -9269,6 +9336,38 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           if (resolvedMgrCents != null) {
             rawDb.prepare(`UPDATE team_members SET override_manager_cents = ? WHERE id = ? AND override_manager_cents IS NULL`)
               .run(resolvedMgrCents, teamMemberId);
+          }
+        }
+
+        // ── Hand the new leader their downline ──────────────────────────────
+        // Every id was validated above; the only thing that cannot be checked
+        // until the member row EXISTS is the cycle, so it runs here against the
+        // live chain and skips (never throws) — a hire must not fail because
+        // one reassignment would have looped. Overrides follow automatically:
+        // from the next sale on, these members' uplines are the new leader's
+        // chain. Already-earned ledger rows keep their frozen attribution.
+        if (teamMemberId != null && resolvedDownlineIds.length > 0) {
+          const moved: number[] = [];
+          const skippedForCycle: number[] = [];
+          for (const downlineId of resolvedDownlineIds) {
+            if (downlineId === teamMemberId) continue; // never self-report
+            const chain = new Map<number, number | null>(
+              storage.getTeamMembers(tenantId).map((m: any) => [m.id, m.reportsToId ?? null]),
+            );
+            if (wouldCreateReportsCycle(downlineId, teamMemberId, chain)) {
+              skippedForCycle.push(downlineId);
+              continue;
+            }
+            storage.updateTeamMember(downlineId, { reportsToId: teamMemberId } as any, tenantId ?? undefined);
+            moved.push(downlineId);
+          }
+          if (skippedForCycle.length > 0) {
+            addHierarchyWarning(`${skippedForCycle.length} member(s) were not moved because the change would have created a reporting loop.`);
+          }
+          if (moved.length > 0) {
+            storage.logActivity(reviewer?.id ?? null, "team.downline_assigned_at_hire", "team_member", teamMemberId, {
+              applicationId: application.id, movedMemberIds: moved, skippedForCycle,
+            }, req.ip, tenantId);
           }
         }
 

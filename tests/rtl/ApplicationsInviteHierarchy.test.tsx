@@ -135,3 +135,69 @@ describe("the invite form's role & upline", () => {
     expect("invitedSupervisorId" in body).toBe(true);
   });
 });
+
+// ── The team a leader hire arrives with ──────────────────────────────────────
+// Hiring a team lead and then re-parenting each rep by hand is the same
+// decision made twice. The invite form makes it part of the offer, so what
+// must hold is: reps are never offered a downline (they supervise nobody), the
+// list only holds members the invited role outranks, the hire's own supervisor
+// is never in it (that pairing is a loop the server refuses), and what leaves
+// the form is exactly the ids that were checked.
+describe("the invite form's downline picker", () => {
+  const downlineBox = () => screen.queryByTestId("invite-downline");
+
+  it("is hidden for a rep hire — a rep supervises nobody", async () => {
+    renderPage();
+    await ready();
+    expect(roleSelect().value).toBe("rep");
+    expect(downlineBox()).toBeNull();
+  });
+
+  it("appears for a team lead hire, listing only members that role outranks", async () => {
+    renderPage();
+    await ready();
+    fireEvent.change(roleSelect(), { target: { value: "team_lead" } });
+    await waitFor(() => expect(downlineBox()).toBeInTheDocument());
+    // Rex (rep) is assignable; Tara (fellow team lead) and Ina (inactive) are not.
+    expect(screen.getByTestId("invite-downline-9")).toBeInTheDocument();
+    expect(screen.queryByTestId("invite-downline-7")).toBeNull();
+    expect(screen.queryByTestId("invite-downline-11")).toBeNull();
+  });
+
+  it("never offers the hire's OWN supervisor as their report", async () => {
+    renderPage();
+    await ready();
+    fireEvent.change(roleSelect(), { target: { value: "team_lead" } });
+    await waitFor(() => expect(downlineBox()).toBeInTheDocument());
+    // The supervisor defaults to the inviter (Mia, id 5) — who must not appear
+    // in the list of people who would report to this hire.
+    expect(supervisorSelect().value).toBe("5");
+    expect(screen.queryByTestId("invite-downline-5")).toBeNull();
+  });
+
+  it("THE REQUIREMENT: checked members leave on the invite as invitedDownlineIds", async () => {
+    renderPage();
+    await ready();
+    fireEvent.change(roleSelect(), { target: { value: "team_lead" } });
+    await waitFor(() => expect(downlineBox()).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("invite-downline-9"));
+    fillCandidate();
+    fireEvent.click(screen.getByTestId("send-candidate-invite"));
+    await waitFor(() => expect(invitePost()).toBeTruthy());
+    expect((invitePost()![2] as any).invitedDownlineIds).toEqual([9]);
+  });
+
+  it("switching back to rep clears the picks — a rep invite carries an empty list", async () => {
+    renderPage();
+    await ready();
+    fireEvent.change(roleSelect(), { target: { value: "team_lead" } });
+    await waitFor(() => expect(downlineBox()).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("invite-downline-9"));
+    fireEvent.change(roleSelect(), { target: { value: "rep" } });
+    expect(downlineBox()).toBeNull();
+    fillCandidate();
+    fireEvent.click(screen.getByTestId("send-candidate-invite"));
+    await waitFor(() => expect(invitePost()).toBeTruthy());
+    expect((invitePost()![2] as any).invitedDownlineIds).toEqual([]);
+  });
+});

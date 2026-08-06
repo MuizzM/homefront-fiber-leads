@@ -93,6 +93,8 @@ interface PipelineRecord {
     // Per-hire override rates the hirer chose (null = inherit org default).
     invitedOverrideTeamLeadCents: number | null;
     invitedOverrideManagerCents: number | null;
+    // Members the hirer picked for this leader to take over at approval.
+    invitedDownlineIds: number[];
   };
   application: null | {
     status: string; phone: string; city: string; state: string; zip: string;
@@ -220,6 +222,10 @@ export default function Applications() {
   // submit. Never part of what the candidate sees or signs.
   const [inviteOverrideTlDollars, setInviteOverrideTlDollars] = useState("");
   const [inviteOverrideMgrDollars, setInviteOverrideMgrDollars] = useState("");
+  // A LEADER hire can arrive with their team: existing members re-homed under
+  // them at approval. Only offered for team_lead/manager invites (a rep
+  // supervises nobody), and only members the invited role would outrank.
+  const [inviteDownlineIds, setInviteDownlineIds] = useState<number[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   // Terms the approval commits the rep to. NOT a fresh house default: approval
   // is where the offer becomes pay, so it opens on what the candidate was
@@ -243,6 +249,7 @@ export default function Applications() {
   // invite's choice (below) the way the comp terms are.
   const [reviewOverrideTlDollars, setReviewOverrideTlDollars] = useState("");
   const [reviewOverrideMgrDollars, setReviewOverrideMgrDollars] = useState("");
+  const [reviewDownlineIds, setReviewDownlineIds] = useState<number[]>([]);
   const [reviewNotes, setReviewNotes] = useState("");
   // Two-step reject (audit finding: reject mutated instantly and is
   // irreversible). First tap arms the button, which auto-disarms after 3s;
@@ -307,6 +314,16 @@ export default function Applications() {
     inviteSupervisorId !== undefined ? inviteSupervisorId : (selfSupervises ? myMemberId : null);
   // The review panel's supervisor list — same filter, keyed on the REVIEW role.
   const reviewSupervisors = team.filter(m => m.active && isValidSupervisorRole(reviewRole, m.role));
+  // Who a leader hire could take over: active members the invited role ranks
+  // strictly above (the supervisor filter, read the other way), minus whoever
+  // was picked as the hire's OWN supervisor — that pairing is a loop the
+  // server refuses, so it is never offered.
+  const assignableDownline = (role: MemberRole, supervisorId: number | null) =>
+    team.filter(m => m.active && m.id !== supervisorId && isValidSupervisorRole(m.role, role));
+  const inviteDownlineOptions = assignableDownline(inviteRole, effectiveInviteSupervisorId);
+  const reviewDownlineOptions = assignableDownline(reviewRole, reviewSupervisorId);
+  const toggleId = (list: number[], id: number): number[] =>
+    list.includes(id) ? list.filter(x => x !== id) : [...list, id];
 
   const records = pipeline.data?.records ?? [];
   const filtered = useMemo(() => records.filter(record => {
@@ -344,6 +361,7 @@ export default function Applications() {
         // late-resolving pipeline query) reseeds the role/upline pickers too.
         selected.invite.invitedRole, selected.invite.invitedSupervisorId,
         selected.invite.invitedOverrideTeamLeadCents, selected.invite.invitedOverrideManagerCents,
+        selected.invite.invitedDownlineIds,
       ])
     : null;
   useEffect(() => {
@@ -356,6 +374,10 @@ export default function Applications() {
     // inherit the org default (matching what approval would stamp).
     setReviewOverrideTlDollars(centsToDollarsDraft(invite?.invitedOverrideTeamLeadCents));
     setReviewOverrideMgrDollars(centsToDollarsDraft(invite?.invitedOverrideManagerCents));
+    // The team the hirer promised this leader. Stale entries (offboarded,
+    // promoted) are skipped server-side with a warning, so seeding the raw
+    // list is honest: it shows what was PROMISED, not a silently pruned copy.
+    setReviewDownlineIds(invite?.invitedDownlineIds ?? []);
     if (!invite?.commissionStructure) { setReviewTerms(DEFAULT_COMMISSION_TERMS); return; }
     setReviewTerms(normalizeCommissionTerms({
       structure: invite.commissionStructure,
@@ -392,6 +414,8 @@ export default function Applications() {
         // Per-hire override rates (null = inherit the org default).
         invitedOverrideTeamLeadCents: overrideDollarsToCents(inviteOverrideTlDollars),
         invitedOverrideManagerCents: overrideDollarsToCents(inviteOverrideMgrDollars),
+        // The team this leader arrives with (empty for a rep hire).
+        invitedDownlineIds: inviteRole === "rep" ? [] : inviteDownlineIds,
       };
       if (terms.structure === "FLAT") body.flatRateCents = terms.flatRateCents ?? 0;
       // THE LADDER. `id` is stripped because the invite schema is .strict() and
@@ -402,7 +426,7 @@ export default function Applications() {
     },
     onSuccess: (data: any) => {
       setInviteName(""); setInviteEmail("");
-      setInviteOverrideTlDollars(""); setInviteOverrideMgrDollars("");
+      setInviteOverrideTlDollars(""); setInviteOverrideMgrDollars(""); setInviteDownlineIds([]);
       refresh();
       toast({ title: "Private invitation sent", description: `${data.invitation.candidateName} received a secure 14-day application link.` });
     },
@@ -438,6 +462,9 @@ export default function Applications() {
             role: reviewRole, reportsToId: reviewSupervisorId,
             overrideTeamLeadCents: overrideDollarsToCents(reviewOverrideTlDollars),
             overrideManagerCents: overrideDollarsToCents(reviewOverrideMgrDollars),
+            // Explicit like everything else on this object: what the reviewer
+            // SEES checked is exactly who gets moved, an empty list included.
+            downlineIds: reviewRole === "rep" ? [] : reviewDownlineIds,
           }
         : undefined;
       return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}`, { status, reviewNotes: reviewNotes || null, commission, hierarchy }).then(response => response.json());
@@ -597,7 +624,7 @@ export default function Applications() {
               <select
                 id="invite-role"
                 value={inviteRole}
-                onChange={event => { setInviteRole(event.target.value as MemberRole); setInviteSupervisorId(undefined); }}
+                onChange={event => { setInviteRole(event.target.value as MemberRole); setInviteSupervisorId(undefined); setInviteDownlineIds([]); }}
                 className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
                 data-testid="invite-role-select"
               >
@@ -661,6 +688,49 @@ export default function Applications() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* A LEADER arrives with a team. Hiring a team lead or manager and
+              then re-parenting each rep by hand on the Team page is the same
+              decision made twice — this makes it part of the offer, and
+              approval performs the moves. Reps are never offered it (they
+              supervise nobody), and the list only holds members the invited
+              role outranks, minus the hire's own supervisor. */}
+          {inviteRole !== "rep" && (
+            <div className="rounded-xl border border-border bg-background/40 p-3" data-testid="invite-downline">
+              <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <Users className="h-3.5 w-3.5" />Downline (who reports to them on day one)
+              </div>
+              <p className="mb-2 text-[11px] text-muted-foreground">
+                {inviteDownlineIds.length > 0
+                  ? `${inviteDownlineIds.length === 1 ? "1 member moves" : `${inviteDownlineIds.length} members move`} under them when this hire is approved.`
+                  : "Optional — leave empty and they start with no reports."}
+              </p>
+              {inviteDownlineOptions.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">No eligible members to assign yet.</p>
+              ) : (
+                <div className="max-h-40 space-y-1 overflow-y-auto">
+                  {inviteDownlineOptions.map(member => (
+                    <label key={member.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-secondary/60">
+                      <input
+                        type="checkbox"
+                        checked={inviteDownlineIds.includes(member.id)}
+                        onChange={() => setInviteDownlineIds(list => toggleId(list, member.id))}
+                        className="h-3.5 w-3.5 accent-primary"
+                        data-testid={`invite-downline-${member.id}`}
+                      />
+                      <span className="text-foreground">{member.name}</span>
+                      <span className="text-muted-foreground">· {memberRoleLabel(member.role)}</span>
+                      {member.reportsToId != null && (
+                        <span className="ml-auto text-2xs text-muted-foreground">
+                          now under {team.find(x => x.id === member.reportsToId)?.name ?? "another leader"}
+                        </span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -739,7 +809,7 @@ export default function Applications() {
                       <select
                         id="review-role"
                         value={reviewRole}
-                        onChange={event => { setReviewRole(event.target.value as MemberRole); setReviewSupervisorId(null); }}
+                        onChange={event => { setReviewRole(event.target.value as MemberRole); setReviewSupervisorId(null); setReviewDownlineIds([]); }}
                         disabled={reviewMutation.isPending}
                         className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary disabled:opacity-50"
                         data-testid="review-role-select"
@@ -804,6 +874,37 @@ export default function Applications() {
                           />
                         </div>
                       </div>
+                    </div>
+                  )}
+                  {/* The team this leader takes over on approval. Seeded from
+                      the invite; the reviewer's checkmarks are what actually
+                      moves. Stale picks (offboarded, promoted) are skipped
+                      server-side and reported back as a warning. */}
+                  {reviewRole !== "rep" && (
+                    <div className="mt-3" data-testid="review-downline">
+                      <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <Users className="h-3.5 w-3.5" />Downline (who moves under them)
+                      </div>
+                      {reviewDownlineOptions.length === 0 ? (
+                        <p className="text-[11px] text-muted-foreground">No eligible members to assign.</p>
+                      ) : (
+                        <div className="max-h-36 space-y-1 overflow-y-auto rounded-xl border border-border bg-background/40 p-2">
+                          {reviewDownlineOptions.map(member => (
+                            <label key={member.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-secondary/60">
+                              <input
+                                type="checkbox"
+                                checked={reviewDownlineIds.includes(member.id)}
+                                onChange={() => setReviewDownlineIds(list => toggleId(list, member.id))}
+                                disabled={reviewMutation.isPending}
+                                className="h-3.5 w-3.5 accent-primary"
+                                data-testid={`review-downline-${member.id}`}
+                              />
+                              <span className="text-foreground">{member.name}</span>
+                              <span className="text-muted-foreground">· {memberRoleLabel(member.role)}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
