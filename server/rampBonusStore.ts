@@ -105,20 +105,127 @@ export function setRampConfig(tenantId: number, actorId: number | null, cfg: Ram
   return merged;
 }
 
+// ── The two timestamp formats, and why every query here carries a strftime ──
+// This codebase stores timestamps two ways (see server/sqlTime.ts for the full
+// account): ISO from JS (`2026-08-06T13:28:23.283Z`) and SQLite's own default
+// (`2026-08-06 13:28:23`). TEXT compares lexicographically, and 'T' (0x54)
+// sorts after ' ' (0x20), so an ISO day bound tested against a SQLite-format
+// column is not slightly wrong — it is wrong for the whole day.
+//
+// `training_review_log.reviewed_at` is ISO (the route normalizes it);
+// `created_at` and `training_progress.completed_at` are SQLite-format. So both
+// of those are folded into the ISO shape before they are compared or parsed.
+// `%f` emits SS.SSS, which lines up with toISOString() exactly.
+//
+// sqlTime.ts warns that a function on a COLUMN discards the index. It does not
+// bite here: every one of these queries is already pinned to one (tenant, user)
+// by an equality match on the leading index columns, so the strftime only runs
+// over that rep's own handful of rows.
+const ISO = (col: string) => `strftime('%Y-%m-%dT%H:%M:%fZ', ${col})`;
+
+/** Where a rep's hire date came from — carried to the API so nobody has to
+ *  guess which clock a ramp window is running on. */
+export type HireDateSource =
+  | "portal_activation"
+  | "last_signature"
+  | "roster_created"
+  /** Has a packet, has not finished it. Not hired yet — no clock runs. */
+  | "not_activated";
+
+export interface HireDate {
+  iso: string | null;
+  source: HireDateSource | null;
+}
+
+/**
+ * When did this rep actually start?
+ *
+ * `team_members.created_at` is the wrong answer, and the gap is not academic:
+ * the roster row is written when the agreement packet is ISSUED. A rep who
+ * takes nine days to sign has nine days of a fourteen-day ramp window burned
+ * before they could log in once.
+ *
+ * The onboarding pipeline already records the real moment. `syncRepActivation`
+ * (server/onboardingPipeline.ts) fires only when EVERY required document is
+ * `completed`; it flips `team_members.active` and stamps
+ * `rep_applications.activated_at` under a COALESCE, so the value is the FIRST
+ * activation and never moves afterwards. Signed and able to log in — that is a
+ * start date, and in the live data it lands within a second of the last
+ * signature.
+ *
+ * Resolution order, each a genuinely different situation:
+ *
+ *   portal_activation  the pipeline completed. The real answer.
+ *   last_signature     every document is signed but no application row carries
+ *                      the stamp (a rep created by hand, an application that
+ *                      predates the field). The packet still says when they
+ *                      finished.
+ *   roster_created     neither exists — a rep who predates the pipeline
+ *                      entirely. Falls back to the old behaviour rather than
+ *                      refusing to give them a ramp window at all.
+ */
+export function hireDateFor(tenantId: number, repId: number): HireDate {
+  // The same join the pipeline itself uses to find a rep's application, so the
+  // two cannot disagree about which application belongs to which rep.
+  const activated = rawDb.prepare(
+    `SELECT a.activated_at AS at
+       FROM rep_applications a
+       JOIN users u ON u.id = a.user_id
+      WHERE a.tenant_id = ? AND u.team_member_id = ? AND a.activated_at IS NOT NULL
+      ORDER BY a.id DESC LIMIT 1`,
+  ).get(tenantId, repId) as any;
+  if (activated?.at) return { iso: String(activated.at), source: "portal_activation" };
+
+  // No stamp: fall back to the packet. Only `completed` documents count — a
+  // `delivered` one is paperwork sitting in an inbox, not a start date.
+  const signed = rawDb.prepare(
+    `SELECT MAX(${ISO("completed_at")}) AS at
+       FROM onboarding_signing_documents
+      WHERE tenant_id = ? AND rep_id = ? AND status = 'completed' AND completed_at IS NOT NULL`,
+  ).get(tenantId, repId) as any;
+  if (signed?.at) return { iso: String(signed.at), source: "last_signature" };
+
+  // Before falling back to the roster row, ask whether this rep went through
+  // the pipeline AT ALL. One that did — a packet issued, documents sitting in
+  // an inbox — has not started; they cannot even log in (syncRepActivation is
+  // what flips `active`). Handing them the roster date would start the ramp
+  // clock on the day the packet was ISSUED, which is the exact failure this
+  // function exists to remove, just wearing a different hat: a rep who signs
+  // nine days later would open the app already on day ten.
+  //
+  // So they get no clock. It starts when they activate.
+  const packet = rawDb.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM rep_applications a JOIN users u ON u.id = a.user_id
+         WHERE a.tenant_id = ? AND u.team_member_id = ?) AS applications,
+       (SELECT COUNT(*) FROM onboarding_signing_documents
+         WHERE tenant_id = ? AND rep_id = ?) AS documents`,
+  ).get(tenantId, repId, tenantId, repId) as any;
+  if (Number(packet?.applications ?? 0) > 0 || Number(packet?.documents ?? 0) > 0) {
+    return { iso: null, source: "not_activated" };
+  }
+
+  // No packet anywhere: a rep who predates the onboarding pipeline, or one an
+  // admin created by hand. The roster row is the only date that exists.
+  const roster = rawDb.prepare(
+    `SELECT ${ISO("created_at")} AS at FROM team_members WHERE id = ? AND tenant_id = ?`,
+  ).get(repId, tenantId) as any;
+  if (roster?.at) return { iso: String(roster.at), source: "roster_created" };
+
+  return { iso: null, source: null };
+}
+
 /**
  * 1-based day of tenure in the org's local calendar; 0 when the hire date is
  * unknown or still in the future.
  *
- * The hire date is `team_members.created_at` — the moment the rep was put on
- * the roster, which is the only start date this schema records. Both ends are
- * snapped to LOCAL midnight before the subtraction, so a rep added at 11pm is
- * on day 2 the next morning rather than 26 hours into "day 1".
+ * Both ends are snapped to LOCAL midnight before the subtraction, so a rep
+ * activated at 11pm is on day 2 the next morning rather than 26 hours into
+ * "day 1" — the ramp is counted in days worked, not in elapsed hours.
  */
 export function tenureDay(tenantId: number, repId: number, nowMs: number): number {
-  const row = rawDb.prepare(
-    `SELECT created_at AS createdAt FROM team_members WHERE id = ? AND tenant_id = ?`,
-  ).get(repId, tenantId) as any;
-  const hiredMs = row?.createdAt ? Date.parse(row.createdAt) : NaN;
+  const hired = hireDateFor(tenantId, repId);
+  const hiredMs = hired.iso ? Date.parse(hired.iso) : NaN;
   if (!Number.isFinite(hiredMs)) return 0;
 
   const tz = orgTimezone(tenantId);
@@ -142,23 +249,6 @@ const ms = (iso: string | null | undefined): number | null => {
   return Number.isFinite(t) ? t : null;
 };
 
-// ── The two timestamp formats, and why every query here carries a strftime ──
-// This codebase stores timestamps two ways (see server/sqlTime.ts for the full
-// account): ISO from JS (`2026-08-06T13:28:23.283Z`) and SQLite's own default
-// (`2026-08-06 13:28:23`). TEXT compares lexicographically, and 'T' (0x54)
-// sorts after ' ' (0x20), so an ISO day bound tested against a SQLite-format
-// column is not slightly wrong — it is wrong for the whole day.
-//
-// `training_review_log.reviewed_at` is ISO (the route normalizes it);
-// `created_at` and `training_progress.completed_at` are SQLite-format. So both
-// of those are folded into the ISO shape before they are compared or parsed.
-// `%f` emits SS.SSS, which lines up with toISOString() exactly.
-//
-// sqlTime.ts warns that a function on a COLUMN discards the index. It does not
-// bite here: every one of these queries is already pinned to one (tenant, user)
-// by an equality match on the leading index columns, so the strftime only runs
-// over that rep's own handful of rows.
-const ISO = (col: string) => `strftime('%Y-%m-%dT%H:%M:%fZ', ${col})`;
 
 /** Today's reviews, bucketed by the CLIENT day (so an offline drill counts on
  *  the day it happened, matching the streak the coach summary already shows). */
@@ -360,6 +450,10 @@ export function repRampCard(id: RampIdentity, nowMs: number) {
     visible: (cfg.enabled !== false && inWindow) || (cfg.completionEnabled !== false && !finished && e.lessonsTotal > 0),
     inWindow,
     tenureDay: e.tenureDay,
+    // Which clock this window is running on. A rep asking "why does it say day
+    // 9?" deserves an answer, and an admin needs to see when a ramp is being
+    // measured from a roster row rather than a real activation.
+    hiredAt: hireDateFor(id.tenantId, id.repId),
     windowDays: cfg.windowDays,
     daysLeft: e.decision.daysLeft,
     rewardCents: cfg.rewardCents,

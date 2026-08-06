@@ -295,6 +295,98 @@ describe("the ramp bonus pays a new hire to train", () => {
     expect(tenureDay(1, newHire.memberId, Date.now())).toBe(1);
   });
 
+  // ── Which date is the hire date ───────────────────────────────────────────
+  // The roster row is written when the agreement packet is ISSUED, so it is not
+  // a start date: a rep who takes nine days to sign would burn nine days of a
+  // fourteen-day window before they could log in once. The pipeline already
+  // records the real moment.
+  it("prefers portal activation over the roster row", async () => {
+    const { hireDateFor, tenureDay } = await import("../../server/rampBonusStore");
+    // Rostered 10 days ago (packet issued), activated 2 days ago (signed).
+    const rostered = new Date(Date.now() - 10 * 86_400_000).toISOString();
+    const activated = new Date(Date.now() - 2 * 86_400_000).toISOString();
+    rawDb.prepare(`UPDATE team_members SET created_at = ? WHERE id = ?`).run(rostered, sprinter.memberId);
+    rawDb.prepare(
+      `INSERT INTO rep_applications
+         (tenant_id, full_name, email, phone, city, zip, state, preferred_carriers,
+          status, user_id, activated_at, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,'approved',?,?,?,?)`,
+    ).run(1, "Bonus Sprinter", "sprinter@bonuses.example.test", "3365550100", "T", "27000", "NC",
+          "kinetic", sprinter.userId, activated, rostered, activated);
+
+    const hired = hireDateFor(1, sprinter.memberId);
+    expect(hired.source).toBe("portal_activation");
+    expect(hired.iso).toContain(activated.slice(0, 10));
+    // Day 3, not day 11 — the eight days spent waiting on a signature are not
+    // days on the job.
+    expect(tenureDay(1, sprinter.memberId, Date.now())).toBe(3);
+  });
+
+  it("falls back to the last signature when nothing stamped an activation", async () => {
+    const { hireDateFor } = await import("../../server/rampBonusStore");
+    const rostered = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    const signedAt = new Date(Date.now() - 4 * 86_400_000).toISOString();
+    rawDb.prepare(`UPDATE team_members SET created_at = ? WHERE id = ?`).run(rostered, spoofer.memberId);
+    // A `delivered` document is paperwork sitting in an inbox — only a
+    // `completed` one is evidence of a start date.
+    for (const [type, status, at] of [
+      ["independent_contractor", "completed", new Date(Date.now() - 6 * 86_400_000).toISOString()],
+      ["commission_agreement", "completed", signedAt],
+      ["confidentiality", "delivered", null],
+    ] as const) {
+      rawDb.prepare(
+        `INSERT INTO onboarding_signing_documents
+           (record_id, tenant_id, rep_id, document_type, document_version, document_title,
+            document_snapshot_json, content_sha256, status, signer_name, signer_email, completed_at)
+         VALUES (?,?,?,?,'v1','T','{}','sha',?,?,?,?)`,
+      ).run(`rec-${spoofer.memberId}-${type}`, 1, spoofer.memberId, type, status,
+            "Bonus Spoofer", "spoofer@bonuses.example.test", at);
+    }
+
+    const hired = hireDateFor(1, spoofer.memberId);
+    expect(hired.source).toBe("last_signature");
+    // The LAST completed signature, not the first and not the undelivered one.
+    expect(hired.iso).toContain(signedAt.slice(0, 10));
+  });
+
+  it("does not start the clock for a rep whose packet is still unsigned", async () => {
+    const { hireDateFor, tenureDay, awardRampForRep } = await import("../../server/rampBonusStore");
+    // Packet issued a week ago, nothing completed. They cannot even log in yet
+    // (activation is what flips `active`), so the ramp has not begun — handing
+    // them the roster date would open their app on day 8 of 14.
+    const issued = new Date(Date.now() - 7 * 86_400_000).toISOString();
+    rawDb.prepare(`UPDATE team_members SET created_at = ? WHERE id = ?`).run(issued, closer.memberId);
+    rawDb.prepare(
+      `INSERT INTO onboarding_signing_documents
+         (record_id, tenant_id, rep_id, document_type, document_version, document_title,
+          document_snapshot_json, content_sha256, status, signer_name, signer_email, completed_at)
+       VALUES (?,?,?,'independent_contractor','v1','T','{}','sha','delivered',?,?,NULL)`,
+    ).run(`rec-unsigned-${closer.memberId}`, 1, closer.memberId, "Bonus Closer", "closer@bonuses.example.test");
+
+    const hired = hireDateFor(1, closer.memberId);
+    expect(hired.source).toBe("not_activated");
+    expect(hired.iso).toBeNull();
+    expect(tenureDay(1, closer.memberId, Date.now())).toBe(0);
+    // …and nothing pays while there is no clock.
+    storage.upsertLessonComplete(closer.userId, 1, "m1l1", null);
+    expect(awardRampForRep({ tenantId: 1, userId: closer.userId, repId: closer.memberId }, Date.now())
+      .find(a => a.kind === "day")).toBeUndefined();
+  });
+
+  it("still gives a rep who predates the pipeline a window off the roster row", async () => {
+    const { hireDateFor } = await import("../../server/rampBonusStore");
+    const hired = hireDateFor(1, offliner.memberId);
+    expect(hired.source).toBe("roster_created");
+    expect(hired.iso).toBeTruthy();
+  });
+
+  it("tells the rep's card which clock the window is running on", async () => {
+    const res = await request("/api/me/ramp-bonus", newHire.session);
+    const card = await res.json();
+    expect(card.hiredAt.source).toBe("roster_created");
+    expect(card.hiredAt.iso).toBeTruthy();
+  });
+
   it("pays a day-one hire who finished lessons with nothing left due", async () => {
     const { awardRampForRep } = await import("../../server/rampBonusStore");
     // The drill deck seeds from completed lessons, so day one is a lesson day.
