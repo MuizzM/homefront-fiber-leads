@@ -2033,12 +2033,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // existing safety net: the data-free map-changed ping + ETag poll re-apply
     // full scoping on every refetch.
     let accessVersion = -1;
+    let accessRosterEpoch = -1;
     let accessScope: number | number[] | undefined;
     let accessOpenField = false;
     const deliver = (evt: LeadEvent) => {
       if (evt.tenantId !== tenantId) return;
-      if (accessVersion !== streamAccessVersion) {
+      // Two stamps, because the /api/team middleware below is not the only way
+      // a reports_to edge moves: approving a leader hire re-homes the picked
+      // downline from /api/onboarding, which that middleware never sees. The
+      // roster epoch is bumped inside storage's team-member writes, so it
+      // covers any route — including ones written after this memo. Without it
+      // a lead keeps streaming a moved rep's doors for the life of the
+      // connection, and this scope is authority, not decoration.
+      const rosterEpoch = storage.teamRosterEpoch();
+      if (accessVersion !== streamAccessVersion || accessRosterEpoch !== rosterEpoch) {
         accessVersion = streamAccessVersion;
+        accessRosterEpoch = rosterEpoch;
         accessScope = leadVisibilityScope(user);
         accessOpenField = storage.openFieldEnabled(user?.tenantId);
       }

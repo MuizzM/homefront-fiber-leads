@@ -144,6 +144,53 @@ describe("delivery is filtered per event, not per tenant", () => {
   });
 });
 
+describe("a roster move re-scopes a stream that is already open", () => {
+  // Regression: the per-connection scope memo was invalidated only by a stamp
+  // that /api/team writes moved. Approving a leader hire re-homes the picked
+  // downline from /api/onboarding, so the stamp never moved and the memo — which
+  // has no TTL — kept the pre-move roster for the life of the connection. The
+  // scope is authority, not decoration: a stale one keeps streaming a moved
+  // rep's doors, with full address and contact fields, to their former lead.
+  it("stops delivering a rep's doors to the lead they were moved away from", async () => {
+    const rep = person("Rex Moved", "rep");
+    const from = person("Lee From", "team_lead");
+    const to = person("Tay To", "team_lead");
+    storage.updateTeamMember(rep.memberId, { reportsToId: from.memberId });
+
+    const a = area([rep.memberId]);
+    const primed = door(a, rep.memberId);
+    const afterMove = door(a, rep.memberId);
+
+    // Knocked BY the manager ON the rep's behalf: a freshly created rep still
+    // owes training, and that 403 would make this test green for the wrong
+    // reason. Leadership is exempt, so the event lands either way and what is
+    // measured stays the lead's scope.
+    const knockFor = (leadId: number) =>
+      fetch(`${baseUrl}/api/leads/${leadId}/knock`, {
+        method: "POST", headers: H(fx.manager.session),
+        body: JSON.stringify({ outcome: "sold", wasHome: true, repId: rep.memberId }),
+      }).then(() => undefined);
+
+    const { text } = await collect(from.session, async () => {
+      // PRIME first. The memo starts unresolved, so a move before any event
+      // would be picked up by the initial resolve and prove nothing — this
+      // knock is what puts the pre-move roster into the closure.
+      await knockFor(primed);
+      await new Promise(r => setTimeout(r, 200));
+      // The write the approval route performs. Deliberately called on storage
+      // rather than over /api/team: that is the whole point — the invalidation
+      // must not depend on which route happened to make the change.
+      storage.updateTeamMember(rep.memberId, { reportsToId: to.memberId });
+      await knockFor(afterMove);
+    }, 1500);
+
+    // Proves the memo was live and delivering — without this the assertion
+    // below could pass simply because nothing was ever streaming.
+    expect(text).toContain(`"leadId":${primed}`);
+    expect(text).not.toContain(`"leadId":${afterMove}`);
+  });
+});
+
 describe("frames carry what a client needs to order and resume", () => {
   it("every lead frame has an id: of the form epoch.seq", async () => {
     const a = area([fx.repA.memberId]);

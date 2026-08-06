@@ -3304,6 +3304,19 @@ function bumpLeaderboardEpoch(): void {
   leaderboardEpoch++;
 }
 
+// Roster shape ONLY — who exists and who reports to whom. Deliberately separate
+// from leaderboardEpoch, which every knock and lead-status write also moves: a
+// consumer that re-derives a REPORTING TREE wants to recompute when the tree
+// changes, not on every sale. routes.ts's SSE lead stream memoises each
+// subscriber's leadVisibilityScope() against this, and that scope is authority
+// (it decides which reps' leads reach a team_lead), so the bump lives on the
+// storage writes rather than on any route: a reports_to edge moved by a route
+// that nobody thought to instrument must still reach an open stream.
+let teamRosterEpoch = 0;
+function bumpTeamRosterEpoch(): void {
+  teamRosterEpoch++;
+}
+
 /** UTC instant of midnight in the org's local day.
  *
  *  "Today" for a field rep is the day on the phone in their hand, not the day
@@ -4187,6 +4200,7 @@ export class Storage implements IStorage {
     const color = member.color != null ? member.color : this.allocateMemberColor(member.tenantId ?? null);
     const row = db.insert(teamMembers).values({ ...member, color, createdAt: new Date().toISOString() }).returning().get();
     bumpLeaderboardEpoch(); // the roster shapes the board's rows
+    bumpTeamRosterEpoch(); // a new member can land under an existing lead
     return row;
   }
   private allocateMemberColor(tenantId: number | null): string | null {
@@ -4203,6 +4217,7 @@ export class Storage implements IStorage {
       : eq(teamMembers.id, id);
     const row = db.update(teamMembers).set(updates).where(condition).returning().get();
     bumpLeaderboardEpoch(); // active flag / name changes reach the board
+    bumpTeamRosterEpoch(); // reports_to moves re-shape a team_lead's scope
     return row;
   }
   deleteTeamMember(id: number, tenantId?: number): boolean {
@@ -4210,9 +4225,13 @@ export class Storage implements IStorage {
       ? and(eq(teamMembers.id, id), eq(teamMembers.tenantId, tenantId))
       : eq(teamMembers.id, id);
     const deleted = db.delete(teamMembers).where(condition).run().changes > 0;
-    if (deleted) bumpLeaderboardEpoch();
+    if (deleted) { bumpLeaderboardEpoch(); bumpTeamRosterEpoch(); }
     return deleted;
   }
+  /** Monotonic stamp of the roster's SHAPE — bumped by every create/update/
+   *  delete above. Read by consumers that cache a derived reporting tree; a
+   *  changed value means "re-derive", it carries no other meaning. */
+  teamRosterEpoch(): number { return teamRosterEpoch; }
 
   // ── Knock log ──────────────────────────────────────────────────────────────
   // Default LIMIT pushed into SQL (mirrors getRecentKnocksByRep): knock_log
