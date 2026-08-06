@@ -70,7 +70,7 @@ import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenantRead, sameTenantWrite } from "./tenantGuard";
-import { canActOnMember, canHireRole, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
+import { canActOnMember, canHireRole, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank, branchOwnerOf } from "@shared/teamHierarchy";
 import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, areaGrantedRepIds, parseAreaDeleteRepPolicy, parseAssigneeIds, MAX_ACTIVE_AREAS_PER_REP, MAX_AREA_ASSIGNEES, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
@@ -5097,6 +5097,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!isSelfEdit && !canActOnMember(actor.role, effectiveMemberRole(tenantId, existing))) {
       return res.status(403).json({ error: "You can only manage members below your own role", code: "HIERARCHY_FORBIDDEN" });
     }
+    // BRANCH, checked after RANK so a peer-manager refusal keeps saying
+    // HIERARCHY_FORBIDDEN (which is what it is — a rank problem) and only an
+    // in-rank member sitting in someone else's tree reports OUT_OF_BRANCH.
+    // Rank alone said yes to every rep in the tenant, which let manager A
+    // quietly re-home manager B's people under themselves.
+    if (!isSelfEdit && !actorMayReachBranch(actor, id, tenantId)) {
+      return res.status(403).json(OUT_OF_BRANCH);
+    }
+    // Nor may they park someone INTO a branch they do not own — guarding only
+    // the target would still let a manager hand their rep to a peer's tree.
+    if (req.body?.reportsToId != null
+        && !actorMayReachBranch(actor, Number(req.body.reportsToId), tenantId)) {
+      return res.status(403).json(OUT_OF_BRANCH);
+    }
     // Activation is NOT a PATCH field: flipping `active` here would disable the
     // linked login without revoking sessions, re-homing reports, or checking the
     // last-admin guard (a manager could PATCH the sole admin's member inactive
@@ -5262,6 +5276,41 @@ export function registerRoutes(_httpServer: Server, app: Express) {
    * (e.g. an admin who also carries a field profile) — the authority decision
    * must use the login's real power, or a manager could offboard/edit an admin
    * by exploiting the low field-role. Falls back to the field role. */
+  /**
+   * May this actor reach into this member's branch?
+   *
+   * Rank alone said yes to everything: a manager outranks every rep and team
+   * lead ANYWHERE in the tenant, so manager A could reassign manager B's reps
+   * under themselves. This adds the missing half — whose people are these —
+   * and it constrains MANAGERS ONLY, deliberately:
+   *
+   *   · admin/super_admin keep org-wide reach (they arbitrate between branches);
+   *   · team_lead is already held to self + direct reports by
+   *     repInVisibilityScope, which is TIGHTER than any branch rule — applying
+   *     this to them would instead refuse a team lead offboarding their own
+   *     rep, whose branch owner is the manager above them;
+   *   · an unowned member (top level, or orphaned by an offboard) has no branch
+   *     to poach from, so anyone senior may adopt them. That is what keeps new
+   *     hires, orphans, and members pushed top-level by a promotion reachable —
+   *     the subtree rule this replaced stranded all three.
+   *
+   * A manager login with no roster row of its own has no branch to defend and
+   * is staff rather than a field manager (the same accounts leadVisibilityScope
+   * already treats as org-wide), so it keeps its current reach.
+   */
+  function actorMayReachBranch(actor: any, memberId: number, tenantId?: number): boolean {
+    if (actor?.role === "admin" || actor?.role === "super_admin") return true;
+    if (actor?.role !== "manager") return true;
+    if (actor?.teamMemberId == null) return true;
+    const owner = branchOwnerOf(memberId, storage.getTeamMembers(tenantId) as any);
+    return owner == null || owner === actor.teamMemberId;
+  }
+
+  const OUT_OF_BRANCH = {
+    error: "That member belongs to another manager's team — ask an admin to transfer them",
+    code: "OUT_OF_BRANCH",
+  };
+
   function effectiveMemberRole(tenantId: number, member: { id: number; role: string }): string {
     const login = storage.getAllUsers(tenantId).find((u) => u.teamMemberId === member.id);
     const memberRank = hierarchyRank(member.role) ?? -1;
@@ -5305,6 +5354,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     if (!canActOnMember(actor.role, effectiveMemberRole(tenantId, target))) {
       return res.status(403).json({ error: "You can only offboard members below your own role", code: "HIERARCHY_FORBIDDEN" });
+    }
+    // Branch AFTER rank, so a peer-manager refusal keeps its established
+    // HIERARCHY_FORBIDDEN code and only in-rank members in another manager's
+    // tree report OUT_OF_BRANCH.
+    if (!actorMayReachBranch(actor, id, tenantId)) {
+      return res.status(403).json(OUT_OF_BRANCH);
     }
     if (!target.active) {
       return res.status(409).json({ error: "That member is already offboarded", code: "ALREADY_INACTIVE" });
@@ -5403,6 +5458,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     if (!canActOnMember(actor.role, effectiveMemberRole(tenantId, target))) {
       return res.status(403).json({ error: "You can only remove members below your own role", code: "HIERARCHY_FORBIDDEN" });
+    }
+    // This route carried NO scope guard at all — rank only — so it was the
+    // widest of the three lifecycle doors: a manager could hard-delete any rep
+    // in the organization, including one squarely inside a peer's team.
+    if (!actorMayReachBranch(actor, id, tenantId)) {
+      return res.status(403).json(OUT_OF_BRANCH);
     }
     if (wouldOrphanTenantAdmins(tenantId, id)) {
       return res.status(409).json({ error: "The organization must keep at least one active admin", code: "LAST_ADMIN" });

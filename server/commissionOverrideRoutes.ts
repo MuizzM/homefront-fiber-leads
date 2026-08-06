@@ -20,7 +20,7 @@ import * as ov from "./overrideStore";
 import { canReadRep, parseWeekRef } from "./commissionRoutes";
 import { csvCell } from "./csv";
 import { weekBoundsFor } from "@shared/workweek";
-import { downlineOf } from "@shared/teamHierarchy";
+import { branchOwnerOf, downlineOf } from "@shared/teamHierarchy";
 import type {
   DownlineRollupRowWire,
   DownlineSheetResponse,
@@ -256,6 +256,22 @@ export function registerCommissionOverrideRoutes(app: Express, deps: Deps) {
          FROM team_members WHERE id = ? AND tenant_id = ?`
       ).get(repId, tid(req)) as any;
       if (!member) return res.status(404).json({ error: "Member not found in your organization." });
+      // Same branch rule the roster routes enforce. Without it this is the side
+      // door: managers hold commission.read.all, so readScope hands them every
+      // rep, and a manager refused a rename on another branch's member could
+      // still re-price that member's overrides — the same authority, one door
+      // over. Admins arbitrate between branches and pass through.
+      const actor = (req as any).user;
+      if (actor?.role === "manager" && actor?.teamMemberId != null) {
+        const roster = storage.getTeamMembers(tid(req)) as any[];
+        const owner = branchOwnerOf(repId, roster);
+        if (owner != null && owner !== actor.teamMemberId) {
+          return res.status(403).json({
+            error: "That member belongs to another manager's team — ask an admin to transfer them",
+            code: "OUT_OF_BRANCH",
+          });
+        }
+      }
 
       const patch: { tl?: number | null; mgr?: number | null } = {};
       const fields = [

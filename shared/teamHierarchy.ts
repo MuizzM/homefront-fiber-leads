@@ -124,6 +124,51 @@ export function downlineOf(
   return out;
 }
 
+/** Minimal member shape for the branch-owner walk. */
+export interface BranchMemberRef {
+  id: number;
+  role: string;
+  reportsToId: number | null;
+  active: boolean;
+}
+
+/**
+ * The ACTIVE manager at the top of a member's branch, or null when the branch
+ * is unowned — a top-level member, an orphan left behind by an offboard, or a
+ * member whose only managers above them are inactive.
+ *
+ * This is what "whose people are these?" means in a single-parent tree, and it
+ * is deliberately NOT the same question as `downlineOf`. A subtree test asks
+ * "is this member beneath me", which strands every top-level member in nobody's
+ * territory; this asks "does this member already belong to a DIFFERENT manager",
+ * which leaves unowned members adoptable by anyone senior enough.
+ *
+ * A member who is themselves an active manager owns their own branch, so peer
+ * managers resolve to each other rather than to a shared parent.
+ *
+ * Hop-budgeted like every walk here: a corrupt chain reads as unowned rather
+ * than looping. Unowned fails OPEN (anyone senior may act), which is the whole
+ * point — the rule exists to stop poaching between branches, not to make
+ * ownerless people unmanageable.
+ */
+export function branchOwnerOf(
+  memberId: number,
+  members: readonly BranchMemberRef[],
+  maxHops = 100,
+): number | null {
+  const byId = new Map(members.map(m => [m.id, m]));
+  let cursor = byId.get(memberId);
+  const seen = new Set<number>();
+  for (let hop = 0; hop < maxHops && cursor; hop++) {
+    if (seen.has(cursor.id)) return null;   // cycle — unowned, never loop
+    seen.add(cursor.id);
+    if (cursor.role === "manager" && cursor.active) return cursor.id;
+    if (cursor.reportsToId == null) return null;
+    cursor = byId.get(cursor.reportsToId);
+  }
+  return null;
+}
+
 /**
  * Is `supervisorRole` a valid supervisor for a member holding `memberRole`?
  * A supervisor must rank strictly above the member (reps report to team
