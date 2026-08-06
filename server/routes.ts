@@ -5189,12 +5189,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const updated = storage.updateTeamMember(id, safeUpdate, tenantId);
         if (!updated) return null;
         syncLoginAccount(updated as any);
+        const roleChanged = typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role;
         // A demotion can leave direct reports pointing at a supervisor who no
         // longer outranks them (reps reporting to a rep). Re-home those
         // subordinates to the edited member's own supervisor so the org chart
         // never holds an invalid edge.
         const reHomedReports: number[] = [];
-        if (typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role) {
+        if (roleChanged) {
           const invalidated = members.filter((member) =>
             (member as any).reportsToId === id && !isValidSupervisorRole(member.role, safeUpdate.role as string));
           for (const subordinate of invalidated) {
@@ -5202,11 +5203,37 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             reHomedReports.push(subordinate.id);
           }
         }
-        return { updated, reHomedReports };
+        // ...and the mirror case, LOOKING UP. A PROMOTION can leave the edited
+        // member pointing at a supervisor who no longer outranks THEM — promote
+        // a rep who reports to a team lead and you get a manager whose
+        // supervisor is a team lead. The reports-to validation above only fires
+        // when the caller SENDS a supervisor, so a role-only PATCH slipped past
+        // it and left that inverted edge in the tree.
+        //
+        // It is not cosmetic: override chains walk UPWARD from the seller, so
+        // the stale edge let a team lead sitting BELOW the promoted manager
+        // collect the team-lead override on every one of their reps' sales.
+        // Promoting to manager always lands top-level — no field role outranks
+        // a manager — which is why this clears rather than re-points.
+        let supervisorCleared = false;
+        const priorSupervisorId = (existing as any).reportsToId ?? null;
+        if (roleChanged
+            && !Object.prototype.hasOwnProperty.call(safeUpdate, "reportsToId")
+            && priorSupervisorId != null) {
+          const priorSupervisor = members.find((member) => member.id === priorSupervisorId);
+          if (!priorSupervisor || !isValidSupervisorRole(safeUpdate.role as string, priorSupervisor.role)) {
+            // Re-read: `updated` was captured before this second write, so
+            // returning it would report a supervisor the row no longer has.
+            const relocated = storage.updateTeamMember(id, { reportsToId: null } as any, tenantId);
+            supervisorCleared = true;
+            return { updated: relocated ?? updated, reHomedReports, supervisorCleared, priorSupervisorId };
+          }
+        }
+        return { updated, reHomedReports, supervisorCleared, priorSupervisorId };
       });
       const result = tx.immediate();
       if (!result) return res.status(404).json({ error: "Not found" });
-      const { updated, reHomedReports } = result;
+      const { updated, reHomedReports, supervisorCleared, priorSupervisorId } = result;
       // Audit every login-email retarget with old + new + actor: this is the
       // trail that distinguishes a legitimate mailbox fix from a hijack.
       if (emailRetargeted) {
@@ -5219,6 +5246,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role) {
         storage.logActivity(actor.id, "team.member.role_changed", "team_member", id, {
           from: existing.role, to: safeUpdate.role, reHomedReports,
+          // A promotion that outgrew its own supervisor moved to top level.
+          ...(supervisorCleared ? { supervisorCleared: true, priorSupervisorId } : {}),
         }, req.ip);
       }
       res.json(updated);
