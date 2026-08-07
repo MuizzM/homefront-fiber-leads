@@ -38,8 +38,11 @@ const Scanners = lazy(() => import("@/pages/Scanners"));
 const FiberIntelligence = lazy(() => import("@/pages/FiberIntelligence"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
+const StatementPage = lazy(() => import("@/pages/StatementPage"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
 const Incentives = lazy(() => import("@/pages/Incentives"));
+const Mileage = lazy(() => import("@/pages/Mileage"));
+const Referrals = lazy(() => import("@/pages/Referrals"));
 const Messages = lazy(() => import("@/pages/Messages"));
 const Applications = lazy(() => import("@/pages/Applications"));
 const MyCommission = lazy(() => import("@/pages/MyCommission"));
@@ -266,6 +269,12 @@ function AppRoutes() {
             <Redirect to="/map" />
           </Route>
           <Route path="/clock"><CapabilityGuard role={role} capability="field.app.use"><ClockIn /></CapabilityGuard></Route>
+          {/* Mileage is gated on the rep-level capability; the manager queue
+              inside the page is gated separately on mileage.approve. */}
+          <Route path="/mileage"><CapabilityGuard role={role} capability="mileage.submit.self"><Mileage /></CapabilityGuard></Route>
+          {/* Every rep sees their own link and pipeline; the approval queue
+              inside the page is gated separately on referral.approve. */}
+          <Route path="/referrals"><CapabilityGuard role={role} capability="referral.read.self"><Referrals /></CapabilityGuard></Route>
           {/* Training — D2D psychology & pitch curriculum. Every field role can
               study; the manager rollup inside the page is gated separately. */}
           <Route path="/training"><CapabilityGuard role={role} capability="field.app.use"><Training /></CapabilityGuard></Route>
@@ -278,6 +287,19 @@ function AppRoutes() {
             {role === "rep" ? <Redirect to="/my-commission" /> : <Redirect to="/commission-console" />}
           </Route>
           <Route path="/my-commission"><CapabilityGuard role={role} capability="commission.read.self"><MyCommission /></CapabilityGuard></Route>
+          {/* A statement gets its own address so it can be linked, bookmarked and
+              re-opened. It was previously reachable only as a modal inside the
+              console or My Commission, which meant "send me that statement" had
+              no answer. Gated on read.self only — the SERVER scopes every
+              statement route to who may see that rep, so a guessed id 403s/404s
+              exactly as it does for the modal. */}
+          <Route path="/statements/:id">
+            {(params: { id: string }) => (
+              <CapabilityGuard role={role} capability="commission.read.self">
+                <StatementPage statementId={Number(params.id)} />
+              </CapabilityGuard>
+            )}
+          </Route>
           <Route path="/my-documents"><CapabilityGuard role={role} capability="onboarding.documents.read.self"><MyDocuments /></CapabilityGuard></Route>
           {/* Tax & direct deposit — the caller's OWN W-9 and bank details. Not
               capability-gated (like /profile): every authenticated user may

@@ -124,6 +124,8 @@ import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
 import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
+import { registerMileageRoutes } from "./mileageRoutes";
+import { registerReferralRoutes } from "./referralRoutes";
 import { pathAllowedWhileGated } from "@shared/trainingGate";
 import {
   isUserTrainingGated, statusFor as trainingGateStatus, setTrainingRequired,
@@ -401,7 +403,51 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   // requireCapability, which all delegate to it). Hanging the gate off one
   // choke point is the only way to be sure a route added next month is covered
   // by default instead of by whoever remembers to add it.
-  return trainingGate(req, res, next);
+  //
+  // The org-status gate rides the same choke point, and runs FIRST: an org that
+  // has been suspended stops being able to use the app whether or not the person
+  // holding the session has finished training.
+  return orgStatusGate(req, res, () => trainingGate(req, res, next));
+}
+
+// ── Organization status gate ────────────────────────────────────────────────
+// A SUSPENDED or CANCELLED organization loses access — including sessions that
+// were minted before the flip, which is exactly why this rides on requireAuth
+// rather than on login alone. Before this existed, `tenants.status` was written
+// by the super-admin console (`DELETE /api/sa/tenants/:id`) and read by nothing
+// at request time, so every user of a cancelled org kept working indefinitely.
+//
+// Deliberately scoped to cancelled/suspended ONLY. Billing state lives on a
+// different column (`tenant_billing.state`) and is NEVER a gate here — see the
+// owner directive on requireScanningAllowed.
+//
+// Fail-OPEN on an internal error, for the same reason the training gate does: a
+// bug in this lookup must never lock an entire floor out of the app mid-shift.
+// A cancelled org retaining access for an hour is a far smaller problem than
+// every live org losing the app at once.
+const ORG_BLOCKING_STATUSES: ReadonlySet<string> = new Set(["cancelled", "suspended"]);
+
+function orgStatusGate(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).user;
+  if (!user) return next();
+  // The platform owner administers organizations from outside all of them —
+  // gating them on a tenant status would lock the only identity that can undo it.
+  if (user.isSuperAdmin || user.tenantId == null) return next();
+  // Same allowlist the training gate uses: never trap a signed-in person without
+  // a route to read who they are, see the notice, or sign out.
+  if (pathAllowedWhileGated(req.path)) return next();
+  try {
+    const tenant = storage.getTenantById(user.tenantId);
+    const status = String(tenant?.status ?? "active").toLowerCase();
+    if (!ORG_BLOCKING_STATUSES.has(status)) return next();
+    return res.status(403).json({
+      error: "This organization is no longer active. Contact your administrator.",
+      code: "ORGANIZATION_INACTIVE",
+    });
+  } catch (e: any) {
+    console.warn("[org-status-gate] check failed, allowing through:", e?.message);
+    return next();
+  }
 }
 
 // ── Training gate ───────────────────────────────────────────────────────────
@@ -1247,6 +1293,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   registerPayRoutes(app, { requireAuth, requireCapability });
   // Manager-launched SPIFF contests — awards land in the existing spiffs ledger.
   registerSpiffCampaignRoutes(app, { requireAuth, requireCapability });
+  // Mileage: trip logging, the approval queue, and the org rate. Reimbursement
+  // MONEY stays behind mileage.reimbursement_enabled (off for every org until an
+  // operator turns it on) — see the note in server/mileageStore.ts.
+  registerMileageRoutes(app, { requireAuth, requireCapability });
+  // Rep-referral program. Ships DARK (referral.program.enabled = false), so the
+  // link and pipeline render but no attribution is accepted and no reward is
+  // ever created until an admin turns it on.
+  registerReferralRoutes(app, { requireAuth, requireCapability });
   // CE-1 drill engine — due deck, review capture, coach summary. Lives under
   // /api/training, so the training gate's allowlist already covers it.
   registerTrainingEngineRoutes(app, { requireAuth });
@@ -5099,6 +5153,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (!isValidSupervisorRole(newRole, supervisor.role)) {
         return res.status(400).json({ error: "A supervisor must rank above the member they manage", code: "INVALID_SUPERVISOR" });
       }
+      // BRANCH GUARD on the DESTINATION — the same rule PATCH enforces on a
+      // re-home. Without it, hiring was a side door around the anti-poaching
+      // rule: manager A could not MOVE a member into manager B's branch, but
+      // could freely CREATE one there, which is the same edge in the same tree.
+      if (!actorMayReachBranch((req as any).user, Number(parsed.data.reportsToId), tenantId)) {
+        return res.status(403).json({
+          error: "That supervisor belongs to another manager's team — ask an admin to place this hire",
+          code: "OUT_OF_BRANCH",
+        });
+      }
     }
     // Tenancy is NEVER client-supplied: a new member always joins the creator's
     // org (overrides any tenantId smuggled into the body).
@@ -5106,6 +5170,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const tx = rawDb.transaction(() => {
         const member = storage.createTeamMember({ ...parsed.data, email, tenantId });
         syncLoginAccount(member as any);
+        // Inside the transaction on purpose. Every other audit write on this
+        // route family sat outside it, so a write that succeeded and an audit
+        // that failed produced a roster change nobody could account for. A
+        // member APPEARING in the org chart is exactly as auditable an event as
+        // one being moved or removed, and it previously logged nothing at all.
+        storage.logActivity((req as any).user.id, "team.member.created", "team_member", member.id, {
+          name: member.name, role: member.role,
+          reportsToId: (member as any).reportsToId ?? null,
+          hasLogin: !!email, actorRole: (req as any).user.role,
+        }, req.ip);
         return member;
       });
       res.status(201).json(tx.immediate());
@@ -5249,6 +5323,45 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         if (!updated) return null;
         syncLoginAccount(updated as any);
         const roleChanged = typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role;
+
+        // ── A ROLE CHANGE RE-AUTHORIZES, EVERYWHERE, AT ONCE ────────────────
+        // syncLoginAccount above already moved users.role, and requireAuth
+        // re-reads it on every request — so the SERVER stops honouring the old
+        // role immediately. That was never the gap.
+        //
+        // The gap was the app already open in the person's hand. The client
+        // keeps a persisted user snapshot (hfs.user) plus a persisted query
+        // cache, and only re-checks status on mount — so a demoted team lead
+        // mid-shift kept seeing team-lead surfaces (Training's manager rollup
+        // was the one that got reported) until they happened to relaunch. The
+        // API refused every one of those actions with a 403, which is safe but
+        // reads as the app being broken rather than as the demotion having
+        // happened.
+        //
+        // Revoking on a role change is the same rule deactivation already uses
+        // (see syncLoginAccount's revokeIfDeactivated): the next request 401s,
+        // the client confirms against /api/auth/status, signs out, and the
+        // person signs back in holding exactly one role. It applies to
+        // PROMOTIONS too — otherwise a newly-minted team lead has to guess that
+        // relaunching is what reveals their new tools.
+        //
+        // Deliberately NOT done for other edits: signing someone out because a
+        // manager fixed a typo in their name would make the roster unusable
+        // mid-shift.
+        let roleChangeSessionsRevoked = 0;
+        if (roleChanged) {
+          const linked = storage.getAllUsers(tenantId).find((u) => u.teamMemberId === id);
+          if (linked) {
+            roleChangeSessionsRevoked = storage.deleteSessionsByUser(linked.id);
+            if (roleChangeSessionsRevoked > 0) {
+              structuredLog("auth.sessions_revoked", {
+                userId: linked.id, teamMemberId: id, reason: "role_changed",
+                fromRole: existing.role, toRole: String(safeUpdate.role), revoked: roleChangeSessionsRevoked,
+              });
+            }
+          }
+        }
+
         // A demotion can leave direct reports pointing at a supervisor who no
         // longer outranks them (reps reporting to a rep). Re-home those
         // subordinates to the edited member's own supervisor so the org chart
@@ -5285,14 +5398,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             // returning it would report a supervisor the row no longer has.
             const relocated = storage.updateTeamMember(id, { reportsToId: null } as any, tenantId);
             supervisorCleared = true;
-            return { updated: relocated ?? updated, reHomedReports, supervisorCleared, priorSupervisorId };
+            return { updated: relocated ?? updated, reHomedReports, supervisorCleared, priorSupervisorId, roleChangeSessionsRevoked };
           }
         }
-        return { updated, reHomedReports, supervisorCleared, priorSupervisorId };
+        return { updated, reHomedReports, supervisorCleared, priorSupervisorId, roleChangeSessionsRevoked };
       });
       const result = tx.immediate();
       if (!result) return res.status(404).json({ error: "Not found" });
-      const { updated, reHomedReports, supervisorCleared, priorSupervisorId } = result;
+      const { updated, reHomedReports, supervisorCleared, priorSupervisorId, roleChangeSessionsRevoked } = result;
       // Audit every login-email retarget with old + new + actor: this is the
       // trail that distinguishes a legitimate mailbox fix from a hijack.
       if (emailRetargeted) {
@@ -5305,8 +5418,32 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role) {
         storage.logActivity(actor.id, "team.member.role_changed", "team_member", id, {
           from: existing.role, to: safeUpdate.role, reHomedReports,
+          sessionsRevoked: roleChangeSessionsRevoked,
           // A promotion that outgrew its own supervisor moved to top level.
           ...(supervisorCleared ? { supervisorCleared: true, priorSupervisorId } : {}),
+        }, req.ip);
+      }
+      // A SUPERVISOR change is the other org-authority change, and it used to be
+      // the silent one: this block only ran on an email retarget or a role
+      // change, so `PATCH /api/team/:id {reportsToId}` — moving a person from one
+      // branch to another, which redirects every future override their sales
+      // earn — wrote nothing at all. Reviewing "who moved this rep, and when?"
+      // after the fact was impossible.
+      //
+      // Logged for BOTH the explicit move and the implicit one: a promotion that
+      // outgrew its supervisor is recorded here as well as on the role event, so
+      // the supervisor timeline is complete on its own and a reader does not have
+      // to know that role changes can move people too.
+      const supervisorRequested = Object.prototype.hasOwnProperty.call(safeUpdate, "reportsToId");
+      const newSupervisorId = supervisorCleared ? null : ((updated as any)?.reportsToId ?? null);
+      if ((supervisorRequested || supervisorCleared) && newSupervisorId !== priorSupervisorId) {
+        storage.logActivity(actor.id, "team.member.supervisor_changed", "team_member", id, {
+          from: priorSupervisorId, to: newSupervisorId,
+          memberRole: (updated as any)?.role ?? existing.role,
+          actorRole: actor.role,
+          // Distinguishes a deliberate re-home from one the server performed to
+          // keep the tree valid after a promotion.
+          reason: supervisorCleared && !supervisorRequested ? "outgrew_supervisor" : "reassigned",
         }, req.ip);
       }
       res.json(updated);
@@ -5424,6 +5561,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // deliberately NOT re-homed — the sponsor edge records history, not the
         // org chart, and the DB trigger would refuse a rewrite anyway.)
         const newSupervisorId = (target as any).reportsToId ?? null;
+        // Capture WHICH members move, not just how many. A count answers "did
+        // something happen"; only the ids answer "where did my team go?" —
+        // the question actually asked after a termination, when the reports have
+        // already been re-homed and the original edge is gone from the tree.
+        const movedReportIds = (rawDb.prepare(
+          "SELECT id FROM team_members WHERE reports_to_id = ? AND tenant_id = ?",
+        ).all(id, tenantId) as any[]).map(r => Number(r.id));
         const reassigned = rawDb.prepare(
           "UPDATE team_members SET reports_to_id = ? WHERE reports_to_id = ? AND tenant_id = ?",
         ).run(newSupervisorId, id, tenantId).changes;
@@ -5431,13 +5575,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // stops working on the next request, not at the next login.
         const linked = storage.getAllUsers(tenantId).find((u) => u.teamMemberId === id);
         const sessionsRevoked = sync.sessionsRevoked + (linked ? storage.deleteSessionsByUser(linked.id) : 0);
-        return { updated, reassigned, loginDisabled: Boolean(linked), sessionsRevoked };
+        return { updated, reassigned, movedReportIds, newSupervisorId, loginDisabled: Boolean(linked), sessionsRevoked };
       });
       const result = tx.immediate();
       if (!result) return res.status(404).json({ error: "Not found" });
       storage.logActivity(actor.id, "team.member.offboarded", "team_member", id, {
         name: target.name, role: target.role, by: actor.role,
         reassignedReports: result.reassigned, sessionsRevoked: result.sessionsRevoked,
+        // The reviewable half: exactly who moved, and to whom. `null` means the
+        // reports went top-level (nobody owns them now), which is the case worth
+        // noticing — an unowned branch is adoptable by any manager.
+        movedReportIds: result.movedReportIds,
+        movedTo: result.newSupervisorId,
       }, req.ip);
       res.json({
         success: true,
@@ -5514,9 +5663,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(409).json({ error: "The organization must keep at least one active admin", code: "LAST_ADMIN" });
     }
     const tx = rawDb.transaction(() => {
+      const newSupervisorId = (target as any).reportsToId ?? null;
+      // Same reason as the offboard path: after a hard delete the original edge
+      // is gone from the tree entirely, so the audit row is the ONLY remaining
+      // record of who used to report to this person and where they went.
+      const movedReportIds = (rawDb.prepare(
+        "SELECT id FROM team_members WHERE reports_to_id = ? AND tenant_id = ?",
+      ).all(id, tenantId) as any[]).map(r => Number(r.id));
       const reassigned = rawDb.prepare(
         "UPDATE team_members SET reports_to_id = ? WHERE reports_to_id = ? AND tenant_id = ?",
-      ).run((target as any).reportsToId ?? null, id, tenantId).changes;
+      ).run(newSupervisorId, id, tenantId).changes;
       if (!storage.deleteTeamMember(id, tenantId)) return null;
       // Member removed → disable their login (account kept for knock history)
       // and revoke live sessions so access ends immediately.
@@ -5526,12 +5682,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         storage.updateUser(linked.id, { active: false } as any, tenantId);
         sessionsRevoked = storage.deleteSessionsByUser(linked.id);
       }
-      return { reassigned, sessionsRevoked };
+      return { reassigned, movedReportIds, newSupervisorId, sessionsRevoked };
     });
     const result = tx.immediate();
     if (!result) return res.status(404).json({ error: "Not found" });
-    storage.logActivity(actor.id, "team.member.removed", "team_member", id,
-      { name: target.name, role: target.role, by: actor.role, reassignedReports: result.reassigned }, req.ip);
+    storage.logActivity(actor.id, "team.member.removed", "team_member", id, {
+      name: target.name, role: target.role, by: actor.role,
+      reassignedReports: result.reassigned,
+      movedReportIds: result.movedReportIds,
+      movedTo: result.newSupervisorId,
+    }, req.ip);
     res.json({ success: true, reassignedReports: result.reassigned, sessionsRevoked: result.sessionsRevoked });
   });
 
@@ -7116,6 +7276,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       storage.logLoginAttempt(cleanEmail, "verify", false, "account_inactive", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
       return res.status(401).json({ error: "Account not active. Contact your administrator." });
     }
+    // A suspended/cancelled org cannot mint NEW sessions either. orgStatusGate
+    // already refuses its existing ones; without this a user of a dead org would
+    // still get a token and only discover the block on the next request. Same
+    // fail-open posture: a lookup failure must not block a live org's login.
+    if (!user.isSuperAdmin && user.tenantId != null) {
+      let orgBlocked = false;
+      try {
+        orgBlocked = ORG_BLOCKING_STATUSES.has(String(storage.getTenantById(user.tenantId)?.status ?? "active").toLowerCase());
+      } catch (e: any) {
+        console.warn("[org-status-gate] login check failed, allowing through:", e?.message);
+      }
+      if (orgBlocked) {
+        storage.logLoginAttempt(cleanEmail, "verify", false, "organization_inactive", ip, req.headers["user-agent"] as string, user.tenantId);
+        return res.status(403).json({ error: "This organization is no longer active. Contact your administrator.", code: "ORGANIZATION_INACTIVE" });
+      }
+    }
     storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
     // Reset verify limiter on success
     otpRateBuckets.reset("verify", `email:${cleanEmail}`);
@@ -7294,6 +7470,32 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Validate role if provided
     if (safeUpdate.role && !(LOGIN_ROLES as readonly string[]).includes(safeUpdate.role as string)) {
       return res.status(400).json({ error: "Invalid role" });
+    }
+    // ── ONE DOOR FOR ROLE CHANGES ──────────────────────────────────────────────
+    // A person in the field org has TWO role fields — users.role (login power)
+    // and team_members.role (org-chart position) — reconciled by taking the
+    // higher of the two (effectiveMemberRole). PATCH /api/team/:id is the door
+    // that keeps them in step: it checks hierarchy rank, branch ownership, and
+    // reporting cycles, re-homes reports a demotion would strand, runs inside a
+    // transaction, and mirrors the change onto the login.
+    //
+    // This route did NONE of that and still wrote users.role, so it could put the
+    // pair into exactly the disagreement effectiveMemberRole exists to paper
+    // over — silently, with no audit row. Promoting a rep's LOGIN to manager here
+    // left their member row a rep: the org chart showed one thing, the permission
+    // system another, and the override engine (which walks member roles) paid a
+    // third. Refusing it is what makes hierarchy history trustworthy, because a
+    // history table is only as honest as the number of doors that can change what
+    // it records.
+    //
+    // Logins with no roster row — compliance, auditor, calling-only identities —
+    // have no org-chart position to keep in step, so they keep using this route.
+    if (safeUpdate.role !== undefined && safeUpdate.role !== target.role && target.teamMemberId != null) {
+      return res.status(409).json({
+        error: "This person is in the org chart — change their role from the Team page so the hierarchy, their reports, and their commissions move with it.",
+        code: "ROLE_CHANGE_WRONG_DOOR",
+        use: `PATCH /api/team/${target.teamMemberId}`,
+      });
     }
     if (Object.prototype.hasOwnProperty.call(safeUpdate, "teamMemberId")) {
       const teamMemberId = safeUpdate.teamMemberId;
@@ -10809,15 +11011,25 @@ export function registerSaasRoutes(app: any) {
     const tenant = storage.getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: "Not found" });
     const updated = storage.updateTenant(tenant.id, { status: "cancelled" });
-    storage.logActivity((req as any).user.id, "tenant.cancelled", "tenant", tenant.id, {});
+    // orgStatusGate refuses this org's sessions on their next request anyway, but
+    // sweeping them here makes the cancellation take effect at the moment it is
+    // ordered rather than on whatever each device happens to do next — and it
+    // holds the line even if the gate is later made fail-open in more cases.
+    let sessionsRevoked = 0;
+    try {
+      for (const u of storage.getAllUsers(tenant.id)) sessionsRevoked += storage.deleteSessionsByUser(u.id);
+    } catch (e: any) {
+      console.warn("[tenant.cancelled] session sweep failed:", e?.message);
+    }
+    storage.logActivity((req as any).user.id, "tenant.cancelled", "tenant", tenant.id, { sessionsRevoked });
     recordAdminAudit({
       ...auditContext(req),
       action: "tenant.cancelled", targetType: "tenant", targetId: tenant.id,
       targetLabel: tenant.brandName ?? tenant.companyName ?? tenant.slug,
-      before: { status: tenant.status }, after: { status: updated?.status ?? "cancelled" },
+      before: { status: tenant.status }, after: { status: updated?.status ?? "cancelled", sessionsRevoked },
       tenantId: tenant.id, outcome: "success",
     });
-    res.json({ ok: true });
+    res.json({ ok: true, sessionsRevoked });
   });
 
   // GET  /api/sa/revenue           — revenue summary across all tenants

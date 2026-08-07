@@ -52,6 +52,29 @@ export type Capability =
   | "onboarding.documents.read.self" | "onboarding.documents.manage"
   // Payouts — moving REAL money to reps. Owner/admin only, never a read/oversight role.
   | "payouts.pay"
+  // Earnings ledger — the unified read across commission, overrides, spiffs,
+  // mileage and referral money. Deliberately SEPARATE from commission.read.*:
+  // the ledger folds in reimbursements and referral bonuses that the commission
+  // capabilities were never scoped to expose, so widening those would have
+  // silently granted the new surface to everyone who already held them.
+  | "earnings.read.self" | "earnings.read.team" | "earnings.read.org"
+  // Training. read.self is every rep's own progress; read.team is the
+  // compliance view over a downline; manage is authoring courses and deciding
+  // what is REQUIRED — which gates who may sell, so it is high-risk.
+  | "training.read.self" | "training.read.team" | "training.manage"
+  // Mileage. submit.self is a worker logging their own trips; approve is the
+  // review queue; settings.manage owns the reimbursement RATE, which is money
+  // policy and therefore admin-only.
+  | "mileage.submit.self" | "mileage.read.team" | "mileage.approve" | "mileage.settings.manage"
+  // Referrals. read.self is a rep's own link and pipeline; read.org is the
+  // whole program; approve releases the reward; settings.manage sets the
+  // threshold, amount, qualification window and clawback period.
+  | "referral.read.self" | "referral.read.org" | "referral.approve" | "referral.settings.manage"
+  // Incentive campaigns that can pay a percentage of a sale, carry a clawback
+  // policy, and fire off training/mileage/referral events — a strictly wider
+  // surface than the knock-shaped spiff campaigns, hence its own capability
+  // rather than reusing commission.structure.manage.
+  | "incentive.campaign.manage"
   // Dashboards / analytics read models
   | "dashboard.read.self" | "dashboard.read.team" | "dashboard.read.org"
   // Audit / activity
@@ -73,6 +96,11 @@ const REP: readonly Capability[] = [
   // on every other one. Requesting a run stays team_lead+ — reading a worklist
   // is field work, spending metered provider budget is a supervisory call.
   "lead.skip_trace.read",
+  // Own money, own training, own trips, own referral link. Every one of these
+  // is self-scoped at the route by the session's teamMemberId — the capability
+  // opens the endpoint, the scope decides the rows, exactly as
+  // commission.read.self already works.
+  "earnings.read.self", "training.read.self", "mileage.submit.self", "referral.read.self",
 ];
 // Deliberately NOT here: scan.submit. Address discovery spends metered upstream
 // geocoding budget, and choosing which streets are worth buying data for is a
@@ -105,6 +133,10 @@ const TEAM_LEAD: readonly Capability[] = [
   // added to REP: these sets are unions, so a REP entry would grant it to
   // every tier at once.
   "lead.skip_trace.request", "lead.skip_trace.read",
+  // Oversight reads over the branch. Mirrors commission.read.team/downline: a
+  // team lead sees their own tree's training compliance, trips and earnings —
+  // never the whole tenant, which starts at MANAGER below.
+  "earnings.read.team", "training.read.team", "mileage.read.team",
 ];
 
 // A manager adds org-wide oversight reads AND the commission write surface
@@ -120,12 +152,34 @@ const MANAGER: readonly Capability[] = [
   "scan.manage",
   "commission.sales.write", "commission.adjustments.write", "commission.statements.write",
   "commission.overrides.manage",
+  "earnings.read.org", "referral.read.org",
+  // Authoring courses and deciding what is REQUIRED. High-risk: required
+  // training is what gates a rep out of the field (shared/trainingGate.ts), so
+  // this capability can stop an org selling as surely as it can start one.
+  "training.manage",
+  // The mileage review queue is a manager's daily work — the spec's manager
+  // dashboard is built around it. Setting the RATE is not: that is money
+  // policy and lands on ADMIN below.
+  "mileage.approve",
+  // Launching an incentive campaign commits money, so it sits with the other
+  // money-write caps rather than with the softer structure.manage tier that
+  // the knock-shaped spiff campaigns use today.
+  "incentive.campaign.manage",
 ];
 
 // Admin (and super_admin) hold the full set including org policy + paying reps.
 // payouts.pay is deliberately NOT in MANAGER — a manager is oversight/read; only
 // the org owner (admin) may move real money.
-const ADMIN: readonly Capability[] = [...MANAGER, "settings.manage.org", "payouts.pay"];
+//
+// referral.approve and mileage.settings.manage join it for the same reason:
+// releasing a referral reward and setting the reimbursement rate both decide
+// what leaves the company's bank account, and both mirror how approving a
+// commission adjustment is already gated on payouts.pay rather than on the
+// manager capability that CREATES the adjustment.
+const ADMIN: readonly Capability[] = [
+  ...MANAGER, "settings.manage.org", "payouts.pay",
+  "referral.approve", "referral.settings.manage", "mileage.settings.manage",
+];
 
 const CALLING_REP: readonly Capability[] = [
   "dashboard.read.self",
@@ -193,7 +247,8 @@ export function capabilitiesFor(role: Role | string | undefined | null): Capabil
 
 export type CapabilityDomain =
   | "field" | "leads" | "assignments" | "scanning" | "calling" | "compliance" | "enrichment"
-  | "commissions" | "onboarding" | "dashboard" | "audit" | "settings";
+  | "commissions" | "earnings" | "incentives" | "training" | "mileage" | "referrals"
+  | "onboarding" | "dashboard" | "audit" | "settings";
 
 export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "field.app.use": "field",
@@ -230,6 +285,21 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "commission.adjustments.write": "commissions",
   "commission.statements.write": "commissions",
   "payouts.pay": "commissions",
+  "earnings.read.self": "earnings",
+  "earnings.read.team": "earnings",
+  "earnings.read.org": "earnings",
+  "incentive.campaign.manage": "incentives",
+  "training.read.self": "training",
+  "training.read.team": "training",
+  "training.manage": "training",
+  "mileage.submit.self": "mileage",
+  "mileage.read.team": "mileage",
+  "mileage.approve": "mileage",
+  "mileage.settings.manage": "mileage",
+  "referral.read.self": "referrals",
+  "referral.read.org": "referrals",
+  "referral.approve": "referrals",
+  "referral.settings.manage": "referrals",
   "onboarding.documents.read.self": "onboarding",
   "onboarding.documents.manage": "onboarding",
   "dashboard.read.self": "dashboard",
@@ -254,6 +324,17 @@ export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capabilit
   "scan.manage",
   "calling.attempt.manual", "calling.manage", "calling.policy.manage", "calling.providers.manage", "calling.dnc.manage",
   "audit.read.org", "settings.manage.org", "payouts.pay",
+  // Org-wide money visibility across every earning type, including
+  // reimbursements and referral bonuses.
+  "earnings.read.org",
+  // Commits money on a rule, with a clawback policy attached.
+  "incentive.campaign.manage",
+  // Required training is the field gate — this can stop an org selling.
+  "training.manage",
+  // Each of these decides that money leaves the company: approving trips,
+  // setting the per-mile rate, and releasing a referral reward.
+  "mileage.approve", "mileage.settings.manage",
+  "referral.approve", "referral.settings.manage",
 ]);
 
 export function isHighRisk(cap: Capability): boolean {
@@ -262,7 +343,7 @@ export function isHighRisk(cap: Capability): boolean {
 
 // Every capability, grouped by domain, in a stable domain order — the matrix
 // and the "grouped capabilities" governance view render straight from this.
-const DOMAIN_ORDER: CapabilityDomain[] = ["field", "leads", "assignments", "scanning", "calling", "compliance", "enrichment", "commissions", "onboarding", "dashboard", "audit", "settings"];
+const DOMAIN_ORDER: CapabilityDomain[] = ["field", "leads", "assignments", "scanning", "calling", "compliance", "enrichment", "commissions", "earnings", "incentives", "training", "mileage", "referrals", "onboarding", "dashboard", "audit", "settings"];
 export function groupedCapabilities(): { domain: CapabilityDomain; capabilities: Capability[] }[] {
   const all = Object.keys(CAPABILITY_DOMAIN) as Capability[];
   return DOMAIN_ORDER.map(domain => ({
