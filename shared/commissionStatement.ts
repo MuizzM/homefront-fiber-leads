@@ -58,7 +58,7 @@ export interface StatementHoldbackInput {
 }
 
 export interface StatementDocInput {
-  company: { name: string; supportEmail?: string | null };
+  company: { name: string; supportEmail?: string | null; logoDataUri?: string | null };
   rep: { id: number; name: string };
   period: { label: string; startUtc: string; nextStartUtc: string; timezone: string };
   statement: {
@@ -78,6 +78,12 @@ export interface StatementDocInput {
   adjustments: Array<{ id: number; amountCents: number; reason: string; approvedAtIso: string | null }>;
   /** ISO instant the document was produced. Supplied — this module has no clock. */
   issuedAtIso: string;
+  /**
+   * True while the week is still OPEN. An open week live-recomputes on every
+   * knock, so the page is a PREVIEW of a moving number — both renderers mark it
+   * so a screenshot of a mid-week total is never mistaken for a pay document.
+   */
+  isDraft?: boolean;
 }
 
 export interface StatementLine {
@@ -128,7 +134,7 @@ export interface StatementPayout {
 }
 
 export interface StatementDocument {
-  company: { name: string; supportEmail: string | null };
+  company: { name: string; supportEmail: string | null; logoDataUri: string | null };
   rep: { id: number; name: string };
   period: StatementDocInput["period"];
   statement: StatementDocInput["statement"] & { issuedAtIso: string };
@@ -139,6 +145,8 @@ export interface StatementDocument {
   adjustments: StatementDocInput["adjustments"];
   /** Present only when the org books house amounts — drives column visibility. */
   showHouseColumn: boolean;
+  /** The week is still OPEN — this is a preview, not a pay document. */
+  isDraft: boolean;
 }
 
 /** A sale in one of these states put money on this statement. */
@@ -263,7 +271,11 @@ export function buildStatementDocument(input: StatementDocInput): StatementDocum
   };
 
   return {
-    company: { name: input.company.name, supportEmail: input.company.supportEmail ?? null },
+    company: {
+      name: input.company.name,
+      supportEmail: input.company.supportEmail ?? null,
+      logoDataUri: input.company.logoDataUri ?? null,
+    },
     rep: input.rep,
     period: input.period,
     statement: { ...input.statement, issuedAtIso: input.issuedAtIso },
@@ -273,7 +285,56 @@ export function buildStatementDocument(input: StatementDocInput): StatementDocum
     payout,
     adjustments: input.adjustments,
     showHouseColumn: houseKnown.length > 0,
+    isDraft: input.isDraft ?? false,
   };
+}
+
+/** One row of the statement's money summary. */
+export interface StatementSummaryRow {
+  label: string;
+  amountCents: number;
+  /** The bolded subtotal line ("Earned this period"). */
+  strong?: boolean;
+  /** Rendered as a deduction — shown negative on both surfaces. */
+  negative?: boolean;
+}
+
+/**
+ * The money summary EXACTLY as both the PDF and the on-screen statement show it.
+ *
+ * This lives here because it used to live in two places and they drifted: the
+ * screen and the paper each built their own row list, and the PDF's list was
+ * missing overrides entirely. `earnedCents` has always included override pay
+ * (see the sum above), so a team lead or manager whose week was all override
+ * money read "Commission on sales $0.00" against a non-zero "Earned this
+ * period" — an unexplained delta on a pay document.
+ *
+ * INVARIANT, pinned by tests/unit/commission-statement-document.test.ts: the
+ * non-strong rows above "Earned this period" sum to exactly `earnedCents`. A
+ * new money plane must be added HERE, which is what makes that invariant hold
+ * on both surfaces at once instead of on whichever one someone remembered.
+ *
+ * Zero-valued optional planes are omitted so an ordinary commission-only rep's
+ * statement stays as short as it was before any of them existed.
+ */
+export function statementSummaryRows(doc: {
+  totals: Pick<StatementTotals, "hourlyPayCents" | "grossCommissionCents" | "overrideCents" | "adjustmentCents" | "spiffCents" | "earnedCents">;
+  payout: Pick<StatementPayout, "reservePercent" | "reserveCents">;
+}): StatementSummaryRow[] {
+  const t = doc.totals;
+  const rows: StatementSummaryRow[] = [];
+  if (t.hourlyPayCents !== 0) rows.push({ label: "Hourly pay", amountCents: t.hourlyPayCents });
+  rows.push({ label: "Commission on sales", amountCents: t.grossCommissionCents });
+  if (t.overrideCents !== 0) rows.push({ label: "Team overrides", amountCents: t.overrideCents, negative: t.overrideCents < 0 });
+  if (t.adjustmentCents !== 0) rows.push({ label: "Adjustments", amountCents: t.adjustmentCents, negative: t.adjustmentCents < 0 });
+  if (t.spiffCents !== 0) rows.push({ label: "Spiffs", amountCents: t.spiffCents });
+  rows.push({ label: "Earned this period", amountCents: t.earnedCents, strong: true });
+  rows.push({
+    label: `Chargeback holdback (${doc.payout.reservePercent}%)`,
+    amountCents: -Math.abs(doc.payout.reserveCents),
+    negative: doc.payout.reserveCents > 0,
+  });
+  return rows;
 }
 
 /** `$1,234.56` / `-$12.00` — one money formatter for every surface. */

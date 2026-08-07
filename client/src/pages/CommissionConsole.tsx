@@ -28,6 +28,10 @@ import { Label } from "@/components/ui/label";
 
 interface OverviewRow {
   repId: number; repName: string; active: boolean;
+  // Derived server-side from the reports-to tree (never stored) — lets the week
+  // be filtered by branch without a second round trip.
+  managerId: number | null; managerName: string | null;
+  teamLeadId: number | null; teamLeadName: string | null;
   statementId: number | null; status: string;
   qualifiedSaleCount: number; pendingSaleCount: number; reversedSaleCount: number;
   tierLabel: string | null; rateCents: number;
@@ -81,6 +85,13 @@ export default function CommissionConsole() {
   const [weekOffset, setWeekOffset] = useState(0);       // 0 = current, -1 = last week…
   const [drillRep, setDrillRep] = useState<OverviewRow | null>(null);
   const [confirmAction, setConfirmAction] = useState<"FINALIZE" | "MARK_PAID" | null>(null);
+  // Week filters. The DATE dimension is the week nav above — these narrow WHO is
+  // shown inside the selected week, which is what a manager closing out a large
+  // floor actually needs. Filtering is client-side on purpose: the overview is
+  // already one row per rep for the week, so there is nothing to page in.
+  const [repQuery, setRepQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [uplineFilter, setUplineFilter] = useState<string>("ALL"); // "mgr:<id>" | "tl:<id>" 
 
   // Anchor the reference instant ONCE per mount — a fresh Date.now() per render
   // would change the query key every render and refetch forever. The server
@@ -112,6 +123,40 @@ export default function CommissionConsole() {
     },
     onError: (e: any) => toast({ title: "Closeout failed", description: e.message, variant: "destructive" }),
   });
+
+  // ── Week filters ───────────────────────────────────────────────────────────
+  // Applied to the REP TABLE only. Totals, exceptions and the finalize/pay
+  // actions deliberately keep reading the UNFILTERED week: a filter is a way to
+  // FIND a rep, never a way to change what closing the week will do. Narrowing
+  // the payroll figure to whoever is on screen would be the most dangerous
+  // possible reading of a filter box.
+  const uplineOptions = (() => {
+    const managers = new Map<number, string>();
+    const leads = new Map<number, string>();
+    for (const r of ov?.rows ?? []) {
+      if (r.managerId != null && r.managerName) managers.set(r.managerId, r.managerName);
+      if (r.teamLeadId != null && r.teamLeadName) leads.set(r.teamLeadId, r.teamLeadName);
+    }
+    return {
+      managers: [...managers].sort((a, b) => a[1].localeCompare(b[1])),
+      leads: [...leads].sort((a, b) => a[1].localeCompare(b[1])),
+    };
+  })();
+
+  const filtersActive = repQuery.trim() !== "" || statusFilter !== "ALL" || uplineFilter !== "ALL";
+  const visibleRows = (ov?.rows ?? []).filter(r => {
+    const q = repQuery.trim().toLowerCase();
+    if (q && !r.repName.toLowerCase().includes(q)) return false;
+    if (statusFilter !== "ALL" && r.status !== statusFilter) return false;
+    if (uplineFilter !== "ALL") {
+      const [kind, rawId] = uplineFilter.split(":");
+      const id = Number(rawId);
+      if (kind === "mgr" && r.managerId !== id) return false;
+      if (kind === "tl" && r.teamLeadId !== id) return false;
+    }
+    return true;
+  });
+  const clearFilters = () => { setRepQuery(""); setStatusFilter("ALL"); setUplineFilter("ALL"); };
 
   const openCount = ov?.rows.filter(r => r.status === "OPEN").length ?? 0;
   const finalizedCount = ov?.rows.filter(r => r.status === "FINALIZED").length ?? 0;
@@ -277,10 +322,69 @@ export default function CommissionConsole() {
 
           {/* Rep table */}
           <div className="rounded-2xl bg-card border border-border overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+            <div className="px-4 py-3 border-b border-border flex items-center gap-2 flex-wrap">
               <Users className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm font-semibold">Reps this week</span>
               <span className="ml-auto text-xs text-muted-foreground">tap a row to explain every dollar</span>
+            </div>
+
+            {/* Filters — narrow WHO is listed inside the selected week. The week
+                itself is the date control above. Totals and the closeout actions
+                intentionally ignore these: a filter finds a rep, it never
+                changes what finalizing the week will do. */}
+            <div className="px-4 py-2.5 border-b border-border flex items-center gap-2 flex-wrap" data-testid="week-filters">
+              <input
+                type="search"
+                value={repQuery}
+                onChange={e => setRepQuery(e.target.value)}
+                placeholder="Find a rep…"
+                aria-label="Filter by rep name"
+                data-testid="filter-rep"
+                className="h-8 min-w-[150px] flex-1 sm:flex-none rounded-lg border border-border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+                aria-label="Filter by statement status"
+                data-testid="filter-status"
+                className="h-8 rounded-lg border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="ALL">All statuses</option>
+                <option value="OPEN">Open</option>
+                <option value="REVIEW">In review</option>
+                <option value="FINALIZED">Finalized</option>
+                <option value="PAID">Paid</option>
+                <option value="NO_PLAN">No plan</option>
+              </select>
+              {(uplineOptions.managers.length > 0 || uplineOptions.leads.length > 0) && (
+                <select
+                  value={uplineFilter}
+                  onChange={e => setUplineFilter(e.target.value)}
+                  aria-label="Filter by manager or team lead"
+                  data-testid="filter-upline"
+                  className="h-8 rounded-lg border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="ALL">All branches</option>
+                  {uplineOptions.managers.length > 0 && (
+                    <optgroup label="Manager">
+                      {uplineOptions.managers.map(([id, name]) => <option key={`mgr-${id}`} value={`mgr:${id}`}>{name}</option>)}
+                    </optgroup>
+                  )}
+                  {uplineOptions.leads.length > 0 && (
+                    <optgroup label="Team lead">
+                      {uplineOptions.leads.map(([id, name]) => <option key={`tl-${id}`} value={`tl:${id}`}>{name}</option>)}
+                    </optgroup>
+                  )}
+                </select>
+              )}
+              {filtersActive && (
+                <>
+                  <span className="text-2xs text-muted-foreground" data-testid="filter-count">
+                    {visibleRows.length} of {ov.rows.length}
+                  </span>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={clearFilters} data-testid="filter-clear">Clear</Button>
+                </>
+              )}
             </div>
             {ov.rows.length === 0 ? (
               <div className="p-10 text-center">
@@ -294,9 +398,21 @@ export default function CommissionConsole() {
               </div>
             ) : (
               <>
+              {/* Filters that match nobody must SAY so. Rendering an empty table
+                  would read as "this week has no reps", which is a different and
+                  much more alarming statement than "your filter is too narrow". */}
+              {visibleRows.length === 0 && (
+                <div className="px-4 py-10 text-center" data-testid="filter-no-matches">
+                  <p className="text-sm font-semibold text-foreground">No reps match these filters</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {ov.rows.length} rep{ov.rows.length === 1 ? " is" : "s are"} producing this week.
+                  </p>
+                  <Button variant="outline" size="sm" className="mt-3 h-8 text-xs" onClick={clearFilters}>Clear filters</Button>
+                </div>
+              )}
               {/* Mobile: card list — Rep + Commission + Status never scroll off. */}
               <div className="sm:hidden divide-y divide-border">
-                {ov.rows.map(r => (
+                {visibleRows.map(r => (
                   <button key={r.repId} onClick={() => setDrillRep(r)} data-testid={`card-rep-${r.repId}`}
                     className="render-lazy w-full text-left px-4 py-3 active:bg-secondary/50 transition-colors">
                     <div className="flex items-center justify-between gap-2">
@@ -341,7 +457,7 @@ export default function CommissionConsole() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {ov.rows.map(r => (
+                    {visibleRows.map(r => (
                       <tr key={r.repId} className="hover:bg-secondary/40 cursor-pointer transition-colors focus:outline-none focus:bg-secondary/60 focus-visible:ring-1 focus-visible:ring-primary"
                         role="button" tabIndex={0} aria-label={`Explain ${r.repName}'s ${usd(r.finalCommissionCents)}`}
                         onClick={() => setDrillRep(r)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDrillRep(r); } }}

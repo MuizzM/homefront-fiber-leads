@@ -8,7 +8,7 @@
 //      same money.
 import { describe, expect, it } from "vitest";
 import {
-  allocateCents, buildStatementDocument, formatCents, planLabelFor,
+  allocateCents, buildStatementDocument, formatCents, planLabelFor, statementSummaryRows,
   type StatementDocInput, type StatementSaleInput,
 } from "@shared/commissionStatement";
 
@@ -195,5 +195,88 @@ describe("formatCents / planLabelFor", () => {
     expect(planLabelFor({ structure: "TIERED", tierLabel: "Tier 3 (7+)", rateCents: 15000 })).toBe("Tier 3 (7+) — $150.00 per sale");
     expect(planLabelFor({ structure: "FLAT", tierLabel: null, rateCents: 5000 })).toBe("Flat — $50.00 per sale");
     expect(planLabelFor({ structure: null, tierLabel: null, rateCents: 0 })).toBe("—");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The money summary is built ONCE, in shared, because it used to be built twice
+// — in server/commissionStatementPdf.ts and client/CommissionStatement.tsx —
+// and the two drifted. The PDF's copy omitted overrides entirely, so a team lead
+// or manager whose week was all override money got a pay document reading
+// "Commission on sales $0.00" against a non-zero "Earned this period".
+//
+// The invariant below is what makes that class of bug structural rather than
+// remembered: whatever rows the summary shows, the ones above "Earned this
+// period" must sum to exactly earnedCents.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("statementSummaryRows — the summary always adds up", () => {
+  const rowsFor = (money: Partial<StatementDocInput["money"]>, holdback: Partial<StatementDocInput["holdback"]> = {}) => {
+    const doc = buildStatementDocument(base({
+      money: { ...base().money, ...money } as StatementDocInput["money"],
+      holdback: { ...base().holdback, ...holdback },
+    }));
+    return { doc, rows: statementSummaryRows(doc) };
+  };
+
+  const sumAbove = (rows: ReturnType<typeof statementSummaryRows>) => {
+    const earnedIdx = rows.findIndex(r => r.strong);
+    return rows.slice(0, earnedIdx).reduce((s, r) => s + r.amountCents, 0);
+  };
+
+  it("commission-only week: rows above the subtotal sum to earned", () => {
+    const { doc, rows } = rowsFor({});
+    expect(sumAbove(rows)).toBe(doc.totals.earnedCents);
+    expect(rows.map(r => r.label)).toEqual([
+      "Commission on sales", "Earned this period", "Chargeback holdback (10%)",
+    ]);
+  });
+
+  it("THE REGRESSION: an override-only week shows the override row and adds up", () => {
+    // A manager who sold nothing themselves but earned $75 of override pay.
+    const { doc, rows } = rowsFor({
+      grossCommissionCents: 0, overrideCents: 7500, overrideItemCount: 1,
+    } as any);
+    expect(doc.totals.overrideCents).toBe(7500);
+    expect(doc.totals.earnedCents).toBe(7500);
+    const override = rows.find(r => r.label === "Team overrides");
+    expect(override).toBeTruthy();
+    expect(override!.amountCents).toBe(7500);
+    // The whole point: no unexplained delta between the lines and the subtotal.
+    expect(sumAbove(rows)).toBe(doc.totals.earnedCents);
+  });
+
+  it("every money plane at once still reconciles", () => {
+    const { doc, rows } = rowsFor({
+      grossCommissionCents: 36000, overrideCents: 5000, adjustmentCents: -2500,
+      spiffCents: 1500, hourlyPayCents: 8000, overrideItemCount: 2,
+    } as any);
+    expect(sumAbove(rows)).toBe(doc.totals.earnedCents);
+    expect(rows.map(r => r.label)).toEqual([
+      "Hourly pay", "Commission on sales", "Team overrides", "Adjustments", "Spiffs",
+      "Earned this period", "Chargeback holdback (10%)",
+    ]);
+  });
+
+  it("a negative override (net clawback week) is shown as a deduction, not hidden", () => {
+    const { doc, rows } = rowsFor({ grossCommissionCents: 20000, overrideCents: -7500 } as any);
+    const override = rows.find(r => r.label === "Team overrides")!;
+    expect(override.amountCents).toBe(-7500);
+    expect(override.negative).toBe(true);
+    expect(sumAbove(rows)).toBe(doc.totals.earnedCents);
+  });
+
+  it("omits zero-valued optional planes so an ordinary rep's statement stays short", () => {
+    const { rows } = rowsFor({ overrideCents: 0, spiffCents: 0, adjustmentCents: 0, hourlyPayCents: 0 } as any);
+    expect(rows.some(r => r.label === "Team overrides")).toBe(false);
+    expect(rows.some(r => r.label === "Spiffs")).toBe(false);
+    expect(rows.some(r => r.label === "Adjustments")).toBe(false);
+    expect(rows.some(r => r.label === "Hourly pay")).toBe(false);
+  });
+
+  it("the holdback is always the last row and always a deduction", () => {
+    const { doc, rows } = rowsFor({});
+    const last = rows[rows.length - 1];
+    expect(last.label).toContain("Chargeback holdback");
+    expect(last.amountCents).toBe(-Math.abs(doc.payout.reserveCents));
   });
 });

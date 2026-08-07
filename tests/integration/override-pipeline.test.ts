@@ -376,3 +376,96 @@ describe("a leader mid-onboarding still earns on their team's sales", () => {
     expect(stmt.statement.override_pay_cents).toBe(2500);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P0: a hold that lapses into an already-locked week must not strand the money.
+// promoteReleasedHolds used to flip HELD → PAYABLE with no statement probe (the
+// EARN path 90 lines above has always had one). The row landed PAYABLE in a
+// FINALIZED week, the upline's recalculation threw STATEMENT_LOCKED and was
+// swallowed best-effort, markWeekSettled had already run — so the upline was
+// never paid and nothing appeared on the exceptions rail to catch it.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("install hold released into a locked week", () => {
+  it("books EXCEPTION / LOCKED_WEEK_RELEASE instead of going PAYABLE into a FINALIZED week", () => {
+    // A fresh branch so the shared mgr/tl fixtures keep their state.
+    const mgrLock = member("Ovr Lock Mgr", "manager", null);
+    const repLock = member("Ovr Lock Rep", "rep", mgrLock.memberId);
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 1, 90, datetime('now'))",
+    ).run(TENANT);
+
+    const lead = sell(repLock.memberId);
+    const future = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    rawDb.prepare(
+      `INSERT INTO commissions (rep_id, tenant_id, lead_id, amount, status, sale_date, payable_after, install_confirmed_at)
+       VALUES (?, ?, ?, 0, 'pending', ?, ?, ?)`,
+    ).run(repLock.memberId, TENANT, lead, soldNow(), future, soldNow());
+    // Re-earn under the hold (same dance as the install-hold test above).
+    svc.reverseFieldSale(TENANT, lead, null);
+    svc.transitionSale(TENANT, null, `lead:${lead}`, "QUALIFY");
+    // Pin the HELD row by id: the first earn/claw pair is already closed and will
+    // be swept to SETTLED by the finalize below, so positional lookup finds it.
+    const heldRow = ledgerFor(lead).find(r => r.entry_type === "EARN" && r.status === "HELD" && r.beneficiary_rep_id === mgrLock.memberId)!;
+    expect(heldRow).toBeTruthy();
+
+    // The manager's week is FINALIZED while the money is still held.
+    const stmt = svc.calculateOrRecalculateStatement({
+      tenantId: TENANT, repId: mgrLock.memberId, weekReference: new Date(), actorId: null,
+    }).statement;
+    svc.transitionStatement(TENANT, null, stmt.id, "FINALIZE");
+    const finalBefore = rawDb.prepare(`SELECT final_commission_cents AS c FROM commission_statements WHERE id = ?`).get(stmt.id).c;
+
+    // …then the hold lapses into that now-locked week.
+    const past = new Date(Date.now() - 60_000).toISOString();
+    rawDb.prepare(`UPDATE commissions SET payable_after = ? WHERE lead_id = ?`).run(past, lead);
+    rawDb.prepare(`UPDATE commission_overrides SET hold_payable_after = ? WHERE source_ref = ? AND status = 'HELD'`)
+      .run(past, `sale:${saleRow(lead).id}`);
+    ov.promoteReleasedHolds(TENANT, (ts) => weekBoundsFor(ts, svc.loadOrgConfig(TENANT)).weekStartUtc);
+
+    const mgrRow = ledgerFor(lead).find(r => r.id === heldRow.id)!;
+    expect(mgrRow.status).toBe("EXCEPTION");            // NOT silently PAYABLE
+    expect(mgrRow.reason).toBe("LOCKED_WEEK_RELEASE");
+
+    // The locked statement is untouched and a human can see the stranded money.
+    const finalAfter = rawDb.prepare(`SELECT final_commission_cents AS c FROM commission_statements WHERE id = ?`).get(stmt.id).c;
+    expect(finalAfter).toBe(finalBefore);
+    expect(ov.listExceptions(TENANT).some((e: any) => e.id === mgrRow.id)).toBe(true);
+
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 0, 90, datetime('now'))",
+    ).run(TENANT);
+  });
+
+  it("still releases normally into an OPEN week", () => {
+    const mgrOpen = member("Ovr Open Mgr", "manager", null);
+    const repOpen = member("Ovr Open Rep", "rep", mgrOpen.memberId);
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 1, 90, datetime('now'))",
+    ).run(TENANT);
+
+    const lead = sell(repOpen.memberId);
+    const future = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    rawDb.prepare(
+      `INSERT INTO commissions (rep_id, tenant_id, lead_id, amount, status, sale_date, payable_after, install_confirmed_at)
+       VALUES (?, ?, ?, 0, 'pending', ?, ?, ?)`,
+    ).run(repOpen.memberId, TENANT, lead, soldNow(), future, soldNow());
+    svc.reverseFieldSale(TENANT, lead, null);
+    svc.transitionSale(TENANT, null, `lead:${lead}`, "QUALIFY");
+    const heldRow = ledgerFor(lead).find(r => r.entry_type === "EARN" && r.status === "HELD" && r.beneficiary_rep_id === mgrOpen.memberId)!;
+    expect(heldRow).toBeTruthy();
+
+    const past = new Date(Date.now() - 60_000).toISOString();
+    rawDb.prepare(`UPDATE commission_overrides SET hold_payable_after = ? WHERE source_ref = ? AND status = 'HELD'`)
+      .run(past, `sale:${saleRow(lead).id}`);
+    ov.promoteReleasedHolds(TENANT, (ts) => weekBoundsFor(ts, svc.loadOrgConfig(TENANT)).weekStartUtc);
+
+    const mgrRow = ledgerFor(lead).find(r => r.id === heldRow.id)!;
+    expect(mgrRow.status).toBe("PAYABLE");
+    expect(mgrRow.reason).toBeNull();
+    expect(mgrRow.earned_week_start_utc).toBe(weekBoundsFor(past, svc.loadOrgConfig(TENANT)).weekStartUtc);
+
+    rawDb.prepare(
+      "INSERT OR REPLACE INTO tenant_pay_policy (tenant_id, require_install_confirm, hold_days, updated_at) VALUES (?, 0, 90, datetime('now'))",
+    ).run(TENANT);
+  });
+});

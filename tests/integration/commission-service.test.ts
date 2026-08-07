@@ -692,3 +692,88 @@ describe("post-finalize correction workflow (reviewer criticals)", () => {
     expect(r?.statementId).toBeNull();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P0: the sale ledger's write guards live in upsertSale itself, not only in the
+// knock wrapper. `POST /api/commission/sales` calls upsertSale directly, so a
+// guard that lived only in recordFieldSaleFromKnock left the HTTP door open to
+// silently re-crediting or re-dating a live sale — which under retroactive
+// weekly pay re-prices BOTH the losing and the gaining rep's entire week.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("upsertSale write guards (sale re-attribution / re-dating / locked weeks)", () => {
+  const T7 = 9007, REP_OWN = 7001, REP_THIEF = 7002;
+
+  beforeAll(() => {
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T7, "Guard Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_OWN, T7, null);
+    seedRep(REP_THIEF, T7, null);
+    svc.assignStructureToRep(T7, 1, { repId: REP_OWN, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+    svc.assignStructureToRep(T7, 1, { repId: REP_THIEF, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+    svc.upsertSale(T7, 1, { repId: REP_OWN, externalId: "guard-1", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+  });
+
+  it("REFUSES to re-credit a QUALIFIED sale to a different rep, and moves no money", () => {
+    let err: any;
+    try {
+      svc.upsertSale(T7, 1, { repId: REP_THIEF, externalId: "guard-1", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    } catch (e) { err = e; }
+    expect(err?.code).toBe("SALE_CREDIT_LOCKED");
+    expect(err?.httpStatus).toBe(409);
+    // the ledger row still belongs to the original rep — no silent overwrite
+    expect(svc.getSaleByExternalId(T7, "guard-1").rep_id).toBe(REP_OWN);
+  });
+
+  it("REFUSES to drag a QUALIFIED sale into a different pay week", () => {
+    const nextWeek = new Date(Date.parse(inWeekTs) + 8 * 86_400_000).toISOString();
+    let err: any;
+    try {
+      svc.upsertSale(T7, 1, { repId: REP_OWN, externalId: "guard-1", status: "QUALIFIED", soldAt: nextWeek, qualifiedAt: nextWeek });
+    } catch (e) { err = e; }
+    expect(err?.code).toBe("SALE_CREDIT_LOCKED");
+    expect(svc.getSaleByExternalId(T7, "guard-1").qualified_at).toBe(inWeekTs);
+  });
+
+  it("still allows an idempotent re-upsert of the same rep in the same week (replay must converge)", () => {
+    expect(() =>
+      svc.upsertSale(T7, 1, { repId: REP_OWN, externalId: "guard-1", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs }),
+    ).not.toThrow();
+    expect(svc.getSaleByExternalId(T7, "guard-1").rep_id).toBe(REP_OWN);
+  });
+
+  it("clamps a backdated soldAt into the correction window when the server stamps receipt", () => {
+    // Default correction window is 30 days; a sale claimed 400 days ago is pulled
+    // forward to the window floor rather than landing in a long-settled week.
+    const claimed = new Date(Date.parse(inWeekTs) - 400 * 86_400_000).toISOString();
+    svc.upsertSale(T7, 1, {
+      repId: REP_OWN, externalId: "guard-backdate", status: "PENDING",
+      soldAt: claimed, serverReceivedAt: inWeekTs,
+    });
+    const soldAt = svc.getSaleByExternalId(T7, "guard-backdate").sold_at;
+    const floor = Date.parse(inWeekTs) - 30 * 86_400_000;
+    expect(Date.parse(soldAt)).toBe(floor);
+    expect(Date.parse(soldAt)).toBeGreaterThan(Date.parse(claimed));
+  });
+
+  it("leaves soldAt alone for a trusted in-process caller that omits serverReceivedAt", () => {
+    // backfillFieldSales books real historical dates and must not be clamped.
+    const historical = new Date(Date.parse(inWeekTs) - 400 * 86_400_000).toISOString();
+    svc.upsertSale(T7, 1, { repId: REP_OWN, externalId: "guard-historical", status: "PENDING", soldAt: historical });
+    expect(svc.getSaleByExternalId(T7, "guard-historical").sold_at).toBe(historical);
+  });
+
+  it("REFUSES to inject a QUALIFIED sale into a FINALIZED week", () => {
+    svc.calculateOrRecalculateStatement({ tenantId: T7, repId: REP_OWN, weekReference: WEEK_REF, actorId: 1 });
+    svc.batchTransitionWeek(T7, 1, WEEK_REF, "FINALIZE", [REP_OWN]);
+    let err: any;
+    try {
+      svc.upsertSale(T7, 1, { repId: REP_OWN, externalId: "guard-late", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    } catch (e) { err = e; }
+    expect(err?.code).toBe("STATEMENT_LOCKED");
+    expect(svc.getSaleByExternalId(T7, "guard-late")).toBeFalsy();
+    // …but booking it PENDING is still allowed — that is the sanctioned path
+    expect(() =>
+      svc.upsertSale(T7, 1, { repId: REP_OWN, externalId: "guard-late", status: "PENDING", soldAt: inWeekTs }),
+    ).not.toThrow();
+  });
+});

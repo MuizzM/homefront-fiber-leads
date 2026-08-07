@@ -17,6 +17,10 @@ data.db
 data.db-shm
 data.db-wal
 data.db-journal
+
+# Throwaway DATA_DIR for the `homefront-verify` launch config — a scratch
+# database used to drive the app locally without contending for data.db.
+.dev-verify/
 # Local snapshots + the out-of-database high-water mark (server/dbSafetyNet.ts).
 # Whole copies of the database, so this must stay ignored for exactly the reason
 # the line above exists — and they are gigabyte-scale.

@@ -10,7 +10,7 @@
 import { renderPdfBuffer } from "./pdfCommon";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { formatCents, type StatementDocument, type StatementLine } from "@shared/commissionStatement";
+import { formatCents, statementSummaryRows, type StatementDocument, type StatementLine } from "@shared/commissionStatement";
 
 const INK = "#12314c";       // headings / primary figures
 const MUTED = "#617081";     // labels, secondary text
@@ -41,6 +41,18 @@ function brandLogo(): Buffer | null {
   }
   logoCache = null;
   return logoCache;
+}
+
+/** Decode a data URI the doc layer has already validated (shape, size, magic
+ *  bytes). Kept defensive anyway — this runs on the pay-document path. */
+function decodeLogoDataUri(value: string | null | undefined): Buffer | null {
+  if (!value) return null;
+  const comma = value.indexOf(",");
+  if (comma < 0) return null;
+  try {
+    const bytes = Buffer.from(value.slice(comma + 1), "base64");
+    return bytes.length > 0 ? bytes : null;
+  } catch { return null; }
 }
 
 function fmtDate(iso: string, timezone: string): string {
@@ -86,11 +98,21 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
     const cols = columns(docModel.showHouseColumn);
 
     // ── Header ───────────────────────────────────────────────────────────────
-    const logo = brandLogo();
+    // Three-level fallback, unchanged in spirit: the tenant's OWN wordmark if it
+    // has configured one, else the bundled HFS mark, else type-set text. The
+    // tenant logo is a data URI already validated at the doc boundary
+    // (sanitizeLogoDataUri), but doc.image can still reject a well-formed image
+    // it cannot decode — so it stays inside the try, and a failure falls through
+    // to the bundled mark rather than costing a rep their statement.
     let headerTextX = M.left;
-    if (logo) {
-      try { doc.image(logo, M.left, M.top - 4, { fit: [46, 46] }); headerTextX = M.left + 58; }
-      catch { headerTextX = M.left; }
+    const drawLogo = (img: Buffer): boolean => {
+      try { doc.image(img, M.left, M.top - 4, { fit: [46, 46] }); headerTextX = M.left + 58; return true; }
+      catch { return false; }
+    };
+    const tenantLogo = decodeLogoDataUri(docModel.company.logoDataUri);
+    if (!(tenantLogo && drawLogo(tenantLogo))) {
+      const fallback = brandLogo();
+      if (fallback) drawLogo(fallback);
     }
     doc.font("Helvetica-Bold").fontSize(15).fillColor(INK)
       .text(docModel.company.name, headerTextX, M.top, { width: 280, lineBreak: false, ellipsis: true });
@@ -102,7 +124,11 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
     doc.font("Helvetica-Bold").fontSize(10).fillColor(INK)
       .text(docModel.period.label || "—", headRight, M.top + 2, { width: 210, align: "right", lineBreak: false });
     doc.font("Helvetica").fontSize(8.5).fillColor(MUTED)
-      .text(`${docModel.statement.status} · Statement #${docModel.statement.id ?? "—"}`, headRight, M.top + 18, { width: 210, align: "right", lineBreak: false });
+      .text(
+        docModel.isDraft
+          ? `DRAFT · ${docModel.statement.status} · Statement #${docModel.statement.id ?? "—"}`
+          : `${docModel.statement.status} · Statement #${docModel.statement.id ?? "—"}`,
+        headRight, M.top + 18, { width: 210, align: "right", lineBreak: false });
 
     doc.moveTo(M.left, M.top + 42).lineTo(M.left + CONTENT_W, M.top + 42).lineWidth(1).strokeColor(BRAND).stroke();
 
@@ -212,13 +238,11 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
     const boxW = 268;
     const boxX = M.left + CONTENT_W - boxW;
 
-    const rows: Array<[string, string, boolean?]> = [];
-    if (docModel.totals.hourlyPayCents !== 0) rows.push(["Hourly pay", formatCents(docModel.totals.hourlyPayCents)]);
-    rows.push(["Commission on sales", formatCents(docModel.totals.grossCommissionCents)]);
-    if (docModel.totals.adjustmentCents !== 0) rows.push(["Adjustments", formatCents(docModel.totals.adjustmentCents)]);
-    if (docModel.totals.spiffCents !== 0) rows.push(["Spiffs", formatCents(docModel.totals.spiffCents)]);
-    rows.push(["Earned this period", formatCents(docModel.totals.earnedCents), true]);
-    rows.push([`Chargeback holdback (${docModel.payout.reservePercent}%)`, `-${formatCents(docModel.payout.reserveCents).replace("-", "")}`]);
+    // Built from the SHARED row list so the paper and the screen can never again
+    // disagree about which money planes a statement admits to (see
+    // shared/commissionStatement.statementSummaryRows).
+    const rows: Array<[string, string, boolean?]> = statementSummaryRows(docModel)
+      .map(r => [r.label, formatCents(r.amountCents), r.strong] as [string, string, boolean?]);
 
     const boxH = 30 + rows.length * 16 + 34;
     doc.roundedRect(boxX, y, boxW, boxH, 8).fillAndStroke("#ffffff", HAIRLINE);
@@ -289,8 +313,15 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
       const restoreBottom = doc.page.margins.bottom;
       doc.page.margins.bottom = 0;
       doc.moveTo(M.left, BODY_BOTTOM + 14).lineTo(M.left + CONTENT_W, BODY_BOTTOM + 14).lineWidth(0.7).strokeColor(HAIRLINE).stroke();
+      // A locked week is stamped with the instant it was ISSUED (its finalized_at,
+      // resolved by the doc layer), so a re-download reproduces the original page.
+      // An open week has no issue date and says so, because its number is still
+      // moving — "Generated" is a preview, "Issued" is a pay document.
+      const stamp = docModel.isDraft
+        ? `Generated ${fmtStamp(docModel.statement.issuedAtIso, tz)} · preview of an open week`
+        : `Issued ${fmtStamp(docModel.statement.issuedAtIso, tz)}`;
       doc.font("Helvetica").fontSize(7.5).fillColor(MUTED)
-        .text(`${docModel.company.name} · Issued ${fmtStamp(docModel.statement.issuedAtIso, tz)} · Calculation v${docModel.statement.calculationVersion}`,
+        .text(`${docModel.company.name} · ${stamp} · Calculation v${docModel.statement.calculationVersion}`,
           M.left, BODY_BOTTOM + 22, { width: CONTENT_W - 60, lineBreak: false, ellipsis: true })
         .text(`Page ${i + 1} of ${range.count}`, M.left + CONTENT_W - 60, BODY_BOTTOM + 22, { width: 60, align: "right", lineBreak: false });
       doc.page.margins.bottom = restoreBottom;

@@ -7,6 +7,16 @@
       "runtimeArgs": ["-c", "SCAN_GLOBAL_CONCURRENCY=24 SCAN_BATCH_CONCURRENCY=12 RESEND_DELIVERY_MODE=log npm run dev"],
       "port": 5050,
       "autoPort": true
+    },
+    {
+      "name": "homefront-verify",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATA_DIR=.dev-verify SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5060,
+      "autoPort": true
     }
   ]
 }

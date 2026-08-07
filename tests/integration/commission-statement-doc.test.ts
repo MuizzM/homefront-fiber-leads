@@ -218,3 +218,95 @@ describe("house amount config", () => {
     expect((await res.json() as any).houseAmountCents).toBe(HOUSE_CENTS);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Provenance and branding on the pay document.
+//
+// A statement is evidence of what someone was paid, so re-downloading it must
+// reproduce the ORIGINAL page — not one stamped with today's date. A locked week
+// therefore takes its issue date from its own finalized_at, and an open week
+// (which live-recomputes on every knock) is marked a preview so a screenshot of
+// a mid-week total is never mistaken for a pay document.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("statement provenance", () => {
+  it("an OPEN week is a DRAFT stamped with the request clock", async () => {
+    const res = await request(`/api/commission/statements/${statementId}/document`, admin.session);
+    expect(res.status).toBe(200);
+    const doc = await res.json() as any;
+    expect(doc.statement.status).toBe("OPEN");
+    expect(doc.isDraft).toBe(true);
+  });
+
+  it("a FINALIZED week is stamped with its own finalized_at, not the request clock", async () => {
+    const fin = await post(`/api/commission/statements/${statementId}/transition`, admin.session, { action: "FINALIZE" });
+    expect(fin.status).toBe(200);
+    const finalizedAt = rawDb.prepare(`SELECT finalized_at AS f FROM commission_statements WHERE id = ?`).get(statementId) as any;
+    expect(finalizedAt.f).toBeTruthy();
+
+    const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(doc.isDraft).toBe(false);
+    expect(doc.statement.issuedAtIso).toBe(finalizedAt.f);
+  });
+
+  it("re-downloading the same locked statement reproduces the same issue stamp", async () => {
+    const first = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    await new Promise(r => setTimeout(r, 15));
+    const second = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(second.statement.issuedAtIso).toBe(first.statement.issuedAtIso);
+  });
+
+  it("MARK_PAID does not re-issue the statement — paying settles it, it does not reprint it", async () => {
+    const before = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect((await post(`/api/commission/statements/${statementId}/transition`, admin.session, { action: "MARK_PAID" })).status).toBe(200);
+    const after = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(after.statement.status).toBe("PAID");
+    expect(after.statement.issuedAtIso).toBe(before.statement.issuedAtIso);
+  });
+});
+
+describe("tenant wordmark on the statement", () => {
+  // 1x1 transparent PNG.
+  const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+  it("ignores a logo that is not a data URI, and keeps rendering", async () => {
+    rawDb.prepare(`UPDATE tenants SET brand_logo = ? WHERE id = 1`).run("https://evil.example.test/logo.png");
+    const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(doc.company.logoDataUri).toBeNull();
+  });
+
+  it("ignores a filesystem path — a pay document never reads a path out of a mutable column", async () => {
+    rawDb.prepare(`UPDATE tenants SET brand_logo = ? WHERE id = 1`).run("../../etc/passwd");
+    const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(doc.company.logoDataUri).toBeNull();
+  });
+
+  it("ignores a payload whose bytes do not match its declared type", async () => {
+    // Declared PNG, actually not.
+    rawDb.prepare(`UPDATE tenants SET brand_logo = ? WHERE id = 1`).run(
+      `data:image/png;base64,${Buffer.from("this is not a png").toString("base64")}`);
+    const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(doc.company.logoDataUri).toBeNull();
+  });
+
+  it("accepts a real PNG data URI and carries it onto the document", async () => {
+    rawDb.prepare(`UPDATE tenants SET brand_logo = ? WHERE id = 1`).run(`data:image/png;base64,${PNG_1PX}`);
+    const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(doc.company.logoDataUri).toBe(`data:image/png;base64,${PNG_1PX}`);
+  });
+
+  it("still renders a valid PDF with the tenant logo embedded", async () => {
+    const res = await request(`/api/commission/statements/${statementId}/statement.pdf`, admin.session);
+    expect(res.status).toBe(200);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    expect(bytes.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(bytes.length).toBeGreaterThan(1000);
+  });
+
+  it("a logo the renderer cannot use never costs a rep their statement", async () => {
+    rawDb.prepare(`UPDATE tenants SET brand_logo = ? WHERE id = 1`).run("data:image/png;base64,!!!not-base64!!!");
+    const res = await request(`/api/commission/statements/${statementId}/statement.pdf`, admin.session);
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer()).subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    rawDb.prepare(`UPDATE tenants SET brand_logo = NULL WHERE id = 1`).run();
+  });
+});

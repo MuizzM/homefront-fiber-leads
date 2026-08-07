@@ -132,6 +132,65 @@ Errors are typed (`CommissionError.code` + `httpStatus`): `STATEMENT_LOCKED` (40
 `OVERLAPPING_PLAN_ASSIGNMENT` (409), `NO_EFFECTIVE_PLAN_ASSIGNMENT`, `INVALID_TIER_CONFIGURATION`,
 `CROSS_TENANT_ACCESS` (404), `UNSUPPORTED_TIER_MODE`, `INVALID_TIMEZONE`, `INVALID_ADJUSTMENT`.
 
+## Write guards on the sale ledger
+
+The `ON CONFLICT` upsert in `upsertSale` rewrites `rep_id` and every timestamp,
+which under retroactive weekly pay is the most valuable write in the system:
+moving a QUALIFIED sale's owner or its pay-week re-prices **both** the losing and
+the gaining rep's entire week. Three guards therefore live in `upsertSale`
+itself, at the single write site, not in any one caller:
+
+1. **Correction-window clamp** — when the caller supplies `serverReceivedAt`,
+   `soldAt` is clamped into `[received − correctionWindowDays, received]`. HTTP
+   routes always stamp it themselves (spread *after* the body, so a caller cannot
+   widen its own window); trusted in-process callers booking real historical
+   dates (`backfillFieldSales`) omit it and are not clamped.
+2. **A QUALIFIED sale is frozen** — owner and pay-week both. Re-pointing either
+   throws `SALE_CREDIT_LOCKED` (409). A genuine correction is a manager reversal
+   followed by a fresh booking, which leaves an auditable pair.
+3. **No QUALIFIED money into a locked week** — throws `STATEMENT_LOCKED` (409);
+   the sanctioned path is to book it PENDING and qualify it in an open
+   correction period.
+
+`recordFieldSaleFromKnock` pre-empts all three with softer, never-fail-a-knock
+handling (early return + audit line), so the knock path never trips these throws.
+
+On the override side, `promoteReleasedHolds` probes the beneficiary's statement
+before flipping HELD → PAYABLE. A hold lapsing into a FINALIZED/PAID week books
+`EXCEPTION` / `LOCKED_WEEK_RELEASE` on the exceptions rail instead of landing
+PAYABLE in a week that will never be recomputed — the same rule the EARN path has
+always enforced.
+
+**Money writes are branch-scoped.** Managers hold `commission.read.all`, so
+`readScope` returns every rep in the tenant and the read test alone is a no-op for
+exactly the role that also holds `sales.write` / `adjustments.write` /
+`statements.write`. `denyOutOfBranch` re-derives `branchOwnerOf` on every
+commission write, so a manager cannot book a sale, file an adjustment, or
+recalculate a statement against a peer manager's rep. Unowned members fail open
+(orphans and new hires stay writable) and admins arbitrate across branches.
+
+## What the statement says
+
+`statementSummaryRows` in `shared/commissionStatement.ts` is the single source for
+the money summary. The PDF and the on-screen statement both build from it, which
+is what keeps them honest: the two used to build their own row lists and drifted,
+and the PDF's copy omitted overrides entirely — so an override-only week showed
+"Commission on sales $0.00" against a non-zero "Earned this period". The pinned
+invariant is that the rows above the subtotal sum to `earnedCents` exactly, so a
+new money plane has to be added in one place to appear correctly in both.
+
+A **locked** statement takes its issue stamp from its own `finalized_at`, so
+re-downloading last month's statement reproduces the original page rather than
+one dated today. An **open** week has no issue date, live-recomputes on every
+knock, and is marked a draft on both surfaces. `MARK_PAID` does not re-issue.
+
+`tenants.brand_logo` is the org's own wordmark, stored as a **self-contained data
+URI** — never a URL (a pay document must not depend on a network fetch) and never
+a filesystem path (traversal out of a mutable column). It is validated at the doc
+boundary for shape, size, and magic bytes matching the declared type; anything
+else is ignored, preserving the three-level fallback (tenant mark → bundled mark →
+type-set text) because a missing image must never cost a rep their statement.
+
 ## Migrations
 
 Additive and idempotent. Base tables come from `drizzle-kit push` (schema.ts); the

@@ -9,6 +9,7 @@ import crypto from "crypto";
 import { rawDb } from "./db";
 import { storage, bumpTenantConfigVersion } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
+import { uplineSlotsOf } from "@shared/teamHierarchy";
 import { computeHoldback, rollupReserve, type Holdback, type ReserveLedger } from "@shared/commissionReserve";
 import {
   resolveRepReserveConfig, getReserveBalanceCents, recordWeeklyHold, setRepReserveConfig,
@@ -32,7 +33,7 @@ export type CommissionErrorCode =
   | "STATEMENT_LOCKED" | "DUPLICATE_SALE" | "CROSS_TENANT_ACCESS"
   | "UNAUTHORIZED_COMMISSION_ACTION" | "INVALID_WORKWEEK" | "INVALID_ADJUSTMENT"
   | "CONCURRENT_STATEMENT_UPDATE" | "WEEK_KEY_FROZEN" | "OPEN_CLOCK_SESSION"
-  | "INVALID_HOUSE_AMOUNT" | "INVALID_OVERRIDE_CONFIG";
+  | "INVALID_HOUSE_AMOUNT" | "INVALID_OVERRIDE_CONFIG" | "SALE_CREDIT_LOCKED";
 
 export class CommissionError extends Error {
   constructor(public code: CommissionErrorCode, message: string, public httpStatus = 400) {
@@ -608,14 +609,97 @@ export function assignPlanVersionToRep(tenantId: number, actorId: number | null,
 }
 
 // Idempotent commissionable-sale upsert keyed by (tenant, externalId).
+//
+// The ON CONFLICT clause below rewrites rep_id and every timestamp, which under
+// retroactive weekly pay is the most valuable write in the system: moving a
+// QUALIFIED sale's owner or its pay-week re-prices BOTH the losing and the
+// gaining rep's whole week. The three guards enforcing that used to live only in
+// recordFieldSaleFromKnock, so `POST /api/commission/sales` — which calls this
+// function directly — reached the raw upsert with none of them. They live HERE
+// now, at the single write site, so no present or future caller can bypass them.
+// recordFieldSaleFromKnock still pre-empts each guard with its own (softer,
+// never-fail-a-knock) handling, so it never trips these throws.
 export function upsertSale(tenantId: number, actorId: number | null, input: {
   repId: number; externalId: string; status?: string; soldAt: string;
   qualifiedAt?: string | null; installedAt?: string | null; activatedAt?: string | null; leadId?: number | null;
+  /** Server-stamped receipt time. When supplied, soldAt is clamped into the org's
+   *  correction window ending here — the untrusted-clock guard. HTTP routes always
+   *  supply it (the client's clock never places a pay-week); trusted in-process
+   *  callers seeding real historical dates (backfillFieldSales, tests) omit it. */
+  serverReceivedAt?: string | null;
 }): any {
   const rep = storage.getTeamMemberById(input.repId);
   if (!rep || rep.tenantId !== tenantId) throw new CommissionError("CROSS_TENANT_ACCESS", "Rep not found in tenant.", 404);
   if (!input.externalId || !input.soldAt) throw new CommissionError("INVALID_ADJUSTMENT", "externalId and soldAt are required.");
   const status = input.status || "PENDING";
+  const config = loadOrgConfig(tenantId);
+
+  // ── GUARD 1: the pay-week is placed by SERVER-RECEIVED time, clamped to the
+  // correction window — never by a caller-supplied clock. Honest late sync still
+  // lands in its true week; what this stops is backdating months to concentrate
+  // sales into one high-tier week. Absent serverReceivedAt = trusted in-process
+  // caller booking a known-good historical date, so no clamp is applied.
+  let soldAt = input.soldAt;
+  if (input.serverReceivedAt) {
+    const serverMs = Date.parse(input.serverReceivedAt);
+    if (Number.isFinite(serverMs)) {
+      const floorMs = serverMs - config.correctionWindowDays * 86_400_000;
+      const rawMs = Date.parse(soldAt);
+      soldAt = new Date(Math.min(Math.max(Number.isFinite(rawMs) ? rawMs : serverMs, floorMs), serverMs)).toISOString();
+    }
+  }
+
+  // The basis timestamp decides which week the money lands in, so that — not
+  // sold_at alone — is what must stay put once a sale is live.
+  const basisOf = (row: { sold_at?: string | null; qualified_at?: string | null; installed_at?: string | null; activated_at?: string | null }) =>
+    (row as any)[BASIS_COLUMN[config.qualificationBasis]] || row.sold_at || null;
+  const existing = rawDb.prepare(
+    `SELECT id, rep_id, status, sold_at, qualified_at, installed_at, activated_at FROM commission_sales WHERE tenant_id = ? AND external_id = ?`,
+  ).get(tenantId, input.externalId) as any;
+
+  // ── GUARD 2: a QUALIFIED sale is FROZEN — owner and pay-week both. Re-pointing
+  // one is a manager REVERSAL followed by a fresh booking, which leaves an
+  // auditable pair, never a silent in-place overwrite that re-prices two weeks.
+  if (existing && existing.status === "QUALIFIED") {
+    const incomingBasis = basisOf({
+      sold_at: soldAt, qualified_at: input.qualifiedAt ?? null,
+      installed_at: input.installedAt ?? null, activated_at: input.activatedAt ?? null,
+    });
+    const movesCredit = Number(existing.rep_id) !== Number(input.repId);
+    const movesWeek = !!incomingBasis && !!basisOf(existing)
+      && weekBoundsFor(incomingBasis, config).weekStartUtc !== weekBoundsFor(basisOf(existing), config).weekStartUtc;
+    if (movesCredit || movesWeek) {
+      storage.logActivity(actorId, "commission_sale.credit_conflict_blocked", "commission_sale", existing.id,
+        { externalId: input.externalId, existingRepId: existing.rep_id, attemptedRepId: input.repId,
+          existingBasis: basisOf(existing), attemptedBasis: incomingBasis, movesCredit, movesWeek }, undefined);
+      throw new CommissionError("SALE_CREDIT_LOCKED",
+        movesCredit
+          ? `Sale ${input.externalId} is QUALIFIED to rep ${existing.rep_id} — reverse it before re-crediting.`
+          : `Sale ${input.externalId} is QUALIFIED in an earlier pay week — reverse it before re-dating.`,
+        409);
+    }
+  }
+
+  // ── GUARD 3: never inject QUALIFIED money into a locked week. It would either
+  // fail the recalculation outright or sit latent inside a PAID week and surface
+  // on the next recompute. A manager qualifies it into an open correction period.
+  if (status === "QUALIFIED") {
+    const basisTs = basisOf({
+      sold_at: soldAt, qualified_at: input.qualifiedAt ?? null,
+      installed_at: input.installedAt ?? null, activated_at: input.activatedAt ?? null,
+    }) || soldAt;
+    const target = weekBoundsFor(basisTs, config).weekStartUtc;
+    const lockedStmt = rawDb.prepare(
+      `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(tenantId, input.repId, target) as any;
+    if (lockedStmt && (lockedStmt.status === "FINALIZED" || lockedStmt.status === "PAID")) {
+      storage.logActivity(actorId, "commission_sale.locked_week_blocked", "commission_sale", existing?.id,
+        { externalId: input.externalId, repId: input.repId, weekStartUtc: target, status: lockedStmt.status }, undefined);
+      throw new CommissionError("STATEMENT_LOCKED",
+        `Week ${target} is ${lockedStmt.status} for rep ${input.repId} — book the sale PENDING and qualify it in an open correction period.`, 409);
+    }
+  }
+
   const now = nowIso();
   rawDb.prepare(
     `INSERT INTO commission_sales (tenant_id, rep_id, external_id, status, sold_at, qualified_at, installed_at, activated_at, lead_id, created_at, updated_at)
@@ -624,7 +708,7 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
        rep_id = excluded.rep_id, status = excluded.status, sold_at = excluded.sold_at,
        qualified_at = excluded.qualified_at, installed_at = excluded.installed_at,
        activated_at = excluded.activated_at, lead_id = excluded.lead_id, updated_at = excluded.updated_at`
-  ).run(tenantId, input.repId, input.externalId, status, input.soldAt, input.qualifiedAt ?? null, input.installedAt ?? null, input.activatedAt ?? null, input.leadId ?? null, now, now);
+  ).run(tenantId, input.repId, input.externalId, status, soldAt, input.qualifiedAt ?? null, input.installedAt ?? null, input.activatedAt ?? null, input.leadId ?? null, now, now);
   const sale = rawDb.prepare(`SELECT * FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, input.externalId) as any;
   storage.logActivity(actorId, "commission_sale.upserted", "commission_sale", sale?.id, { externalId: input.externalId, repId: input.repId, status }, undefined);
   return sale;
@@ -1297,6 +1381,14 @@ export interface WeekOverviewRepRow {
   // with no downline earnings this week).
   overridePayCents: number;
   overrideItemCount: number;
+  // DERIVED upline, never stored (shared/teamHierarchy.uplineSlotsOf): the first
+  // team lead and first manager above this rep in the reports-to tree, resolved
+  // at read time. Lets the console filter a week by branch without a second
+  // round trip, and without two writable columns that could disagree with the
+  // tree. What a settled week PAID still comes from the ledger's frozen
+  // chain_snapshot — this is a read model, never a money source.
+  managerId: number | null; managerName: string | null;
+  teamLeadId: number | null; teamLeadName: string | null;
 }
 
 export function getWeekOverview(tenantId: number, actorId: number | null, weekReference: Date | string | number, repIds: number[] | null): {
@@ -1321,7 +1413,13 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
       .get(tenantId, m.id)) return true;
     return overrides.hasOverrideRowsForWeek(tenantId, m.id, bounds.weekStartUtc);
   };
-  let reps = storage.getTeamMembers(tenantId).filter((m: any) => m.role !== "manager" || managerHasPayableSurface(m));
+  const roster = storage.getTeamMembers(tenantId) as any[];
+  // The FULL roster drives the upline walk — `reps` below is filtered down to
+  // who has a payable surface this week, and walking a filtered tree would lose
+  // the very supervisors we are resolving.
+  const rosterRefs = roster.map((m: any) => ({ id: m.id, role: m.role, reportsToId: m.reportsToId ?? null, active: !!m.active }));
+  const rosterNameById = new Map<number, string>(roster.map((m: any) => [m.id, m.name]));
+  let reps = roster.filter((m: any) => m.role !== "manager" || managerHasPayableSurface(m));
   if (repIds) reps = reps.filter((m: any) => repIds.includes(m.id));
 
   const rows: WeekOverviewRepRow[] = [];
@@ -1346,8 +1444,11 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
     // effective at week start). Also drives the OPEN_CLOCK_SESSION exception.
     const hp = hourlyPayForWeek(tenantId, rep.id, bounds.weekStartUtc, bounds.nextWeekStartUtc);
 
+    const upline = uplineSlotsOf(rep.id, rosterRefs);
     let row: WeekOverviewRepRow = {
       repId: rep.id, repName: rep.name, active: !!rep.active,
+      managerId: upline.managerId, managerName: rosterNameById.get(upline.managerId ?? -1) ?? null,
+      teamLeadId: upline.teamLeadId, teamLeadName: rosterNameById.get(upline.teamLeadId ?? -1) ?? null,
       statementId: null, status: "NO_PLAN",
       qualifiedSaleCount: byStatus["QUALIFIED"] ?? 0,
       pendingSaleCount: byStatus["PENDING"] ?? 0,

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Printer, X, Download, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { formatCents, type StatementDocument, type StatementLine } from "@shared/commissionStatement";
+import { formatCents, statementSummaryRows, type StatementDocument, type StatementLine } from "@shared/commissionStatement";
 
 // ── Printable commission statement ────────────────────────────────────────────
 // A paper-white, logo-bearing pay document. Every number on it comes from the
@@ -136,13 +136,16 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
     </tr>
   );
 
-  const summaryRows: Array<{ k: string; v: string; strong?: boolean; negative?: boolean }> = [];
-  if (doc.totals.hourlyPayCents !== 0) summaryRows.push({ k: "Hourly pay", v: money(doc.totals.hourlyPayCents) });
-  summaryRows.push({ k: "Commission on sales", v: money(doc.totals.grossCommissionCents) });
-  if (doc.totals.adjustmentCents !== 0) summaryRows.push({ k: "Adjustments", v: money(doc.totals.adjustmentCents), negative: doc.totals.adjustmentCents < 0 });
-  if (doc.totals.spiffCents !== 0) summaryRows.push({ k: "Spiffs", v: money(doc.totals.spiffCents) });
-  summaryRows.push({ k: "Earned this period", v: money(doc.totals.earnedCents), strong: true });
-  summaryRows.push({ k: `Chargeback holdback (${doc.payout.reservePercent}%)`, v: `−${money(Math.abs(doc.payout.reserveCents))}`, negative: doc.payout.reserveCents > 0 });
+  // Built from the SHARED row list (shared/commissionStatement.statementSummaryRows)
+  // so the screen and the downloadable PDF always show the same money planes.
+  const summaryRows = statementSummaryRows(doc).map(r => ({
+    k: r.label,
+    // The holdback is the one row rendered with a true minus sign rather than a
+    // hyphen, so it reads as a deduction on screen.
+    v: r.amountCents < 0 && r.negative ? `−${money(Math.abs(r.amountCents))}` : money(r.amountCents),
+    strong: r.strong,
+    negative: r.negative,
+  }));
 
   const capPct = doc.payout.reserveCapCents && doc.payout.reserveCapCents > 0
     ? Math.max(0, Math.min(100, Math.round((doc.payout.reserveBalanceCents / doc.payout.reserveCapCents) * 100)))
@@ -177,8 +180,12 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
         {/* Header — logo + the tenant's own company name, never a hardcoded one */}
         <div className="flex items-start justify-between gap-6 pb-7" style={{ borderBottom: `1px solid ${RULE}` }}>
           <div className="flex items-start gap-4 min-w-0">
+            {/* The tenant's own wordmark when it has one, else the bundled mark,
+                else nothing — the same three-level fallback the PDF uses, so the
+                screen and the download never show different branding. */}
             <img
-              src="/hfs-logo.png" alt=""
+              src={doc.company.logoDataUri || "/hfs-logo.png"} alt=""
+              data-testid="statement-logo"
               style={{ height: 54, width: "auto", display: "block", flexShrink: 0 }}
               onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
             />
@@ -188,7 +195,12 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
               <div className="mt-3 space-y-0.5 text-[12.5px]" style={{ color: MUTED }}>
                 <div><span className="inline-block w-[92px]" style={{ color: FAINT }}>Statement</span> #{doc.statement.id ?? "—"}</div>
                 <div><span className="inline-block w-[92px]" style={{ color: FAINT }}>Pay period</span> {doc.period.label || "—"}</div>
-                <div><span className="inline-block w-[92px]" style={{ color: FAINT }}>Issued</span> {issued}</div>
+                {/* A locked week carries its real issue date; an open one is a
+                    preview of a number that still moves, and says so. */}
+                <div>
+                  <span className="inline-block w-[92px]" style={{ color: FAINT }}>{doc.isDraft ? "Generated" : "Issued"}</span> {issued}
+                  {doc.isDraft && <span className="ml-2 text-[11px] uppercase tracking-wide" style={{ color: FAINT }}>preview</span>}
+                </div>
               </div>
             </div>
           </div>

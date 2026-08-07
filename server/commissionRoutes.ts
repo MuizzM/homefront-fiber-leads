@@ -7,7 +7,7 @@
 
 import type { Express, Request, Response, NextFunction } from "express";
 import { can } from "@shared/capabilities";
-import { downlineOf } from "@shared/teamHierarchy";
+import { branchOwnerOf, downlineOf } from "@shared/teamHierarchy";
 import { storage } from "./storage";
 import * as svc from "./commissionService";
 import * as reserve from "./reserveService";
@@ -135,6 +135,32 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     try { res.json(svc.activatePlan(tid(req), uid(req), Number(req.params.id))); } catch (e) { fail(res, e); }
   });
 
+  // Branch guard for MONEY WRITES. A manager holds commission.read.all, so
+  // readScope hands them `repIds: null` — every rep in the tenant — which makes
+  // the read test below a no-op for exactly the role that also holds
+  // sales.write / adjustments.write / statements.write. Before this existed,
+  // manager A could book a sale, file an adjustment, or recalculate a statement
+  // against manager B's rep; the self-deal guard did not catch it, because it
+  // only blocks writing your OWN commission, never a peer's rep.
+  //
+  // This is the same rule the roster routes and PATCH /reps/:repId/override-rates
+  // already enforce (commissionOverrideRoutes.ts) — that route's comment named
+  // this hole. Unowned members fail OPEN by branchOwnerOf's deliberate design, so
+  // orphans and new hires stay writable; admins arbitrate between branches and
+  // pass through. Applied to WRITES only: a manager's org-wide READ is oversight
+  // they are meant to have.
+  const denyOutOfBranch = (req: Request, res: Response, repId: number): boolean => {
+    const actor = (req as any).user;
+    if (actor?.role !== "manager" || actor?.teamMemberId == null) return false;
+    const owner = branchOwnerOf(repId, storage.getTeamMembers(tid(req)) as any[]);
+    if (owner == null || owner === actor.teamMemberId) return false;
+    res.status(403).json({
+      error: "That member belongs to another manager's team — ask an admin to transfer them",
+      code: "OUT_OF_BRANCH",
+    });
+    return true;
+  };
+
   // Write-scope guard: a structure.manage holder (team_lead+) may only WRITE to
   // reps they can READ. Without this a team_lead could fabricate sales / set
   // rates for reps outside their team (write-scope exceeding read-scope).
@@ -154,7 +180,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       res.status(403).json({ error: "You cannot set your own commission", code: "COMMISSION_SELF_DEAL" });
       return true;
     }
-    return false;
+    return denyOutOfBranch(req, res, repId);
   };
 
   // ── Rep assignments (overlap-checked) ─────────────────────────────────────────
@@ -313,7 +339,13 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   // team_lead holds and could otherwise use to fabricate QUALIFIED sales.
   app.post("/api/commission/sales", requireCapability("commission.sales.write"), (req, res) => {
     if (denyOutOfScope(req, res, Number(req.body?.repId))) return;
-    try { res.status(201).json(svc.upsertSale(tid(req), uid(req), req.body || {})); } catch (e) { fail(res, e); }
+    // serverReceivedAt is stamped HERE and deliberately spread AFTER the body so a
+    // caller-supplied receipt time can never widen its own correction window. The
+    // clamp, the QUALIFIED-sale freeze, and the locked-week refusal all live in
+    // upsertSale itself, so this route cannot reach the raw upsert without them.
+    try {
+      res.status(201).json(svc.upsertSale(tid(req), uid(req), { ...(req.body || {}), serverReceivedAt: new Date().toISOString() }));
+    } catch (e) { fail(res, e); }
   });
   app.post("/api/commission/sales/:externalId/transition", requireCapability("commission.sales.write"), (req, res) => {
     const { action, at, reason } = req.body || {};
@@ -331,6 +363,9 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     const weekReference = parseWeekRef(req.body?.week) ?? parseWeekRef(req.body?.weekReference);
     if (!repId || !weekReference) return res.status(400).json({ error: "repId and week are required" });
     if (!canReadRep((req as any).user, repId)) return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
+    // Recalculation REWRITES a statement row, so it takes the same branch guard
+    // as the other money writes rather than only the read test.
+    if (denyOutOfBranch(req, res, repId)) return;
     try {
       const out = svc.calculateOrRecalculateStatement({ tenantId: tid(req), repId, weekReference, actorId: uid(req), requestId: rid(req) });
       res.json(out);

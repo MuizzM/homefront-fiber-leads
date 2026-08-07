@@ -170,6 +170,50 @@ export function branchOwnerOf(
 }
 
 /**
+ * The first team lead and the first manager strictly ABOVE a member, walking the
+ * reports-to chain upward.
+ *
+ * This is the read-model answer to "who is this person's manager / team lead?" —
+ * the pair the spec wants as columns. They are DERIVED, never stored: two
+ * writable columns can disagree with each other and with the tree, which is the
+ * exact bug an inverted edge caused before (a team lead below a promoted manager
+ * still collecting overrides). One parent edge makes disagreement structurally
+ * impossible, so the pair is computed from it wherever it is displayed.
+ *
+ * The one place a derived pair IS frozen is the money row: commission_overrides
+ * stores chain_snapshot at earn time, because what a settled week PAID must not
+ * move when the tree does. Read models call this; ledgers read their snapshot.
+ *
+ * Hop-budgeted and cycle-safe like every other walk here — a corrupt chain
+ * reports nulls rather than looping. Deliberately NOT gated on `active`, for the
+ * same reason computeFlatOverrides is not: a departed leader is already out of
+ * the chain (offboard re-homes their reports), while an inactive one is usually
+ * a new hire mid-signature whose team is already selling.
+ */
+export function uplineSlotsOf(
+  memberId: number,
+  members: readonly BranchMemberRef[],
+  maxHops = 100,
+): { teamLeadId: number | null; managerId: number | null } {
+  const byId = new Map(members.map(m => [m.id, m]));
+  const seen = new Set<number>([memberId]);
+  let teamLeadId: number | null = null;
+  let managerId: number | null = null;
+  let cursor = byId.get(memberId)?.reportsToId ?? null;
+  for (let hop = 0; hop < maxHops; hop++) {
+    if (cursor == null || seen.has(cursor)) break;
+    seen.add(cursor);
+    const node = byId.get(cursor);
+    if (!node) break;
+    if (node.role === "team_lead" && teamLeadId == null) teamLeadId = node.id;
+    if (node.role === "manager" && managerId == null) managerId = node.id;
+    if (teamLeadId != null && managerId != null) break;
+    cursor = node.reportsToId ?? null;
+  }
+  return { teamLeadId, managerId };
+}
+
+/**
  * Is `supervisorRole` a valid supervisor for a member holding `memberRole`?
  * A supervisor must rank strictly above the member (reps report to team
  * leads or managers; team leads report to managers; managers report to

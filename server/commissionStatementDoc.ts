@@ -57,6 +57,13 @@ const BASIS_COLUMN: Record<string, string> = {
  * `issuedAtIso` is injected rather than read from the clock so a test can pin
  * the whole document, and so a caller that renders the same statement twice in
  * one request stamps both copies identically.
+ *
+ * For a LOCKED week the caller's clock is overridden by the statement's own
+ * `finalized_at`: a pay document is evidence of what was paid and when it was
+ * issued, so re-downloading last month's statement must reproduce the same
+ * page, not one stamped "generated today". An OPEN week has no issue date yet —
+ * it keeps the request clock and is marked a draft (see `isDraft`), because a
+ * live-recomputing week is a preview, never a pay document.
  */
 export function buildStatementDocumentFor(
   tenantId: number, statementId: number, issuedAtIso: string,
@@ -66,7 +73,7 @@ export function buildStatementDocumentFor(
 
   const config = svc.loadOrgConfig(tenantId);
   const rep = storage.getTeamMemberById(stmt.rep_id) as any;
-  const tenant = rawDb.prepare(`SELECT company_name, owner_email FROM tenants WHERE id = ?`).get(tenantId) as any;
+  const tenant = rawDb.prepare(`SELECT company_name, owner_email, brand_logo FROM tenants WHERE id = ?`).get(tenantId) as any;
 
   // A locked week reads its FROZEN door snapshot; an open one reads live. The
   // fallback covers statements locked before the snapshot column existed.
@@ -92,7 +99,12 @@ export function buildStatementDocumentFor(
   const reserveBalanceCents = getReserveBalanceCents(tenantId, stmt.rep_id);
 
   const input: StatementDocInput = {
-    company: { name: tenant?.company_name || "Home Front Solutions", supportEmail: tenant?.owner_email ?? null },
+    company: {
+      name: tenant?.company_name || "Home Front Solutions",
+      supportEmail: tenant?.owner_email ?? null,
+      // Validated at the boundary so neither renderer has to trust the column.
+      logoDataUri: sanitizeLogoDataUri(tenant?.brand_logo),
+    },
     rep: { id: Number(stmt.rep_id), name: rep?.name || `Rep #${stmt.rep_id}` },
     period: {
       label: String(stmt.local_week_label ?? ""),
@@ -137,7 +149,43 @@ export function buildStatementDocumentFor(
         id: Number(a.id), amountCents: Number(a.amount_cents ?? 0),
         reason: String(a.reason ?? ""), approvedAtIso: a.approved_at ?? null,
       })),
-    issuedAtIso,
+    // A locked week is stamped with the moment it was actually issued, so a
+    // re-print reproduces the original page rather than today's date. PAID keeps
+    // finalized_at too: paying does not re-issue the statement, it settles it.
+    issuedAtIso: (locked && stmt.finalized_at) ? String(stmt.finalized_at) : issuedAtIso,
+    isDraft: !locked,
   };
   return buildStatementDocument(input);
+}
+
+// ── Tenant wordmark ──────────────────────────────────────────────────────────
+// `tenants.brand_logo` is TEXT and, until now, was written by the super-admin
+// console and read by nothing — so its storage form was undefined. It is a
+// self-contained data URI, deliberately NOT a URL and NOT a filesystem path:
+// rendering a pay document must never depend on a network fetch, and a path out
+// of a mutable column is a traversal risk on the server that renders it.
+//
+// Anything malformed, oversized, or of an unsupported type returns null rather
+// than throwing. That preserves the existing three-level fallback in the PDF
+// (tenant logo → bundled HFS wordmark → type-set text), which exists because a
+// missing image must never cost a rep their statement.
+const MAX_LOGO_BYTES = 512 * 1024;
+const LOGO_DATA_URI = /^data:image\/(png|jpe?g);base64,([A-Za-z0-9+/=\s]+)$/;
+
+export function sanitizeLogoDataUri(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const match = LOGO_DATA_URI.exec(raw.trim());
+  if (!match) return null;
+  let bytes: Buffer;
+  try { bytes = Buffer.from(match[2].replace(/\s+/g, ""), "base64"); }
+  catch { return null; }
+  if (bytes.length === 0 || bytes.length > MAX_LOGO_BYTES) return null;
+  // Verify the magic bytes match the DECLARED type. A mislabelled payload would
+  // otherwise reach doc.image() and throw mid-render, turning a cosmetic
+  // misconfiguration into a failed statement download.
+  const isPng = bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  const isJpeg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const declaredPng = match[1] === "png";
+  if (declaredPng ? !isPng : !isJpeg) return null;
+  return `data:image/${match[1]};base64,${bytes.toString("base64")}`;
 }

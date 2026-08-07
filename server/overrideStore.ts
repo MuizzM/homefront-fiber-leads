@@ -306,13 +306,31 @@ export function beneficiariesForSale(tenantId: number, saleId: number): Array<{ 
  */
 export function promoteReleasedHolds(tenantId: number, weekStartOf: (ts: string) => string, now = nowIso()): void {
   const due = rawDb.prepare(
-    `SELECT id, hold_payable_after FROM commission_overrides
+    `SELECT id, beneficiary_rep_id AS beneficiaryRepId, hold_payable_after AS holdPayableAfter
+     FROM commission_overrides
      WHERE tenant_id = ? AND status = 'HELD' AND hold_payable_after IS NOT NULL AND hold_payable_after <= ?`
   ).all(tenantId, now) as any[];
   for (const row of due) {
+    const releaseWeek = weekStartOf(row.holdPayableAfter);
+    // Same rule the EARN path enforces 90 lines up: money may never land PAYABLE
+    // in a week that is already FINALIZED or PAID. Without this probe the row
+    // went PAYABLE into a locked week, the upline's recalculation threw
+    // STATEMENT_LOCKED (swallowed best-effort by the caller), markWeekSettled had
+    // already run — and the upline was simply never paid, with nothing on the
+    // exceptions rail to catch it. Book EXCEPTION instead so it surfaces for a
+    // manager adjustment, exactly like a reversal against a settled week.
+    const uplineStmt = rawDb.prepare(
+      `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`
+    ).get(tenantId, row.beneficiaryRepId, releaseWeek) as any;
+    const uplineLocked = uplineStmt && (uplineStmt.status === "FINALIZED" || uplineStmt.status === "PAID");
     rawDb.prepare(
-      `UPDATE commission_overrides SET status='PAYABLE', earned_week_start_utc=?, updated_at=? WHERE id=? AND status='HELD'`
-    ).run(weekStartOf(row.hold_payable_after), now, row.id);
+      `UPDATE commission_overrides SET status=?, earned_week_start_utc=?, reason=COALESCE(reason, ?), updated_at=?
+       WHERE id=? AND status='HELD'`
+    ).run(uplineLocked ? "EXCEPTION" : "PAYABLE", releaseWeek, uplineLocked ? "LOCKED_WEEK_RELEASE" : null, now, row.id);
+    if (uplineLocked) {
+      storage.logActivity(null, "override.hold_released_into_locked_week", "commission_override", row.id,
+        { beneficiaryRepId: row.beneficiaryRepId, weekStartUtc: releaseWeek, statementStatus: uplineStmt.status }, undefined);
+    }
   }
 }
 
