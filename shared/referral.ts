@@ -401,3 +401,117 @@ export function canChangeReferrer(
   if (actorIsAdmin) return { allowed: true, reason: null };
   return { allowed: false, reason: "Changing the referrer after hire requires an admin." };
 }
+
+// ── The referred person's own view ──────────────────────────────────────────
+//
+// What someone who was REFERRED may see about the referral they are the subject
+// of. Kept here, pure, so there is exactly ONE definition of what is safe to
+// show and it can be tested without a server.
+//
+// ── WHAT IS DELIBERATELY ABSENT, AND WHY ───────────────────────────────────
+// The referred person is not the beneficiary. The reward is the REFERRER's
+// compensation, so no amount appears here at all — not the configured reward,
+// not a partial, not a currency field left at zero. A zero would invite "why is
+// my bonus $0", and any real figure is someone else's pay.
+//
+// Nothing identifies the referrer either. The applicant already knows who gave
+// them a link; the platform confirming it turns a social fact into a record,
+// and one that survives the referrer leaving.
+//
+// And a declined referral never says WHY. "Invalid code", "referrer offboarded"
+// and "anti-fraud rule triggered" are each a probe someone could use to tune a
+// next attempt, so every non-qualifying terminal state collapses to the single
+// opaque `unavailable`.
+
+/** Plain-language reward state, from the referred person's point of view. */
+export type ApplicantRewardState =
+  /** No referral is attached to this person at all. */
+  | "none"
+  /** Attributed and still working toward the bar. */
+  | "in_progress"
+  /** The bar is met; the organization is reviewing or holding it. */
+  | "in_review"
+  | "approved"
+  | "paid"
+  /** Closed without a reward. Deliberately says nothing about the cause. */
+  | "unavailable";
+
+export interface ApplicantReferralStatus {
+  /** Was this person referred by someone? */
+  attributed: boolean;
+  rewardState: ApplicantRewardState;
+  /** Their OWN qualifying sales toward the threshold. Safe because it is their
+   *  own work, and it is the one number that makes the view actionable. Null
+   *  before there is anything to count. */
+  salesProgress: { current: number; target: number } | null;
+  /** Their own funnel milestones — facts about themselves, not about the
+   *  programme's rules. */
+  milestones: { hired: boolean; activated: boolean; trainingComplete: boolean };
+  /** One sentence for the UI. Never contains a reason for a decline. */
+  headline: string;
+}
+
+const APPLICANT_TERMINAL_UNAVAILABLE: ReadonlySet<ReferralStatus> = new Set<ReferralStatus>([
+  "REJECTED", "EXPIRED", "CLAWED_BACK",
+]);
+
+/**
+ * Project a referral into what its SUBJECT may see.
+ *
+ * Takes the already-computed qualification result rather than recomputing, so
+ * this view can never disagree with the one the referrer and the admin see
+ * about the same referral — they are three renderings of one evaluation.
+ */
+export function applicantStatusView(
+  referral: {
+    status: ReferralStatus;
+    hiredAt: string | null;
+    activatedAt: string | null;
+  } | null,
+  qualification: QualificationResult | null,
+  trainingComplete: boolean,
+): ApplicantReferralStatus {
+  if (!referral) {
+    return {
+      attributed: false,
+      rewardState: "none",
+      salesProgress: null,
+      milestones: { hired: false, activated: false, trainingComplete: false },
+      headline: "You were not referred by anyone, so there is nothing to track here.",
+    };
+  }
+
+  const salesRequirement = qualification?.requirements.find(r => r.key === "sales");
+  const salesProgress = salesRequirement?.target != null
+    ? { current: salesRequirement.current ?? 0, target: salesRequirement.target }
+    : null;
+
+  const milestones = {
+    hired: !!referral.hiredAt,
+    activated: !!referral.activatedAt,
+    trainingComplete,
+  };
+
+  // Order matters: the terminal check runs FIRST so a rejected referral can
+  // never fall through into a state that describes progress.
+  let rewardState: ApplicantRewardState;
+  if (APPLICANT_TERMINAL_UNAVAILABLE.has(referral.status)) rewardState = "unavailable";
+  else if (referral.status === "PAID") rewardState = "paid";
+  else if (referral.status === "APPROVED") rewardState = "approved";
+  else if (referral.status === "QUALIFIED" || referral.status === "REWARD_PENDING") rewardState = "in_review";
+  else rewardState = "in_progress";
+
+  const HEADLINES: Record<ApplicantRewardState, string> = {
+    none: "You were not referred by anyone, so there is nothing to track here.",
+    in_progress: salesProgress
+      ? `You are ${salesProgress.current} of ${salesProgress.target} approved sales toward completing your referral.`
+      : "Your referral is on file. Your progress will show here once you start selling.",
+    in_review: "You have met everything asked of you. Your referral is with your organization for review.",
+    approved: "Your referral has been approved.",
+    paid: "Your referral is complete.",
+    // No cause, by design.
+    unavailable: "This referral is closed. Ask your manager if you have questions.",
+  };
+
+  return { attributed: true, rewardState, salesProgress, milestones, headline: HEADLINES[rewardState] };
+}

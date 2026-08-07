@@ -65,6 +65,13 @@ interface Settings {
   requireTrainingComplete: boolean; requireActiveStatus: boolean;
   liability: { pendingCents: number; approvedCents: number; inProgress: number };
 }
+interface MyStatus {
+  attributed: boolean;
+  rewardState: "none" | "in_progress" | "in_review" | "approved" | "paid" | "unavailable";
+  salesProgress: { current: number; target: number } | null;
+  milestones: { hired: boolean; activated: boolean; trainingComplete: boolean };
+  headline: string;
+}
 interface HistoryRow {
   id: number; eventType: string; metadata: string | null; createdAt: string;
 }
@@ -283,6 +290,81 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
   );
 }
 
+// ── The referred person's own view ──────────────────────────────────────────
+
+/**
+ * Shown to someone who was REFERRED, about the referral they are the subject of.
+ *
+ * Renders only what the server sent, and the server sends no amount, no
+ * referrer identity, and no reason for a decline. There is deliberately nothing
+ * here that derives or infers those — a client that reconstructed a reward
+ * figure from the programme settings would defeat the redaction entirely.
+ */
+function MyReferralStatus() {
+  const { data } = useQuery<MyStatus>({
+    queryKey: ["/api/referrals/my-status"],
+    queryFn: () => get<MyStatus>("/api/referrals/my-status"),
+  });
+
+  // Nobody referred this person — say nothing rather than showing an empty
+  // card that implies they missed out on something.
+  if (!data || !data.attributed) return null;
+
+  const TONE: Record<MyStatus["rewardState"], string> = {
+    none: "text-muted-foreground",
+    in_progress: "text-amber-700 dark:text-amber-400",
+    in_review: "text-sky-700 dark:text-sky-400",
+    approved: "text-emerald-700 dark:text-emerald-400",
+    paid: "text-emerald-700 dark:text-emerald-400",
+    unavailable: "text-muted-foreground",
+  };
+
+  return (
+    <Card data-testid="my-referral-status">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Gift className="h-4 w-4" /> Your referral
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className={`text-sm ${TONE[data.rewardState]}`} data-testid="my-referral-headline">
+          {data.headline}
+        </p>
+
+        {data.salesProgress && (
+          <div>
+            <div className="mb-1 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Approved sales</span>
+              <span className="font-medium tabular-nums" data-testid="my-referral-sales">
+                {data.salesProgress.current} of {data.salesProgress.target}
+              </span>
+            </div>
+            <Progress
+              value={Math.round((data.salesProgress.current / Math.max(1, data.salesProgress.target)) * 100)}
+              className="h-2"
+            />
+          </div>
+        )}
+
+        <ul className="space-y-1">
+          {([
+            ["Hired", data.milestones.hired],
+            ["Account activated", data.milestones.activated],
+            ["Training complete", data.milestones.trainingComplete],
+          ] as const).map(([label, met]) => (
+            <li key={label} className="flex items-center gap-2 text-xs">
+              {met
+                ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                : <X className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+              <span className={met ? "text-foreground" : "text-muted-foreground"}>{label}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Admin tracker ───────────────────────────────────────────────────────────
 
 /**
@@ -464,6 +546,9 @@ export default function Referrals() {
 
       {/* Every rep sees their own link and pipeline first — this page is
           primarily theirs, and the admin tracker sits below it. */}
+      {/* If this person was themselves referred, their own status comes first —
+          it is the thing they are most likely to have opened the page for. */}
+      <MyReferralStatus />
       <MyLinkCard />
       <Pipeline scope="mine" />
 

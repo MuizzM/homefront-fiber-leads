@@ -25,7 +25,14 @@ import { ipKeyGenerator } from "express-rate-limit";
 import { can } from "@shared/capabilities";
 import { storage } from "./storage";
 import * as store from "./referralStore";
-import { normalizeReferralCode, referralStageIndex, type ReferralStatus } from "@shared/referral";
+import {
+  normalizeReferralCode, referralStageIndex, applicantStatusView,
+  type ReferralStatus,
+} from "@shared/referral";
+
+/** The "nobody referred you" answer, shaped exactly like a real one so the
+ *  client renders one component either way. */
+const applicantEmptyStatus = () => applicantStatusView(null, null, false);
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -157,6 +164,27 @@ export function registerReferralRoutes(app: Express, deps: Deps) {
         tenantId: tid(req), referrerUserId: uid(req), referrerRepId: repId,
         baseUrl: baseUrl(req), nowIso: nowIso(),
       }));
+    } catch (e) { fail(res, e); }
+  });
+
+  // ── The referred person's own status ──────────────────────────────────────
+  // Identity comes from the SESSION. There is deliberately no :id on this route
+  // and no id accepted in the body: an endpoint with no identifier to tamper
+  // with cannot have an insecure direct object reference, which is a stronger
+  // guarantee than checking one.
+  //
+  // Gated on referral.read.self, which every rep holds — this is the one
+  // referral surface whose audience is the person the referral is ABOUT rather
+  // than the person who earns from it.
+  app.get("/api/referrals/my-status", requireCapability("referral.read.self"), (req, res) => {
+    try {
+      const repId = meRep(req);
+      // No linked team member means nothing can be attributed to this login.
+      // Answered as the ordinary empty state, not an error: "you were not
+      // referred" is a legitimate answer, and a 400 here would make the page
+      // look broken for most of the org.
+      if (!repId) return res.json(applicantEmptyStatus());
+      res.json(store.applicantStatusFor(tid(req), repId, nowIso()));
     } catch (e) { fail(res, e); }
   });
 
