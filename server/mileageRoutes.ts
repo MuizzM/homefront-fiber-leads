@@ -515,7 +515,16 @@ export function registerMileageRoutes(app: Express, deps: Deps) {
   // The file a bookkeeper or CPA actually works from. Every column a
   // contractor-mileage substantiation needs is present: date, endpoints,
   // distance, business purpose, the rate applied, and who approved it.
-  app.get("/api/mileage/export", requireCapability("mileage.read.team"), (req, res) => {
+  //
+  // Gated on the REP-level capability, not mileage.read.team. When the
+  // organization does not reimburse — which is the normal case here — the whole
+  // point of the log is the contractor's OWN Schedule C deduction, and a rep who
+  // cannot export the record they created cannot use it for the one purpose it
+  // exists to serve. Scope is still decided server-side by `readScope`: a rep
+  // gets their own rows and nothing else, a manager gets their branch, an
+  // org-wide reader gets everything. The capability opens the endpoint; it never
+  // widens the rows.
+  app.get("/api/mileage/export", requireCapability("mileage.submit.self"), (req, res) => {
     const user = (req as any).user;
     const requested = req.query.repId != null ? Number(req.query.repId) : null;
     if (requested != null && !canReadRep(user, requested)) return res.status(404).json({ error: "Not found" });

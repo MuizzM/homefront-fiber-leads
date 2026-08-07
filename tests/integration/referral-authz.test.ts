@@ -247,6 +247,50 @@ describe("manager and admin boundaries", () => {
   });
 });
 
+describe("a rep can export their OWN mileage log", () => {
+  // The organization does not reimburse — the log exists for the contractor's
+  // own Schedule C deduction. A rep who cannot export the record they created
+  // cannot use it for the one purpose it serves, so the export is gated on the
+  // REP capability and scoped server-side.
+  it("lets a plain rep export, and gives them only their own rows", async () => {
+    const M = await import("../../server/mileageStore");
+    const mine = M.createTrip({
+      tenantId: T1, repId: t1Rep.memberId, userId: t1Rep.userId,
+      tripDate: "2026-08-07", startLocation: "Mine A", endLocation: "Mine B",
+      milesHundredths: 1000, purpose: "Own route", source: "MANUAL",
+      nowIso: NOW, todayIso: "2026-08-07",
+    });
+    M.createTrip({
+      tenantId: T1, repId: t1OtherRep.memberId, userId: t1OtherRep.userId,
+      tripDate: "2026-08-07", startLocation: "Theirs A", endLocation: "Theirs B",
+      milesHundredths: 2000, purpose: "Someone else's route", source: "MANUAL",
+      nowIso: NOW, todayIso: "2026-08-07",
+    });
+
+    const res = await call("/api/mileage/export", t1Rep.session);
+    expect(res.status).toBe(200);
+    const csv = await res.text();
+    expect(csv).toContain("Own route");
+    // Scope is decided server-side; the capability opens the endpoint, it never
+    // widens the rows.
+    expect(csv).not.toContain("Someone else's route");
+    expect(csv).toContain(String(mine.id));
+  });
+
+  it("still refuses a rep asking for another rep's rows by id", async () => {
+    const res = await call(`/api/mileage/export?repId=${t1OtherRep.memberId}`, t1Rep.session);
+    expect(res.status).toBe(404);
+  });
+
+  it("widens to the branch for someone who may see it", async () => {
+    const res = await call("/api/mileage/export?scope=team", t1Manager.session);
+    expect(res.status).toBe(200);
+    const csv = await res.text();
+    expect(csv).toContain("Own route");
+    expect(csv).toContain("Someone else's route");
+  });
+});
+
 describe("the public endpoints stay non-disclosing", () => {
   it("track-click answers identically for a real and an unknown code", async () => {
     const real = R.ensureLink({

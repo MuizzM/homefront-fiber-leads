@@ -25,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
 import { formatMiles } from "@shared/mileage";
-import { MapPin, Play, Square, Plus, Check, X, Car, AlertTriangle, Download, Lock } from "lucide-react";
+import { MapPin, Play, Square, Plus, Check, X, Car, Download, Lock, FileDown } from "lucide-react";
 
 interface Trip {
   id: number; repId: number; repName?: string; tripDate: string;
@@ -493,13 +493,13 @@ export default function Mileage() {
         <h1 className="flex items-center gap-2 text-xl font-semibold">
           <Car className="h-5 w-5" /> Mileage
         </h1>
-        {canExport && (
-          <Button variant="outline" size="sm" data-testid="mileage-export" asChild>
-            <a href="/api/mileage/export?scope=team" download>
-              <Download className="mr-2 h-4 w-4" /> Export
-            </a>
-          </Button>
-        )}
+        {/* Every rep can export their OWN log; a manager's export widens to
+            their branch. The server decides the rows either way. */}
+        <Button variant="outline" size="sm" data-testid="mileage-export" asChild>
+          <a href={canExport ? "/api/mileage/export?scope=team" : "/api/mileage/export"} download>
+            <Download className="mr-2 h-4 w-4" /> Export
+          </a>
+        </Button>
       </div>
 
       {summary && (
@@ -523,10 +523,15 @@ export default function Mileage() {
             // alternative to showing a rep a dollar figure nobody has agreed
             // to pay them.
             <CardContent className="border-t pt-3">
+              {/* Tracking-only is the INTENDED state, not an unfinished one.
+                  The old copy ("has not turned on reimbursement… not being paid
+                  yet") read as a missing feature and quietly promised money that
+                  is never coming. A 1099 contractor deducts these miles
+                  themselves, so the log's value IS the record — say that. */}
               <p className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="mileage-money-off">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Your organization is tracking mileage but has not turned on reimbursement.
-                Trips are recorded and exportable; no amount is being paid yet.
+                <FileDown className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                Your organization does not reimburse mileage — this log is for your own records.
+                Export it for your tax return; as a contractor you deduct these miles yourself.
               </p>
             </CardContent>
           )}
