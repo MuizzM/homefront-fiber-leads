@@ -19,6 +19,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_WORKWEEK, localWallToUtcMs, localYmdParts } from "@shared/workweek";
 import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -99,10 +100,24 @@ const ledgerRows = (repId: number, prefix: string): number => Number(rawDb.prepa
   `SELECT COUNT(*) AS n FROM spiffs WHERE rep_id = ? AND sale_ref LIKE ?`,
 ).get(repId, `${prefix}%`).n);
 
-/** A fixed mid-morning start so every generated day sits inside one local day
- *  whatever timezone the test host is in. */
-const DAY_START = new Date();
-DAY_START.setHours(9, 0, 0, 0);
+/**
+ * A fixed mid-morning start, anchored to the ORG's timezone rather than the test
+ * host's.
+ *
+ * `new Date(); setHours(9,…)` anchors to the HOST's calendar day, which is not
+ * the day the card endpoints bucket by — they use the org's
+ * commission_timezone (America/New_York). The two agree on a New York host and
+ * diverge on a UTC one for the four hours after midnight UTC, because UTC has
+ * already rolled to tomorrow while New York is still on today. CI runs in UTC,
+ * so a 02:48 UTC run stamped its sales on Aug 7 org-local and then asked the
+ * card for Aug 6 — which correctly answered zero.
+ *
+ * Deriving the anchor through the same timezone helpers the app uses makes this
+ * suite host-independent, which is what the original comment intended.
+ */
+const ORG_TZ = DEFAULT_WORKWEEK.timezone;
+const { y: ORG_Y, mo: ORG_MO, d: ORG_D } = localYmdParts(Date.now(), ORG_TZ);
+const DAY_START = new Date(localWallToUtcMs(ORG_Y, ORG_MO, ORG_D, 9, 0, ORG_TZ));
 const at = (minutes: number) => new Date(DAY_START.getTime() + minutes * 60_000);
 
 beforeAll(async () => {
