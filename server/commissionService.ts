@@ -639,42 +639,71 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
   // lands in its true week; what this stops is backdating months to concentrate
   // sales into one high-tier week. Absent serverReceivedAt = trusted in-process
   // caller booking a known-good historical date, so no clamp is applied.
-  let soldAt = input.soldAt;
-  if (input.serverReceivedAt) {
+  //
+  // EVERY basis-eligible timestamp is clamped, not just sold_at. The week a sale
+  // pays in is BASIS_COLUMN[qualificationBasis] and the shipped default is
+  // QUALIFIED_AT — so clamping sold_at alone left the column that actually
+  // places the money fully caller-controlled, and this guard documented a
+  // protection it did not provide. (Measured: a 4-sale week re-posted with a
+  // backdated qualifiedAt became a 19-sale top-tier week, $600 → $5,700.)
+  const clampTs = (ts: string | null | undefined): string | null => {
+    if (ts == null) return null;
+    if (!input.serverReceivedAt) return ts;
     const serverMs = Date.parse(input.serverReceivedAt);
-    if (Number.isFinite(serverMs)) {
-      const floorMs = serverMs - config.correctionWindowDays * 86_400_000;
-      const rawMs = Date.parse(soldAt);
-      soldAt = new Date(Math.min(Math.max(Number.isFinite(rawMs) ? rawMs : serverMs, floorMs), serverMs)).toISOString();
-    }
-  }
+    if (!Number.isFinite(serverMs)) return ts;
+    const floorMs = serverMs - config.correctionWindowDays * 86_400_000;
+    const rawMs = Date.parse(ts);
+    return new Date(Math.min(Math.max(Number.isFinite(rawMs) ? rawMs : serverMs, floorMs), serverMs)).toISOString();
+  };
+  const soldAt = clampTs(input.soldAt) as string;
+  const qualifiedAt = clampTs(input.qualifiedAt);
+  const installedAt = clampTs(input.installedAt);
+  const activatedAt = clampTs(input.activatedAt);
 
   // The basis timestamp decides which week the money lands in, so that — not
   // sold_at alone — is what must stay put once a sale is live.
+  const basisColumn = BASIS_COLUMN[config.qualificationBasis];
   const basisOf = (row: { sold_at?: string | null; qualified_at?: string | null; installed_at?: string | null; activated_at?: string | null }) =>
-    (row as any)[BASIS_COLUMN[config.qualificationBasis]] || row.sold_at || null;
+    (row as any)[basisColumn] || row.sold_at || null;
+  const incomingRow = { sold_at: soldAt, qualified_at: qualifiedAt, installed_at: installedAt, activated_at: activatedAt };
   const existing = rawDb.prepare(
     `SELECT id, rep_id, status, sold_at, qualified_at, installed_at, activated_at FROM commission_sales WHERE tenant_id = ? AND external_id = ?`,
   ).get(tenantId, input.externalId) as any;
 
-  // ── GUARD 2: a QUALIFIED sale is FROZEN — owner and pay-week both. Re-pointing
-  // one is a manager REVERSAL followed by a fresh booking, which leaves an
-  // auditable pair, never a silent in-place overwrite that re-prices two weeks.
-  if (existing && existing.status === "QUALIFIED") {
-    const incomingBasis = basisOf({
-      sold_at: soldAt, qualified_at: input.qualifiedAt ?? null,
-      installed_at: input.installedAt ?? null, activated_at: input.activatedAt ?? null,
-    });
+  // ── GUARD 2: a live sale's OWNER is frozen, and a QUALIFIED sale's PAY-WEEK is
+  // frozen too. Re-pointing either is a manager REVERSAL followed by a fresh
+  // booking, which leaves an auditable pair, never a silent in-place overwrite
+  // that re-prices two people's weeks.
+  //
+  // The owner check deliberately covers EVERY existing row, not just QUALIFIED
+  // ones: the ON CONFLICT clause rewrites rep_id regardless of status, so
+  // limiting it to QUALIFIED left PENDING, INSTALLED, ACTIVATED and REVERSED
+  // sales freely re-attributable — including resurrecting someone else's
+  // reversed sale under a new owner.
+  if (existing) {
     const movesCredit = Number(existing.rep_id) !== Number(input.repId);
-    const movesWeek = !!incomingBasis && !!basisOf(existing)
-      && weekBoundsFor(incomingBasis, config).weekStartUtc !== weekBoundsFor(basisOf(existing), config).weekStartUtc;
-    if (movesCredit || movesWeek) {
+    // The pay-week freeze applies only once the sale is live. The RAW basis
+    // column is compared with no sold_at fallback: under an INSTALLED_AT or
+    // ACTIVATED_AT basis a live sale legitimately has a null basis column until
+    // the install is confirmed, and falling back to sold_at made that first
+    // stamp read as a week move — 409ing the very write that makes the sale
+    // payable.
+    const existingBasisRaw = existing[basisColumn] ?? null;
+    const incomingBasis = basisOf(incomingRow);
+    const movesWeek = existing.status === "QUALIFIED"
+      && !!incomingBasis && !!existingBasisRaw
+      && weekBoundsFor(incomingBasis, config).weekStartUtc !== weekBoundsFor(existingBasisRaw, config).weekStartUtc;
+    // Bringing a REVERSED sale back to life in place erases the reversal instead
+    // of recording a correction; re-qualifying is transitionSale's job.
+    const resurrects = existing.status === "REVERSED" && status === "QUALIFIED" && movesCredit;
+    if (movesCredit || movesWeek || resurrects) {
       storage.logActivity(actorId, "commission_sale.credit_conflict_blocked", "commission_sale", existing.id,
         { externalId: input.externalId, existingRepId: existing.rep_id, attemptedRepId: input.repId,
-          existingBasis: basisOf(existing), attemptedBasis: incomingBasis, movesCredit, movesWeek }, undefined);
+          existingStatus: existing.status, existingBasis: existingBasisRaw, attemptedBasis: incomingBasis,
+          movesCredit, movesWeek, resurrects }, undefined);
       throw new CommissionError("SALE_CREDIT_LOCKED",
         movesCredit
-          ? `Sale ${input.externalId} is QUALIFIED to rep ${existing.rep_id} — reverse it before re-crediting.`
+          ? `Sale ${input.externalId} already belongs to rep ${existing.rep_id} — reverse it before re-crediting.`
           : `Sale ${input.externalId} is QUALIFIED in an earlier pay week — reverse it before re-dating.`,
         409);
     }
@@ -684,10 +713,7 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
   // fail the recalculation outright or sit latent inside a PAID week and surface
   // on the next recompute. A manager qualifies it into an open correction period.
   if (status === "QUALIFIED") {
-    const basisTs = basisOf({
-      sold_at: soldAt, qualified_at: input.qualifiedAt ?? null,
-      installed_at: input.installedAt ?? null, activated_at: input.activatedAt ?? null,
-    }) || soldAt;
+    const basisTs = basisOf(incomingRow) || soldAt;
     const target = weekBoundsFor(basisTs, config).weekStartUtc;
     const lockedStmt = rawDb.prepare(
       `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
@@ -708,7 +734,7 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
        rep_id = excluded.rep_id, status = excluded.status, sold_at = excluded.sold_at,
        qualified_at = excluded.qualified_at, installed_at = excluded.installed_at,
        activated_at = excluded.activated_at, lead_id = excluded.lead_id, updated_at = excluded.updated_at`
-  ).run(tenantId, input.repId, input.externalId, status, soldAt, input.qualifiedAt ?? null, input.installedAt ?? null, input.activatedAt ?? null, input.leadId ?? null, now, now);
+  ).run(tenantId, input.repId, input.externalId, status, soldAt, qualifiedAt, installedAt, activatedAt, input.leadId ?? null, now, now);
   const sale = rawDb.prepare(`SELECT * FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, input.externalId) as any;
   storage.logActivity(actorId, "commission_sale.upserted", "commission_sale", sale?.id, { externalId: input.externalId, repId: input.repId, status }, undefined);
   return sale;
@@ -1314,8 +1340,8 @@ export function reverseFieldSale(tenantId: number, leadId: number, actorId: numb
 // QUALIFIED sale dated by its most recent sold knock. Idempotent (upsert by
 // external id); leads without a rep/tenant are skipped, never guessed. Called
 // from server startup after migrations.
-export function backfillFieldSales(): { created: number; skipped: number } {
-  let created = 0, skipped = 0;
+export function backfillFieldSales(): { created: number; skipped: number; held: number; failed: number } {
+  let created = 0, skipped = 0, held = 0, failed = 0;
   const soldLeads = rawDb.prepare(
     `SELECT l.id, l.tenant_id AS tenantId, l.assigned_rep_id AS assignedRepId,
             (SELECT k.knocked_at FROM knock_log k WHERE k.lead_id = l.id AND k.outcome = 'sold' ORDER BY k.knocked_at DESC LIMIT 1) AS soldAt,
@@ -1327,17 +1353,37 @@ export function backfillFieldSales(): { created: number; skipped: number } {
     if (!l.tenantId || !repId || !l.soldAt) { skipped++; continue; }
     const existing = rawDb.prepare(`SELECT id FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(l.tenantId, fieldSaleExternalId(l.id));
     if (existing) { skipped++; continue; } // already in the ledger — never overwrite
-    upsertSale(l.tenantId, null, {
-      repId, externalId: fieldSaleExternalId(l.id), status: "QUALIFIED",
-      soldAt: l.soldAt, qualifiedAt: l.soldAt, leadId: l.id,
-    });
-    created++;
+    // A historical sold door can land in a week that is already FINALIZED or
+    // PAID, which upsertSale refuses (GUARD 3). Book it PENDING instead — the
+    // same thing recordFieldSaleFromKnock does for a locked week — so the row
+    // exists for a manager to qualify into an open correction period.
+    const config = loadOrgConfig(l.tenantId);
+    const lockedStmt = rawDb.prepare(
+      `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(l.tenantId, repId, weekBoundsFor(l.soldAt, config).weekStartUtc) as any;
+    const weekLocked = lockedStmt && (lockedStmt.status === "FINALIZED" || lockedStmt.status === "PAID");
+    // PER-LEAD isolation. This loop runs at BOOT, and it previously had none: a
+    // single throwing lead aborted the whole sweep, and because rows already
+    // created are skipped on the next pass, the same lead blocked the same
+    // position on every restart — a silent, permanent, self-repeating failure to
+    // adopt every sold door after it. One bad lead must cost one lead.
+    try {
+      upsertSale(l.tenantId, null, {
+        repId, externalId: fieldSaleExternalId(l.id),
+        status: weekLocked ? "PENDING" : "QUALIFIED",
+        soldAt: l.soldAt, qualifiedAt: weekLocked ? null : l.soldAt, leadId: l.id,
+      });
+      if (weekLocked) held++; else created++;
+    } catch (e: any) {
+      failed++;
+      console.warn(`[commission] backfill skipped lead ${l.id} (${fieldSaleExternalId(l.id)}): ${e?.code ?? ""} ${e?.message ?? e}`);
+    }
   }
-  if (created > 0) {
-    storage.logActivity(null, "commission_sales.backfilled", "commission_sale", undefined, { created, skipped }, undefined);
-    console.log(`[commission] Backfilled ${created} field sales into the weekly ledger (${skipped} skipped)`);
+  if (created > 0 || held > 0 || failed > 0) {
+    storage.logActivity(null, "commission_sales.backfilled", "commission_sale", undefined, { created, skipped, held, failed }, undefined);
+    console.log(`[commission] Backfilled ${created} field sales into the weekly ledger (${skipped} skipped, ${held} booked PENDING into locked weeks, ${failed} failed)`);
   }
-  return { created, skipped };
+  return { created, skipped, held, failed };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

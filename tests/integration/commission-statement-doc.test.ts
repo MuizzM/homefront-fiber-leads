@@ -310,3 +310,66 @@ describe("tenant wordmark on the statement", () => {
     rawDb.prepare(`UPDATE tenants SET brand_logo = NULL WHERE id = 1`).run();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A locked statement's MONEY must be as frozen as its issue date.
+//
+// WP-22 pinned the date but not the holdback: buildStatementDocumentFor called
+// holdbackForStatement unconditionally, which resolves the CURRENT org/rep
+// percent and cap against the CURRENT running balance. Since
+// netPayCents = earned - reserve, the hero NET PAY figure on a settled pay
+// document moved whenever an admin changed the reserve percent — and two people
+// downloading the same statement id on different days could disagree.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("a locked statement's holdback is frozen with it", () => {
+  let lockedId = 0;
+
+  beforeAll(async () => {
+    const lockRep = makePerson("Lock Holdback Rep", "rep", 1, "rep", lead.memberId);
+    expect((await post("/api/commission/assign-structure", admin.session, {
+      repId: lockRep.memberId, structure: "FLAT", flatRateCents: 50_000,
+    })).status).toBe(201);
+    const now = new Date().toISOString();
+    for (let i = 0; i < 4; i += 1) {
+      expect((await post("/api/commission/sales", mgr.session, {
+        repId: lockRep.memberId, externalId: `hb-sale-${i}`, soldAt: now, status: "QUALIFIED", qualifiedAt: now,
+      })).status).toBe(201);
+    }
+    // Withhold 10% at finalize, so a real reserve_entries hold is recorded.
+    rawDb.prepare(`UPDATE tenants SET commission_reserve_percent = 10 WHERE id = 1`).run();
+    const recalc = await post("/api/commission/statements/recalculate", mgr.session, { repId: lockRep.memberId, week: now });
+    lockedId = (await recalc.json() as any).statement.id;
+    expect((await post(`/api/commission/statements/${lockedId}/transition`, admin.session, { action: "FINALIZE" })).status).toBe(200);
+  });
+
+  it("prints the RECORDED hold from the reserve ledger, not a live recompute", async () => {
+    const doc = await (await request(`/api/commission/statements/${lockedId}/document`, admin.session)).json() as any;
+    const recorded = rawDb.prepare(
+      `SELECT amount_cents AS c FROM reserve_entries
+       WHERE tenant_id = 1 AND kind = 'hold' AND statement_id = ?`,
+    ).get(lockedId) as any;
+    expect(recorded?.c).toBeGreaterThan(0);
+    expect(doc.payout.reserveCents).toBe(recorded.c);
+    expect(doc.payout.netPayCents).toBe(doc.totals.earnedCents - recorded.c);
+  });
+
+  it("THE REGRESSION: changing the org reserve percent does not move a settled statement's net pay", async () => {
+    const before = await (await request(`/api/commission/statements/${lockedId}/document`, admin.session)).json() as any;
+
+    rawDb.prepare(`UPDATE tenants SET commission_reserve_percent = 40 WHERE id = 1`).run();
+
+    const after = await (await request(`/api/commission/statements/${lockedId}/document`, admin.session)).json() as any;
+    expect(after.payout.reserveCents).toBe(before.payout.reserveCents);
+    expect(after.payout.netPayCents).toBe(before.payout.netPayCents);
+    expect(after.payout.reservePercent).toBe(before.payout.reservePercent);
+
+    rawDb.prepare(`UPDATE tenants SET commission_reserve_percent = 0 WHERE id = 1`).run();
+  });
+
+  it("an OPEN week still computes live — it has no recorded hold yet and says it is a draft", async () => {
+    const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
+    expect(doc.statement.status).toBe("PAID"); // from the provenance block above
+    // …and the locked one is not a draft either way.
+    expect(doc.isDraft).toBe(false);
+  });
+});

@@ -956,6 +956,14 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS commission_sales (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, external_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', sold_at TEXT NOT NULL, qualified_at TEXT, installed_at TEXT, activated_at TEXT, reversed_at TEXT, disqualification_reason TEXT, lead_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_tenant_external ON commission_sales(tenant_id, external_id)`,
     `CREATE INDEX IF NOT EXISTS idx_sales_agg ON commission_sales(tenant_id, rep_id, status, qualified_at)`,
+    // The FCC purge predicate (fccPurgeWhere) asks "does this lead have a
+    // commission sale?" once per candidate row. Without this index that clause
+    // is the only one of its four siblings that resolves as a full SCAN of
+    // commission_sales, per candidate — measured at 26.4s of BLOCKED event loop
+    // on 120k fcc leads x 10k sales, versus 0.07s with it (~375x). better-sqlite3
+    // is synchronous, so that is the whole floor stalled while one admin opens
+    // the purge dialog, which fires the count automatically on open.
+    `CREATE INDEX IF NOT EXISTS idx_sales_lead ON commission_sales(lead_id)`,
     // Per-sale override of the org's house amount, for shops whose doors are not
     // all worth the same (different speeds/bundles). NULL = fall back to the org
     // default; the statement never invents a number for a door nobody priced.

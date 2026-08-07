@@ -237,6 +237,25 @@ describe("the branch rule on commission money writes", () => {
     expect((await res.json() as any).code).toBe("OUT_OF_BRANCH");
   });
 
+  it("REVIEW FIX: nor RE-POINT another branch's existing sale into their own", async () => {
+    // The route originally guarded only the INCOMING repId, while the upsert's
+    // ON CONFLICT rewrites rep_id — so the direct-write direction was closed but
+    // the transfer direction stayed open. Manager A books nothing new; they
+    // re-post manager B's rep's existing externalId with their own repId.
+    const admin201 = await bookSale(admin.session, repB.memberId, "transfer-target-1");
+    expect(admin201.status).toBe(201);
+
+    const res = await req("/api/commission/sales", mgrA.session, {
+      method: "POST",
+      body: JSON.stringify({ repId: repA.memberId, externalId: "transfer-target-1", status: "PENDING", soldAt: new Date().toISOString() }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json() as any).code).toBe("OUT_OF_BRANCH");
+    // The sale still belongs to manager B's rep.
+    expect(rawDb.prepare("SELECT rep_id AS r FROM commission_sales WHERE external_id = ?").get("transfer-target-1"))
+      .toMatchObject({ r: repB.memberId });
+  });
+
   it("a manager still books freely inside their OWN branch", async () => {
     const res = await bookSale(mgrA.session, repA.memberId, "own-branch-sale-1");
     expect(res.status).toBe(201);

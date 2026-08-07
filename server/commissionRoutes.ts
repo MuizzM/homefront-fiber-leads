@@ -338,6 +338,14 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   // sales.write cap (manager+), never on rate-config (structure.manage) which a
   // team_lead holds and could otherwise use to fabricate QUALIFIED sales.
   app.post("/api/commission/sales", requireCapability("commission.sales.write"), (req, res) => {
+    // Guard the sale's CURRENT owner as well as the incoming one. The upsert's
+    // ON CONFLICT rewrites rep_id, so checking only the destination let a
+    // manager re-point a sale that belongs to a PEER's rep into their own
+    // branch — the transfer direction, as opposed to the direct-write direction
+    // the incoming check already closed. The transition route below has always
+    // done this; this route did not.
+    const priorSale = svc.getSaleByExternalId(tid(req), String(req.body?.externalId ?? ""));
+    if (priorSale && denyOutOfScope(req, res, priorSale.rep_id)) return;
     if (denyOutOfScope(req, res, Number(req.body?.repId))) return;
     // serverReceivedAt is stamped HERE and deliberately spread AFTER the body so a
     // caller-supplied receipt time can never widen its own correction window. The

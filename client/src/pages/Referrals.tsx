@@ -16,7 +16,10 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
-import { Check, Copy, Gift, Users, X, AlertCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Check, Copy, Gift, Users, X, AlertCircle, Settings, History, TrendingUp } from "lucide-react";
 
 interface Requirement {
   key: string; label: string; met: boolean; current?: number; target?: number;
@@ -54,6 +57,17 @@ const STATUS_TONE: Record<string, string> = {
   EXPIRED: "bg-destructive/10 text-muted-foreground",
   CLAWED_BACK: "bg-destructive/15 text-destructive",
 };
+
+interface Settings {
+  enabled: boolean; rewardCents: number; requiredApprovedSales: number;
+  qualificationWindowDays: number; clawbackWindowDays: number;
+  attributionWindowDays: number;
+  requireTrainingComplete: boolean; requireActiveStatus: boolean;
+  liability: { pendingCents: number; approvedCents: number; inProgress: number };
+}
+interface HistoryRow {
+  id: number; eventType: string; metadata: string | null; createdAt: string;
+}
 
 const get = <T,>(url: string) => apiRequest("GET", url).then(r => r.json() as Promise<T>);
 
@@ -256,7 +270,12 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
                 )}
               </div>
             </div>
-            {expanded === r.id && <QualificationChecklist referralId={r.id} />}
+            {expanded === r.id && (
+              <>
+                <QualificationChecklist referralId={r.id} />
+                {scope === "org" && <AuditHistory referralId={r.id} />}
+              </>
+            )}
           </div>
         ))}
       </CardContent>
@@ -264,17 +283,193 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
   );
 }
 
+// ── Admin tracker ───────────────────────────────────────────────────────────
+
+/**
+ * What the programme is COSTING, split three ways.
+ *
+ * In-progress, pending and approved are shown as separate figures rather than
+ * one total, for the same reason the mileage and earnings summaries do it: a
+ * referral that has qualified but is still inside its clawback window is a
+ * different kind of number from one an admin has released, and blending them
+ * overstates what the org actually owes.
+ */
+function LiabilityCard({ settings }: { settings: Settings }) {
+  const l = settings.liability;
+  return (
+    <Card data-testid="referral-liability">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <TrendingUp className="h-4 w-4" /> Programme liability
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-3 gap-4 text-center">
+        <div>
+          <p className="text-xs text-muted-foreground">In progress</p>
+          <p className="text-lg font-semibold tabular-nums" data-testid="referral-liability-inprogress">{l.inProgress}</p>
+          <p className="text-[11px] text-muted-foreground">referrals working</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Qualified, holding</p>
+          <p className="text-lg font-semibold tabular-nums" data-testid="referral-liability-pending">{money(l.pendingCents)}</p>
+          <p className="text-[11px] text-muted-foreground">may still claw back</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Approved</p>
+          <p className="text-lg font-semibold tabular-nums" data-testid="referral-liability-approved">{money(l.approvedCents)}</p>
+          <p className="text-[11px] text-muted-foreground">owed now</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SettingsCard({ settings }: { settings: Settings }) {
+  const { toast } = useToast();
+  const [draft, setDraft] = useState({
+    rewardDollars: String(settings.rewardCents / 100),
+    requiredApprovedSales: String(settings.requiredApprovedSales),
+    qualificationWindowDays: String(settings.qualificationWindowDays),
+    clawbackWindowDays: String(settings.clawbackWindowDays),
+  });
+
+  const save = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      apiRequest("PUT", "/api/referrals/settings", body).then(async r => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error ?? "Failed");
+        return json;
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/referrals/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/referrals"] });
+      toast({ title: "Referral settings saved" });
+    },
+    onError: (e: any) => toast({ title: "Could not save", description: String(e?.message ?? ""), variant: "destructive" }),
+  });
+
+  const num = (v: string) => Math.trunc(Number(v));
+
+  return (
+    <Card data-testid="referral-settings">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Settings className="h-4 w-4" /> Referral settings
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between rounded-md border p-3">
+          <div className="pr-4">
+            <Label htmlFor="ref-enabled" className="text-sm font-medium">Programme running</Label>
+            <p className="text-xs text-muted-foreground">
+              While this is off, links still work for tracking but no applicant is attributed
+              and no reward is created.
+            </p>
+          </div>
+          <Switch
+            id="ref-enabled" checked={settings.enabled} data-testid="referral-enabled"
+            onCheckedChange={(enabled) => save.mutate({ enabled })}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="ref-reward" className="text-xs">Reward ($)</Label>
+            <Input id="ref-reward" inputMode="decimal" data-testid="referral-reward"
+              value={draft.rewardDollars}
+              onChange={e => setDraft(d => ({ ...d, rewardDollars: e.target.value }))} />
+          </div>
+          <div>
+            <Label htmlFor="ref-sales" className="text-xs">Approved sales required</Label>
+            <Input id="ref-sales" inputMode="numeric" data-testid="referral-required-sales"
+              value={draft.requiredApprovedSales}
+              onChange={e => setDraft(d => ({ ...d, requiredApprovedSales: e.target.value }))} />
+          </div>
+          <div>
+            <Label htmlFor="ref-window" className="text-xs">Qualification window (days)</Label>
+            <Input id="ref-window" inputMode="numeric" data-testid="referral-qualification-window"
+              value={draft.qualificationWindowDays}
+              onChange={e => setDraft(d => ({ ...d, qualificationWindowDays: e.target.value }))} />
+          </div>
+          <div>
+            <Label htmlFor="ref-clawback" className="text-xs">Clawback hold (days)</Label>
+            <Input id="ref-clawback" inputMode="numeric" data-testid="referral-clawback-window"
+              value={draft.clawbackWindowDays}
+              onChange={e => setDraft(d => ({ ...d, clawbackWindowDays: e.target.value }))} />
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Changing these affects referrals that have not qualified yet. A referral that already
+          met the bar keeps the terms it qualified under.
+        </p>
+
+        <Button
+          className="w-full" data-testid="referral-save-settings" disabled={save.isPending}
+          onClick={() => save.mutate({
+            rewardCents: Math.round(Number(draft.rewardDollars) * 100),
+            requiredApprovedSales: num(draft.requiredApprovedSales),
+            qualificationWindowDays: num(draft.qualificationWindowDays),
+            clawbackWindowDays: num(draft.clawbackWindowDays),
+          })}
+        >
+          Save settings
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The append-only funnel history — what happened to this referral and when. */
+function AuditHistory({ referralId }: { referralId: number }) {
+  const { data: rows = [] } = useQuery<HistoryRow[]>({
+    queryKey: [`/api/referrals/${referralId}/history`],
+    queryFn: () => get<HistoryRow[]>(`/api/referrals/${referralId}/history`),
+  });
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-2 rounded-md border p-3" data-testid={`referral-history-${referralId}`}>
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <History className="h-3.5 w-3.5" /> History
+      </p>
+      <ol className="space-y-1">
+        {rows.map(r => (
+          <li key={r.id} className="flex items-baseline justify-between gap-3 text-xs">
+            <span className="font-medium">{r.eventType}</span>
+            <span className="text-muted-foreground">{new Date(r.createdAt).toLocaleString()}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function Referrals() {
   const canSeeOrg = useCan("referral.read.org");
+  const canConfigure = useCan("referral.settings.manage");
+
+  const { data: settings } = useQuery<Settings>({
+    queryKey: ["/api/referrals/settings"],
+    queryFn: () => get<Settings>("/api/referrals/settings"),
+    // Only org readers may call this at all; asking as a rep would 403 on every
+    // render and fill the console with noise.
+    enabled: canSeeOrg,
+  });
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-24" data-testid="referrals-page">
       <h1 className="text-xl font-semibold">Referrals</h1>
+
+      {/* Every rep sees their own link and pipeline first — this page is
+          primarily theirs, and the admin tracker sits below it. */}
       <MyLinkCard />
       <Pipeline scope="mine" />
+
+      {canSeeOrg && settings && <LiabilityCard settings={settings} />}
       {canSeeOrg && <Pipeline scope="org" />}
+      {canConfigure && settings && <SettingsCard settings={settings} />}
     </div>
   );
 }

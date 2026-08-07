@@ -132,6 +132,17 @@ describe("a SUSPENDED organization loses access", () => {
     expect((await res.json()).code).toBe("ORGANIZATION_INACTIVE");
   });
 
+  it("REVIEW FIX: does NOT leave the recruiting plane open — a dead org cannot keep hiring", async () => {
+    // The gate originally reused the TRAINING allowlist, which answers a
+    // different question ("what does an untrained rep need to become
+    // employable") and therefore exempted /api/onboarding — the routes that
+    // send invitations on the platform's own mail domain and mint user
+    // accounts. A suspended organization must not keep hiring.
+    const res = await req("/api/onboarding/applications", doomedAdminSession);
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe("ORGANIZATION_INACTIVE");
+  });
+
   it("still lets the blocked user reach /api/auth so they can sign out", async () => {
     // logout-all sits behind requireAuth, so it genuinely runs the gate rather
     // than passing vacuously the way an unrouted path would.
@@ -197,6 +208,29 @@ describe("cancelling an org through the console revokes its sessions immediately
     expect(res.status).toBe(200);
     expect((await res.json()).sessionsRevoked).toBeGreaterThan(0);
     // The token itself is gone, not merely refused.
+    expect(storage.getSession(session)).toBeFalsy();
+  });
+});
+
+describe("REVIEW FIX: suspending through PATCH revokes sessions too", () => {
+  it("sweeps sessions when the status flips to a blocking one", async () => {
+    rawDb.prepare(
+      `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name, status)
+       VALUES (4, 'patch-fiber', 'Patch Fiber', 'Owner P', 'owner@patch.example.test', 'Patch', 'active')`,
+    ).run();
+    const u = storage.createUser({
+      name: "Patch Rep", email: "rep@patch.example.test", role: "rep", active: true, tenantId: 4,
+    } as any);
+    const session = storage.createSession(u.id).id;
+    expect(storage.getSession(session)).toBeTruthy();
+
+    // Only DELETE swept sessions before; PATCH could set the same status and
+    // leave every device signed in — and requireAuth slides the expiry forward
+    // on each request, so an allowlisted poll kept them alive indefinitely.
+    const res = await req("/api/sa/tenants/4", ownerSession, {
+      method: "PATCH", body: JSON.stringify({ status: "suspended" }),
+    });
+    expect(res.status).toBe(200);
     expect(storage.getSession(session)).toBeFalsy();
   });
 });

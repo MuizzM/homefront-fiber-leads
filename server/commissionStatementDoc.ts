@@ -94,9 +94,40 @@ export function buildStatementDocumentFor(
   // Per-rep, cap-aware split against the LIVE ledger balance — the same numbers
   // the reserve endpoints and the rep's reserve card report, so the statement
   // can never quote a holdback the ledger disagrees with.
-  const holdback = svc.holdbackForStatement(tenantId, finalCents, stmt.rep_id);
+  let holdback = svc.holdbackForStatement(tenantId, finalCents, stmt.rep_id);
   const reserveConfig = resolveRepReserveConfig(tenantId, stmt.rep_id);
   const reserveBalanceCents = getReserveBalanceCents(tenantId, stmt.rep_id);
+
+  // A LOCKED week's holdback comes from the append-only reserve ledger, never
+  // from a live recompute.
+  //
+  // holdbackForStatement resolves the CURRENT org/rep percent and cap against
+  // the CURRENT running balance, so a settled statement re-printed later showed
+  // whatever those happen to be today — and `netPayCents = earned - reserve` is
+  // the hero figure on the page. Two people downloading the same statement id on
+  // different days could see different net pay, and a statement could print "$0
+  // withheld" while its own reserve_entries row said $160. reserveService states
+  // the rule for exactly this reason: "Report the RECORDED amount — never
+  // recompute it, or a display could disagree with the ledger that actually
+  // paid." An OPEN week has no recorded hold yet and is already marked a draft,
+  // so it keeps the live computation.
+  if (locked) {
+    const held = rawDb.prepare(
+      `SELECT amount_cents AS amountCents FROM reserve_entries
+       WHERE tenant_id = ? AND rep_id = ? AND kind = 'hold' AND week_start_utc = ?`,
+    ).get(tenantId, stmt.rep_id, stmt.week_start_utc) as any;
+    const recordedCents = Math.max(0, Math.trunc(Number(held?.amountCents ?? 0)));
+    const earnedCents = Math.trunc(holdback.earnedCents ?? finalCents);
+    holdback = {
+      ...holdback,
+      reserveCents: recordedCents,
+      netPayableCents: earnedCents - recordedCents,
+      // The EFFECTIVE rate this week was actually held at — a cap can make it
+      // lower than the configured percent, and the label must agree with the
+      // two numbers beside it rather than quote today's setting.
+      reservePercent: earnedCents > 0 ? Math.round((recordedCents / earnedCents) * 100) : 0,
+    };
+  }
 
   const input: StatementDocInput = {
     company: {

@@ -427,15 +427,32 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 // every live org losing the app at once.
 const ORG_BLOCKING_STATUSES: ReadonlySet<string> = new Set(["cancelled", "suspended"]);
 
+// The org gate gets its OWN allowlist rather than borrowing the training gate's.
+// That list answers a different question — "what does an untrained rep need in
+// order to become employable" — and includes the whole recruiting plane:
+// /api/onboarding sends invitations and approval emails on the platform's own
+// mail domain and mints user accounts. A suspended organization must not keep
+// hiring. This list is only what the lock screen itself needs: know who you are,
+// read the notice, sign out.
+const ORG_GATE_ALLOWED_PREFIXES: readonly string[] = [
+  "/api/auth",           // session read + logout — never trap someone signed in
+  "/api/health",
+  "/api/notifications",  // the "your organization is inactive" notice has to arrive
+];
+const orgGateAllows = (path: string): boolean => {
+  const p = String(path ?? "");
+  return ORG_GATE_ALLOWED_PREFIXES.some(prefix => p === prefix || p.startsWith(`${prefix}/`));
+};
+
 function orgStatusGate(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).user;
   if (!user) return next();
   // The platform owner administers organizations from outside all of them —
   // gating them on a tenant status would lock the only identity that can undo it.
   if (user.isSuperAdmin || user.tenantId == null) return next();
-  // Same allowlist the training gate uses: never trap a signed-in person without
-  // a route to read who they are, see the notice, or sign out.
-  if (pathAllowedWhileGated(req.path)) return next();
+  // Never trap a signed-in person without a route to read who they are, see the
+  // notice, or sign out — but nothing wider than that (see ORG_GATE_ALLOWED_PREFIXES).
+  if (orgGateAllows(req.path)) return next();
   try {
     const tenant = storage.getTenantById(user.tenantId);
     const status = String(tenant?.status ?? "active").toLowerCase();
@@ -9284,7 +9301,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { fullName, email, phone, city, zip, state, hasSalesExperience,
               salesExperienceDetails, hasReliableTransportation, preferredCarriers,
-              referralSource, orgSlug, inviteToken,
+              referralSource, referralCode, orgSlug, inviteToken,
               applicationSource, desiredRole, consent } = req.body;
 
       if (!fullName || !email || !phone || !city || !zip || !preferredCarriers) {
@@ -9324,6 +9341,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           fullName, email, phone, city, zip, state: state || "NC",
           hasSalesExperience: hasSalesExperience === "true" || hasSalesExperience === true,
           salesExperienceDetails: typeof salesExperienceDetails === "string" ? salesExperienceDetails.slice(0, 4_000) : null,
+          // The rep-referral code from a shared link. Distinct from
+          // referralSource (the free-text "how did you hear about us" dropdown,
+          // which pays nobody). Length-capped here; the code's SHAPE is
+          // validated by normalizeReferralCode before it reaches a lookup.
+          referralCode: typeof referralCode === "string" ? referralCode.slice(0, 32) : null,
           // Tri-state: absent/unrecognized → null (the form never asked),
           // NOT false — a careers-site "No" must not be invented here.
           hasReliableTransportation:
@@ -10985,6 +11007,21 @@ export function registerSaasRoutes(app: any) {
       });
       return res.status(404).json({ error: "Not found" });
     }
+    // Suspending through PATCH must revoke access as decisively as cancelling
+    // through DELETE. Only DELETE swept sessions, so `status:"suspended"` set
+    // here left every live session alive — and because requireAuth slides the
+    // expiry forward on each request, a device polling an allowlisted path kept
+    // its session indefinitely.
+    let sessionsRevoked = 0;
+    const nowBlocking = ORG_BLOCKING_STATUSES.has(String(updated.status ?? "").toLowerCase());
+    const wasBlocking = ORG_BLOCKING_STATUSES.has(String((previous as any)?.status ?? "").toLowerCase());
+    if (nowBlocking && !wasBlocking) {
+      try {
+        for (const u of storage.getAllUsers(updated.id)) sessionsRevoked += storage.deleteSessionsByUser(u.id);
+      } catch (e: any) {
+        console.warn("[tenant.updated] session sweep failed:", e?.message);
+      }
+    }
     const before: Record<string, unknown> = {};
     const after: Record<string, unknown> = {};
     for (const key of Object.keys(safeTenant)) {
@@ -10992,7 +11029,7 @@ export function registerSaasRoutes(app: any) {
       const now = (updated as any)?.[key];
       if (was !== now) { before[key] = was; after[key] = now; }
     }
-    storage.logActivity((req as any).user.id, "tenant.updated", "tenant", updated.id, { fields: Object.keys(after) });
+    storage.logActivity((req as any).user.id, "tenant.updated", "tenant", updated.id, { fields: Object.keys(after), sessionsRevoked });
     recordAdminAudit({
       ...auditContext(req),
       action: "tenant.updated", targetType: "tenant", targetId: updated.id,

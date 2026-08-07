@@ -479,6 +479,31 @@ const FIBER_SCOUT_SERVER = "FIBER_SCOUT_SERVER_PLACEHOLDER";
 const API_ENDPOINT = FIBER_SCOUT_SERVER + "/api/onboarding/apply";
 const ORG_SLUG = "FIBER_SCOUT_ORG_PLACEHOLDER";
 const INVITE_TOKEN = new URLSearchParams(window.location.search).get("invite") || "";
+// ── Rep referral code from a shared link (/join?ref=CODE) ───────────────────
+// Kept in sessionStorage as well as read from the URL, because an applicant who
+// lands on the link, navigates away to find their driver's licence photo, and
+// comes back without the query string would otherwise cost their referrer the
+// reward. The code is only ever a claim — the server re-validates it and can
+// decline it, and a declined attribution never fails the application.
+const REFERRAL_CODE = (function () {
+  try {
+    const fromUrl = (new URLSearchParams(window.location.search).get("ref") || "").trim();
+    if (fromUrl) { window.sessionStorage.setItem("hfs.ref", fromUrl); return fromUrl; }
+    return window.sessionStorage.getItem("hfs.ref") || "";
+  } catch { return (new URLSearchParams(window.location.search).get("ref") || "").trim(); }
+})();
+
+// Count the visit. Fire-and-forget: a blocked or failed request must never stop
+// someone applying, and the endpoint answers identically for real and unknown
+// codes so it cannot be used to discover which codes exist.
+if (REFERRAL_CODE) {
+  fetch(FIBER_SCOUT_SERVER + "/api/referrals/track-click", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: REFERRAL_CODE }),
+    keepalive: true,
+  }).catch(function () { /* never blocks the form */ });
+}
 // Role label from the resolved invite (e.g. "Team Lead") — the application
 // records the role the invite offered, not a hardcoded default.
 let INVITE_ROLE_LABEL = "";
@@ -637,6 +662,8 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
   fd.append("hasReliableTransportation", $("hasTransport").value);
   fd.append("preferredCarriers", carriers.join(","));
   fd.append("referralSource", $("referralSource").value);
+  // The rep-referral code, if this application came through someone's link.
+  if (REFERRAL_CODE) fd.append("referralCode", REFERRAL_CODE);
   fd.append("applicationSource", "public_join");
   fd.append("desiredRole", INVITE_ROLE_LABEL || "Field Representative");
   if (ORG_SLUG) fd.append("orgSlug", ORG_SLUG);

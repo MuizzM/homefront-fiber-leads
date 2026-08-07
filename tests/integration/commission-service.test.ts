@@ -777,3 +777,159 @@ describe("upsertSale write guards (sale re-attribution / re-dating / locked week
     ).not.toThrow();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REVIEW FIXES. An adversarial review of the guards above reproduced four
+// defects in them. Each test below is the reproduction, kept as a regression pin.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("upsertSale guards — defects found in review", () => {
+  const T8 = 9008, REP_A = 8001, REP_B = 8002;
+
+  beforeAll(() => {
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T8, "Review Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_A, T8, null);
+    seedRep(REP_B, T8, null);
+    for (const r of [REP_A, REP_B]) {
+      svc.assignStructureToRep(T8, 1, { repId: r, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    }
+  });
+
+  // §1.1 — the clamp rewrote only sold_at, while the DEFAULT basis is
+  // QUALIFIED_AT. A caller could backdate qualified_at freely and concentrate
+  // months of sales into one high-tier week.
+  it("clamps EVERY basis timestamp, not just soldAt", () => {
+    const claimed = new Date(Date.parse(inWeekTs) - 400 * 86_400_000).toISOString();
+    svc.upsertSale(T8, 1, {
+      repId: REP_A, externalId: "rv-basis-1", status: "PENDING",
+      soldAt: inWeekTs, qualifiedAt: claimed, installedAt: claimed, activatedAt: claimed,
+      serverReceivedAt: inWeekTs,
+    });
+    const row = svc.getSaleByExternalId(T8, "rv-basis-1");
+    const floor = Date.parse(inWeekTs) - 30 * 86_400_000;
+    // Every one of them is pulled forward to the correction-window floor.
+    expect(Date.parse(row.qualified_at)).toBe(floor);
+    expect(Date.parse(row.installed_at)).toBe(floor);
+    expect(Date.parse(row.activated_at)).toBe(floor);
+  });
+
+  it("THE EXPLOIT: a backdated qualifiedAt can no longer re-price a whole week", () => {
+    // The week the attacker wants to stuff.
+    const target = inWeekTs;
+    for (let i = 0; i < 4; i++) {
+      svc.upsertSale(T8, 1, { repId: REP_A, externalId: `rv-honest-${i}`, status: "QUALIFIED", soldAt: target, qualifiedAt: target });
+    }
+    const honest = svc.calculateOrRecalculateStatement({ tenantId: T8, repId: REP_A, weekReference: WEEK_REF, actorId: 1 }).statement;
+    expect(honest.qualified_sale_count).toBe(4);
+
+    // Now try to drag 15 much older sales into that same week via qualifiedAt.
+    const longAgo = new Date(Date.parse(target) - 300 * 86_400_000).toISOString();
+    for (let i = 0; i < 15; i++) {
+      svc.upsertSale(T8, 1, {
+        repId: REP_A, externalId: `rv-stuff-${i}`, status: "QUALIFIED",
+        soldAt: longAgo, qualifiedAt: target,          // claim: counted in the rich week
+        serverReceivedAt: longAgo,                     // but the server received them long ago
+      });
+    }
+    const after = svc.calculateOrRecalculateStatement({ tenantId: T8, repId: REP_A, weekReference: WEEK_REF, actorId: 1 }).statement;
+    // The stuffed sales were clamped back to their own week — the honest week
+    // still counts 4, and its tier did not move.
+    expect(after.qualified_sale_count).toBe(4);
+    expect(after.rate_cents).toBe(honest.rate_cents);
+  });
+
+  // §1.2 — the owner freeze only covered QUALIFIED rows, so PENDING / REVERSED
+  // sales were freely re-attributable in place.
+  it("refuses to re-credit a PENDING sale, not just a QUALIFIED one", () => {
+    svc.upsertSale(T8, 1, { repId: REP_A, externalId: "rv-pending", status: "PENDING", soldAt: inWeekTs });
+    let err: any;
+    try { svc.upsertSale(T8, 1, { repId: REP_B, externalId: "rv-pending", status: "PENDING", soldAt: inWeekTs }); }
+    catch (e) { err = e; }
+    expect(err?.code).toBe("SALE_CREDIT_LOCKED");
+    expect(svc.getSaleByExternalId(T8, "rv-pending").rep_id).toBe(REP_A);
+  });
+
+  it("refuses to resurrect someone else's REVERSED sale under a new owner", () => {
+    svc.upsertSale(T8, 1, { repId: REP_A, externalId: "rv-reversed", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    svc.transitionSale(T8, 1, "rv-reversed", "REVERSE");
+    let err: any;
+    try { svc.upsertSale(T8, 1, { repId: REP_B, externalId: "rv-reversed", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs }); }
+    catch (e) { err = e; }
+    expect(err?.code).toBe("SALE_CREDIT_LOCKED");
+    const row = svc.getSaleByExternalId(T8, "rv-reversed");
+    expect(row.rep_id).toBe(REP_A);
+    expect(row.status).toBe("REVERSED");
+  });
+
+  it("still allows the OWNER to update their own live sale in place", () => {
+    svc.upsertSale(T8, 1, { repId: REP_A, externalId: "rv-own-update", status: "PENDING", soldAt: inWeekTs });
+    expect(() =>
+      svc.upsertSale(T8, 1, { repId: REP_A, externalId: "rv-own-update", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs }),
+    ).not.toThrow();
+    expect(svc.getSaleByExternalId(T8, "rv-own-update").status).toBe("QUALIFIED");
+  });
+
+  // §1.4 — under an INSTALLED_AT basis, a live sale legitimately has a null
+  // basis column until install is confirmed. The sold_at fallback made that
+  // first stamp look like a week move and 409'd the write that makes it payable.
+  it("allows first-time install stamping under an INSTALLED_AT basis", () => {
+    const T9 = 9009, REP_I = 9101;
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T9, "Install Basis Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_I, T9, null);
+    svc.assignStructureToRep(T9, 1, { repId: REP_I, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+    svc.updateOrgConfig(T9, 1, { commissionQualificationBasis: "INSTALLED_AT" } as any);
+
+    svc.upsertSale(T9, 1, { repId: REP_I, externalId: "rv-install", status: "QUALIFIED", soldAt: inWeekTs });
+    // Three weeks later the install is confirmed — a different week than sold_at.
+    const installedAt = new Date(Date.parse(inWeekTs) + 21 * 86_400_000).toISOString();
+    expect(() =>
+      svc.upsertSale(T9, 1, { repId: REP_I, externalId: "rv-install", status: "QUALIFIED", soldAt: inWeekTs, installedAt }),
+    ).not.toThrow();
+    expect(svc.getSaleByExternalId(T9, "rv-install").installed_at).toBe(installedAt);
+  });
+});
+
+describe("backfillFieldSales — defect found in review", () => {
+  // §1.3 — GUARD 3 threw STATEMENT_LOCKED for a sold door whose week was already
+  // finalized. With no per-lead catch, one such lead aborted the whole boot
+  // sweep, permanently: rows already created are skipped next boot, so the same
+  // lead blocked the same position on every restart.
+  it("books a locked-week door PENDING and keeps going instead of aborting the sweep", () => {
+    const T10 = 9010, REP_BF = 10001;
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T10, "Backfill Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_BF, T10, null);
+    svc.assignStructureToRep(T10, 1, { repId: REP_BF, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+
+    // Lock the week this rep's historical doors fall in.
+    svc.upsertSale(T10, 1, { repId: REP_BF, externalId: "bf-seed", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    svc.calculateOrRecalculateStatement({ tenantId: T10, repId: REP_BF, weekReference: WEEK_REF, actorId: 1 });
+    svc.batchTransitionWeek(T10, 1, WEEK_REF, "FINALIZE", [REP_BF]);
+
+    // Two sold leads in that now-locked week, plus one in an open week AFTER them.
+    const openTs = new Date(Date.parse(inWeekTs) + 30 * 86_400_000).toISOString();
+    const mkLead = (id: number, ts: string) => {
+      rawDb.prepare(
+        `INSERT INTO leads (id, address, city, state, zip, tenant_id, assigned_rep_id, lead_status, created_at, updated_at)
+         VALUES (?, ?, 'Rockwell', 'NC', '28138', ?, ?, 'sold', datetime('now'), datetime('now'))`,
+      ).run(id, `${id} Backfill Way`, T10, REP_BF);
+      rawDb.prepare(
+        `INSERT INTO knock_log (lead_id, rep_id, tenant_id, knocked_at, was_home, outcome) VALUES (?, ?, ?, ?, 1, 'sold')`,
+      ).run(id, REP_BF, T10, ts);
+    };
+    mkLead(770001, inWeekTs);
+    mkLead(770002, inWeekTs);
+    mkLead(770003, openTs);
+
+    const out = svc.backfillFieldSales();
+    // The locked-week doors were booked PENDING, not dropped…
+    expect(out.held).toBeGreaterThanOrEqual(2);
+    expect(out.failed).toBe(0);
+    // …and the sweep reached the door AFTER them, which is what used to be lost.
+    expect(svc.getSaleByExternalId(T10, "lead:770003")).toBeTruthy();
+    expect(svc.getSaleByExternalId(T10, "lead:770003").status).toBe("QUALIFIED");
+    // The locked week's frozen total is untouched.
+    expect(svc.getSaleByExternalId(T10, "lead:770001").status).toBe("PENDING");
+  });
+});

@@ -1,6 +1,8 @@
 import { getDefaultTenantId, storage } from "./storage";
 import { attachApplicationToInvite, resolveRecruitingInviteToken } from "./onboardingRecruitingStore";
 import { rawDb } from "./db";
+import { attributeApplication } from "./referralStore";
+import { normalizeReferralCode } from "@shared/referral";
 
 export type ApplicationSource = "invited" | "careers" | "public_join";
 
@@ -23,6 +25,10 @@ export interface ApplicationIntakeInput {
   hasReliableTransportation?: boolean | null;
   preferredCarriers: string;
   referralSource?: string | null;
+  /** The rep-referral code from the shared link (`/join?ref=CODE`). Distinct
+   *  from `referralSource`, which is the free-text "how did you hear about us"
+   *  dropdown and pays nobody. */
+  referralCode?: string | null;
   desiredRole?: string | null;
   requestedSource?: string | null;
   orgSlug?: string | null;
@@ -106,6 +112,34 @@ export function submitPublicApplication(input: ApplicationIntakeInput) {
     // row when another concurrent request won, so retries never leave duplicates.
     rawDb.prepare("DELETE FROM rep_applications WHERE id = ? AND user_id IS NULL").run(application.id);
     throw new ApplicationIntakeError(error instanceof Error ? error.message : "This invitation has already been used.", 409);
+  }
+
+  // ── Attribute the rep-referral, if this application came through a link ────
+  // Deliberately AFTER the application row exists and deliberately best-effort:
+  // a declined or failed attribution must never fail the application. Someone
+  // applying for a job does not lose their application because a referral code
+  // was stale, the programme was switched off, or they turned out to be an
+  // existing user. The referral is a bonus on top of a hire, never a gate on it.
+  if (input.referralCode) {
+    try {
+      const code = normalizeReferralCode(input.referralCode);
+      if (code) {
+        const { rejected } = attributeApplication({
+          tenantId, linkCode: code, applicantEmail: email,
+          applicationId: application.id, nowIso: new Date().toISOString(),
+        });
+        if (rejected) {
+          storage.logActivity(null, "referral.attribution.declined", "rep_application", application.id, {
+            tenantId, reason: rejected,
+          }, input.actorIp ?? undefined, tenantId);
+        }
+      }
+    } catch (error) {
+      // Logged, never thrown. See above.
+      storage.logActivity(null, "referral.attribution.failed", "rep_application", application.id, {
+        tenantId, error: error instanceof Error ? error.message : "unknown",
+      }, input.actorIp ?? undefined, tenantId);
+    }
   }
 
   storage.logActivity(null, "onboarding.application.submitted", "rep_application", application.id, {
