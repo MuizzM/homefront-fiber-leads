@@ -28,7 +28,7 @@ import { recordReferralReward } from "./earningsLedgerStore";
 import {
   DEFAULT_REFERRAL_CONFIG, canReferralTransition, canChangeReferrer,
   evaluateQualification, referralCodeFrom, referralUrl, rejectAttribution,
-  rewardReleasable, validateReferralConfig, isReferralCommitted,
+  rewardReleasable, validateReferralConfig, isReferralCommitted, applicantStatusView,
   type ReferralProgramConfig, type ReferralStatus, type QualificationResult,
 } from "@shared/referral";
 
@@ -100,18 +100,6 @@ export function ensureReferralSchema(): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_one_live_user
       ON referrals(tenant_id, referred_user_id)
       WHERE referred_user_id IS NOT NULL AND status NOT IN ('REJECTED','EXPIRED') AND deleted_at IS NULL;
-    -- ONE ATTRIBUTION PER APPLICATION. The live-email and live-user indexes
-    -- above stop the same PERSON being referred twice, but neither stops two
-    -- referrals pointing at the same application row — which is what a retried
-    -- intake, a double-submitted form, or two concurrent requests would
-    -- produce. Unlike the other two this is NOT filtered on status: an
-    -- application that was rejected once must not become attributable again by
-    -- a second attribution, because the application itself is the thing that
-    -- happened once.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_one_per_application
-      ON referrals(tenant_id, referred_application_id)
-      WHERE referred_application_id IS NOT NULL;
-
     -- Click de-duplication. A counter that increments on every request counts a
     -- refresh, a back-button, and a prefetch as three people, which makes the
     -- one number a rep actually watches meaningless — and makes inflating it
@@ -145,6 +133,8 @@ export function ensureReferralSchema(): void {
       ON referral_events(referral_id, id);
   `);
 
+  ensureOneReferralPerApplicationIndex();
+
   rawDb.exec(`
     CREATE TRIGGER IF NOT EXISTS referral_events_no_update
       BEFORE UPDATE ON referral_events
@@ -154,6 +144,64 @@ export function ensureReferralSchema(): void {
       BEGIN SELECT RAISE(ABORT, 'referral_events is append-only'); END;
   `);
 }
+/**
+ * ONE ATTRIBUTION PER APPLICATION.
+ *
+ * The live-email and live-user indexes stop the same PERSON being referred
+ * twice, but neither stops two referrals pointing at the same application row —
+ * which is what a retried intake, a double-submitted form, or two concurrent
+ * requests would produce. Unlike those two this is NOT filtered on status: an
+ * application that was rejected once must not become attributable again,
+ * because the application itself is the thing that happened once.
+ *
+ * ── WHY THIS IS NOT JUST ANOTHER LINE IN THE exec() ABOVE ──────────────────
+ * `CREATE UNIQUE INDEX` FAILS if the data already violates it, and this whole
+ * function runs at module import — i.e. at BOOT. On an existing database that
+ * already contains a duplicate, putting this in the bulk exec would throw
+ * before the server finished starting, turning a data problem into an outage,
+ * on every restart, with no way in.
+ *
+ * So: detect first, and if the data is dirty, START ANYWAY and say so loudly
+ * with the exact offending rows. The constraint is a guard against a future
+ * duplicate; refusing to boot does not un-create the ones already there.
+ *
+ * Deliberately does NOT auto-delete or auto-merge. These rows decide who gets
+ * paid $500, and a heuristic that silently picks a winner is worse than an
+ * operator picking one — this reports, a human resolves, the next boot
+ * installs the index.
+ */
+export function ensureOneReferralPerApplicationIndex(): { installed: boolean; conflicts: number } {
+  const duplicates = rawDb.prepare(
+    `SELECT tenant_id AS tenantId, referred_application_id AS applicationId,
+            COUNT(*) AS n, GROUP_CONCAT(id) AS referralIds
+       FROM referrals
+      WHERE referred_application_id IS NOT NULL
+      GROUP BY tenant_id, referred_application_id
+     HAVING COUNT(*) > 1`,
+  ).all() as Array<{ tenantId: number; applicationId: number; n: number; referralIds: string }>;
+
+  if (duplicates.length > 0) {
+    for (const d of duplicates) {
+      console.error(
+        `[referral-migration] tenant ${d.tenantId}: application ${d.applicationId} has ${d.n} referrals ` +
+        `(ids ${d.referralIds}). Resolve to one before the one-per-application constraint can be installed.`,
+      );
+    }
+    console.error(
+      "[referral-migration] Booting WITHOUT idx_referrals_one_per_application. " +
+      "New duplicates are not blocked until this is resolved.",
+    );
+    return { installed: false, conflicts: duplicates.length };
+  }
+
+  rawDb.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_one_per_application
+       ON referrals(tenant_id, referred_application_id)
+       WHERE referred_application_id IS NOT NULL`,
+  );
+  return { installed: true, conflicts: 0 };
+}
+
 ensureReferralSchema();
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -768,6 +816,26 @@ export function rejectReferral(p: {
   ).run(p.actorUserId, p.nowIso, p.reason.trim(), p.nowIso, p.tenantId, p.referralId);
   recordEvent({ tenantId: p.tenantId, referralId: p.referralId, type: "REJECTED", metadata: { reason: p.reason }, actorUserId: p.actorUserId, nowIso: p.nowIso });
   return getReferral(p.tenantId, p.referralId)!;
+}
+
+/**
+ * The referred person's OWN status, projected to what they may see.
+ *
+ * Takes a rep id resolved from the SESSION — there is no id parameter anywhere
+ * in this path, which is what makes it immune to a tampered identifier rather
+ * than merely defended against one.
+ */
+export function applicantStatusFor(tenantId: number, repId: number, nowIso: string) {
+  const referral = referralForRep(tenantId, repId);
+  if (!referral) return applicantStatusView(null, null, false);
+
+  const snapshot = qualificationFor(tenantId, referral.id, nowIso);
+  const trainingMet = snapshot?.result.requirements.find(r => r.key === "training")?.met
+    // A programme that does not require training has no training requirement in
+    // the checklist; the milestone then reads as met rather than as missing.
+    ?? true;
+
+  return applicantStatusView(referral, snapshot?.result ?? null, trainingMet);
 }
 
 /** Link the reward's ledger row once the incentive engine has written it. */
