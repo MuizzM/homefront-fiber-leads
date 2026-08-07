@@ -5,11 +5,24 @@
 > stand; 16 of ~60 candidate findings survived). Companion to
 > [`HIERARCHY_COMMISSION_AUDIT.md`](./HIERARCHY_COMMISSION_AUDIT.md).
 >
-> **Status: §1.1 – §1.5 are FIXED, plus §2.1 and §2.4.** Each carries a
-> regression test that reproduces the original defect. Still open: **§2.2**
-> (`upsertSale` books a QUALIFIED sale that syncs no overrides and refreshes no
-> statement) and **§2.3** (`batchTransitionWeek` has no per-rep isolation).
-> Section 3 is unactioned by design.
+> **Status: §1.1 – §1.5, §2.1 – §2.4 are ALL FIXED.** Each carries a regression
+> test that reproduces the original defect. Section 3 is unactioned by design.
+>
+> A follow-up sweep for the same failure class (one unit of work aborting a
+> batch, or a caught exception losing the record of failure) found two more,
+> both now fixed: the **incentive subscriber's poison-event stall**
+> (`server/incentiveSubscriber.ts` — one throwing event prevented `advanceCursor`
+> from ever running, so the queue stalled permanently and invisibly) and the
+> **per-tenant boot backfill** (`server/index.ts` — one org's failure ended the
+> fresh-lead backfill for every org after it, identically on every restart).
+>
+> One additional finding is **reported but deliberately NOT fixed**: the
+> qualification basis has two sources — `tenants.commission_qualification_basis`
+> picks the week a sale write recomputes, while
+> `commission_plan_versions.qualification_basis` is what the statement counts by.
+> When they disagree a sale is recomputed into a week that does not count it.
+> Choosing a winner moves money, so the current behaviour is pinned by a test
+> (`tests/integration/commission-side-effects.test.ts`) rather than changed.
 
 ---
 

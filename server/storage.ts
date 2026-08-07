@@ -968,6 +968,14 @@ export function runMigrations() {
     // all worth the same (different speeds/bundles). NULL = fall back to the org
     // default; the statement never invents a number for a door nobody priced.
     `ALTER TABLE commission_sales ADD COLUMN house_amount_cents INTEGER`,
+    // IMMUTABLE qualification-basis snapshot — which timestamp places this sale
+    // in a pay week. Stamped once from the plan version effective when the sale
+    // first becomes commission-relevant, then frozen, so a later tenant-config
+    // or plan change can never re-week a sale that already exists. NULL means a
+    // row written before this column, which resolves through the documented
+    // fallback (the plan version's basis) and therefore behaves exactly as it
+    // did before. See the precedence note in server/commissionService.ts.
+    `ALTER TABLE commission_sales ADD COLUMN qualification_basis TEXT`,
 
     `CREATE TABLE IF NOT EXISTS commission_statements (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, week_start_utc TEXT NOT NULL, next_week_start_utc TEXT NOT NULL, timezone TEXT NOT NULL, local_week_label TEXT NOT NULL, qualification_basis TEXT NOT NULL, commission_plan_id INTEGER, commission_plan_version_id INTEGER, plan_version_number INTEGER, plan_snapshot TEXT, qualified_sale_count INTEGER NOT NULL DEFAULT 0, tier_id INTEGER, tier_label TEXT, rate_cents INTEGER NOT NULL DEFAULT 0, gross_commission_cents INTEGER NOT NULL DEFAULT 0, adjustment_cents INTEGER NOT NULL DEFAULT 0, final_commission_cents INTEGER NOT NULL DEFAULT 0, calculation_version INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'OPEN', calculated_at TEXT NOT NULL DEFAULT (datetime('now')), finalized_at TEXT, finalized_by INTEGER, paid_at TEXT, paid_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_statements_tenant_rep_week ON commission_statements(tenant_id, rep_id, week_start_utc)`,
@@ -2288,6 +2296,17 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN carrier TEXT NOT NULL DEFAULT 'kinetic'`,
     `ALTER TABLE leads ADD COLUMN carrier TEXT NOT NULL DEFAULT 'kinetic'`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_carrier_city ON scan_targets(carrier, lower(city), state)`,
+    // The city/state join WITHOUT the carrier prefix. `syncMarketState` and
+    // `listMarkets` (server/stateMonitorStore.ts) join scan_targets to
+    // state_fiber_markets on `lower(s.city)=lower(m.city) AND s.state=m.state`
+    // and never mention carrier, so the index above cannot be seeked — carrier
+    // has two distinct values and is the leading column. Without this, each of
+    // the seven correlated subqueries in syncMarketState's UPDATE walks all
+    // ~474k rows once per market row (483 of them), and the NOT EXISTS branches
+    // hit the worst case: a full scan to prove absence.
+    // Measured on a copy of live data: the UPDATE goes from 222s to 0.22s, and
+    // the plan becomes a COVERING INDEX seek. ~9 MB on disk.
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_city_state ON scan_targets(lower(city), state)`,
     `ALTER TABLE scan_targets ADD COLUMN frontier_control TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_frontier_control ON scan_targets(frontier_control)`,
     // ── Coming-Soon watchlist ─────────────────────────────────────────────────
@@ -3051,6 +3070,10 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_lifecycle ON scan_targets(lifecycle_state, lifecycle_changed_at)`);
+    // Must be recreated here too: the rebuild drops every index with the old
+    // table, and losing this one silently returns syncMarketState to a
+    // multi-minute full scan on the next scheduler tick.
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_city_state ON scan_targets(lower(city), state)`);
   };
 
   raw.transaction(() => {

@@ -16,6 +16,9 @@ import { hourlyBlockForStatement, sumWeekSpiffsByRep } from "./hourlyPay";
 import { computeHoldback } from "@shared/commissionReserve";
 import { buildStatementDocumentFor } from "./commissionStatementDoc";
 import { renderCommissionStatementPdf } from "./commissionStatementPdf";
+import { reconcile } from "./commissionReconciliation";
+import * as queueOps from "./eventQueueOps";
+import { cursorFor, backlogFor } from "./domainEventStore";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -614,5 +617,71 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     const { decision } = req.body || {};
     if (decision !== "APPROVE" && decision !== "REJECT") return res.status(400).json({ error: "decision must be APPROVE or REJECT" });
     try { res.json(svc.decideAdjustment(tid(req), uid(req), Number(req.params.id), decision)); } catch (e) { fail(res, e); }
+  });
+
+  // ── Reconciliation + queue operations (ADMIN ONLY, read-only by default) ────
+  // The report NEVER repairs anything: an auto-corrector that is wrong pays the
+  // wrong amount and destroys the evidence, so every finding is routed to a
+  // human who fixes it through the existing audited adjustment / override
+  // exception workflows.
+  app.get("/api/commission/reconciliation", requireCapability("audit.read.org"), (req, res) => {
+    try {
+      const nowIso = new Date().toISOString();
+      const report = reconcile({ tenantId: tid(req), nowIso, runId: `recon:${tid(req)}:${nowIso}` });
+      res.json(report);
+    } catch (e) { fail(res, e); }
+  });
+
+  // CSV export of the same report, for an operator working a backlog offline.
+  app.get("/api/commission/reconciliation.csv", requireCapability("audit.read.org"), (req, res) => {
+    try {
+      const nowIso = new Date().toISOString();
+      const report = reconcile({ tenantId: tid(req), nowIso, runId: `recon:${tid(req)}:${nowIso}` });
+      const rows = [
+        "Kind,Severity,Tenant,Rep,Sale,Week,Correlation,Detail",
+        ...report.findings.map(f => [
+          f.kind, f.severity, f.tenantId ?? "", f.repId ?? "", f.saleId ?? "",
+          f.statementWeekUtc ?? "", f.correlationId, f.detail,
+        ].map(csvCell).join(",")),
+      ];
+      res.setHeader("content-type", "text/csv; charset=utf-8");
+      res.setHeader("content-disposition", `attachment; filename="reconciliation-${nowIso.slice(0, 10)}.csv"`);
+      res.setHeader("cache-control", "no-store");
+      res.send(rows.join("\n"));
+    } catch (e) { fail(res, e); }
+  });
+
+  // Queue health for the incentive subscriber: what is halted, for how long, and
+  // whether anything has crossed an alert threshold.
+  app.get("/api/commission/queue/health", requireCapability("audit.read.org"), (_req, res) => {
+    try {
+      const subscriber = "incentives";
+      res.json(queueOps.queueHealth(subscriber, cursorFor(subscriber), backlogFor(subscriber)));
+    } catch (e) { fail(res, e); }
+  });
+
+  app.get("/api/commission/queue/recovery", requireCapability("audit.read.org"), (_req, res) => {
+    try {
+      const subscriber = "incentives";
+      res.json(queueOps.recoveryReport(subscriber, cursorFor(subscriber)));
+    } catch (e) { fail(res, e); }
+  });
+
+  // The only WRITE here, and it moves no money — it decides whether the queue
+  // may advance. settings.manage.org (admin/owner) plus a mandatory reason.
+  app.post("/api/commission/queue/events/:eventId/action", requireCapability("settings.manage.org"), (req, res) => {
+    const { action, reason } = req.body || {};
+    if (!["RETRY", "DEAD_LETTER", "RESOLVE"].includes(action)) {
+      return res.status(400).json({ error: "action must be RETRY, DEAD_LETTER or RESOLVE" });
+    }
+    try {
+      res.json(queueOps.operatorAction({
+        subscriber: "incentives", eventId: Number(req.params.eventId),
+        action, actorUserId: uid(req), reason: String(reason ?? ""), tenantId: tid(req),
+      }));
+    } catch (e: any) {
+      if (/reason is required/i.test(e?.message ?? "")) return res.status(400).json({ error: e.message, code: "REASON_REQUIRED" });
+      fail(res, e);
+    }
   });
 }

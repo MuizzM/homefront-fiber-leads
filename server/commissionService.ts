@@ -21,6 +21,7 @@ import {
 import { hourlyBlockForStatement, hourlyPayForWeek, type WeekHourlyPay } from "./hourlyPay";
 import { getTenantPayPolicy } from "./payPolicyStore";
 import { structuredLog } from "./structuredLog";
+import { resolveEffectiveDates, BASIS_FIELD as BASIS_FIELD_INPUT, type EffectiveDateResult } from "@shared/commissionEffectiveDate";
 // Downline override ledger. Import direction mirrors hourlyPay: this service
 // imports the store; the store never imports this service.
 import * as overrides from "./overrideStore";
@@ -67,6 +68,166 @@ export type QualificationBasis = "SOLD_AT" | "QUALIFIED_AT" | "INSTALLED_AT" | "
 const BASIS_COLUMN: Record<QualificationBasis, string> = {
   SOLD_AT: "sold_at", QUALIFIED_AT: "qualified_at", INSTALLED_AT: "installed_at", ACTIVATED_AT: "activated_at",
 };
+
+// ── Qualification basis: ONE source of truth per sale ────────────────────────
+//
+// The basis decides WHICH timestamp places a sale in a pay week, and it used to
+// have two sources that could disagree:
+//
+//   · `tenants.commission_qualification_basis` chose the week a sale WRITE
+//     recomputed, and
+//   · `commission_plan_versions.qualification_basis` — snapshotted onto the
+//     statement — chose the week the statement actually COUNTED.
+//
+// When they differed, a sale was recomputed into a week that did not count it:
+// the statement for the org-config week was created and priced nothing, and the
+// week that would have counted it was never recomputed at all.
+//
+// PRECEDENCE, in order:
+//   1. `commission_sales.qualification_basis` — an IMMUTABLE snapshot stamped on
+//      the sale the first time it is written, and never re-derived afterwards.
+//   2. When that is NULL (a row predating the column), the plan version's basis
+//      as resolved by the statement — which is exactly what already counted it.
+//   3. Org config, only when no plan version applies at all.
+//
+// The snapshot is derived from the PLAN VERSION rather than the tenant row
+// because the plan version is what already determined the money; adopting the
+// tenant row instead would have silently re-weeked historical sales. Mutable
+// tenant configuration therefore never reinterprets a sale that already exists,
+// which is the property that makes this safe to deploy against live data.
+
+/** SQL expression for a sale's effective basis timestamp, honouring the row's
+ *  own immutable snapshot and falling back to the statement's basis for legacy
+ *  rows — so a NULL snapshot behaves EXACTLY as it did before this column. */
+function basisTsExpr(alias: string, fallback: QualificationBasis): string {
+  // `fallback` is constrained to the BASIS_COLUMN keys by its type and is
+  // re-validated by every caller's loadOrgConfig/plan-version read, so this
+  // interpolation cannot carry caller input.
+  if (!BASIS_COLUMN[fallback]) throw new CommissionError("INVALID_WORKWEEK", `Unsupported qualification basis: ${fallback}`);
+  const a = alias ? `${alias}.` : "";
+  return `CASE COALESCE(${a}qualification_basis, '${fallback}')
+            WHEN 'SOLD_AT' THEN ${a}sold_at
+            WHEN 'QUALIFIED_AT' THEN ${a}qualified_at
+            WHEN 'INSTALLED_AT' THEN ${a}installed_at
+            WHEN 'ACTIVATED_AT' THEN ${a}activated_at
+          END`;
+}
+
+/** The basis SQL expression for one tenant, for read-only callers outside this
+ *  module (the reconciler). Uses the tenant's current default only as the LEGACY
+ *  fallback — a stamped row still resolves by its own frozen snapshot. */
+export function basisTsExprFor(tenantId: number, alias = "cs"): string {
+  return basisTsExpr(alias, loadOrgConfig(tenantId).qualificationBasis);
+}
+
+/** A sale row's effective basis, in JS. Same precedence as basisTsExpr. */
+export function basisForSale(sale: any, fallback: QualificationBasis): QualificationBasis {
+  const stamped = sale?.qualification_basis ?? sale?.qualificationBasis ?? null;
+  return (stamped && BASIS_COLUMN[stamped as QualificationBasis] ? stamped : fallback) as QualificationBasis;
+}
+
+/** The basis timestamp that places this sale in a week (sold_at as the
+ *  documented last resort, matching the COALESCE the ledger queries use). */
+export function basisTsForSale(sale: any, fallback: QualificationBasis): string {
+  return sale[BASIS_COLUMN[basisForSale(sale, fallback)]] || sale.sold_at;
+}
+
+/** Precedence rule 3, in ONE place: a plan version's basis, with org config as
+ *  the only fallback. `commission_plan_versions.qualification_basis` is NOT NULL
+ *  DEFAULT 'QUALIFIED_AT', so the guard is defensive — but this is the single
+ *  spot that decision is written down. */
+function basisOfVersion(version: any, config: OrgCommissionConfig): QualificationBasis {
+  const b = version?.qualification_basis as QualificationBasis | undefined;
+  return b && BASIS_COLUMN[b] ? b : config.qualificationBasis;
+}
+
+/**
+ * Precedence rule 2: the basis for a rep in a WEEK — the plan version the
+ * STATEMENT resolves for that week, else org config.
+ *
+ * This is the fallback every NULL-snapshot row must resolve through. It matters
+ * far more than "legacy rows" suggests: `commission_sales.qualification_basis`
+ * is added by a bare ALTER TABLE with no backfill, so on the first boot after
+ * deploy EVERY existing sale is NULL and takes this path.
+ *
+ * Before this existed the fallback had two implementations —
+ * `calculateOrRecalculateStatement` used the plan version (deciding which week
+ * COUNTS the money) while the recompute, week-overview, FINALIZE enumeration and
+ * door-list sites used `config.qualificationBasis`. When a tenant's basis and its
+ * plan version's basis disagreed, a sale was counted by one and recomputed by the
+ * other: the statement for the org-config week was created and priced nothing,
+ * and the week that would have counted it was never recomputed at all.
+ *
+ * NEVER throws. An hourly-only or override-only rep has no assignment and still
+ * needs a basis — `calculateOrRecalculateStatement` deliberately tolerates that
+ * and the routes render it as `noPlan`. A resolver that threw
+ * NO_EFFECTIVE_PLAN_ASSIGNMENT here would turn those surfaces into 500s.
+ */
+export function fallbackBasisForRepWeek(
+  tenantId: number, repId: number, bounds: WeekBounds, config: OrgCommissionConfig,
+): QualificationBasis {
+  const assignments = rawDb.prepare(
+    `SELECT id, commission_plan_version_id AS commissionPlanVersionId,
+            effective_from AS effectiveFrom, effective_to AS effectiveTo
+       FROM rep_commission_assignments WHERE tenant_id = ? AND rep_id = ? ORDER BY effective_from DESC`,
+  ).all(tenantId, repId) as AssignmentRow[];
+  const assignment = resolveAssignmentForWeek(assignments, bounds.weekStartUtc, bounds.nextWeekStartUtc);
+  if (!assignment) return config.qualificationBasis;
+  const version = rawDb.prepare(
+    `SELECT qualification_basis FROM commission_plan_versions WHERE id = ? AND tenant_id = ?`,
+  ).get(assignment.commissionPlanVersionId, tenantId) as any;
+  return basisOfVersion(version, config);
+}
+
+/**
+ * The basis a NEW sale should be stamped with: the basis of the plan version
+ * effective for this rep in the week that instant falls in, else the org default.
+ *
+ * Resolved once, at the moment the sale first becomes commission-relevant, and
+ * frozen — a later plan-version or tenant-config change cannot re-week it.
+ *
+ * This was a SECOND assignment resolver: instant-scoped, and comparing a DATE
+ * `effective_to` against a full ISO instant, so `'2026-08-01' > '2026-08-01T10:00Z'`
+ * read false and it disagreed with `resolveAssignmentForWeek` at every mid-week
+ * boundary — including the new-hire exception, which it had no equivalent of.
+ * The stamp must name the version the STATEMENT will use for this sale's own
+ * week, or the frozen snapshot can name a basis no version governing that week
+ * ever chose.
+ */
+export function resolveSaleBasis(tenantId: number, repId: number, atIso: string, config: OrgCommissionConfig): QualificationBasis {
+  return fallbackBasisForRepWeek(tenantId, repId, weekBoundsFor(atIso, config), config);
+}
+
+/**
+ * The instant that places THIS sale in a week, resolved the way the statement
+ * resolves it.
+ *
+ * For a STAMPED sale this is trivial and reads no extra rows: the frozen basis
+ * names one column, that column names one week.
+ *
+ * For a LEGACY NULL-snapshot row "which basis?" and "which week?" define each
+ * other — `fallbackBasisForRepWeek` needs a week, and the week comes from the
+ * basis. With at most four candidate instants the fixpoint is just: for each
+ * candidate, ask the STATEMENT's own resolver which basis governs that week, and
+ * accept the candidate only when the basis it resolves to places the sale in the
+ * very week the candidate named. That is exactly the agreement condition that
+ * was missing — a sale recomputed into a week that did not count it.
+ *
+ * Falls back to the org default only when no candidate agrees, which preserves
+ * today's behaviour for a row that has no coherent week under any basis.
+ */
+function resolvedBasisTsForSale(tenantId: number, sale: any, config: OrgCommissionConfig): string {
+  const stamped = sale?.qualification_basis as QualificationBasis | undefined;
+  if (stamped && BASIS_COLUMN[stamped]) return sale[BASIS_COLUMN[stamped]] || sale.sold_at;
+  for (const candidate of [sale.qualified_at, sale.installed_at, sale.activated_at, sale.sold_at]) {
+    if (!candidate) continue;
+    const basis = fallbackBasisForRepWeek(tenantId, sale.rep_id, weekBoundsFor(candidate, config), config);
+    const ts = sale[BASIS_COLUMN[basis]] || sale.sold_at;
+    if (!ts) continue;
+    if (weekBoundsFor(ts, config).weekStartUtc === weekBoundsFor(candidate, config).weekStartUtc) return ts;
+  }
+  return basisTsForSale(sale, config.qualificationBasis);
+}
 
 export function isValidTimezone(tz: string): boolean {
   if (!tz || typeof tz !== "string") return false;
@@ -250,13 +411,17 @@ function countQualifiedSales(
   tenantId: number, repId: number, basis: QualificationBasis, bounds: WeekBounds,
   opts: { forPay?: boolean; now?: Date } = {},
 ): number {
-  const col = BASIS_COLUMN[basis];
+  // Each sale is placed by ITS OWN frozen basis, falling back to the statement's
+  // basis for rows written before the snapshot column existed — so legacy rows
+  // count exactly as they always did, and new rows can never be counted by a
+  // different basis than the one that placed them.
+  const col = basisTsExpr("", basis);
   const policy = opts.forPay ? getTenantPayPolicy(tenantId) : null;
   if (!policy?.requireInstallConfirm) {
     const row = rawDb.prepare(
       `SELECT COUNT(*) AS c FROM commission_sales
        WHERE tenant_id = ? AND rep_id = ? AND status = 'QUALIFIED'
-         AND ${col} IS NOT NULL AND ${col} >= ? AND ${col} < ?`
+         AND (${col}) IS NOT NULL AND (${col}) >= ? AND (${col}) < ?`
     ).get(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any;
     return Number(row?.c ?? 0);
   }
@@ -275,7 +440,7 @@ function countQualifiedSales(
          ELSE hold_payable_after                       -- released: pays in the payable_after week
        END AS effective_ts
        FROM (
-         SELECT cs.${col} AS basis_ts,
+         SELECT (${basisTsExpr("cs", basis)}) AS basis_ts,
            (SELECT cm.status FROM commissions cm
              WHERE cm.tenant_id = cs.tenant_id AND cm.lead_id = cs.lead_id AND cm.rep_id = cs.rep_id
                AND cm.status != 'superseded'
@@ -302,7 +467,6 @@ function installHeldSalesForWeek(tenantId: number, repId: number, basis: Qualifi
 } {
   const policy = getTenantPayPolicy(tenantId);
   if (!policy.requireInstallConfirm) return { saleCount: 0, earliestPayableAfter: null };
-  const col = BASIS_COLUMN[basis];
   const row = rawDb.prepare(
     `SELECT COUNT(*) AS c, MIN(hold_payable_after) AS earliest FROM (
        SELECT
@@ -316,7 +480,7 @@ function installHeldSalesForWeek(tenantId: number, repId: number, basis: Qualifi
            ORDER BY cm.id DESC LIMIT 1) AS hold_payable_after
        FROM commission_sales cs
        WHERE cs.tenant_id = ? AND cs.rep_id = ? AND cs.status = 'QUALIFIED'
-         AND COALESCE(cs.${col}, cs.sold_at) >= ? AND COALESCE(cs.${col}, cs.sold_at) < ?
+         AND COALESCE(${basisTsExpr("cs", basis)}, cs.sold_at) >= ? AND COALESCE(${basisTsExpr("cs", basis)}, cs.sold_at) < ?
      )
      WHERE cm_status = 'pending' AND (hold_payable_after IS NULL OR hold_payable_after > ?)`
   ).get(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc, now.toISOString()) as any;
@@ -407,7 +571,11 @@ export function calculateOrRecalculateStatement(input: {
     if (!plan) throw new CommissionError("INVALID_COMMISSION_PLAN", "Plan not found in tenant.", 404);
 
     const tiers = plan.type === "TIERED" ? loadTiers(tenantId, version.id) : [];
-    basis = (version.qualification_basis || config.qualificationBasis) as QualificationBasis;
+    // The definition every other basis site now defers to, rather than each
+    // re-deriving it and drifting. This value is UNCHANGED — it is the site that
+    // was already correct; the others moved to meet it, which is what keeps
+    // existing statements byte-identical.
+    basis = basisOfVersion(version, config);
     // forPay: the statement IS the pay document — the ONE place the install
     // hold may gate sale counts. Every other consumer (incentive counters,
     // leaderboards) must use the raw count and see held sales as real sales.
@@ -532,7 +700,10 @@ export function addPlanVersion(tenantId: number, actorId: number | null, planId:
   const plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE id = ? AND tenant_id = ?`).get(planId, tenantId) as any;
   if (!plan) throw new CommissionError("CROSS_TENANT_ACCESS", "Plan not found in tenant.", 404);
   if (!input.effectiveFrom) throw new CommissionError("INVALID_COMMISSION_PLAN", "effectiveFrom is required.");
-  const basis = (input.qualificationBasis || "QUALIFIED_AT") as QualificationBasis;
+  // Defaults from the ORG config. Hardcoding QUALIFIED_AT here is how an org
+  // that had chosen INSTALLED_AT still received QUALIFIED_AT plan versions —
+  // the two sources diverging at the moment the version was created.
+  const basis = (input.qualificationBasis || loadOrgConfig(tenantId).qualificationBasis) as QualificationBasis;
   if (!BASIS_COLUMN[basis]) throw new CommissionError("INVALID_WORKWEEK", `Unsupported qualification basis: ${basis}`);
 
   let normalizedTiers: CommissionTier[] = [];
@@ -609,6 +780,64 @@ export function assignPlanVersionToRep(tenantId: number, actorId: number | null,
   return rawDb.prepare(`SELECT * FROM rep_commission_assignments WHERE id = ?`).get(info.lastInsertRowid);
 }
 
+
+/**
+ * Append-only audit for every timestamp this system moved.
+ *
+ * A clamp silently changes which week money lands in, so it must leave a record
+ * naming the requested value, the applied value and the reason — otherwise the
+ * only evidence that a backdating attempt happened is its absence from the
+ * numbers. Logged at WARN when the clamp moved the BASIS field, because that is
+ * the case that moved the pay week.
+ */
+function auditEffectiveDateClamps(
+  actorId: number | null, tenantId: number, externalId: string,
+  dates: EffectiveDateResult, path: string,
+): void {
+  if (dates.clamps.length === 0) return;
+  for (const c of dates.clamps) {
+    structuredLog("commission_sale.effective_date_clamped", {
+      tenantId, externalId, path, field: c.field, requested: c.requested,
+      applied: c.applied, reason: c.reason, isBasisField: c.isBasisField,
+    }, c.isBasisField ? "warn" : "info");
+  }
+  storage.logActivity(actorId, "commission_sale.effective_date_clamped", "commission_sale", undefined, {
+    externalId, path, payWeekMoved: dates.payWeekMoved, clamps: dates.clamps,
+  }, undefined);
+}
+
+/**
+ * The single locked-week gate for every path that can make a sale COUNTABLE.
+ *
+ * Injecting QUALIFIED money into a FINALIZED/PAID week either fails the
+ * recalculation outright or — worse — sits latent inside the settled week and
+ * surfaces on the next recompute, re-pricing a whole retroactive week that
+ * nobody asked to change and that no adjustment row explains.
+ *
+ * This lived inline in `upsertSale`, so `POST /api/commission/sales/:externalId/transition`
+ * — the OTHER door onto the same `qualified_at` column — accepted exactly the
+ * payload the sales route refused, and then `reconcileSaleSideEffects` swallowed
+ * the STATEMENT_LOCKED that followed as an expected outcome. The caller got a
+ * 200 and the row landed QUALIFIED inside a locked week with no error recorded
+ * anywhere. Hoisted for the same reason `resolveEffectiveDates` was: two
+ * implementations of one money rule is one implementation too many.
+ */
+function assertWeekOpenForQualify(
+  tenantId: number, repId: number, basisTs: string, config: OrgCommissionConfig,
+  actorId: number | null, externalId: string, saleId: number | null,
+): void {
+  const target = weekBoundsFor(basisTs, config).weekStartUtc;
+  const lockedStmt = rawDb.prepare(
+    `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+  ).get(tenantId, repId, target) as any;
+  if (lockedStmt && (lockedStmt.status === "FINALIZED" || lockedStmt.status === "PAID")) {
+    storage.logActivity(actorId, "commission_sale.locked_week_blocked", "commission_sale", saleId ?? undefined,
+      { externalId, repId, weekStartUtc: target, status: lockedStmt.status }, undefined);
+    throw new CommissionError("STATEMENT_LOCKED",
+      `Week ${target} is ${lockedStmt.status} for rep ${repId} — book the sale PENDING and qualify it in an open correction period.`, 409);
+  }
+}
+
 // Idempotent commissionable-sale upsert keyed by (tenant, externalId).
 //
 // The ON CONFLICT clause below rewrites rep_id and every timestamp, which under
@@ -647,29 +876,60 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
   // places the money fully caller-controlled, and this guard documented a
   // protection it did not provide. (Measured: a 4-sale week re-posted with a
   // backdated qualifiedAt became a 19-sale top-tier week, $600 → $5,700.)
-  const clampTs = (ts: string | null | undefined): string | null => {
-    if (ts == null) return null;
-    if (!input.serverReceivedAt) return ts;
-    const serverMs = Date.parse(input.serverReceivedAt);
-    if (!Number.isFinite(serverMs)) return ts;
-    const floorMs = serverMs - config.correctionWindowDays * 86_400_000;
-    const rawMs = Date.parse(ts);
-    return new Date(Math.min(Math.max(Number.isFinite(rawMs) ? rawMs : serverMs, floorMs), serverMs)).toISOString();
-  };
-  const soldAt = clampTs(input.soldAt) as string;
-  const qualifiedAt = clampTs(input.qualifiedAt);
-  const installedAt = clampTs(input.installedAt);
-  const activatedAt = clampTs(input.activatedAt);
 
   // The basis timestamp decides which week the money lands in, so that — not
   // sold_at alone — is what must stay put once a sale is live.
-  const basisColumn = BASIS_COLUMN[config.qualificationBasis];
+  const existing = rawDb.prepare(
+    `SELECT id, rep_id, status, sold_at, qualified_at, installed_at, activated_at, qualification_basis
+       FROM commission_sales WHERE tenant_id = ? AND external_id = ?`,
+  ).get(tenantId, input.externalId) as any;
+  // The basis snapshot is stamped ONCE and then frozen: an existing row keeps
+  // the basis it was written with, so no later config or plan change can move a
+  // sale that already exists into a different pay week.
+  //
+  // ── CLAMP BEFORE STAMPING ───────────────────────────────────────────────────
+  // The snapshot used to be resolved from RAW `input.qualifiedAt`, five lines
+  // above the clamp — so a 400-day-backdated payload picked the plan version
+  // governing a week the sale could never legally land in, and the write-once
+  // COALESCE below then froze that wrong choice FOREVER. Clamping the timestamps
+  // fixed the dates but not the basis already chosen from the unfixed ones.
+  //
+  // There is no real circularity here: inside resolveEffectiveDates the basis
+  // selects only the `isBasisField` label and the `basisTs` output — the clamped
+  // values themselves are computed per-field and never consult it. So pass 1
+  // yields the authoritative clamped dates under a provisional basis, the
+  // snapshot is resolved from THOSE, and pass 2 (a pure, cheap recompute)
+  // re-labels the clamp records against the basis that actually won.
+  const provisionalBasis: QualificationBasis =
+    existing?.qualification_basis && BASIS_COLUMN[existing.qualification_basis as QualificationBasis]
+      ? (existing.qualification_basis as QualificationBasis)
+      : config.qualificationBasis;
+  const clampArgs = {
+    soldAt: input.soldAt, qualifiedAt: input.qualifiedAt,
+    installedAt: input.installedAt, activatedAt: input.activatedAt,
+  };
+  const pass1 = resolveEffectiveDates(clampArgs, {
+    basis: provisionalBasis, correctionWindowDays: config.correctionWindowDays,
+    serverReceivedAt: input.serverReceivedAt,
+  });
+  const basis: QualificationBasis = existing?.qualification_basis && BASIS_COLUMN[existing.qualification_basis as QualificationBasis]
+    ? (existing.qualification_basis as QualificationBasis)
+    : resolveSaleBasis(tenantId, input.repId, (pass1.applied.qualifiedAt ?? pass1.applied.soldAt) as string, config);
+  const basisColumn = BASIS_COLUMN[basis];
+  // ONE resolver for every commission-relevant timestamp on every write path
+  // (shared/commissionEffectiveDate). Clamping used to live only here, so
+  // transitionSale accepted exactly the payloads this route refused.
+  const dates = basis === provisionalBasis ? pass1 : resolveEffectiveDates(clampArgs, {
+    basis, correctionWindowDays: config.correctionWindowDays, serverReceivedAt: input.serverReceivedAt,
+  });
+  auditEffectiveDateClamps(actorId, tenantId, input.externalId, dates, "upsertSale");
+  const soldAt = dates.applied.soldAt as string;
+  const qualifiedAt = dates.applied.qualifiedAt;
+  const installedAt = dates.applied.installedAt;
+  const activatedAt = dates.applied.activatedAt;
   const basisOf = (row: { sold_at?: string | null; qualified_at?: string | null; installed_at?: string | null; activated_at?: string | null }) =>
     (row as any)[basisColumn] || row.sold_at || null;
   const incomingRow = { sold_at: soldAt, qualified_at: qualifiedAt, installed_at: installedAt, activated_at: activatedAt };
-  const existing = rawDb.prepare(
-    `SELECT id, rep_id, status, sold_at, qualified_at, installed_at, activated_at FROM commission_sales WHERE tenant_id = ? AND external_id = ?`,
-  ).get(tenantId, input.externalId) as any;
 
   // ── GUARD 2: a live sale's OWNER is frozen, and a QUALIFIED sale's PAY-WEEK is
   // frozen too. Re-pointing either is a manager REVERSAL followed by a fresh
@@ -713,29 +973,27 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
   // ── GUARD 3: never inject QUALIFIED money into a locked week. It would either
   // fail the recalculation outright or sit latent inside a PAID week and surface
   // on the next recompute. A manager qualifies it into an open correction period.
+  // Shared with transitionSale's QUALIFY, which is the other door onto this same
+  // column and enforced nothing.
   if (status === "QUALIFIED") {
-    const basisTs = basisOf(incomingRow) || soldAt;
-    const target = weekBoundsFor(basisTs, config).weekStartUtc;
-    const lockedStmt = rawDb.prepare(
-      `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
-    ).get(tenantId, input.repId, target) as any;
-    if (lockedStmt && (lockedStmt.status === "FINALIZED" || lockedStmt.status === "PAID")) {
-      storage.logActivity(actorId, "commission_sale.locked_week_blocked", "commission_sale", existing?.id,
-        { externalId: input.externalId, repId: input.repId, weekStartUtc: target, status: lockedStmt.status }, undefined);
-      throw new CommissionError("STATEMENT_LOCKED",
-        `Week ${target} is ${lockedStmt.status} for rep ${input.repId} — book the sale PENDING and qualify it in an open correction period.`, 409);
-    }
+    assertWeekOpenForQualify(
+      tenantId, input.repId, basisOf(incomingRow) || soldAt, config,
+      actorId, input.externalId, existing?.id ?? null,
+    );
   }
 
   const now = nowIso();
   rawDb.prepare(
-    `INSERT INTO commission_sales (tenant_id, rep_id, external_id, status, sold_at, qualified_at, installed_at, activated_at, lead_id, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `INSERT INTO commission_sales (tenant_id, rep_id, external_id, status, sold_at, qualified_at, installed_at, activated_at, lead_id, qualification_basis, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
      ON CONFLICT(tenant_id, external_id) DO UPDATE SET
        rep_id = excluded.rep_id, status = excluded.status, sold_at = excluded.sold_at,
        qualified_at = excluded.qualified_at, installed_at = excluded.installed_at,
-       activated_at = excluded.activated_at, lead_id = excluded.lead_id, updated_at = excluded.updated_at`
-  ).run(tenantId, input.repId, input.externalId, status, soldAt, qualifiedAt, installedAt, activatedAt, input.leadId ?? null, now, now);
+       activated_at = excluded.activated_at, lead_id = excluded.lead_id,
+       -- COALESCE, never excluded: the basis snapshot is write-once.
+       qualification_basis = COALESCE(commission_sales.qualification_basis, excluded.qualification_basis),
+       updated_at = excluded.updated_at`
+  ).run(tenantId, input.repId, input.externalId, status, soldAt, qualifiedAt, installedAt, activatedAt, input.leadId ?? null, basis, now, now);
   const sale = rawDb.prepare(`SELECT * FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, input.externalId) as any;
   storage.logActivity(actorId, "commission_sale.upserted", "commission_sale", sale?.id, { externalId: input.externalId, repId: input.repId, status }, undefined);
   // Side effects belong at the WRITE SITE, for the same reason the guards do.
@@ -774,7 +1032,13 @@ function reconcileSaleSideEffects(
 ): any {
   const expected = (e: unknown) =>
     e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED");
-  const basisTs = sale[BASIS_COLUMN[config.qualificationBasis]] || sale.sold_at;
+  // THE SALE'S OWN frozen basis — not the tenant's current setting. This line
+  // read `config.qualificationBasis` while the statement counted by the plan
+  // version's basis, which is exactly how a sale got recomputed into a week that
+  // did not count it. For a legacy NULL-snapshot row the fallback now resolves
+  // through the statement's own resolver, so the week recomputed here and the
+  // week that counts the money are the same week by construction.
+  const basisTs = resolvedBasisTsForSale(tenantId, sale, config);
   const weekStartUtc = weekBoundsFor(basisTs, config).weekStartUtc;
 
   overrides.syncOverridesForSale(tenantId, sale.id, actorId, weekStartUtc);
@@ -803,9 +1067,50 @@ function reconcileSaleSideEffects(
 export function transitionSale(tenantId: number, actorId: number | null, externalId: string, action: "QUALIFY" | "REVERSE" | "DISQUALIFY" | "CANCEL", opts?: { at?: string; reason?: string | null }): any {
   const sale = rawDb.prepare(`SELECT * FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, externalId) as any;
   if (!sale) throw new CommissionError("INVALID_ADJUSTMENT", "Sale not found.", 404);
-  const at = opts?.at || nowIso();
   const now = nowIso();
+  // THE OTHER DOOR. This used to be `opts?.at || nowIso()` written straight into
+  // qualified_at, with none of upsertSale's correction-window clamp — so a
+  // payload that route refused (a qualifiedAt backdated into an earlier, richer
+  // tier week) was simply accepted here instead. Both paths now resolve through
+  // the same shared function against the sale's OWN frozen basis.
+  //
+  // `at` is treated as caller-supplied whenever the caller passed one; an
+  // omitted `at` is the server's own clock and needs no clamping.
+  const cfgForDates = loadOrgConfig(tenantId);
+  const saleBasis = basisForSale(sale, cfgForDates.qualificationBasis);
+  const resolvedAt = opts?.at
+    ? resolveEffectiveDates(
+        { [BASIS_FIELD_INPUT[saleBasis]]: opts.at } as any,
+        { basis: saleBasis, correctionWindowDays: cfgForDates.correctionWindowDays, serverReceivedAt: now },
+      )
+    : null;
+  if (resolvedAt) auditEffectiveDateClamps(actorId, tenantId, externalId, resolvedAt, `transitionSale:${action}`);
+  const at = resolvedAt ? (resolvedAt.basisTs ?? now) : now;
   if (action === "QUALIFY") {
+    // GUARD 3 applies HERE too. Without it this door accepted the payload the
+    // sales route refused: reconcileSaleSideEffects swallows the STATEMENT_LOCKED
+    // that follows as an expected outcome, so the caller got a 200 and the row
+    // sat QUALIFIED inside a settled week until the next recompute re-priced it.
+    //
+    // Two subtleties the obvious version gets wrong:
+    //   · The UPDATE is COALESCE(qualified_at, ?) — an already-stamped
+    //     qualified_at WINS and `at` is discarded, so the week to test is the
+    //     one the row will actually have, not the one `at` names.
+    //   · qualified_at is only the pay-week column when the sale's frozen basis
+    //     is QUALIFIED_AT. Under INSTALLED_AT/ACTIVATED_AT this write does not
+    //     touch the basis column at all, so the week comes from the existing row.
+    // basisTsForSale over the PROJECTED row expresses both in one place.
+    //
+    // Scoped to a sale that is not already QUALIFIED: re-qualifying one that is
+    // cannot move its week (COALESCE freezes the stamp), so there is no money to
+    // inject and a 409 there would only break an idempotent retry.
+    if (sale.status !== "QUALIFIED") {
+      const projected = { ...sale, qualified_at: sale.qualified_at ?? at };
+      assertWeekOpenForQualify(
+        tenantId, sale.rep_id, basisTsForSale(projected, cfgForDates.qualificationBasis),
+        cfgForDates, actorId, externalId, sale.id,
+      );
+    }
     rawDb.prepare(`UPDATE commission_sales SET status='QUALIFIED', qualified_at=COALESCE(qualified_at, ?), updated_at=? WHERE id=?`).run(at, now, sale.id);
   } else if (action === "REVERSE") {
     rawDb.prepare(`UPDATE commission_sales SET status='REVERSED', reversed_at=?, updated_at=? WHERE id=?`).run(at, now, sale.id);
@@ -1055,14 +1360,20 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
   // So these three keys are frozen once ANY locked statement exists. (Basis,
   // finalization delay, correction window, auto-finalize don't move the key and
   // stay editable.)
-  const changesWeekKey = patch.commissionTimezone != null || patch.commissionWeekStartsOn != null || patch.commissionWeekStartLocalTime != null;
+  // A qualification-basis change re-keys WHICH TIMESTAMP places a sale in a
+  // week, so it can move sales across week boundaries exactly the way a timezone
+  // or week-start change can — it belongs in this guard for the same reason.
+  // (Existing sales carry a frozen basis snapshot and are immune; this protects
+  // the legacy rows that still resolve through the fallback.)
+  const changesWeekKey = patch.commissionTimezone != null || patch.commissionWeekStartsOn != null
+    || patch.commissionWeekStartLocalTime != null || patch.commissionQualificationBasis != null;
   if (changesWeekKey) {
     const locked = rawDb.prepare(
       `SELECT 1 FROM commission_statements WHERE tenant_id = ? AND status IN ('FINALIZED','PAID') LIMIT 1`,
     ).get(tenantId);
     if (locked) {
       throw new CommissionError("WEEK_KEY_FROZEN",
-        "Timezone and week-start can't change once a week has been finalized or paid — it would re-key locked weeks and risk paying their sales twice. Reopen/settle those weeks first.", 409);
+        "Timezone, week-start and qualification basis can't change once a week has been finalized or paid — they re-key locked weeks and risk paying their sales twice. Reopen/settle those weeks first.", 409);
     }
   }
   const sets: string[] = []; const params: any[] = [];
@@ -1125,7 +1436,7 @@ export function getOrCreateStandardTieredVersion(tenantId: number, actorId: numb
   let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'TIERED' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, STANDARD_TIERED_PLAN_NAME) as any;
   if (!plan) plan = createPlan(tenantId, actorId, { name: STANDARD_TIERED_PLAN_NAME, type: "TIERED", tierMode: "RETROACTIVE_WEEKLY", description: "Default retroactive weekly tiers (1–7 $150, 8–12 $200, 13–16 $250, 17+ $300)." });
   let version = rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ? ORDER BY version_number DESC LIMIT 1`).get(tenantId, plan.id) as any;
-  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: orgToday(tenantId), qualificationBasis: "QUALIFIED_AT", tiers: DEFAULT_RETRO_TIERS });
+  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: orgToday(tenantId), qualificationBasis: loadOrgConfig(tenantId).qualificationBasis, tiers: DEFAULT_RETRO_TIERS });
   if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
   return { planId: plan.id, versionId: version.id };
 }
@@ -1139,7 +1450,7 @@ export function getOrCreateFlatVersion(tenantId: number, actorId: number | null,
   let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'FLAT' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, FLAT_PLAN_NAME) as any;
   if (!plan) plan = createPlan(tenantId, actorId, { name: FLAT_PLAN_NAME, type: "FLAT", description: "Flat per-qualified-sale commission." });
   let version = rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ? AND flat_rate_cents = ? ORDER BY version_number DESC LIMIT 1`).get(tenantId, plan.id, flatRateCents) as any;
-  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: orgToday(tenantId), flatRateCents, qualificationBasis: "QUALIFIED_AT" });
+  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: orgToday(tenantId), flatRateCents, qualificationBasis: loadOrgConfig(tenantId).qualificationBasis });
   if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
   return { planId: plan.id, versionId: version.id };
 }
@@ -1170,7 +1481,7 @@ export function getOrCreateCustomTieredVersion(
     }
   }
   const version = addPlanVersion(tenantId, actorId, plan.id, {
-    effectiveFrom: orgToday(tenantId), qualificationBasis: "QUALIFIED_AT", tiers: v.normalized,
+    effectiveFrom: orgToday(tenantId), qualificationBasis: loadOrgConfig(tenantId).qualificationBasis, tiers: v.normalized,
     changeSummary: `Ladder: ${v.normalized.map(t => `${t.label} ${t.rateCents / 100}`).join(", ")}`,
   });
   if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
@@ -1497,8 +1808,11 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
   let projected = 0, finalized = 0, paid = 0, exposure = 0, qualifiedSales = 0, repsWithSales = 0;
 
   for (const rep of reps as any[]) {
-    // Per-status sale counts for the week (basis column from org config).
-    const basisCol = BASIS_COLUMN[config.qualificationBasis];
+    // Per-status sale counts for the week. Each sale is placed by its own frozen
+    // snapshot; a NULL snapshot falls back to THIS REP'S plan-version basis —
+    // the same one their statement counts by — rather than the org default,
+    // which is what let the console disagree with the pay document.
+    const basisCol = basisTsExpr("", fallbackBasisForRepWeek(tenantId, rep.id, bounds, config));
     const counts = rawDb.prepare(
       `SELECT status, COUNT(*) AS c FROM commission_sales
        WHERE tenant_id = ? AND rep_id = ?
@@ -1725,7 +2039,8 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
 } {
   const config = loadOrgConfig(tenantId);
   const bounds = weekBoundsFor(weekReference, config);
-  const basisCol = BASIS_COLUMN[config.qualificationBasis];
+  // No org-wide basis column here: the FINALIZE enumeration below resolves one
+  // per rep, because that is the basis their statement will count by.
   const results: BatchRepOutcome[] = [];
   const blocked = new Set<number>();
   // Correlates every log line for this closeout, and each rep result within it.
@@ -1755,12 +2070,35 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
   // otherwise be silently skipped. A rep with sales but no plan is reported as
   // an explicit blocker (not finalized, not lost).
   if (action === "FINALIZE") {
-    const salesByRep = rawDb.prepare(
-      `SELECT rep_id AS repId, COUNT(*) AS c FROM commission_sales
+    // Two phases, because this is the one enumeration where a MISSED rep is an
+    // UNPAID rep, and a single org-wide basis cannot answer it: each rep's
+    // NULL-snapshot sales are placed by THEIR plan version's basis, which is
+    // what the statement will count by.
+    //
+    // Phase 1 is deliberately permissive — any of the four basis-eligible
+    // timestamps landing in the week makes the rep a candidate, so no basis
+    // choice can hide one. Phase 2 then re-counts with that rep's own resolved
+    // basis, so a candidate who does not really qualify is dropped rather than
+    // handed a spurious $0 statement.
+    const ws = bounds.weekStartUtc, ns = bounds.nextWeekStartUtc;
+    const candidates = rawDb.prepare(
+      `SELECT DISTINCT rep_id AS repId FROM commission_sales
        WHERE tenant_id = ? AND status = 'QUALIFIED'
-         AND COALESCE(${basisCol}, sold_at) >= ? AND COALESCE(${basisCol}, sold_at) < ?
-       GROUP BY rep_id`
-    ).all(tenantId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any[];
+         AND ( (sold_at      >= ? AND sold_at      < ?)
+            OR (qualified_at >= ? AND qualified_at < ?)
+            OR (installed_at >= ? AND installed_at < ?)
+            OR (activated_at >= ? AND activated_at < ?) )`
+    ).all(tenantId, ws, ns, ws, ns, ws, ns, ws, ns) as any[];
+    const salesByRep: Array<{ repId: number; c: number }> = [];
+    for (const cand of candidates) {
+      const repBasisCol = basisTsExpr("", fallbackBasisForRepWeek(tenantId, cand.repId, bounds, config));
+      const row = rawDb.prepare(
+        `SELECT COUNT(*) AS c FROM commission_sales
+         WHERE tenant_id = ? AND rep_id = ? AND status = 'QUALIFIED'
+           AND COALESCE(${repBasisCol}, sold_at) >= ? AND COALESCE(${repBasisCol}, sold_at) < ?`
+      ).get(tenantId, cand.repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any;
+      if (Number(row?.c ?? 0) > 0) salesByRep.push({ repId: cand.repId, c: Number(row.c) });
+    }
     for (const s of salesByRep) {
       if (repIds && !repIds.includes(s.repId)) continue;
       try {
@@ -1913,7 +2251,10 @@ export function acceptCurrentPlan(tenantId: number, repId: number, actorUserId: 
 export function listWeekSalesForRep(tenantId: number, repId: number, weekReference: Date | string | number): any[] {
   const config = loadOrgConfig(tenantId);
   const bounds = weekBoundsFor(weekReference, config);
-  const basisCol = BASIS_COLUMN[config.qualificationBasis];
+  // Per-sale basis snapshot; a NULL snapshot falls back to this rep's
+  // plan-version basis, so the door list shows exactly the sales the statement
+  // counted — this list is also what freezes into `contributing_sales`.
+  const csBasis = basisTsExpr("cs", fallbackBasisForRepWeek(tenantId, repId, bounds, config));
   const rows = rawDb.prepare(
     `SELECT cs.id, cs.external_id, cs.status, cs.sold_at, cs.qualified_at, cs.reversed_at,
             cs.lead_id, cs.house_amount_cents, l.address, l.city,
@@ -1931,8 +2272,8 @@ export function listWeekSalesForRep(tenantId: number, repId: number, weekReferen
               ORDER BY cm.id DESC LIMIT 1) AS cm_payable_after
      FROM commission_sales cs LEFT JOIN leads l ON l.id = cs.lead_id
      WHERE cs.tenant_id = ? AND cs.rep_id = ?
-       AND COALESCE(cs.${basisCol}, cs.sold_at) >= ? AND COALESCE(cs.${basisCol}, cs.sold_at) < ?
-     ORDER BY COALESCE(cs.${basisCol}, cs.sold_at) DESC`
+       AND COALESCE(${csBasis}, cs.sold_at) >= ? AND COALESCE(${csBasis}, cs.sold_at) < ?
+     ORDER BY COALESCE(${csBasis}, cs.sold_at) DESC`
   ).all(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any[];
   // Per-sale install-hold flag (same pure predicate the payable math uses) so
   // the rep-facing "what counts" list can show a held sale WITH its release

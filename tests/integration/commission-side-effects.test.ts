@@ -545,68 +545,404 @@ describe("non-default basis with soldAt / qualifiedAt / installedAt in three dif
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ADDITIONAL FINDING (reported, NOT fixed here — see the summary).
+// BASIS DIVERGENCE — eliminated.
 //
-// The qualification basis has TWO sources and they can disagree:
-//   · `tenants.commission_qualification_basis` (org config) decides which WEEK
-//     a sale write recomputes — reconcileSaleSideEffects, and transitionSale
-//     before it, both read `BASIS_COLUMN[config.qualificationBasis]`.
-//   · `commission_plan_versions.qualification_basis` is snapshotted onto the
-//     statement and is what `countQualifiedSales` actually counts by.
+// The basis had TWO sources that could disagree:
+//   · `tenants.commission_qualification_basis` picked the week a sale WRITE
+//     recomputed, and
+//   · `commission_plan_versions.qualification_basis` picked the week the
+//     statement COUNTED.
+// A sale could therefore be recomputed into a week that did not count it.
 //
-// When they differ, a sale is recomputed into a week that does not count it, so
-// the money lands in neither: the statement for the org-config week is created
-// and prices nothing, and the plan-version week is never recomputed at all.
-//
-// Deciding which source should win is a compensation-policy call that moves
-// money, so this test PINS the current behaviour rather than changing it.
+// Now every commission-relevant operation resolves the basis from ONE place:
+// an immutable `commission_sales.qualification_basis` snapshot, stamped from the
+// plan version effective when the sale first became commission-relevant.
 // ═══════════════════════════════════════════════════════════════════════════
-describe("FINDING: org-config basis and plan-version basis are separate sources", () => {
-  it("a sale can be recomputed into a week that does not count it", () => {
-    const T_DIV = 7744;
+describe("qualification basis has one source of truth", () => {
+  const T_DIV = 7744;
+  let dRep: Person;
+  const at = (week: string) => rawDb.prepare(
+    `SELECT qualified_sale_count AS n, gross_commission_cents AS c, qualification_basis AS basis
+       FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+  ).get(T_DIV, dRep.memberId, week) as any;
+
+  beforeAll(() => {
     rawDb.prepare(
       `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name)
        VALUES (?, 'divergent-org', 'Divergent Org', 'Owner D', 'owner@divergent.example.test', 'Divergent')`,
     ).run(T_DIV);
-    const dRep = person("Divergent Rep", "rep", null, T_DIV);
-
-    // Org config says INSTALLED_AT…
+    dRep = person("Divergent Rep", "rep", null, T_DIV);
     svc.updateOrgConfig(T_DIV, null, { commissionQualificationBasis: "INSTALLED_AT" } as any);
-    // …while the rep's plan version still counts by QUALIFIED_AT (the default
-    // assignStructureToRep produces).
+    // The plan is created AFTER the org chose INSTALLED_AT, so the version must
+    // inherit it rather than the old hardcoded QUALIFIED_AT.
     svc.assignStructureToRep(T_DIV, 1, { repId: dRep.memberId, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+  });
 
+  it("a new plan version inherits the org basis instead of hardcoding QUALIFIED_AT", () => {
+    const v = rawDb.prepare(
+      `SELECT v.qualification_basis AS basis FROM commission_plan_versions v
+         JOIN commission_plans p ON p.id = v.commission_plan_id
+        WHERE p.tenant_id = ? ORDER BY v.id DESC LIMIT 1`,
+    ).get(T_DIV) as any;
+    expect(v.basis).toBe("INSTALLED_AT");
+  });
+
+  it("THE DEFECT: recompute week and count week are the same week", () => {
     const soldTs = "2026-10-07T15:00:00.000Z";
     const instTs = new Date(Date.parse(soldTs) + 21 * 86_400_000).toISOString();
     const cfg = svc.loadOrgConfig(T_DIV);
     const installWeek = weekBoundsFor(instTs, cfg).weekStartUtc;
-    const qualifiedWeek = weekBoundsFor(soldTs, cfg).weekStartUtc;
-    expect(installWeek).not.toBe(qualifiedWeek);
+    const soldWeek = weekBoundsFor(soldTs, cfg).weekStartUtc;
+    expect(installWeek).not.toBe(soldWeek);
 
     svc.upsertSale(T_DIV, 1, {
       repId: dRep.memberId, externalId: "div-1", status: "QUALIFIED",
       soldAt: soldTs, qualifiedAt: soldTs, installedAt: instTs,
     });
 
-    const at = (week: string) => rawDb.prepare(
-      `SELECT qualified_sale_count AS n, gross_commission_cents AS c, qualification_basis AS basis
-         FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
-    ).get(T_DIV, dRep.memberId, week) as any;
+    // The install week both received the statement AND counted the sale.
+    const stmt = at(installWeek);
+    expect(stmt.basis).toBe("INSTALLED_AT");
+    expect(stmt.n).toBe(1);
+    expect(stmt.c).toBe(20000);
+    // No orphan statement in the week that merely held sold_at.
+    expect(at(soldWeek)?.c ?? 0).toBe(0);
+  });
 
-    // The org-config week got the statement — priced at zero, because the
-    // statement counts by the PLAN VERSION's basis.
-    const installStmt = at(installWeek);
-    expect(installStmt).toBeTruthy();
-    expect(installStmt.basis).toBe("QUALIFIED_AT");   // plan version wins the count
-    expect(installStmt.n).toBe(0);
-    expect(installStmt.c).toBe(0);
+  it("the sale carries an IMMUTABLE basis snapshot", () => {
+    expect(svc.getSaleByExternalId(T_DIV, "div-1").qualification_basis).toBe("INSTALLED_AT");
+  });
 
-    // …and the week that WOULD have counted it was never recomputed.
-    expect(at(qualifiedWeek)).toBeFalsy();
+  it("changing tenant config afterwards does NOT re-week the existing sale", () => {
+    const cfg = svc.loadOrgConfig(T_DIV);
+    const instTs = new Date(Date.parse("2026-10-07T15:00:00.000Z") + 21 * 86_400_000).toISOString();
+    const installWeek = weekBoundsFor(instTs, cfg).weekStartUtc;
 
-    // The money is recoverable — an explicit recompute of the counting week
-    // prices it correctly — so this is a reconciliation gap, not a loss.
-    svc.calculateOrRecalculateStatement({ tenantId: T_DIV, repId: dRep.memberId, weekReference: soldTs, actorId: 1 });
-    expect(at(qualifiedWeek).c).toBe(20000);
+    // Flip the org to a different basis. Mutable config must not reinterpret
+    // history, so the frozen snapshot has to win.
+    svc.updateOrgConfig(T_DIV, null, { commissionQualificationBasis: "SOLD_AT" } as any);
+    svc.upsertSale(T_DIV, 1, {
+      repId: dRep.memberId, externalId: "div-1", status: "QUALIFIED",
+      soldAt: "2026-10-07T15:00:00.000Z", qualifiedAt: "2026-10-07T15:00:00.000Z", installedAt: instTs,
+    });
+    expect(svc.getSaleByExternalId(T_DIV, "div-1").qualification_basis).toBe("INSTALLED_AT");
+    expect(at(installWeek).c).toBe(20000);
+
+    svc.updateOrgConfig(T_DIV, null, { commissionQualificationBasis: "INSTALLED_AT" } as any);
+  });
+
+  it("a basis change is refused once any week is locked — it would re-key locked weeks", () => {
+    const lockOrg = 7745;
+    rawDb.prepare(
+      `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name)
+       VALUES (?, 'lockbasis-org', 'Lock Basis', 'Owner L', 'owner@lockbasis.example.test', 'Lock')`,
+    ).run(lockOrg);
+    const lRep = person("Lock Basis Rep", "rep", null, lockOrg);
+    svc.assignStructureToRep(lockOrg, 1, { repId: lRep.memberId, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+    const ts = "2026-11-04T15:00:00.000Z";
+    svc.upsertSale(lockOrg, 1, { repId: lRep.memberId, externalId: "lock-b1", status: "QUALIFIED", soldAt: ts, qualifiedAt: ts });
+    svc.calculateOrRecalculateStatement({ tenantId: lockOrg, repId: lRep.memberId, weekReference: ts, actorId: 1 });
+    svc.batchTransitionWeek(lockOrg, 1, ts, "FINALIZE", [lRep.memberId]);
+
+    const frozen = rawDb.prepare(
+      `SELECT gross_commission_cents AS c, qualification_basis AS basis FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ?`,
+    ).get(lockOrg, lRep.memberId) as any;
+
+    let err: any;
+    try { svc.updateOrgConfig(lockOrg, null, { commissionQualificationBasis: "SOLD_AT" } as any); }
+    catch (e) { err = e; }
+    expect(err?.code).toBe("WEEK_KEY_FROZEN");
+
+    // The locked statement is byte-identical after the refused change.
+    const after = rawDb.prepare(
+      `SELECT gross_commission_cents AS c, qualification_basis AS basis FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ?`,
+    ).get(lockOrg, lRep.memberId) as any;
+    expect(after).toEqual(frozen);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE OTHER BACKDATING DOOR.
+//
+// `upsertSale` clamped every commission-relevant timestamp to the correction
+// window. `transitionSale`'s QUALIFY wrote `COALESCE(qualified_at, caller_at)`
+// with no clamp at all — so the payload one route refused, the other accepted.
+// Both now resolve through shared/commissionEffectiveDate against the sale's
+// OWN frozen basis.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("every write path resolves dates the same way", () => {
+  const T_DATE = 7746;
+  let dRep: Person;
+  const DAY = 86_400_000;
+  let recvTs = "";
+
+  const saleRow = (extId: string) => svc.getSaleByExternalId(T_DATE, extId);
+
+  beforeAll(() => {
+    rawDb.prepare(
+      `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name)
+       VALUES (?, 'dates-org', 'Dates Org', 'Owner T', 'owner@dates.example.test', 'Dates')`,
+    ).run(T_DATE);
+    dRep = person("Dates Rep", "rep", null, T_DATE);
+    svc.assignStructureToRep(T_DATE, 1, { repId: dRep.memberId, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    // The REAL clock: transitionSale stamps its own serverReceivedAt from
+    // nowIso(), so both paths must be compared against the same receipt time.
+    recvTs = new Date().toISOString();
+  });
+
+  it("THE EXPLOIT: transitionSale QUALIFY can no longer backdate into an earlier tier week", () => {
+    const cfg = svc.loadOrgConfig(T_DATE);
+    // A sale booked PENDING in the current week.
+    svc.upsertSale(T_DATE, 1, {
+      repId: dRep.memberId, externalId: "date-1", status: "PENDING",
+      soldAt: recvTs, serverReceivedAt: recvTs,
+    });
+
+    // Now QUALIFY it with a timestamp 400 days back — far outside the 30-day
+    // correction window. This used to be written verbatim.
+    const longAgo = new Date(Date.parse(recvTs) - 400 * DAY).toISOString();
+    svc.transitionSale(T_DATE, 1, "date-1", "QUALIFY", { at: longAgo });
+
+    const stored = saleRow("date-1").qualified_at;
+    // Clamped to the 30-day window floor, not the requested date. A second of
+    // slack absorbs the difference between the test's clock read and the
+    // service's own nowIso().
+    const floor = Date.parse(recvTs) - 30 * DAY;
+    expect(Date.parse(stored)).toBeGreaterThanOrEqual(floor - 5_000);
+    expect(Date.parse(stored)).toBeGreaterThan(Date.parse(longAgo));
+    // …so the money did not land in a week 400 days ago.
+    const claimedWeek = weekBoundsFor(longAgo, cfg).weekStartUtc;
+    const landed = rawDb.prepare(
+      `SELECT gross_commission_cents AS c FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_DATE, dRep.memberId, claimedWeek) as any;
+    expect(landed?.c ?? 0).toBe(0);
+  });
+
+  it("the clamp is auditable — requested, applied and reason are all recorded", () => {
+    const events = rawDb.prepare(
+      `SELECT details FROM activity_log WHERE action = 'commission_sale.effective_date_clamped' ORDER BY id DESC LIMIT 1`,
+    ).get() as any;
+    expect(events).toBeTruthy();
+    const d = JSON.parse(events.details);
+    expect(d.path).toContain("transitionSale");
+    expect(d.payWeekMoved).toBe(true);
+    expect(d.clamps[0]).toMatchObject({ reason: "BEFORE_CORRECTION_WINDOW", isBasisField: true });
+    expect(d.clamps[0].requested).toBeTruthy();
+    expect(d.clamps[0].applied).toBeTruthy();
+  });
+
+  it("the SAME payload through upsertSale and transitionSale resolves to the same date and week", () => {
+    const cfg = svc.loadOrgConfig(T_DATE);
+    const longAgo = new Date(Date.parse(recvTs) - 400 * DAY).toISOString();
+
+    svc.upsertSale(T_DATE, 1, {
+      repId: dRep.memberId, externalId: "date-via-upsert", status: "QUALIFIED",
+      soldAt: recvTs, qualifiedAt: longAgo, serverReceivedAt: recvTs,
+    });
+    svc.upsertSale(T_DATE, 1, {
+      repId: dRep.memberId, externalId: "date-via-transition", status: "PENDING",
+      soldAt: recvTs, serverReceivedAt: recvTs,
+    });
+    svc.transitionSale(T_DATE, 1, "date-via-transition", "QUALIFY", { at: longAgo });
+
+    const a = saleRow("date-via-upsert").qualified_at;
+    const b = saleRow("date-via-transition").qualified_at;
+    // Both were clamped to the same window floor. They can differ only by the
+    // milliseconds between the two calls' clock reads; what must match exactly
+    // is the thing that decides the money — the pay week.
+    expect(Math.abs(Date.parse(a) - Date.parse(b))).toBeLessThan(5_000);
+    expect(weekBoundsFor(a, cfg).weekStartUtc).toBe(weekBoundsFor(b, cfg).weekStartUtc);
+  });
+
+  it("a caller cannot move a date that would alter a LOCKED week", () => {
+    const lockTs = "2027-01-06T12:00:00.000Z";
+    svc.upsertSale(T_DATE, 1, { repId: dRep.memberId, externalId: "date-lock", status: "QUALIFIED", soldAt: lockTs, qualifiedAt: lockTs });
+    svc.calculateOrRecalculateStatement({ tenantId: T_DATE, repId: dRep.memberId, weekReference: lockTs, actorId: 1 });
+    svc.batchTransitionWeek(T_DATE, 1, lockTs, "FINALIZE", [dRep.memberId]);
+    const cfg = svc.loadOrgConfig(T_DATE);
+    const lockedWeek = weekBoundsFor(lockTs, cfg).weekStartUtc;
+    const frozen = rawDb.prepare(
+      `SELECT gross_commission_cents AS c, qualified_sale_count AS n FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_DATE, dRep.memberId, lockedWeek) as any;
+
+    // Booking a NEW qualified sale into that locked week is refused outright…
+    let err: any;
+    try {
+      svc.upsertSale(T_DATE, 1, { repId: dRep.memberId, externalId: "date-lock-2", status: "QUALIFIED", soldAt: lockTs, qualifiedAt: lockTs });
+    } catch (e) { err = e; }
+    expect(err?.code).toBe("STATEMENT_LOCKED");
+
+    // …and the locked totals are unchanged.
+    const after = rawDb.prepare(
+      `SELECT gross_commission_cents AS c, qualified_sale_count AS n FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_DATE, dRep.memberId, lockedWeek) as any;
+    expect(after).toEqual(frozen);
+  });
+
+  it("retries and duplicate PATCHes through either path create no duplicate ledger effect", () => {
+    const cfg = svc.loadOrgConfig(T_DATE);
+    const ts = "2027-02-10T12:00:00.000Z";
+    const week = weekBoundsFor(ts, cfg).weekStartUtc;
+    for (let i = 0; i < 4; i++) {
+      svc.upsertSale(T_DATE, 1, { repId: dRep.memberId, externalId: "date-idem", status: "QUALIFIED", soldAt: ts, qualifiedAt: ts });
+      svc.transitionSale(T_DATE, 1, "date-idem", "QUALIFY", { at: ts });
+    }
+    const stmt = rawDb.prepare(
+      `SELECT qualified_sale_count AS n FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_DATE, dRep.memberId, week) as any;
+    expect(stmt.n).toBe(1);   // one door, one count, however many retries
+    expect(rawDb.prepare(`SELECT COUNT(*) AS c FROM commission_sales WHERE tenant_id = ? AND external_id = ?`)
+      .get(T_DATE, "date-idem")).toMatchObject({ c: 1 });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE REMAINING THREE. The clamp and the snapshot landed in earlier passes;
+// these are the holes that survived them.
+//
+//   §2 — transitionSale had the clamp but NOT GUARD 3, so QUALIFY into a
+//        settled week returned 200: reconcileSaleSideEffects swallows the
+//        STATEMENT_LOCKED that follows, leaving the row QUALIFIED inside a
+//        locked week until the next recompute re-priced it.
+//   §3 — the write-once basis snapshot was resolved from RAW caller input,
+//        five lines before the clamp ran, so a backdated payload froze a plan
+//        version governing a week the sale could never legally land in.
+//   §1 — the NULL-snapshot FALLBACK had two implementations: the statement
+//        counted by the plan version while the recompute, the console and the
+//        closeout enumeration used the tenant default.
+// ═══════════════════════════════════════════════════════════════════════════
+describe("the three holes the clamp and the snapshot did not close", () => {
+  const T_HOLE = 7747;
+  let hRep: Person;
+  const DAY = 86_400_000;
+
+  beforeAll(() => {
+    rawDb.prepare(
+      `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name)
+       VALUES (?, 'holes-org', 'Holes Org', 'Owner H', 'owner@holes.example.test', 'Holes')`,
+    ).run(T_HOLE);
+    hRep = person("Holes Rep", "rep", null, T_HOLE);
+    svc.assignStructureToRep(T_HOLE, 1, { repId: hRep.memberId, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+  });
+
+  it("§2 transitionSale QUALIFY into a FINALIZED week is refused, not silently swallowed", () => {
+    const cfg = svc.loadOrgConfig(T_HOLE);
+    const ts = "2026-09-09T15:00:00.000Z";
+    const week = weekBoundsFor(ts, cfg).weekStartUtc;
+
+    // A real, counted sale settles the week.
+    svc.upsertSale(T_HOLE, 1, { repId: hRep.memberId, externalId: "hole-paid", status: "QUALIFIED", soldAt: ts, qualifiedAt: ts });
+    svc.calculateOrRecalculateStatement({ tenantId: T_HOLE, repId: hRep.memberId, weekReference: ts, actorId: 1 });
+    svc.batchTransitionWeek(T_HOLE, 1, ts, "FINALIZE", [hRep.memberId]);
+
+    const frozen = rawDb.prepare(
+      `SELECT status, qualified_sale_count AS n, gross_commission_cents AS c FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_HOLE, hRep.memberId, week) as any;
+    expect(frozen.status).toBe("FINALIZED");
+
+    // A second sale sitting PENDING in that same, now-locked week.
+    svc.upsertSale(T_HOLE, 1, { repId: hRep.memberId, externalId: "hole-late", status: "PENDING", soldAt: ts, qualifiedAt: ts });
+
+    // THE DEFECT: this used to return 200 and leave the row QUALIFIED in a
+    // FINALIZED week, latent until something recomputed it.
+    let err: any;
+    try { svc.transitionSale(T_HOLE, 1, "hole-late", "QUALIFY", { at: ts }); }
+    catch (e) { err = e; }
+    expect(err?.code).toBe("STATEMENT_LOCKED");
+    expect(err?.httpStatus).toBe(409);
+
+    // The row never became QUALIFIED, and the locked statement is untouched.
+    expect(svc.getSaleByExternalId(T_HOLE, "hole-late").status).toBe("PENDING");
+    expect(rawDb.prepare(
+      `SELECT status, qualified_sale_count AS n, gross_commission_cents AS c FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_HOLE, hRep.memberId, week)).toEqual(frozen);
+  });
+
+  it("§2 re-qualifying an already-QUALIFIED sale in a locked week stays idempotent", () => {
+    // The guard is scoped to a sale that is not already QUALIFIED: re-running
+    // QUALIFY cannot move a week (COALESCE freezes the stamp), so a 409 there
+    // would only break an honest retry.
+    const before = svc.getSaleByExternalId(T_HOLE, "hole-paid");
+    expect(before.status).toBe("QUALIFIED");
+    expect(() => svc.transitionSale(T_HOLE, 1, "hole-paid", "QUALIFY", { at: before.qualified_at })).not.toThrow();
+    expect(svc.getSaleByExternalId(T_HOLE, "hole-paid").qualified_at).toBe(before.qualified_at);
+  });
+
+  it("§3 the basis snapshot is stamped from the CLAMPED date, never the raw one", () => {
+    const recv = new Date().toISOString();
+    // 400 days back — far outside the 30-day correction window. The snapshot
+    // used to be resolved from THIS value, picking whatever plan version
+    // governed a week the sale can never land in, and freezing it forever.
+    const longAgo = new Date(Date.parse(recv) - 400 * DAY).toISOString();
+    svc.upsertSale(T_HOLE, 1, {
+      repId: hRep.memberId, externalId: "hole-clamp", status: "PENDING",
+      soldAt: recv, qualifiedAt: longAgo, serverReceivedAt: recv,
+    });
+
+    const sale = svc.getSaleByExternalId(T_HOLE, "hole-clamp");
+    const cfg = svc.loadOrgConfig(T_HOLE);
+    // The stored date is clamped…
+    expect(Date.parse(sale.qualified_at)).toBeGreaterThan(Date.parse(longAgo));
+    // …and the frozen snapshot names the basis of the plan version governing
+    // the week the sale ACTUALLY landed in, which is what the statement will
+    // count it by.
+    const landedWeek = weekBoundsFor(sale.qualified_at, cfg);
+    expect(sale.qualification_basis).toBe(
+      svc.fallbackBasisForRepWeek(T_HOLE, hRep.memberId, landedWeek, cfg),
+    );
+  });
+
+  it("§1 a LEGACY null-snapshot sale recomputes into the week that counts it", () => {
+    // Every existing sale becomes NULL on the first boot after deploy — the
+    // ALTER TABLE adds the column with no backfill — so this is the DEFAULT
+    // path for existing data, not an edge case.
+    const cfg = svc.loadOrgConfig(T_HOLE);
+    const ts = "2026-05-06T15:00:00.000Z";
+    const week = weekBoundsFor(ts, cfg).weekStartUtc;
+    svc.upsertSale(T_HOLE, 1, { repId: hRep.memberId, externalId: "hole-legacy", status: "QUALIFIED", soldAt: ts, qualifiedAt: ts });
+
+    // Strip the snapshot to manufacture a pre-column row, then force the
+    // recompute to resolve the fallback from scratch.
+    rawDb.prepare(`UPDATE commission_sales SET qualification_basis = NULL WHERE tenant_id = ? AND external_id = ?`)
+      .run(T_HOLE, "hole-legacy");
+    expect(svc.getSaleByExternalId(T_HOLE, "hole-legacy").qualification_basis).toBeNull();
+
+    svc.calculateOrRecalculateStatement({ tenantId: T_HOLE, repId: hRep.memberId, weekReference: ts, actorId: 1 });
+
+    // The week the recompute targeted is the week that actually counts it: the
+    // statement exists there AND it priced the sale, rather than an empty
+    // statement in one week and the money stranded in another.
+    const stmt = rawDb.prepare(
+      `SELECT qualified_sale_count AS n, gross_commission_cents AS c FROM commission_statements
+        WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_HOLE, hRep.memberId, week) as any;
+    expect(stmt.n).toBe(1);
+    expect(stmt.c).toBe(20000);
+
+    // And the door list agrees with the statement it belongs to.
+    expect(svc.listWeekSalesForRep(T_HOLE, hRep.memberId, ts).map((s: any) => s.external_id))
+      .toContain("hole-legacy");
+  });
+
+  it("§1 a legacy sale is still enumerated at FINALIZE when the org default disagrees", () => {
+    // The closeout enumeration decides WHO gets a statement. A rep missed here
+    // is a rep unpaid, so it must resolve each rep's own plan-version basis
+    // rather than one org-wide column.
+    const cfg = svc.loadOrgConfig(T_HOLE);
+    const ts = "2026-05-06T15:00:00.000Z";
+    const week = weekBoundsFor(ts, cfg).weekStartUtc;
+    const res = svc.batchTransitionWeek(T_HOLE, 1, ts, "FINALIZE", [hRep.memberId]);
+    expect(res.results.some((r: any) => r.repId === hRep.memberId && r.outcome === "ok")).toBe(true);
+    expect(rawDb.prepare(
+      `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+    ).get(T_HOLE, hRep.memberId, week)).toMatchObject({ status: "FINALIZED" });
   });
 });

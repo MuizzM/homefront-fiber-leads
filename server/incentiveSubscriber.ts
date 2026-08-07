@@ -33,6 +33,7 @@ import "./spiffStore";
 import "./spiffCampaignStore";
 import { nextBatch, advanceCursor, cursorFor } from "./domainEventStore";
 import { structuredLog } from "./structuredLog";
+import * as queueOps from "./eventQueueOps";
 import * as referralStore from "./referralStore";
 import { recordIncentive } from "./earningsLedgerStore";
 import {
@@ -344,7 +345,13 @@ export interface DrainResult {
   lastEventId: number;
   /** Events whose transaction threw. The cursor stops BEFORE the first of them,
    *  so the work is retried on the next drain rather than skipped. */
-  failed: Array<{ eventId: number; type: string; tenantId: number; message: string }>;
+  failed: Array<{ eventId: number; type: string; tenantId: number; message: string; attempts?: number; status?: string }>;
+  /** Events an operator explicitly cleared, which the queue advanced past. */
+  skipped: Array<{ eventId: number; status: string; reason: string }>;
+  /** Events left for later — leased by another worker, or backing off. */
+  deferred: Array<{ eventId: number; reason: string }>;
+  /** Correlates every log line and state row written by this drain. */
+  runId: string;
 }
 
 /**
@@ -356,7 +363,9 @@ export interface DrainResult {
  */
 export function drainOnce(nowIso: string, limit = 200): DrainResult {
   const batch = nextBatch(SUBSCRIBER_NAME, limit);
-  const result: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: cursorFor(SUBSCRIBER_NAME), failed: [] };
+  const runId = `${SUBSCRIBER_NAME}:${nowIso}:${cursorFor(SUBSCRIBER_NAME)}`;
+  const workerId = `${process.pid}`;
+  const result: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: cursorFor(SUBSCRIBER_NAME), failed: [], skipped: [], deferred: [], runId };
   if (batch.length === 0) return result;
 
   for (const event of batch) {
@@ -448,19 +457,45 @@ export function drainOnce(nowIso: string, limit = 200): DrainResult {
     // order is load-bearing (a SALE_CANCELLED clawback must not be applied
     // before the SALE_APPROVED award it reverses), so stepping over a failure
     // could apply money out of sequence. Stopping keeps the failed event
-    // claimable, keeps the committed work durable, and makes the stall LOUD —
-    // a structured log on every drain instead of an exception nobody catches.
+    // claimable and the committed work durable.
+    const prior = queueOps.getState(SUBSCRIBER_NAME, event.id);
+
+    // An operator has explicitly set this one aside. That is the ONLY way the
+    // queue advances past an unprocessed event, it is audited, and it is a
+    // deliberate human decision rather than an automatic skip.
+    if (queueOps.isOperatorCleared(prior)) {
+      result.skipped.push({ eventId: event.id, status: String(prior.status), reason: String(prior.resolved_reason ?? "") });
+      result.lastEventId = event.id;
+      continue;
+    }
+
+    // Lease it. A live lease held by another worker, or an unexpired backoff,
+    // means this worker leaves the event alone — which is what stops two
+    // workers from processing one event, and what spaces out retries.
+    if (!queueOps.acquireLease(SUBSCRIBER_NAME, event.id, workerId, { tenantId: event.tenantId, eventType: String(event.type) })) {
+      result.deferred.push({ eventId: event.id, reason: queueOps.isHalted(prior) ? "HALTED" : "LEASED_OR_BACKING_OFF" });
+      break;
+    }
+
     try {
       tx();
     } catch (e: any) {
       const message = e?.message ?? String(e);
-      result.failed.push({ eventId: event.id, type: String(event.type), tenantId: Number(event.tenantId), message });
+      const outcome = queueOps.markFailed(SUBSCRIBER_NAME, event.id, e, runId);
+      result.failed.push({
+        eventId: event.id, type: String(event.type), tenantId: Number(event.tenantId), message,
+        attempts: outcome.attempts, status: outcome.status,
+      });
       structuredLog("incentive.event_failed", {
         subscriber: SUBSCRIBER_NAME, eventId: event.id, type: String(event.type),
         tenantId: Number(event.tenantId), message, cursorHeldAt: result.lastEventId,
+        attempts: outcome.attempts, status: outcome.status, runId,
       }, "error");
       break;
     }
+    // Marked completed BEFORE the cursor advances, so a crash between the two
+    // leaves a completed row the recovery report can reconcile against.
+    queueOps.markCompleted(SUBSCRIBER_NAME, event.id, runId);
     result.processed += 1;
     result.lastEventId = event.id;
   }
@@ -473,17 +508,20 @@ export function drainOnce(nowIso: string, limit = 200): DrainResult {
 
 /** Drain until empty, bounded so a runaway backlog cannot hold the loop. */
 export function drain(nowIso: string, maxBatches = 50): DrainResult {
-  const total: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: 0, failed: [] };
+  const total: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: 0, failed: [], skipped: [], deferred: [], runId: `${SUBSCRIBER_NAME}:${nowIso}` };
   for (let i = 0; i < maxBatches; i += 1) {
     const batch = drainOnce(nowIso);
     total.processed += batch.processed;
     total.awarded += batch.awarded;
     total.reversed += batch.reversed;
     total.lastEventId = batch.lastEventId;
+    total.runId = batch.runId;
     total.failed.push(...batch.failed);
+    total.skipped.push(...batch.skipped);
+    total.deferred.push(...batch.deferred);
     // A stalled batch will produce the identical failure on every retry, so
     // spinning maxBatches times over it buys nothing but log noise.
-    if (batch.failed.length > 0) break;
+    if (batch.failed.length > 0 || batch.deferred.length > 0) break;
     if (batch.processed === 0) break;
   }
   return total;
