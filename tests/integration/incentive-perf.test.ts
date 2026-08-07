@@ -24,6 +24,31 @@ const DAY = 86_400_000;
 let repId = 0;
 let leadIds: number[] = [];
 
+/**
+ * ONE evaluation clock for the whole file, at noon UTC of the current UTC date.
+ *
+ * Every fixture row is stamped relative to this and every counter is evaluated
+ * at it, so the fixture and the assertion can never disagree about which local
+ * day a knock belongs to.
+ *
+ * `Date.now()` cannot do that job. Knocks written at `now - k * 60_000` straddle
+ * LOCAL MIDNIGHT whenever the suite runs in the first few minutes of an org's
+ * day: at 00:02 America/New_York, three of the six knocks land at 23:59, 23:58
+ * and 23:57 the PREVIOUS local day, today holds only three against a five-knock
+ * bar, and a streak that should read 2 reads 0. Reproduced exactly — the failure
+ * window is 00:00–00:03 local, which is how it stayed hidden until a CI run
+ * happened to cross it.
+ *
+ * Noon UTC is morning in every US org timezone, so it is far from both
+ * midnights AND before the 23:00-local cutoff the knocks_by_time test needs.
+ * That test discovered the same hazard first and fixed it locally; this hoists
+ * its fix to the whole file, which is where it always belonged.
+ */
+const ANCHOR = (() => {
+  const t = new Date();
+  return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), 12, 0, 0);
+})();
+
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-incperf-"));
   process.env.NODE_ENV = "test";
@@ -48,7 +73,7 @@ beforeAll(async () => {
       leadStatus: "new", tenantId: 1,
     } as any).id);
   }
-  const now = Date.now();
+  const now = ANCHOR;
   const ins = rawDb.prepare(
     `INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, tenant_id, verification_status, superseded)
      VALUES (?,?,?,?,?,1,'verified',0)`);
@@ -83,7 +108,7 @@ function countQueries(fn: () => void): number {
 }
 
 function campaignWith(trigger: any, name: string) {
-  const now = Date.now();
+  const now = ANCHOR;
   return campaigns.createCampaign(1, null, {
     name, startsAtMs: now - 20 * DAY, endsAtMs: now + 7 * DAY,
     trigger, rewardCents: 1_000, nowMs: now,
@@ -100,8 +125,7 @@ describe("campaign counters only compute what the trigger reads", () => {
     // "now", were then legitimately past the cutoff and the counter correctly
     // read 0.) Dedicated knocks on tail leads keep the count exact regardless
     // of which fixture rows share the local day.
-    const realNow = new Date();
-    const noonUtc = Date.UTC(realNow.getUTCFullYear(), realNow.getUTCMonth(), realNow.getUTCDate(), 12, 0, 0);
+    const noonUtc = ANCHOR;
     const ins = rawDb.prepare(
       `INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, tenant_id, verification_status, superseded)
        VALUES (?,?,?,?,?,1,'verified',0)`);
@@ -119,14 +143,14 @@ describe("campaign counters only compute what the trigger reads", () => {
 
   it("a sales_in_day campaign does not scan knocks at all", () => {
     const c = campaignWith({ kind: "sales_in_day", sales: 2 }, "Two a day");
-    const counters = campaigns.buildCounters(1, c, repId, Date.now());
+    const counters = campaigns.buildCounters(1, c, repId, ANCHOR);
     expect(counters.knocksBeforeCutoffToday).toBe(0);
     expect(counters.streakDaysMeetingBar).toBe(0);
   });
 
   it("a per_sale campaign reads sales in the window and nothing else", () => {
     const c = campaignWith({ kind: "per_sale" }, "Per sale");
-    const counters = campaigns.buildCounters(1, c, repId, Date.now());
+    const counters = campaigns.buildCounters(1, c, repId, ANCHOR);
     expect(counters.knocksBeforeCutoffToday).toBe(0);
     expect(counters.streakDaysMeetingBar).toBe(0);
     expect(counters.salesToday).toBe(0);
@@ -144,7 +168,7 @@ describe("campaign counters only compute what the trigger reads", () => {
       ["knock_streak", { kind: "knock_streak", days: 5, knocksPerDay: 5 }],
     ] as const) {
       const c = campaignWith(trigger, `Q ${label}`);
-      const n = countQueries(() => campaigns.buildCounters(1, c, repId, Date.now()));
+      const n = countQueries(() => campaigns.buildCounters(1, c, repId, ANCHOR));
       expect(n, `${label} issued ${n} queries`).toBeLessThanOrEqual(6);
     }
   });
@@ -155,7 +179,7 @@ describe("the streak lookback is bounded by the streak being chased", () => {
     // The rep above has 20 consecutive qualifying days. A 5-day campaign has no
     // reason to count past 5 — and counting past it is what made this slow.
     const c = campaignWith({ kind: "knock_streak", days: 5, knocksPerDay: 5 }, "Five day");
-    const counters = campaigns.buildCounters(1, c, repId, Date.now());
+    const counters = campaigns.buildCounters(1, c, repId, ANCHOR);
     expect(counters.streakDaysMeetingBar).toBe(5);
   });
 
@@ -166,7 +190,7 @@ describe("the streak lookback is bounded by the streak being chased", () => {
     const solo = storage.createTeamMember({
       name: "Short Streak", email: "short@incperf.example.test", role: "rep", active: true, tenantId: 1,
     } as any);
-    const now = Date.now();
+    const now = ANCHOR;
     const ins = rawDb.prepare(
       `INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, tenant_id, verification_status, superseded)
        VALUES (?,?,'not_home',0,?,1,'verified',0)`);
