@@ -20,6 +20,7 @@ import {
 } from "@shared/commissionTiers";
 import { hourlyBlockForStatement, hourlyPayForWeek, type WeekHourlyPay } from "./hourlyPay";
 import { getTenantPayPolicy } from "./payPolicyStore";
+import { structuredLog } from "./structuredLog";
 // Downline override ledger. Import direction mirrors hourlyPay: this service
 // imports the store; the store never imports this service.
 import * as overrides from "./overrideStore";
@@ -737,7 +738,64 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
   ).run(tenantId, input.repId, input.externalId, status, soldAt, qualifiedAt, installedAt, activatedAt, input.leadId ?? null, now, now);
   const sale = rawDb.prepare(`SELECT * FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, input.externalId) as any;
   storage.logActivity(actorId, "commission_sale.upserted", "commission_sale", sale?.id, { externalId: input.externalId, repId: input.repId, status }, undefined);
+  // Side effects belong at the WRITE SITE, for the same reason the guards do.
+  // Leaving them to callers meant `POST /api/commission/sales` — the one door
+  // this function's own comment calls the safe write site — booked a QUALIFIED
+  // sale that paid no upline and refreshed no statement: syncOverridesForSale
+  // had only two callers, and neither was this one. Nothing repaired it later
+  // (overrideBlockForWeek only SUMs rows that exist), so the money was simply
+  // absent. Latent only while both override rate columns are $0.
+  if (sale) reconcileSaleSideEffects(tenantId, sale, actorId, config, `sale:${input.externalId}:upsert`);
   return sale;
+}
+
+/**
+ * Bring the override ledger and the affected statements back in step with one
+ * sale's CURRENT state. The single reconciliation path for every sale write.
+ *
+ * Both halves are idempotent state reconcilers, not incremental adjustments:
+ * `syncOverridesForSale` derives the rows the sale should have and opens/closes
+ * pairs to match, and `calculateOrRecalculateStatement` re-prices a week from
+ * the ledger. So a retry, a repeated PATCH, a knock replay or a backfill rerun
+ * converges on the same numbers instead of double-paying.
+ *
+ * Order matters: overrides are reconciled BEFORE statements, because the
+ * statement calc folds the override block into `final_commission_cents`.
+ *
+ * A LOCKED week is never mutated here — `calculateOrRecalculateStatement`
+ * refuses it with STATEMENT_LOCKED, which is swallowed as an expected outcome;
+ * the override side books an EXCEPTION row instead of injecting money. Only
+ * those two codes are swallowed, so a genuine fault still surfaces rather than
+ * being lost.
+ */
+function reconcileSaleSideEffects(
+  tenantId: number, sale: any, actorId: number | null,
+  config: OrgCommissionConfig, requestId: string,
+): any {
+  const expected = (e: unknown) =>
+    e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED");
+  const basisTs = sale[BASIS_COLUMN[config.qualificationBasis]] || sale.sold_at;
+  const weekStartUtc = weekBoundsFor(basisTs, config).weekStartUtc;
+
+  overrides.syncOverridesForSale(tenantId, sale.id, actorId, weekStartUtc);
+
+  let statement: any = null;
+  try {
+    statement = calculateOrRecalculateStatement({
+      tenantId, repId: sale.rep_id, weekReference: basisTs, actorId, requestId,
+    }).statement;
+  } catch (e) { if (!expected(e)) throw e; }
+
+  // Every beneficiary with rows for this sale — including ones whose pair was
+  // just CLOSED, whose week must be re-summed exactly as much as a fresh earn's.
+  for (const b of overrides.beneficiariesForSale(tenantId, sale.id)) {
+    try {
+      calculateOrRecalculateStatement({
+        tenantId, repId: b.repId, weekReference: b.weekStartUtc, actorId, requestId: `${requestId}:upline`,
+      });
+    } catch (e) { if (!expected(e)) throw e; }
+  }
+  return statement;
 }
 
 // Transition a sale's lifecycle. QUALIFY stamps qualifiedAt; REVERSE/DISQUALIFY
@@ -759,27 +817,12 @@ export function transitionSale(tenantId: number, actorId: number | null, externa
   storage.logActivity(actorId, "commission_sale.transitioned", "commission_sale", sale.id, { externalId, action, reason: opts?.reason ?? null }, undefined);
   const updated = rawDb.prepare(`SELECT * FROM commission_sales WHERE id = ?`).get(sale.id) as any;
 
-  // Best-effort recalculation of the affected week (skip if unassigned/locked).
-  const config = loadOrgConfig(tenantId);
-  const basisTs = updated[BASIS_COLUMN[config.qualificationBasis]] || updated.sold_at;
-  // Reconcile the override ledger BEFORE recomputing statements: QUALIFY opens
-  // earn pairs, REVERSE/DISQUALIFY/CANCEL closes them (a claw against a
-  // settled week becomes an EXCEPTION — the locked statement is never touched).
-  overrides.syncOverridesForSale(tenantId, sale.id, actorId, weekBoundsFor(basisTs, config).weekStartUtc);
-  let statement: any = null;
-  try {
-    statement = calculateOrRecalculateStatement({ tenantId, repId: sale.rep_id, weekReference: basisTs, actorId, requestId: `sale:${externalId}:${action}` }).statement;
-  } catch (e) {
-    if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
-  }
-  // Each beneficiary's week refolds the fresh earn/claw (same best-effort rule).
-  for (const b of overrides.beneficiariesForSale(tenantId, sale.id)) {
-    try {
-      calculateOrRecalculateStatement({ tenantId, repId: b.repId, weekReference: b.weekStartUtc, actorId, requestId: `override:${externalId}:${action}` });
-    } catch (e) {
-      if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
-    }
-  }
+  // QUALIFY opens earn pairs; REVERSE/DISQUALIFY/CANCEL closes them (a claw
+  // against a settled week becomes an EXCEPTION — the locked statement is never
+  // touched). Same single reconciliation path every sale write uses.
+  const statement = reconcileSaleSideEffects(
+    tenantId, updated, actorId, loadOrgConfig(tenantId), `sale:${externalId}:${action}`,
+  );
   return { sale: updated, statement };
 }
 
@@ -1301,32 +1344,13 @@ export function recordFieldSaleFromKnock(input: {
   if (weekLocked) {
     storage.logActivity(actorId, "commission_sale.locked_week_pending", "commission_sale", undefined,
       { externalId, leadId, weekStartUtc: bounds.weekStartUtc, status: lockedStmt.status }, undefined);
-    return;
   }
-  // Reconcile the downline-override ledger with the freshly QUALIFIED sale.
-  // The sync is an idempotent state reconciler, so a knock replay converges to
-  // the same rows; run inside the knock route's money transaction like the
-  // upsert above (better-sqlite3 is synchronous — no interleaving).
-  const savedSale = rawDb.prepare(
-    `SELECT id FROM commission_sales WHERE tenant_id = ? AND external_id = ?`
-  ).get(tenantId, externalId) as any;
-  if (savedSale) overrides.syncOverridesForSale(tenantId, savedSale.id, actorId, bounds.weekStartUtc);
-  // Keep the rep's live week fresh (best-effort — a missing plan must never
-  // block the knock).
-  try {
-    calculateOrRecalculateStatement({ tenantId, repId, weekReference: effectiveSoldAt, actorId, requestId: `field-sale:lead:${leadId}` });
-  } catch (e) {
-    if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
-  }
-  // And each override beneficiary's week (same best-effort contract — an
-  // upline recompute failure must never block a knock).
-  for (const b of savedSale ? overrides.beneficiariesForSale(tenantId, savedSale.id) : []) {
-    try {
-      calculateOrRecalculateStatement({ tenantId, repId: b.repId, weekReference: b.weekStartUtc, actorId, requestId: `override:lead:${leadId}` });
-    } catch (e) {
-      if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
-    }
-  }
+  // The override reconcile and the statement refresh now run inside upsertSale
+  // itself, at the single write site — a knock replay still converges because
+  // both halves are idempotent reconcilers, and the locked-week case is handled
+  // there too (the recompute's STATEMENT_LOCKED is an expected, swallowed
+  // outcome, and the override side books an EXCEPTION rather than injecting
+  // money into a settled week).
 }
 
 export function reverseFieldSale(tenantId: number, leadId: number, actorId: number | null): void {
@@ -1660,15 +1684,71 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
 // Recalculates then finalizes every OPEN statement in the week; already-locked
 // statements are skipped, never re-touched. Returns per-rep results so the UI
 // can show exactly what happened. MARK_PAID is idempotent per statement.
+/** One rep's outcome in a week closeout. `result` keeps the human string the
+ *  console renders; the rest is the machine-readable half a retry needs. */
+export interface BatchRepOutcome {
+  repId: number;
+  statementId: number | null;
+  result: string;
+  finalCommissionCents?: number;
+  /** ok = transitioned · skipped = nothing to do · blocked = a named precondition
+   *  failed · failed = an unexpected fault isolated to this rep. */
+  outcome: "ok" | "skipped" | "blocked" | "failed";
+  /** Machine-readable cause on blocked/failed. */
+  code?: string;
+  /** Whether re-running the batch can succeed for this rep once the cause is
+   *  addressed. `false` means the rep is already in its terminal state. */
+  retryable?: boolean;
+}
+
+/**
+ * Close a week for every in-scope rep.
+ *
+ * EACH REP IS AN ISOLATED UNIT OF WORK. It did not used to be: the recompute and
+ * the lock in the main loop ran bare, so one rep's throw propagated out of the
+ * whole batch — reps before it stayed FINALIZED, everyone after stayed OPEN, and
+ * the `results` array (the only record of who had already been locked) was
+ * discarded with the exception. The `blocked` Set below was written and never
+ * read; the isolation was designed and never landed. A Sunday closeout is the
+ * worst possible place for all-or-nothing behaviour that is neither.
+ *
+ * Each rep's transition is ATOMIC in itself — the recompute and the lock share
+ * one transaction — so a rep is never left half-transitioned (a FINALIZED
+ * statement with no reserve hold, say). Reruns are safe because every terminal
+ * state is reported and skipped rather than repeated.
+ */
 export function batchTransitionWeek(tenantId: number, actorId: number | null, weekReference: Date | string | number, action: "FINALIZE" | "MARK_PAID", repIds?: number[] | null): {
   bounds: WeekBounds;
-  results: Array<{ repId: number; statementId: number | null; result: string; finalCommissionCents?: number }>;
+  runId: string;
+  results: BatchRepOutcome[];
+  summary: { ok: number; skipped: number; blocked: number; failed: number };
 } {
   const config = loadOrgConfig(tenantId);
   const bounds = weekBoundsFor(weekReference, config);
   const basisCol = BASIS_COLUMN[config.qualificationBasis];
-  const results: Array<{ repId: number; statementId: number | null; result: string; finalCommissionCents?: number }> = [];
+  const results: BatchRepOutcome[] = [];
   const blocked = new Set<number>();
+  // Correlates every log line for this closeout, and each rep result within it.
+  const runId = `week-${action.toLowerCase()}:${tenantId}:${bounds.weekStartUtc}:${nowIso()}`;
+
+  /** Run one rep's work with the batch's failure contract: expected outcomes are
+   *  classified, unexpected ones are isolated to this rep, logged with the run
+   *  id, and reported as retryable rather than silently dropped. */
+  const perRep = (repId: number, statementId: number | null, work: () => BatchRepOutcome): void => {
+    try {
+      results.push(work());
+    } catch (e: any) {
+      const code = e instanceof CommissionError ? e.code : "UNEXPECTED_ERROR";
+      const message = e?.message ?? String(e);
+      results.push({
+        repId, statementId, outcome: "failed", code, retryable: true,
+        result: `FAILED (${code}: ${message})`,
+      });
+      structuredLog("commission.week.rep_failed", { runId, tenantId, repId, action, code, message });
+      storage.logActivity(actorId, "commission.week.rep_failed", "commission_statement", statementId ?? undefined,
+        { runId, repId, action, code, message, week: bounds.weekStartUtc }, undefined);
+    }
+  };
 
   // FINALIZE first ensures a statement EXISTS for every in-scope rep with
   // qualified sales — a rep whose statement was never live-computed would
@@ -1684,14 +1764,28 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
     for (const s of salesByRep) {
       if (repIds && !repIds.includes(s.repId)) continue;
       try {
-        calculateOrRecalculateStatement({ tenantId, repId: s.repId, weekReference: bounds.weekStartUtc, actorId, requestId: "batch-finalize-ensure" });
-      } catch (e) {
+        calculateOrRecalculateStatement({ tenantId, repId: s.repId, weekReference: bounds.weekStartUtc, actorId, requestId: `${runId}:ensure` });
+      } catch (e: any) {
         if (e instanceof CommissionError && e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT") {
-          results.push({ repId: s.repId, statementId: null, result: `BLOCKED (${s.c} qualified sale(s), no plan assigned)` });
+          results.push({
+            repId: s.repId, statementId: null, outcome: "blocked",
+            code: "NO_EFFECTIVE_PLAN_ASSIGNMENT", retryable: true,
+            result: `BLOCKED (${s.c} qualified sale(s), no plan assigned)`,
+          });
           blocked.add(s.repId);
         } else if (e instanceof CommissionError && e.code === "STATEMENT_LOCKED") {
           /* already locked — handled in the main loop below */
-        } else { throw e; }
+        } else {
+          // Was `throw e`, which aborted the ENTIRE closeout over one rep's
+          // statement failing to materialize. Isolate it and keep going.
+          const code = e instanceof CommissionError ? e.code : "UNEXPECTED_ERROR";
+          results.push({
+            repId: s.repId, statementId: null, outcome: "failed", code, retryable: true,
+            result: `FAILED (${code}: ${e?.message ?? String(e)})`,
+          });
+          blocked.add(s.repId);
+          structuredLog("commission.week.rep_failed", { runId, tenantId, repId: s.repId, action, code, message: e?.message ?? String(e), stage: "ensure" });
+        }
       }
     }
     // Same guarantee for override beneficiaries: an upline whose only money
@@ -1705,9 +1799,18 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
     for (const b of overrideBeneficiaries) {
       if (repIds && !repIds.includes(b.repId)) continue;
       try {
-        calculateOrRecalculateStatement({ tenantId, repId: b.repId, weekReference: bounds.weekStartUtc, actorId, requestId: "batch-finalize-ensure-override" });
-      } catch (e) {
-        if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
+        calculateOrRecalculateStatement({ tenantId, repId: b.repId, weekReference: bounds.weekStartUtc, actorId, requestId: `${runId}:ensure-override` });
+      } catch (e: any) {
+        if (e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED")) continue;
+        // Same isolation rule: one upline's statement failing to materialize
+        // must not cost every other rep their closeout.
+        const code = e instanceof CommissionError ? e.code : "UNEXPECTED_ERROR";
+        results.push({
+          repId: b.repId, statementId: null, outcome: "failed", code, retryable: true,
+          result: `FAILED (${code}: ${e?.message ?? String(e)})`,
+        });
+        blocked.add(b.repId);
+        structuredLog("commission.week.rep_failed", { runId, tenantId, repId: b.repId, action, code, message: e?.message ?? String(e), stage: "ensure-override" });
       }
     }
   }
@@ -1718,32 +1821,64 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
 
   for (const s of stmts) {
     if (repIds && !repIds.includes(s.rep_id)) continue;
-    if (action === "FINALIZE") {
-      if (s.status === "FINALIZED" || s.status === "PAID") { results.push({ repId: s.rep_id, statementId: s.id, result: `already ${s.status}` }); continue; }
-      // Auto-close rule: a week is final only when it has ended AND no open
-      // clock session remains. An open punch would freeze partial hourly pay,
-      // so it BLOCKS finalize with a named exception (mirrors the week-overview
-      // OPEN_CLOCK_SESSION exception) — commission-only reps are unaffected.
-      const hp = hourlyPayForWeek(tenantId, s.rep_id, bounds.weekStartUtc, bounds.nextWeekStartUtc);
-      if (hp.rateCents != null && hp.openSessionCount > 0) {
-        results.push({ repId: s.rep_id, statementId: s.id, result: "BLOCKED (OPEN_CLOCK_SESSION: close the open clock session before finalizing hourly pay)" });
-        continue;
+    // A rep already reported as blocked/failed in the ensure pass is not
+    // attempted again in the same run — this is what the `blocked` Set was
+    // always for, and reporting one rep twice would misstate the closeout.
+    if (blocked.has(s.rep_id)) continue;
+
+    perRep(s.rep_id, s.id, () => {
+      if (action === "FINALIZE") {
+        if (s.status === "FINALIZED" || s.status === "PAID") {
+          // Terminal already — a rerun must not repeat the transition, which is
+          // what makes the whole batch safe to re-run after a partial failure.
+          return { repId: s.rep_id, statementId: s.id, outcome: "skipped", code: `ALREADY_${s.status}`, retryable: false, result: `already ${s.status}` };
+        }
+        // Auto-close rule: a week is final only when it has ended AND no open
+        // clock session remains. An open punch would freeze partial hourly pay,
+        // so it BLOCKS finalize with a named exception (mirrors the week-overview
+        // OPEN_CLOCK_SESSION exception) — commission-only reps are unaffected.
+        const hp = hourlyPayForWeek(tenantId, s.rep_id, bounds.weekStartUtc, bounds.nextWeekStartUtc);
+        if (hp.rateCents != null && hp.openSessionCount > 0) {
+          return {
+            repId: s.rep_id, statementId: s.id, outcome: "blocked",
+            code: "OPEN_CLOCK_SESSION", retryable: true,
+            result: "BLOCKED (OPEN_CLOCK_SESSION: close the open clock session before finalizing hourly pay)",
+          };
+        }
+        // Recompute right before locking so the frozen number matches the ledger
+        // — and do BOTH in one transaction, so a fault between them can never
+        // leave this rep half-transitioned (a FINALIZED statement whose reserve
+        // hold or override settlement did not land).
+        const locked = rawDb.transaction(() => {
+          const fresh = calculateOrRecalculateStatement({ tenantId, repId: s.rep_id, weekReference: bounds.weekStartUtc, actorId, requestId: `${runId}:finalize` });
+          return transitionStatement(tenantId, actorId, fresh.statement.id, "FINALIZE");
+        })();
+        return { repId: s.rep_id, statementId: locked.id, outcome: "ok", result: "FINALIZED", finalCommissionCents: locked.final_commission_cents };
       }
-      // Recompute right before locking so the frozen number matches the ledger.
-      const fresh = calculateOrRecalculateStatement({ tenantId, repId: s.rep_id, weekReference: bounds.weekStartUtc, actorId, requestId: "batch-finalize" });
-      const locked = transitionStatement(tenantId, actorId, fresh.statement.id, "FINALIZE");
-      results.push({ repId: s.rep_id, statementId: locked.id, result: "FINALIZED", finalCommissionCents: locked.final_commission_cents });
-    } else {
-      if (s.status === "PAID") { results.push({ repId: s.rep_id, statementId: s.id, result: "already PAID" }); continue; }
-      if (s.status !== "FINALIZED") { results.push({ repId: s.rep_id, statementId: s.id, result: `skipped (${s.status} — finalize first)` }); continue; }
-      const paid = transitionStatement(tenantId, actorId, s.id, "MARK_PAID");
-      results.push({ repId: s.rep_id, statementId: paid.id, result: "PAID", finalCommissionCents: paid.final_commission_cents });
-    }
+      if (s.status === "PAID") {
+        return { repId: s.rep_id, statementId: s.id, outcome: "skipped", code: "ALREADY_PAID", retryable: false, result: "already PAID" };
+      }
+      if (s.status !== "FINALIZED") {
+        return { repId: s.rep_id, statementId: s.id, outcome: "skipped", code: "NOT_FINALIZED", retryable: true, result: `skipped (${s.status} — finalize first)` };
+      }
+      const paid = rawDb.transaction(() => transitionStatement(tenantId, actorId, s.id, "MARK_PAID"))();
+      return { repId: s.rep_id, statementId: paid.id, outcome: "ok", result: "PAID", finalCommissionCents: paid.final_commission_cents };
+    });
   }
 
+  const summary = {
+    ok: results.filter(r => r.outcome === "ok").length,
+    skipped: results.filter(r => r.outcome === "skipped").length,
+    blocked: results.filter(r => r.outcome === "blocked").length,
+    failed: results.filter(r => r.outcome === "failed").length,
+  };
+  // The report is persisted whether or not every rep succeeded — it used to be
+  // discarded along with the exception, which left no record of who HAD been
+  // locked before the batch died.
   storage.logActivity(actorId, `commission.week.${action.toLowerCase()}`, "commission_statement", undefined,
-    { week: bounds.localWeekLabel, results: results.map(r => ({ repId: r.repId, result: r.result })) }, undefined);
-  return { bounds, results };
+    { runId, week: bounds.localWeekLabel, summary, results: results.map(r => ({ repId: r.repId, result: r.result, outcome: r.outcome, code: r.code })) }, undefined);
+  structuredLog("commission.week.closeout", { runId, tenantId, action, week: bounds.weekStartUtc, ...summary });
+  return { bounds, runId, results, summary };
 }
 
 // ── Plan acceptance (direct onboarding's handshake) ──────────────────────────

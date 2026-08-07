@@ -32,6 +32,7 @@ import { rawDb } from "./db";
 import "./spiffStore";
 import "./spiffCampaignStore";
 import { nextBatch, advanceCursor, cursorFor } from "./domainEventStore";
+import { structuredLog } from "./structuredLog";
 import * as referralStore from "./referralStore";
 import { recordIncentive } from "./earningsLedgerStore";
 import {
@@ -341,6 +342,9 @@ export interface DrainResult {
   awarded: number;
   reversed: number;
   lastEventId: number;
+  /** Events whose transaction threw. The cursor stops BEFORE the first of them,
+   *  so the work is retried on the next drain rather than skipped. */
+  failed: Array<{ eventId: number; type: string; tenantId: number; message: string }>;
 }
 
 /**
@@ -352,7 +356,7 @@ export interface DrainResult {
  */
 export function drainOnce(nowIso: string, limit = 200): DrainResult {
   const batch = nextBatch(SUBSCRIBER_NAME, limit);
-  const result: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: cursorFor(SUBSCRIBER_NAME) };
+  const result: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: cursorFor(SUBSCRIBER_NAME), failed: [] };
   if (batch.length === 0) return result;
 
   for (const event of batch) {
@@ -434,7 +438,29 @@ export function drainOnce(nowIso: string, limit = 200): DrainResult {
       }
     });
 
-    tx();
+    // A throwing event used to propagate out of drainOnce entirely, which meant
+    // advanceCursor below never ran — not even past the events that HAD already
+    // committed. Every later drain replayed from the same cursor, hit the same
+    // event, and threw again: the queue stalled permanently and invisibly, so
+    // no event after the poison one ever paid anybody.
+    //
+    // Deliberately STOP rather than skip ahead. These events are ordered and
+    // order is load-bearing (a SALE_CANCELLED clawback must not be applied
+    // before the SALE_APPROVED award it reverses), so stepping over a failure
+    // could apply money out of sequence. Stopping keeps the failed event
+    // claimable, keeps the committed work durable, and makes the stall LOUD —
+    // a structured log on every drain instead of an exception nobody catches.
+    try {
+      tx();
+    } catch (e: any) {
+      const message = e?.message ?? String(e);
+      result.failed.push({ eventId: event.id, type: String(event.type), tenantId: Number(event.tenantId), message });
+      structuredLog("incentive.event_failed", {
+        subscriber: SUBSCRIBER_NAME, eventId: event.id, type: String(event.type),
+        tenantId: Number(event.tenantId), message, cursorHeldAt: result.lastEventId,
+      }, "error");
+      break;
+    }
     result.processed += 1;
     result.lastEventId = event.id;
   }
@@ -447,13 +473,17 @@ export function drainOnce(nowIso: string, limit = 200): DrainResult {
 
 /** Drain until empty, bounded so a runaway backlog cannot hold the loop. */
 export function drain(nowIso: string, maxBatches = 50): DrainResult {
-  const total: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: 0 };
+  const total: DrainResult = { processed: 0, awarded: 0, reversed: 0, lastEventId: 0, failed: [] };
   for (let i = 0; i < maxBatches; i += 1) {
     const batch = drainOnce(nowIso);
     total.processed += batch.processed;
     total.awarded += batch.awarded;
     total.reversed += batch.reversed;
     total.lastEventId = batch.lastEventId;
+    total.failed.push(...batch.failed);
+    // A stalled batch will produce the identical failure on every retry, so
+    // spinning maxBatches times over it buys nothing but log noise.
+    if (batch.failed.length > 0) break;
     if (batch.processed === 0) break;
   }
   return total;

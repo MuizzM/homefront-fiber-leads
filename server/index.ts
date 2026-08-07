@@ -1013,7 +1013,14 @@ app.use((req, res, next) => {
         const { rawDb } = await import("./db");
         const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
         const tenantIds = rawDb.prepare("SELECT id FROM tenants").all().map((r: any) => Number(r.id));
+        let tenantsFailed = 0;
         for (const tid of tenantIds) {
+         // PER-TENANT isolation. The only try/catch used to be the one wrapping
+         // this whole block, so one org's failure ended the backfill for every
+         // org after it — on BOOT, with a single console.warn as the only
+         // signal, and identically on every restart. Same failure class as the
+         // field-sale backfill: one bad unit of work must cost one unit of work.
+         try {
           // LINK-BY-ADDRESS first: thousands of green scan_targets already have a lead
           // row for the same address (created before source_scan_target_id linking) but
           // no converted_to_lead_id. Link them so the metric is honest and the projector
@@ -1047,15 +1054,27 @@ app.use((req, res, next) => {
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
           const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('GA','NC','SC')
             AND last_fiber_status='new_fiber' AND last_billing_status='N' AND converted_to_lead_id IS NULL`).all(tid).map((r: any) => Number(r.id));
-          let created = 0, linkedProj = 0;
+          let created = 0, linkedProj = 0, chunksFailed = 0;
           // Chunk so each projection transaction is small and the event loop breathes.
           for (let i = 0; i < ids.length; i += 300) {
-            const r = projectConfirmedFreshLeads(tid, ids.slice(i, i + 300));
-            created += r.created; linkedProj += r.linkedExisting;
+            // Isolated per chunk, exactly like the link loop above — that one
+            // already learned this lesson ("never abort the remaining thousands").
+            try {
+              const r = projectConfirmedFreshLeads(tid, ids.slice(i, i + 300));
+              created += r.created; linkedProj += r.linkedExisting;
+            } catch (chunkErr: any) {
+              chunksFailed += 1;
+              structuredLog("fresh_lead.projection_chunk_failed", { tenantId: tid, chunk: i / 300, message: chunkErr?.message ?? String(chunkErr) }, "warn");
+            }
             await yieldLoop(); // let the control worker serve HTTP between projection chunks
           }
-          structuredLog("fresh_lead.boot_backfill", { tenantId: tid, candidates: ids.length, created, linkedExisting: linkedProj });
+          structuredLog("fresh_lead.boot_backfill", { tenantId: tid, candidates: ids.length, created, linkedExisting: linkedProj, chunksFailed });
+         } catch (tenantErr: any) {
+           tenantsFailed += 1;
+           structuredLog("fresh_lead.tenant_failed", { tenantId: tid, message: tenantErr?.message ?? String(tenantErr) }, "error");
+         }
         }
+        if (tenantsFailed > 0) structuredLog("fresh_lead.boot_backfill_incomplete", { tenantsFailed, tenants: tenantIds.length }, "warn");
       } catch (e: any) { console.warn("[fresh-lead-backfill] skipped:", e?.message); }
     })(); }, "fresh-lead-backfill");
   }
