@@ -21,7 +21,7 @@
 // tracked, but `rejectAttribution` refuses while the program is off and no
 // reward is ever created, so deploying this costs nobody anything.
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { rawDb } from "./db";
 import { emit } from "./domainEventStore";
 import { recordReferralReward } from "./earningsLedgerStore";
@@ -100,6 +100,34 @@ export function ensureReferralSchema(): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_one_live_user
       ON referrals(tenant_id, referred_user_id)
       WHERE referred_user_id IS NOT NULL AND status NOT IN ('REJECTED','EXPIRED') AND deleted_at IS NULL;
+    -- ONE ATTRIBUTION PER APPLICATION. The live-email and live-user indexes
+    -- above stop the same PERSON being referred twice, but neither stops two
+    -- referrals pointing at the same application row — which is what a retried
+    -- intake, a double-submitted form, or two concurrent requests would
+    -- produce. Unlike the other two this is NOT filtered on status: an
+    -- application that was rejected once must not become attributable again by
+    -- a second attribution, because the application itself is the thing that
+    -- happened once.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_one_per_application
+      ON referrals(tenant_id, referred_application_id)
+      WHERE referred_application_id IS NOT NULL;
+
+    -- Click de-duplication. A counter that increments on every request counts a
+    -- refresh, a back-button, and a prefetch as three people, which makes the
+    -- one number a rep actually watches meaningless — and makes inflating it
+    -- free. The dedupe key is coarse on purpose (see clickDedupeKey): it must
+    -- collapse one person revisiting, without needing an identifier we have no
+    -- business assigning to an anonymous visitor.
+    CREATE TABLE IF NOT EXISTS referral_click_dedupe (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_click_dedupe
+      ON referral_click_dedupe(code, dedupe_key);
+    CREATE INDEX IF NOT EXISTS idx_referral_click_dedupe_age
+      ON referral_click_dedupe(created_at);
 
     -- Append-only funnel history. This is the audit trail the admin console
     -- shows and the reason a status can be explained rather than just read.
@@ -268,14 +296,58 @@ export function linkByCode(code: string) {
   };
 }
 
-/** A click is a counter bump, not a referral row — an anonymous visit has no
- *  identity to attribute and creating a row per click would be a fraud vector
- *  and a garbage pipeline. */
-export function trackClick(code: string): boolean {
+/**
+ * A coarse, privacy-preserving identity for one visitor-day.
+ *
+ * Hashed rather than stored raw: this exists to collapse a refresh, not to
+ * build a profile of anonymous visitors, and an IP + user-agent pair kept in
+ * plaintext against a referral code is exactly such a profile. The day bucket
+ * means the window resets naturally without a sweeper needing to run on time.
+ *
+ * Deliberately imperfect. Two people behind one office NAT on the same browser
+ * version collapse to one click, and one person on phone-then-laptop counts
+ * twice. Both are acceptable: the number is a rep's engagement signal, not a
+ * billing input, and the alternative is a durable identifier we have no reason
+ * to assign to someone who has not applied for anything.
+ */
+export function clickDedupeKey(p: { ip?: string | null; userAgent?: string | null; dayIso: string }): string {
+  return createHash("sha256")
+    .update(`${p.ip ?? ""}|${p.userAgent ?? ""}|${p.dayIso}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * Record a visit. Returns true only when this was a NEW click.
+ *
+ * A click is a counter bump, not a referral row — an anonymous visit has no
+ * identity to attribute, and creating a referral per click would be both a
+ * fraud vector and a garbage pipeline.
+ *
+ * With a dedupe key the increment happens at most once per visitor-day, so a
+ * refresh, a back-button, or a background prefetch cannot inflate it. Without
+ * one (a caller that has no request context) it falls back to the old
+ * unconditional bump rather than silently dropping the click.
+ */
+export function trackClick(code: string, dedupeKey?: string | null, nowIso?: string): boolean {
+  if (dedupeKey) {
+    const fresh = rawDb.prepare(
+      `INSERT INTO referral_click_dedupe (code, dedupe_key, created_at) VALUES (?,?,?)
+       ON CONFLICT(code, dedupe_key) DO NOTHING`,
+    ).run(code, dedupeKey, nowIso ?? new Date().toISOString());
+    // Already counted this visitor today — not an error, just not a new click.
+    if (fresh.changes === 0) return false;
+  }
   const info = rawDb.prepare(
     `UPDATE referral_links SET click_count = click_count + 1 WHERE code = ? AND active = 1`,
   ).run(code);
   return info.changes > 0;
+}
+
+/** Drop dedupe rows older than the retention window. Called opportunistically;
+ *  the table is a de-duplication cache, not a record of anything. */
+export function pruneClickDedupe(olderThanIso: string): number {
+  return rawDb.prepare(`DELETE FROM referral_click_dedupe WHERE created_at < ?`).run(olderThanIso).changes;
 }
 
 // ── Referral lifecycle ──────────────────────────────────────────────────────

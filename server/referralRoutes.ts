@@ -90,7 +90,17 @@ export function registerReferralRoutes(app: Express, deps: Deps) {
     const code = normalizeReferralCode(req.body?.code);
     // A malformed code never reaches the database, and the response is the same
     // either way so the endpoint cannot be used to test which codes exist.
-    if (code) store.trackClick(code);
+    if (code) {
+      const now = nowIso();
+      store.trackClick(code, store.clickDedupeKey({
+        ip: req.ip ?? null,
+        userAgent: String(req.headers["user-agent"] ?? "").slice(0, 256),
+        dayIso: now.slice(0, 10),
+      }), now);
+    }
+    // Always the same body, whatever happened — a caller must not be able to
+    // learn from the response whether a code is real or whether their click
+    // counted.
     res.json({ ok: true });
   });
 
