@@ -83,7 +83,7 @@ export function FlashcardDeck({
       {done ? (
         <div className="mt-10 rounded-2xl border border-border bg-card p-6 text-center" data-testid="deck-finished">
           <div className="text-[15px] font-semibold text-foreground">
-            {mode === "warmup" ? "Warm — first door's waiting." : mode === "debrief" ? "Debrief done — data collected." : "Deck clear."}
+            {mode === "warmup" ? "Warm. First door's waiting." : mode === "debrief" ? "Debrief done. Data collected." : "Deck clear."}
           </div>
           <div className="mt-1 text-sm-minus text-muted-foreground">
             {mode === "warmup" ? "Your opener is loaded. Go get the first yes." : "Pick up where you left off anytime."}

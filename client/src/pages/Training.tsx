@@ -35,6 +35,7 @@ import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 import { TrainingGateBanner, TrainingClearedBanner } from "@/components/TrainingLock";
 import { TrainingAccessPanel } from "@/components/TrainingAccessPanel";
 import PitchRecorder, { isPitchRecorderSupported } from "@/components/training/PitchRecorder";
+import FullPitchRun from "@/components/training/FullPitchRun";
 import {
   TRAINING_MODULES,
   TRAINING_LESSONS,
@@ -472,6 +473,7 @@ export default function Training() {
   const { toast } = useToast();
   const [openLessonId, setOpenLessonId] = useState<string | null>(null);
   const [showPitchPractice, setShowPitchPractice] = useState(false);
+  const [showFullRun, setShowFullRun] = useState(false);
 
   // The list ⇄ lesson swap happens inside ONE route, so the app's scroll
   // container (App.tsx keys it by location) never resets. Without this a rep
@@ -480,7 +482,7 @@ export default function Training() {
   // with the new view, not a frame after it.
   useLayoutEffect(() => {
     document.querySelector(".app-route-stage")?.scrollTo({ top: 0 });
-  }, [openLessonId, showPitchPractice]);
+  }, [openLessonId, showPitchPractice, showFullRun]);
   const canSeeTeam = ["admin", "manager", "super_admin"].includes(user?.role ?? "rep");
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "rep");
   const pitchSupported = isPitchRecorderSupported();
@@ -559,7 +561,9 @@ export default function Training() {
 
   return (
     <div className="hf-stagger mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
-      {showPitchPractice ? (
+      {showFullRun ? (
+        <FullPitchRun onBack={() => setShowFullRun(false)} />
+      ) : showPitchPractice ? (
         <PitchPracticeView onBack={() => setShowPitchPractice(false)} />
       ) : openLesson && openModule ? (
         <LessonView
@@ -651,10 +655,33 @@ export default function Training() {
                 data-testid="training-progress-retry"
                 className={cn("mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-secondary px-4 text-sm font-semibold text-foreground", FOCUS)}
               >
-                <RefreshCw className="h-4 w-4" aria-hidden="true" /> Progress didn't load — retry
+                <RefreshCw className="h-4 w-4" aria-hidden="true" /> Progress didn't load. Retry
               </button>
             )}
           </div>
+
+          {/* The flagship drill gets a full-width door, not a header button:
+              the complete pitch as one rehearsal, then live objections. */}
+          <button
+            type="button"
+            onClick={() => setShowFullRun(true)}
+            data-testid="open-full-pitch-run"
+            className={cn(
+              "flex w-full items-center gap-4 rounded-2xl border border-primary/30 bg-primary/[0.08] p-4 text-left transition-colors hover:bg-primary/[0.14]",
+              FOCUS,
+            )}
+          >
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
+              <Mic className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-bold text-foreground">Run the full pitch</span>
+              <span className="block text-[13px] text-muted-foreground">
+                Four beats, one 30-second take, then the door talks back. About three minutes.
+              </span>
+            </span>
+            <ChevronRight className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+          </button>
 
           {/* Fast-start track — "start here" for reps still ramping */}
           {showFastStart && <FastStartTrack completedById={completedById} onOpen={setOpenLessonId} />}

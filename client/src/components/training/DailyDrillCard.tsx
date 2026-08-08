@@ -36,7 +36,7 @@ export function DailyDrillCard({
       type="button"
       onClick={onFlip}
       data-testid={`drill-card-${card.id}`}
-      aria-label={flipped ? "Card back — tap to see prompt" : "Card front — tap to reveal"}
+      aria-label={flipped ? "Card back. Tap to see prompt" : "Card front. Tap to reveal"}
       aria-pressed={flipped}
       className={cn(
         "relative flex min-h-[240px] w-full flex-col rounded-2xl border bg-card p-5 text-left",
