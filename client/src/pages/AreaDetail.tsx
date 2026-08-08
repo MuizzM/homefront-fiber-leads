@@ -90,9 +90,12 @@ export default function AreaDetail() {
   const [nextPassOpen, setNextPassOpen] = useState(false);
   const [pickedRepId, setPickedRepId] = useState<number | null>(null);
   // Crew editing. `confirmRemoveId` arms one rep's Remove; `removingRepId` is
-  // which one is in flight, so only that row spins.
+  // which one is in flight, so only that row spins. `confirmUnassign` arms the
+  // header's Unassign the same way — both fire the same mutation, so neither
+  // may be a one-tap action.
   const [addRepOpen, setAddRepOpen] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<number | null>(null);
+  const [confirmUnassign, setConfirmUnassign] = useState(false);
   const [removingRepId, setRemovingRepId] = useState<number | null>(null);
 
   const progressQuery = useQuery<AreaDetailRow>({
@@ -347,18 +350,40 @@ export default function AreaDetail() {
             crew it would beg the question WHICH rep, so removal moves to the
             per-rep control on the card below. */}
         {canAssign && !pool && holders.length === 1 && area.repId != null && (
-          <button
-            type="button"
-            data-testid="area-action-unassign"
-            disabled={unassignMutation.isPending}
-            onClick={() => { setRemovingRepId(area.repId as number); unassignMutation.mutate(area.repId as number); }}
-            className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70 disabled:opacity-50", FOCUS)}
-          >
-            {unassignMutation.isPending
-              ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              : <UserMinus className="h-4 w-4" aria-hidden="true" />}
-            Unassign {shortRep(area.repName)}
-          </button>
+          confirmUnassign ? (
+            <span className="flex items-center gap-1.5">
+              <button
+                type="button"
+                data-testid="area-action-unassign-confirm"
+                disabled={unassignMutation.isPending}
+                onClick={() => { setConfirmUnassign(false); setRemovingRepId(area.repId as number); unassignMutation.mutate(area.repId as number); }}
+                className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-destructive px-3.5 text-sm font-semibold text-destructive-foreground disabled:opacity-50", FOCUS)}
+              >
+                Unassign {shortRep(area.repName)}
+              </button>
+              <button
+                type="button"
+                data-testid="area-action-unassign-cancel"
+                onClick={() => setConfirmUnassign(false)}
+                className={cn("min-h-11 rounded-xl border border-border px-3.5 text-sm font-semibold text-foreground", FOCUS)}
+              >
+                Keep
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              data-testid="area-action-unassign"
+              disabled={unassignMutation.isPending}
+              onClick={() => setConfirmUnassign(true)}
+              className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70 disabled:opacity-50", FOCUS)}
+            >
+              {unassignMutation.isPending
+                ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                : <UserMinus className="h-4 w-4" aria-hidden="true" />}
+              Unassign {shortRep(area.repName)}
+            </button>
+          )
         )}
         {canDelete && (
           <button

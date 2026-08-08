@@ -240,6 +240,35 @@ describe("AreaDetail — who may act", () => {
     // It opens the real dry run, so the reset is never a blind one-tap action.
     expect(await screen.findByRole("button", { name: "Start pass 4" })).toBeInTheDocument();
   });
+
+  it("the header Unassign arms first; /unassign fires only on the confirm tap", async () => {
+    const user = userEvent.setup();
+    mockAuth.user = { id: 2, name: "Mona Manager", role: "manager", teamMemberId: 4 };
+    apiRequest.mockImplementation(async () => ({
+      json: async () => ({ ok: true, leadsReleased: 84, assigneeIds: [] }),
+    } as unknown as Response));
+    renderPage();
+
+    await user.click(await screen.findByTestId("area-action-unassign"));
+    // Armed, not fired: same stakes as the per-rep Remove — a mis-tap on a
+    // phone would strip Bo of the whole area in one touch.
+    expect(apiRequest).not.toHaveBeenCalled();
+    expect(screen.getByTestId("area-action-unassign-confirm")).toHaveTextContent("Unassign Bo");
+
+    await user.click(screen.getByTestId("area-action-unassign-confirm"));
+    expect(apiRequest).toHaveBeenCalledWith("POST", "/api/territories/7/unassign", { repId: 5 });
+  });
+
+  it("Keep disarms the header Unassign and calls nothing", async () => {
+    const user = userEvent.setup();
+    mockAuth.user = { id: 2, name: "Mona Manager", role: "manager", teamMemberId: 4 };
+    renderPage();
+    await user.click(await screen.findByTestId("area-action-unassign"));
+    await user.click(screen.getByTestId("area-action-unassign-cancel"));
+    expect(screen.queryByTestId("area-action-unassign-confirm")).toBeNull();
+    expect(screen.getByTestId("area-action-unassign")).toBeInTheDocument();
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
 });
 
 // ── The crew, and taking somebody off it from the Area tab ──────────────────
