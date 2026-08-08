@@ -796,10 +796,10 @@ const LeadTableRow = memo(function LeadTableRow({
       <td className="px-3 py-3">
         <div className="flex items-center justify-end gap-0.5">
           {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
-          {canAssign && <button onClick={() => onAssign(lead)} title="Assign" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" /></button>}
-          <button onClick={() => onOpen(lead)} title="Open details" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" /></button>
-          {canEdit && <button onClick={() => onEdit(lead)} title="Edit" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>}
-          {canDelete && <button onClick={() => onDelete(lead.id)} title="Delete" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>}
+          {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
+          <button onClick={() => onOpen(lead)} title="Open details" aria-label={`Open details for ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" /></button>
+          {canEdit && <button onClick={() => onEdit(lead)} title="Edit" aria-label={`Edit ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" aria-hidden="true" /></button>}
+          {canDelete && <button onClick={() => onDelete(lead.id)} title="Delete" aria-label={`Delete ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>}
         </div>
       </td>
     </tr>
@@ -823,7 +823,11 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
             <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
             <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground"><MapPin className="h-3.5 w-3.5 shrink-0" />{lead.city}, {lead.state} {lead.zip}</div>
           </div>
-          <Badge className={`shrink-0 border-0 text-2xs ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
+          {/* leadStateLabel, NOT the raw lookup: "already a customer" is stored
+              as not_interested + lastOutcome, and the raw label showed those
+              doors as "Not Interested" — the exact field-reported bug the
+              desktop grid and drawer already fixed. */}
+          <Badge className={`shrink-0 border-0 text-2xs ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge>
         </div>
         <div className="mt-3 grid grid-cols-3 rounded-lg border border-border bg-background/45">
           <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>

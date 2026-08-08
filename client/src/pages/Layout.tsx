@@ -33,6 +33,8 @@ import {
   LayoutGrid,
   Zap,
   MessagesSquare,
+  Car,
+  UserPlus,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -94,6 +96,13 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/training",     label: "Training",     icon: GraduationCap,show: isFieldRole,                              group: "Field" },
   { href: "/coach",        label: "Coach",        icon: Zap,          show: isFieldRole,                              group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
+  // Mileage and Referrals had live routes, pages, and server APIs but NO nav
+  // entry anywhere — reachable only by typed URL. A tax-deduction log and a
+  // paid referral program are not features to hide from the people they pay.
+  // Gates mirror the routes' CapabilityGuards exactly, so neither entry can
+  // ever point a role at a page that would render Access Denied.
+  { href: "/mileage",      label: "Mileage",       icon: Car,          show: r => can(r, "mileage.submit.self"),       group: "Field" },
+  { href: "/referrals",    label: "Referrals",     icon: UserPlus,     show: r => can(r, "referral.read.self"),        group: "Field" },
   { href: "/my-commission",label: "My commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
   { href: "/my-documents", label: "My documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
   // NOTE: /tax-and-pay is deliberately NOT a nav item. The W-9 and direct
@@ -271,6 +280,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/my-documents" ? "Documents"
     : location === "/tax-and-pay" ? "Tax & pay"
     : location === "/followups" ? "Follow-ups"
+    : location === "/mileage" ? "Mileage"
+    : location === "/referrals" ? "Referrals"
     : location === "/my-territory" ? "My territory"
     : onCalling ? "Calling"
     : location === "/profile" ? "Profile"

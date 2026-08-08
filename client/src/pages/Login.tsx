@@ -23,6 +23,9 @@ export default function Login() {
   const [code, setCode]     = useState("");
   const [loading, setLoading] = useState(false);
   const [resendIn, setResendIn] = useState(0); // seconds until "Resend code" re-enables
+  // Inline, announced error — the toast alone was invisible to screen readers
+  // (no live region near the field) and easy to miss on a phone in sunlight.
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Tick the resend cooldown down to zero.
   useEffect(() => {
@@ -55,6 +58,7 @@ export default function Login() {
     e.preventDefault();
     if (!email.trim()) return;
     setLoading(true);
+    setFormError(null);
     try {
       const { code: developmentCode, emailDelivered } = await requestCode();
       setStep("code");
@@ -65,6 +69,7 @@ export default function Login() {
         : "Code created, but email is delayed — ask your manager for it.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
     } catch (err: any) {
+      setFormError(err.message || "Something went wrong");
       toast({ title: err.message || "Something went wrong", variant: "destructive" });
     } finally {
       setLoading(false);
@@ -83,6 +88,7 @@ export default function Login() {
         : "New code created, but email is delayed — ask your manager for it.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
     } catch (err: any) {
+      setFormError(err.message || "Something went wrong");
       toast({ title: err.message || "Something went wrong", variant: "destructive" });
     } finally {
       setLoading(false);
@@ -112,13 +118,14 @@ export default function Login() {
       if (!res.ok) throw new Error(data.error ?? "Invalid code");
       login(data.sessionId, data.user);
     } catch (err: any) {
+      setFormError(err.message || "Invalid code");
       toast({ title: err.message || "Invalid code", variant: "destructive" });
       if (!codeStillGood) setCode(""); // wrong code → clear the boxes so they can retype cleanly
     } finally {
       setLoading(false);
     }
   }
-  function handleCodeSubmit(e: React.FormEvent) { e.preventDefault(); verify(code); }
+  function handleCodeSubmit(e: React.FormEvent) { e.preventDefault(); setFormError(null); verify(code); }
 
   const inputClasses =
     "w-full rounded-lg border border-input bg-background text-foreground " +
@@ -187,6 +194,10 @@ export default function Login() {
                 </div>
               </div>
 
+              {formError && (
+                <p role="alert" className="text-sm text-destructive" data-testid="login-error">{formError}</p>
+              )}
+
               <button
                 type="submit"
                 disabled={loading || !email.trim()}
@@ -212,10 +223,14 @@ export default function Login() {
               </div>
 
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-foreground">
+                <label id="otp-label" className="block text-sm font-medium text-foreground">
                   Verification code
                 </label>
-                <CodeBoxes value={code} onChange={setCode} onComplete={verify} disabled={loading} />
+                {/* role=group + aria-labelledby ties the six digit boxes to the
+                    label above — it previously labelled nothing. */}
+                <div role="group" aria-labelledby="otp-label">
+                  <CodeBoxes value={code} onChange={setCode} onComplete={verify} disabled={loading} />
+                </div>
                 <div className="flex items-center justify-between pt-1">
                   <p className="text-xs text-muted-foreground">Expires in 10 minutes.</p>
                   <button
@@ -230,6 +245,10 @@ export default function Login() {
                 </div>
               </div>
 
+              {formError && (
+                <p role="alert" className="text-sm text-destructive" data-testid="login-code-error">{formError}</p>
+              )}
+
               <button
                 type="submit"
                 disabled={loading || code.length < 6}
@@ -243,7 +262,7 @@ export default function Login() {
 
               <button
                 type="button"
-                onClick={() => { setStep("email"); setCode(""); setResendIn(0); }}
+                onClick={() => { setStep("email"); setCode(""); setResendIn(0); setFormError(null); }}
                 className="inline-flex w-[calc(100%+1rem)] items-center justify-center gap-1.5 min-h-11 px-2 -mx-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Use a different email

@@ -69,7 +69,11 @@ function MetricStrip({ items, loading }: {
               <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${METRIC_TONE_BG[m.tone] ?? "bg-secondary"}`}>
                 <Icon className={`h-3.5 w-3.5 ${m.tone}`} />
               </span>
-              <span className={`truncate ${EYEBROW}`}>{m.label}</span>
+              {/* Wrap, don't clip: at exactly 1280px (six columns, ~100px of
+                  label box) `truncate` rendered "NEW FIBER LEA…" and "KINETIC
+                  ADDRE…" — a metric whose NAME is cut off is an unlabeled
+                  number. Two tight lines beat an ellipsis. */}
+              <span className={`min-w-0 leading-tight ${EYEBROW}`}>{m.label}</span>
             </div>
             {loading
               ? <Skeleton className="mt-3 h-7 w-16" />

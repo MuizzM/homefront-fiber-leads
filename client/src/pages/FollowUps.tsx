@@ -122,7 +122,7 @@ export default function FollowUps() {
               bordered
               icon={CheckCircle2}
               title="You're all caught up"
-              description={'No callbacks scheduled. When you tap "Callback" on a door, it shows up here so you never miss the second visit.'}
+              description={'No callbacks scheduled. When you log "Follow-up" on a door, it shows up here so you never miss the second visit.'}
             />
           </div>
         ) : (

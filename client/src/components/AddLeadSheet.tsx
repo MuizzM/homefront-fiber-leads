@@ -11,7 +11,7 @@
 // in the background (success/duplicate/failure all land as toasts).
 import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Plus, MapPin, LocateFixed } from "lucide-react";
@@ -240,10 +240,11 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
           <div className="p-5 pb-3">
             <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-white/40" aria-hidden="true" />
             <div className="flex items-center gap-2">
-              <h2 className="text-[19px] font-bold tracking-tight text-foreground flex items-center gap-2 flex-1">
-                <span className="grid place-items-center w-8 h-8 rounded-xl bg-primary/12 text-primary"><Plus className="w-4 h-4" /></span>
+              {/* SheetTitle (not a bare h2) wires the dialog's accessible name. */}
+              <SheetTitle className="text-[19px] font-bold tracking-tight text-foreground flex items-center gap-2 flex-1">
+                <span className="grid place-items-center w-8 h-8 rounded-xl bg-primary/12 text-primary" aria-hidden="true"><Plus className="w-4 h-4" /></span>
                 Add a lead
-              </h2>
+              </SheetTitle>
               {!prefilled && (
                 <button
                   type="button"
@@ -303,8 +304,10 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
           {/* Sticky submit row: always visible above the keyboard/home bar. */}
           <div className="sticky bottom-0 mt-auto bg-transparent px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-2">
             {!canSave && !saving && (
-              <p className="mb-1.5 text-center text-[12px] text-muted-foreground" data-testid="add-lead-missing">
-                Add {missing.join(" and ")}
+              // aria-live so the hint is announced as fields complete; the list
+              // reads "a, b, and c" instead of the old "a and b and c".
+              <p aria-live="polite" className="mb-1.5 text-center text-[12px] text-muted-foreground" data-testid="add-lead-missing">
+                Add {missing.length <= 2 ? missing.join(" and ") : `${missing.slice(0, -1).join(", ")}, and ${missing[missing.length - 1]}`}
               </p>
             )}
             {/* No loading phase: the tap closes the sheet and the save runs in

@@ -2,7 +2,7 @@
 // Current field outcomes as big color-coded targets (Sold emphasized) plus an
 // optional note. Used by Today and Property Detail so logging is identical.
 import { useState, useEffect } from "react";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { FIELD_OUTCOMES, pinDisplayState, STATE_COLORS, type KnockOutcome } from "@shared/knock";
 import { X, StickyNote, CheckCircle2 } from "lucide-react";
 import type { LogOpts } from "@/lib/useKnockLogger";
@@ -43,7 +43,9 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
             <div className="flex items-start gap-3 px-5 pt-5 pb-3 border-b border-border">
               <span className="w-2.5 h-2.5 rounded-full mt-1.5 shrink-0" style={{ background: STATE_COLORS[pinDisplayState(lead)] }} />
               <div className="flex-1 min-w-0">
-                <div className="text-[16px] font-bold text-foreground leading-tight">{lead.address}</div>
+                {/* SheetTitle gives the dialog its accessible name — without it
+                    a screen reader announced this sheet as just "dialog". */}
+                <SheetTitle className="text-[16px] font-bold text-foreground leading-tight">{lead.address}</SheetTitle>
                 <div className="text-[12px] text-muted-foreground">{lead.city}{lead.zip ? ` ${lead.zip}` : ""}{lead.contactName ? ` · ${lead.contactName}` : ""}</div>
               </div>
               <button onClick={onClose} aria-label="Close" className="w-11 h-11 -mr-2 -mt-2 flex items-center justify-center text-muted-foreground"><X className="w-5 h-5" /></button>

@@ -15,7 +15,10 @@ type Tone = "neutral" | "positive" | "primary";
 
 const TONES: Record<Tone, { tile: string; icon: string; ring: string }> = {
   neutral: { tile: "bg-muted", icon: "text-muted-foreground", ring: "border-border" },
-  positive: { tile: "bg-emerald-500/15", icon: "text-emerald-400", ring: "border-emerald-500/25" },
+  // The light-mode override matters: text-emerald-400 on the light card is
+  // ~2:1 — decorative here (aria-hidden tile), but the shared primitive should
+  // model the correct both-themes pattern it asks pages to follow.
+  positive: { tile: "bg-emerald-500/15", icon: "text-emerald-400 [.light_&]:text-emerald-700", ring: "border-emerald-500/25" },
   primary: { tile: "bg-primary/10", icon: "text-primary", ring: "border-border" },
 };
 
