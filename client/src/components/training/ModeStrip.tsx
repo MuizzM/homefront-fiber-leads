@@ -44,7 +44,7 @@ export function ModeStrip({
             type="button"
             onClick={() => onSelect(mode)}
             data-testid={`mode-${mode}`}
-            aria-label={`${label} (${time}) — ${hint}`}
+            aria-label={`${label} (${time}). ${hint}`}
             className={cn(
               "relative flex min-h-14 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50",
               FOCUS,

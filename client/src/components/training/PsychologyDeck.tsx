@@ -26,9 +26,9 @@ const TIPS: readonly PsychTip[] = [
     id: "reciprocity",
     icon: Gift,
     principle: "Reciprocity",
-    hook: "Give something first — even thirty seconds of useful information counts.",
+    hook: "Give something first. Even thirty seconds of useful information counts.",
     atTheDoor: "“Before anything else — the construction on your street? That's fiber conduit. Here's what that means for your address.”",
-    why: "People repay value with attention. Lead with a fact they didn't have, and listening back feels natural — not granted, owed.",
+    why: "People repay value with attention. Lead with a fact they didn't have, and listening back feels owed, not granted.",
   },
   {
     id: "social-proof",
@@ -36,7 +36,7 @@ const TIPS: readonly PsychTip[] = [
     principle: "Social proof",
     hook: "Nobody wants to be first. Everybody wants to be next.",
     atTheDoor: "“I just set up the Hendersons two doors down — same install window, if you want it.”",
-    why: "Uncertainty makes people copy their neighbors. Name real nearby installs — proximity is the proof; the street sells the street.",
+    why: "Uncertainty makes people copy their neighbors. Name real nearby installs. Proximity is the proof; the street sells the street.",
   },
   {
     id: "loss-aversion",
@@ -44,7 +44,7 @@ const TIPS: readonly PsychTip[] = [
     principle: "Loss aversion",
     hook: "Losing $20 stings roughly twice as hard as winning $20 feels good.",
     atTheDoor: "“You're paying for copper speeds fiber left behind — every month at the old price is money already spent.”",
-    why: "Frame the status quo as the cost. People move faster to stop a leak than to chase a gain — the math is identical, the feeling isn't.",
+    why: "Frame the status quo as the cost. People move faster to stop a leak than to chase a gain. The math is identical; the feeling isn't.",
   },
   {
     id: "foot-in-door",
@@ -58,15 +58,15 @@ const TIPS: readonly PsychTip[] = [
     id: "numbers-game",
     icon: Dice5,
     principle: "Rejection is data",
-    hook: "The nos aren't failures — they're the price sheet for the yeses.",
-    atTheDoor: "After a hard no: log it, note the objection, take one breath — next door. That's the whole ritual.",
-    why: "Conversion is a rate, not a verdict. At field-average rates every knock has the same expected value before the door opens — volume is the strategy, mood is noise.",
+    hook: "The nos aren't failures. They're the price sheet for the yeses.",
+    atTheDoor: "After a hard no: log it, note the objection, take one breath, then next door. That's the whole ritual.",
+    why: "Conversion is a rate, not a verdict. At field-average rates every knock has the same expected value before the door opens. Volume is the strategy; mood is noise.",
   },
   {
     id: "first-frame",
     icon: Timer,
     principle: "The 3-second frame",
-    hook: "The door decides in three seconds — before your pitch starts.",
+    hook: "The door decides in three seconds, before your pitch starts.",
     atTheDoor: "Step back off the porch after you knock, hands visible, smile before the door moves. Open with their street, not your company.",
     why: "First impressions are a threat assessment, not a product review. Lower the threat and the brain frees up to actually hear you.",
   },
@@ -74,15 +74,15 @@ const TIPS: readonly PsychTip[] = [
     id: "labeling",
     icon: Tag,
     principle: "Labeling",
-    hook: "Tell people who they are — kindly — and they'll act like it.",
+    hook: "Tell people who they are, kindly, and they'll act like it.",
     atTheDoor: "“You seem like someone who does the homework before switching anything — so here are the actual numbers.”",
-    why: "Handed a flattering identity, people perform it. A “homework” person now has to look at your numbers — that's the label doing the work.",
+    why: "Handed a flattering identity, people perform it. A “homework” person now has to look at your numbers. That's the label doing the work.",
   },
   {
     id: "peak-end",
     icon: Sparkles,
     principle: "Peak-end rule",
-    hook: "People remember the peak and the ending — almost nothing else.",
+    hook: "People remember the peak and the ending, and almost nothing else.",
     atTheDoor: "Whatever the answer, end warm: “Either way — the conduit work wraps this month, so you'll have options. Good talking with you.”",
     why: "Today's no is remembered by its last five seconds. End generous and the callback knock starts from warmth, not from a slammed door.",
   },
@@ -164,7 +164,7 @@ export default function PsychologyDeck() {
           )}
           data-testid="psych-deck-progress"
         >
-          {allExplored ? "Deck explored — nice" : `${explored} of ${TIPS.length} flipped`}
+          {allExplored ? "Deck explored, nice" : `${explored} of ${TIPS.length} flipped`}
         </span>
       </div>
       <div className="hf-stagger mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">

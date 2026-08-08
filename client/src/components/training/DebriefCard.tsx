@@ -70,7 +70,7 @@ export function DebriefCard({
       </div>
 
       <div className="mt-2 text-[15px] font-semibold text-foreground tabular-nums" data-testid="debrief-reviewed">
-        {reviewedCount} card{reviewedCount === 1 ? "" : "s"} drilled — data collected
+        {reviewedCount} card{reviewedCount === 1 ? "" : "s"} drilled. Data collected
       </div>
 
       <div className="mt-4">
@@ -85,7 +85,7 @@ export function DebriefCard({
         </div>
         {heard.length > 0 && (
           <div className="mt-2 text-xs text-muted-foreground" data-testid="debrief-heard-count">
-            {heard.length} objection{heard.length === 1 ? "" : "s"} logged — they&apos;ll be back in the deck.
+            {heard.length} objection{heard.length === 1 ? "" : "s"} logged. They&apos;ll be back in the deck.
           </div>
         )}
       </div>

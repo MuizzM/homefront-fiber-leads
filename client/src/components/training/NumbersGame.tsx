@@ -97,7 +97,7 @@ export default function NumbersGame() {
         <SectionLabel className="text-primary">The numbers game</SectionLabel>
       </div>
       <p className="mt-1 text-sm leading-relaxed text-foreground">
-        Sales isn't a talent contest — it's a rate times a volume. Drag the slider and watch the week reprice itself.
+        Sales isn't a talent contest. It's a rate times a volume. Drag the slider and watch the week reprice itself.
       </p>
 
       {/* The headline — one week, on the house ladder, at field-average rates */}
@@ -108,7 +108,7 @@ export default function NumbersGame() {
             {formatUsdCents(shownWeekly)}
           </div>
           <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">
-            ≈ {formatUsdCents(perKnockCents)} per knock — the nos included. That's the whole mindset.
+            ≈ {formatUsdCents(perKnockCents)} per knock, the nos included. That's the whole mindset.
           </div>
         </div>
         <div className="text-right">
@@ -140,9 +140,9 @@ export default function NumbersGame() {
           aria-valuetext={`${doorsPerDay} doors per day`}
         />
         <div className="mt-1 flex justify-between text-[10px] tabular-nums text-muted-foreground/70">
-          <span>20 — a warm-up</span>
-          <span>60 — a shift</span>
-          <span>120 — a grinder</span>
+          <span>20 · a warm-up</span>
+          <span>60 · a shift</span>
+          <span>120 · a grinder</span>
         </div>
       </div>
 
@@ -158,7 +158,7 @@ export default function NumbersGame() {
       <p className="mt-3 rounded-xl border border-border bg-background px-3 py-2.5 text-xs leading-relaxed text-muted-foreground" data-testid="numbers-game-nudge">
         {tierProgressMessage(retro)}{" "}
         <span className="text-foreground">
-          Skipping {knocksSkipped} knocks doesn't save effort — at these rates it spends about{" "}
+          Skipping {knocksSkipped} knocks doesn't save effort. At these rates it spends about{" "}
           <span className="font-semibold tabular-nums">{formatUsdCents(skipCostCents)}</span>.
         </span>
       </p>
