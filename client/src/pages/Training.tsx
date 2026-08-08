@@ -5,8 +5,9 @@
 // Page grammar follows the house style: PageHeader + eyebrow SectionLabels,
 // StatStrip-style hero numbers (tabular-nums), Linear-style lesson rows, and
 // tokens only (bg-card / border-border / rounded-xl / FOCUS).
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 import {
   GraduationCap,
   ChevronLeft,
@@ -36,6 +37,7 @@ import { TrainingAccessPanel } from "@/components/TrainingAccessPanel";
 import PitchRecorder, { isPitchRecorderSupported } from "@/components/training/PitchRecorder";
 import {
   TRAINING_MODULES,
+  TRAINING_LESSONS,
   TOTAL_TRAINING_LESSONS,
   TRAINING_FAST_START,
   getFastStartLessons,
@@ -44,6 +46,12 @@ import {
   type TrainingLesson,
   type TrainingModule,
 } from "@shared/trainingContent";
+
+/** The lesson after this one in curriculum order, or undefined at the end. */
+function nextTrainingLesson(lessonId: string): TrainingLesson | undefined {
+  const i = TRAINING_LESSONS.findIndex((l) => l.id === lessonId);
+  return i >= 0 ? TRAINING_LESSONS[i + 1] : undefined;
+}
 
 type ProgressRow = { lessonId: string; completedAt: string; quizScore: number | null };
 type ProgressPayload = { totalLessons: number; completed: ProgressRow[] };
@@ -188,7 +196,7 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
 
 // ── Lesson reader ─────────────────────────────────────────────────────────────
 function LessonView({
-  lesson, module: mod, isComplete, savedScore, onBack, onComplete, saving,
+  lesson, module: mod, isComplete, savedScore, onBack, onComplete, onOpenLesson, saving,
 }: {
   lesson: TrainingLesson;
   module: TrainingModule;
@@ -196,6 +204,7 @@ function LessonView({
   savedScore: number | null;
   onBack: () => void;
   onComplete: (quizScore: number | null) => void;
+  onOpenLesson: (lessonId: string) => void;
   saving: boolean;
 }) {
   const [quizScore, setQuizScore] = useState<number | null>(null);
@@ -265,7 +274,7 @@ function LessonView({
 
       <LessonQuiz lesson={lesson} onScore={setQuizScore} />
 
-      <div className="flex items-center gap-3 pb-6">
+      <div className="flex flex-wrap items-center gap-3 pb-6">
         <button
           type="button"
           disabled={saving}
@@ -280,6 +289,29 @@ function LessonView({
           <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
           {isComplete ? "Save again" : "Mark lesson complete"}
         </button>
+        {/* Completing used to dead-end here: the only feedback was this button
+            relabeling. Momentum is the whole game in a 113-lesson curriculum,
+            so once complete, the primary action becomes the NEXT lesson. */}
+        {isComplete && (() => {
+          const next = nextTrainingLesson(lesson.id);
+          return next ? (
+            <button
+              type="button"
+              onClick={() => onOpenLesson(next.id)}
+              data-testid="lesson-next"
+              className={cn(
+                "inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground transition-transform active:scale-[.98]",
+                FOCUS,
+              )}
+            >
+              Next lesson <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : (
+            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+              That was the last lesson. Curriculum done.
+            </span>
+          );
+        })()}
         {quizScore == null && !isComplete && (
           <span className="text-xs text-muted-foreground">Finish the quiz to record a score.</span>
         )}
@@ -383,7 +415,8 @@ function FastStartTrack({
                   {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-semibold text-foreground">{lesson.title}</span>
+                  {/* Wrap, don't truncate: the differentiating words are at the end. */}
+                  <span className="block text-[13px] font-semibold leading-snug text-foreground">{lesson.title}</span>
                   <span className="block truncate text-xs text-muted-foreground">{step.why}</span>
                 </span>
                 <ArrowRight className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
@@ -436,8 +469,18 @@ function PitchPracticeView({ onBack }: { onBack: () => void }) {
 export default function Training() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [openLessonId, setOpenLessonId] = useState<string | null>(null);
   const [showPitchPractice, setShowPitchPractice] = useState(false);
+
+  // The list ⇄ lesson swap happens inside ONE route, so the app's scroll
+  // container (App.tsx keys it by location) never resets. Without this a rep
+  // opening a module-10 lesson from thousands of px down the list lands in the
+  // middle of the quiz, not at the title. Layout effect so the reset paints
+  // with the new view, not a frame after it.
+  useLayoutEffect(() => {
+    document.querySelector(".app-route-stage")?.scrollTo({ top: 0 });
+  }, [openLessonId, showPitchPractice]);
   const canSeeTeam = ["admin", "manager", "super_admin"].includes(user?.role ?? "rep");
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "rep");
   const pitchSupported = isPitchRecorderSupported();
@@ -485,8 +528,16 @@ export default function Training() {
       });
       return { previous };
     },
+    // The optimistic ring/streak just told the rep it worked, so a silent
+    // rollback IS the bug: a gated new hire can "finish", walk off, and stay
+    // locked out. Say it failed, in words, while they are still on the lesson.
     onError: (_err, _vars, ctx) => {
       if (ctx?.previous) queryClient.setQueryData(PROGRESS_KEY, ctx.previous);
+      toast({
+        variant: "destructive",
+        title: "Couldn't save your progress",
+        description: "Tap Mark lesson complete again when you have signal.",
+      });
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: PROGRESS_KEY });
@@ -512,6 +563,10 @@ export default function Training() {
         <PitchPracticeView onBack={() => setShowPitchPractice(false)} />
       ) : openLesson && openModule ? (
         <LessonView
+          // Keyed by lesson: "Next lesson" swaps the lesson prop on a mounted
+          // view, and without the remount the previous lesson's local quiz
+          // score would be submitted for the new one.
+          key={openLesson.id}
           lesson={openLesson}
           module={openModule}
           isComplete={completedById.has(openLesson.id)}
@@ -519,6 +574,7 @@ export default function Training() {
           saving={completeMutation.isPending}
           onBack={() => setOpenLessonId(null)}
           onComplete={(quizScore) => completeMutation.mutate({ lessonId: openLesson.id, quizScore })}
+          onOpenLesson={setOpenLessonId}
         />
       ) : (
         <>
@@ -621,8 +677,8 @@ export default function Training() {
                     <ProgressRing done={modDone} total={mod.lessons.length} />
                     <div className="min-w-0 flex-1">
                       <SectionLabel>Module {mi + 1}</SectionLabel>
-                      <div className="truncate text-[15px] font-bold tracking-tight text-foreground">{mod.title}</div>
-                      <div className="truncate text-xs text-muted-foreground">{mod.tagline}</div>
+                      <div className="text-[15px] font-bold leading-snug tracking-tight text-foreground">{mod.title}</div>
+                      <div className="line-clamp-2 text-xs text-muted-foreground">{mod.tagline}</div>
                     </div>
                   </div>
 
@@ -680,8 +736,12 @@ export default function Training() {
                           ) : (
                             <Circle className="h-[18px] w-[18px] shrink-0 text-muted-foreground/40" aria-hidden="true" />
                           )}
+                          {/* Titles carry their meaning in the tail ("the assumptive
+                              close: the full play" vs "…: the full pl…"), so they
+                              must wrap, not truncate. The summary stays one line —
+                              it is a teaser, and the lesson page has the rest. */}
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-semibold text-foreground">{lesson.title}</span>
+                            <span className="block text-[13px] font-semibold leading-snug text-foreground">{lesson.title}</span>
                             <span className="block truncate text-xs text-muted-foreground">{lesson.summary}</span>
                           </span>
                           <span className="flex shrink-0 items-center gap-2 text-xs tabular-nums text-muted-foreground">

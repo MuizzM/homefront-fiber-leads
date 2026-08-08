@@ -53,8 +53,9 @@ function formatTime(totalSeconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+const PERSIST_PREFIX = "pitch-take:";
 function storageKeyFor(id?: string): string | null {
-  return id ? `pitch-take:${id}` : null;
+  return id ? `${PERSIST_PREFIX}${id}` : null;
 }
 
 export default function PitchRecorder({
@@ -77,6 +78,9 @@ export default function PitchRecorder({
   const [takeSeconds, setTakeSeconds] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [kept, setKept] = useState(false);
+  // True only after a CONFIRMED localStorage write (or restore). kept alone
+  // means "kept for this session"; persisted means it survives reload.
+  const [persisted, setPersisted] = useState(false);
   const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0));
 
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -145,6 +149,7 @@ export default function PitchRecorder({
         setAudioUrl(saved);
         setState("recorded");
         setKept(true);
+        setPersisted(true);
       }
     } catch {
       /* ignore storage errors */
@@ -212,6 +217,7 @@ export default function PitchRecorder({
     revokeObjectUrl(audioUrl);
     setAudioUrl(null);
     setKept(false);
+    setPersisted(false);
     chunksRef.current = [];
     setLevels(new Array(BAR_COUNT).fill(0));
 
@@ -294,6 +300,7 @@ export default function PitchRecorder({
     revokeObjectUrl(audioUrl);
     setAudioUrl(null);
     setKept(false);
+    setPersisted(false);
     setState("idle");
     setError(null);
     setSeconds(0);
@@ -313,18 +320,36 @@ export default function PitchRecorder({
     reRecord();
   }
 
+  // Persistence budget. Base64 audio is ~1.4x blob size and localStorage is a
+  // ~5 MB pool SHARED with the react-query persister and the offline review
+  // outbox — and the outbox's safeStorage degrades to memory-only for the rest
+  // of the session on its first quota throw. One oversized take must never be
+  // what breaks offline drill grading, so takes above the cap stay in-memory.
+  const MAX_PERSIST_BLOB_BYTES = 1_500_000;
+
   async function keepTake() {
     setKept(true);
     const key = storageKeyFor(persistKey);
     if (!key || !audioUrl || audioUrl.startsWith("data:") || typeof localStorage === "undefined") return;
-    // Persist as a data URL so the take survives within the session even though
-    // object URLs do not. Best-effort — storage limits or errors are non-fatal.
+    // Persist as a data URL so the take survives reload even though object
+    // URLs do not. `persisted` is set ONLY on a successful write — the badge
+    // must not claim durability the write never achieved.
     try {
       const blob = await fetch(audioUrl).then((r) => r.blob());
+      if (blob.size > MAX_PERSIST_BLOB_BYTES) return;
       const reader = new FileReader();
       reader.onloadend = () => {
         try {
-          if (typeof reader.result === "string") localStorage.setItem(key, reader.result);
+          if (typeof reader.result === "string") {
+            // One take per device is the promise: evict other cards' takes so
+            // pitch audio can never crowd the shared pool.
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+              const k = localStorage.key(i);
+              if (k && k !== key && k.startsWith(PERSIST_PREFIX)) localStorage.removeItem(k);
+            }
+            localStorage.setItem(key, reader.result);
+            setPersisted(true);
+          }
         } catch {
           /* storage full — the in-memory take still plays */
         }
@@ -458,7 +483,10 @@ export default function PitchRecorder({
               </button>
             ) : (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400" data-testid="pitch-kept">
-                <Check className="h-3.5 w-3.5" aria-hidden="true" /> Take kept
+                {/* "Take kept" only when the write actually landed — a long
+                    take or a full disk keeps it for this session only, and
+                    saying otherwise is a lie the rep discovers after reload. */}
+                <Check className="h-3.5 w-3.5" aria-hidden="true" /> {persisted ? "Take kept" : "Kept for this session"}
               </span>
             )}
             <button

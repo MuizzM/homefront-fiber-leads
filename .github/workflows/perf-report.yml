@@ -1,0 +1,229 @@
+name: Perf report (production)
+
+# Turn the telemetry production ALREADY emits into an answer, without touching
+# production.
+#
+# WHY THIS EXISTS
+# The app logs `http.request` for every /api call and `perf.leads_map` for the
+# map feed, but nothing aggregates them, so "the app feels slow" has never had a
+# number attached. There is no metrics stack on this host and standing one up
+# would cost RAM and disk the box does not have (8 GB RAM against an 18.82 GB
+# database, ~79% disk). This is the cheapest path from existing logs to a ranked
+# decision: stream them to the runner, aggregate there, upload the report.
+#
+# STRICTLY READ-ONLY. It writes NOTHING to the box — no temp file, no log copy,
+# no pragma change, no checkpoint, no restart. Everything is piped over SSH and
+# analysed on the runner. That is not politeness: the disk this would write to is
+# the same one that already blocks the pre-deploy backup, so an observability
+# tool that materialises anything here would be creating the next incident while
+# reporting on the last one.
+#
+# RETENTION. Two bounds, both deliberate:
+#   · SOURCE — docker's json-file driver is capped at max-size 10m x max-file 5
+#     (50 MB/service) in docker-compose.production.yml. That ring is the only
+#     copy; nothing is added here. The report PRINTS the window it actually
+#     observed so a rolled buffer is visible rather than silently truncating.
+#   · OUTPUT — the artifact expires (retention-days below). Perf reports are
+#     evidence for a decision, not a durable dataset. Nothing accumulates.
+#
+# REDACTION. The app does not log IPs, session ids, headers or bodies today, and
+# this must not be what starts. scripts/perf-report.mjs collapses record ids,
+# uuids, tokens and query strings out of every route before aggregation, and
+# emits only allowlisted aggregate fields. The RAW log is never uploaded.
+
+on:
+  workflow_dispatch:
+    inputs:
+      window:
+        description: "Log window to analyse (docker --since syntax, e.g. 30m, 6h, 2d)"
+        required: true
+        default: "6h"
+        type: string
+      capacity:
+        description: "Also collect the read-only capacity snapshot (RAM, disk, SQLite pragmas, pressure)"
+        required: false
+        default: true
+        type: boolean
+      retention_days:
+        description: "How long to keep the uploaded report"
+        required: false
+        default: "7"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-report-production
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Collect and summarize production perf
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          WINDOW: ${{ inputs.window }}
+          RETENTION: ${{ inputs.retention_days }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The window is interpolated into a remote command line. Constrain it
+          # to docker's own duration grammar so it can never carry a shell
+          # metacharacter to the box.
+          [[ "$WINDOW" =~ ^[0-9]+(s|m|h|d)$ ]] || {
+            echo "window must look like 30m / 6h / 2d" >&2; exit 1; }
+          [[ "$RETENTION" =~ ^[0-9]{1,2}$ ]] && [ "$RETENTION" -ge 1 ] && [ "$RETENTION" -le 90 ] || {
+            echo "retention_days must be 1-90" >&2; exit 1; }
+
+      - name: Collect over pinned SSH host key (read-only)
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          WINDOW: ${{ inputs.window }}
+          WANT_CAPACITY: ${{ inputs.capacity && '1' || '0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          SSH=(ssh
+            -i "$HOME/.ssh/id_ed25519"
+            -o BatchMode=yes -o ConnectTimeout=15
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=40
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
+
+          mkdir -p out
+
+          # ── 1. Logs ────────────────────────────────────────────────────────
+          # Streamed straight to the runner and never written on the box. Kept
+          # as a separate step from the capacity snapshot so a docker-logs
+          # hiccup cannot cost us the capacity numbers.
+          echo "::group::Collecting logs (--since $WINDOW)"
+          "${SSH[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            bash -s -- "$WINDOW" > out/raw.ndjson <<'REMOTE'
+          set -euo pipefail
+          WINDOW="$1"
+          [[ "$WINDOW" =~ ^[0-9]+(s|m|h|d)$ ]]
+          cd /srv/homefront
+          APP="$(docker compose -f docker-compose.production.yml ps -q app 2>/dev/null | head -n1 || true)"
+          [ -n "$APP" ] || APP="$(docker ps --format '{{.ID}} {{.Image}}' | awk '/homefront-app:/{print $1; exit}' || true)"
+          [ -n "$APP" ] || { echo "no running app container" >&2; exit 1; }
+          # Only the events the analyser consumes. Filtering HERE keeps the
+          # transfer small and means domain events carrying lead detail never
+          # leave the box at all.
+          docker logs --since "$WINDOW" "$APP" 2>&1 \
+            | grep -aE '"event":"(http\.request|perf\.[a-z_]+|auth\.otp_unavailable|db\.wal_guard|fresh_fiber\.projection_failed|state_monitor\.alert_failed)"' \
+            || true
+          REMOTE
+          echo "collected $(wc -l < out/raw.ndjson) matching lines"
+          echo "::endgroup::"
+
+          # ── 2. Capacity snapshot ───────────────────────────────────────────
+          if [ "$WANT_CAPACITY" = "1" ]; then
+            echo "::group::Capacity snapshot"
+            "${SSH[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s > out/capacity.txt <<'REMOTE'
+          set -euo pipefail
+          cd /srv/homefront
+          hr() { echo "──────────────────────────────────────────────────────"; }
+          hr; echo "MEMORY";        free -m 2>/dev/null | sed 's/^/  /' || echo "  (free unavailable)"
+          hr; echo "SWAP";          swapon --show 2>/dev/null | sed 's/^/  /' || echo "  (no swap configured)"
+          hr; echo "DISK";          df -h / 2>/dev/null | sed 's/^/  /'
+          hr; echo "INODES";        df -i / 2>/dev/null | sed 's/^/  /'
+          # Pressure Stall Information: the honest answer to "is this box
+          # thrashing". `some avg60` above a few percent on memory means real
+          # stalls, which is exactly the symptom an 18.82 GB DB on 8 GB would
+          # produce. Absent on older kernels — say so rather than print nothing.
+          hr; echo "PRESSURE (PSI)"
+          for f in /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory; do
+            [ -r "$f" ] && { echo "  $f"; sed 's/^/    /' "$f"; } || echo "  $f unavailable"
+          done
+          hr; echo "IO WAIT (vmstat 1 3)"; vmstat 1 3 2>/dev/null | sed 's/^/  /' || echo "  (vmstat unavailable)"
+          hr; echo "OOM EVENTS"
+          (dmesg 2>/dev/null || sudo dmesg 2>/dev/null || true) | grep -iE 'out of memory|oom-kill|killed process' | tail -10 | sed 's/^/  /' || echo "  none found (or dmesg not readable)"
+          hr; echo "CONTAINER MEMORY"; docker stats --no-stream --format '  {{.Name}}  mem={{.MemUsage}}  ({{.MemPerc}})  cpu={{.CPUPerc}}' 2>/dev/null || true
+          hr; echo "DOCKER DISK";    docker system df 2>/dev/null | sed 's/^/  /' || true
+          VOL="$(docker volume inspect homefront_app-data --format '{{.Mountpoint}}' 2>/dev/null || true)"
+          SUDO=""; command -v sudo >/dev/null && SUDO="sudo"
+          hr; echo "DATA VOLUME  ${VOL:-<not found>}"
+          [ -n "$VOL" ] && $SUDO du -ah --max-depth=1 "$VOL" 2>/dev/null | sort -rh | head -8 | sed 's/^/  /' || true
+          hr; echo "BACKUPS"; ls -lh backups/ 2>/dev/null | tail -10 | sed 's/^/  /' || echo "  (no backups/ directory)"
+          hr; echo "BACKUP CRON LOG (tail)"; tail -15 .backup-cron.log 2>/dev/null | sed 's/^/  /' || echo "  (no .backup-cron.log — cron may never have run)"
+          # ── SQLite configuration, read-only on the live file ───────────────
+          APP="$(docker compose -f docker-compose.production.yml ps -q app 2>/dev/null | head -n1 || true)"
+          [ -n "$APP" ] || APP="$(docker ps --format '{{.ID}} {{.Image}}' | awk '/homefront-app:/{print $1; exit}' || true)"
+          hr; echo "SQLITE CONFIG (read-only)"
+          if [ -n "$APP" ]; then
+            docker exec "$APP" node -e "
+              const D=require('better-sqlite3');
+              const db=new D(process.env.DATA_DIR+'/data.db',{readonly:true});
+              const p=k=>db.pragma(k,{simple:true});
+              const gb=b=>(b/1073741824).toFixed(2)+' GB';
+              const pageSize=p('page_size'), pageCount=p('page_count'), free=p('freelist_count');
+              for (const k of ['journal_mode','synchronous','busy_timeout','mmap_size','cache_size','wal_autocheckpoint','journal_size_limit','auto_vacuum','temp_store','page_size'])
+                console.log('  '+k.padEnd(20)+p(k));
+              console.log('  page_count          '+pageCount+'  ('+gb(pageSize*pageCount)+')');
+              console.log('  freelist_count      '+free+'  ('+gb(pageSize*free)+', '+(100*free/pageCount).toFixed(1)+'%)');
+              console.log('  live data           '+gb(pageSize*(pageCount-free)));
+            " 2>&1 | sed 's/^/  /' || echo "  (could not read pragmas)"
+          else
+            echo "  no running app container"
+          fi
+          REMOTE
+            echo "::endgroup::"
+          fi
+
+      - name: Summarize
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/perf-report.mjs < out/raw.ndjson | tee out/report.txt
+          node scripts/perf-report.mjs --json < out/raw.ndjson > out/report.json
+          {
+            echo '## Production perf report'
+            echo '```'
+            cat out/report.txt
+            echo '```'
+            if [ -f out/capacity.txt ]; then
+              echo '## Capacity snapshot'
+              echo '```'
+              cat out/capacity.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The RAW log is deliberately NOT uploaded: it is per-request data, and
+          # the aggregate is what the decision needs. Remove before the artifact
+          # step so it cannot leave this runner.
+          rm -f out/raw.ndjson
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report
+          path: out/
+          retention-days: ${{ inputs.retention_days }}

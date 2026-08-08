@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
 import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION } from "./addressKey";
-import { streetKeyOf } from "@shared/addressKey";
+import { streetKeyOf, addressIdentityIssues } from "@shared/addressKey";
+import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
+import { ensureAdminAuditSchema } from "./adminAudit";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -2304,9 +2306,16 @@ export function runMigrations() {
     // the seven correlated subqueries in syncMarketState's UPDATE walks all
     // ~474k rows once per market row (483 of them), and the NOT EXISTS branches
     // hit the worst case: a full scan to prove absence.
-    // Measured on a copy of live data: the UPDATE goes from 222s to 0.22s, and
-    // the plan becomes a COVERING INDEX seek. ~9 MB on disk.
+    // Measured on a 476k-row copy of live data (2026-08-07):
+    //   no index                      170,829 ms   2 full SCANs + 2 wrong-index seeks
+    //   (lower(city), state)              153 ms   SEARCH ... USING INDEX      (10.1 MB)
+    //   + the four read columns             41 ms   SEARCH ... USING COVERING INDEX (12.7 MB)
+    // The narrow index wins ~1,100x on its own; the extra four columns are what
+    // make the plan COVERING, removing one table lookup per matching row for a
+    // further ~3.7x at +2.6 MB. Both are kept: the narrow one is load-bearing
+    // for other city/state lookups, and dropping it is a separate decision.
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_city_state ON scan_targets(lower(city), state)`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_market_sync ON scan_targets(lower(city), state, last_scanned_at, last_is_new_fiber, first_seen_fiber_at, first_seen_live_at)`,
     `ALTER TABLE scan_targets ADD COLUMN frontier_control TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_frontier_control ON scan_targets(frontier_control)`,
     // ── Coming-Soon watchlist ─────────────────────────────────────────────────
@@ -2899,7 +2908,6 @@ export function runMigrations() {
   // append-only triggers) so a redeploy re-runs it and finds prior rows intact —
   // history surviving deployments is the whole point of the table.
   try {
-    const { ensureAdminAuditSchema } = require("./adminAudit") as typeof import("./adminAudit");
     ensureAdminAuditSchema();
   } catch (e: any) { console.warn("[migration] admin audit schema:", e?.message); }
 }
@@ -2957,8 +2965,6 @@ function migrateCommissionsPendingDedupe(raw: import("better-sqlite3").Database)
 function backfillCompetitiveSuppression(raw: import("better-sqlite3").Database): void {
   const cols = new Set((raw.prepare(`PRAGMA table_info(leads)`).all() as { name: string }[]).map(c => c.name));
   if (!cols.has("competitor_name") || !cols.has("lead_tag")) return;
-  // Lazy import avoids pulling the shared module at every boot when unused.
-  const { evaluateSingleCompetitor } = require("@shared/competitiveEligibility") as typeof import("@shared/competitiveEligibility");
   const rows = raw.prepare(
     `SELECT id, competitor_name, competitor_tech FROM leads
        WHERE lead_tag='fresh_fiber_confirmed'
@@ -3017,7 +3023,6 @@ function backfillScopeSuppression(raw: import("better-sqlite3").Database): void 
 // closed business or already-suppressed rows; writes the reasons to
 // lead_events for audit + release.
 function backfillAddressReview(raw: import("better-sqlite3").Database): void {
-  const { addressIdentityIssues } = require("@shared/addressKey") as typeof import("@shared/addressKey");
   const rows = raw.prepare(
     `SELECT id, address, city, state, lat, lng FROM leads
       WHERE lead_status NOT IN ('sold','now_active','competitor_suppressed','scope_suppressed','address_review')`,
@@ -3074,6 +3079,9 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
     // table, and losing this one silently returns syncMarketState to a
     // multi-minute full scan on the next scheduler tick.
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_city_state ON scan_targets(lower(city), state)`);
+    // Same reason, same blast radius: this is the one that makes the plan
+    // COVERING. Losing it costs ~3.7x on every scheduler tick.
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_market_sync ON scan_targets(lower(city), state, last_scanned_at, last_is_new_fiber, first_seen_fiber_at, first_seen_live_at)`);
   };
 
   raw.transaction(() => {

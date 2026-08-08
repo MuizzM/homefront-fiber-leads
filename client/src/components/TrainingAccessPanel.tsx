@@ -68,7 +68,7 @@ export function TrainingAccessPanel() {
     onSuccess: (_r, { required }) => {
       qc.invalidateQueries({ queryKey: ["/api/training/gate/roster"] });
       qc.invalidateQueries({ queryKey: ["/api/training/gate"] });
-      toast({ title: required ? "Locked to training" : "Unlocked — full app access" });
+      toast({ title: required ? "Locked to training" : "Unlocked · full app access" });
     },
     onError: (e: any) => toast({ title: "Couldn't change access", description: String(e?.message ?? e), variant: "destructive" }),
   });
@@ -106,8 +106,8 @@ export function TrainingAccessPanel() {
       </div>
 
       <p className="text-[13px] text-muted-foreground">
-        Locked reps can only reach Training, their profile, and their onboarding paperwork —
-        no map, doors, leads, or commission until they finish.
+        Locked reps can only reach Training, their profile, and their onboarding paperwork.
+        No map, doors, leads, or commission until they finish.
       </p>
 
       <div className="relative">
@@ -152,12 +152,12 @@ export function TrainingAccessPanel() {
                     r.gated ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}
                      data-testid={`training-state-${r.userId}`}>
                     {r.gated
-                      ? `Locked — training only · ${r.completed} of ${r.required}`
+                      ? `Locked to training · ${r.completed} of ${r.required}`
                       : exempt
-                        ? "Full app — role is exempt from training"
+                        ? "Full app · role is exempt from training"
                         : r.trainingRequired
-                          ? `Unlocked — training complete (${r.completed} of ${r.required})`
-                          : `Unlocked — training not required`}
+                          ? `Unlocked · training complete (${r.completed} of ${r.required})`
+                          : `Unlocked · training not required`}
                   </p>
                   {r.trainingRequired && !exempt && (
                     <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary" aria-hidden="true">

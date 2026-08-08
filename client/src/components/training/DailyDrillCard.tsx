@@ -28,6 +28,10 @@ export function DailyDrillCard({
   onFlip: () => void;
 }) {
   return (
+    // The Full-lesson Link is a SIBLING of the flip button, not a child: an <a>
+    // inside a <button> is invalid HTML, and keyboard/screen-reader activation
+    // becomes unreliable — same fix as the Areas card's delete control.
+    <div className="relative">
     <button
       type="button"
       onClick={onFlip}
@@ -64,22 +68,23 @@ export function DailyDrillCard({
           )}
         </span>
       )}
-      <span className="mt-auto flex items-center justify-between pt-4">
+      {/* pr clears the sibling Full-lesson link overlaying bottom-right. */}
+      <span className={cn("mt-auto flex items-center justify-between pt-4", flipped && "pr-24")}>
         <span className="inline-flex items-center gap-1.5 text-2xs text-muted-foreground">
           <RotateCcw className="h-3 w-3" aria-hidden="true" />
           {flipped ? "Tap to see prompt" : "Tap to reveal"}
         </span>
-        {flipped && (
-          <Link
-            href="/training"
-            data-testid={`drill-card-source-${card.id}`}
-            className={cn("inline-flex min-h-11 items-center gap-1 text-2xs font-semibold text-primary", FOCUS)}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <BookOpen className="h-3 w-3" aria-hidden="true" /> Full lesson
-          </Link>
-        )}
       </span>
     </button>
+    {flipped && (
+      <Link
+        href="/training"
+        data-testid={`drill-card-source-${card.id}`}
+        className={cn("absolute bottom-2.5 right-3 z-10 inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-2xs font-semibold text-primary", FOCUS)}
+      >
+        <BookOpen className="h-3 w-3" aria-hidden="true" /> Full lesson
+      </Link>
+    )}
+    </div>
   );
 }

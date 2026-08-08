@@ -11,11 +11,18 @@ let rawDb: import("better-sqlite3").Database;
 let storage: typeof import("../../server/storage").storage;
 const TENANT = 1;
 
+// Default every fixture to real coordinates (Monroe, NC — the 28110 these
+// addresses claim). These specs are about MERGE semantics, not address quality:
+// runMigrations also runs the address-review backfill, which quarantines any
+// lead with no coordinates as `address_review`. Without a default the
+// lead_status assertions below would silently be measuring that quarantine
+// instead of the merge. Pass lat/lng explicitly to exercise the quarantine path.
 const insertRawLead = (fields: Record<string, unknown>) => {
-  const cols = Object.keys(fields);
+  const withIdentity = { lat: 35.0107, lng: -80.5514, ...fields };
+  const cols = Object.keys(withIdentity);
   return Number(rawDb.prepare(
     `INSERT INTO leads (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
-  ).run(...Object.values(fields)).lastInsertRowid);
+  ).run(...Object.values(withIdentity)).lastInsertRowid);
 };
 
 beforeAll(async () => {

@@ -2,7 +2,7 @@
  * Shared rate limiters — imported by both index.ts and routes.ts.
  * Kept in a separate file to avoid circular imports between index ↔ routes.
  */
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import type { Request, RequestHandler } from "express";
 import { can as hasCapability } from "@shared/capabilities";
 import {
@@ -34,10 +34,28 @@ export const authorizedScanAdmission: RequestHandler = (req, res, next) => {
 // carrier NAT shares an IP, and one hijacked session can roam across IPs. Key
 // on the session token when present (one token = one signed-in user), falling
 // back to the resolved client IP for unauthenticated traffic.
+// The IP fallback MUST go through ipKeyGenerator. A raw req.ip keys IPv6 on the
+// full /128 address, and a single residential IPv6 allocation is a /64 — so one
+// caller holding a /64 has 2^64 distinct keys and every limiter below becomes a
+// no-op for them. ipKeyGenerator collapses IPv6 to its subnet so the bucket is
+// per-CUSTOMER, not per-address. IPv4 is returned unchanged.
 export function perUserKey(req: Request): string {
   const sid = req.headers["x-session-id"];
   if (typeof sid === "string" && sid) return `u:${sid}`;
-  return `ip:${req.ip ?? req.socket.remoteAddress ?? "unknown"}`;
+  return `ip:${ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown")}`;
+}
+
+/**
+ * Rate-limit bucket key for a bare IP, for buckets that aren't express-rate-
+ * limit's (the SQLite-backed OTP buckets). Same reasoning as perUserKey: keying
+ * the full IPv6 /128 hands one caller their whole /64 worth of buckets. Exported
+ * so check/reset on the same address can never derive different keys — a reset
+ * that misses its bucket is a lockout nobody can clear.
+ *
+ * Bucketing only. Audit trails must keep logging the FULL address.
+ */
+export function ipBucketKey(ip: string): string {
+  return `ip:${ipKeyGenerator(ip)}`;
 }
 
 interface BudgetOptions {

@@ -78,7 +78,7 @@ export default function Areas() {
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search areas by name"
+            placeholder="Search areas"
             aria-label="Search areas by name"
             data-testid="areas-search"
             className={cn("h-11 w-full rounded-xl border border-border bg-card pl-8 pr-8 text-sm text-foreground placeholder:text-muted-foreground", FOCUS)}
@@ -207,7 +207,9 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
         FOCUS,
       )}
     >
-      <div className="flex items-start gap-2.5">
+      {/* pr clears the absolutely-positioned delete button — without it the
+          status chip renders UNDER the trash icon on narrow screens. */}
+      <div className={cn("flex items-start gap-2.5", onDelete && "pr-9")}>
         <span
           aria-hidden="true"
           className="mt-1 h-3 w-3 shrink-0 rounded-full border border-foreground/10"
@@ -220,7 +222,10 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
             data-testid={`area-card-${row.id}-rep`}
             title={holders.length > 2 ? holders.map(h => h.name).join(", ") : undefined}
           >
-            {pool ? "Unassigned" : crew || row.repName}
+            {/* The chip already says UNASSIGNED; repeating it here wastes the
+                line. Pool cards only ever render for team_lead+ (server scope),
+                and the console they open leads with Assign — so say that. */}
+            {pool ? "In the pool · open to assign" : crew || row.repName}
           </div>
         </div>
         <span className={cn(CHIP, meta.chip, "shrink-0")}>{meta.label}</span>
@@ -229,7 +234,9 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
       <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
         <CardStat label="Doors" value={row.total} />
         <CardStat label="Knocked" value={row.knocked} />
-        <CardStat label="Sold" value={row.sold} />
+        {/* Sold is the number a manager triages by — the one quiet tint on the
+            card, so the eye lands there first without the card shouting. */}
+        <CardStat label="Sold" value={row.sold} emphasis />
       </dl>
 
       <div
@@ -242,8 +249,18 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
       >
         <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${covered}%` }} />
       </div>
+      {/* The label must agree with the bar. The raw rate can exceed 100 (repeat
+          passes count against the same available base), and "109.24%" on a card
+          reads as a bug, not as diligence. Clamp to the same value the bar
+          draws, drop the false-precision decimals, and let a finished area say
+          so in words. The exact rate stays on the title attr for anyone who
+          hovers to check the maths. */}
       <div className="mt-1.5 flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
-        <span><span className="tabular-nums">{row.knockCompletionRate}%</span> of available doors knocked</span>
+        <span title={`${row.knockCompletionRate}% exact`}>
+          {covered >= 100
+            ? "All available doors knocked"
+            : <><span className="tabular-nums">{Math.round(covered)}%</span> of available doors knocked</>}
+        </span>
         <span>{shortDate(row.lastActivityAt) ?? "no activity"}</span>
       </div>
     </Link>
@@ -251,9 +268,9 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
   );
 }
 
-function CardStat({ label, value }: { label: string; value: number }) {
+function CardStat({ label, value, emphasis }: { label: string; value: number; emphasis?: boolean }) {
   return (
-    <div className="rounded-xl bg-secondary/50 py-1.5">
+    <div className={cn("rounded-xl py-1.5", emphasis ? "bg-primary/10" : "bg-secondary/50")}>
       <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
       <dd className="text-base font-bold leading-tight tabular-nums text-foreground">{value.toLocaleString()}</dd>
     </div>

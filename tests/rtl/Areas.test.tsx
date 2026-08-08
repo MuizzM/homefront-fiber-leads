@@ -78,10 +78,13 @@ describe("Areas index", () => {
     expect(within(card).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
   });
 
-  it("says Unassigned instead of naming a rep who no longer holds the area", async () => {
+  it("shows the pool call-to-action instead of naming a rep who no longer holds the area", async () => {
     renderPage();
     const card = await screen.findByTestId("area-card-2");
-    expect(within(card).getByTestId("area-card-2-rep")).toHaveTextContent("Unassigned");
+    // The point under test: the STALE holder name must not appear. The pool
+    // line is a call to action ("open to assign") because the chip above it
+    // already says UNASSIGNED — printing it twice wasted the line.
+    expect(within(card).getByTestId("area-card-2-rep")).toHaveTextContent("In the pool · open to assign");
   });
 
   it("filters by name as you type", async () => {
@@ -138,11 +141,14 @@ describe("Areas index — who works each area", () => {
     expect(cell).toHaveAttribute("title", "Bo, Talal, Cam");
   });
 
-  it("still says Unassigned for a pool area, even one with a stale holder list", async () => {
+  it("shows the pool call-to-action for a pool area, even one with a stale holder list", async () => {
     // repId keeps naming the LAST rep after a reclaim — reading it as a holder
     // is how a reclaimed area gets handed back to whoever it was taken from.
     renderPage([row({ id: 4, status: "unassigned", repId: null, repIds: [5], repNames: ["Bo Rivera"] })]);
-    expect(await screen.findByTestId("area-card-4-rep")).toHaveTextContent("Unassigned");
+    const cell = await screen.findByTestId("area-card-4-rep");
+    expect(cell).toHaveTextContent("In the pool · open to assign");
+    // The stale holder must never surface — that is the point under test.
+    expect(cell).not.toHaveTextContent("Bo Rivera");
   });
 
   it("falls back to the single name for a row served before repIds existed", async () => {

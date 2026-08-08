@@ -81,6 +81,7 @@ export const DOOR_STAGES: readonly DoorStage[] = [
 //   m20 Magic Words and the Sound of the Close close — verbatim lines, tonality
 //   m21 The Team Lead's Operating System  mindset   — huddles, scorecards
 //   m22 Compliance Is the Pitch           compliance— cooling-off, territory law
+//   m23 How to Think About Doors          mindset   — streaks, cancels, shutdown
 export const MODULE_STAGE_TABLE: Readonly<Record<string, DoorStage>> = {
   m1: "mindset",
   m2: "opener",
@@ -104,6 +105,7 @@ export const MODULE_STAGE_TABLE: Readonly<Record<string, DoorStage>> = {
   m20: "close",
   m21: "mindset",
   m22: "compliance",
+  m23: "mindset",
 };
 
 /** Per-lesson overrides where a lesson's job differs from its module default. */

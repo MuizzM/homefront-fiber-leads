@@ -231,7 +231,7 @@ import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { getFiberChanges, getCopperPool } from "./fiberTransitions";
-import { authorizedScanAdmission, onboardingLimiter, geocodeLimiter, rescanPoolLimiter, chatPostLimiter } from "./limiters";
+import { authorizedScanAdmission, onboardingLimiter, geocodeLimiter, rescanPoolLimiter, chatPostLimiter, ipBucketKey } from "./limiters";
 import { scanSseCaps } from "./scanSseCaps";
 import { otpRateBuckets } from "./otpRateBuckets";
 import { validateLeadPatch, rescanPoolPlan, clampActivityLogLimit, validateTerritoryRequestMessage, filterInChunks, RESCAN_POOL_MAX_TARGETS, RESCAN_POOL_CHUNK_SIZE as RESCAN_POOL_CHUNK } from "./routeInputPolicy";
@@ -7188,7 +7188,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const cleanEmail = email.trim().toLowerCase();
     // IP + email rate limiting
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit("request", `ip:${ip}`, OTP_REQUEST_IP_MAX);
+    const ipCheck = checkRateLimit("request", ipBucketKey(ip), OTP_REQUEST_IP_MAX);
     const emailCheck = checkRateLimit("request", `email:${cleanEmail}`, OTP_REQUEST_EMAIL_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
@@ -7275,7 +7275,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const cleanEmail = email.trim().toLowerCase();
     // Rate limit verify attempts per email
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit("verify", `ip:${ip}`, OTP_VERIFY_IP_MAX);
+    const ipCheck = checkRateLimit("verify", ipBucketKey(ip), OTP_VERIFY_IP_MAX);
     const emailCheck = checkRateLimit("verify", `email:${cleanEmail}`, OTP_VERIFY_EMAIL_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
@@ -7312,7 +7312,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
     // Reset verify limiter on success
     otpRateBuckets.reset("verify", `email:${cleanEmail}`);
-    otpRateBuckets.reset("verify", `ip:${ip}`);
+    otpRateBuckets.reset("verify", ipBucketKey(ip));
     otpRateBuckets.reset("request", `email:${cleanEmail}`);
     const session = storage.createSession(user.id);
     res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId } });

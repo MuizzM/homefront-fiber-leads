@@ -5,6 +5,7 @@ import { pointInPolygon } from "@shared/geo";
 import { meterQualifiedLead } from "./billingStore";
 import { normalizeKineticAddressKey, kineticLeadKeyOrNull } from "./scanner";
 import { addressIdentityIssues } from "@shared/addressKey";
+import { syncFreshFiberQueue } from "./calling/store";
 
 interface ProjectionCandidate {
   id: number;
@@ -458,9 +459,8 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     // publishes. force=true: this is THE event-driven sync the read-side
     // debounce leans on — it must never itself be debounced away.
     try {
-      const { syncFreshFiberQueue } = require("./calling/store") as typeof import("./calling/store");
       syncFreshFiberQueue(tenantId, true);
-    } catch { /* calling module optional — never block lead publication */ }
+    } catch { /* never block lead publication on a queue-sync failure */ }
     structuredLog("fresh_fiber.projected", {
       tenantId, confirmed: result.confirmed, created: result.created, linkedExisting: result.linkedExisting, published: result.published,
       targets: result.leadIds.length,

@@ -28,7 +28,7 @@ describe("drill-card deck", () => {
     expect(new Set(first).size).toBe(first.length);
     // Spot-pin the id format at both ends of the deck.
     expect(first[0]).toBe("card:m1-rejection-math:say-this:0");
-    expect(first[first.length - 1]).toMatch(/^card:m22-[a-z-]+:drill:0$/);
+    expect(first[first.length - 1]).toMatch(/^card:m23-[a-z-]+:drill:0$/);
   });
 
   it("validates every minted id via isDrillCardId, and round-trips through getDrillCard", () => {

@@ -332,7 +332,11 @@ export default function AreaDetail() {
           <button
             type="button"
             data-testid="area-action-reassign"
-            onClick={() => { setPickedRepId(area.repId); setAssignOpen(true); }}
+            // No preselect. area.repId still names the LAST holder after a
+            // reclaim, so preselecting it armed a one-tap hand-back to exactly
+            // the person the area was taken from. An empty picker makes the
+            // choice deliberate; confirm stays disabled until one is made.
+            onClick={() => { setPickedRepId(null); setAssignOpen(true); }}
             className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70", FOCUS)}
           >
             <UserCog className="h-4 w-4" aria-hidden="true" />
@@ -616,18 +620,20 @@ export default function AreaDetail() {
             )}
           </div>
 
-          {/* The four numbers. Rates are printed as sent — see the file header. */}
+          {/* The four numbers. Denominators are never recomputed here (file
+              header) — but display clamps to 0–100 like AreaStatsCard, since a
+              repeat pass can push the raw rate past 100. */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="area-stat-grid">
             <HeadlineStat
               label="Doors in area" value={area.total} sub="Matches current filter set"
               icon={DoorOpen} chip="bg-primary/15" tone="text-primary" testId="area-stat-total"
             />
             <HeadlineStat
-              label="Knocked" value={area.knocked} sub={`${area.knockCompletionRate}% of the area covered`}
+              label="Knocked" value={area.knocked} sub={`${pct(area.knockCompletionRate)}% of the area covered`}
               icon={Hand} chip="bg-sky-500/15" tone="text-sky-600 dark:text-sky-400" testId="area-stat-knocked"
             />
             <HeadlineStat
-              label="Sold" value={area.sold} sub={`${area.penetrationRate}% penetration`}
+              label="Sold" value={area.sold} sub={`${pct(area.penetrationRate)}% penetration`}
               icon={BadgeDollarSign} chip="bg-emerald-500/15" tone="text-emerald-600 dark:text-emerald-400" testId="area-stat-sold"
             />
             <HeadlineStat
@@ -739,17 +745,20 @@ export default function AreaDetail() {
           <div>
             <SectionLabel className="mb-2">Door breakdown</SectionLabel>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3" data-testid="area-breakdown">
-              <MiniStat label="Contacted" value={area.contacted} hint={`${area.contactRate}% of doors knocked answered`} testId="area-stat-contacted" />
+              <MiniStat label="Contacted" value={area.contacted} hint={`${pct(area.contactRate)}% of doors knocked answered`} testId="area-stat-contacted" />
               <MiniStat label="Nobody home" value={area.notHome} hint="Knocked, no answer yet" testId="area-stat-nothome" />
               <MiniStat label="Untouched" value={area.untouched} hint="Available doors never knocked" testId="area-stat-untouched" />
               <MiniStat label="Disqualified" value={area.disqualified} hint="Terminal no — out of the base" testId="area-stat-disqualified" />
               <MiniStat label="Unavailable" value={area.unavailable} hint="Do not knock — out of the base" testId="area-stat-unavailable" />
               <MiniStat label="Knock attempts" value={area.attempts} hint="Every knock, including repeat visits" testId="area-stat-attempts" />
             </div>
+            {/* "Every rate" was false: contact rate divides by doors KNOCKED,
+                not by the available base. Scope the claim to the rates it
+                actually covers, or the note teaches managers the wrong math. */}
             <p className="mt-2 text-xs text-muted-foreground" data-testid="area-base-note">
-              Every rate divides by the <span className="tabular-nums">{area.availableBase.toLocaleString()}</span> available
+              Coverage and penetration divide by the <span className="tabular-nums">{area.availableBase.toLocaleString()}</span> available
               doors ({area.total.toLocaleString()} total minus {area.unavailable} unavailable and {area.disqualified} disqualified),
-              never by the raw total.
+              never by the raw total. Contact rate divides by doors knocked.
             </p>
           </div>
 
@@ -923,6 +932,15 @@ export default function AreaDetail() {
       )}
     </div>
   );
+}
+
+/** Display clamp for server-computed rates. Repeat passes can push raw rates
+ *  past 100 ("109.24% covered" reads as a bug), so cap at 100 — but keep one
+ *  decimal: a 7.5% penetration rounded to 8% erases real resolution at the low
+ *  end where managers actually compare areas. Denominators stay server-owned
+ *  (file header); this only formats. */
+function pct(rate: unknown): number {
+  return Math.round(Math.max(0, Math.min(100, Number(rate) || 0)) * 10) / 10;
 }
 
 function BackLink() {

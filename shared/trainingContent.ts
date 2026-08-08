@@ -10,7 +10,7 @@ export type TrainingQuizQuestion = {
   options: string[];
   /** Index into options — pinned valid by tests/unit/training-content.test.ts. */
   answerIndex: number;
-  /** Shown after the rep answers, right or wrong — the teach-back moment. */
+  /** Shown after the rep answers, right or wrong. The teach-back moment. */
   explanation: string;
 };
 
@@ -42,7 +42,7 @@ export type TrainingLesson = {
   /** "Try this on your next 10 doors" card. */
   drillPrompt: string;
   quiz: TrainingQuizQuestion[];
-  /** Spoken-pitch rehearsal script for the Pitch Recorder — present only on
+  /** Spoken-pitch rehearsal script for the Pitch Recorder, present only on
    *  lessons where a rep practices a pitch out loud (openers, the skeleton,
    *  closes, situational pitches). Additive, optional, back-compatible. */
   pitchDrill?: string;
@@ -64,7 +64,7 @@ export type TrainingModule = {
 };
 
 /** One step of the "Get ready for doors in 15 minutes" fast-start track. It
- *  references an existing lesson by id — no content is duplicated here. */
+ *  references an existing lesson by id. No content is duplicated here. */
 export type FastStartStep = {
   /** Must be a real id in TRAINING_LESSONS (pinned by tests). */
   lessonId: string;
@@ -81,7 +81,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "Rejection math, identity, and the habits that keep you knocking.",
     hook: "Every no is already paid for. Learn to hear it that way.",
     fieldStory:
-      "Two reps knock the same street. One gets a slammed door at house six and knocks the next four like a whipped dog — no sales. The other logs the no, exhales on the walk, and knocks house seven exactly like house one. Same doors, same weather, same script. One of them just does the math, and the math does not flinch.",
+      "Two reps knock the same street. One gets a slammed door at house six and knocks the next four like a whipped dog. No sales. The other logs the no, exhales on the walk, and knocks house seven exactly like house one. Same doors, same weather, same script. One of them just does the math, and the math does not flinch.",
     sayThisNotThat: {
       instead: "Sorry to bother you, do you have a quick second?",
       say: "I handle the fiber build on this street — thirty seconds and I'm gone either way.",
@@ -182,7 +182,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         keyTakeaways: [
           "Homeowners mirror your frame: arrive as the street's fiber consultant, not an interrupter.",
-          "Anchor identity on conversations held, not sales closed — that identity survives rejection.",
+          "Anchor identity on conversations held, not sales closed. That identity survives rejection.",
           "Helpers outperform hunters over a season because they earn callbacks and referrals.",
           "Speak with the authority of the operation you represent.",
         ],
@@ -246,7 +246,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Streaks and minimums",
             body: [
-              "Set a floor, not just a target: no shift ends before 50 doors, no exceptions for weather or mood. Floors protect you from the compounding cost of quitting early, because skipped doors do not just cost today's expected value — they erode the habit that produces every future paycheck. Keep the streak alive and the streak keeps you alive.",
+              "Set a floor, not just a target: no shift ends before 50 doors, no exceptions for weather or mood. Floors protect you from the compounding cost of quitting early, because skipped doors do not just cost today's expected value. They erode the habit that produces every future paycheck. Keep the streak alive and the streak keeps you alive.",
             ],
           },
         ],
@@ -273,7 +273,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "It is 6 p.m., you have zero sales, and you feel yourself starting to push harder at each door. What does this lesson prescribe?",
             options: [
-              "Push harder — urgency closes deals",
+              "Push harder: urgency closes deals",
               "Return to the activity goal and run the same calm process on the remaining doors",
               "Stop for the day to avoid burning doors",
               "Offer discounts to force a close",
@@ -303,14 +303,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Emotional residue is the silent killer",
             body: [
-              "The most expensive door of your day is the one after a bad one. Carry frustration from a rude no onto the next porch and the next homeowner meets a tense, flat version of you — and passes. One bad interaction quietly converts into three or four weak ones unless you cut the chain. That is what a reset ritual is for.",
+              "The most expensive door of your day is the one after a bad one. Carry frustration from a rude no onto the next porch and the next homeowner meets a tense, flat version of you. And passes. One bad interaction quietly converts into three or four weak ones unless you cut the chain. That is what a reset ritual is for.",
             ],
           },
           {
             heading: "Build a physical reset",
             body: [
               "The reset must be physical, not just mental, because your body carries the tension. A proven sequence for the walk between doors: exhale hard and drop your shoulders, say a closing phrase that files the last door (that one's done), state the next micro-intention (next door: smile, slow opener), and square your posture on the last three steps of the driveway. Twenty seconds, every door, good or bad.",
-              "Run it after wins too. Excitement distorts the next door just like anger does — a rep riding a sale tends to rush the next opener and skip qualifying. The ritual returns you to neutral, and neutral is where your trained skills live.",
+              "Run it after wins too. Excitement distorts the next door just like anger does. A rep riding a sale tends to rush the next opener and skip qualifying. The ritual returns you to neutral, and neutral is where your trained skills live.",
             ],
           },
           {
@@ -323,7 +323,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "A bad door taxes the next several doors unless you deliberately reset.",
           "Make the reset physical: exhale, shoulders down, closing phrase, next-door intention.",
-          "Reset after wins too — excitement distorts as much as anger.",
+          "Reset after wins too: excitement distorts as much as anger.",
           "Use a two-minute circuit breaker after any three-door rough patch.",
         ],
         drillPrompt:
@@ -335,7 +335,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Homeowners talk to their neighbors instantly",
               "You carry visible residue that flattens your opener and the homeowner mirrors it",
               "Rejections cluster geographically",
-              "It is not dangerous — doors are independent",
+              "It is not dangerous: doors are independent",
             ],
             answerIndex: 1,
             explanation: "Doors are independent, but you are not. Un-reset frustration changes your tone and posture, and the next homeowner responds to what shows up.",
@@ -344,7 +344,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why should the reset ritual run after a sale as well?",
             options: [
               "To avoid jinxing the sale",
-              "Excitement also distorts the next interaction — rushing, skipping qualification",
+              "Excitement also distorts the next interaction: rushing, skipping qualification",
               "Managers require it",
               "It should not run after sales",
             ],
@@ -389,7 +389,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The homeowner's first question is not about internet",
             body: [
-              "Before a homeowner processes a single word, their brain answers one question: is this person a threat? Everything about your approach should answer no. Until that question is settled, nothing you say lands, because they are not listening — they are assessing.",
+              "Before a homeowner processes a single word, their brain answers one question: is this person a threat? Everything about your approach should answer no. Until that question is settled, nothing you say lands, because they are not listening, they are assessing.",
             ],
           },
           {
@@ -402,16 +402,16 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Hands, badge, and props",
             body: [
-              "Keep both hands visible at all times — never in pockets, never behind your back. Hold your tablet or door literature low and in one hand, at your side or waist level, not clutched to your chest like a shield or raised like a clipboard ambush. Wear your badge where it can be read without you touching it.",
+              "Keep both hands visible at all times: never in pockets, never behind your back. Hold your tablet or door literature low and in one hand, at your side or waist level, not clutched to your chest like a shield or raised like a clipboard ambush. Wear your badge where it can be read without you touching it.",
               "Look at the door, not into windows, while you wait. Take one small step back as the door opens. That single step is the highest-value body-language move at the door: it visibly hands control of the space to the homeowner right at the moment they are deciding whether to engage.",
             ],
           },
         ],
         keyTakeaways: [
-          "The first evaluation is threat assessment — win that before persuading anyone.",
+          "The first evaluation is threat assessment: win that before persuading anyone.",
           "Stand two to three feet back, angled 45 degrees, never square to the door.",
           "Both hands visible, materials held low, badge readable.",
-          "Step back as the door opens — it hands the homeowner control of the space.",
+          "Step back as the door opens: it hands the homeowner control of the space.",
         ],
         drillPrompt:
           "On your next 10 doors, run a three-point check while you wait after knocking: feet angled, hands visible, one step back ready. Rate yourself out of three on each door and get to ten out of ten by the last three doors.",
@@ -504,7 +504,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Which opener best fits this lesson's guidance?",
             options: [
               "Hi! How are you today? I am with a company you are going to love",
-              "You have seen the orange flags along the road? I am with the fiber build — that is what those are",
+              "You have seen the orange flags along the road? I am with the fiber build. That is what those are",
               "I was just speaking with your neighbor and they said you would be interested",
               "This is not a sales call",
             ],
@@ -546,13 +546,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Match, then lead",
             body: [
-              "Open at roughly the homeowner's energy, then guide. If they answer the door quiet and wary, a booming greeting blows them backward; start softer, then warm up together. If they open big and friendly, flat calm reads as cold. Meet them where they are for the first two lines, then lead the exchange toward relaxed and unhurried — the state where decisions happen.",
+              "Open at roughly the homeowner's energy, then guide. If they answer the door quiet and wary, a booming greeting blows them backward; start softer, then warm up together. If they open big and friendly, flat calm reads as cold. Meet them where they are for the first two lines, then lead the exchange toward relaxed and unhurried. The state where decisions happen.",
             ],
           },
         ],
         keyTakeaways: [
           "Delivery decides the first seconds; vocabulary barely registers.",
-          "End statements with falling pitch — the upswing sound invites refusal.",
+          "End statements with falling pitch: the upswing sound invites refusal.",
           "Speak about 20 percent slower than your nervous instinct.",
           "Match the homeowner's energy first, then lead it toward calm.",
         ],
@@ -611,13 +611,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "The name exchange",
             body: [
               "Give your first name early and unprompted — I'm Marcus, by the way — because named people are harder to dismiss than roles. Then ask theirs, and use it once soon after, naturally. Once is warm; three times in a minute is a technique they can smell.",
-              "If they do not offer a name, do not push. The offer itself did its work: you presented as a person. When they do give it, that is a small yes — the first deposit in a chain of small agreements that ends at the close.",
+              "If they do not offer a name, do not push. The offer itself did its work: you presented as a person. When they do give it, that is a small yes. The first deposit in a chain of small agreements that ends at the close.",
             ],
           },
         ],
         keyTakeaways: [
           "Genuine low-grade warmth beats a performed grin every time.",
-          "Set your energy slightly above the homeowner's — never double it.",
+          "Set your energy slightly above the homeowner's, never double it.",
           "Offer your first name early; a named person is harder to brush off than a role.",
           "Use their name once, naturally. Repetition reads as a technique.",
         ],
@@ -641,7 +641,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It is required by solicitation permits",
               "It converts you from a dismissible role into a person, and people get more courtesy",
               "It makes them remember the brand",
-              "It does not — names are small talk",
+              "It does not: names are small talk",
             ],
             answerIndex: 1,
             explanation: "Brush-offs are aimed at the salesperson category. A name pulls you out of the category, and the reciprocated name is the door's first small yes.",
@@ -651,7 +651,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Every sentence, to build rapport fast",
               "Once, soon after, naturally",
-              "Never — using names is manipulative",
+              "Never: using names is manipulative",
               "Only at the close",
             ],
             answerIndex: 1,
@@ -697,18 +697,18 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Map the pain to the fix",
             body: [
-              "Bill pain maps to flat, promotional-game-free pricing. Speed pain maps to fiber's symmetrical bandwidth and evening stability — no shared neighborhood bottleneck at 7 p.m. Match the fix to the pain they voiced, and only that pain. A rep who answers bill pain with a speed monologue has stopped listening, and the homeowner notices immediately.",
+              "Bill pain maps to flat, promotional-game-free pricing. Speed pain maps to fiber's symmetrical bandwidth and evening stability. No shared neighborhood bottleneck at 7 p.m. Match the fix to the pain they voiced, and only that pain. A rep who answers bill pain with a speed monologue has stopped listening, and the homeowner notices immediately.",
             ],
           },
         ],
         keyTakeaways: [
-          "Switching is firing the current provider — the pitch starts at their pain, not your product.",
+          "Switching is firing the current provider: the pitch starts at their pain, not your product.",
           "Ask questions that let them name the pain; a self-named pain outweighs any claim.",
           "Hold one beat of agreement before pivoting to the fix.",
           "Answer the pain they actually voiced: bill pain gets pricing, speed pain gets stability.",
         ],
         drillPrompt:
-          "On your next 10 doors, do not mention fiber until the homeowner has answered one pain question about their bill or their evening speeds. Count how many doors reach a named pain — that number is your real pitch count.",
+          "On your next 10 doors, do not mention fiber until the homeowner has answered one pain question about their bill or their evening speeds. Count how many doors reach a named pain. That number is your real pitch count.",
         pitchDrill:
           "Record your two pain-finding questions back to back, the way you'd actually ask them on a porch: \"Out of curiosity, what's the bill running these days — did yours do the thing where it jumps after the first year?\" and \"Evenings, when everyone's on it at once — does it hold up?\" Listen back for tone. Do they sound curious and easy, or like a form you're reading? Re-record until they sound like a neighbor wondering out loud.",
         quiz: [
@@ -732,7 +732,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Offer to review their bill line by line",
             ],
             answerIndex: 1,
-            explanation: "Agree first — it proves you listened. Then answer the exact pain they named: pricing. Pivoting to speed answers a question they did not ask.",
+            explanation: "Agree first: it proves you listened. Then answer the exact pain they named: pricing. Pivoting to speed answers a question they did not ask.",
           },
           {
             question: "What are the two pains that drive most fiber switches?",
@@ -750,32 +750,32 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m3-pitch-skeleton",
         title: "The 30-second fiber pitch skeleton",
-        summary: "Hook, credibility, value, micro-commitment — in that order, in half a minute.",
+        summary: "Hook, credibility, value, micro-commitment: in that order, in half a minute.",
         minutes: 6,
         sections: [
           {
             heading: "Why 30 seconds",
             body: [
-              "The homeowner granted you a short window, and honoring it is itself persuasive. The pitch skeleton has four beats: hook, credibility, value, micro-commitment. Learn the beats, not a word-for-word script — the beats survive interruptions, and doors are made of interruptions.",
+              "The homeowner granted you a short window, and honoring it is itself persuasive. The pitch skeleton has four beats: hook, credibility, value, micro-commitment. Learn the beats, not a word-for-word script. The beats survive interruptions, and doors are made of interruptions.",
             ],
           },
           {
             heading: "The four beats",
             body: [
-              "Hook (about 5 seconds): tie yourself to something real and local. They are running the fiber line down this street right now — that is the digging you have seen. Credibility (about 5 seconds): make it concrete and checkable. We connected six houses on Maple last week; your neighbor at the corner is already on it. Value (about 15 seconds): one pain, one fix, one number. Most folks here are cutting the bill by about 30 a month and getting speeds that do not sag at night. Micro-commitment (about 5 seconds): the smallest possible yes. Worth checking if your address qualifies? Takes about a minute.",
-              "The micro-commitment is the engine. You are not asking them to buy — you are asking permission for a one-minute address check. Small yeses compound: address check, then seeing the price, then picking an install window. Each step is easy because the previous one was.",
+              "Hook (about 5 seconds): tie yourself to something real and local. They are running the fiber line down this street right now. That is the digging you have seen. Credibility (about 5 seconds): make it concrete and checkable. We connected six houses on Maple last week; your neighbor at the corner is already on it. Value (about 15 seconds): one pain, one fix, one number. Most folks here are cutting the bill by about 30 a month and getting speeds that do not sag at night. Micro-commitment (about 5 seconds): the smallest possible yes. Worth checking if your address qualifies? Takes about a minute.",
+              "The micro-commitment is the engine. You are not asking them to buy. You are asking permission for a one-minute address check. Small yeses compound: address check, then seeing the price, then picking an install window. Each step is easy because the previous one was.",
             ],
           },
           {
             heading: "Keep it modular",
             body: [
-              "If they interrupt at the hook with a question, answer it and skip ahead — the beats are a checklist, not a monologue. If they show price interest at beat two, jump straight to value and the check. The worst version of this pitch is the rep who returns to the top of the script after every interruption. Track where you are, not what line you are on.",
+              "If they interrupt at the hook with a question, answer it and skip ahead. The beats are a checklist, not a monologue. If they show price interest at beat two, jump straight to value and the check. The worst version of this pitch is the rep who returns to the top of the script after every interruption. Track where you are, not what line you are on.",
             ],
           },
         ],
         keyTakeaways: [
           "Four beats: hook (local), credibility (checkable), value (one pain, one fix, one number), micro-commitment.",
-          "Ask for the smallest yes — a one-minute address check, never the sale itself.",
+          "Ask for the smallest yes: a one-minute address check, never the sale itself.",
           "Learn beats, not lines: the structure must survive interruptions.",
           "Jump beats forward when the homeowner shows interest; never restart the script.",
         ],
@@ -810,7 +810,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Which credibility line best fits the skeleton?",
             options: [
               "We are the fastest-growing provider in the country",
-              "We connected six houses on Maple last week — the corner house is already running on it",
+              "We connected six houses on Maple last week: the corner house is already running on it",
               "Our company has won multiple industry awards",
               "Everyone is switching to us",
             ],
@@ -828,7 +828,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Proof shrinks with distance",
             body: [
-              "A million customers nationwide moves nobody. Three houses on this street moves almost everybody. Humans weigh evidence by social distance: what people like me, near me, chose. Every install, every yard sign, every completed address check in the neighborhood is ammunition — if you track it and name it.",
+              "A million customers nationwide moves nobody. Three houses on this street moves almost everybody. Humans weigh evidence by social distance: what people like me, near me, chose. Every install, every yard sign, every completed address check in the neighborhood is ammunition. If you track it and name it.",
               "Be specific to the edge of what is true and appropriate: We did installs on Hawthorne and the two cul-de-sacs behind it this month. Name streets, counts, and timeframes. Never name a specific neighbor's decision without their permission — specificity about streets builds trust, specificity about people burns it.",
             ],
           },
@@ -841,7 +841,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Proof strength is inversely proportional to distance — this street beats this nation.",
+          "Proof strength is inversely proportional to distance. This street beats this nation.",
           "Name streets, counts, and timeframes; never name neighbors without permission.",
           "Ask each new customer for permission to reference the block coming online.",
           "Work blocks in passes: each sale on a street lowers the price of the next.",
@@ -863,7 +863,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the rule about naming neighbors?",
             options: [
-              "Name them freely — it is public knowledge",
+              "Name them freely: it is public knowledge",
               "Name streets and counts freely, but individual neighbors only with their permission",
               "Never mention the neighborhood at all",
               "Only name neighbors who complained",
@@ -893,7 +893,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The brain trusts specifics",
             body: [
-              "Save money is noise; save about 32 dollars a month is information. Specific numbers signal that a real calculation happened, and they survive in memory — the homeowner will repeat your number to their spouse at dinner, which means your number pitches the second decision-maker without you. Every claim in your pitch should carry exactly one number.",
+              "Save money is noise; save about 32 dollars a month is information. Specific numbers signal that a real calculation happened, and they survive in memory. The homeowner will repeat your number to their spouse at dinner, which means your number pitches the second decision-maker without you. Every claim in your pitch should carry exactly one number.",
               "Round-but-not-too-round lands best: about 30 a month reads honest, 32.47 reads like a trick, huge savings reads like nothing at all.",
             ],
           },
@@ -906,7 +906,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "One specific number per claim — specifics signal real calculation and stick in memory.",
+          "One specific number per claim: specifics signal real calculation and stick in memory.",
           "Your number gets repeated to the spouse; it pitches the absent decision-maker for you.",
           "Annualize savings to add weight: 30 a month is 360 a year.",
           "Only numbers you can defend, and never more than two per beat.",
@@ -930,7 +930,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "You will save money every month",
               "You will save 32.47 per month",
-              "About 30 a month — which is 360 a year",
+              "About 30 a month, which is 360 a year",
               "Savings vary by household",
             ],
             answerIndex: 2,
@@ -939,7 +939,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the risk of stacking five numbers into one pitch beat?",
             options: [
-              "No risk — more data builds more trust",
+              "No risk: more data builds more trust",
               "The pitch becomes a spreadsheet: cognitive load replaces persuasion and nothing sticks",
               "The homeowner may check your math",
               "It extends the pitch past 30 seconds",
@@ -959,7 +959,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "Archetypes, buying signals, and the discipline of disqualifying fast.",
     hook: "The pitch is for their brain, not yours. Read it, then flex.",
     fieldStory:
-      "An analytical rep buries a driver in fine print and loses a door a single sentence would have won. Two houses down, that same driver would have signed on the spot for bottom line: same speeds, thirty less, one-minute check. The facts never changed. The shape they came in did — and the rep who can't change shape leaves money on every third porch.",
+      "An analytical rep buries a driver in fine print and loses a door a single sentence would have won. Two houses down, that same driver would have signed on the spot for bottom line: same speeds, thirty less, one-minute check. The facts never changed. The shape they came in did. And the rep who can't change shape leaves money on every third porch.",
     sayThisNotThat: {
       instead: "Let me walk you through all our plans and features first.",
       say: "Bottom line: same speeds, about thirty less a month, one-minute check — want it?",
@@ -968,13 +968,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m4-archetypes",
         title: "The four quick-read archetypes",
-        summary: "Analytical, driver, amiable, expressive — and how each one buys at a door.",
+        summary: "Analytical, driver, amiable, expressive, and how each one buys at a door.",
         minutes: 6,
         sections: [
           {
             heading: "Read the style in the first exchange",
             body: [
-              "Within two sentences most homeowners show you one of four buying styles. Analyticals answer precisely and ask about numbers, terms, and fine print. Drivers are brisk, interrupt, and want the point. Amiables are warm, unhurried, agreeable — and slow to commit. Expressives are animated, personal, and story-driven. None is better; each one buys through a different door, and your pitch flexes or it fails.",
+              "Within two sentences most homeowners show you one of four buying styles. Analyticals answer precisely and ask about numbers, terms, and fine print. Drivers are brisk, interrupt, and want the point. Amiables are warm, unhurried, agreeable. And slow to commit. Expressives are animated, personal, and story-driven. None is better; each one buys through a different door, and your pitch flexes or it fails.",
             ],
           },
           {
@@ -987,14 +987,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Hold the read loosely",
             body: [
-              "The archetype is a starting stance, not a verdict. People blend styles and shift under stress. Read, flex, and keep watching — if the driver suddenly asks for the contract terms, the analytical part of them just showed up. Serve it.",
+              "The archetype is a starting stance, not a verdict. People blend styles and shift under stress. Read, flex, and keep watching. If the driver suddenly asks for the contract terms, the analytical part of them just showed up. Serve it.",
             ],
           },
         ],
         keyTakeaways: [
           "Four styles: analytical (numbers), driver (bottom line), amiable (safety), expressive (story).",
           "Flex the same facts into the shape each style buys through.",
-          "Your default pitch is your own style — the discipline is pitching theirs.",
+          "Your default pitch is your own style: the discipline is pitching theirs.",
           "Hold reads loosely; people blend and shift mid-conversation.",
         ],
         drillPrompt:
@@ -1005,7 +1005,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Warm rapport building to slow things down",
               "The full numbers walk-through with fine print",
-              "Bottom line in one sentence, then a choice: same speeds, 30 less, one-minute check — yes or no?",
+              "Bottom line in one sentence, then a choice: same speeds, 30 less, one-minute check, yes or no?",
               "A story about the neighbors' install",
             ],
             answerIndex: 2,
@@ -1026,7 +1026,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What should you do when a homeowner's style seems to shift mid-conversation?",
             options: [
               "Stick to your first read for consistency",
-              "Follow the shift — serve the style that just showed up",
+              "Follow the shift: serve the style that just showed up",
               "Restart the pitch",
               "Point out that they changed",
             ],
@@ -1056,7 +1056,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The overtalking failure",
             body: [
-              "The most common way reps lose a sold door is answering a buying signal with three more minutes of features. Every sentence after the customer is internally sold gives them new material to object to. When the signals fire: answer, ask, and go quiet. Silence after a closing question is the close working — the first one to speak fills the space, and it should not be you.",
+              "The most common way reps lose a sold door is answering a buying signal with three more minutes of features. Every sentence after the customer is internally sold gives them new material to object to. When the signals fire: answer, ask, and go quiet. Silence after a closing question is the close working. The first one to speak fills the space, and it should not be you.",
             ],
           },
         ],
@@ -1072,10 +1072,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "The homeowner asks how long installation takes. What is this, and what do you do?",
             options: [
-              "An objection — reassure them at length about the process",
-              "Small talk — redirect to the savings number",
-              "A buying signal — answer directly and offer a concrete install window",
-              "A stall — create urgency",
+              "An objection: reassure them at length about the process",
+              "Small talk: redirect to the savings number",
+              "A buying signal: answer directly and offer a concrete install window",
+              "A stall: create urgency",
             ],
             answerIndex: 2,
             explanation: "They are mentally scheduling it. Answer in one line and hand them a Thursday. More pitch here can only lose ground.",
@@ -1097,7 +1097,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It wastes shift time",
               "Every additional claim gives an internally-sold customer fresh material to object to",
               "It violates the 30-second rule",
-              "It does not hurt — reinforcement helps",
+              "It does not hurt: reinforcement helps",
             ],
             answerIndex: 1,
             explanation: "A sold customer needs a next step, not more reasons. New claims reopen evaluation mode and can talk them back out of the yes.",
@@ -1107,7 +1107,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m4-disqualify",
         title: "Disqualifying fast and politely",
-        summary: "Your scarcest asset is daylight — spend it on doors that can buy.",
+        summary: "Your scarcest asset is daylight: spend it on doors that can buy.",
         minutes: 4,
         sections: [
           {
@@ -1125,14 +1125,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Exit warm, always",
             body: [
-              "A polite exit from a dead door still pays. Renters know owners on the block; the contract-locked household unlocks in eight months; the non-buyer talks at barbecues. Leave every disqualified door with a genuine 'good talking to you' and a one-line seed: If you hear neighbors complaining about the cable bill, the fiber crew is around all month. Never let disappointment show — a door that cannot buy can still recommend, and next season it may be a door that can.",
+              "A polite exit from a dead door still pays. Renters know owners on the block; the contract-locked household unlocks in eight months; the non-buyer talks at barbecues. Leave every disqualified door with a genuine 'good talking to you' and a one-line seed: If you hear neighbors complaining about the cable bill, the fiber crew is around all month. Never let disappointment show. A door that cannot buy can still recommend, and next season it may be a door that can.",
             ],
           },
         ],
         keyTakeaways: [
           "Every minute at a can't-buy door is taken from a can-buy door.",
           "Fold owner/renter and decision-maker questions into the natural first-minute flow.",
-          "Never pitch the proxy — book a return when the decision-makers are home.",
+          "Never pitch the proxy: book a return when the decision-makers are home.",
           "Exit disqualified doors warm: they refer now and may qualify later.",
         ],
         drillPrompt:
@@ -1141,7 +1141,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "You learn the homeowner rents and the landlord pays utilities. What is the best move?",
             options: [
-              "Pitch anyway — enthusiasm might convert them",
+              "Pitch anyway: enthusiasm might convert them",
               "Ask if they can pass the landlord's contact along, exit warm, and move on",
               "Explain why renting is a bad deal",
               "Leave immediately without another word",
@@ -1163,7 +1163,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What does a warm exit from a disqualified door actually buy you?",
             options: [
-              "Nothing — the door was dead",
+              "Nothing: the door was dead",
               "Referrals, block reputation, and a future prospect when their situation changes",
               "A better mood only",
               "Protection from complaints",
@@ -1183,7 +1183,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "Reflexes, the agree-bridge-close pattern, and the big six answered.",
     hook: "The first no isn't a decision. It's a reflex. Don't argue with weather.",
     fieldStory:
-      "Not interested comes out three seconds in, before you've said what there is to not be interested in. Rookies hear a verdict and fold. Veterans hear a reflex, nod, and ask one real question — and watch the same door that just said no lean back in. Most doors that close, close on that second exchange. Fold at the first no and you're leaving your paycheck inside doors you already knocked.",
+      "Not interested comes out three seconds in, before you've said what there is to not be interested in. Rookies hear a verdict and fold. Veterans hear a reflex, nod, and ask one real question. And watch the same door that just said no lean back in. Most doors that close, close on that second exchange. Fold at the first no and you're leaving your paycheck inside doors you already knocked.",
     sayThisNotThat: {
       instead: "But wait — if you'd just let me explain why we're better...",
       say: "Totally fair — quick thing though: did the bill do the post-promo jump yet?",
@@ -1192,13 +1192,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m5-reflex",
         title: "Objections are reflexes, not decisions",
-        summary: "The first no is a defense mechanism firing — treat it like weather, not a verdict.",
+        summary: "The first no is a defense mechanism firing: treat it like weather, not a verdict.",
         minutes: 4,
         sections: [
           {
             heading: "The doorstep no is automatic",
             body: [
-              "'Not interested' spoken three seconds into your opener cannot be a considered judgment — the homeowner does not yet know what they are not interested in. It is a reflex: the same rehearsed shield they raise at every solicitor, deployed before thought. This distinction changes everything about how you respond. You do not argue with a reflex, because there is no position to argue against. You let it fire, stay relaxed, and give the person a reason to actually think.",
+              "'Not interested' spoken three seconds into your opener cannot be a considered judgment. The homeowner does not yet know what they are not interested in. It is a reflex: the same rehearsed shield they raise at every solicitor, deployed before thought. This distinction changes everything about how you respond. You do not argue with a reflex, because there is no position to argue against. You let it fire, stay relaxed, and give the person a reason to actually think.",
             ],
           },
           {
@@ -1217,7 +1217,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         keyTakeaways: [
           "A no in the first seconds is a reflex shield, not an evaluation of your offer.",
-          "Acknowledge the reflex calmly and ask one relevant question — the second response is the real one.",
+          "Acknowledge the reflex calmly and ask one relevant question. The second response is the real one.",
           "Reflex-no gets one graceful bounce; decision-no gets respect and a warm exit.",
           "Take nothing personally: tension at the first no is what actually closes the door.",
         ],
@@ -1228,9 +1228,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why can a no at second three of the conversation not be a real decision?",
             options: [
               "Homeowners are not allowed to decide that fast",
-              "No information has been exchanged yet — there is nothing to have decided about",
+              "No information has been exchanged yet: there is nothing to have decided about",
               "It is usually a joke",
-              "It can be — treat every no as final",
+              "It can be: treat every no as final",
             ],
             answerIndex: 1,
             explanation: "A decision requires something to evaluate. Three seconds in, the no is the standard solicitor shield firing on autopilot.",
@@ -1281,7 +1281,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Never attach 'but' to your agreement — it converts validation into argument.",
+          "Never attach 'but' to your agreement: it converts validation into argument.",
           "Agree with the true kernel: the feeling, the fact, or the skeptical instinct.",
           "Bridge with exactly one piece of reframing information, then close with a small ask.",
           "The pattern only works delivered with genuine ease, not technique-voice.",
@@ -1296,7 +1296,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Strengthens it with contrast",
               "Cancels the validation and reopens the argument the agreement had just defused",
-              "Nothing — it is a connector",
+              "Nothing: it is a connector",
               "Makes it sound more natural",
             ],
             answerIndex: 1,
@@ -1306,7 +1306,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A homeowner says switching is too much hassle. Which response follows the pattern?",
             options: [
               "It is actually very easy, you are wrong about that",
-              "Fair — switching used to be a project. The install now is one visit, about 90 minutes, and we handle the old provider. Worth seeing if your address qualifies?",
+              "Fair: switching used to be a project. The install now is one visit, about 90 minutes, and we handle the old provider. Worth seeing if your address qualifies?",
               "But think about the savings you are leaving behind",
               "Okay, have a good day",
             ],
@@ -1319,7 +1319,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It confuses the homeowner",
               "Neediness signals the deal serves you, not them; ease signals the information stands on its own",
               "It is reverse psychology that works on everyone",
-              "It does not — urgency always wins",
+              "It does not: urgency always wins",
             ],
             answerIndex: 1,
             explanation: "Pressure implies the offer cannot survive scrutiny. Relaxed delivery implies it can — which is exactly the frame a skeptical homeowner needs to lean in.",
@@ -1355,7 +1355,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Busy: compress to 20 honest seconds or trade for a specific-time return.",
           "Happy: never attack the provider — reframe to price or plant the post-promo seed.",
           "Spouse: validate, arm them with two numbers, and push for the joint return visit.",
-          "Ask what the spouse would want to know — it reveals whether the objection is real.",
+          "Ask what the spouse would want to know: it reveals whether the objection is real.",
         ],
         drillPrompt:
           "Before your shift, say each of the six responses in this lesson out loud twice. On your next 10 doors, use the matching response the moment one of these three objections appears, and log which objection and which response you used.",
@@ -1364,7 +1364,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "The homeowner says they are busy. You promised 20 seconds. What matters most about what happens next?",
             options: [
               "Fitting the full pitch into the 20 seconds by talking fast",
-              "Actually stopping at 20 seconds — keeping the promise is itself the trust pitch",
+              "Actually stopping at 20 seconds: keeping the promise is itself the trust pitch",
               "Extending to 60 seconds once they seem engaged",
               "Skipping the close to save time",
             ],
@@ -1375,7 +1375,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why must you never criticize the current provider to a homeowner who says they are happy?",
             options: [
               "The provider might hear about it",
-              "They chose that provider — attacking it attacks their judgment and triggers defense",
+              "They chose that provider: attacking it attacks their judgment and triggers defense",
               "It violates advertising rules",
               "Happy customers cannot be converted anyway",
             ],
@@ -1397,7 +1397,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       },
       {
         id: "m5-big-six-2",
-        title: "The big six, part two: price, bad experience, not interested — and when to walk",
+        title: "The big six, part two: price, bad experience, not interested. And when to walk",
         summary: "The heavier three objections, plus the discipline of the graceful exit.",
         minutes: 6,
         sections: [
@@ -1444,7 +1444,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What does a homeowner with a bad past switching experience need before any facts?",
             options: [
               "A discount",
-              "To be fully heard — the scar acknowledged without rebuttal",
+              "To be fully heard: the scar acknowledged without rebuttal",
               "A comparison chart",
               "To speak with a manager",
             ],
@@ -1454,7 +1454,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "Why is willingness to walk away a selling skill rather than giving up?",
             options: [
-              "It is not — top reps never walk",
+              "It is not: top reps never walk",
               "Time recovered from dead doors funds live ones, and non-neediness makes every remaining pitch more credible",
               "It reduces complaint risk only",
               "Walking triggers fear of missing out",
@@ -1494,7 +1494,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "A spoken objection becomes a defended position — resolve the top one before it is voiced.",
           "Attribute the objection to most folks so the homeowner never has to own or defend it.",
-          "One sentence, one fact, inside the value beat — the strike is an aside, not a segment.",
+          "One sentence, one fact, inside the value beat: the strike is an aside, not a segment.",
           "Pre-empt only your street's number-one objection; pre-answering three plants doubts that were never there.",
         ],
         drillPrompt:
@@ -1506,7 +1506,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Because you can talk faster than they can",
               "Once spoken, it becomes a stance they defend for consistency; unspoken, there is no position to walk back",
               "Because homeowners forget their objections quickly",
-              "It is not easier — objections should always be drawn out first",
+              "It is not easier: objections should always be drawn out first",
             ],
             answerIndex: 1,
             explanation: "People defend what they have said far harder than what they have felt. The pre-emptive strike resolves the doubt while it is still a doubt, not a declared position.",
@@ -1554,7 +1554,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m6-closes",
         title: "Assumptive and choice closes at the door",
-        summary: "Stop asking whether — start asking which.",
+        summary: "Stop asking whether: start asking which.",
         minutes: 5,
         sections: [
           {
@@ -1566,7 +1566,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Assumptive and choice forms",
             body: [
-              "The assumptive close proceeds as if the yes is settled and puts a logistics question on the table: Let me pull up the install calendar for your address. The choice close offers two yeses and no no: Mornings or afternoons better for the install crew? Both work for the same reason — they move the decision from whether to how, and how questions are easy. Use them only after genuine buying signals. An assumptive close against visible hesitation is pressure, and the homeowner feels the mismatch instantly.",
+              "The assumptive close proceeds as if the yes is settled and puts a logistics question on the table: Let me pull up the install calendar for your address. The choice close offers two yeses and no no: Mornings or afternoons better for the install crew? Both work for the same reason. They move the decision from whether to how, and how questions are easy. Use them only after genuine buying signals. An assumptive close against visible hesitation is pressure, and the homeowner feels the mismatch instantly.",
               "If they push back on an assumptive close — hold on, I have not said yes — do not apologize into a puddle. Calibrate honestly: You are right, I got ahead of us. What is the piece you are still weighing? The pushback just told you exactly where the real objection lives, which is more than most doors give you.",
             ],
           },
@@ -1586,13 +1586,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
         drillPrompt:
           "On your next 10 engaged doors, end every pitch with a choice close — mornings or afternoons — and then count silently to ten before saying another word. Log how many homeowners answer inside the silence.",
         pitchDrill:
-          "Record your choice close and the silence that follows it. Say it as the natural next step of a conversation that already went well: \"Mornings or afternoons better for the install crew?\" Then stop the recording after you've held a real five to ten seconds of silence. Play it back — the close should sound like scheduling, not asking permission, and the pause after it should be long enough to feel uncomfortable. That discomfort is the close working.",
+          "Record your choice close and the silence that follows it. Say it as the natural next step of a conversation that already went well: \"Mornings or afternoons better for the install crew?\" Then stop the recording after you've held a real five to ten seconds of silence. Play it back. The close should sound like scheduling, not asking permission, and the pause after it should be long enough to feel uncomfortable. That discomfort is the close working.",
         quiz: [
           {
             question: "What makes 'mornings or afternoons better for the install?' stronger than 'do you want to sign up?'",
             options: [
               "It is more polite",
-              "It moves the decision from whether to how — both answers advance, and how questions are easy",
+              "It moves the decision from whether to how: both answers advance, and how questions are easy",
               "It hides the commitment from the homeowner",
               "It is faster to say",
             ],
@@ -1603,7 +1603,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "The homeowner says 'hold on, I have not agreed yet' after your assumptive close. Best response?",
             options: [
               "Apologize repeatedly and restart the pitch",
-              "Push through — they are almost there",
+              "Push through: they are almost there",
               "Own it lightly and ask what they are still weighing",
               "Switch immediately to a discount offer",
             ],
@@ -1626,7 +1626,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m6-install-date",
         title: "The install-date close and honest urgency",
-        summary: "The calendar is your strongest close — and the urgency you use must be true.",
+        summary: "The calendar is your strongest close, and the urgency you use must be true.",
         minutes: 5,
         sections: [
           {
@@ -1650,7 +1650,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Close on an install date — dates are vivid, easy yeses that create mental ownership.",
+          "Close on an install date: dates are vivid, easy yeses that create mental ownership.",
           "Use every ounce of real urgency: crew presence, true rate windows, filling calendars.",
           "The manager test: if the homeowner repeated your urgency line to your manager, would it hold?",
           "Confirm the slot in-system on the porch and narrate exactly what happens next.",
@@ -1696,13 +1696,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m6-callback",
         title: "The callback that actually happens",
-        summary: "Most callbacks are polite fiction — here is how to book the real ones.",
+        summary: "Most callbacks are polite fiction: here is how to book the real ones.",
         minutes: 4,
         sections: [
           {
             heading: "Vague callbacks are soft nos",
             body: [
-              "Come back sometime and I will think about it are exits, not appointments. A callback is only real when it has three properties: a specific time, a stated reason, and a named participant. Thursday at six, so I can show you both the address pricing, when your wife is home — that can actually happen. Anything less converts at roughly zero and pollutes your follow-up list with ghosts.",
+              "Come back sometime and I will think about it are exits, not appointments. A callback is only real when it has three properties: a specific time, a stated reason, and a named participant. Thursday at six, so I can show you both the address pricing, when your wife is home. That can actually happen. Anything less converts at roughly zero and pollutes your follow-up list with ghosts.",
             ],
           },
           {
@@ -1721,7 +1721,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "A real callback has a specific time, a stated reason, and a named participant.",
           "Offer two windows, attach the reason, and log it visibly on the porch.",
-          "No committed window means soft no — seed and move on.",
+          "No committed window means soft no: seed and move on.",
           "Arriving exactly on time converts expected flakiness into startling credibility.",
         ],
         drillPrompt:
@@ -1747,13 +1747,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "To time-stamp for the manager",
             ],
             answerIndex: 1,
-            explanation: "The visible act tells the homeowner this is an appointment, not a pleasantry — and it makes your own follow-through automatic.",
+            explanation: "The visible act tells the homeowner this is an appointment, not a pleasantry. And it makes your own follow-through automatic.",
           },
           {
             question: "The homeowner will not commit to either proposed window. What does this mean?",
             options: [
               "Offer five more windows",
-              "It is a soft no — leave the seed line warmly and invest the time in committed doors",
+              "It is a soft no: leave the seed line warmly and invest the time in committed doors",
               "Show up unannounced Thursday anyway",
               "Escalate to a manager visit",
             ],
@@ -1823,7 +1823,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why run the reset ritual before the debrief rather than after?",
             options: [
               "Order does not matter",
-              "The debrief needs a clear head — emotion distorts the facts you are trying to harvest",
+              "The debrief needs a clear head: emotion distorts the facts you are trying to harvest",
               "The debrief is emotional and the reset is factual",
               "To save time between doors",
             ],
@@ -1842,7 +1842,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "Six closing styles, when each one is earned, and the failure mode of each.",
     hook: "Six ways to close. The skill is knowing which one the door just earned.",
     fieldStory:
-      "A rep hits an assumptive close against a homeowner who's still visibly weighing it — and manufactures the exact objection the close was supposed to skip. The homeowner feels the mismatch instantly. Closes aren't lines you fire on cue; they're reads. Count the buying signals first, pick the close the conversation earned, then hold four seconds of silence and let them finish the math.",
+      "A rep hits an assumptive close against a homeowner who's still visibly weighing it. And manufactures the exact objection the close was supposed to skip. The homeowner feels the mismatch instantly. Closes aren't lines you fire on cue; they're reads. Count the buying signals first, pick the close the conversation earned, then hold four seconds of silence and let them finish the math.",
     sayThisNotThat: {
       instead: "Do you want to save money, or keep overpaying every month?",
       say: "I've got Thursday at 10 or Saturday at 9 — which fits your week better?",
@@ -1858,7 +1858,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "When the assumptive close is earned",
             body: [
               "Module 6 introduced the assumptive close; this is the full treatment. The assumptive close is not a trick — it is a reading. When the conversation has already gone yes-shaped, re-asking whether insults the progress. The move is to proceed to logistics as if the decision is settled: Let me pull up the install calendar for your address — looks like the crew has Thursday morning open. No permission requested, no drama, just the natural next step of a conversation that earned it.",
-              "Earned is the operative word. The gate is two or more genuine buying signals: a logistics question, the spouse summoned, the door opened wide, the homeowner stepping out onto the porch. Fired against visible hesitation, the same sentence becomes pressure, and the homeowner feels the mismatch instantly — you just manufactured the objection your close was supposed to skip. Count signals before you assume. Zero or one signal means keep discovering; two or more means stop pitching and proceed.",
+              "Earned is the operative word. The gate is two or more genuine buying signals: a logistics question, the spouse summoned, the door opened wide, the homeowner stepping out onto the porch. Fired against visible hesitation, the same sentence becomes pressure, and the homeowner feels the mismatch instantly. You just manufactured the objection your close was supposed to skip. Count signals before you assume. Zero or one signal means keep discovering; two or more means stop pitching and proceed.",
             ],
           },
           {
@@ -1872,12 +1872,12 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Silence as a close: the 4-second rule",
             body: [
               "Every closing ask in this module ends the same way: with your mouth closed. After the ask, hold silence for four full seconds minimum — count them in your head if you have to. The homeowner is running the final math, and the silence is not dead air; it is the close operating. Untrained reps panic at second two and re-pitch, which hands the homeowner new inputs and restarts the decision they were about to finish.",
-              "Four seconds feels like an hour on a porch. Practice it until it feels like what it is: the most productive four seconds of the conversation. When they speak, respond to what they said — not to your nerves.",
+              "Four seconds feels like an hour on a porch. Practice it until it feels like what it is: the most productive four seconds of the conversation. When they speak, respond to what they said. Not to your nerves.",
             ],
           },
         ],
         keyTakeaways: [
-          "The assumptive close is a reading, not a trick — it requires two or more genuine buying signals first.",
+          "The assumptive close is a reading, not a trick. It requires two or more genuine buying signals first.",
           "Proceed to logistics as the natural next step: pull up the calendar, name a real slot.",
           "If they push back, own it in one sentence and ask what they are still weighing — never collapse into apology.",
           "After any closing ask, hold four full seconds of silence. Re-pitching into the silence reopens the decision.",
@@ -1902,8 +1902,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "The homeowner says 'hold on, I have not agreed to anything.' What is the playbook response?",
             options: [
               "Apologize several times and restart the pitch from the top",
-              "Push forward — they are close and momentum matters",
-              "You are right, I got ahead of us — what is the piece you are still weighing?",
+              "Push forward: they are close and momentum matters",
+              "You are right, I got ahead of us: what is the piece you are still weighing?",
               "Offer a discount to smooth it over",
             ],
             answerIndex: 2,
@@ -1938,7 +1938,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Building the choices right",
             body: [
               "Offer exactly two options. One option is a yes/no question in disguise; three or more turns the close into analysis and stalls it. Both options must be real — actual slots on the actual calendar — and both must be acceptable to you. Make them concrete and near-term: named days, named times. Thursday at 10 or Saturday at 9 closes; sometime this week or maybe next does not.",
-              "And the choice must always be between two versions of how, never a manufactured choice about whether. Do you want to save money, or keep overpaying? is not an alternative-choice close — it is a manipulative false choice, the homeowner recognizes it as one, and it costs you the trust the real technique depends on.",
+              "And the choice must always be between two versions of how, never a manufactured choice about whether. Do you want to save money, or keep overpaying? is not an alternative-choice close. It is a manipulative false choice, the homeowner recognizes it as one, and it costs you the trust the real technique depends on.",
             ],
           },
           {
@@ -1950,7 +1950,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         keyTakeaways: [
           "Move the close from whether to which: two real install slots, both of which advance the sale.",
-          "Exactly two options, concrete and near-term — one is a yes/no in disguise, three is analysis.",
+          "Exactly two options, concrete and near-term: one is a yes/no in disguise, three is analysis.",
           "Never manufacture a false choice about whether; the choice is always between two versions of how.",
           "A flat 'neither works' with no counter-offer is a soft no — return to discovery, do not offer slot three.",
         ],
@@ -1971,7 +1971,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is wrong with 'do you want to save money, or keep overpaying?'",
             options: [
-              "Nothing — it is a strong alternative-choice close",
+              "Nothing: it is a strong alternative-choice close",
               "It offers too many options",
               "It is a manufactured false choice about whether, which homeowners recognize as manipulation",
               "It mentions money too early",
@@ -1983,7 +1983,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "The homeowner says 'neither works' flatly, offering no alternative. What does the playbook say?",
             options: [
               "Offer a third and fourth slot until one lands",
-              "Read it as a soft no and return to discovery — ask what is still open for them",
+              "Read it as a soft no and return to discovery: ask what is still open for them",
               "Book Thursday anyway and confirm by text",
               "Leave immediately without another word",
             ],
@@ -2001,7 +2001,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Their words, played back",
             body: [
-              "Through a good door conversation, the homeowner hands you pains in their own words: the bill jumped to 105, the upstairs stream drops every evening, they pay 15 a month to rent a modem. The summary close collects those and plays them back in one stack: So — the bill is at 105 and climbing, the 8 p.m. stream keeps dropping, and 15 of that bill is renting their modem. Fiber puts you at 65 flat on a dedicated line with your own equipment. Want me to grab Thursday? Three items, their words, then the fix, then one ask.",
+              "Through a good door conversation, the homeowner hands you pains in their own words: the bill jumped to 105, the upstairs stream drops every evening, they pay 15 a month to rent a modem. The summary close collects those and plays them back in one stack: So. The bill is at 105 and climbing, the 8 p.m. stream keeps dropping, and 15 of that bill is renting their modem. Fiber puts you at 65 flat on a dedicated line with your own equipment. Want me to grab Thursday? Three items, their words, then the fix, then one ask.",
             ],
           },
           {
@@ -2031,7 +2031,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "It is technically accurate",
               "Homeowners forget what they said",
-              "It is agreement replay — rebutting it would mean rebutting themselves",
+              "It is agreement replay: rebutting it would mean rebutting themselves",
               "Long sentences discourage interruption",
             ],
             answerIndex: 2,
@@ -2040,9 +2040,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the maximum stack size, and why?",
             options: [
-              "Five — more evidence is more persuasive",
-              "Three — beyond that the summary reads as a prosecution instead of a read-back",
-              "One — simplicity always wins",
+              "Five: more evidence is more persuasive",
+              "Three: beyond that the summary reads as a prosecution instead of a read-back",
+              "One: simplicity always wins",
               "There is no limit if the pains are real",
             ],
             answerIndex: 1,
@@ -2051,10 +2051,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "You are mid-summary and realize one of your three items was never actually said by the homeowner. What happened?",
             options: [
-              "Nothing — it was probably true anyway",
+              "Nothing: it was probably true anyway",
               "You strengthened the close with an extra pain",
               "A minor slip that homeowners rarely catch",
-              "You broke the technique — an invented pain collapses the stack and reveals case-building instead of listening",
+              "You broke the technique: an invented pain collapses the stack and reveals case-building instead of listening",
             ],
             answerIndex: 3,
             explanation: "The summary close's entire power is that every item is theirs. One planted item converts agreement replay back into arguable claims and costs the trust behind all three.",
@@ -2091,7 +2091,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "The takeaway removes the force resistance pushes against — stop pulling and they start selling themselves.",
           "It might not be worth it for you is qualification wearing a close's clothes: it either closes or correctly disqualifies.",
           "Real scarcity only: crew rotations and calendar limits that pass the manager test word for word.",
-          "The walk-back must be genuine — if they do not call you back, keep walking, warmly.",
+          "The walk-back must be genuine: if they do not call you back, keep walking, warmly.",
         ],
         drillPrompt:
           "On your next 10 doors, deploy one honest takeaway at any stalled-but-qualified door: name the real limit or concede they might be fine as-is, then start a genuine warm exit. Count how many doors re-open behind you, and confirm every scarcity line you used would survive the manager test.",
@@ -2112,7 +2112,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "This price expires when I leave the porch",
               "I can only do this for one more house tonight",
-              "The crew wraps this street Friday — after that, the install waits for the next rotation",
+              "The crew wraps this street Friday: after that, the install waits for the next rotation",
               "You probably will not qualify, so decide fast",
             ],
             answerIndex: 2,
@@ -2121,7 +2121,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "You start a genuine walk-back and the homeowner does not call you back. What now?",
             options: [
-              "Keep walking, warmly — the walk was real and the door stays warm for the next pass",
+              "Keep walking, warmly: the walk was real and the door stays warm for the next pass",
               "Circle back at the end of the driveway with a better offer",
               "Knock again in ten minutes",
               "Log the door as hostile",
@@ -2140,7 +2140,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Temperature checks before the ask",
             body: [
-              "A trial close is a question that measures readiness without demanding a decision: How does that 65 compare to what you are paying now? or If the speeds hold the way they are holding next door, is there anything else that would give you pause? The answer tells you which move is next — a warm answer says stop pitching and close; a cool answer names the gap you still need to fill. Trial closes are how you avoid the two classic errors: closing too early against hesitation, and overtalking past a door that was already sold.",
+              "A trial close is a question that measures readiness without demanding a decision: How does that 65 compare to what you are paying now? or If the speeds hold the way they are holding next door, is there anything else that would give you pause? The answer tells you which move is next. A warm answer says stop pitching and close; a cool answer names the gap you still need to fill. Trial closes are how you avoid the two classic errors: closing too early against hesitation, and overtalking past a door that was already sold.",
               "You have been running one all along: the address-check micro-close — worth checking if your address qualifies? — is itself a trial close. The yes costs the homeowner nothing, and how they say it is a temperature reading on everything that follows.",
             ],
           },
@@ -2183,7 +2183,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Everyone loves dogs",
               "It hides the real price until after install",
-              "Ownership does the selling — two weeks of lived-in fiber speeds makes going back feel like a downgrade",
+              "Ownership does the selling: two weeks of lived-in fiber speeds makes going back feel like a downgrade",
               "It legally obligates the homeowner after 30 days",
             ],
             answerIndex: 2,
@@ -2193,12 +2193,12 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "When is the phrase no-risk allowed at the door?",
             options: [
               "Whenever it helps close a hesitant buyer",
-              "Only when the actual terms make it literally true — no fees, real cancellation window, no hidden hassle",
+              "Only when the actual terms make it literally true. No fees, real cancellation window, no hidden hassle",
               "Only in writing",
-              "Never — risk language is always banned",
+              "Never: risk language is always banned",
             ],
             answerIndex: 1,
-            explanation: "A no-risk claim the homeowner disproves in month two produces a cancellation, a complaint, and a block-wide story. The frame is powerful precisely because it is checkable — so it must check out.",
+            explanation: "A no-risk claim the homeowner disproves in month two produces a cancellation, a complaint, and a block-wide story. The frame is powerful precisely because it is checkable. So it must check out.",
           },
         ],
       },
@@ -2211,14 +2211,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The moment to ask",
             body: [
-              "The best time to open the next sale is the sixty seconds after closing this one. The new customer is at peak goodwill — they just made a decision they feel good about, and helping a neighbor get the same deal confirms it was smart. While you confirm the install: Who else on the street complains about the bill? Anyone you would want on the same install week so the crew does both in one pass? Ask for names, plural and specific. Anyone you know? produces a shrug; who complains about the bill? produces the Hendersons.",
+              "The best time to open the next sale is the sixty seconds after closing this one. The new customer is at peak goodwill. They just made a decision they feel good about, and helping a neighbor get the same deal confirms it was smart. While you confirm the install: Who else on the street complains about the bill? Anyone you would want on the same install week so the crew does both in one pass? Ask for names, plural and specific. Anyone you know? produces a shrug; who complains about the bill? produces the Hendersons.",
             ],
           },
           {
             heading: "Permissioned name-drops",
             body: [
-              "A name is only usable with permission, so get it on the spot: Mind if I mention you are getting connected Thursday when I knock the Hendersons? Most say yes, and that yes converts the next door's cold open into a warm one: Dana two doors down is getting installed Thursday — she figured you would want the same numbers. A permissioned name-drop carries the referrer's credibility to a porch you have never stood on.",
-              "The rule is absolute: never drop a name you did not clear. One unauthorized name-drop, discovered over a fence conversation, travels the block faster than ten good installs — and it takes your permissioned drops down with it, because now every name you use is suspect.",
+              "A name is only usable with permission, so get it on the spot: Mind if I mention you are getting connected Thursday when I knock the Hendersons? Most say yes, and that yes converts the next door's cold open into a warm one: Dana two doors down is getting installed Thursday. She figured you would want the same numbers. A permissioned name-drop carries the referrer's credibility to a porch you have never stood on.",
+              "The rule is absolute: never drop a name you did not clear. One unauthorized name-drop, discovered over a fence conversation, travels the block faster than ten good installs. And it takes your permissioned drops down with it, because now every name you use is suspect.",
             ],
           },
           {
@@ -2229,10 +2229,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Ask in the sixty seconds after the yes — helping a neighbor confirms their own decision was smart.",
+          "Ask in the sixty seconds after the yes: helping a neighbor confirms their own decision was smart.",
           "Ask specifically: who complains about the bill beats anyone you know, every time.",
           "Permission the name-drop on the spot, and never use a name you did not clear.",
-          "Text now or knock within 48 hours — referrals decay into cold doors.",
+          "Text now or knock within 48 hours: referrals decay into cold doors.",
         ],
         drillPrompt:
           "At every close and every genuinely warm exit on your next 10 doors, ask the two-part referral question: who complains about the bill, and may I mention your name? Log names, permission status, and knock or text every referral within 48 hours.",
@@ -2262,7 +2262,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the standing rule on name-drops?",
             options: [
-              "Any customer's name may be used — installs are visible anyway",
+              "Any customer's name may be used: installs are visible anyway",
               "Names may be used only with that person's explicit permission, obtained on the spot",
               "Names may be used after the install completes",
               "Only first names may be used freely",
@@ -2291,7 +2291,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m8-reciprocity",
         title: "Reciprocity at the door: give first",
-        summary: "Real value delivered before any ask — the speed check and the honest bill review.",
+        summary: "Real value delivered before any ask: the speed check and the honest bill review.",
         minutes: 5,
         sections: [
           {
@@ -2316,9 +2316,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         keyTakeaways: [
           "Give first, for real: the porch speed check and the honest bill review are worth money to them either way.",
-          "If their setup is genuinely good, say so — truth against your own interest builds a street-wide reference.",
+          "If their setup is genuinely good, say so: truth against your own interest builds a street-wide reference.",
           "Never voice the string: an invoked favor cancels the debt and creates resentment.",
-          "Reciprocity earns the fair hearing, not the sale — the product still has to win.",
+          "Reciprocity earns the fair hearing, not the sale. The product still has to win.",
         ],
         drillPrompt:
           "On your next 10 doors, lead every engaged conversation with one real give — a live speed test on their phone or one useful fact about local post-promo pricing — before any pitch beat. Track how many doors give you a full hearing compared to your normal rate.",
@@ -2329,7 +2329,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "The dollar value of the gift",
               "The give is genuinely useful to the homeowner whether or not they ever buy",
               "Professionals give at the end instead of the start",
-              "There is no difference — all giving obligates",
+              "There is no difference: all giving obligates",
             ],
             answerIndex: 1,
             explanation: "A speed check or honest bill review has standalone value, so it reads as help. A gift that only exists to obligate reads as the setup it is.",
@@ -2351,7 +2351,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It is grammatically weak",
               "Voicing the string converts a felt debt into an invoice, and resentment replaces the urge to reciprocate",
               "It takes too long to say",
-              "It does not — naming the favor strengthens it",
+              "It does not: naming the favor strengthens it",
             ],
             answerIndex: 1,
             explanation: "Reciprocity works precisely because it is unspoken. The moment the favor is invoked as leverage, the homeowner realizes it was a purchase, not a gift.",
@@ -2361,33 +2361,33 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m8-consistency",
         title: "Commitment and consistency: the micro-yes ladder",
-        summary: "Why small agreements compound toward the close — and why trick-yeses backfire.",
+        summary: "Why small agreements compound toward the close. And why trick-yeses backfire.",
         minutes: 5,
         sections: [
           {
             heading: "Small agreements compound",
             body: [
               "People act in line with what they have already said and done — contradicting your own recent steps feels wrong in a way psychologists have measured for decades. This is the engine under the micro-commitment ladder from Module 3: the one-minute address check leads to seeing the price, which leads to picking an install window. Each rung is small, and each makes the next one natural, because refusing rung four would quietly contradict rungs one through three. Nobody climbs a ladder and then argues the ladder should not exist.",
-              "Notice what the ladder is not: it is not a trap. Every rung is a real, informative step — the check produces a real answer, the price is a real number, the window is a real slot. The homeowner is not being walked into anything; they are walking through a decision at a comfortable step size.",
+              "Notice what the ladder is not: it is not a trap. Every rung is a real, informative step. The check produces a real answer, the price is a real number, the window is a real slot. The homeowner is not being walked into anything; they are walking through a decision at a comfortable step size.",
             ],
           },
           {
             heading: "Build the ladder from their statements",
             body: [
               "Words are commitments too. Every true thing the homeowner says about their situation — yeah, the bill did the jump, and evenings are honestly rough up here — is a rung. When the close arrives, consistency is on your side, because the close follows from what they said, not from what you claimed. This is exactly why the summary close from the Closing Playbook hits: it is a consistency engine, replaying their own commitments in order until the conclusion is standing in the room.",
-              "Practical habit: ask questions whose honest answers are rungs. What is the bill running now? Does it hold up at 8 p.m.? Who streams upstairs? You are not extracting yeses — you are letting them describe a situation that argues for the switch in their own voice.",
+              "Practical habit: ask questions whose honest answers are rungs. What is the bill running now? Does it hold up at 8 p.m.? Who streams upstairs? You are not extracting yeses. You are letting them describe a situation that argues for the switch in their own voice.",
             ],
           },
           {
             heading: "Never trick-yeses",
             body: [
-              "The manipulative cousin is the momentum chain: You like saving money, right? You care about your family, right? So you would want the best for them, right? Homeowners recognize the pattern by the second question, feel herded, and produce reactance — the strong urge to do the opposite of whatever the herder wants. Every trick-yes also poisons the real rungs that came before it. The rule: every micro-yes must be a step the homeowner would take knowingly, with full information. If a yes exists only to harvest compliance, cut it from the pitch.",
+              "The manipulative cousin is the momentum chain: You like saving money, right? You care about your family, right? So you would want the best for them, right? Homeowners recognize the pattern by the second question, feel herded, and produce reactance. The strong urge to do the opposite of whatever the herder wants. Every trick-yes also poisons the real rungs that came before it. The rule: every micro-yes must be a step the homeowner would take knowingly, with full information. If a yes exists only to harvest compliance, cut it from the pitch.",
             ],
           },
         ],
         keyTakeaways: [
           "Small real steps compound: refusing rung four would contradict rungs one through three.",
-          "Their true statements are rungs too — ask questions whose honest answers argue your case in their voice.",
+          "Their true statements are rungs too: ask questions whose honest answers argue your case in their voice.",
           "The summary close works because it is a consistency engine replaying their own commitments.",
           "Every micro-yes must be a step they would take knowingly — compliance-harvesting yeses trigger reactance and poison the ladder.",
         ],
@@ -2398,9 +2398,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why does agreeing to a one-minute address check make agreeing to see the price easier?",
             options: [
               "The homeowner forgets they can refuse",
-              "Refusing the next small step would quietly contradict the step they just took — people act consistently with their own recent actions",
+              "Refusing the next small step would quietly contradict the step they just took. People act consistently with their own recent actions",
               "The check legally obligates them to continue",
-              "It does not — every step is independent",
+              "It does not: every step is independent",
             ],
             answerIndex: 1,
             explanation: "Consistency pressure is internal, not imposed. Each real step makes the next one the natural continuation of a path they chose.",
@@ -2444,7 +2444,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Show, do not tell",
             body: [
-              "A proof the homeowner can see with their own eyes from the porch outranks any sentence you can say. Point at the visible drop line on the corner house. Nod at the crew truck staged at the end of the street. Run the speed test live on your tablet instead of quoting the result. Physical evidence bypasses the salesperson filter entirely, because their eyes are not listening to a pitch — they are just seeing. Build the habit: for every claim you make on a block, ask yourself whether there is a version of it the homeowner can see, and use that version.",
+              "A proof the homeowner can see with their own eyes from the porch outranks any sentence you can say. Point at the visible drop line on the corner house. Nod at the crew truck staged at the end of the street. Run the speed test live on your tablet instead of quoting the result. Physical evidence bypasses the salesperson filter entirely, because their eyes are not listening to a pitch. They are just seeing. Build the habit: for every claim you make on a block, ask yourself whether there is a version of it the homeowner can see, and use that version.",
             ],
           },
           {
@@ -2467,7 +2467,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why is three the magic number in the 3-neighbor rule?",
             options: [
               "Three fits in a short sentence",
-              "One install reads as a fluke; three reads as the street deciding — and joining is easier than going first",
+              "One install reads as a fluke; three reads as the street deciding. And joining is easier than going first",
               "Compliance limits proof claims to three",
               "Three is easier to remember than four",
             ],
@@ -2479,7 +2479,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Pointing is more dramatic",
               "It proves you know the neighborhood",
-              "Seen evidence bypasses the salesperson filter — eyes do not audit claims the way ears do",
+              "Seen evidence bypasses the salesperson filter: eyes do not audit claims the way ears do",
               "It saves pitch time",
             ],
             answerIndex: 2,
@@ -2508,7 +2508,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "What the porch reads in two seconds",
             body: [
               "Before a word lands, the homeowner has already priced your authority from signals: a badge they can read without asking, a clean uniform or branded shirt, a tablet held like a tool rather than a phone held like a distraction, posture that is settled instead of shifty. These are processed pre-verbally, the same channel as the threat assessment from Module 2, and they either open a credibility account or start you in debt.",
-              "Then there is borrowed authority, and it is real: you represent the carrier building the street. The crews, the network operations center, the install calendar — that entire operation stands behind your sentences. Speak with its calm. The crew wraps this street Friday is a report from an organization, not a claim from a stranger, and homeowners hear the difference in reps who believe it.",
+              "Then there is borrowed authority, and it is real: you represent the carrier building the street. The crews, the network operations center, the install calendar. That entire operation stands behind your sentences. Speak with its calm. The crew wraps this street Friday is a report from an organization, not a claim from a stranger, and homeowners hear the difference in reps who believe it.",
             ],
           },
           {
@@ -2527,7 +2527,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         keyTakeaways: [
           "The porch prices your authority pre-verbally: readable badge, clean kit, tablet as tool, settled posture.",
-          "Borrowed authority is real — speak with the calm of the operation behind you.",
+          "Borrowed authority is real: speak with the calm of the operation behind you.",
           "Two precise, locally checkable facts outrank any credential; calibrated I-do-not-know outranks any bluff.",
           "Credibility is asymmetric: one exaggeration, dodge, or I-am-not-selling-anything ends it for good on that porch.",
         ],
@@ -2548,7 +2548,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A homeowner asks a technical question you cannot answer. What is the authority-preserving move?",
             options: [
-              "Give your best guess confidently — hesitation looks weak",
+              "Give your best guess confidently: hesitation looks weak",
               "Change the subject to savings",
               "Say you do not know, commit to finding out, and follow through the same day",
               "Refer them to the website",
@@ -2562,7 +2562,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It violates disclosure law in most states",
               "It confuses the homeowner about your role",
               "It wastes the pattern-interrupt window",
-              "It is a visible lie in your first sentence — the homeowner spends the rest of the conversation confirming you lied",
+              "It is a visible lie in your first sentence: the homeowner spends the rest of the conversation confirming you lied",
             ],
             answerIndex: 3,
             explanation: "The homeowner can see the badge and the tablet. Trading permanent trust for two seconds of lowered guard is the worst exchange rate on the porch.",
@@ -2578,7 +2578,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Why matching works",
             body: [
-              "People relax around what feels familiar, and nothing feels more familiar than their own rhythm. Matching a homeowner's speaking pace, volume, and formality quiets the stranger-alarm that every doorstep interaction starts with. This is the full version of match-then-lead from Module 2: tone was the melody; mirroring and pacing extend it to the body, the sentence length, and the vocabulary. Match first so they relax, then lead the exchange toward calm and unhurried — the state where decisions happen.",
+              "People relax around what feels familiar, and nothing feels more familiar than their own rhythm. Matching a homeowner's speaking pace, volume, and formality quiets the stranger-alarm that every doorstep interaction starts with. This is the full version of match-then-lead from Module 2: tone was the melody; mirroring and pacing extend it to the body, the sentence length, and the vocabulary. Match first so they relax, then lead the exchange toward calm and unhurried. The state where decisions happen.",
             ],
           },
           {
@@ -2595,7 +2595,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Match pace, volume, sentence length, and formality first — then lead toward calm.",
+          "Match pace, volume, sentence length, and formality first. Then lead toward calm.",
           "Use their words for things: wifi, not bandwidth; their phrase for the pain, replayed in the bridge.",
           "Delay and dilute: shift your general register, never copy specific gestures in real time.",
           "Real listening produces natural alignment; conscious choreography is performance, and it gets detected.",
@@ -2612,13 +2612,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Imitating their regional accent",
             ],
             answerIndex: 1,
-            explanation: "Familiar rhythm quiets the stranger-alarm. Real-time gesture copying and accent imitation are mimicry — they read as mockery and reverse the effect.",
+            explanation: "Familiar rhythm quiets the stranger-alarm. Real-time gesture copying and accent imitation are mimicry. They read as mockery and reverse the effect.",
           },
           {
             question: "The homeowner says their internet 'crawls at night.' What is the highest-rapport bridge?",
             options: [
               "Our bandwidth degradation is significantly lower",
-              "That crawl at night is the shared line — that is exactly what fiber removes",
+              "That crawl at night is the shared line: that is exactly what fiber removes",
               "Everyone says that about cable",
               "Define the technical cause of congestion first",
             ],
@@ -2634,14 +2634,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "You start using their name",
             ],
             answerIndex: 2,
-            explanation: "Genuine attention produces natural alignment for free. The moment matching becomes a performance you are managing, it becomes detectable — and mockery is how it lands.",
+            explanation: "Genuine attention produces natural alignment for free. The moment matching becomes a performance you are managing, it becomes detectable. And mockery is how it lands.",
           },
         ],
       },
       {
         id: "m8-loss-framing",
         title: "Loss framing done honestly",
-        summary: "What staying on copper actually costs — and the rules that keep the frame out of fear-mongering.",
+        summary: "What staying on copper actually costs, and the rules that keep the frame out of fear-mongering.",
         minutes: 5,
         sections: [
           {
@@ -2667,7 +2667,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Losses weigh about double gains: losing 30 a month moves people that saving 30 does not.",
           "Compute the real annual cost of staying — overpay, rental, nightly friction — from their own numbers only.",
           "State the loss frame once, flatly, and let it sit; repetition converts framing into pressure.",
-          "Invented, inflated, or safety-aimed losses are fear-mongering — they close deals that cancel and complain.",
+          "Invented, inflated, or safety-aimed losses are fear-mongering. They close deals that cancel and complain.",
         ],
         drillPrompt:
           "On your next 10 engaged doors, after the homeowner gives you their bill number, deliver one honest loss frame built from it — that is X a year leaving the house for the same speeds — exactly once, in a flat accountant's tone. Log whether the door engaged deeper or pulled back, and adjust nothing else.",
@@ -2678,7 +2678,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It is more polite",
               "Losses psychologically weigh about twice as much as equivalent gains",
               "It implies the provider is cheating them",
-              "It does not — gain frames always test better",
+              "It does not: gain frames always test better",
             ],
             answerIndex: 1,
             explanation: "Loss aversion is one of the most replicated findings in decision research. Same arithmetic, roughly double the motivational weight.",
@@ -2692,14 +2692,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Your provider probably will not exist in five years",
             ],
             answerIndex: 2,
-            explanation: "It is built from their own stated number and verifiable on their own bill. The others are invented or safety-aimed fears — the definition of crossing the line.",
+            explanation: "It is built from their own stated number and verifiable on their own bill. The others are invented or safety-aimed fears. The definition of crossing the line.",
           },
           {
             question: "How many times should a loss frame be stated at one door?",
             options: [
               "Once, flatly, then let it sit",
               "At every beat of the pitch for reinforcement",
-              "Twice — once early, once at the close",
+              "Twice: once early, once at the close",
               "Until the homeowner acknowledges it",
             ],
             answerIndex: 0,
@@ -2726,20 +2726,20 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m9-analyst-pitch",
         title: "The analyst pitch: numbers first",
-        summary: "The full pitch build for spreadsheet people — comparison, fine print, and homework that converts.",
+        summary: "The full pitch build for spreadsheet people: comparison, fine print, and homework that converts.",
         minutes: 5,
         sections: [
           {
             heading: "Reading the spreadsheet person",
             body: [
-              "You met the analytical archetype in Module 4; this is the complete pitch built for them. The tells are unmistakable: precise answers to your questions, unprompted interest in terms and fine print, exact figures instead of roughly, and a visible allergy to enthusiasm. This homeowner does not want to be sold — they want to be given inputs. The analyst pitch is the discipline of becoming a clean data source.",
+              "You met the analytical archetype in Module 4; this is the complete pitch built for them. The tells are unmistakable: precise answers to your questions, unprompted interest in terms and fine print, exact figures instead of roughly, and a visible allergy to enthusiasm. This homeowner does not want to be sold. They want to be given inputs. The analyst pitch is the discipline of becoming a clean data source.",
             ],
           },
           {
             heading: "The structure: comparison, fine print, writing",
             body: [
               "Lead with the comparison, not the story. Current bill next to fiber price, line by line: base rate, equipment, the promo expiration and what the rate becomes after it. Volunteer the fine print before they ask — term length, install cost, whether the price is fixed, no data caps — because fine print you surface is transparency, while fine print they extract is concealment. Offer everything in writing: analysts trust documents over conversations, and the rep willing to be held to paper is the rep whose numbers are real.",
-              "Slow your pace by another notch and let silences sit while they read or compute — an analyst doing math is a door converting, and interrupting the math is overtalking. One exaggeration, even a small rounded-up one, ends the door permanently: this is the one archetype guaranteed to check.",
+              "Slow your pace by another notch and let silences sit while they read or compute. An analyst doing math is a door converting, and interrupting the math is overtalking. One exaggeration, even a small rounded-up one, ends the door permanently: this is the one archetype guaranteed to check.",
             ],
           },
           {
@@ -2750,13 +2750,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Analysts want inputs, not persuasion — become a clean data source.",
+          "Analysts want inputs, not persuasion: become a clean data source.",
           "Volunteer the fine print before it is asked for: surfaced fine print is transparency, extracted fine print is concealment.",
           "Let silences sit while they compute; interrupting the math is overtalking.",
-          "Close with a verification step, not tempo — an analyst who checks your numbers and finds them right stays for years.",
+          "Close with a verification step, not tempo: an analyst who checks your numbers and finds them right stays for years.",
         ],
         drillPrompt:
-          "Build a one-page comparison sheet for your current street: local post-promo bill range, fiber price, equipment, term, and the fine print. On your next 10 doors, hand it to every analytical read, volunteer one piece of fine print unprompted, and offer the check-it-tonight close. Log how many ask a follow-up question — that is the analyst engaging.",
+          "Build a one-page comparison sheet for your current street: local post-promo bill range, fiber price, equipment, term, and the fine print. On your next 10 doors, hand it to every analytical read, volunteer one piece of fine print unprompted, and offer the check-it-tonight close. Log how many ask a follow-up question. That is the analyst engaging.",
         quiz: [
           {
             question: "Why volunteer the fine print before an analyst asks?",
@@ -2774,11 +2774,11 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Recap the key numbers so they stay engaged",
               "Ask if everything is okay",
-              "Let the silence sit — they are computing, and the math is your close working",
+              "Let the silence sit: they are computing, and the math is your close working",
               "Move to the emotional benefits",
             ],
             answerIndex: 2,
-            explanation: "An analyst doing arithmetic is a door converting. Interrupting hands them a reason to restart — this is the overtalking failure in its analyst-specific form.",
+            explanation: "An analyst doing arithmetic is a door converting. Interrupting hands them a reason to restart. This is the overtalking failure in its analyst-specific form.",
           },
           {
             question: "What is the correct close for an analytical homeowner?",
@@ -2789,7 +2789,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "A numbers summary plus verification homework: check the sheet against your bill tonight, I am back tomorrow",
             ],
             answerIndex: 3,
-            explanation: "Tempo pressure reads as distrust-my-numbers. Inviting verification signals the numbers survive scrutiny — and an analyst who verifies becomes your most durable customer.",
+            explanation: "Tempo pressure reads as distrust-my-numbers. Inviting verification signals the numbers survive scrutiny. And an analyst who verifies becomes your most durable customer.",
           },
         ],
       },
@@ -2808,7 +2808,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Build a true story bank",
             body: [
-              "Collect two or three real install stories per area, permissioned the same way as name-drops. Detail is what makes a story land: the install that finished before the school pickup, the kid whose game nights stopped lagging, the household that watched the bill drop 40 from the promo-cliff rate. Log the details while they are fresh — a story bank is field equipment, as real as your tablet.",
+              "Collect two or three real install stories per area, permissioned the same way as name-drops. Detail is what makes a story land: the install that finished before the school pickup, the kid whose game nights stopped lagging, the household that watched the bill drop 40 from the promo-cliff rate. Log the details while they are fresh. A story bank is field equipment, as real as your tablet.",
               "Never invent one. An invented story collapses under a single follow-up question — which house was that? — and takes your real stories down with it. If you are new and have no stories yet, borrow honestly from the team: My teammate installed a family on Hawthorne last week — and here is what they told him.",
             ],
           },
@@ -2820,9 +2820,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Four beats, 30 to 45 seconds: character, problem, turn, ending — then stop.",
+          "Four beats, 30 to 45 seconds: character, problem, turn, ending, then stop.",
           "Build a permissioned, true story bank per area; detail is what makes stories land.",
-          "Never invent a story — one follow-up question collapses it and everything else you said.",
+          "Never invent a story: one follow-up question collapses it and everything else you said.",
           "End the arc on their porch with the micro-commitment, and never story-pitch a driver.",
         ],
         drillPrompt:
@@ -2844,10 +2844,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the hard time cap on a doorstep story, and why?",
             options: [
-              "Three minutes — enough for full context",
-              "Ten seconds — attention spans demand it",
+              "Three minutes: enough for full context",
+              "Ten seconds: attention spans demand it",
               "There is no cap if the story is good",
-              "About 45 seconds — beyond that the storyteller becomes the porch bore and the door glazes",
+              "About 45 seconds: beyond that the storyteller becomes the porch bore and the door glazes",
             ],
             answerIndex: 3,
             explanation: "The story is a vehicle for one feeling and one close. Past 45 seconds it stops carrying and starts costing the attention you won.",
@@ -2855,7 +2855,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "You have no install stories of your own yet. What does the lesson prescribe?",
             options: [
-              "Compose a plausible one — nobody checks",
+              "Compose a plausible one: nobody checks",
               "Skip story pitching until you close your own installs",
               "Borrow honestly from the team, attributed: my teammate installed a family on Hawthorne last week",
               "Use a story from another city",
@@ -2868,20 +2868,20 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m9-demo-pitch",
         title: "The demo pitch: seeing is believing",
-        summary: "A live speed test outperforms every claim — if the stagecraft is rehearsed.",
+        summary: "A live speed test outperforms every claim: if the stagecraft is rehearsed.",
         minutes: 5,
         sections: [
           {
             heading: "A demo beats a claim",
             body: [
-              "Every pitch beat is a claim the homeowner must decide whether to believe. A demo removes the decision: run a live speed test on your tablet on the fiber network, next to one on their phone over their own wifi, and let the two numbers sit side by side. The gap sells silently — no adjective you own is as loud as their 43 next to your 940. Demos are the native language of skeptics and show-me people: the doors that distrust talk are precisely the doors a demo wins.",
+              "Every pitch beat is a claim the homeowner must decide whether to believe. A demo removes the decision: run a live speed test on your tablet on the fiber network, next to one on their phone over their own wifi, and let the two numbers sit side by side. The gap sells silently. No adjective you own is as loud as their 43 next to your 940. Demos are the native language of skeptics and show-me people: the doors that distrust talk are precisely the doors a demo wins.",
             ],
           },
           {
             heading: "Stagecraft rules",
             body: [
               "A demo is theater and theater is preparation. Set up before the porch: test app loaded, tablet charged, connection verified, one tap from running. Narrate what they are watching, because raw numbers do not explain themselves: That top number is download — and watch upload, that is the one copper starves. Cable gives you a tenth of that on a good night. Then the highest-leverage move: hand them the tablet. Run it yourself, they watched a demo; run it in their hands, they did it — and touch creates ownership the same way the puppy-dog frame does.",
-              "Invite the comparison on their device too: Pull up the same test on your phone right now. Their own hardware producing the sad number closes the credibility gap completely — you did not even supply the evidence.",
+              "Invite the comparison on their device too: Pull up the same test on your phone right now. Their own hardware producing the sad number closes the credibility gap completely. You did not even supply the evidence.",
             ],
           },
           {
@@ -2892,9 +2892,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "A demo removes the believe-or-not decision — the gap between their number and yours sells silently.",
+          "A demo removes the believe-or-not decision: the gap between their number and yours sells silently.",
           "Prepare to one tap, narrate what they are seeing, and hand them the tablet: touch creates ownership.",
-          "A fumbled demo is a live metaphor against you — rehearse the sequence and carry a dated fallback screenshot.",
+          "A fumbled demo is a live metaphor against you: rehearse the sequence and carry a dated fallback screenshot.",
           "Demo only what reproduces at their address, and never make a hurried driver sit through theater.",
         ],
         drillPrompt:
@@ -2904,7 +2904,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why does a live side-by-side speed test outperform the same numbers spoken aloud?",
             options: [
               "Screens are more entertaining than talk",
-              "Spoken numbers are claims to audit; seen numbers are just perceived — the demo removes the believe-or-not decision",
+              "Spoken numbers are claims to audit; seen numbers are just perceived. The demo removes the believe-or-not decision",
               "Speed tests are more accurate in person",
               "It slows the conversation down usefully",
             ],
@@ -2916,7 +2916,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "It frees your hands for the paperwork",
               "It proves the tablet is not rigged",
-              "Touch creates ownership — run it yourself and they watched a demo; run it in their hands and they did it",
+              "Touch creates ownership: run it yourself and they watched a demo; run it in their hands and they did it",
               "It is a politeness convention",
             ],
             answerIndex: 2,
@@ -2938,7 +2938,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m9-ten-second-pitch",
         title: "The 10-second pitch for the closing door",
-        summary: "One complete, honest line that earns ten more seconds — and plants a seed when it does not.",
+        summary: "One complete, honest line that earns ten more seconds. And plants a seed when it does not.",
         minutes: 4,
         sections: [
           {
@@ -2950,7 +2950,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The construction",
             body: [
-              "One local fact plus one number plus a full stop. No greeting, no company preamble, no how-are-you-today — the closing door has no budget for throat-clearing. And no question at the end: a question demands an answer and demanding anything from a closing door speeds it up. The question comes only if the door stops moving. Rehearse the line until it runs at conversational speed on autopilot, because you get exactly one take, usually while the door is in motion, and a fumbled version of it is just noise.",
+              "One local fact plus one number plus a full stop. No greeting, no company preamble, no how-are-you-today. The closing door has no budget for throat-clearing. And no question at the end: a question demands an answer and demanding anything from a closing door speeds it up. The question comes only if the door stops moving. Rehearse the line until it runs at conversational speed on autopilot, because you get exactly one take, usually while the door is in motion, and a fumbled version of it is just noise.",
             ],
           },
           {
@@ -2961,10 +2961,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Build the line in advance: one local fact, one number, full stop — no greeting, no question.",
+          "Build the line in advance: one local fact, one number, full stop. No greeting, no question.",
           "Name the time cap and honor it; respecting their ten seconds is what earns the next ten.",
           "If the door pauses, ask only the micro-commitment; if it closes, exit warm and log for the next pass.",
-          "Rehearse to autopilot — you get one take, usually against a moving door.",
+          "Rehearse to autopilot: you get one take, usually against a moving door.",
         ],
         drillPrompt:
           "Write your 10-second line — local fact, number, full stop — and time it under ten seconds out loud. On your next 10 doors, deliver it the instant any door starts to close, and log the result: paused, closed warm, or closed cold. Two pauses out of ten means the line is working.",
@@ -2996,7 +2996,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "The door closes anyway, mid-line. What did the pitch accomplish?",
             options: [
-              "Nothing — the door was a loss",
+              "Nothing: the door was a loss",
               "It planted a seed: a respectful line plus a warm exit leaves the door workable on the next pass",
               "It disqualified the address permanently",
               "It counts as a completed pitch for your funnel",
@@ -3035,7 +3035,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Mornings: fewer answers, longer calmer talks. Early afternoons: callbacks and referrals, not fresh doors.",
           "Dinner hour is peak decision-makers at peak interruption cost — compress, acknowledge the meal, book returns.",
           "Saturday morning is the week's best window; porch-sitters get the passerby approach, never a knock.",
-          "Weather thins competitors and earns sympathy — shorten the pitch, protect the kit, never drip on the porch.",
+          "Weather thins competitors and earns sympathy: shorten the pitch, protect the kit, never drip on the porch.",
         ],
         drillPrompt:
           "Split your next shift into labeled blocks — morning, afternoon, dinner hour — and match the work to the window: fresh doors in the morning, callbacks midafternoon, compressed twenty-second openers with return-booking after five. Log conversations per hour by block and compare against your normal unplanned day.",
@@ -3043,9 +3043,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the right use of the early-afternoon lull?",
             options: [
-              "Fresh doors — volume matters most",
+              "Fresh doors: volume matters most",
               "A long break to preserve energy",
-              "Callbacks, referral knocks, and note-drops — decision-maker density is too low to burn fresh doors",
+              "Callbacks, referral knocks, and note-drops: decision-maker density is too low to burn fresh doors",
               "Switching neighborhoods entirely",
             ],
             answerIndex: 2,
@@ -3057,7 +3057,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Knock on the door frame to signal formality",
               "As a passerby — angled, unhurried, referencing the visible street work — since the threat assessment is already half done",
               "Wait until they go inside, then knock properly",
-              "Skip them — porch sitters do not buy",
+              "Skip them: porch sitters do not buy",
             ],
             answerIndex: 1,
             explanation: "The open door and visible person mean the coldest part of the interaction is already over. A knock would formalize what is warmer as a passing conversation.",
@@ -3078,7 +3078,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m9-two-buyers",
         title: "Multi-decision-maker doors",
-        summary: "Two people, one pitch, two channels — and the spouse-alignment move that closes both.",
+        summary: "Two people, one pitch, two channels, and the spouse-alignment move that closes both.",
         minutes: 5,
         sections: [
           {
@@ -3101,7 +3101,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Never pitch past the quiet one — the silent partner kills more deals than the vocal skeptic.",
+          "Never pitch past the quiet one: the silent partner kills more deals than the vocal skeptic.",
           "Find each person's separate pain and give each their own number.",
           "Close by aligning them with each other, not with you — joint ideas survive the night.",
           "Spouse arrives mid-pitch: 10-second recap plus a question to the newcomer. Couple starts deciding: go silent.",
@@ -3137,7 +3137,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Correct any small errors in their math immediately",
               "Summarize the offer once more so they have it fresh",
               "Suggest an install date while enthusiasm is high",
-              "Go completely silent — they are closing each other, and one sentence from you can lose two yeses",
+              "Go completely silent: they are closing each other, and one sentence from you can lose two yeses",
             ],
             answerIndex: 3,
             explanation: "A couple negotiating logistics together is the sale completing itself. This is the overtalking failure at double stakes: protect the silence.",
@@ -3162,13 +3162,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m10-five-second-read",
         title: "The four states behind every open door",
-        summary: "Busy, curious, guarded, annoyed — identify the state before you say your third word.",
+        summary: "Busy, curious, guarded, annoyed: identify the state before you say your third word.",
         minutes: 5,
         sections: [
           {
             heading: "Four states, four different doors",
             body: [
-              "Every door you will ever knock opens into one of four states, and each one needs a different first sentence. The busy state: door opens fast and half, body angled back into the house, first word is \"yeah?\" The curious state: full open, eye contact, they saw the trucks or heard from a neighbor and they are waiting to see what you are. The guarded state: opens on the chain or through the glass, arms crossed, weight back — you are a threat until proven otherwise. The annoyed state: door yanked open, exhale before hello, you are the third knock this week.",
+              "Every door you will ever knock opens into one of four states, and each one needs a different first sentence. The busy state: door opens fast and half, body angled back into the house, first word is \"yeah?\" The curious state: full open, eye contact, they saw the trucks or heard from a neighbor and they are waiting to see what you are. The guarded state: opens on the chain or through the glass, arms crossed, weight back. You are a threat until proven otherwise. The annoyed state: door yanked open, exhale before hello, you are the third knock this week.",
               "You read the state in the first five seconds from three signals: how the door opens (crack versus full), where their weight sits (leaning in versus braced back), and the first sound they make (a question versus a sigh). You do not need to be right with certainty. You need a working guess fast enough that your opener matches their reality instead of the script in your head.",
             ],
           },
@@ -3176,13 +3176,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Name the state silently, then match it",
             body: [
               "Busy gets compression and respect for the clock: \"I can see I'm catching you mid-something — twenty seconds and one question, then I'm gone.\" Curious gets the door opened wider: \"You've probably seen the crews up the street — that's us. Want the two-minute version of what just changed on your block?\" Guarded gets the threat removed first: \"Totally fair — I'm not asking you to buy anything on the porch. I'm checking which houses on this street the new fiber actually reaches.\" Annoyed gets the acknowledgment, because being seen defuses faster than being pitched: \"You've probably had a run of knocks lately — I'll make this painless. One thing worth knowing, then I'm off your porch.\"",
-              "The psychology underneath: people cooperate when the interaction matches their current state, and resist when it demands a state change. Asking an annoyed person to be cheerful is a state change. Acknowledging the annoyance and being brief is a state match — and a matched state is the only road to a real conversation.",
+              "The psychology underneath: people cooperate when the interaction matches their current state, and resist when it demands a state change. Asking an annoyed person to be cheerful is a state change. Acknowledging the annoyance and being brief is a state match. And a matched state is the only road to a real conversation.",
             ],
           },
           {
             heading: "The state is about them, never about you",
             body: [
-              "The rookie error is reading every flat door as rejection of you. An annoyed state is almost never about you — it is the interrupted dinner, the crying kid, the last solicitor. Your job is to route around the state, not absorb it. When you stop taking the state personally, you can work it: busy doors become callbacks, guarded doors become your best customers once the threat clears, and annoyed doors respect the rep who keeps it to one honest sentence and leaves.",
+              "The rookie error is reading every flat door as rejection of you. An annoyed state is almost never about you. It is the interrupted dinner, the crying kid, the last solicitor. Your job is to route around the state, not absorb it. When you stop taking the state personally, you can work it: busy doors become callbacks, guarded doors become your best customers once the threat clears, and annoyed doors respect the rep who keeps it to one honest sentence and leaves.",
             ],
           },
         ],
@@ -3202,7 +3202,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             explanation: "Physical barriers and braced posture are the guarded state's signature. Remove the threat before you pitch anything.",
           },
           {
-            question: "A homeowner yanks the door open with an audible sigh — you're clearly the third knock this week. What is the right first move?",
+            question: "A homeowner yanks the door open with an audible sigh. You're clearly the third knock this week. What is the right first move?",
             options: [
               "Deliver your full opener with extra energy to reset the mood",
               "Acknowledge the run of knocks, promise one painless thing, and keep it brief",
@@ -3221,14 +3221,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It shortens the pitch, which everyone prefers",
             ],
             answerIndex: 1,
-            explanation: "People cooperate when the interaction matches their current state. Demanding cheerfulness from an annoyed homeowner is a state change — and state changes get resisted.",
+            explanation: "People cooperate when the interaction matches their current state. Demanding cheerfulness from an annoyed homeowner is a state change. And state changes get resisted.",
           },
         ],
       },
       {
         id: "m10-doorway-tells",
         title: "Doorway tells: the house speaks first",
-        summary: "Dish on the roof, carrier van outside, ONT box, dog — the intel you gather walking up the driveway.",
+        summary: "Dish on the roof, carrier van outside, ONT box, dog. The intel you gather walking up the driveway.",
         minutes: 5,
         sections: [
           {
@@ -3242,7 +3242,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Reading the approach",
             body: [
               "The driveway is a briefing. Two cars and toys in the yard means a full household with streaming, gaming, and work-from-home loads — your pain questions can go straight to peak-hour slowdowns. A doorbell camera means you are being recorded from the street: assume the whole interaction is reviewable, because it is, and let that keep your claims clean and your register professional. A no-soliciting sign is not a tell to work around — it is a boundary to honor. Skip the door, log it, and move on.",
-              "The freshest tell is construction itself: fresh conduit flags, a crew trailer, a bored line under the sidewalk. That is the freshest-fiber pitch in Module 11 arriving in physical form — the build is your proof, visible from the porch.",
+              "The freshest tell is construction itself: fresh conduit flags, a crew trailer, a bored line under the sidewalk. That is the freshest-fiber pitch in Module 11 arriving in physical form. The build is your proof, visible from the porch.",
             ],
           },
           {
@@ -3265,9 +3265,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "You spot an ONT box on the exterior wall as you approach. What does it tell you?",
             options: [
               "The house cannot get fiber",
-              "Fiber already reaches this house — check the app before knocking; it may be an existing customer or a competitor's fiber",
+              "Fiber already reaches this house: check the app before knocking; it may be an existing customer or a competitor's fiber",
               "The homeowner is a satellite customer",
-              "Nothing — ONT boxes are decorative",
+              "Nothing: ONT boxes are decorative",
             ],
             answerIndex: 1,
             explanation: "An ONT means fiber is lit at the address. The app tells you whether it is ours (thank them, mark already_customer) or a competitor's (a completely different angle).",
@@ -3275,13 +3275,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A competitor's technician van is parked in the driveway when you arrive. What is the best read?",
             options: [
-              "A lost door — skip it",
-              "A hostile door — expect a fight",
+              "A lost door: skip it",
+              "A hostile door: expect a fight",
               "A homeowner with internet service freshly on their mind — be ready to be compared",
               "A door to return to tomorrow",
             ],
             answerIndex: 2,
-            explanation: "A service visit means a bill or a repair is front of mind today. That is attention on exactly your category — a tell for your angle, not a verdict on the door.",
+            explanation: "A service visit means a bill or a repair is front of mind today. That is attention on exactly your category. A tell for your angle, not a verdict on the door.",
           },
           {
             question: "Which tells legitimately end a knock before it starts?",
@@ -3305,7 +3305,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "You get ten seconds, not thirty",
             body: [
-              "The homeowner's decision to keep listening happens in roughly the first ten seconds, and it is mostly not about your product. They are answering one question: is this person worth thirty more seconds of my evening? Everything they need to decide that is visible fast — your posture, your pace, whether your first sentence sounds like every other solicitor or like a person with specific, useful news about their street.",
+              "The homeowner's decision to keep listening happens in roughly the first ten seconds, and it is mostly not about your product. They are answering one question: is this person worth thirty more seconds of my evening? Everything they need to decide that is visible fast. Your posture, your pace, whether your first sentence sounds like every other solicitor or like a person with specific, useful news about their street.",
               "The practical consequence: anything in your opener that does not fit in ten seconds is not in your opener. If your name, your connection to Kinetic, and the reason this street matters today cannot be said inside one breath, the pitch is too long and the door is already closing while you finish it.",
             ],
           },
@@ -3326,7 +3326,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "The keep-listening decision happens in about ten seconds and is about you, not the product.",
           "Three beats fit: who you are, why this street right now, one easy question.",
-          "The question converts a monologue into a conversation — it is the load-bearing beat.",
+          "The question converts a monologue into a conversation. It is the load-bearing beat.",
           "Wavering door: buy time with an honest permission ask — \"Twenty seconds — worth it?\"",
         ],
         drillPrompt:
@@ -3358,7 +3358,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why does \"Twenty seconds — worth it?\" work on a wavering door?",
             options: [
               "It pressures the homeowner into politeness",
-              "It is a small, specific, honest ask with an exit built in — a yes is a chosen listen, a no saves you four minutes",
+              "It is a small, specific, honest ask with an exit built in. A yes is a chosen listen, a no saves you four minutes",
               "It implies a limited-time offer",
               "It restarts the ten-second clock",
             ],
@@ -3376,7 +3376,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "One opener structure, three verbatim pitches, and the anchors you quote from.",
     hook: "One skeleton, three pitches, zero claims they can't check from the couch.",
     fieldStory:
-      "A rep quotes the gig price off last month's sheet, confident as sunrise. The homeowner pulls up this week's mailer in eight seconds flat — the numbers don't match, and now nothing else the rep says all evening matches either. Two streets over, another rep checks the app on the walk up, quotes the live offer, and books the install. Memorized numbers rot. Verified numbers close.",
+      "A rep quotes the gig price off last month's sheet, confident as sunrise. The homeowner pulls up this week's mailer in eight seconds flat. The numbers don't match, and now nothing else the rep says all evening matches either. Two streets over, another rep checks the app on the walk up, quotes the live offer, and books the install. Memorized numbers rot. Verified numbers close.",
     sayThisNotThat: {
       instead: "Can I tell you about our internet plans?",
       say: "The line down your street just went live — who's your provider right now?",
@@ -3385,21 +3385,21 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m11-opener-structure",
         title: "The four-beat opener",
-        summary: "Name, authorized-partner, new-fiber hook, question — the skeleton every Kinetic pitch hangs on.",
+        summary: "Name, authorized-partner, new-fiber hook, question. The skeleton every Kinetic pitch hangs on.",
         minutes: 5,
         sections: [
           {
             heading: "The skeleton",
             body: [
               "Every Kinetic pitch in this module hangs on the same four beats, in order. Beat one, your name — a person, not a company: \"I'm Alex.\" Beat two, the authorized-partner line — why you specifically are on this porch: \"I work with Kinetic, the company building out the fiber network on this side of town.\" Beat three, the new-fiber hook — the news about their street: \"The crews just lit the line down your block, so your house can get fiber for the first time.\" Beat four, the question — the handoff: \"Who's your provider right now?\"",
-              "The order is the psychology. Name first makes you a person before you are a pitch. Partner second borrows the authority of the whole build behind you. The hook third gives them news, not an ask — people open doors for news. The question last moves the work to them, in the easiest possible form. Skip a beat and the door feels it: no name reads as a script, no partner line reads as a random stranger, no hook reads as a favor you want, no question reads as a lecture.",
+              "The order is the psychology. Name first makes you a person before you are a pitch. Partner second borrows the authority of the whole build behind you. The hook third gives them news, not an ask. People open doors for news. The question last moves the work to them, in the easiest possible form. Skip a beat and the door feels it: no name reads as a script, no partner line reads as a random stranger, no hook reads as a favor you want, no question reads as a lecture.",
             ],
           },
           {
             heading: "The full opener, verbatim",
             body: [
               "\"Hey, I'm Alex — I work with Kinetic, the company that's been building the new fiber network through this neighborhood. The line down your street just went live, so your house can finally get real fiber. Quick question — who's your internet provider right now?\"",
-              "Say it at conversation pace, not recital pace. The moment it sounds memorized it loses the news quality that makes it work, so learn the beats cold and let the words flex. Two rules of honesty that are also rules of effectiveness: only claim the street is live if the app shows it serviceable, and confirm your exact authorized-partner wording with your manager before you use it — the relationship between field reps and Kinetic has specific approved language [VERIFY].",
+              "Say it at conversation pace, not recital pace. The moment it sounds memorized it loses the news quality that makes it work, so learn the beats cold and let the words flex. Two rules of honesty that are also rules of effectiveness: only claim the street is live if the app shows it serviceable, and confirm your exact authorized-partner wording with your manager before you use it. The relationship between field reps and Kinetic has specific approved language [VERIFY].",
             ],
           },
           {
@@ -3411,7 +3411,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         keyTakeaways: [
           "Four beats in order: name, authorized-partner, new-fiber hook, question.",
-          "The hook is news, not an ask — people open doors for news.",
+          "The hook is news, not an ask: people open doors for news.",
           "Learn the beats cold and let the words flex; recital pace kills the opener.",
           "Only claim live service the app confirms, and verify your partner wording with your manager [VERIFY].",
         ],
@@ -3443,7 +3443,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "Before telling a street \"your line just went live,\" what must you do?",
             options: [
-              "Nothing — momentum language is always fine",
+              "Nothing: momentum language is always fine",
               "Ask the homeowner if they've seen crews",
               "Confirm serviceability in the app, and confirm your approved partner wording with your manager",
               "Check whether neighbors already bought",
@@ -3456,13 +3456,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m11-pitch-fresh-fiber",
         title: "Verbatim: the fresh-fiber street pitch",
-        summary: "For blocks where the crews just left — the build itself is your proof.",
+        summary: "For blocks where the crews just left: the build itself is your proof.",
         minutes: 6,
         sections: [
           {
             heading: "When to run it",
             body: [
-              "Run this pitch on streets where the build is fresh — the app shows the cluster as newly serviceable, the conduit flags are still in yards, the neighbors are still talking about the trucks. Fresh fiber is the strongest position in D2D internet: you are not asking the homeowner to imagine an improvement, you are pointing at one they watched get buried in their easement.",
+              "Run this pitch on streets where the build is fresh. The app shows the cluster as newly serviceable, the conduit flags are still in yards, the neighbors are still talking about the trucks. Fresh fiber is the strongest position in D2D internet: you are not asking the homeowner to imagine an improvement, you are pointing at one they watched get buried in their easement.",
             ],
           },
           {
@@ -3481,10 +3481,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Fresh-fiber streets are the strongest position in D2D — the build itself is your proof.",
+          "Fresh-fiber streets are the strongest position in D2D. The build itself is your proof.",
           "Structure: four-beat opener, routing question, then the anchor block (symmetry, caps, contract, install).",
           "Every speed tier, price, contract, and install claim gets quoted only after you verify the current offer [VERIFY].",
-          "\"For the first time\" frames fiber as something the house was owed — fairness beats salesmanship.",
+          "\"For the first time\" frames fiber as something the house was owed, fairness beats salesmanship.",
         ],
         drillPrompt:
           "Run the fresh-fiber pitch verbatim at your next 10 newly-serviceable doors. After each, note which anchor — symmetry, no caps, no contract, or free install — produced the visible reaction, and lead with that anchor at the next door.",
@@ -3515,7 +3515,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What does \"for the first time\" do psychologically in this pitch?",
             options: [
               "Creates artificial urgency",
-              "Frames fiber as something the house was owed and finally received — fairness framing",
+              "Frames fiber as something the house was owed and finally received, fairness framing",
               "Signals the technology is untested",
               "Implies the offer expires soon",
             ],
@@ -3527,13 +3527,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m11-pitch-upgrade",
         title: "Verbatim: the established-fiber upgrade pitch",
-        summary: "For streets lit a while ago where most neighbors still sit on cable — the switch pitch.",
+        summary: "For streets lit a while ago where most neighbors still sit on cable, the switch pitch.",
         minutes: 6,
         sections: [
           {
             heading: "When to run it",
             body: [
-              "Run this on streets the app shows serviceable for months or years, where the build story is old news and the door's reality is an entrenched cable or DSL habit. You cannot sell these homeowners on novelty — the fiber has been there. You sell them on the gap between what they settled for and what has been available one truck-roll away the whole time.",
+              "Run this on streets the app shows serviceable for months or years, where the build story is old news and the door's reality is an entrenched cable or DSL habit. You cannot sell these homeowners on novelty. The fiber has been there. You sell them on the gap between what they settled for and what has been available one truck-roll away the whole time.",
             ],
           },
           {
@@ -3555,7 +3555,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Established streets: sell the gap between what they settled for and what has been available all along.",
           "Lead with upload symmetry and promo-cliff price creep — cable's two structural weaknesses [VERIFY current competitor plans].",
           "The bill pull-up is the heart of the pitch: their real fees versus your real offer, arithmetic in front of them.",
-          "Never invent savings — read their numbers, do the math together, and let the arithmetic criticize.",
+          "Never invent savings: read their numbers, do the math together, and let the arithmetic criticize.",
         ],
         drillPrompt:
           "At your next 10 established-fiber doors, ask for the bill pull-up on every engaged conversation. Log how often the real bill is higher than the number they quoted from memory, and use that gap as your opening evidence at the next door.",
@@ -3564,7 +3564,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why doesn't the fresh-build pitch work on long-established fiber streets?",
             options: [
               "The fiber there is slower",
-              "The build story is old news — the pitch has to sell the gap between what they settled for and what's been available",
+              "The build story is old news: the pitch has to sell the gap between what they settled for and what's been available",
               "Homeowners there dislike new technology",
               "The install window has closed everywhere",
             ],
@@ -3586,7 +3586,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why should you avoid directly criticizing their current provider?",
             options: [
               "It's illegal",
-              "It triggers defense of a decision they made — better to arrange for them to reach the conclusion themselves",
+              "It triggers defense of a decision they made: better to arrange for them to reach the conclusion themselves",
               "The competitor might hear about it",
               "It's a waste of breath",
             ],
@@ -3598,7 +3598,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m11-pitch-lit-your-block",
         title: "Verbatim: \"Kinetic just lit your block\"",
-        summary: "The momentum pitch — real installs, real neighbors, real calendar, and the honesty rule that powers it.",
+        summary: "The momentum pitch: real installs, real neighbors, real calendar, and the honesty rule that powers it.",
         minutes: 6,
         sections: [
           {
@@ -3612,8 +3612,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The honesty rule that powers it",
             body: [
-              "Momentum is the most abused claim in door-to-door, which is exactly why it is powerful when it is true and fatal when it is invented. Before you run this pitch, the momentum must be real: the app shows the block newly serviceable, installs are actually booking on the street, and the calendar slots you offer actually exist. If three neighbors are on the calendar, you may say three neighbors are on the calendar. If none are, you do not say \"everyone's signing up\" — you say the block just went live and the window is open, which is true.",
-              "The reason is not just ethics. A fabricated momentum claim is checkable — the homeowner asks the neighbor at the barbecue on Saturday, and when your story collapses you lose the street, not just the door. The map's install history is your receipt; work streets where the app shows real momentum and quote only what it shows.",
+              "Momentum is the most abused claim in door-to-door, which is exactly why it is powerful when it is true and fatal when it is invented. Before you run this pitch, the momentum must be real: the app shows the block newly serviceable, installs are actually booking on the street, and the calendar slots you offer actually exist. If three neighbors are on the calendar, you may say three neighbors are on the calendar. If none are, you do not say \"everyone's signing up\". You say the block just went live and the window is open, which is true.",
+              "The reason is not just ethics. A fabricated momentum claim is checkable. The homeowner asks the neighbor at the barbecue on Saturday, and when your story collapses you lose the street, not just the door. The map's install history is your receipt; work streets where the app shows real momentum and quote only what it shows.",
             ],
           },
           {
@@ -3624,9 +3624,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Momentum pitch: the block just lit, installs are booking, the window is open — then straight to the two-day-choice close.",
+          "Momentum pitch: the block just lit, installs are booking, the window is open. Then straight to the two-day-choice close.",
           "Quote only momentum the app confirms; fabricated claims are checkable at the Saturday barbecue.",
-          "Real urgency is a service — install windows genuinely fill and crews genuinely move on.",
+          "Real urgency is a service: install windows genuinely fill and crews genuinely move on.",
           "Never invent scarcity: no fake expirations, phantom slots, or imaginary neighbors.",
         ],
         drillPrompt:
@@ -3641,13 +3641,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "When the block was recently built out",
             ],
             answerIndex: 2,
-            explanation: "Momentum claims must match the map exactly. The app's install history is your receipt — and the homeowner's neighbors are the fact-check.",
+            explanation: "Momentum claims must match the map exactly. The app's install history is your receipt. And the homeowner's neighbors are the fact-check.",
           },
           {
             question: "Why is fabricated momentum especially dangerous in D2D?",
             options: [
               "It violates quota rules",
-              "It is checkable — the homeowner asks the neighbors, and a collapsed story loses the whole street",
+              "It is checkable: the homeowner asks the neighbors, and a collapsed story loses the whole street",
               "Neighbors talk to competitors",
               "It slows down your knock rate",
             ],
@@ -3657,7 +3657,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What makes the urgency in this pitch legitimate rather than manipulative?",
             options: [
-              "Nothing — urgency is always manipulation",
+              "Nothing: urgency is always manipulation",
               "You are reporting real, finite logistics — install windows fill and crews move on — not inventing scarcity",
               "The offers really do expire at midnight",
               "Urgency is fine if the pitch is friendly",
@@ -3685,7 +3685,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m12-happy-price-works",
         title: "\"I'm happy,\" \"what's the price,\" \"it works fine\"",
-        summary: "The satisfaction wall — three ways through the most common doors in the territory.",
+        summary: "The satisfaction wall: three ways through the most common doors in the territory.",
         minutes: 6,
         sections: [
           {
@@ -3706,14 +3706,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "\"My internet works fine\"",
             body: [
               "\"It works fine — until when? Most folks tell me it's fine until 8 p.m. when everyone's streaming, or until a work call drops. Where does yours hold up worst?\" The question presumes nothing and invites the crack to name itself.",
-              "The psychology: works-fine is a summary judgment, not a measurement. Nobody has tested their upload during the evening peak; they have only stopped noticing the failures they adapted to — the call taken on the phone instead of the laptop, the show paused to buffer. Your job is to make the adaptation visible again, gently, with one question. Once the homeowner says the crack out loud, works-fine is gone and you are solving a problem they just admitted to having.",
+              "The psychology: works-fine is a summary judgment, not a measurement. Nobody has tested their upload during the evening peak; they have only stopped noticing the failures they adapted to. The call taken on the phone instead of the laptop, the show paused to buffer. Your job is to make the adaptation visible again, gently, with one question. Once the homeowner says the crack out loud, works-fine is gone and you are solving a problem they just admitted to having.",
             ],
           },
         ],
         keyTakeaways: [
-          "Happy is an objection to change, not to fiber — reframe as keep-the-happiness, add-the-savings, just look.",
+          "Happy is an objection to change, not to fiber: reframe as keep-the-happiness, add-the-savings, just look.",
           "Never quote price into a vacuum; anchor on their current bill first.",
-          "Compare totals, not stickers — fees and promo cliffs live off the headline number [VERIFY your current plan terms].",
+          "Compare totals, not stickers: fees and promo cliffs live off the headline number [VERIFY your current plan terms].",
           "Works-fine is a summary judgment; one \"until when?\" question makes the hidden crack visible.",
         ],
         drillPrompt:
@@ -3723,12 +3723,12 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why is \"I'm happy with my provider\" not really an objection to fiber?",
             options: [
               "Happy customers are lying",
-              "It is an objection to change — reframe the ask as a risk-free comparison that keeps everything they like",
+              "It is an objection to change: reframe the ask as a risk-free comparison that keeps everything they like",
               "It is a request for pricing",
               "It means they already have fiber",
             ],
             answerIndex: 1,
-            explanation: "You are not asking them to switch, only to look. Looking is cheap, so happy people say yes to it — and the numbers do the switching.",
+            explanation: "You are not asking them to switch, only to look. Looking is cheap, so happy people say yes to it. And the numbers do the switching.",
           },
           {
             question: "A homeowner says your price is too expensive. What is the strongest honest move?",
@@ -3739,7 +3739,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "Tell them the competition charges more",
             ],
             answerIndex: 2,
-            explanation: "Sticker-to-sticker comparisons hide the fee stack and the promo cliff. Totals are the honest ground — and if the totals don't favor you, pivot to upload and reliability rather than fake the math.",
+            explanation: "Sticker-to-sticker comparisons hide the fee stack and the promo cliff. Totals are the honest ground. And if the totals don't favor you, pivot to upload and reliability rather than fake the math.",
           },
           {
             question: "What is the function of \"It works fine — until when?\"",
@@ -3750,14 +3750,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It buys time to think",
             ],
             answerIndex: 1,
-            explanation: "People adapt to failures and forget them. One question makes the adaptation visible again — and a problem they name out loud is one you can solve.",
+            explanation: "People adapt to failures and forget them. One question makes the adaptation visible again. And a problem they name out loud is one you can solve.",
           },
         ],
       },
       {
         id: "m12-renting-spouse-think",
         title: "\"I'm renting,\" \"my spouse decides,\" \"let me think about it\"",
-        summary: "The deferral family — objections that hand the decision to someone or sometime else.",
+        summary: "The deferral family: objections that hand the decision to someone or sometime else.",
         minutes: 6,
         sections: [
           {
@@ -3795,7 +3795,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What is \"I'm renting\" usually really asking?",
             options: [
               "Whether fiber reaches rentals",
-              "Whether this decision is even theirs to make — answer the permission question and the objection usually evaporates",
+              "Whether this decision is even theirs to make: answer the permission question and the objection usually evaporates",
               "Whether the deposit is refundable",
               "Whether the landlord gets a commission",
             ],
@@ -3818,7 +3818,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Restate the whole pitch",
               "Offer the soft-commit immediately",
-              "Isolate the real concern with one question — price, or the hassle of switching",
+              "Isolate the real concern with one question: price, or the hassle of switching",
               "Accept it and leave a flyer",
             ],
             answerIndex: 2,
@@ -3829,7 +3829,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m12-scam-bad-notinterested",
         title: "\"Is this a scam,\" \"I had a bad experience,\" \"not interested\"",
-        summary: "The trust family — fear, history, and the flat no, handled without pressure.",
+        summary: "The trust family: fear, history, and the flat no, handled without pressure.",
         minutes: 6,
         sections: [
           {
@@ -3855,10 +3855,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Scam questions are engagement — invite verification and hand them the tools to check you [VERIFY the current verification path].",
-          "Bad experience: ask, listen fully, never defend — then show what you can put in writing today.",
+          "Scam questions are engagement: invite verification and hand them the tools to check you [VERIFY the current verification path].",
+          "Bad experience: ask, listen fully, never defend. Then show what you can put in writing today.",
           "Sort the brush-off from the real no; respect the real no instantly with one memorable fact and a clean exit.",
-          "Mark not_interested accurately and never re-pitch a marked door on the same pass — the clean exit is next pass's open door.",
+          "Mark not_interested accurately and never re-pitch a marked door on the same pass. The clean exit is next pass's open door.",
         ],
         drillPrompt:
           "At your next 10 trust-family objections, run the matching script and measure the exit: did the conversation end with the homeowner still talking to you? Log which verification behavior (ID, website, call-them-yourself) landed hardest on scam doors.",
@@ -3867,7 +3867,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why is \"is this a scam?\" actually good news at the door?",
             options: [
               "It means they will buy out of fear",
-              "It means they are engaged enough to care whether you are real — and inviting verification dissolves the fear",
+              "It means they are engaged enough to care whether you are real. And inviting verification dissolves the fear",
               "It is a legal trap",
               "It means a competitor warned them",
             ],
@@ -3879,7 +3879,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Explain what the company policy actually is",
               "Apologize on behalf of the industry and pitch your reliability",
-              "\"What happened?\" — then listen to the whole story without defending anything",
+              "\"What happened?\" Then listen to the whole story without defending anything",
               "Offer a discount for their trouble",
             ],
             answerIndex: 2,
@@ -3888,7 +3888,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "Why does instantly respecting a real \"not interested\" pay off later?",
             options: [
-              "It doesn't — you should always try twice",
+              "It doesn't: you should always try twice",
               "It keeps your knock rate up",
               "The clean, one-sentence exit is what the homeowner remembers, and it's what opens the door differently on the next pass",
               "It prevents complaints to the city",
@@ -3901,7 +3901,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m12-competitor-pivot",
         title: "The competitor pivot: Google Fiber, AT&T, and the rest",
-        summary: "When to concede gracefully, when to win — and how to mark both in the app.",
+        summary: "When to concede gracefully, when to win, and how to mark both in the app.",
         minutes: 6,
         sections: [
           {
@@ -3914,21 +3914,21 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "When the competitor is beatable",
             body: [
-              "Cable and satellite are a different story — the gap is structural, and you can win on it honestly. Against cable: symmetrical upload, no data caps [VERIFY], no annual contract [VERIFY], and the promo-cliff bill creep from Module 11. Against satellite: latency that video calls and gaming cannot tolerate, weather dropouts, and data thresholds [VERIFY current competitor plan details in your market]. Against fixed wireless: the shared-tower slowdown at peak hours [VERIFY].",
+              "Cable and satellite are a different story: the gap is structural, and you can win on it honestly. Against cable: symmetrical upload, no data caps [VERIFY], no annual contract [VERIFY], and the promo-cliff bill creep from Module 11. Against satellite: latency that video calls and gaming cannot tolerate, weather dropouts, and data thresholds [VERIFY current competitor plan details in your market]. Against fixed wireless: the shared-tower slowdown at peak hours [VERIFY].",
               "The winning frame is never trash-talk: \"I'm not going to tell you your provider is bad — I'll tell you where fiber is structurally different, and you can test both claims tonight.\" Specific, checkable, structural claims beat general disparagement every time, because the homeowner can verify them from their couch — and a claim they verify themselves converts harder than one they simply heard.",
             ],
           },
           {
             heading: "The graceful concession is a long game",
             body: [
-              "The conceded door is not a lost door — it is a planted one. The homeowner who heard \"honestly, keep it\" from a Kinetic rep just watched the company choose honesty over a sale, and that story gets told at the fence line. Leave your name and the one fact that matters (\"if the bill ever jumps or the service ever drops, we're lit on your street\"), log the accurate outcome with the competitor named in the note, and let the pass system bring you back when their contract renewal or first outage does the pitching for you.",
+              "The conceded door is not a lost door: it is a planted one. The homeowner who heard \"honestly, keep it\" from a Kinetic rep just watched the company choose honesty over a sale, and that story gets told at the fence line. Leave your name and the one fact that matters (\"if the bill ever jumps or the service ever drops, we're lit on your street\"), log the accurate outcome with the competitor named in the note, and let the pass system bring you back when their contract renewal or first outage does the pitching for you.",
             ],
           },
         ],
         keyTakeaways: [
-          "Happy competitor-fiber customers have no gap — concede gracefully and mark the door accurately.",
+          "Happy competitor-fiber customers have no gap: concede gracefully and mark the door accurately.",
           "Cable, satellite, and fixed wireless lose on structure: upload symmetry, caps, contracts, latency [VERIFY competitor details in your market].",
-          "Never trash-talk — offer specific, checkable, structural claims the homeowner can verify tonight.",
+          "Never trash-talk: offer specific, checkable, structural claims the homeowner can verify tonight.",
           "A graceful concession plants next season's sale: leave your name, one fact, and an accurate log.",
         ],
         drillPrompt:
@@ -3960,7 +3960,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why name the competitor in the door note after conceding?",
             options: [
               "So managers can complain to the competitor",
-              "So the next pass knows the door is handled and the exact reason why — the log is the team's memory",
+              "So the next pass knows the door is handled and the exact reason why. The log is the team's memory",
               "It is required by law",
               "To track competitor market share for commission",
             ],
@@ -3987,7 +3987,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m13-the-rules",
         title: "The two nevers and the one always",
-        summary: "Never paper, never voice — always the secure form. The rules that protect the rep as much as the customer.",
+        summary: "Never paper, never voice: always the secure form. The rules that protect the rep as much as the customer.",
         minutes: 5,
         sections: [
           {
@@ -4006,12 +4006,12 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Why this protects you, not just them",
             body: [
-              "Reps sometimes experience payment security as friction imposed on the sale. Reframe it: it is armor built around the rep. When a customer later disputes a charge or claims misuse, the rep who never saw the number has a complete defense — the record shows the customer typed it into a secure form themselves. The rep who wrote it on paper has nothing but their word. Compliance also builds the sale: a customer who watches you insist on the secure flow learns, at the exact moment of maximum suspicion, that this company handles their money more carefully than they expected. That lesson converts.",
+              "Reps sometimes experience payment security as friction imposed on the sale. Reframe it: it is armor built around the rep. When a customer later disputes a charge or claims misuse, the rep who never saw the number has a complete defense. The record shows the customer typed it into a secure form themselves. The rep who wrote it on paper has nothing but their word. Compliance also builds the sale: a customer who watches you insist on the secure flow learns, at the exact moment of maximum suspicion, that this company handles their money more carefully than they expected. That lesson converts.",
             ],
           },
         ],
         keyTakeaways: [
-          "Never write a card number anywhere — paper, notes apps, texts, and door notes are all violations.",
+          "Never write a card number anywhere: paper, notes apps, texts, and door notes are all violations.",
           "Never take a number by voice; misheard, overheard, and misused all start there.",
           "Always: the customer types their own details into the secure form, on their phone where possible [VERIFY current flow].",
           "Compliance is the rep's armor: if you never saw the number, no dispute can touch you.",
@@ -4022,19 +4022,19 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A customer offers to read you their card number to save time. What do you do?",
             options: [
-              "Take it — the customer consented",
+              "Take it: the customer consented",
               "Write it down but destroy the paper after",
-              "Decline and hand them the secure form — voice and paper are never acceptable paths for a card number",
+              "Decline and hand them the secure form: voice and paper are never acceptable paths for a card number",
               "Type it into the door note for later",
             ],
             answerIndex: 2,
-            explanation: "Customer consent does not change the rule. The number must travel only through the secure form, typed by the customer — no exceptions for convenience.",
+            explanation: "Customer consent does not change the rule. The number must travel only through the secure form, typed by the customer. No exceptions for convenience.",
           },
           {
             question: "Why do the payment rules protect the rep, not just the customer?",
             options: [
               "They speed up commission payout",
-              "If a charge is ever disputed, the rep who never saw the number has a complete defense — the record shows the customer typed it themselves",
+              "If a charge is ever disputed, the rep who never saw the number has a complete defense. The record shows the customer typed it themselves",
               "They reduce data entry errors",
               "They keep the rep's phone storage clean",
             ],
@@ -4044,9 +4044,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What does insisting on the secure flow do for the sale itself?",
             options: [
-              "Nothing — it's pure friction",
+              "Nothing: it's pure friction",
               "It slows the close but avoids liability",
-              "At the moment of maximum suspicion, it teaches the customer this company handles money more carefully than expected — and that converts",
+              "At the moment of maximum suspicion, it teaches the customer this company handles money more carefully than expected, and that converts",
               "It lets you skip the confirmation step",
             ],
             answerIndex: 2,
@@ -4076,18 +4076,18 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The small behaviors that sell it",
             body: [
-              "Hand the phone over promptly — hesitation reads as reluctance to give up control. Look away while they type, visibly and obviously. Narrate the milestones out loud: the secure page, the masked number, the confirmation email. Each behavior is a proof, and proofs stack: by the time the confirmation email lands, the customer has watched three separate demonstrations that their card was safer with you than it is in their own wallet. That feeling is what they describe to the neighbor who asks about the salesperson who came by.",
+              "Hand the phone over promptly: hesitation reads as reluctance to give up control. Look away while they type, visibly and obviously. Narrate the milestones out loud: the secure page, the masked number, the confirmation email. Each behavior is a proof, and proofs stack: by the time the confirmation email lands, the customer has watched three separate demonstrations that their card was safer with you than it is in their own wallet. That feeling is what they describe to the neighbor who asks about the salesperson who came by.",
             ],
           },
         ],
         keyTakeaways: [
           "The script: secure form, you type it, I never see it, that's on purpose, confirmation in your email.",
-          "Framing decides everything — the same form reads as pressure or protection depending on your thirty seconds.",
+          "Framing decides everything: the same form reads as pressure or protection depending on your thirty seconds.",
           "Answer the unspoken trust question before it gets asked; star the security as a feature.",
           "Hand over promptly, look away visibly, narrate the milestones — proofs stack into a story the customer retells.",
         ],
         drillPrompt:
-          "Rehearse the handoff script verbatim five times before your next shift, including the physical look-away. At your next 3 closes, narrate each milestone out loud and log the customer's reaction at the confirmation email — that moment is your referral seed.",
+          "Rehearse the handoff script verbatim five times before your next shift, including the physical look-away. At your next 3 closes, narrate each milestone out loud and log the customer's reaction at the confirmation email. That moment is your referral seed.",
         quiz: [
           {
             question: "What does \"I never see the number, and that's on purpose\" accomplish?",
@@ -4115,7 +4115,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why narrate the confirmation email out loud when it lands?",
             options: [
               "To fill awkward silence",
-              "It closes the proof loop — the customer sees the system working exactly as you described it",
+              "It closes the proof loop: the customer sees the system working exactly as you described it",
               "To confirm the email address is correct",
               "It is required for commission",
             ],
@@ -4127,11 +4127,11 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m13-no-card-objection",
         title: "\"I don't give my card out\"",
-        summary: "The hardest payment objection — validate it, route around it compliantly, never workaround it.",
+        summary: "The hardest payment objection: validate it, route around it compliantly, never workaround it.",
         minutes: 5,
         sections: [
           {
-            heading: "Validate first — the objection is rational",
+            heading: "Validate first: the objection is rational",
             body: [
               "\"Totally understand — most people who say that got burned once. I'm the same way with my card.\" This is not a technique; it is the truth, and saying it first changes what the conversation is about. The customer arrived braced for a rep who would push past their boundary. When you honor the boundary instead, the conversation stops being about whether to trust you and becomes about which compliant path works for them.",
             ],
@@ -4139,7 +4139,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The compliant routes around it",
             body: [
-              "Depending on current policy, there are usually several legitimate paths, and you must confirm which ones are live before offering them [VERIFY current payment policy with your manager]. Autopay framing: if autopay is not required, say so plainly — \"the card on file is for the first bill; you're not locked into autopay\" [VERIFY]. Pay-later framing: some offers let the customer complete payment through the official online checkout after the visit, from their own couch [VERIFY]. Install-first framing: where policy allows, book the install now and the customer finishes payment through the official channel before the truck rolls [VERIFY].",
+              "Depending on current policy, there are usually several legitimate paths, and you must confirm which ones are live before offering them [VERIFY current payment policy with your manager]. Autopay framing: if autopay is not required, say so plainly: \"the card on file is for the first bill; you're not locked into autopay\" [VERIFY]. Pay-later framing: some offers let the customer complete payment through the official online checkout after the visit, from their own couch [VERIFY]. Install-first framing: where policy allows, book the install now and the customer finishes payment through the official channel before the truck rolls [VERIFY].",
               "Notice what every route has in common: the number still only ever travels through the official secure channel. The customer's rule — I don't hand my card to people — is fully honored; you have simply moved the moment and the device.",
             ],
           },
@@ -4151,13 +4151,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Validate the boundary first — most people who guard their card got burned once, and honoring the rule reframes the whole conversation.",
+          "Validate the boundary first: most people who guard their card got burned once, and honoring the rule reframes the whole conversation.",
           "Compliant routes: autopay-not-required framing, official online checkout later, install-first-then-pay — all [VERIFY current policy].",
           "Every legitimate route keeps the number inside the official secure channel; you only move the moment and the device.",
           "No route fits? Follow_up with the secure link. A workaround unwinds the sale, the commission, and the career.",
         ],
         drillPrompt:
-          "Role-play this objection three times with a teammate before your next shift: validate, offer two verified compliant routes, and land the follow_up if neither fits. In the field, log which route your territory's card-guarders choose most — that route becomes your default offer.",
+          "Role-play this objection three times with a teammate before your next shift: validate, offer two verified compliant routes, and land the follow_up if neither fits. In the field, log which route your territory's card-guarders choose most. That route becomes your default offer.",
         quiz: [
           {
             question: "What is the correct first response to \"I don't give my card out\"?",
@@ -4174,18 +4174,18 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What do all compliant routes around the card objection have in common?",
             options: [
               "They avoid taking payment entirely",
-              "The number still travels only through the official secure channel — you move the moment and the device, never the channel",
+              "The number still travels only through the official secure channel. You move the moment and the device, never the channel",
               "They require manager approval",
               "They postpone the install",
             ],
             answerIndex: 1,
-            explanation: "Autopay framing, online checkout later, install-first — every legitimate path keeps the card inside the secure system. Only the timing changes.",
+            explanation: "Autopay framing, online checkout later, install-first. Every legitimate path keeps the card inside the secure system. Only the timing changes.",
           },
           {
             question: "A workaround would save today's sale. Why refuse it anyway?",
             options: [
               "Workarounds are slower",
-              "The first dispute or audit unwinds the sale, the commission, and the job — and the app's history makes it fully traceable",
+              "The first dispute or audit unwinds the sale, the commission, and the job. And the app's history makes it fully traceable",
               "Customers dislike workarounds",
               "It violates the price list",
             ],
@@ -4212,49 +4212,49 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m14-two-day-choice",
         title: "The two-day-choice close",
-        summary: "\"Tuesday morning or Thursday afternoon?\" — the assumptive close that ends every strong pitch.",
+        summary: "\"Tuesday morning or Thursday afternoon?\" The assumptive close that ends every strong pitch.",
         minutes: 5,
         sections: [
           {
             heading: "The mechanics",
             body: [
               "When the value conversation lands — the homeowner has nodded at the numbers, asked a logistics question, or compared plans out loud — do not ask whether they want to schedule. Ask which slot: \"I've got Tuesday morning or Thursday afternoon on your street — which works better for you?\" Then go quiet and let them check their calendar, which is the physical act of deciding.",
-              "The two options must be real slots in the real install calendar from the app. If Tuesday fills while you stand there, offer the next real pair without blinking. The close's power comes entirely from its honesty — you are a person with a live calendar offering genuine capacity, not a trick question with dates attached.",
+              "The two options must be real slots in the real install calendar from the app. If Tuesday fills while you stand there, offer the next real pair without blinking. The close's power comes entirely from its honesty. You are a person with a live calendar offering genuine capacity, not a trick question with dates attached.",
             ],
           },
           {
             heading: "Why it works",
             body: [
-              "Choice architecture: \"do you want to schedule?\" presents a yes/no decision where no is the safe, effort-free answer. \"Tuesday or Thursday?\" presumes the yes and moves the decision to logistics — and logistics questions are easier to answer than commitment questions, so the homeowner answers the easy one and arrives at the commitment through it. Both options being yeses is not manipulation; it is respect for how decisions actually get made on porches, by tired people, at 6 p.m.",
-              "The psychology underneath is decision fatigue: every additional open question you leave standing costs energy the homeowner does not have. The two-day choice collapses the decision to one small, concrete, answerable question — and a question they can answer is a question they will answer.",
+              "Choice architecture: \"do you want to schedule?\" presents a yes/no decision where no is the safe, effort-free answer. \"Tuesday or Thursday?\" presumes the yes and moves the decision to logistics. And logistics questions are easier to answer than commitment questions, so the homeowner answers the easy one and arrives at the commitment through it. Both options being yeses is not manipulation; it is respect for how decisions actually get made on porches, by tired people, at 6 p.m.",
+              "The psychology underneath is decision fatigue: every additional open question you leave standing costs energy the homeowner does not have. The two-day choice collapses the decision to one small, concrete, answerable question. And a question they can answer is a question they will answer.",
             ],
           },
           {
             heading: "Variants and the \"neither\" answer",
             body: [
-              "The install-window variant works the same way one level down: \"Morning window or evening window?\" Use it when the day is settled but the timing is not. And when they say neither day works, that is not a failed close — it is a scheduling question wearing a no costume: \"What day do you usually have off? Let me check that one.\" Pull up the calendar, find their day, offer the window. The homeowner who negotiates the date with you is closing; the calendar is where the close happens, so keep them standing in it.",
+              "The install-window variant works the same way one level down: \"Morning window or evening window?\" Use it when the day is settled but the timing is not. And when they say neither day works, that is not a failed close. It is a scheduling question wearing a no costume: \"What day do you usually have off? Let me check that one.\" Pull up the calendar, find their day, offer the window. The homeowner who negotiates the date with you is closing; the calendar is where the close happens, so keep them standing in it.",
             ],
           },
         ],
         keyTakeaways: [
-          "Never ask whether they want to schedule — ask which of two real slots works better.",
+          "Never ask whether they want to schedule: ask which of two real slots works better.",
           "Both options are yeses: the decision moves from commitment to logistics, which tired people can actually answer.",
-          "Only offer slots that exist in the app's live calendar — the close's power is its honesty.",
-          "\"Neither works\" is a scheduling question — find their day and keep them standing in the calendar.",
+          "Only offer slots that exist in the app's live calendar. The close's power is its honesty.",
+          "\"Neither works\" is a scheduling question: find their day and keep them standing in the calendar.",
         ],
         drillPrompt:
-          "At your next 10 closes, use the two-day choice verbatim and count to four in silence after asking. Log how often the homeowner physically pulls out their phone to check their calendar — that reach is the close happening in front of you.",
+          "At your next 10 closes, use the two-day choice verbatim and count to four in silence after asking. Log how often the homeowner physically pulls out their phone to check their calendar. That reach is the close happening in front of you.",
         quiz: [
           {
             question: "Why is \"Tuesday morning or Thursday afternoon?\" stronger than \"Do you want to schedule an install?\"",
             options: [
               "It sounds more confident",
-              "It presumes the yes and moves the decision to logistics — an easier question that carries the commitment inside it",
+              "It presumes the yes and moves the decision to logistics. An easier question that carries the commitment inside it",
               "It limits the install team's workload",
               "It creates false urgency",
             ],
             answerIndex: 1,
-            explanation: "Yes/no questions make no the effortless answer. A choice between two real slots makes the homeowner answer logistics — and arrive at yes through them.",
+            explanation: "Yes/no questions make no the effortless answer. A choice between two real slots makes the homeowner answer logistics. And arrive at yes through them.",
           },
           {
             question: "What must be true of the two slots you offer?",
@@ -4265,25 +4265,25 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "They must match the neighbor's install day",
             ],
             answerIndex: 1,
-            explanation: "The close works because it is honest — genuine capacity, genuinely offered. Invented slots unravel at the first scheduling call.",
+            explanation: "The close works because it is honest: genuine capacity, genuinely offered. Invented slots unravel at the first scheduling call.",
           },
           {
             question: "The homeowner says neither Tuesday nor Thursday works. What is happening?",
             options: [
-              "The close failed — mark not_interested",
-              "A scheduling question is wearing a no costume — ask what day works for them and check the calendar",
+              "The close failed: mark not_interested",
+              "A scheduling question is wearing a no costume: ask what day works for them and check the calendar",
               "They want a discount first",
               "They need to think about it",
             ],
             answerIndex: 1,
-            explanation: "Negotiating the date is closing behavior. Keep them in the calendar — that is where the close completes.",
+            explanation: "Negotiating the date is closing behavior. Keep them in the calendar. That is where the close completes.",
           },
         ],
       },
       {
         id: "m14-trial-soft-commit",
         title: "The trial close and the pencil-in",
-        summary: "\"Let me just check the schedule\" — testing readiness without asking for a decision, and the soft-commit for genuine hesitation.",
+        summary: "\"Let me just check the schedule\": testing readiness without asking for a decision, and the soft-commit for genuine hesitation.",
         minutes: 5,
         sections: [
           {
@@ -4297,7 +4297,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "The soft-commit: penciling them in",
             body: [
               "For genuine think-about-it hesitation — real deliberation, not a hidden no — the soft-commit: \"Tell you what. I'll pencil you in for Thursday's window while you decide. There's no charge to cancel [VERIFY cancellation policy], and it holds your slot — if it's not a fit, one text and it's off the calendar. Sound fair?\"",
-              "The psychology: open-ended deliberation has no forcing function, so it defaults to forgetting. A penciled install converts deliberation into a dated decision — the homeowner now decides by Thursday, with a concrete thing to keep or cancel, and keeping is the path of least resistance. The soft-commit only works because cancellation is genuinely easy [VERIFY]; a slot that is hard to cancel is not a soft-commit, it is a trap, and traps generate cancellations, complaints, and chargebacks at triple the rate of honest holds.",
+              "The psychology: open-ended deliberation has no forcing function, so it defaults to forgetting. A penciled install converts deliberation into a dated decision. The homeowner now decides by Thursday, with a concrete thing to keep or cancel, and keeping is the path of least resistance. The soft-commit only works because cancellation is genuinely easy [VERIFY]; a slot that is hard to cancel is not a soft-commit, it is a trap, and traps generate cancellations, complaints, and chargebacks at triple the rate of honest holds.",
             ],
           },
           {
@@ -4308,8 +4308,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Trial close: browse their install slots out loud — the reaction tells you whether to close or return to value.",
-          "The trial close asks for nothing, so there is nothing to refuse — and readiness reveals itself honestly.",
+          "Trial close: browse their install slots out loud. The reaction tells you whether to close or return to value.",
+          "The trial close asks for nothing, so there is nothing to refuse. And readiness reveals itself honestly.",
           "Soft-commit: pencil the slot with genuinely free cancellation [VERIFY], converting open deliberation into a dated decision.",
           "Ethics line: real booking, real cancellation, real follow-up — anything less is a trap, not a close.",
         ],
@@ -4320,12 +4320,12 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What does the trial close actually test?",
             options: [
               "Whether the calendar has openings",
-              "The homeowner's readiness — their behavior around the calendar reveals it without asking for any decision",
+              "The homeowner's readiness: their behavior around the calendar reveals it without asking for any decision",
               "Whether they understood the pricing",
               "Whether the address is serviceable",
             ],
             answerIndex: 1,
-            explanation: "It asks for nothing, so nothing can be refused — and the homeowner's reaction to the calendar tells you honestly whether to close or return to value.",
+            explanation: "It asks for nothing, so nothing can be refused. And the homeowner's reaction to the calendar tells you honestly whether to close or return to value.",
           },
           {
             question: "Why does the pencil-in work on genuine deliberation?",
@@ -4360,7 +4360,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "When to walk",
             body: [
-              "Walk when the no is real — stated after your opener with eye contact, restated after one honest attempt at the Module 12 answer, or driven by circumstances no pitch fixes: moving next month, house for sale, genuinely locked contract. Walking well is a skill with a payoff structure: the door you leave gracefully is winnable later, and the door you pressure past a real no is lost permanently, along with its fence-line neighbors.",
+              "Walk when the no is real: stated after your opener with eye contact, restated after one honest attempt at the Module 12 answer, or driven by circumstances no pitch fixes: moving next month, house for sale, genuinely locked contract. Walking well is a skill with a payoff structure: the door you leave gracefully is winnable later, and the door you pressure past a real no is lost permanently, along with its fence-line neighbors.",
             ],
           },
           {
@@ -4378,7 +4378,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Walk when the no is real — pressured doors are lost permanently, graceful doors are winnable later.",
+          "Walk when the no is real: pressured doors are lost permanently, graceful doors are winnable later.",
           "The script: no pressure, my number, fiber's not going anywhere, neither am I, one memorable fact.",
           "One fact sticks; five brochures hit the recycling. The fact is the hook for the next conversation.",
           "Log reality: not_interested for real no's, follow_up with reason and timing for real circumstances — never a fantasy pipeline.",
@@ -4400,19 +4400,19 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A homeowner's contract ends in four months and they ask you to come back then. The correct outcome is:",
             options: [
-              "not_interested — they said no today",
+              "not_interested: they said no today",
               "follow_up with the reason and timing in the note",
-              "sold — it's basically a future sale",
+              "sold: it's basically a future sale",
               "Leave it unmarked and remember it",
             ],
             answerIndex: 1,
-            explanation: "A circumstance with a date is a real follow_up — and the note with reason and timing is what makes next pass's door open warm.",
+            explanation: "A circumstance with a date is a real follow_up. And the note with reason and timing is what makes next pass's door open warm.",
           },
           {
             question: "Why not mark a real no as follow_up to keep the pipeline looking healthy?",
             options: [
               "Managers audit follow_ups",
-              "A fantasy pipeline sends you back to closed doors and keeps you off open ones — the map only works if it reflects reality",
+              "A fantasy pipeline sends you back to closed doors and keeps you off open ones. The map only works if it reflects reality",
               "follow_ups expire automatically",
               "It affects your commission",
             ],
@@ -4452,7 +4452,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Work in passes, not in wanders",
             body: [
-              "Territory pays when it is swept systematically. Work the map in passes: sweep a block, log every door, and let the app carry the memory — not-home doors resurface as next-door candidates on your next pass, sold and do-not-knock doors stay frozen out of the working set. Wandering to whatever street feels lucky today produces Swiss-cheese territory: half-knocked blocks, double-knocked neighbors, and no momentum story anywhere.",
+              "Territory pays when it is swept systematically. Work the map in passes: sweep a block, log every door, and let the app carry the memory. Not-home doors resurface as next-door candidates on your next pass, sold and do-not-knock doors stay frozen out of the working set. Wandering to whatever street feels lucky today produces Swiss-cheese territory: half-knocked blocks, double-knocked neighbors, and no momentum story anywhere.",
               "The not-home door is the most underworked asset in the territory. A door that was empty at 11 a.m. is a different door at 6 p.m. Schedule your second pass of a block for a different hour than the first, and watch a third of your territory's \"dead\" doors come alive.",
             ],
           },
@@ -4464,7 +4464,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Honest day: thirty to forty-five real knocks, eight to fifteen real conversations — then close rate does the rest.",
+          "Honest day: thirty to forty-five real knocks, eight to fifteen real conversations. Then close rate does the rest.",
           "Work the map in passes; wandering produces Swiss-cheese territory and double-knocked neighbors.",
           "Not-home at 11 a.m. is a different door at 6 p.m. — re-pass blocks at a different hour.",
           "Protect the 5:30 to 7:30 golden window; start on time, because the first hour sets the rhythm.",
@@ -4499,7 +4499,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Mark them not_interested",
               "Skip the block permanently",
-              "Re-pass it during the 5:30 to 7:30 golden window — the same door is a different door at a different hour",
+              "Re-pass it during the 5:30 to 7:30 golden window. The same door is a different door at a different hour",
               "Leave flyers on every door",
             ],
             answerIndex: 2,
@@ -4510,35 +4510,35 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m15-logging-discipline",
         title: "Every door gets an outcome",
-        summary: "The map is the team's memory — and the log is why tomorrow's you knocks smarter.",
+        summary: "The map is the team's memory, and the log is why tomorrow's you knocks smarter.",
         minutes: 5,
         sections: [
           {
             heading: "The rule and the reasons",
             body: [
               "Every knocked door gets an outcome in the app before you reach the next porch: not_home, interested, sold, not_interested, already_customer, or follow_up. Not at the end of the street, not at the end of the day — before the next porch, while the conversation is still accurate in your head. The sixty-second memory decay after a hard door is real; the rep who batches logging is the rep whose notes say \"seemed nice\" about a door that said never come back.",
-              "The discipline pays you directly. not_home at 11 a.m. becomes your 6 p.m. re-knock. follow_up with a real callback time becomes the appointment that converts at triple the cold rate. sold through the proper outcome is what mints the commission — a sale that never gets logged as sold is a sale you may never get paid on. Skipped logs create phantom territory: doors that look unworked get double-knocked by teammates, and nothing poisons a street faster than two reps knocking the same annoyed household in one week.",
+              "The discipline pays you directly. not_home at 11 a.m. becomes your 6 p.m. re-knock. follow_up with a real callback time becomes the appointment that converts at triple the cold rate. sold through the proper outcome is what mints the commission. A sale that never gets logged as sold is a sale you may never get paid on. Skipped logs create phantom territory: doors that look unworked get double-knocked by teammates, and nothing poisons a street faster than two reps knocking the same annoyed household in one week.",
             ],
           },
           {
             heading: "The map is the team's memory",
             body: [
-              "No individual rep remembers four hundred doors. The team that logs honestly never has to: the pin colors, the outcome history, and the door notes hold everything — the promo-cliff complaint at 412, the dog at 418, the contract that ends in March at 422. When you get reassigned or a teammate picks up your block, the map hands them your whole season of learning in one glance. That only works if every rep treats the log as a message to a future colleague, because it is.",
+              "No individual rep remembers four hundred doors. The team that logs honestly never has to: the pin colors, the outcome history, and the door notes hold everything. The promo-cliff complaint at 412, the dog at 418, the contract that ends in March at 422. When you get reassigned or a teammate picks up your block, the map hands them your whole season of learning in one glance. That only works if every rep treats the log as a message to a future colleague, because it is.",
               "Write notes for the reader, not for yourself: \"hates promo pricing, contract renews March, prefers evening\" beats \"nice lady, maybe later.\" One sentence, concrete, forward-looking. The note you write today is the opener some rep — possibly you — uses in three months.",
             ],
           },
           {
             heading: "Callback discipline",
             body: [
-              "Every \"come back later\" becomes a callback with a specific day and time, set in the app before you leave the porch, honored exactly. \"Thursday after 5\" is a callback; \"sometime next week\" is a wish. And the honor-exactly part is the product: anyone can promise a return, almost nobody arrives when promised, and the homeowner who watches you pull up at 5:15 on Thursday as agreed has just received a live demonstration of how this company keeps commitments. The kept callback is the highest-converting door in the business — you arrive pre-trusted, which is the whole game.",
+              "Every \"come back later\" becomes a callback with a specific day and time, set in the app before you leave the porch, honored exactly. \"Thursday after 5\" is a callback; \"sometime next week\" is a wish. And the honor-exactly part is the product: anyone can promise a return, almost nobody arrives when promised, and the homeowner who watches you pull up at 5:15 on Thursday as agreed has just received a live demonstration of how this company keeps commitments. The kept callback is the highest-converting door in the business. You arrive pre-trusted, which is the whole game.",
             ],
           },
         ],
         keyTakeaways: [
-          "Log the outcome before the next porch — batching means inaccurate notes and poisoned streets.",
+          "Log the outcome before the next porch: batching means inaccurate notes and poisoned streets.",
           "The log pays you: re-knocks, callbacks, and commissions all run through accurate outcomes.",
           "Write notes for the future reader: one concrete, forward-looking sentence.",
-          "Callbacks get a specific day and time, honored exactly — the kept callback arrives pre-trusted.",
+          "Callbacks get a specific day and time, honored exactly. The kept callback arrives pre-trusted.",
         ],
         drillPrompt:
           "For your next full day in the field, log every outcome within thirty seconds of leaving each porch and write one forward-looking note per contact. At day's end, audit: any door without an outcome? Any note you couldn't act on in three months? Fix both before clocking out.",
@@ -4558,18 +4558,18 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What does \"the map is the team's memory\" mean in practice?",
             options: [
               "Managers can see where you are",
-              "Pins, outcome history, and door notes hold what no rep can remember — and hand a whole season of learning to whoever works the block next",
+              "Pins, outcome history, and door notes hold what no rep can remember. And hand a whole season of learning to whoever works the block next",
               "The map remembers your commission rate",
               "Sold pins stay visible permanently",
             ],
             answerIndex: 1,
-            explanation: "Four hundred doors exceed any human memory. The log is a message to a future colleague — often future you.",
+            explanation: "Four hundred doors exceed any human memory. The log is a message to a future colleague, often future you.",
           },
           {
             question: "Why is the kept callback the highest-converting door in the business?",
             options: [
               "Callbacks have better demographics",
-              "Arriving exactly when promised is a live demonstration that this company keeps commitments — you arrive pre-trusted",
+              "Arriving exactly when promised is a live demonstration that this company keeps commitments, you arrive pre-trusted",
               "Callback customers forget their objections",
               "It skips the opener entirely",
             ],
@@ -4588,7 +4588,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Suppression respect is permanent",
             body: [
               "A do-not-knock flag is the closest thing this job has to sacred law. When an occupant asks not to be visited again, that flag goes on the door, it stays forever, and it survives every pass reset — the system is built so that a manager clearing a block for a new sweep cannot accidentally reopen it. Never knock a flagged door, never ask a teammate to knock it for you, and never mark a door inaccurately to dodge a suppression. The same respect extends to no-soliciting signage, gated-community rules, and building policies — a sale extracted past a posted boundary is a complaint with a commission attached, and the complaint always outlives the commission.",
-              "The phone side has its own hard rules: do-not-call lists govern who you may call and text, and the calling side of this app blocks listed numbers for a reason. A callback number a homeowner gave you at the door is permission for that callback — it is not permission to add them to a campaign. When in doubt, ask your manager before the call, not after the complaint.",
+              "The phone side has its own hard rules: do-not-call lists govern who you may call and text, and the calling side of this app blocks listed numbers for a reason. A callback number a homeowner gave you at the door is permission for that callback. It is not permission to add them to a campaign. When in doubt, ask your manager before the call, not after the complaint.",
             ],
           },
           {
@@ -4607,8 +4607,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "Do-not-knock is permanent and survives every reset — never knock it, never route around it, never mis-mark to dodge it.",
           "DNC lists govern the phone side; a door-given callback number is permission for that callback only.",
-          "Quote only verified current offers — the [VERIFY] tags are a compliance discipline, not a style choice.",
-          "Safety: visible ID, daylight, check-ins, dog respect, local curfews [VERIFY], and the absolute gut rule — leave.",
+          "Quote only verified current offers: the [VERIFY] tags are a compliance discipline, not a style choice.",
+          "Safety: visible ID, daylight, check-ins, dog respect, local curfews [VERIFY], and the absolute gut rule, leave.",
         ],
         drillPrompt:
           "Before your next shift, verify three things and write them down: the current offer terms you'll quote today, the local soliciting-hours rule for your territory, and your check-in contact. At shift's end, audit the day: every claim verified, every boundary honored, every door accurately marked.",
@@ -4617,19 +4617,19 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A manager resets the block for a new pass. What happens to a do-not-knock door?",
             options: [
               "It becomes knockable again after thirty days",
-              "It stays frozen — do-not-knock is permanent and survives every pass reset",
+              "It stays frozen: do-not-knock is permanent and survives every pass reset",
               "It resets like any other door",
               "It switches to follow_up",
             ],
             answerIndex: 1,
-            explanation: "The system is built so the occupant's request can never be silently undone — not by a reset, not by a rep, not by a teammate.",
+            explanation: "The system is built so the occupant's request can never be silently undone. Not by a reset, not by a rep, not by a teammate.",
           },
           {
             question: "A homeowner gives you their number for a callback. What may you use it for?",
             options: [
               "Any future campaign",
               "Sharing with the team's text list",
-              "That callback — nothing more, unless they give separate permission",
+              "That callback: nothing more, unless they give separate permission",
               "Weekly check-ins until they buy",
             ],
             answerIndex: 2,
@@ -4640,11 +4640,11 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Close fast and leave",
               "Stay on the public side of the threshold",
-              "Leave — the gut rule is absolute, and no sale is worth an unsafe minute",
+              "Leave: the gut rule is absolute, and no sale is worth an unsafe minute",
               "Call a teammate to join you at the door",
             ],
             answerIndex: 2,
-            explanation: "Interest does not override instinct. Mark the door accurately, leave, and let the next pass decide — the sale is never the priority over safety.",
+            explanation: "Interest does not override instinct. Mark the door accurately, leave, and let the next pass decide. The sale is never the priority over safety.",
           },
         ],
       },
@@ -4666,13 +4666,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m16-equation",
         title: "The only equation that pays you",
-        summary: "Knocks times conversations times close rate — manage inputs, never hope.",
+        summary: "Knocks times conversations times close rate: manage inputs, never hope.",
         minutes: 6,
         sections: [
           {
             heading: "The formula",
             body: [
-              "Every dollar you will ever make in this job comes out of one equation: knocks times conversations times close rate equals installs. The reps who grow income fastest attack the input side of it — \"double your door count, keep the same close rate, and watch your income explode.\" The reason is structural: inputs are controllable, outputs are not. You cannot control whether door 41 buys. You can absolutely control whether you knock door 41. Manage knocks, not hope.",
+              "Every dollar you will ever make in this job comes out of one equation: knocks times conversations times close rate equals installs. The reps who grow income fastest attack the input side of it: \"double your door count, keep the same close rate, and watch your income explode.\" The reason is structural: inputs are controllable, outputs are not. You cannot control whether door 41 buys. You can absolutely control whether you knock door 41. Manage knocks, not hope.",
               "This is where the pacing work from Door Discipline gets its engine. m15 taught you to log the day honestly; this module teaches you what the log is for. Every number you write down tonight is a variable in the equation that pays you next month.",
             ],
           },
@@ -4686,7 +4686,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Work backwards from the income goal",
             body: [
-              "Start at the paycheck and divide backwards. You want ten installs this week. Your close rate says that takes a set number of full conversations. The conversation ratio says how many knocks those conversations cost. Out comes your daily knock target — not a wish, a quotient. Every rep must be able to state their personal equation cold: X knocks produce Y conversations produce Z installs. If you can't say yours, you are hoping, and hope is not a funnel stage.",
+              "Start at the paycheck and divide backwards. You want ten installs this week. Your close rate says that takes a set number of full conversations. The conversation ratio says how many knocks those conversations cost. Out comes your daily knock target. Not a wish, a quotient. Every rep must be able to state their personal equation cold: X knocks produce Y conversations produce Z installs. If you can't say yours, you are hoping, and hope is not a funnel stage.",
             ],
           },
           {
@@ -4701,11 +4701,11 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Knocks times conversations times close rate equals installs — inputs are controllable, outputs are not.",
           "Working bands: 50-70 knocks a day trained baseline, one conversation per 3-5 knocks, 2-3% of knocks to sales for average reps [VERIFY].",
           "State your personal equation cold: X knocks, Y conversations, Z installs.",
-          "Knocks today are installs 30-90 days from now — missed days bite late.",
+          "Knocks today are installs 30-90 days from now: missed days bite late.",
           "A dead stage is a timing or skill problem with an address; find it in the numbers, not in your feelings.",
         ],
         drillPrompt:
-          "For the next 7 knocking days, log four numbers per day: knocks, real conversations, installs, and minutes-to-recover after your worst door. On day 7, compute your personal equation (knocks to conversations to installs) and find your weakest stage. Bring the card to your 1:1 and name the one stage you are fixing this week — the conversion gap usually lives in a single funnel stage.",
+          "For the next 7 knocking days, log four numbers per day: knocks, real conversations, installs, and minutes-to-recover after your worst door. On day 7, compute your personal equation (knocks to conversations to installs) and find your weakest stage. Bring the card to your 1:1 and name the one stage you are fixing this week. The conversion gap usually lives in a single funnel stage.",
         quiz: [
           {
             question: "You want 8 installs this week, you close 1 in 4 full conversations, and 1 in 4 knocks becomes a real conversation. What is your weekly knock target?",
@@ -4721,8 +4721,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A rep knocks 100 doors a day with a 10% contact rate. What is the most likely fix?",
             options: [
-              "More hustle — knock 150 doors",
-              "Better timing or turf — the door count is fine, the contact stage is sick",
+              "More hustle: knock 150 doors",
+              "Better timing or turf: the door count is fine, the contact stage is sick",
               "A louder opener",
               "Lower close targets",
             ],
@@ -4732,7 +4732,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What does the 30-day rule predict about skipping a slow Tuesday?",
             options: [
-              "Nothing — one day is noise",
+              "Nothing: one day is noise",
               "The cost lands immediately, on Tuesday's numbers",
               "The cost lands 30 to 90 days later, when today's knocks would have ripened into installs",
               "It only matters in blitz weeks",
@@ -4751,21 +4751,21 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "First sale fast, comfort slow",
             body: [
-              "The first sale typically lands inside two to four full-effort knocking days. One rep's post says it in all caps: \"I GOT MY FIRST EVER SALE TODAY DOOR KNOCKING TOO. TOOK ME ABOUT 4 days of knocking.\" That early win is real and you should expect it — but do not confuse it with arrival. Comfort takes much longer: \"Don't expect excellence out of the gate. It took me a year to feel comfortable and confident.\"",
+              "The first sale typically lands inside two to four full-effort knocking days. One rep's post says it in all caps: \"I GOT MY FIRST EVER SALE TODAY DOOR KNOCKING TOO. TOOK ME ABOUT 4 days of knocking.\" That early win is real and you should expect it. But do not confuse it with arrival. Comfort takes much longer: \"Don't expect excellence out of the gate. It took me a year to feel comfortable and confident.\"",
               "Hold both truths at once. If you are on day three with no sale, you are normal — keep knocking. If you are on month three and still feel clumsy at the door, you are also normal — comfort is a year-long build, not a weekend course.",
             ],
           },
           {
             heading: "The income ladder is a skill ladder",
             body: [
-              "The eight-year field report is the cleanest income map in this business: \"first year 45k… Year 2 approx 65k… Year 3 75-90k… Year 4 150-175k, i became good at filtering people and doors, not everyone's a deal. Year 5-8 was 250-400k.\" Read the jump carefully. Nothing about year four involved knocking more hours — the hours were constant from year one. The jump is a skill jump: learning which doors deserve your minutes. \"Not everyone's a deal\" is the whole lesson in five words.",
+              "The eight-year field report is the cleanest income map in this business: \"first year 45k… Year 2 approx 65k… Year 3 75-90k… Year 4 150-175k, i became good at filtering people and doors, not everyone's a deal. Year 5-8 was 250-400k.\" Read the jump carefully. Nothing about year four involved knocking more hours. The hours were constant from year one. The jump is a skill jump: learning which doors deserve your minutes. \"Not everyone's a deal\" is the whole lesson in five words.",
             ],
           },
           {
             heading: "Structured ramps beat sink-or-swim",
             body: [
               "The four-week progression that keeps rookies alive: fundamentals first, then shadow-selling beside a veteran, then supervised selling with a coach watching, then independent knocking with daily check-ins. The ramp scoreboard climbs in stages — 20 doors a day at 1 percent, then 50 a day at 2 percent, then 70-plus a day at 3 percent or better. You are not behind when week one looks small. You are on step one of a four-step staircase.",
-              "Why the structure matters so much: \"Speed to sale, speed to pay, speed to integrate. Miss any one and the new hire ghosts you before day 30.\" Time-to-first-funded-deal is the number one retention predictor in door-to-door, and most quitting concentrates in weeks three through eight. If you are in that window right now and wobbling, you are standing in the statistically normal danger zone — the move is to tell your lead today, not to disappear Friday.",
+              "Why the structure matters so much: \"Speed to sale, speed to pay, speed to integrate. Miss any one and the new hire ghosts you before day 30.\" Time-to-first-funded-deal is the number one retention predictor in door-to-door, and most quitting concentrates in weeks three through eight. If you are in that window right now and wobbling, you are standing in the statistically normal danger zone. The move is to tell your lead today, not to disappear Friday.",
             ],
           },
           {
@@ -4776,11 +4776,11 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Expect a first sale inside 2-4 full-effort days — and expect real comfort to take closer to a year.",
+          "Expect a first sale inside 2-4 full-effort days. And expect real comfort to take closer to a year.",
           "The income ladder jumps when filtering skill lands, not when hours increase: \"not everyone's a deal.\"",
           "The ramp: fundamentals, shadow, supervised, independent with daily check-ins — 20/day at 1% up to 70+/day at 3%+.",
           "Weeks 3-8 are the quitting window; if you are wobbling there, tell your lead today.",
-          "Slow turf gets a new plan, not a complaint — change one variable at a time.",
+          "Slow turf gets a new plan, not a complaint: change one variable at a time.",
         ],
         drillPrompt:
           "Write your own ramp card tonight: where you are on the four-week progression, your current doors-per-day and close rate, and the one variable you will change if this week stays slow. Compare it to the scoreboard stages (20 at 1%, 50 at 2%, 70+ at 3%+) and bring the gap — not the mood — to your next check-in.",
@@ -4790,7 +4790,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Working seven days a week instead of six",
               "Better luck with territories",
-              "Learning to filter people and doors — a skill jump, not a hustle jump",
+              "Learning to filter people and doors: a skill jump, not a hustle jump",
               "A pay-plan change",
             ],
             answerIndex: 2,
@@ -4800,7 +4800,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A rookie on day three has no sale yet. The field data says they are…",
             options: [
               "Statistically behind",
-              "Normal — first sales typically land inside 2-4 full-effort days",
+              "Normal: first sales typically land inside 2-4 full-effort days",
               "Ready for a new opener",
               "Better off switching to evenings only",
             ],
@@ -4810,9 +4810,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "When is door-to-door turnover most concentrated, and what does that mean for you?",
             options: [
-              "Week one — push through orientation",
-              "Weeks 3-8 — if you are wobbling then, you are in the normal danger zone and should loop in your lead",
-              "Month six — ask for a raise",
+              "Week one: push through orientation",
+              "Weeks 3-8: if you are wobbling then, you are in the normal danger zone and should loop in your lead",
+              "Month six: ask for a raise",
               "It is evenly spread",
             ],
             answerIndex: 1,
@@ -4837,13 +4837,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "No-goals and the fifth ask",
             body: [
               "Sales folklore holds that most customers say no several times before yes and that most reps quit long before the fifth ask — teach that as direction, not as a measurement; the specific percentages are canon folklore, not verified fiber data. The usable version: set targets for no's collected, not just yeses. A rep hunting thirty no's cannot be crushed by the twelfth, because the twelfth was on the shopping list.",
-              "The consent boundary from m15 still governs everything: persistence lives inside a welcome conversation. Three genuine no's, a request to leave, a posted sign, or the clock ends the door — \"next\" is always part of the chant.",
+              "The consent boundary from m15 still governs everything: persistence lives inside a welcome conversation. Three genuine no's, a request to leave, a posted sign, or the clock ends the door: \"next\" is always part of the chant.",
             ],
           },
           {
             heading: "The fear is the brake, not the rejection",
             body: [
-              "Study after study lands on the same mechanic: it is the fear of rejection, not rejection itself, that throttles a rep — the average salesperson spends only about ninety minutes a day actually face-to-face with prospects. The rest is steering around the fear: long lunches, map fiddling, one more coffee. The cure is volume delivered fast: \"run up to that first door before you overthink it.\" Motion kills the dread that planning feeds.",
+              "Study after study lands on the same mechanic: it is the fear of rejection, not rejection itself, that throttles a rep. The average salesperson spends only about ninety minutes a day actually face-to-face with prospects. The rest is steering around the fear: long lunches, map fiddling, one more coffee. The cure is volume delivered fast: \"run up to that first door before you overthink it.\" Motion kills the dread that planning feeds.",
               "Make bounce-back time a tracked skill. The walk from a bad door to the next porch is where careers are decided — exhaled and reset in ten seconds, or marinated in for ten minutes. And learn the walk-away win: \"If you know the person is going to say 'no', beat them to the punch and walk away. In your head, you won!\"",
             ],
           },
@@ -4869,12 +4869,12 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "According to the module, what actually limits most reps' production?",
             options: [
               "The rejection itself",
-              "The fear of rejection — the average salesperson averages only about ninety minutes a day face-to-face",
+              "The fear of rejection: the average salesperson averages only about ninety minutes a day face-to-face",
               "Bad territories",
               "Weak closing lines",
             ],
             answerIndex: 1,
-            explanation: "Rejection is over in seconds; the avoidance of it consumes hours. The cure is fast volume — \"run up to that first door before you overthink it.\"",
+            explanation: "Rejection is over in seconds; the avoidance of it consumes hours. The cure is fast volume: \"run up to that first door before you overthink it.\"",
           },
           {
             question: "What is the correct way to use the \"customers say no four times\" claim?",
@@ -4903,20 +4903,20 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m16-at-bats",
         title: "At-bats: the filtering identity",
-        summary: "Low pressure, high volume, hard filtering — the identity of the reps who eat.",
+        summary: "Low pressure, high volume, hard filtering: the identity of the reps who eat.",
         minutes: 5,
         sections: [
           {
             heading: "Create at-bats, don't force closes",
             body: [
               "The top-earner pattern across every facet is the same three-legged stool: low pressure, high volume, strong filtering. A 490k-a-year rep describes it exactly: \"The biggest mistake is in trying to close everyone… I don't close hard sales, I create hundreds of easy ones… I just create more at bats.\" The baseball metaphor is the identity. You are not trying to hit a home run on every pitch. You are trying to get to the plate more times than anyone else, with the discipline to lay off bad pitches.",
-              "Here is the anti-pressure opener that rep actually runs, in full: \"You're not signing up for anything today. In a week or so you can, but I'm not gonna twist your arm. You'll either like it and do it or you won't.\" It works precisely because it lowers the shield — and because the rep has enough at-bats scheduled that this one door never has to convert.",
+              "Here is the anti-pressure opener that rep actually runs, in full: \"You're not signing up for anything today. In a week or so you can, but I'm not gonna twist your arm. You'll either like it and do it or you won't.\" It works precisely because it lowers the shield. And because the rep has enough at-bats scheduled that this one door never has to convert.",
             ],
           },
           {
             heading: "Filtering is where the money lives",
             body: [
-              "Filtering means spending your golden-window minutes on the doors that can actually say yes. Pre-qualify the map before you burn the gas: which streets are serviceable, which blocks are DSL conversions waiting to happen (the easiest wins in fiber), which are renters who need the quick service-choice version rather than the homeowner pitch. Stay in your lane — the year-four income jump from lesson two was a filtering jump, not a charisma jump.",
+              "Filtering means spending your golden-window minutes on the doors that can actually say yes. Pre-qualify the map before you burn the gas, which streets are serviceable, which blocks are DSL conversions waiting to happen (the easiest wins in fiber), which are renters who need the quick service-choice version rather than the homeowner pitch. Stay in your lane. The year-four income jump from lesson two was a filtering jump, not a charisma jump.",
               "Filtering is not skipping. Every door still gets a professional knock and an accurate disposition. You are deciding where the deep conversation goes, not where the manners go.",
             ],
           },
@@ -4937,8 +4937,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "\"I don't close hard sales, I create hundreds of easy ones… I just create more at bats.\"",
           "The anti-pressure opener converts because volume removes the neediness: \"I'm not gonna twist your arm.\"",
-          "Filtering aims golden-window minutes at serviceable, winnable doors — it decides where depth goes, never where manners go.",
-          "Hunter identity internally, neighbor-helper posture externally — in that order.",
+          "Filtering aims golden-window minutes at serviceable, winnable doors. It decides where depth goes, never where manners go.",
+          "Hunter identity internally, neighbor-helper posture externally, in that order.",
           "One more door is the mantra; fun is the diagnostic.",
         ],
         drillPrompt:
@@ -4953,14 +4953,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It saves the rep time on paperwork",
             ],
             answerIndex: 1,
-            explanation: "De-pressurizing works because the rep genuinely has more at-bats scheduled — the calm is real, and the door can feel it.",
+            explanation: "De-pressurizing works because the rep genuinely has more at-bats scheduled. The calm is real, and the door can feel it.",
           },
           {
             question: "What did the year-four income jump in the field report come from?",
             options: [
               "Harder closes",
               "Longer hours",
-              "Filtering — spending prime minutes on doors that can say yes",
+              "Filtering: spending prime minutes on doors that can say yes",
               "A better zip code",
             ],
             answerIndex: 2,
@@ -5000,7 +5000,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         summary: "Greenfield, pre-registration, overbuild, and MDU are four different conversations.",
         minutes: 6,
         pitchDrill:
-          "Hey, how's it going? We just finished running fiber to your street — you're one of the first homes that can get it. Are you currently with your cable provider?",
+          "Hey, how's it going? We just finished running fiber to your street. You're one of the first homes that can get it. Are you currently with your cable provider?",
         sections: [
           {
             heading: "The strategic frame",
@@ -5019,7 +5019,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Mapping it to NC/SC",
             body: [
-              "Kinetic greenfield turf tracks the grant-funded builds — the Cabarrus and Stanly county CAB areas and the new community lighting announcements [VERIFY against ops' current buildout calendar before you plan a campaign]. The overbuild battlegrounds are the Charlotte-metro suburbs where Spectrum, AT&T Fiber, and Lumos already fight for the porch [VERIFY which competitor serves each zone]. The stage map changes quarterly; a street that was pre-registration in spring can be greenfield by fall.",
+              "Kinetic greenfield turf tracks the grant-funded builds. The Cabarrus and Stanly county CAB areas and the new community lighting announcements [VERIFY against ops' current buildout calendar before you plan a campaign]. The overbuild battlegrounds are the Charlotte-metro suburbs where Spectrum, AT&T Fiber, and Lumos already fight for the porch [VERIFY which competitor serves each zone]. The stage map changes quarterly; a street that was pre-registration in spring can be greenfield by fall.",
             ],
           },
           {
@@ -5032,7 +5032,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "Fiber D2D is deployment-tied: name the stage before you plan the knock.",
           "Greenfield = novelty/upgrade; pre-registration = interest list with honest timelines; overbuild = comparison; MDU = property manager first.",
-          "Never promise install dates before the network exists — that debt comes due.",
+          "Never promise install dates before the network exists. That debt comes due.",
           "Check the buildout calendar quarterly; stages migrate [VERIFY].",
           "Step zero of every knock is an address-level serviceability check.",
         ],
@@ -5043,7 +5043,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What is the correct play in a soft-launch / pre-registration area?",
             options: [
               "Quote install dates to build urgency",
-              "Build the interest list with honest timelines — overpromising dates here damages trust before the network exists",
+              "Build the interest list with honest timelines: overpromising dates here damages trust before the network exists",
               "Skip the area until it is lit",
               "Lead with a price comparison against cable",
             ],
@@ -5054,7 +5054,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A townhome has a fiber box 30 feet away but can't get service. Why?",
             options: [
               "The box is decorative",
-              "MDU service requires building-wide access — clear the property manager or HOA before any unit gets pitched",
+              "MDU service requires building-wide access: clear the property manager or HOA before any unit gets pitched",
               "The homeowner filled out the wrong form",
               "The unit is too far from the street",
             ],
@@ -5066,7 +5066,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "The flyer drop",
               "The four-beat opener",
-              "An address-level serviceability check — no check, no knock",
+              "An address-level serviceability check: no check, no knock",
               "A look at the neighbor's install",
             ],
             answerIndex: 2,
@@ -5077,13 +5077,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m17-window",
         title: "The two-to-four-week window",
-        summary: "Why the first weeks after lighting convert hardest — and how to ride the notification wave.",
+        summary: "Why the first weeks after lighting convert hardest. And how to ride the notification wave.",
         minutes: 5,
         sections: [
           {
             heading: "Why the window converts",
             body: [
-              "\"The homeowner has seen the construction and is curious, [the ISP] is running promotional pricing, the competition has not yet responded with retention offers, and there is a neighborhood momentum effect where early adopters talk to their neighbors.\" Four conversion forces peak at once — and all four decay. \"The awareness is high because they have seen the construction trucks and orange conduit being laid for weeks.\"",
+              "\"The homeowner has seen the construction and is curious, [the ISP] is running promotional pricing, the competition has not yet responded with retention offers, and there is a neighborhood momentum effect where early adopters talk to their neighbors.\" Four conversion forces peak at once. And all four decay. \"The awareness is high because they have seen the construction trucks and orange conduit being laid for weeks.\"",
               "The deepest of the four is risk perception: \"When a homeowner sees a fiber installation truck parked three doors down, their perceived risk of switching providers drops… Your job is to step into that psychological gap.\" The truck is proof the switch works. Six months later the proof is gone and you are selling from scratch.",
             ],
           },
@@ -5102,16 +5102,16 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Ride the notification wave",
             body: [
-              "The big fiber builders all announce themselves. Metronet mails homeowners at least 30 days before crews arrive and plants yard signs and door hangers. Ziply sends ambassadors door-to-door in the days before construction. Lumos synchronizes mailers during construction in the Carolinas. Calendar your knocks to land after the mailer and with the trucks — the homeowner has been pre-warmed by the company's own marketing, and your knock is the easy final step.",
+              "The big fiber builders all announce themselves. Metronet mails homeowners at least 30 days before crews arrive and plants yard signs and door hangers. Ziply sends ambassadors door-to-door in the days before construction. Lumos synchronizes mailers during construction in the Carolinas. Calendar your knocks to land after the mailer and with the trucks. The homeowner has been pre-warmed by the company's own marketing, and your knock is the easy final step.",
               "Plan capacity honestly: a blitz day produces roughly 3 to 6 signups per rep [VERIFY]. Treat any certification-course claim of 10 to 13 deals a day as marketing, and staff your campaign around the real band.",
             ],
           },
         ],
         keyTakeaways: [
-          "Curiosity, promos, un-answered competition, and neighbor momentum all peak in weeks 1-4 — then decay.",
+          "Curiosity, promos, un-answered competition, and neighbor momentum all peak in weeks 1-4, then decay.",
           "The install truck three doors down drops the perceived risk of switching; step into that gap.",
           "Bands [VERIFY]: first pass 15-25%, second pass +5-10%, team campaign 20-30%, mature turf 5-10%.",
-          "Knock in front of the plow crews — visible construction is the cheapest marketing you will ever get.",
+          "Knock in front of the plow crews: visible construction is the cheapest marketing you will ever get.",
           "Land knocks after the ISP's mailer, with the trucks; plan capacity at 3-6 signups per rep per blitz day [VERIFY].",
         ],
         drillPrompt:
@@ -5121,7 +5121,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Which force does the parked installation truck primarily create?",
             options: [
               "Price pressure",
-              "A drop in the perceived risk of switching — visible proof the switch works",
+              "A drop in the perceived risk of switching: visible proof the switch works",
               "Fear of missing a contract",
               "Curiosity about the crew's equipment",
             ],
@@ -5131,20 +5131,20 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "Your campaign on freshly lit turf is converting at mature-area rates (5-10%). What does the window model say?",
             options: [
-              "The neighborhood is a dud — move on",
-              "The campaign is the problem — fresh turf should run 15-25% on the first pass [VERIFY]",
+              "The neighborhood is a dud: move on",
+              "The campaign is the problem: fresh turf should run 15-25% on the first pass [VERIFY]",
               "Wait two months for awareness to build",
               "Cut the take-rate targets in half",
             ],
             answerIndex: 1,
-            explanation: "The bands exist to diagnose. Fresh turf converting at mature rates means the passes, timing, or staffing are broken — not the doors.",
+            explanation: "The bands exist to diagnose. Fresh turf converting at mature rates means the passes, timing, or staffing are broken, not the doors.",
           },
           {
             question: "What is the lesson of the municipal 30% pre-sign case?",
             options: [
               "Promise 30% pre-signups on every build",
               "The exact percentages will repeat on Kinetic turf",
-              "Knock while the crews are visibly working — construction itself is the marketing",
+              "Knock while the crews are visibly working: construction itself is the marketing",
               "Skip knocking until the build is complete",
             ],
             answerIndex: 2,
@@ -5176,28 +5176,28 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Team blitz mechanics",
             body: [
-              "A blitz is not five reps wandering the same subdivision. Divide the neighborhood into zero-overlap zones so no homeowner gets double-knocked. Put 3 to 5 reps in the same neighborhood on the same day so \"homeowners see your team… and perceive it as an event rather than a random solicitation.\" Track take rates by zone in real time, and share intelligence instantly — the street that is all rentals, the hostile HOA president on the corner lot, the competitor's tech who was just there. Then send the strongest closers on the second pass, where the warm maybes live.",
+              "A blitz is not five reps wandering the same subdivision. Divide the neighborhood into zero-overlap zones so no homeowner gets double-knocked. Put 3 to 5 reps in the same neighborhood on the same day so \"homeowners see your team… and perceive it as an event rather than a random solicitation.\" Track take rates by zone in real time, and share intelligence instantly. The street that is all rentals, the hostile HOA president on the corner lot, the competitor's tech who was just there. Then send the strongest closers on the second pass, where the warm maybes live.",
               "Run the verify-measure-manage loop around it: confirm reps are working the assigned zones and hitting contact-rate targets, with territory boundaries drawn around the buildout footprint and assignments pushed to phones. After every install, stack the neighborhood: knock the five closest doors — left, right, and across the street first, the cloverleaf pattern — while the truck is still warming the block.",
             ],
           },
         ],
         keyTakeaways: [
           "Every install anchors a 3-day cluster: anchor knock, expand with named neighbors, close the street.",
-          "Scarcity lines are only honest when literally true — \"whether the constraint is real\" is the whole test.",
+          "Scarcity lines are only honest when literally true: \"whether the constraint is real\" is the whole test.",
           "Blitz = zero-overlap zones, 3-5 reps visible same day, live intel sharing, take rates by zone.",
           "Strongest closers take the second pass.",
           "After every install, knock the five closest doors — cloverleaf left, right, across.",
         ],
         drillPrompt:
-          "At your next scheduled install, run the full 3-day cluster on the ten closest doors: day-one anchor script, day-two named-neighbor expansion, day-three street close — every line literally true. Log disposition per door per day, and report at the huddle how many cluster doors converted versus your solo-knock baseline.",
+          "At your next scheduled install, run the full 3-day cluster on the ten closest doors: day-one anchor script, day-two named-neighbor expansion, day-three street close. Every line literally true. Log disposition per door per day, and report at the huddle how many cluster doors converted versus your solo-knock baseline.",
         quiz: [
           {
             question: "When may you say \"you are actually one of the last ones I haven't spoken to yet\"?",
             options: [
               "Whenever the door feels cold",
               "Only on day three of any cluster",
-              "Only when it is literally true — the constraint must be real",
-              "Never — scarcity is banned",
+              "Only when it is literally true: the constraint must be real",
+              "Never: scarcity is banned",
             ],
             answerIndex: 2,
             explanation: "\"The difference between sleazy scarcity and effective scarcity is whether the constraint is real.\" True scarcity closes; fake scarcity is a compliance violation that also burns the street.",
@@ -5218,7 +5218,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "The newest reps, for practice",
               "Whoever is closest",
-              "The strongest closers — the second pass holds the warm maybes",
+              "The strongest closers: the second pass holds the warm maybes",
               "Nobody; second passes are optional",
             ],
             answerIndex: 2,
@@ -5235,13 +5235,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The discipline",
             body: [
-              "\"Work in concentric circles outward from the build's center, and track every knock so second and third passes target maybes and not-homes instead of re-knocking signed accounts.\" Three canvass passes reach about 90 percent of homes — but only if the passes are aimed. A second pass that re-knocks signed customers and hard no's is not a pass; it is a complaint generator. The disposition log from m15 is what makes aiming possible: pass two exists to hunt maybes and not-homes, and nothing else.",
+              "\"Work in concentric circles outward from the build's center, and track every knock so second and third passes target maybes and not-homes instead of re-knocking signed accounts.\" Three canvass passes reach about 90 percent of homes. But only if the passes are aimed. A second pass that re-knocks signed customers and hard no's is not a pass; it is a complaint generator. The disposition log from m15 is what makes aiming possible: pass two exists to hunt maybes and not-homes, and nothing else.",
             ],
           },
           {
             heading: "The yo-yo approach",
             body: [
-              "Mid-day, skip the houses with no signs of life and keep moving. Then, \"as most people return home from work at 5 pm, circle back around to the houses that were previously vacant… Most reps usually skip going back to missed houses.\" That skip is your edge. The not-home door is the highest-value door in the log — it was never a no, it was a scheduling problem, and scheduling problems are solvable.",
+              "Mid-day, skip the houses with no signs of life and keep moving. Then, \"as most people return home from work at 5 pm, circle back around to the houses that were previously vacant… Most reps usually skip going back to missed houses.\" That skip is your edge. The not-home door is the highest-value door in the log. It was never a no, it was a scheduling problem, and scheduling problems are solvable.",
             ],
           },
           {
@@ -5261,9 +5261,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "Passes two and three target maybes and not-homes only — re-knocking signed doors is a complaint generator.",
           "Three passes reach ~90% of homes, but only when the disposition log aims them.",
-          "Yo-yo back at 5 p.m. to the houses that were vacant mid-day — most reps never do.",
+          "Yo-yo back at 5 p.m. to the houses that were vacant mid-day. Most reps never do.",
           "Flyers are motion sensors for the reknock, not a sales channel: \"advertising, not sales.\"",
-          "Hard stop 8:30-9 p.m., never after dark in winter — an after-hours blitz is a compliance event.",
+          "Hard stop 8:30-9 p.m., never after dark in winter. An after-hours blitz is a compliance event.",
         ],
         drillPrompt:
           "On your next full turf day, run the flyer loop exactly: 25-30 doors with flyers at not-homes, a break, then reknock every door whose flyer is gone. Log the conversion difference between first-touch doors and flyer-loop returns, and bring the two numbers to your 1:1.",
@@ -5272,7 +5272,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What is the correct target list for a second pass?",
             options: [
               "Every door on the street, in order",
-              "Maybes and not-homes — never signed accounts or hard no's",
+              "Maybes and not-homes: never signed accounts or hard no's",
               "Only the biggest houses",
               "Doors that complained",
             ],
@@ -5283,7 +5283,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A flyer you left at 11 a.m. is gone when you return at 5. What does that tell you?",
             options: [
               "The wind took it",
-              "Someone is home now — the flyer is a motion sensor, reknock that door",
+              "Someone is home now: the flyer is a motion sensor, reknock that door",
               "The homeowner is uninterested",
               "The competitor was there",
             ],
@@ -5294,7 +5294,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why does the module call an after-hours blitz a compliance event rather than a sales event?",
             options: [
               "Sales don't count after 8 p.m.",
-              "Hours violations produce complaints, viral threads, and police reports — the brand damage exceeds any sale",
+              "Hours violations produce complaints, viral threads, and police reports. The brand damage exceeds any sale",
               "Homeowners can't sign after dark",
               "The app stops working at 9 p.m.",
             ],
@@ -5312,7 +5312,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "The triage between objection and indecision, and the deep-dives m12 never touched.",
     hook: "m12 taught you to survive objections. This module teaches you to read them — because 'let me think about it' is a different disease than 'it's too expensive,' and the cure for one poisons the other.",
     fieldStory:
-      "A woman warns a solar rep that nobody in the neighborhood is interested — then, mid-warning, mentions her own house has solar. \"That's your house? How's your trueup?\" She says 1500 dollars a year. He closed her fifteen minutes later. The hostile objection was not a wall; it was the door to the real conversation.",
+      "A woman warns a solar rep that nobody in the neighborhood is interested. Then, mid-warning, mentions her own house has solar. \"That's your house? How's your trueup?\" She says 1500 dollars a year. He closed her fifteen minutes later. The hostile objection was not a wall; it was the door to the real conversation.",
     sayThisNotThat: {
       instead: "Oh, you need to talk to your spouse…",
       say: "If your spouse loves the idea, are you 100% on board, or do you still have reservations?",
@@ -5347,16 +5347,16 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Door rules vs. table rules",
             body: [
-              "The same words mean different things at different depths. \"'I need to talk to my spouse' at the door means set a joint follow-up… at the signing table means you handle it on the spot.\" Signing-table aggression at the doorstep kills deals — the door is a 90-second environment, and the win there is a specific next step, not a signature extracted under porch pressure. m14 owns the table; this module owns the triage that tells you which room you are standing in.",
+              "The same words mean different things at different depths. \"'I need to talk to my spouse' at the door means set a joint follow-up… at the signing table means you handle it on the spot.\" Signing-table aggression at the doorstep kills deals. The door is a 90-second environment, and the win there is a specific next step, not a signature extracted under porch pressure. m14 owns the table; this module owns the triage that tells you which room you are standing in.",
             ],
           },
         ],
         keyTakeaways: [
           "All objection frameworks share one skeleton: acknowledge, isolate, pivot, confirm — learn one, name the rest.",
           "Never repeat the objection back as a statement; it is a reflex, not a decision; end every rebuttal with one ask.",
-          "Objection (named concern) gets a rebuttal; indecision (unnamed stall) gets JOLT — recommend, limit, de-risk.",
+          "Objection (named concern) gets a rebuttal; indecision (unnamed stall) gets JOLT, recommend, limit, de-risk.",
           "\"An objection is not a rejection—it's a request for more information delivered with emotion.\"",
-          "At the door, the win is a specific next step — table aggression on a porch kills deals.",
+          "At the door, the win is a specific next step: table aggression on a porch kills deals.",
         ],
         drillPrompt:
           "GhostRep's standard is 10 role-play reps per objection, not 3 — at ten repetitions the response becomes automatic and you can watch the prospect instead of the script. This week: 10 reps each on think-about-it, spouse, and too-expensive, rotating empathy-first, logic-based, and urgency-driven framings. Log every real field objection to the territory objection map; the hardest one from yesterday becomes tomorrow's huddle drill.",
@@ -5364,10 +5364,10 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "\"Let me think about it\" with no named concern behind it should be treated as…",
             options: [
-              "A price objection — counter with the daily-rate reframe",
-              "Indecision — run JOLT: recommend, limit the exploration, take risk off the table",
-              "A polite no — leave immediately",
-              "A spouse objection — book the joint call",
+              "A price objection: counter with the daily-rate reframe",
+              "Indecision: run JOLT: recommend, limit the exploration, take risk off the table",
+              "A polite no: leave immediately",
+              "A spouse objection: book the joint call",
             ],
             answerIndex: 1,
             explanation: "No content means no rebuttal will land. Indecision is fear of messing up; the cure is a recommendation and de-risking, not argument.",
@@ -5376,7 +5376,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why should you never repeat the objection back as a statement?",
             options: [
               "It wastes time",
-              "It makes the smoke screen real — you validate a reflex into a decision",
+              "It makes the smoke screen real: you validate a reflex into a decision",
               "It sounds scripted",
               "The homeowner will correct you",
             ],
@@ -5386,7 +5386,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What do LAARC, Validate-Isolate-Pivot, and SPOTIO's four steps have in common?",
             options: [
-              "Nothing — they conflict",
+              "Nothing: they conflict",
               "They are the same skeleton: acknowledge first, isolate the truth, then respond and confirm",
               "They all require a manager's approval",
               "They only work at the signing table",
@@ -5399,7 +5399,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m18-think-about-it",
         title: "\"Let me think about it\": the smoke-screen playbook",
-        summary: "Isolate the real concern, permit the no, or de-risk the indecision — then lock a specific return.",
+        summary: "Isolate the real concern, permit the no, or de-risk the indecision. Then lock a specific return.",
         minutes: 6,
         pitchDrill:
           "Absolutely, this is a big decision and I would never want you to rush into anything. Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?",
@@ -5413,7 +5413,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The forced-choice isolate",
             body: [
-              "The number one tool: \"Absolutely, this is a big decision and I would never want you to rush into anything. Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?\" — \"Nine times out of ten, they will tell you the real objection.\" The fiber variant swaps in the local nouns: \"is it the price, the speed, or something else that you'd want to look into?\"",
+              "The number one tool: \"Absolutely, this is a big decision and I would never want you to rush into anything. Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?\" \"Nine times out of ten, they will tell you the real objection.\" The fiber variant swaps in the local nouns: \"is it the price, the speed, or something else that you'd want to look into?\"",
               "Why it works: agreement first removes the combat, the forced choice makes answering easy, and \"something else entirely\" gives them a dignified exit ramp to name the real thing. Once the real objection is on the porch, you are back in m12 and this module's deep-dives.",
             ],
           },
@@ -5432,7 +5432,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "\"Let me think about it\" is politeness wearing a costume — the surface words are never the real thing.",
+          "\"Let me think about it\" is politeness wearing a costume. The surface words are never the real thing.",
           "The forced-choice isolate surfaces the real objection nine times out of ten.",
           "Permission to say no builds the trust that brings the door back later.",
           "True indecision gets JOLT: recommend, limit, de-risk with real instruments — including the cooling-off right.",
@@ -5468,7 +5468,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Try a third rebuttal",
               "Discount the price",
-              "Lock a specific return time and leave — never \"I'll check back sometime\"",
+              "Lock a specific return time and leave: never \"I'll check back sometime\"",
               "Ask for the sale one last time",
             ],
             answerIndex: 2,
@@ -5479,7 +5479,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m18-spouse",
         title: "\"I need to talk to my spouse\": diagnose before you rebut",
-        summary: "Rarely about the spouse — isolate the hidden reservation, then arm the advocate.",
+        summary: "Rarely about the spouse: isolate the hidden reservation, then arm the advocate.",
         minutes: 5,
         sections: [
           {
@@ -5491,7 +5491,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The isolation rebuttal",
             body: [
-              "\"That makes total sense, and I would expect you to make this decision together. Just so I know where you stand, if your spouse comes home and says they love the idea, are you 100% on board, or do you still have some reservations?\" Respect the partnership, then isolate the individual. If they are not 100 percent on board, the reservations are yours to handle right now — the spouse was the smoke screen. If they are 100 percent, your job changes: arm them to advocate, with the one number and the one sentence that will win the kitchen-table conversation you cannot attend.",
+              "\"That makes total sense, and I would expect you to make this decision together. Just so I know where you stand, if your spouse comes home and says they love the idea, are you 100% on board, or do you still have some reservations?\" Respect the partnership, then isolate the individual. If they are not 100 percent on board, the reservations are yours to handle right now. The spouse was the smoke screen. If they are 100 percent, your job changes: arm them to advocate, with the one number and the one sentence that will win the kitchen-table conversation you cannot attend.",
             ],
           },
           {
@@ -5503,7 +5503,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The money warning",
             body: [
-              "Bulldozing the spouse objection is the single biggest creator of next-day cancellations in home services: \"a slightly delayed Sale in many cases can be much more productive than a pressured or rushed sale that will be cancelled later.\" A signature extracted against a couple's spending pact is not a sale — it is a cooling-off cancellation with a chargeback attached, and m19 will show you what that costs in dollars.",
+              "Bulldozing the spouse objection is the single biggest creator of next-day cancellations in home services: \"a slightly delayed Sale in many cases can be much more productive than a pressured or rushed sale that will be cancelled later.\" A signature extracted against a couple's spending pact is not a sale. It is a cooling-off cancellation with a chargeback attached, and m19 will show you what that costs in dollars.",
               "So the door rule: at the doorstep, the win is a both-present appointment — \"I'm on this street tomorrow at 6 — will [name] be home?\" The forbidden line, never to be said at any depth: \"You don't need to talk to your spouse.\"",
             ],
           },
@@ -5533,7 +5533,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "They answer the isolation question with \"honestly, I'd still want to see the total cost.\" What just happened?",
             options: [
               "The deal is dead",
-              "The spouse was a smoke screen — the real objection (cost) is now on the porch for you to handle",
+              "The spouse was a smoke screen: the real objection (cost) is now on the porch for you to handle",
               "You should call the spouse",
               "You should leave a flyer",
             ],
@@ -5594,13 +5594,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Bad experiences: probe the specific failure, no humor, and switch to service recovery if the wound is open.",
         ],
         drillPrompt:
-          "Build your Spectrum battlecard this week and verify every number on it against current offer data [VERIFY]: upload tiers, the promo-cliff delta, the evening-congestion question, and the retention-line pre-emption. Role-play the full pivot 10 times, then the win-back probe 5 times with a partner playing a genuinely burned ex-customer — no jokes allowed in that rep.",
+          "Build your Spectrum battlecard this week and verify every number on it against current offer data [VERIFY]: upload tiers, the promo-cliff delta, the evening-congestion question, and the retention-line pre-emption. Role-play the full pivot 10 times, then the win-back probe 5 times with a partner playing a genuinely burned ex-customer. No jokes allowed in that rep.",
         quiz: [
           {
             question: "Why is \"we have no contracts\" a wrong wedge against Spectrum?",
             options: [
               "Contracts are illegal",
-              "Spectrum already offers no contracts and no data caps — the claim marks you as a rep who doesn't know the market",
+              "Spectrum already offers no contracts and no data caps. The claim marks you as a rep who doesn't know the market",
               "Homeowners like contracts",
               "Kinetic requires contracts",
             ],
@@ -5611,7 +5611,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A homeowner says \"we had Kinetic before and cancelled.\" Your first move is…",
             options: [
               "A light joke to defuse it",
-              "\"What part of the experience felt off for you?\" — then differentiate on exactly that axis",
+              "\"What part of the experience felt off for you?\" Then differentiate on exactly that axis",
               "The promo-cliff math",
               "The speed-test anchor",
             ],
@@ -5622,7 +5622,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A competitor-fiber household's math beats yours this month. The correct exit is…",
             options: [
               "Point out three flaws in their provider",
-              "Push harder — everyone has a price",
+              "Push harder: everyone has a price",
               "Congratulate the choice, plant the promo-expiry seed with a logged date, and leave warmly",
               "Leave a flyer and never return",
             ],
@@ -5634,11 +5634,97 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Reduce to the daily rate",
               "Offer the cheapest tier twice",
-              "Disengage — never push a household past what it can afford",
+              "Disengage: never push a household past what it can afford",
               "Ask a manager for a bigger discount",
             ],
             answerIndex: 2,
             explanation: "Selling past inability to pay manufactures cancellations and real harm. Disengage rules are scored skills, not suggestions.",
+          },
+        ],
+      },
+      {
+        id: "m18-book-it",
+        title: "The push-out: turn stalls into booked appointments",
+        summary: "Spouse and think-it-over stalls get one test: will they put a time on it? Agree, make it easy, book the return.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The stall is a scheduling test",
+            body: [
+              "Two objections end more porch conversations than any others: the spouse and the think-it-over. This module already taught you to isolate them. This lesson gives you the exit move when the isolate cannot finish the job at the door: convert the stall into a booked, time-boxed return. The test is simple. A homeowner with real interest will accept a five-minute window. A homeowner performing politeness will refuse any time at all, and that refusal is a gift: it just saved you a dead callback.",
+              "The mechanics are always the same three beats. Agree without flinching. Make the delay easy instead of fighting it. Set a specific time with their escape hatch built in. You are not asking them to decide. You are asking them to schedule, and scheduling is a much smaller yes.",
+            ],
+          },
+          {
+            heading: "\"I need to ask my wife\": book the visit, not the verdict",
+            body: [
+              "The line: \"Totally fair. We can push the install out so you two can talk it over. If she is home tonight I can swing back at 7 for five minutes, and if it is a no then, I am gone.\" Every beat is load-bearing. \"Totally fair\" kills the fight. Pushing the install out proves you are not squeezing them [VERIFY current install-window flexibility before promising dates]. The five minutes caps their risk. \"A no then, I am gone\" hands them the exit, which is exactly why they stop reaching for it.",
+              "The psychology: this objection is usually a polite exit, not a real errand. The test is never the words, it is whether they will book a time. Real interest accepts a concrete window because the window costs nothing. A polite exit refuses every window you offer, because the spouse was the door closing softly. Either answer wins: one books a both-present appointment, the other frees your evening.",
+              "Variants for the rotation: \"Smart move. When do you two eat dinner? I can catch you both for five minutes at 7 and you'll have the whole picture.\" \"She'll have questions I can answer in two minutes. Tonight at 7 or tomorrow at 6?\" \"Take the night. I'm on this street tomorrow anyway. Is 6 or 7 better?\" And the m18-spouse rule still stands: the forbidden line stays forbidden, and the win is the both-present visit.",
+            ],
+          },
+          {
+            heading: "\"Let me think about it\": name it or park it",
+            body: [
+              "The line: \"Sure. Usually when someone says that, it is either the price or the switching hassle. Which one is it for you?\" Two things can happen, and you win both. They name one, and the fog becomes a real objection you already have tools for. Or they say \"honestly, neither, we're just slammed this week,\" and now you park it with the push-out: \"Then take the night. I can swing back tomorrow at 6 for five minutes, and a no then is a fine answer.\"",
+              "The psychology: nobody sits down after dinner and thinks about internet. \"Think about it\" is fog, and fog has a social job: it avoids saying the awkward thing to your face. The either-or question makes the awkward thing cheap to say, because you said it first. Naming price costs them nothing once you have offered it as a normal answer. The genuine hesitator is the exception, and the push-out serves them honestly: pressure removed, time booked, decision kept.",
+              "Variants: \"No rush. What would you be thinking over, the monthly or the switch itself?\" \"Fair enough. If tomorrow's answer is no, that's a fine answer. Five minutes at 6 to hear it?\" \"Take the night, run tonight's speed test, and I'll take whatever answer you've got at 6.\" If they refuse every window, close the file politely and log the fast no you just earned.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "A stall is a scheduling test: real interest accepts a five-minute window, a polite exit refuses them all.",
+          "Three beats every time: agree without flinching, make the delay easy, book a specific time with their exit built in.",
+          "Push the install, not the person: \"we can push the install out so you two can talk it over.\"",
+          "Name it or park it: offer price or hassle as the easy confession, then book the return for the genuine hesitator.",
+          "A refused window is a fast no: it frees your evening and closes the file honestly.",
+        ],
+        drillPrompt:
+          "Role-play both stalls with a partner: five reps where they secretly hold a real objection, five where they are politely exiting. Then on your next 10 doors, every spouse or think-it-over stall gets exactly one booking attempt with a specific time, and you log which doors booked and which refused.",
+        quiz: [
+          {
+            question: "What is the real test hiding inside \"I need to ask my wife\"?",
+            options: [
+              "Whether they repeat it twice",
+              "Whether they will book a concrete five-minute return window",
+              "Whether the wife is home",
+              "Whether they take a flyer",
+            ],
+            answerIndex: 1,
+            explanation: "The objection is usually a polite exit. Words prove nothing. A booked window proves interest, and a refused window frees your evening.",
+          },
+          {
+            question: "Why does \"we can push the install out\" work?",
+            options: [
+              "It creates urgency",
+              "It proves you are not squeezing them, which removes the pressure the stall was defending against",
+              "It locks in the price",
+              "It skips the spouse conversation",
+            ],
+            answerIndex: 1,
+            explanation: "The stall defends against pressure. Volunteering the delay removes the thing being defended against, and the booking becomes easy to accept.",
+          },
+          {
+            question: "They say \"let me think about it.\" What is your first move?",
+            options: [
+              "Leave a flyer and go",
+              "Offer a discount",
+              "Offer the two likely reasons, price or switching hassle, and ask which one it is",
+              "Come back next week unannounced",
+            ],
+            answerIndex: 2,
+            explanation: "You make the real objection cheap to say by saying it first. Name it and handle it. If it is truly neither, park it with a booked return.",
+          },
+          {
+            question: "They refuse every window you offer. What did you just get?",
+            options: [
+              "A failure to log",
+              "A fast no that saves a dead callback, so close the file politely",
+              "A reason to knock again tomorrow",
+              "A referral opportunity",
+            ],
+            answerIndex: 1,
+            explanation: "The scheduling test ran and returned its answer. The polite exit was never buying, and now your evening belongs to a door that can.",
           },
         ],
       },
@@ -5660,7 +5746,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m19-enroll-later",
         title: "\"I'll enroll later\" is a loss event, not a pipeline event",
-        summary: "Later almost never happens — quantify the leak and structure the next step instead.",
+        summary: "Later almost never happens: quantify the leak and structure the next step instead.",
         minutes: 5,
         sections: [
           {
@@ -5671,9 +5757,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
             ],
           },
           {
-            heading: "Pressure closes flake — structure doesn't",
+            heading: "Pressure closes flake: structure doesn't",
             body: [
-              "The counterintuitive truth: \"sales that close because of persuasion or pressure will either flake or cause headaches.\" So flake control is not closing harder — it is structuring the next step so the deal does not need pressure. The rule of the porch: \"don't walk to your car without a date on the calendar.\" A maybe with a date is a follow-up. A maybe without one is a eulogy.",
+              "The counterintuitive truth: \"sales that close because of persuasion or pressure will either flake or cause headaches.\" So flake control is not closing harder. It is structuring the next step so the deal does not need pressure. The rule of the porch: \"don't walk to your car without a date on the calendar.\" A maybe with a date is a follow-up. A maybe without one is a eulogy.",
               "When the door earns a sit-down, set it with all four conditions: \"both decision-makers, kitchen table, 45 minutes, no obligation.\" Half-conditioned appointments are where flakes are born.",
             ],
           },
@@ -5685,9 +5771,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "\"I'll enroll later\" is a loss event — one rep counted $1,200 gone in a single week.",
+          "\"I'll enroll later\" is a loss event: one rep counted $1,200 gone in a single week.",
           "Flyers alone convert under 1%; \"A flyer is where sales go to die.\"",
-          "Keep days-to-install at 3-7 [VERIFY] — long waits manufacture pre-install cancellations.",
+          "Keep days-to-install at 3-7 [VERIFY]: long waits manufacture pre-install cancellations.",
           "Flake control is structure, not pressure: \"don't walk to your car without a date on the calendar.\"",
           "Reflex no's get one bridge and thirty seconds; interested stalls get a date. Consent caps both.",
         ],
@@ -5698,7 +5784,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why classify \"I'll enroll later\" as a loss event instead of pipeline?",
             options: [
               "Pessimism keeps reps sharp",
-              "The follow-through almost never happens — the rep who counted lost $1,200 in one week",
+              "The follow-through almost never happens: the rep who counted lost $1,200 in one week",
               "The app can't store maybes",
               "Managers prefer it",
             ],
@@ -5720,7 +5806,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "How does pressure closing relate to flake rates?",
             options: [
               "Pressure reduces flakes by creating commitment",
-              "\"Sales that close because of persuasion or pressure will either flake or cause headaches\" — structure beats pressure",
+              "\"Sales that close because of persuasion or pressure will either flake or cause headaches\", structure beats pressure",
               "No relationship exists",
               "Pressure only matters at the table",
             ],
@@ -5732,7 +5818,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m19-callback-architecture",
         title: "The callback architecture",
-        summary: "A/B booking, speed-test homework, and the face-saving re-open — never open-ended.",
+        summary: "A/B booking, speed-test homework, and the face-saving re-open, never open-ended.",
         minutes: 6,
         pitchDrill:
           "I am going to be talking to the rest of the neighbors on this block for the next hour. Should I swing back by in about 45 minutes, or would tomorrow evening be better for you?",
@@ -5748,13 +5834,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Anchors that survive the night",
             body: [
               "The speed-test homework anchor gives the return visit a purpose the homeowner chose: \"Tonight around 7:00 PM, when everyone is streaming and gaming, run a quick speed test on your phone. I am going to swing back by tomorrow afternoon just to see what numbers you got. If they are exactly what you are paying for, I will not bother you again. Fair enough?\" They run the test at the worst congestion hour; you return to numbers, not to a pitch.",
-              "The neighbor-install follow-up rides m17's cluster: \"Hey [Name], Sam from [Company] again. I was just down the street getting the Smiths set up with their new fiber line. I wanted to drop off this quick comparison sheet I promised you… Have you had a chance to look at your current bill since we spoke?\" And the smallest retention trick in the business: get their name and note it — \"if you get their name, make note… you'd be surprised how far that goes when selling in a neighborhood.\"",
+              "The neighbor-install follow-up rides m17's cluster: \"Hey [Name], Sam from [Company] again. I was just down the street getting the Smiths set up with their new fiber line. I wanted to drop off this quick comparison sheet I promised you… Have you had a chance to look at your current bill since we spoke?\" And the smallest retention trick in the business: get their name and note it: \"if you get their name, make note… you'd be surprised how far that goes when selling in a neighborhood.\"",
             ],
           },
           {
             heading: "The face-saving re-open",
             body: [
-              "Old leads and expired promos get the reframe that removes their embarrassment: \"I'm guessing you haven't got around to shopping your internet since the promo expired.\" Nobody did — that is exactly why the line works. It normalizes the lapse, hands them a reason that is not their fault, and makes you the solution to a problem they just admitted having.",
+              "Old leads and expired promos get the reframe that removes their embarrassment: \"I'm guessing you haven't got around to shopping your internet since the promo expired.\" Nobody did. That is exactly why the line works. It normalizes the lapse, hands them a reason that is not their fault, and makes you the solution to a problem they just admitted having.",
             ],
           },
           {
@@ -5766,20 +5852,20 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Book every callback as A or B — \"Should I swing back by in about 45 minutes, or would tomorrow evening be better?\"",
+          "Book every callback as A or B: \"Should I swing back by in about 45 minutes, or would tomorrow evening be better?\"",
           "The speed-test anchor makes the homeowner run the test at the worst hour, so you return to numbers.",
-          "Note names — \"you'd be surprised how far that goes.\"",
+          "Note names: \"you'd be surprised how far that goes.\"",
           "The face-saving re-open: \"I'm guessing you haven't got around to shopping your internet since the promo expired.\"",
           "Return at the exact promised minute; stop after 3-4 well-spaced attempts with no engagement.",
         ],
         drillPrompt:
-          "For one week, end every non-signing conversation with an A/B booking delivered out loud — no \"I'll check back\" allowed. Log each booked callback and whether you hit the promised minute exactly. Friday: compute your kept-appointment rate and your kept-time rate separately, and bring both to your 1:1.",
+          "For one week, end every non-signing conversation with an A/B booking delivered out loud. No \"I'll check back\" allowed. Log each booked callback and whether you hit the promised minute exactly. Friday: compute your kept-appointment rate and your kept-time rate separately, and bring both to your 1:1.",
         quiz: [
           {
             question: "What is wrong with \"I'll check back sometime\"?",
             options: [
               "Nothing, if you mean it",
-              "It is open-ended — an unbooked callback is a hope, not an appointment",
+              "It is open-ended: an unbooked callback is a hope, not an appointment",
               "It sounds too formal",
               "It takes too long to say",
             ],
@@ -5790,7 +5876,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why does the speed-test anchor specify \"tonight around 7:00 PM\"?",
             options: [
               "Reps prefer evening callbacks",
-              "That is peak congestion — the homeowner measures their current service at its worst hour",
+              "That is peak congestion: the homeowner measures their current service at its worst hour",
               "Speed tests only work at night",
               "It avoids meal times",
             ],
@@ -5813,7 +5899,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m19-protect-commission",
         title: "Protect the commission after the signature",
-        summary: "Commission pays on activation, chargebacks punish hype — the 8-stage workflow is yours.",
+        summary: "Commission pays on activation, chargebacks punish hype. The 8-stage workflow is yours.",
         minutes: 6,
         sections: [
           {
@@ -5850,7 +5936,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "The week-after check-in call: 10 minutes to save a $150 commission [VERIFY].",
         ],
         drillPrompt:
-          "Build your expectations checklist card from this lesson and verify every number on it against current install guidance [VERIFY]. Use it verbatim on your next 5 signups, then set a reminder for the one-week check-in call on each. Track whether any of the five surfaces a surprise you failed to pre-empt — and add that surprise to the card.",
+          "Build your expectations checklist card from this lesson and verify every number on it against current install guidance [VERIFY]. Use it verbatim on your next 5 signups, then set a reminder for the one-week check-in call on each. Track whether any of the five surfaces a surprise you failed to pre-empt. And add that surprise to the card.",
         quiz: [
           {
             question: "When does commission typically pay, and what threatens it?",
@@ -5896,13 +5982,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Every sale is a lead event",
             body: [
-              "The close is the beginning of the street, not the end of the door. Ask for referrals while the signature is warm. Run the install-day ask while the truck is still parked out front — the most persuasive billboard in fiber. Stack the neighborhood after every install: the five closest doors, cloverleaf left, right, and across the street, with the true and fresh line that the crew just left their neighbor's house. One install, worked properly, is worth a street of warm doors.",
+              "The close is the beginning of the street, not the end of the door. Ask for referrals while the signature is warm. Run the install-day ask while the truck is still parked out front. The most persuasive billboard in fiber. Stack the neighborhood after every install: the five closest doors, cloverleaf left, right, and across the street, with the true and fresh line that the crew just left their neighbor's house. One install, worked properly, is worth a street of warm doors.",
             ],
           },
           {
             heading: "The contract-expiry calendar",
             body: [
-              "Every \"I'm under contract\" is a future sale with a date on it. Log the expiration, check whether a buyout offer or ETF credit currently applies [VERIFY current offers], and plant the seed on the way off the porch: \"When's your promo period up? I'll make a note to swing by the month before; that's when the bill usually jumps\" [ADAPTED — field-test before canonizing].",
+              "Every \"I'm under contract\" is a future sale with a date on it. Log the expiration, check whether a buyout offer or ETF credit currently applies [VERIFY current offers], and plant the seed on the way off the porch: \"When's your promo period up? I'll make a note to swing by the month before; that's when the bill usually jumps\" [ADAPTED, field-test before canonizing].",
               "Old leads get the re-hash opener: \"Hi Mr. Jones… I'm sure you remember us from when we were out here in April? Great — I was in the area and wanted to let you know about a new special we're running this month…\" Only run it when there genuinely is something new to say — the re-hash trades on memory, and a fake reason burns the memory it borrowed.",
             ],
           },
@@ -5922,7 +6008,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "Every sale triggers referral asks, install-day visibility, and a five-door cloverleaf while the truck is warm.",
           "Log every contract expiry; check buyout/ETF offers [VERIFY]; swing by the month before the promo ends.",
-          "The re-hash opener trades on memory — only run it with something genuinely new to say.",
+          "The re-hash opener trades on memory: only run it with something genuinely new to say.",
           "New move-ins are the warmest doors in fiber: no loyalty yet, decisions made fast, first two weeks.",
           "WFH gets upload/stability; gamers get latency and jitter — same product, right lens.",
         ],
@@ -5933,7 +6019,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why is the install-day referral ask so effective?",
             options: [
               "Customers feel obligated",
-              "The truck is visible proof on the street — the strongest billboard fiber has",
+              "The truck is visible proof on the street: the strongest billboard fiber has",
               "Installers close the deal",
               "It saves a trip next week",
             ],
@@ -5973,7 +6059,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "Exact-word swaps, tonalities, strategic silences — the micro-language layer.",
     hook: "The exact phrase is the technique. Two reps can say the same sentence and get opposite doors — the difference is one swapped word and three seconds of silence.",
     fieldStory:
-      "A fiber rep finds his magic number: homeowners literally mid-swing on closing the door stop when they hear the concrete savings figure — \"people about to close the door until they hear the magic number and change their minds.\" Not a better product, not a better price. Better words. The words you pick decide whether the door finishes closing.",
+      "A fiber rep finds his magic number: homeowners literally mid-swing on closing the door stop when they hear the concrete savings figure: \"people about to close the door until they hear the magic number and change their minds.\" Not a better product, not a better price. Better words. The words you pick decide whether the door finishes closing.",
     sayThisNotThat: {
       instead: "Do you have any questions?",
       say: "What questions do you have for me?",
@@ -5990,7 +6076,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The premise",
             body: [
-              "Decisions get made twice: the subconscious decides first, and the conscious mind justifies afterward. The phrases in this lesson talk to the first decider. And the reason to drill them before the shift: \"the worst time to think about what to say is in the moment.\" These are seasoning, not a meal — they slot into the four-beat structure from m11; they do not replace it.",
+              "Decisions get made twice: the subconscious decides first, and the conscious mind justifies afterward. The phrases in this lesson talk to the first decider. And the reason to drill them before the shift: \"the worst time to think about what to say is in the moment.\" These are seasoning, not a meal. They slot into the four-beat structure from m11; they do not replace it.",
             ],
           },
           {
@@ -6009,7 +6095,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "The subconscious decides first — these phrases talk to it, then the conscious mind justifies.",
+          "The subconscious decides first: these phrases talk to it, then the conscious mind justifies.",
           "\"The worst time to think about what to say is in the moment\" — drill before the shift.",
           "The family: not-sure-if, open-minded, how-would-you-feel, just-imagine, what-do-you-know, haven't-got-around-to, bit-like-me.",
           "Seasoning, not a meal: maximum one magic phrase per exchange.",
@@ -6031,9 +6117,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the maximum number of magic phrases per exchange?",
             options: [
-              "Three — one per beat",
+              "Three: one per beat",
               "As many as fit",
-              "One — stacking reads as a parlor trick",
+              "One: stacking reads as a parlor trick",
               "Zero on fresh-fiber streets",
             ],
             answerIndex: 2,
@@ -6043,7 +6129,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "\"What do you know about fiber vs. cable?\" is designed to…",
             options: [
               "Test their technical knowledge",
-              "Turn a potential debate into reflection — they consult their own knowledge instead of fighting yours",
+              "Turn a potential debate into reflection: they consult their own knowledge instead of fighting yours",
               "Fill silence",
               "Qualify their current plan",
             ],
@@ -6055,7 +6141,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m20-assume-outcome",
         title: "Swaps that assume the outcome",
-        summary: "Question-frame, options, sequence-skipping, and the conditional close — word-level closes.",
+        summary: "Question-frame, options, sequence-skipping, and the conditional close, word-level closes.",
         minutes: 6,
         pitchDrill:
           "As I see it, you have three options: keep cable as-is, take the 500, or take the gig. Of those three options, what's going to be easiest for you?",
@@ -6075,24 +6161,24 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The sequence-skipper and the conditional close",
             body: [
-              "The sequence-skipper narrates the process as underway: \"What happens next is I check your address in the system, then we pick an install window. What's the best email for the confirmation?\" No permission requested, no gap to object into — the next step simply arrives with a logistics question attached.",
+              "The sequence-skipper narrates the process as underway: \"What happens next is I check your address in the system, then we pick an install window. What's the best email for the confirmation?\" No permission requested, no gap to object into. The next step simply arrives with a logistics question attached.",
               "The conditional close trades a concession for a commitment: \"If I can waive the install fee today, will you pick a window?\" [VERIFY current install offer before you offer to waive anything.] The structure is the point — if-I-can, will-you — and it only works when the concession is real.",
             ],
           },
           {
             heading: "The judo and the keep-alive",
             body: [
-              "When an objection lands, the judo move is five words and silence: \"What makes you say that?\" The gentler variant: \"Just out of curiosity, what is it specifically you need to think about?\" Either way, ask and then shut up — their answer is the rebuttal you did not have to invent.",
+              "When an objection lands, the judo move is five words and silence: \"What makes you say that?\" The gentler variant: \"Just out of curiosity, what is it specifically you need to think about?\" Either way, ask and then shut up. Their answer is the rebuttal you did not have to invent.",
               "The keep-alive for a closing door: \"Before you make up your mind, let me show you the one number that changes people's minds — your actual evening speed.\" The Columbo exit, used only when literally true (F1): \"Just one more thing — the install crew finishes this street Friday; after that it's a 3-week wait\" [VERIFY the crew schedule]. And the social-proof reframe: \"Most people on the street take the gig plan because it's only $10 more than the 500\" [VERIFY the price delta], or \"The good news is the fiber's already at your property line — no construction in your yard.\"",
             ],
           },
         ],
         keyTakeaways: [
           "\"What questions do you have for me?\" assumes the outcome; \"any questions\" invites the no.",
-          "Three options plus \"what's easiest for you?\" — and \"would the gig be enough?\" closes without pressure.",
+          "Three options plus \"what's easiest for you?\" And \"would the gig be enough?\" closes without pressure.",
           "The sequence-skipper narrates the process as already moving.",
-          "Conditional close: \"If I can…, will you…?\" — the concession must be real [VERIFY].",
-          "\"What makes you say that?\" — then silence; their answer is the rebuttal.",
+          "Conditional close: \"If I can…, will you…?\" The concession must be real [VERIFY].",
+          "\"What makes you say that?\" Then silence; their answer is the rebuttal.",
         ],
         drillPrompt:
           "Flashcard day on the swaps. Write the instead/say pairs on cards and drill until the swap is reflexive, then use exactly one swap family per day this week — Monday the question-frame, Tuesday the options frame, and so on. Log doors, swap used, and result; the week's best story goes to the huddle verbatim.",
@@ -6112,7 +6198,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What constraint governs the conditional close \"If I can waive the install fee, will you pick a window?\"",
             options: [
               "Say it only at the table",
-              "The concession must be real and current — verify the install offer before offering it",
+              "The concession must be real and current: verify the install offer before offering it",
               "Never offer it twice",
               "It requires manager approval by text",
             ],
@@ -6124,7 +6210,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "A quick follow-up question",
               "The price anchor",
-              "Silence — their answer hands you the real objection",
+              "Silence: their answer hands you the real objection",
               "A smile and a nod",
             ],
             answerIndex: 2,
@@ -6169,7 +6255,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Four porch tonalities: playful default, focused for money, assertive only at the close, low empathy for wounds.",
           "The skill is the switch between voices as the conversation earns each gear.",
           "Micro-permission lines die with any trace of neediness — volume is what makes nonchalance real.",
-          "Humor is banned at bad experiences, trust moments, money moments — and after a flat joke: \"I'm just kidding,\" and move on.",
+          "Humor is banned at bad experiences, trust moments, money moments. And after a flat joke: \"I'm just kidding,\" and move on.",
         ],
         drillPrompt:
           "Record yourself delivering your opener plus one objection answer on your phone. Listen back twice: once for the words, once for the music. Mark the exact second your tone should have shifted from playful to focused, re-record with the switch, and play both for a teammate at the huddle.",
@@ -6179,7 +6265,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "The opener",
               "The whole pitch",
-              "The close only — used early it reads as aggression",
+              "The close only: used early it reads as aggression",
               "The goodbye",
             ],
             answerIndex: 2,
@@ -6189,7 +6275,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why does neediness kill the ten-second micro-permission line?",
             options: [
               "Homeowners dislike fast talkers",
-              "The words promise ease while the tone begs — the contradiction reads as manipulation",
+              "The words promise ease while the tone begs: the contradiction reads as manipulation",
               "It takes longer than ten seconds",
               "It requires a permit",
             ],
@@ -6201,7 +6287,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "Repeat it louder",
               "Explain the joke",
-              "\"I'm just kidding,\" and move on — never double down",
+              "\"I'm just kidding,\" and move on: never double down",
               "Silence and a long pause",
             ],
             answerIndex: 2,
@@ -6212,7 +6298,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m20-silences",
         title: "The seven silences and the 8-Mile move",
-        summary: "Strategic pauses that let the homeowner close themselves — and saying their objection first.",
+        summary: "Strategic pauses that let the homeowner close themselves. And saying their objection first.",
         minutes: 5,
         sections: [
           {
@@ -6237,13 +6323,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The mid-pitch permission pause",
             body: [
-              "When you feel the door drifting, ask: \"Can I pause for a sec? I want to make sure this is actually helpful.\" — \"Most people will say, 'No, this is helpful,' and re-engage more fully.\" The pause works because it is the opposite of every pushy rep they have ever met: you checked on them mid-pitch instead of flooring it through the disinterest.",
+              "When you feel the door drifting, ask: \"Can I pause for a sec? I want to make sure this is actually helpful.\" \"Most people will say, 'No, this is helpful,' and re-engage more fully.\" The pause works because it is the opposite of every pushy rep they have ever met: you checked on them mid-pitch instead of flooring it through the disinterest.",
             ],
           },
         ],
         keyTakeaways: [
           "Seven silences: name, question, trial close, objection received, objection answered, the ask, the price.",
-          "After you ask for the sale, shut up — \"He who speaks first loses.\"",
+          "After you ask for the sale, shut up: \"He who speaks first loses.\"",
           "\"Don't project your relationship with money onto them\" — state the price and let them speak.",
           "80/20: they talk themselves into the deal; monologues kill it.",
           "The 8-Mile move: say their objection first, then show the one difference [ADAPTED].",
@@ -6256,7 +6342,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "You recap the benefits",
               "You offer a fallback",
-              "Nothing — you shut up; he who speaks first loses",
+              "Nothing: you shut up; he who speaks first loses",
               "You check the app",
             ],
             answerIndex: 2,
@@ -6267,7 +6353,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "To seem mysterious",
               "To check their body language",
-              "Because projecting your own money-relationship onto them distorts their answer — let them speak",
+              "Because projecting your own money-relationship onto them distorts their answer, let them speak",
               "To remember the next line",
             ],
             answerIndex: 2,
@@ -6289,7 +6375,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m20-one-liner-vault",
         title: "The one-liner vault: flashcards for the fast brain",
-        summary: "Fifty field-tested lines, organized by moment — drill one a day until they are reflexes.",
+        summary: "Fifty field-tested lines, organized by moment: drill one a day until they are reflexes.",
         minutes: 8,
         sections: [
           {
@@ -6309,8 +6395,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Objection bridges",
             body: [
-              "\"Totally understand. You weren't expecting the [fiber] guy to stop by today. Let me show you what I was doing for Ms. Jones next door. If it works for you, cool. If not, that's cool too.\" \"I am glad to hear that. Honestly, your current provider has been the best option in this area for a long time. The only reason we are out here is that the infrastructure has finally changed…\" — the happy-provider judo.",
+              "\"Totally understand. You weren't expecting the [fiber] guy to stop by today. Let me show you what I was doing for Ms. Jones next door. If it works for you, cool. If not, that's cool too.\" \"I am glad to hear that. Honestly, your current provider has been the best option in this area for a long time. The only reason we are out here is that the infrastructure has finally changed…\", the happy-provider judo.",
               "\"Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?\" \"If this isn't for you, I'd rather have a no right now – believe me, you won't hurt my feelings.\" \"If your spouse comes home and says they love the idea, are you 100% on board, or do you still have some reservations?\" \"Sure! Would it make sense for us to call them now?\" \"Would you mind pulling up your most recent internet bill? I find that about seven out of ten homes I visit are actually paying more than they think.\" \"I know you've already got fiber from [competitor] — what are you paying for what speed?\" \"I understand how you feel. Many of my current customers felt the same way. But what they found was…\" \"What makes you say that?\" — then silence.",
+              "The push-out and fast-sort set, one breath each, labeled by objection key: \"Totally fair. If she is home tonight, I can swing back at 7 for five minutes, and a no then is a fine answer.\" (spouse) \"Sure. Usually that means the price or the switching hassle. Which one is it for you?\" (think_about_it) \"Perfect. I only need the busy version: thirty seconds, then I am gone either way.\" (too_busy) \"Fair. Before we call it expensive, what is the bill now? Most folks on this street guess twenty low.\" (price) \"Totally fair, and most of your neighbors said the same thing right before they saw the number. Thirty seconds?\" (not_interested) \"Fine is what cable feels like at noon. Run a speed test at 7 tonight and I will swing back tomorrow for the number.\" (already_have)",
             ],
           },
           {
@@ -6323,9 +6410,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "The vault is a drill deck, not a script wall — one line a day until it is a reflex.",
+          "The vault is a drill deck, not a script wall: one line a day until it is a reflex.",
           "Every line maps to a moment: opener, probe, bridge, trust, close, or self-talk.",
-          "[ADAPTED] lines are field-test candidates — log what they do before you canonize them.",
+          "[ADAPTED] lines are field-test candidates: log what they do before you canonize them.",
           "Price, speed, and offer claims inside any line carry [VERIFY] — check the current offer before quoting.",
         ],
         drillPrompt:
@@ -6335,7 +6422,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "How is the vault meant to be drilled?",
             options: [
               "Memorize all fifty lines in one weekend",
-              "One line per day, every door, logged nightly — until the line is a reflex",
+              "One line per day, every door, logged nightly: until the line is a reflex",
               "Read once before each shift",
               "Only before blitz days",
             ],
@@ -6345,8 +6432,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A vault line contains a price or speed claim. What happens before you quote it?",
             options: [
-              "Nothing — vault lines are pre-approved",
-              "You verify it against the current offer — [VERIFY] tags follow the number wherever the line goes",
+              "Nothing: vault lines are pre-approved",
+              "You verify it against the current offer: [VERIFY] tags follow the number wherever the line goes",
               "You round it down",
               "You say it only to renters",
             ],
@@ -6375,7 +6462,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
     tagline: "Huddles, scorecards, ride-alongs, and motivation mechanics — the manager track.",
     hook: "Talent is great. Systems are better. A good rep on a great system beats a great rep on a bad system every single time — and building the system is now your job.",
     fieldStory:
-      "The 9-to-9 team lead knocks mornings while training the newbies, closes in the evenings, and between appointments goes straight back to knocking — \"works his ass off always knocking or closing 9 to 9.\" His reps don't follow a manager. They follow a pace-setter.",
+      "The 9-to-9 team lead knocks mornings while training the newbies, closes in the evenings, and between appointments goes straight back to knocking: \"works his ass off always knocking or closing 9 to 9.\" His reps don't follow a manager. They follow a pace-setter.",
     sayThisNotThat: {
       instead: "Why are your numbers down?",
       say: "Show me your funnel — which stage moved this week?",
@@ -6390,7 +6477,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Who this module is for",
             body: [
-              "This module is manager-facing. It is written for team leads, assistant managers, and senior reps on the leadership path — the people who now own the system the reps run inside. Nothing in modules 1 through 20 is manager content; this one converts the team-systems research into the lead's playbook. If you are a rep, your job is in the other twenty-one modules. If you are a lead, this module is the job.",
+              "This module is manager-facing. It is written for team leads, assistant managers, and senior reps on the leadership path. The people who now own the system the reps run inside. Nothing in modules 1 through 20 is manager content; this one converts the team-systems research into the lead's playbook. If you are a rep, your job is in the other twenty-one modules. If you are a lead, this module is the job.",
             ],
           },
           {
@@ -6404,32 +6491,32 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "The variant rule and the culture law",
             body: [
               "No metrics review in the huddle. Numbers go to the weekly 30-to-45-minute sync, where door knocks, contact rate, appointments, and close rate get their proper autopsy. Mixing the two kills both: the huddle gets heavy, the sync gets rushed.",
-              "The culture law is absolute: never cancel a huddle — \"You don't cancel on culture.\" A cancelled huddle tells the team the system is optional, and optional systems are dead systems.",
+              "The culture law is absolute: never cancel a huddle: \"You don't cancel on culture.\" A cancelled huddle tells the team the system is optional, and optional systems are dead systems.",
             ],
           },
           {
             heading: "The anti-pattern and the drill loop",
             body: [
-              "The failure mode to avoid is the ra-ra hype meeting — the one that sends overcaffeinated rookies bouncing into neighborhoods. A homeowner described the result from the other side of the door: reps with \"the eyes of someone hopped up on redBull and motivational ra ra sales meetings.\" Energy at your huddle comes from structure and micro-wins, not volume.",
+              "The failure mode to avoid is the ra-ra hype meeting. The one that sends overcaffeinated rookies bouncing into neighborhoods. A homeowner described the result from the other side of the door: reps with \"the eyes of someone hopped up on redBull and motivational ra ra sales meetings.\" Energy at your huddle comes from structure and micro-wins, not volume.",
               "Close the loop with the field: \"the hardest objection from yesterday becomes the drill for tomorrow.\" The objection map from m18 feeds the eight-minute micro-training slot, so the huddle is always practicing against live ammunition, and daily role-play stays a fixed fifteen minutes inside the week.",
             ],
           },
         ],
         keyTakeaways: [
-          "Manager track: this module is for leads and leadership-path seniors — you own the system now.",
+          "Manager track: this module is for leads and leadership-path seniors. You own the system now.",
           "The agenda: 2 celebrate, 5 targets, 8 micro-training with live role-play, 3 pair-ups, 2 send-off — 20 minutes, hard stop.",
           "No metrics in the huddle; the weekly 30-45 minute sync owns the numbers.",
-          "Never cancel a huddle — \"You don't cancel on culture.\"",
+          "Never cancel a huddle: \"You don't cancel on culture.\"",
           "Yesterday's hardest field objection is tomorrow's drill.",
         ],
         drillPrompt:
-          "Run tomorrow's huddle on the timer — 20 minutes hard stop, one micro-training topic, two reps role-playing before anyone leaves. Then audit your week: how many minutes of direct coaching did each rep receive? Any rep at zero gets a ride-along scheduled before Friday.",
+          "Run tomorrow's huddle on the timer: 20 minutes hard stop, one micro-training topic, two reps role-playing before anyone leaves. Then audit your week: how many minutes of direct coaching did each rep receive? Any rep at zero gets a ride-along scheduled before Friday.",
         quiz: [
           {
             question: "Where does the weekly metrics review belong?",
             options: [
               "The daily huddle",
-              "The weekly 30-45 minute sync — the huddle is for ignition, not administration",
+              "The weekly 30-45 minute sync: the huddle is for ignition, not administration",
               "A group text",
               "The ride-along",
             ],
@@ -6439,7 +6526,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "What is the correct response when a tangent threatens the huddle clock?",
             options: [
-              "Let it run — engagement matters",
+              "Let it run: engagement matters",
               "Table it with \"we can talk about that one-on-one\" and keep the 20-minute hard stop",
               "End the huddle early",
               "Move it to the send-off",
@@ -6450,8 +6537,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A rep suggests cancelling huddles on blitz days to gain knocking time. The rule is…",
             options: [
-              "Reasonable — blitzes are revenue",
-              "Never cancel a huddle — you don't cancel on culture",
+              "Reasonable: blitzes are revenue",
+              "Never cancel a huddle: you don't cancel on culture",
               "Cancel every other one",
               "Replace it with a conference call",
             ],
@@ -6463,7 +6550,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m21-scorecards",
         title: "Scorecards that coach, not surveil",
-        summary: "Five KPIs plus coaching minutes — diagnose one funnel stage, never micromanage the ace.",
+        summary: "Five KPIs plus coaching minutes: diagnose one funnel stage, never micromanage the ace.",
         minutes: 6,
         sections: [
           {
@@ -6483,13 +6570,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "The micromanagement landmine",
             body: [
               "The rep-side warning, scored one of the most-upvoted posts in the research: \"Your guy that is running >100% to quota does not need micromanaged at all, he needs a pat on the back… Having that guy spend hours a day doing stupid reporting is absolutely criminal.\" Scorecards serve the coaching conversation; the moment they serve surveillance, your best rep starts interviewing.",
-              "Design for the field's patience: CRM disposition entry must take under 20 seconds per door or reps stop logging — and unlogged doors make every scorecard fiction. Keep the entry that fast and the data stays real.",
+              "Design for the field's patience: CRM disposition entry must take under 20 seconds per door or reps stop logging. And unlogged doors make every scorecard fiction. Keep the entry that fast and the data stays real.",
             ],
           },
           {
             heading: "Territory data hygiene",
             body: [
-              "Respect historical close rates over proximity: \"the neighborhood you closed 3 deals in last month is more valuable than the neighborhood that's 5 minutes closer.\" Assign turf by evidence, not convenience. And tag wins and losses to script variants so the opener library gets A/B tested by reality — the huddle should be drilling what the data says works on this turf, not what sounded good in a course.",
+              "Respect historical close rates over proximity: \"the neighborhood you closed 3 deals in last month is more valuable than the neighborhood that's 5 minutes closer.\" Assign turf by evidence, not convenience. And tag wins and losses to script variants so the opener library gets A/B tested by reality. The huddle should be drilling what the data says works on this turf, not what sounded good in a course.",
             ],
           },
         ],
@@ -6498,7 +6585,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "\"If coaching minutes is zero, you're not running a sales team — you're running a cost center.\"",
           "Diagnose one funnel stage: contact = timing/turf, presentation = opener, close = pitch/objection.",
           "Compare reps on knock-to-lead ratio, not raw sales; under-20-second logging keeps the data real.",
-          "Never micromanage the over-quota rep — assign turf by historical close rates, not proximity.",
+          "Never micromanage the over-quota rep: assign turf by historical close rates, not proximity.",
         ],
         drillPrompt:
           "Pull your team's funnel this week and find each rep's single broken stage — contact, presentation, or close. Write one sentence of coaching per rep aimed at exactly that stage, and time your next disposition entry: if it takes over 20 seconds, bring the friction to your ops contact before Friday.",
@@ -6508,7 +6595,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             options: [
               "A closing problem",
               "A motivation problem",
-              "A timing or territory problem — fix the contact stage, leave the rest alone",
+              "A timing or territory problem: fix the contact stage, leave the rest alone",
               "A paperwork problem",
             ],
             answerIndex: 2,
@@ -6518,7 +6605,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What does the coaching-minutes KPI catch that the five activity KPIs cannot?",
             options: [
               "Rep dishonesty",
-              "Whether you are actually developing anyone — zero coaching minutes means a cost center, not a team",
+              "Whether you are actually developing anyone: zero coaching minutes means a cost center, not a team",
               "Territory quality",
               "Comp plan fairness",
             ],
@@ -6529,7 +6616,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why must disposition entry take under 20 seconds?",
             options: [
               "App store requirements",
-              "If logging is slow, reps stop logging — and every scorecard built on unlogged doors is fiction",
+              "If logging is slow, reps stop logging, and every scorecard built on unlogged doors is fiction",
               "Battery life",
               "Faster entries pay more",
             ],
@@ -6541,7 +6628,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m21-ride-alongs",
         title: "Ride-alongs and the rookie ramp",
-        summary: "Observe, don't intervene — the 3-phase ride-along, the cadence, and the retention stakes.",
+        summary: "Observe, don't intervene: the 3-phase ride-along, the cadence, and the retention stakes.",
         minutes: 6,
         sections: [
           {
@@ -6554,7 +6641,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The cadence",
             body: [
-              "Observation-only for new reps in their first 30 days. Shadow-and-assist in weeks 5 through 12 — the highest-value tool for reps who are stuck. Side-by-side after the ramp, plus peer ride-alongs between reps. Frequency: three to four per week for days 0 to 60, one to two per week for days 60 to 120, monthly after that.",
+              "Observation-only for new reps in their first 30 days. Shadow-and-assist in weeks 5 through 12. The highest-value tool for reps who are stuck. Side-by-side after the ramp, plus peer ride-alongs between reps. Frequency: three to four per week for days 0 to 60, one to two per week for days 60 to 120, monthly after that.",
               "Performance flags that trigger an unscheduled ride-along: close rate below team baseline for two straight weeks, three or more no-decision stalls in a row, or the rep simply asks for help. That last one is the healthiest signal a team can produce — protect it by making help consequence-free.",
             ],
           },
@@ -6568,13 +6655,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "Lead from the front",
             body: [
-              "The rhythm that earns followership: \"He knocks mornings and trains newbies and closes in the evenings.\" The operating day: 8:30 huddle, 9:30 to noon knocking, midday management, 3 to 7-plus back on the doors. \"Managers sell. Setters set. Closers close. Everyone trains. Everyone logs reps.\" A lead who knocks can say \"watch me\" — the two most credible words in management.",
+              "The rhythm that earns followership: \"He knocks mornings and trains newbies and closes in the evenings.\" The operating day: 8:30 huddle, 9:30 to noon knocking, midday management, 3 to 7-plus back on the doors. \"Managers sell. Setters set. Closers close. Everyone trains. Everyone logs reps.\" A lead who knocks can say \"watch me\". The two most credible words in management.",
             ],
           },
         ],
         keyTakeaways: [
           "Ride-along phases: plan together, observe without intervening, self-assessment first, one reinforce plus one adjust.",
-          "Never ride along only when numbers are down — that turns observation into surveillance.",
+          "Never ride along only when numbers are down: that turns observation into surveillance.",
           "Cadence: observation days 0-30, shadow-assist weeks 5-12, side-by-side post-ramp; flags trigger extras.",
           "Speed to sale, speed to pay, speed to integrate — weeks 3-8 are the quitting window.",
           "Lead from the front: \"Managers sell. Setters set. Closers close. Everyone trains. Everyone logs reps.\"",
@@ -6597,7 +6684,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why ride along with your top performer on the same cadence as your struggler?",
             options: [
               "To check their numbers",
-              "So observation never reads as surveillance — and you learn what to teach everyone else",
+              "So observation never reads as surveillance, and you learn what to teach everyone else",
               "To keep them humble",
               "Fairness paperwork",
             ],
@@ -6626,7 +6713,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The perception gap",
             body: [
-              "Seventy-one percent of sales managers say they know how to motivate their team; only 40 percent of reps agree. Close the gap with what reps actually rank: real-time progress tracking, regular recognition, individual goal progression — and cash bonuses as the best reward, named by a majority. Anchor spiffs in cash and recognition in public, in that order.",
+              "Seventy-one percent of sales managers say they know how to motivate their team; only 40 percent of reps agree. Close the gap with what reps actually rank: real-time progress tracking, regular recognition, individual goal progression. And cash bonuses as the best reward, named by a majority. Anchor spiffs in cash and recognition in public, in that order.",
             ],
           },
           {
@@ -6652,9 +6739,9 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         keyTakeaways: [
           "The gap: 71% of managers think they motivate; 40% of reps agree — cash spiffs, public recognition, real-time tracking.",
-          "Contests decay in 6-8 weeks — rotate monthly; leaderboard = volume, badges = consistency, contest = burst, blitz = campaign.",
+          "Contests decay in 6-8 weeks: rotate monthly; leaderboard = volume, badges = consistency, contest = burst, blitz = campaign.",
           "Reward controllables (knocks, contact rate, follow-up speed), not just closes.",
-          "Share wins publicly in verbatim detail — the play-by-play is the training.",
+          "Share wins publicly in verbatim detail: the play-by-play is the training.",
           "The defined pipeline (rep to manager) is retention; \"build the system that makes B-players dangerous.\"",
         ],
         drillPrompt:
@@ -6664,7 +6751,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why do leaderboard-only contests fade after 6-8 weeks?",
             options: [
               "Reps stop caring about money",
-              "The same contest stops working — the mechanic must rotate, matched to the outcome you want",
+              "The same contest stops working: the mechanic must rotate, matched to the outcome you want",
               "The prizes get smaller",
               "New reps join",
             ],
@@ -6686,7 +6773,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why does the defined rep-to-manager pipeline function as retention?",
             options: [
               "It raises base pay",
-              "Reps stay where they can see a staircase — each step has criteria and a clear next step",
+              "Reps stay where they can see a staircase: each step has criteria and a clear next step",
               "It impresses recruits",
               "HR requires it",
             ],
@@ -6713,7 +6800,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m22-cooling-off",
         title: "The Cooling-Off Rule is your friend",
-        summary: "Three days to cancel, disclosed up front — the skeptic-closer hiding inside a legal duty.",
+        summary: "Three days to cancel, disclosed up front: the skeptic-closer hiding inside a legal duty.",
         minutes: 6,
         pitchDrill:
           "Smart question — you should ask it. Here's my rep ID, and here's the official number on my badge — call it while I stand here. And when you sign up, federal law gives you three days to cancel for any reason — it's printed right on the paperwork.",
@@ -6727,7 +6814,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The flip: disclosure as a closing tool",
             body: [
-              "Here is the thesis of this module: disclosing the rule up front is a trust asset, not a speed bump. The D2D Experts' guidance is \"We follow FTC rules and leave your 3-day cancel notice and itemized quote… Say it, show it.\" The psychology is risk-reversal — \"When the downside is capped, the decision gets easier.\" The consumer-grade de-risking instruments are the contract buyout, the price-lock, the install guarantee, and the cooling-off period. You are not weakening the close; you are removing the last reason to stall.",
+              "Here is the thesis of this module: disclosing the rule up front is a trust asset, not a speed bump. The D2D Experts' guidance is \"We follow FTC rules and leave your 3-day cancel notice and itemized quote… Say it, show it.\" The psychology is risk-reversal: \"When the downside is capped, the decision gets easier.\" The consumer-grade de-risking instruments are the contract buyout, the price-lock, the install guarantee, and the cooling-off period. You are not weakening the close; you are removing the last reason to stall.",
             ],
           },
           {
@@ -6763,7 +6850,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Why disclose the cooling-off right before the customer asks?",
             options: [
               "To get the legal duty over with",
-              "Risk-reversal: \"When the downside is capped, the decision gets easier\" — disclosure closes skeptics",
+              "Risk-reversal: \"When the downside is capped, the decision gets easier\", disclosure closes skeptics",
               "It shortens the install window",
               "It prevents chargebacks entirely",
             ],
@@ -6774,7 +6861,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "A homeowner refuses to hand you their card. The compliant response is…",
             options: [
               "Reassure them you are trustworthy",
-              "Reward the caution — they enter their own payment info in the app; nothing goes through you",
+              "Reward the caution: they enter their own payment info in the app; nothing goes through you",
               "Move to cash",
               "Skip the payment step",
             ],
@@ -6813,18 +6900,18 @@ export const TRAINING_MODULES: TrainingModule[] = [
         keyTakeaways: [
           "\"The difference between sleazy scarcity and effective scarcity is whether the constraint is real.\"",
           "Permitted: real crew schedules, real install-slot counts, real promo end dates [VERIFY], visible construction.",
-          "Honor your own deadlines — inconsistency \"destroys credibility and hands control to the customer.\"",
+          "Honor your own deadlines: inconsistency \"destroys credibility and hands control to the customer.\"",
           "Banned: today-only claims that are not true — deceptive-practice exposure plus manufactured cancellations.",
           "Fake urgency is an accounting loss before it is a legal one.",
         ],
         drillPrompt:
-          "Audit your last 10 closes: list every urgency claim you made and the verifiable fact behind each. Any claim without a fact goes on your personal banned list, and you replace it this week with one item from the permitted inventory — a real crew date, a real slot count, or a real promo end date pulled from the current offer sheet.",
+          "Audit your last 10 closes: list every urgency claim you made and the verifiable fact behind each. Any claim without a fact goes on your personal banned list, and you replace it this week with one item from the permitted inventory. A real crew date, a real slot count, or a real promo end date pulled from the current offer sheet.",
         quiz: [
           {
             question: "Which urgency claim is permitted?",
             options: [
               "\"This price expires when I leave\"",
-              "\"We have three open install slots this month because our crew is already here\" — when the schedule actually shows it",
+              "\"We have three open install slots this month because our crew is already here\". When the schedule actually shows it",
               "\"Everyone on the street already signed\"",
               "\"The offer ends tonight\"",
             ],
@@ -6834,8 +6921,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             question: "A promo is set to end Friday, and a great door wants it held to Monday. The deadline-hold rule says…",
             options: [
-              "Hold it — the deal matters more",
-              "It ends Friday — honoring the deadline is what gives your deadlines power",
+              "Hold it: the deal matters more",
+              "It ends Friday: honoring the deadline is what gives your deadlines power",
               "Extend it if they sign today",
               "Split the difference",
             ],
@@ -6846,7 +6933,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "Beyond legal exposure, what does fake urgency do to your numbers?",
             options: [
               "Nothing measurable",
-              "It manufactures pressured sales that cancel inside the cooling-off window — the flake class m19 counts in dollars",
+              "It manufactures pressured sales that cancel inside the cooling-off window. The flake class m19 counts in dollars",
               "It increases referrals",
               "It speeds up installs",
             ],
@@ -6858,7 +6945,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
       {
         id: "m22-forbidden-playbook",
         title: "The forbidden playbook: the tactics that burned this channel",
-        summary: "Impersonation, speed-test games, overpromising, unserviceable pitching, fraud, and FUD — named and banned.",
+        summary: "Impersonation, speed-test games, overpromising, unserviceable pitching, fraud, and FUD, named and banned.",
         minutes: 7,
         sections: [
           {
@@ -6891,14 +6978,14 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
         keyTakeaways: [
-          "Never impersonate crews or migration agents — leverage construction, state who you are in the first breath.",
+          "Never impersonate crews or migration agents: leverage construction, state who you are in the first breath.",
           "Speed tests: hardwired or next to the router, state what they prove, never touch the customer's network.",
-          "Quote scenario-appropriate windows; written numbers only when accurate — \"the service agreement defines the contract.\"",
-          "No serviceability check, no knock — unserviceable pitching gets us mocked by name.",
+          "Quote scenario-appropriate windows; written numbers only when accurate: \"the service agreement defines the contract.\"",
+          "No serviceability check, no knock: unserviceable pitching gets us mocked by name.",
           "The saturated-opener answer is verifiable specificity: \"A number beats a vague promise.\"",
         ],
         drillPrompt:
-          "Write your differentiation kit on one card: your serviceability check, your bill-pull number, the claim you will put in writing, and your compliance artifacts. Role-play opening on a homeowner who recites the last four reps' script at you — your only tools are the four items on the card. Run it three times this week.",
+          "Write your differentiation kit on one card: your serviceability check, your bill-pull number, the claim you will put in writing, and your compliance artifacts. Role-play opening on a homeowner who recites the last four reps' script at you. Your only tools are the four items on the card. Run it three times this week.",
         quiz: [
           {
             question: "The copper retirement is a true talking point. What makes the impersonation version deception?",
@@ -6968,13 +7055,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The porch rule",
             body: [
-              "\"Never debate constitutional law on a porch.\" If a homeowner, an HOA board member, or a security guard challenges you: \"Respect the Rules… Always be respectful and prepared to leave if asked.\" Instant, pleasant compliance. You may be legally right about the public street — and being right loudly is still a loss, because \"the neighborhood is watching how you treat the rules, and tonight's HOA complainer is often tomorrow's sign-up.\" Exit gracefully, flag the interaction to your lead, and let the company settle the legal question through channels that are not a doorstep.",
+              "\"Never debate constitutional law on a porch.\" If a homeowner, an HOA board member, or a security guard challenges you: \"Respect the Rules… Always be respectful and prepared to leave if asked.\" Instant, pleasant compliance. You may be legally right about the public street. And being right loudly is still a loss, because \"the neighborhood is watching how you treat the rules, and tonight's HOA complainer is often tomorrow's sign-up.\" Exit gracefully, flag the interaction to your lead, and let the company settle the legal question through channels that are not a doorstep.",
             ],
           },
           {
             heading: "The vulnerable and the brand tax",
             body: [
-              "Door-to-door's worst reputation vector is pressure on the lonely and elderly — the regret threads and the \"preyed on the lonely and elderly\" posts are the highest-scored D2D content that exists, and the impersonation case targeted an elderly woman specifically. Kinetic is the incumbent in many of these communities: every pushy rep story is a local brand tax the whole team pays for years. Disengaging from a pressured situation is a scored skill in this curriculum, not a courtesy.",
+              "Door-to-door's worst reputation vector is pressure on the lonely and elderly. The regret threads and the \"preyed on the lonely and elderly\" posts are the highest-scored D2D content that exists, and the impersonation case targeted an elderly woman specifically. Kinetic is the incumbent in many of these communities: every pushy rep story is a local brand tax the whole team pays for years. Disengaging from a pressured situation is a scored skill in this curriculum, not a courtesy.",
               "Hold the counter-signal too, because it is the goal: \"I've hired 2 people that came to my door to sell to me.\" That is how much a professional rep impresses people. The channel works \"when the rep is informative and leaves when asked; it turns toxic on persistence, late hours, and overclaiming.\" Every rule in this module is the difference between the two versions.",
             ],
           },
@@ -6987,18 +7074,18 @@ export const TRAINING_MODULES: TrainingModule[] = [
           "Pressure on the lonely and elderly is the channel's worst vector; \"informative and leaves when asked\" is the whole game.",
         ],
         drillPrompt:
-          "Compliance self-audit of your last 10 closes: for each, confirm (1) serviceability was verified before the pitch, (2) every urgency claim was verifiably true, (3) the 3-day cancel right was disclosed orally and in writing, (4) every number you quoted would survive being put in writing, (5) no signed door, no after-hours knock, no past-consent persistence. Any \"no\" answer goes to your team lead this week — self-reported, no penalty.",
+          "Compliance self-audit of your last 10 closes: for each, confirm (1) serviceability was verified before the pitch, (2) every urgency claim was verifiably true, (3) the 3-day cancel right was disclosed orally and in writing, (4) every number you quoted would survive being put in writing, (5) no signed door, no after-hours knock, no past-consent persistence. Any \"no\" answer goes to your team lead this week, self-reported, no penalty.",
         quiz: [
           {
             question: "Which \"No Soliciting\" signage is legally enforceable against you?",
             options: [
               "A sign at a community entrance on public streets",
-              "A sign on an individual home — ignoring it risks trespassing charges",
+              "A sign on an individual home: ignoring it risks trespassing charges",
               "Any HOA newsletter rule",
-              "None — canvassing is always protected",
+              "None: canvassing is always protected",
             ],
             answerIndex: 1,
-            explanation: "Individual-home signs bind. Entrance signs on public streets generally do not — but you never argue that on a porch.",
+            explanation: "Individual-home signs bind. Entrance signs on public streets generally do not. But you never argue that on a porch.",
           },
           {
             question: "An HOA board member orders you off a public street you may legally work. The rule is…",
@@ -7026,12 +7113,388 @@ export const TRAINING_MODULES: TrainingModule[] = [
             question: "What does \"I've hired 2 people that came to my door to sell to me\" prove?",
             options: [
               "Homeowners are gullible",
-              "A professional rep impresses people so much they offer jobs — the channel works when the rep is informative and leaves when asked",
+              "A professional rep impresses people so much they offer jobs. The channel works when the rep is informative and leaves when asked",
               "Recruiting beats selling",
               "Porch pitching is dead",
             ],
             answerIndex: 1,
             explanation: "That is the counter-signal: professionalism at the door is so rare it reads as hire-worthy. That is the standard.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "m23",
+    title: "How to Think About Doors",
+    tagline: "Streak math, the no-hunt, surviving the cancel, and leaving the day on the street.",
+    hook: "You already know the averages. Nobody taught you the streaks. Tonight's cold run is not a message. It is math.",
+    fieldStory:
+      "A second-year rep went 0 for 74 across two days and rewrote his pitch at midnight. His lead made him read his own log first: contact rate normal, pitch rate normal, asks normal. Nothing was broken. He knocked the old pitch on day three and closed twice by dinner. The rookie next to him hit the same cold run, decided the territory was dead, and quit in week five. Same streak. Two stories. One paycheck.",
+    sayThisNotThat: {
+      instead: "This street is dead. I'm cursed today.",
+      say: "I'm 40 doors into a normal dry run. The ratios are fine. Keep walking.",
+    },
+    lessons: [
+      {
+        id: "m23-streak-math",
+        title: "Streak math: what a cold run really means",
+        summary: "Dry streaks are scheduled by your close rate. Learn how long a normal one lasts and when a slump is real.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "Doors have no memory",
+            body: [
+              "Three slams in a row feel like a pattern. They are not. Door four was decided by who lives there, what they pay, and what kind of day they had. It cannot see doors one through three. The rule from m1 holds: \"Doors are independent, but you are not.\" The doors do not carry your streak. Only you do.",
+              "Casinos get rich on the opposite belief. A gambler sees five reds and bets black because black is \"due.\" Nothing is due. At a 1-in-40 close rate, door 41 of a no-run is the same 1-in-40 door as your first knock of the day. Say it before you knock: this door does not know about the last one.",
+            ],
+          },
+          {
+            heading: "How long a normal dry streak lasts",
+            body: [
+              "Run the numbers on a 1-in-40 close rate. The chance that any 40-door stretch comes up all no's is about 36 percent. Roughly one stretch in three. A 60-door no-run lands about one stretch in five. So a zero-sale day at 50 or 60 knocks is not a crisis. It is a scheduled event with a frequency you can predict before it happens.",
+              "Here is what that buys you. When the cold run arrives, you do not have to interpret it. You already booked it on the calendar. And the per-door price from m1 holds through the whole run: at 250 dollars a sale and 1 in 40, every one of those no's paid you 6.25 dollars for showing up.",
+            ],
+          },
+          {
+            heading: "When a slump is real",
+            body: [
+              "One day of results is noise. A week of ratios is signal. That is the rule. Before you touch your pitch, read the funnel: doors to conversations, conversations to pitches, pitches to asks, asks to closes. If those ratios held all week and the closes just did not land, nothing is broken. Keep knocking the same game.",
+              "If a ratio drifted for a full week, the slump is real, and now it has an address. Contact rate down points at your hours or your turf. Pitch rate down points at your opener. Close rate down points at your ask. Fix the one drifting number. Change one thing, never three.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Doors have no memory: three slams in a row predict nothing about door four.",
+          "Dry streaks are scheduled: at 1 in 40, a full 40-door no-run shows up about one stretch in three.",
+          "One day is noise, one week is signal: only a full week of ratio drift is a real slump.",
+          "Slumps have an address: find the one drifting ratio and change one thing, never three.",
+        ],
+        drillPrompt:
+          "Before your next 10 doors, say out loud at each door: \"This door does not know about the last one.\" Log your longest no-streak every shift this week. On Friday, compare it to the math for your close rate, and read your weekly ratios before you change anything.",
+        quiz: [
+          {
+            question: "You close 1 in 40 and just took 40 no's in a row. What does the math say?",
+            options: [
+              "The territory is burned",
+              "Your pitch broke on door one",
+              "That happens about one 40-door stretch in three, so it is routine",
+              "You are owed a yes on the next door",
+            ],
+            answerIndex: 2,
+            explanation: "At 1 in 40, an all-no 40-door stretch lands about 36 percent of the time. Routine variance, not a verdict. And no door is ever owed.",
+          },
+          {
+            question: "Three doors slam in a row. What is true about door four?",
+            options: [
+              "It is more likely to slam",
+              "It is due for a yes",
+              "It is the same 1-in-40 door as every other door on the street",
+              "It should be skipped to reset the streak",
+            ],
+            answerIndex: 2,
+            explanation: "Doors are independent. The streak lives in your head, not on the street.",
+          },
+          {
+            question: "When do you rework the pitch?",
+            options: [
+              "After any zero-sale day",
+              "When a teammate outsells you",
+              "Every Monday, no matter what",
+              "After a full week where one funnel ratio drifted",
+            ],
+            answerIndex: 3,
+            explanation: "Days are noise. A week of ratio drift is signal, and the drifting ratio tells you which piece to fix.",
+          },
+        ],
+      },
+      {
+        id: "m23-hunt-the-no",
+        title: "Hunt the no: exposure drills that kill door fear",
+        summary: "Knock the first door in five minutes, chase fast no's on purpose, and train the fear out with reps.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The first door in five minutes",
+            body: [
+              "The hardest knock of the shift is the first one. Every minute you sit in the truck, your brain builds the case against knocking. Route planning, one more text, a snack. That is fear wearing a clipboard. The rule: first knock within five minutes of parking. Run up to that first door before you overthink it.",
+              "The first door is not for closing. It is for breaking the seal. Rate it a warm-up and expect nothing. Once you hear the first no of the day, the day gets easier, because the thing you were dreading already happened and you are still standing.",
+            ],
+          },
+          {
+            heading: "Go get rejected on purpose",
+            body: [
+              "Fear of rejection does not die from pep talks. It dies from reps. So run exposure drills. Open one shift a week hunting a no: your only goal on the first five doors is to hear no and stay relaxed while it lands. Once a week, make one oversized ask on a real door, bigger than you would normally dare. You are teaching your nervous system that no is a sound, not an injury.",
+              "Keep the target straight. The homeowner met a stranger for 30 seconds and turned down an offer. That is the whole event. They rejected a pitch from a company they barely know. They have zero information about you as a person, so the no cannot be about you as a person. The pitch took the hit. You just carried it.",
+            ],
+          },
+          {
+            heading: "Why the best reps want the fast no",
+            body: [
+              "A fast no costs 30 seconds. A slow maybe costs 20 minutes, a promised callback, and an evening of thinking about it. At a fixed close rate, income runs on doors per hour, and slow maybes are the tax on doors per hour. Top reps invite the no to speed the sort: \"If this isn't for you, tell me now. You won't hurt my feelings and I'm gone in ten seconds.\"",
+              "That line does two jobs. It sorts the polite from the possible, and it hands the homeowner permission to be honest, which is the fastest trust you can build in one sentence. Every fast no buys you time on a door that can buy.",
+            ],
+          },
+        ],
+        pitchDrill:
+          "Rehearse until smooth: \"Look, if this isn't for you, tell me now. Straight no's are my favorite answer, you won't hurt my feelings, and I'm gone in ten seconds. But if evening buffering sounds familiar, give me thirty.\"",
+        keyTakeaways: [
+          "First knock in five minutes: the truck becomes an office the moment you let it.",
+          "Fear dies from reps: hunt five deliberate no's a week and make one oversized ask.",
+          "The pitch takes the hit: a stranger's 30-second no contains zero information about you as a person.",
+          "Fast no's are income: doors per hour pays you, and slow maybes are the tax on it.",
+        ],
+        drillPrompt:
+          "This week, park, breathe once, and knock door one within five minutes, every shift. Then on your next 10 doors, open each knock wanting either a yes or a fast no, and log which doors gave you a clean fast answer and how much time it saved.",
+        quiz: [
+          {
+            question: "What is the five-minute rule?",
+            options: [
+              "Spend five minutes maximum at each door",
+              "Knock your first door within five minutes of parking",
+              "Take a five-minute break every hour",
+              "Wait five minutes before a second knock",
+            ],
+            answerIndex: 1,
+            explanation: "Delay feeds fear. The first knock breaks the seal, so it happens before the brain builds its case.",
+          },
+          {
+            question: "Why do top reps want the fast no?",
+            options: [
+              "It punishes rude homeowners",
+              "It protects the close rate",
+              "A fast no costs 30 seconds while a slow maybe burns 20 minutes, and doors per hour drive income",
+              "No's count toward bonuses",
+            ],
+            answerIndex: 2,
+            explanation: "At a fixed close rate, income is doors per hour. The fast no frees you for a door that can buy.",
+          },
+          {
+            question: "A homeowner you never met says no in 20 seconds. What got rejected?",
+            options: [
+              "You as a person",
+              "Your work ethic",
+              "A 30-second pitch from a stranger",
+              "Your future with the company",
+            ],
+            answerIndex: 2,
+            explanation: "They have zero information about you as a person. The pitch takes the hit. You carry it to the next door.",
+          },
+        ],
+      },
+      {
+        id: "m23-cancel-comeback",
+        title: "The cancel: rejection after the win",
+        summary: "Next-day cancels and no-show installs hit harder than any door no. Process the clawback, skip the chase, log it like a no.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Why the cancel hits harder than a slam",
+            body: [
+              "A door no costs you nothing you had. A cancel takes back a win you already banked. You told the team. You spent the commission in your head. Then the next-day call comes, or the install tech texts \"no answer at the door,\" and the win becomes a clawback. That stings more than fifty slams, because losses land heavier than wins feel good. Name that before it names you.",
+              "So expect them. m19 already priced cancellations in dollars. This lesson prices them in mood. A rep who never plans for the cancel treats each one as betrayal, and betrayal is the frame that makes you chase.",
+            ],
+          },
+          {
+            heading: "Do not chase the cancel",
+            body: [
+              "One calm call. That is the whole play. \"No problem at all. Before I close it out, what changed since Tuesday?\" If the answer is fixable, fix the real thing: move the install window, walk the bill line by line, book the both-present visit that got skipped. If the answer is firm, thank them and release. Pressure on a canceller inside the cooling-off window manufactures a chargeback, a complaint, and a neighbor who tells the street about you.",
+              "The chase feels productive because it feels like fighting for your money. It is not. The commission was already gone the moment they decided. The only things still on the table are your reputation on that street and the next hour of your shift.",
+            ],
+          },
+          {
+            heading: "Log it like a no",
+            body: [
+              "A cancel is funnel data. Log it with the same columns as any door: which pitch, which objection surfaced late, was the spouse present, how hard did you push at the close. Cancels cluster. Run the log monthly and the pattern shows: bulldozed spouse objections cancel, rushed closes cancel, thin discovery cancels. That log turns your worst feeling into your best coaching.",
+              "Then apply the shutdown rule: process it the same day, write the one lesson, and knock tomorrow with a clean sheet. A cancel you carry into the next ten doors cancels those too.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Cancels hit harder by design: you banked the win, so plan for the clawback before it comes.",
+          "One calm call, then release: ask what changed, fix the fixable, never pressure the cooling-off window.",
+          "The chase buys nothing: the commission left when they decided, and pressure only adds a chargeback.",
+          "Log cancels like no's: which pitch, which objection, who was present. Cancels cluster, and the log shows where.",
+        ],
+        drillPrompt:
+          "Build your cancel log this week: one row per cancel or no-show, with the pitch used, the objection that surfaced late, and who was present at the sale. On your next 10 doors after any cancel, say your per-door dollar value out loud at each one until the sheet feels clean again.",
+        quiz: [
+          {
+            question: "Why does a next-day cancel hurt more than a door slam?",
+            options: [
+              "It costs more gas",
+              "You already banked the win, so it lands as a loss instead of a miss",
+              "Cancels are public",
+              "The office tracks cancels",
+            ],
+            answerIndex: 1,
+            explanation: "Losses land heavier than wins feel good. The slam takes nothing you had. The cancel takes a win you spent in your head.",
+          },
+          {
+            question: "What is the right response to a cancel call?",
+            options: [
+              "Match their energy and defend the sale",
+              "Whatever it takes to save it, including pressure",
+              "One calm call: ask what changed, fix the fixable, then release",
+              "Show up at their door that evening",
+            ],
+            answerIndex: 2,
+            explanation: "Pressure inside the cooling-off window manufactures chargebacks and complaints. Fix the real problem or let go clean.",
+          },
+          {
+            question: "What goes in the cancel log?",
+            options: [
+              "The customer's excuse, word for word, for the group chat",
+              "The pitch used, the objection that surfaced late, and who was present at the sale",
+              "Only the lost commission amount",
+              "Nothing, cancels are not data",
+            ],
+            answerIndex: 1,
+            explanation: "Cancels cluster around bulldozed objections and rushed closes. The log turns the sting into coaching.",
+          },
+        ],
+      },
+      {
+        id: "m23-own-scoreboard",
+        title: "Run your own race: the scoreboard and the teammate math",
+        summary: "Score the behaviors you control, and read a hot teammate as a ratio lesson instead of a verdict.",
+        minutes: 4,
+        sections: [
+          {
+            heading: "Score behaviors, not outcomes",
+            body: [
+              "You control four numbers today: doors knocked, conversations held, pitches given, asks made. You do not control which of them turns into a sale by dinner. So the daily scoreboard tracks the four you own. Hit your knock number and your ask number and the day is a win, sale or no sale, because sales arrive on the average's schedule, not on yours.",
+              "Outcome scoring runs the other direction. Score yourself on sales alone and variance grades you: a lucky day makes you sloppy and a dry day makes you desperate. Desperate reads through a storm door. Behavior scoring keeps your voice the same on door 60 as on door 6.",
+            ],
+          },
+          {
+            heading: "The day a teammate closes three",
+            body: [
+              "It will happen. You sit at zero, the group chat lights up, and a teammate posts a third sale by 6 PM. The leaderboard tells you what happened. It cannot tell you why, and it cannot tell you what it means about you. On any single day, the gap between you and them is mostly variance. Two fair coins can land five heads apart in an afternoon.",
+              "Comparison poison starts when you read their day as your verdict. Run your own race means one question at the end of the night: did I hit my behavior numbers? If yes, your averages are coming. If no, that is the only gap worth your attention.",
+            ],
+          },
+          {
+            heading: "Borrow ratios, not moods",
+            body: [
+              "A teammate's numbers are useless as a mirror and priceless as a map. Over a month, if their doors-per-sale beats yours, that is not an insult. It is a diagnosis with a location. Compare funnels stage by stage. Same knocks, fewer conversations: their turf or hours differ from yours. Same conversations, more pitches: their opener is beating yours, so ride along Tuesday and steal it.",
+              "Envy contains zero information. Ratios contain all of it. The rep who asks \"what is your doors-per-pitch?\" in the huddle gets better every month. The rep who stews about the leaderboard gets bitter on the same schedule.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Score what you control: doors, conversations, pitches, asks. Sales arrive on the average's schedule.",
+          "One hot teammate day is variance: their three closes carry no verdict about you.",
+          "Borrow ratios, not moods: compare funnels stage by stage and steal the mechanic, never the mood.",
+          "Behavior scoring keeps your voice level: the same voice on door 60 as on door 6.",
+        ],
+        drillPrompt:
+          "Set your four behavior targets tonight: knocks, conversations, pitches, asks. Grade every shift this week on those four only. On your next 10 doors after seeing a teammate's sale post, say your own knock target out loud and finish the set before you open the group chat again.",
+        quiz: [
+          {
+            question: "Which numbers belong on your daily scoreboard?",
+            options: [
+              "Sales and commission only",
+              "Doors knocked, conversations held, pitches given, asks made",
+              "Your rank on the team leaderboard",
+              "Close rate, refreshed hourly",
+            ],
+            answerIndex: 1,
+            explanation: "Those four are the ones you control today. Sales land on the average's schedule, and grading yourself on them lets variance grade you.",
+          },
+          {
+            question: "A teammate closes three while you sit at zero. What does that prove about your pitch?",
+            options: [
+              "It is broken and needs a rewrite tonight",
+              "Nothing by itself: one day's gap is mostly variance",
+              "You should copy their pitch word for word tomorrow",
+              "You are on burned turf",
+            ],
+            answerIndex: 1,
+            explanation: "A single day is noise. The only question that matters tonight: did you hit your behavior numbers?",
+          },
+          {
+            question: "What is the right use of a teammate's stats?",
+            options: [
+              "Motivation through envy",
+              "Proof the leaderboard is rigged",
+              "A month of their funnel ratios as a diagnosis of which stage of yours lags",
+              "Ignore them completely",
+            ],
+            answerIndex: 2,
+            explanation: "Ratios locate the gap: turf, opener, pitch, or ask. Then you ride along and steal the mechanic.",
+          },
+        ],
+      },
+      {
+        id: "m23-shutdown-ritual",
+        title: "The shutdown ritual: leave the doors on the street",
+        summary: "A closing ritual for the day, a protocol for the genuinely nasty door, and an identity that outlives the shift.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Close the day like a shift, not a wound",
+            body: [
+              "m1 gave you the reset between doors. This is the reset between days. Three steps in the truck before you drive: log the four behavior numbers, write one line about the day's single lesson, and say the shift is over, out loud if you have to. That is the whole ritual. Ninety seconds.",
+              "Then the hard part: do not re-run the worst door. Telling the group chat, telling your spouse, replaying it at the red light. Every retelling is another rep of the rejection with a bigger audience. You logged the lesson. The story has nothing left to teach after that. Tell the best door instead, or tell nothing.",
+            ],
+          },
+          {
+            heading: "After the genuinely nasty door",
+            body: [
+              "Some doors are not no's. Threats, slurs, a stranger deciding to humiliate you. m15 taught the exit. This is the ten minutes after. Walk, sit in the car, and write down what happened in plain facts, no adjectives. Then tell your lead the same day. Reporting a hostile door is a professional act, the same as logging a gas leak. Swallowing it lets one door poison a week of knocks.",
+              "Watch the story you tell yourself. \"That man was having the worst day of his year and I was the nearest target\" is almost always the true version. If the 10-door circuit breaker from m1 does not clear it, end the shift. One lost evening is cheaper than a lost week, and going home is a decision, not a defeat.",
+            ],
+          },
+          {
+            heading: "Keep a life outside the numbers",
+            body: [
+              "A rep who is only a rep rides every day's variance like a verdict on his whole life. That rep burns out on schedule. The insurance is boring: something you train, someone you cook for, a court you show up to on Thursdays. When the identity has more than one leg, a zero-sale Tuesday can only take one of them.",
+              "Sleep beats replay. The reps still knocking in year three are not the ones who never had brutal days. They are the ones who got good at ending them.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The shutdown takes ninety seconds: log the numbers, write one lesson, declare the day over.",
+          "Never re-run the worst door: every retelling is another rep of the rejection with a bigger audience.",
+          "Nasty doors get reported the same day: plain facts to your lead, no adjectives, no swallowing it.",
+          "Keep a second leg: an identity outside knocking is burnout insurance, and sleep beats replay.",
+        ],
+        drillPrompt:
+          "Run the shutdown ritual every shift this week: numbers, one lesson, day over, out loud in the truck. On your next 10 doors after any brutal one, use the m1 reset, and if door 10 arrives still heavy, end the shift on purpose and log why.",
+        quiz: [
+          {
+            question: "What are the three steps of the shutdown ritual?",
+            options: [
+              "Log the behavior numbers, write one lesson, declare the day over",
+              "Review every no in detail, plan tomorrow, call your lead",
+              "Post results to the group chat, vent, sleep",
+              "Recount commissions, rank yourself, set a bigger goal",
+            ],
+            answerIndex: 0,
+            explanation: "Ninety seconds in the truck. The log closes the books, the lesson extracts the value, the declaration ends the shift.",
+          },
+          {
+            question: "Why not tell the group chat about the worst door?",
+            options: [
+              "It breaks team rules",
+              "Leads read the chat",
+              "Every retelling is another rep of the rejection, now with an audience",
+              "Nobody cares",
+            ],
+            answerIndex: 2,
+            explanation: "You logged the lesson already. Replaying the door re-runs the rejection and spreads the weight to the whole team.",
+          },
+          {
+            question: "A homeowner screams a slur and threatens you. After leaving safely, what comes next?",
+            options: [
+              "Shake it off silently and keep knocking",
+              "Ten minutes: sit, write the plain facts, and report it to your lead the same day",
+              "Post it in the group chat as a warning",
+              "Knock the neighbor's door to prove a point",
+            ],
+            answerIndex: 1,
+            explanation: "Reporting is professional, the write-down drains the charge, and if the circuit breaker does not clear it, ending the shift is a decision, not a defeat.",
           },
         ],
       },

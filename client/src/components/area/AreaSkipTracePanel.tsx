@@ -239,6 +239,17 @@ export function AreaSkipTracePanel({
 
         {listQuery.isLoading && <Skeleton className="mt-3 h-24 w-full" />}
 
+        {/* A failed fetch used to render NOTHING — an empty panel reads as "no
+            numbers", which is a different (and wrong) answer. */}
+        {listQuery.isError && !listQuery.isLoading && (
+          <div role="alert" className="mt-3 rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-foreground" data-testid="skiptrace-error">
+            Couldn't load this area's numbers. Check your connection and{" "}
+            <button type="button" onClick={() => listQuery.refetch()} className={cn("font-semibold underline underline-offset-2", FOCUS)}>
+              try again
+            </button>.
+          </div>
+        )}
+
         {list && list.entries.length === 0 && !listQuery.isLoading && (
           <div className="mt-3">
             <EmptyState

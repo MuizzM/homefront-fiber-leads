@@ -100,6 +100,9 @@ export const OBJECTION_SECTION_HEADINGS: Readonly<Record<string, ObjectionKey>> 
   '"Too expensive" — isolate before you reframe': "price",
   '"We just got fiber from a competitor"': "competitor_fiber",
   "The bad-experience win-back": "bad_experience",
+  // m18-book-it — the push-out family.
+  '"I need to ask my wife": book the visit, not the verdict': "spouse",
+  '"Let me think about it": name it or park it': "think_about_it",
 };
 
 /** Resolve a lesson section heading to its objection key, or null when the

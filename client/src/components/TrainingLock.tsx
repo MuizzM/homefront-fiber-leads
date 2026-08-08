@@ -105,7 +105,7 @@ export function TrainingLock() {
             ))}
           </ul>
           <p className="mt-3 text-[12px] text-muted-foreground">
-            Your profile and onboarding paperwork stay open — you can finish your W-9 and
+            Your profile and onboarding paperwork stay open, so you can finish your W-9 and
             documents while you work through the lessons.
           </p>
         </CardContent>
@@ -130,7 +130,7 @@ export function TrainingGateBanner() {
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold text-foreground">{p.headline}</p>
         <p className="text-[12px] text-muted-foreground tabular-nums">
-          {p.completed} of {p.required} complete — the rest of the app opens when you finish.
+          {p.completed} of {p.required} complete. The rest of the app opens when you finish.
         </p>
       </div>
     </div>
@@ -146,7 +146,7 @@ export function TrainingClearedBanner() {
          role="status" data-testid="training-cleared-banner">
       <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
       <p className="text-[13px] font-semibold text-foreground">
-        Training complete — the whole app is unlocked. Go get some doors.
+        Training complete. The whole app is unlocked. Go get some doors.
       </p>
     </div>
   );

@@ -23,6 +23,7 @@ import { adaptivePace, adaptivePaceStats } from "./adaptivePace";
 import { isProxyCircuitOpen, circuitBreakerSnapshot } from "./bandwidthGovernor";
 import { triggerExpansionForTargets } from "./clusterExpansion";
 import crypto from "node:crypto";
+import os from "node:os";
 import { storage } from "./storage";
 import { rawDb } from "./db";
 import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
@@ -238,6 +239,24 @@ function providerPriorityForRun(kind: string): ProviderRequestPriority {
   return "market";
 }
 
+/**
+ * The identity of the scan worker in THIS process.
+ *
+ * Stable for the lifetime of the process and distinct across processes, so the
+ * heartbeat UPSERT collapses onto one row per live worker instead of minting a
+ * new one per run. Host + pid is enough: two processes on one box differ by pid,
+ * and two boxes differ by hostname. A restart legitimately produces a new row —
+ * that is a genuinely new worker — and the old one ages out of the health view
+ * by `heartbeat_at`, which is what that view already sorts on.
+ */
+let cachedWorkerId: string | null = null;
+function stableWorkerId(): string {
+  if (cachedWorkerId) return cachedWorkerId;
+  const host = process.env.HOSTNAME || os.hostname() || "host";
+  cachedWorkerId = `scan:${host}:${process.pid}`;
+  return cachedWorkerId;
+}
+
 // Run the worker loop for an already-created, already-enqueued run. Fire-and-
 // forget from the route; it drives itself off the DB queue so it is resumable.
 export async function runScanWorker(
@@ -247,7 +266,20 @@ export async function runScanWorker(
 ): Promise<void> {
   if (activeRuns.has(runId)) return;
   activeRuns.add(runId);
-  const workerId = `scan:${runId}`;
+  // STABLE worker identity — a property of the PROCESS, not of the run.
+  //
+  // This was `scan:${runId}`, which made every run a brand-new worker. The
+  // heartbeat table is keyed `worker_id TEXT PRIMARY KEY` and written with
+  // `ON CONFLICT(worker_id) DO UPDATE` precisely so a worker keeps ONE row and
+  // re-stamps it — but a run-scoped id can never collide, so the UPSERT never
+  // fired and the table gained a permanent row per run forever. Measured on a
+  // representative copy: 270,907 rows / 270,907 distinct worker_ids — exactly
+  // 1:1, i.e. not one row was ever reused.
+  //
+  // The run is NOT lost: `run_id` is already a column on the row and the UPSERT
+  // already refreshes it, so "which run is this worker on right now" still
+  // answers correctly — it just stops costing a row to ask.
+  const workerId = stableWorkerId();
   let terminalError: string | null = null;
   // DECOUPLED RUN HEARTBEAT — the reaper's only cross-process ownership signal.
   // touchRun() is also called per-batch (below), but a batch can stall far past the

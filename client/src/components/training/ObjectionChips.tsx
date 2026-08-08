@@ -22,11 +22,15 @@ export function ObjectionChips({
   const isSelected = (key: ObjectionKey) =>
     selected instanceof Set ? selected.has(key) : selected === key;
   return (
+    // role=group, not listbox: these are independent toggle buttons, and the
+    // listbox/option contract (single tab stop, arrow-key navigation, real
+    // selection state) was never implemented — screen readers announced a
+    // widget whose keyboard model did not exist. aria-pressed on each button
+    // is the truthful contract for a toggle.
     <div
       className="flex flex-wrap gap-2"
-      role="listbox"
+      role="group"
       aria-label="Objections"
-      aria-multiselectable={selected instanceof Set || undefined}
       data-testid="objection-chips"
     >
       {OBJECTION_TAXONOMY.map(({ key, chip }) => {
@@ -36,8 +40,7 @@ export function ObjectionChips({
           <button
             key={key}
             type="button"
-            role="option"
-            aria-selected={active}
+            aria-pressed={active}
             data-testid={`objection-chip-${key}`}
             onClick={() => onSelect(key)}
             className={cn(
@@ -50,6 +53,8 @@ export function ObjectionChips({
             )}
           >
             {chip}
+            {/* The dimmed style alone says nothing to a screen reader. */}
+            {gap && !active && <span className="sr-only"> (no card yet)</span>}
           </button>
         );
       })}
