@@ -6,7 +6,7 @@ import { CheckCircle2, AlertTriangle, RefreshCw } from "lucide-react";
 export default function TokenSetup() {
   const { toast } = useToast();
 
-  const { data: status, refetch } = useQuery<{
+  const { data: status, isError, refetch } = useQuery<{
     hasToken: boolean;
     expiresIn: number | null;
     source: string;
@@ -15,7 +15,11 @@ export default function TokenSetup() {
     refetchInterval: 15000,
   });
 
-  const tokenOk = status?.hasToken && (status.expiresIn ?? 0) > 60;
+  // Distinguish "we don't know" from "the token is bad": before the first
+  // response (and on a failed fetch) this page used to open on the red
+  // "Token Expired" alarm for ~200ms on every visit — a false outage.
+  const unknown = status === undefined;
+  const tokenOk = !!status?.hasToken && (status.expiresIn ?? 0) > 60;
   const expiresMin = status?.expiresIn ? Math.round(status.expiresIn / 60) : 0;
 
   const refreshMutation = useMutation({
@@ -31,25 +35,32 @@ export default function TokenSetup() {
   return (
     <div className="max-w-sm mx-auto p-6 space-y-4 mt-8">
       {/* Status card */}
-      <div className={`rounded-2xl p-5 border ${
-        tokenOk
-          ? "bg-green-500/10 border-green-500/25"
-          : "bg-red-500/10 border-red-500/25"
+      <h1 className="sr-only">Scanner token</h1>
+      <div role="status" className={`rounded-2xl p-5 border ${
+        unknown
+          ? "bg-card border-border"
+          : tokenOk
+            ? "bg-green-500/10 border-green-500/25"
+            : "bg-red-500/10 border-red-500/25"
       }`}>
         <div className="flex items-center gap-3">
-          {tokenOk ? (
+          {unknown ? (
+            <RefreshCw className="w-6 h-6 text-muted-foreground flex-shrink-0 animate-spin" />
+          ) : tokenOk ? (
             <CheckCircle2 className="w-6 h-6 text-green-400 flex-shrink-0" />
           ) : (
             <AlertTriangle className="w-6 h-6 text-red-400 flex-shrink-0" />
           )}
           <div>
             <p className="font-semibold text-foreground">
-              {tokenOk ? "Scanner Connected" : "Token Expired"}
+              {unknown ? (isError ? "Status unavailable" : "Checking…") : tokenOk ? "Scanner Connected" : "Token Expired"}
             </p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {tokenOk
-                ? `Expires in ~${expiresMin} min · auto-refreshes via proxy`
-                : "Click refresh to reconnect via proxy"}
+              {unknown
+                ? (isError ? "Couldn't reach the token service — retrying automatically." : "Fetching the current token status.")
+                : tokenOk
+                  ? `Expires in ~${expiresMin} min · auto-refreshes via proxy`
+                  : "Click refresh to reconnect via proxy"}
             </p>
           </div>
         </div>

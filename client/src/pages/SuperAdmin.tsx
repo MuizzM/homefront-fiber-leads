@@ -348,20 +348,27 @@ export default function SuperAdmin() {
     onError: (e: any) => toast({ title: e.message || "Error", variant: "destructive" }),
   });
 
+  // update/delete had NO onError: a failed privileged write produced no toast,
+  // no state change, and a dialog that just sat there. Silence is the one
+  // outcome a tenant-management console can't afford.
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: number; data: any }) => { const r = await apiRequest("PATCH", `/api/sa/tenants/${id}`, data); return r.json(); },
     onSuccess: () => { toast({ title: "Updated" }); qc.invalidateQueries({ queryKey: ["/api/sa/tenants"] }); qc.invalidateQueries({ queryKey: ["/api/sa/revenue"] }); setEditTenant(null); },
+    onError: (e: any) => toast({ title: "Update failed", description: e.message || "The tenant was not changed.", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => { await apiRequest("DELETE", `/api/sa/tenants/${id}`); },
     onSuccess: () => { toast({ title: "Tenant cancelled" }); qc.invalidateQueries({ queryKey: ["/api/sa/tenants"] }); setDeleteTenant(null); },
+    onError: (e: any) => toast({ title: "Cancellation failed", description: e.message || "The tenant is still active.", variant: "destructive" }),
   });
 
+  // "—", never "$0": a failed revenue fetch must not tell the platform owner
+  // their MRR is zero.
   const metrics = [
-    { label: "Active Tenants", value: revenue?.tenantCount ?? 0, icon: Building2, color: "text-muted-foreground" },
-    { label: "Total MRR", value: `$${(revenue?.totalMrr ?? 0).toFixed(0)}`, icon: TrendingUp, color: "text-emerald-400" },
-    { label: "Your MRR Cut", value: `$${(revenue?.yourMrr ?? 0).toFixed(0)}`, icon: DollarSign, color: "text-primary" },
+    { label: "Active Tenants", value: revenue ? revenue.tenantCount : "—", icon: Building2, color: "text-muted-foreground" },
+    { label: "Total MRR", value: revenue ? `$${revenue.totalMrr.toFixed(0)}` : "—", icon: TrendingUp, color: "text-emerald-400" },
+    { label: "Your MRR Cut", value: revenue ? `$${revenue.yourMrr.toFixed(0)}` : "—", icon: DollarSign, color: "text-primary" },
     { label: "Total Leads", value: tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-sky-400" },
   ];
 
@@ -502,7 +509,10 @@ export default function SuperAdmin() {
         <DialogContent className="bg-card border-border text-foreground max-w-xl">
           <DialogHeader><DialogTitle className="text-base">Edit Tenant</DialogTitle></DialogHeader>
           {editTenant && (
-            <TenantForm initial={editTenant}
+            // Keyed by tenant id: TenantForm seeds its state once on mount, so
+            // without the key a future "switch tenant while open" path would
+            // silently edit tenant B with tenant A's values.
+            <TenantForm key={editTenant.id} initial={editTenant}
               onSave={data => updateMutation.mutate({ id: editTenant.id, data })}
               onCancel={() => setEditTenant(null)} saving={updateMutation.isPending} />
           )}
@@ -521,7 +531,7 @@ export default function SuperAdmin() {
             <Button onClick={() => deleteTenant && deleteMutation.mutate(deleteTenant.id)}
               disabled={deleteMutation.isPending}
               className="bg-destructive hover:bg-destructive/90 text-white">
-              Cancel Tenant
+              {deleteMutation.isPending ? "Cancelling…" : "Cancel Tenant"}
             </Button>
           </DialogFooter>
         </DialogContent>

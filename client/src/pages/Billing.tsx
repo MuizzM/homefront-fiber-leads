@@ -71,7 +71,7 @@ function StatTile({ label, value, sub, accent }: { label: string; value: React.R
 }
 
 export default function Billing() {
-  const { data: summary, isLoading } = useQuery<Summary>({
+  const { data: summary, isLoading, isError, refetch } = useQuery<Summary>({
     queryKey: ["/api/billing"],
     queryFn: () => apiRequest("GET", "/api/billing").then(r => r.json()),
     staleTime: 30_000,
@@ -158,6 +158,18 @@ export default function Billing() {
           <Skeleton className="h-24 w-full rounded-xl" />
           <Skeleton className="h-40 w-full rounded-xl" />
         </div>
+      ) : isError ? (
+        // A failed fetch is NOT "billing isn't set up". Rendering NotProvisioned
+        // here told admins "nothing is metered" during a network blip — the most
+        // load-bearing false statement this page could make.
+        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" role="alert" data-testid="billing-error">
+          <div className="text-sm font-semibold text-foreground">Couldn't load billing</div>
+          <div className="mt-1 text-sm text-muted-foreground">Your plan and credits are unchanged — this is a connection problem, not a billing state.</div>
+          <button onClick={() => refetch()}
+            className="mt-4 inline-flex items-center justify-center min-h-11 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground hover:bg-secondary/80">
+            Retry
+          </button>
+        </div>
       ) : !enabled ? (
         <NotProvisioned plans={plans} />
       ) : summary ? (
@@ -209,7 +221,7 @@ export default function Billing() {
                     )}
                   </div>
                   {(summary.level === "critical" || summary.level === "exhausted") && (
-                    <div className="mt-3 flex items-center gap-2 rounded-lg bg-red-500/10 text-red-400 px-3 py-2 text-[12.5px]">
+                    <div role="alert" className="mt-3 flex items-center gap-2 rounded-lg bg-red-500/10 text-red-400 px-3 py-2 text-[12.5px]">
                       <AlertTriangle className="w-4 h-4 shrink-0" />
                       {summary.level === "exhausted"
                         ? (summary.overageMode === "stop"

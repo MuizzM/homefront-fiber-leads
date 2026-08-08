@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Check } from "lucide-react";
 
 interface CapRow { capability: string; highRisk: boolean; roles: string[] }
 interface Group { domain: string; capabilities: CapRow[] }
@@ -39,6 +39,7 @@ function UserPreview({ members }: { members: TeamMember[] }) {
         <select
           value={uid} onChange={e => setUid(e.target.value ? Number(e.target.value) : "")}
           data-testid="gov-user-select"
+          aria-label="Preview a person's access"
           className="h-9 rounded-lg bg-secondary border border-border px-3 text-[13px] text-foreground focus:outline-none focus:border-primary/60"
         >
           <option value="">Select a person…</option>
@@ -76,7 +77,7 @@ function UserPreview({ members }: { members: TeamMember[] }) {
 }
 
 export default function Governance() {
-  const { data, isLoading } = useQuery<Matrix>({
+  const { data, isLoading, isError, refetch } = useQuery<Matrix>({
     queryKey: ["/api/governance/capabilities"],
     queryFn: () => apiRequest("GET", "/api/governance/capabilities").then(r => r.json()),
     staleTime: 5 * 60_000, // policy rarely changes within a session
@@ -108,21 +109,35 @@ export default function Governance() {
         <p className="text-[13px] text-muted-foreground">What each role can do — read straight from the map the middleware enforces.</p>
       </div>
 
+      {/* A permissions console must never render "0 high-risk capabilities"
+          because a fetch failed — that is the exact false reassurance the
+          Diagnostics page was built to avoid. */}
+      {isError && (
+        <div role="alert" className="rounded-xl bg-card border border-rose-500/30 p-5 text-center">
+          <div className="text-sm font-semibold text-foreground">Couldn't load the capability map</div>
+          <div className="mt-1 text-sm text-muted-foreground">The numbers and matrix below are unknown, not zero.</div>
+          <button onClick={() => refetch()}
+            className="mt-3 inline-flex min-h-11 items-center justify-center rounded-lg border border-border bg-secondary px-4 text-sm font-semibold text-foreground hover:bg-secondary/70">
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Hairline metric strip */}
       <div className="flex items-stretch rounded-xl bg-card border border-border divide-x divide-border">
         <div className="flex-1 px-4 py-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Roles</div>
-          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{roles.length}</div>
+          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{data ? roles.length : "—"}</div>
         </div>
         <div className="flex-1 px-4 py-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Capabilities</div>
-          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{totalCaps}</div>
+          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{data ? totalCaps : "—"}</div>
         </div>
         <div className="flex-1 px-4 py-3">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <AlertTriangle className="w-3 h-3 text-amber-400" /> High-risk
           </div>
-          <div className="text-[18px] font-semibold tracking-tight text-amber-400 tabular-nums">{highRiskCaps}</div>
+          <div className="text-[18px] font-semibold tracking-tight text-amber-400 tabular-nums">{data ? highRiskCaps : "—"}</div>
         </div>
       </div>
 
@@ -134,6 +149,7 @@ export default function Governance() {
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder="Search capabilities…"
+          aria-label="Search capabilities"
           data-testid="gov-search"
           className="w-full max-w-xs h-9 rounded-lg bg-card border border-border px-3.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/60"
         />
@@ -168,12 +184,21 @@ export default function Governance() {
                       const granted = cap.roles.includes(r);
                       return (
                         <span key={r} className="w-[68px] flex justify-center" data-granted={granted}>
+                          {/* A check glyph inside the dot + a real accessible
+                              name: the grant state was previously encoded ONLY
+                              as a hue in a title tooltip — invisible to screen
+                              readers, touch, and anyone who can't split the
+                              tints. */}
                           <span
-                            className={`w-4 h-4 rounded-full ${granted
+                            role="img"
+                            aria-label={granted ? `${ROLE_LABEL[r] ?? r}: granted${cap.highRisk ? " (high-risk)" : ""}` : `${ROLE_LABEL[r] ?? r}: not granted`}
+                            className={`w-4 h-4 rounded-full inline-flex items-center justify-center ${granted
                               ? (cap.highRisk ? "bg-amber-400" : "bg-primary")
                               : "bg-muted border border-border"}`}
                             title={granted ? `${ROLE_LABEL[r] ?? r} has ${cap.capability}` : "not granted"}
-                          />
+                          >
+                            {granted && <Check className="w-3 h-3 text-background" aria-hidden="true" strokeWidth={3} />}
+                          </span>
                         </span>
                       );
                     })}

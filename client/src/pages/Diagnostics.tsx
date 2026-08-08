@@ -64,9 +64,9 @@ function FeedRow({ e }: { e: DiagEvent }) {
 }
 
 // A sectioned readout — micro-labelled header + hairline-divided feed body.
-function Feed({ icon: Icon, title, subtitle, testid, isLoading, items, empty }: {
+function Feed({ icon: Icon, title, subtitle, testid, isLoading, isError, items, empty }: {
   icon: typeof Activity; title: string; subtitle?: string; testid: string;
-  isLoading: boolean; items?: DiagEvent[]; empty: string;
+  isLoading: boolean; isError?: boolean; items?: DiagEvent[]; empty: string;
 }) {
   return (
     <>
@@ -79,6 +79,9 @@ function Feed({ icon: Icon, title, subtitle, testid, isLoading, items, empty }: 
       </div>
       <div data-testid={testid} className="px-4 pb-2 mt-1 divide-y divide-border/60">
         {isLoading ? <Skeleton className="h-8 my-2" /> :
+          // The same honesty rule as the health panel: a failed fetch must never
+          // read as "no failures — engines healthy" mid-outage.
+          isError ? <p className="text-[13px] text-muted-foreground py-4">Unknown — this feed didn't load.</p> :
           items && items.length > 0
             ? items.map((e, i) => <FeedRow key={i} e={e} />)
             : <p className="text-[13px] text-muted-foreground italic py-4">{empty}</p>}
@@ -178,12 +181,12 @@ export default function Diagnostics() {
       <div className="grid md:grid-cols-2 gap-4">
         <section className="rounded-xl bg-card border border-border">
           <Feed icon={AlertTriangle} title="Recent failures" testid="diag-failures"
-            isLoading={isLoading} items={data?.recentFailures}
+            isLoading={isLoading} isError={isError} items={data?.recentFailures}
             empty="No failed operations — engines healthy." />
         </section>
         <section className="rounded-xl bg-card border border-border">
           <Feed icon={ShieldX} title="Permission denials" testid="diag-denials"
-            isLoading={isLoading} items={data?.recentDenials}
+            isLoading={isLoading} isError={isError} items={data?.recentDenials}
             empty="No blocked actions — access looks correct." />
         </section>
       </div>
@@ -199,6 +202,7 @@ export default function Diagnostics() {
         </div>
         <div data-testid="diag-sensitive" className="px-4 pb-2 mt-1 divide-y divide-border/60 max-h-72 overflow-y-auto overscroll-contain">
           {isLoading ? <Skeleton className="h-8 my-2" /> :
+            isError ? <p className="text-[13px] text-muted-foreground py-4">Unknown — this feed didn't load.</p> :
             data && data.sensitiveActions.length > 0
               ? data.sensitiveActions.map((e, i) => <FeedRow key={i} e={e} />)
               : <p className="text-[13px] text-muted-foreground italic py-4">No sensitive actions in this window.</p>}

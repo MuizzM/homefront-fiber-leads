@@ -260,7 +260,7 @@ export default function Today() {
         </header>
 
         {(offline || backlog || snap.deadCount > 0) && (
-          <div className={`mt-3 flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px] ${offline ? "bg-muted border-border text-muted-foreground" : "bg-primary/10 border-primary/20 text-foreground"}`} data-testid="today-sync">
+          <div role="status" aria-live="polite" className={`mt-3 flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px] ${offline ? "bg-muted border-border text-muted-foreground" : "bg-primary/10 border-primary/20 text-foreground"}`} data-testid="today-sync">
             {offline ? <WifiOff className="w-4 h-4 shrink-0" aria-hidden="true" /> : <RefreshCw className="w-4 h-4 shrink-0 text-primary animate-spin" aria-hidden="true" />}
             <span className="flex-1">
               {offline ? "Offline — your taps are saved" : `Syncing ${snap.pendingCount} knock${snap.pendingCount === 1 ? "" : "s"}`}
@@ -272,6 +272,17 @@ export default function Today() {
         {/* Reserve the clock-in card's slot while its status loads, so the card
             doesn't pop in above the hero and shift the tap targets. */}
         {clockQ.isLoading && <Skeleton className="mt-3 h-[62px] w-full rounded-xl" />}
+        {/* A failed status fetch must not silently remove the way to start a
+            paid shift — say what happened and give the retry. */}
+        {clockQ.isError && (
+          <div role="alert" className="mt-3 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+            <span className="text-[13px] text-muted-foreground flex-1">Couldn't check your clock status.</span>
+            <button onClick={() => clockQ.refetch()}
+              className={`inline-flex items-center justify-center min-h-11 px-3 rounded-lg bg-secondary border border-border text-[13px] font-semibold text-foreground ${FOCUS}`}>
+              Retry
+            </button>
+          </div>
+        )}
         {clockQ.data && !clockQ.data.clockedIn && (
           <button onClick={() => clockIn.mutate()} disabled={clockIn.isPending} data-testid="today-clock-in"
             className={`mt-3 w-full flex items-center gap-3 rounded-xl bg-card border border-border px-4 py-3 text-left active:scale-[.99] transition-transform disabled:opacity-60 hover:border-primary/30 ${FOCUS}`}>
@@ -320,7 +331,15 @@ export default function Today() {
           <WarmupStrip />
         </div>
 
-        {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}
+        {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop).
+            On a failed fetch, say the count is unknown rather than implying zero. */}
+        {followupsQ.isError && (
+          <div className="mt-4 flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-[12px] text-muted-foreground" data-testid="today-followups-error">
+            <CalendarClock className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span className="flex-1">Couldn't check your follow-ups.</span>
+            <button onClick={() => followupsQ.refetch()} className={`font-semibold text-foreground min-h-11 px-2 ${FOCUS}`}>Retry</button>
+          </div>
+        )}
         {followupsDue > 0 && (
           <Link href="/followups" className={`group mt-4 flex items-center gap-3 rounded-xl border border-sky-400/25 bg-sky-400/[0.08] px-4 py-3.5 active:scale-[.99] transition-transform hover:border-sky-400/40 ${FOCUS}`} data-testid="today-followups">
             <span className="w-9 h-9 rounded-lg bg-sky-400/15 text-sky-400 flex items-center justify-center shrink-0"><CalendarClock className="w-5 h-5" aria-hidden="true" /></span>

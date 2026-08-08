@@ -619,7 +619,9 @@ export default function Training() {
               <div className="min-w-0 flex-1">
                 <SectionLabel>Your progress</SectionLabel>
                 <div className="mt-0.5 text-xl font-bold tabular-nums tracking-tight text-foreground" data-testid="training-hero-count">
-                  {isLoading ? "—" : `${doneCount} of ${total}`}{" "}
+                  {/* On error the count is UNKNOWN, not zero — "0 of 30" told a
+                      finished rep their progress had been reset. */}
+                  {isLoading || isError ? "—" : `${doneCount} of ${total}`}{" "}
                   <span className="text-sm font-medium text-muted-foreground">lessons complete</span>
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden="true">

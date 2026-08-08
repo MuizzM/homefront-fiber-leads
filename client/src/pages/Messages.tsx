@@ -266,7 +266,7 @@ export default function Messages() {
 // The same rows the bell sheet renders, inline. Opening the tab clears the
 // bell (one watermark serves both surfaces), exactly like opening the sheet.
 function AnnouncementFeed() {
-  const { data, isLoading } = useTeamFeed();
+  const { data, isLoading, isError, refetch } = useTeamFeed();
   const qc = useQueryClient();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -301,14 +301,24 @@ function AnnouncementFeed() {
     <section className="space-y-3" data-testid="announcement-feed">
       <SectionLabel>What the floor's been told</SectionLabel>
       {isLoading && <Skeleton className="h-24 w-full rounded-2xl" data-testid="announcement-feed-loading" />}
-      {!isLoading && !data?.items.length && (
+      {!isLoading && isError && (
+        <div role="alert" className="rounded-2xl border border-border bg-card p-4 text-center" data-testid="announcement-feed-error">
+          <p className="text-[13px] text-muted-foreground">Couldn't load the feed — new posts may be waiting.</p>
+          <button onClick={() => refetch()} className="mt-2 inline-flex min-h-11 items-center justify-center rounded-lg border border-border bg-secondary px-4 text-[13px] font-semibold text-foreground">Retry</button>
+        </div>
+      )}
+      {!isLoading && !isError && !data?.items.length && (
         <p className="rounded-2xl border border-border bg-card p-4 text-center text-[13px] text-muted-foreground" data-testid="announcement-feed-empty">
           Nothing yet today. Wins, streaks, and posts from your managers land here.
         </p>
       )}
-      <ul className="divide-y divide-border rounded-2xl border border-border bg-card px-4">
-        {data?.items.map(item => <FeedRow key={item.id} item={item} now={now} />)}
-      </ul>
+      {/* The list shell renders only when there are rows — an empty bordered
+          box under the empty-state message read as a broken second widget. */}
+      {(data?.items.length ?? 0) > 0 && (
+        <ul className="divide-y divide-border rounded-2xl border border-border bg-card px-4">
+          {data?.items.map(item => <FeedRow key={item.id} item={item} now={now} />)}
+        </ul>
+      )}
     </section>
   );
 }
