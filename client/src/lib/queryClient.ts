@@ -101,6 +101,17 @@ export function queryRetryDelay(attempt: number, error: unknown): number {
 // are shared; mutations always run their own request.
 const _inflightGets = new Map<string, Promise<Response>>();
 
+// A completed mutation makes every in-flight GET's eventual body suspect: it
+// left the server BEFORE the write. Any query that refetches after the
+// mutation (invalidation, onSettled) must not be handed that pre-write body —
+// that is exactly how a just-created lead vanished from the list until some
+// later refetch found it. Busting the share map doesn't abort the underlying
+// requests (their earlier callers still get their response); it only stops
+// NEW callers from joining a response that predates the write.
+function bustInflightGetShare(): void {
+  _inflightGets.clear();
+}
+
 export async function apiRequest(
   method: string,
   url: string,
@@ -131,14 +142,21 @@ export async function apiRequest(
     return (await shared).clone();
   }
 
-  const res = await fetch(`${API_BASE}${url}`, {
-    method,
-    headers: authHeaders(
-      data ? { "Content-Type": "application/json" } : {},
-      isMutation, // attach CSRF token on all state-changing requests
-    ),
-    body: data ? JSON.stringify(data) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${url}`, {
+      method,
+      headers: authHeaders(
+        data ? { "Content-Type": "application/json" } : {},
+        isMutation, // attach CSRF token on all state-changing requests
+      ),
+      body: data ? JSON.stringify(data) : undefined,
+    });
+  } finally {
+    // Even a network-failed mutation may have reached the server — the write's
+    // fate is unknown, so pre-mutation GET bodies stay unjoinable either way.
+    if (isMutation) bustInflightGetShare();
+  }
 
   notifyIfSessionExpired(res.status);
   await throwIfResNotOk(res);
@@ -149,11 +167,16 @@ export async function apiRequest(
 // apiRequest, but leaves Content-Type unset so the browser writes the multipart
 // boundary. Use for file uploads (apiRequest JSON-encodes its body).
 export async function apiUpload(url: string, form: FormData): Promise<Response> {
-  const res = await fetch(`${API_BASE}${url}`, {
-    method: "POST",
-    headers: authHeaders({}, true), // x-session-id + x-csrf-token; NO content-type
-    body: form,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${url}`, {
+      method: "POST",
+      headers: authHeaders({}, true), // x-session-id + x-csrf-token; NO content-type
+      body: form,
+    });
+  } finally {
+    bustInflightGetShare(); // uploads mutate too — same stale-share rule
+  }
   notifyIfSessionExpired(res.status);
   await throwIfResNotOk(res);
   return res;

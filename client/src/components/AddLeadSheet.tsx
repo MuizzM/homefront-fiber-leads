@@ -13,6 +13,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { apiRequest } from "@/lib/queryClient";
+import { isLeadsListKey, upsertLeadIntoLists } from "@/lib/leadsListQuery";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Plus, MapPin, LocateFixed } from "lucide-react";
 import type { CardProperty } from "@/components/LeadCard";
@@ -201,7 +202,26 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
           const placing = lead?.lat == null || lead?.lng == null;
           toast({ title: "Lead added", description: placing ? `${submittedAddress} — placing on map…` : submittedAddress });
         }
-        qc.invalidateQueries({ queryKey: ["/api/leads"] });
+        // Targeted list update, not the old bare ["/api/leads"] prefix
+        // invalidation — that refetched every cached list page AND every
+        // per-lead subquery (knocks/enrichment/history) after each add. A new
+        // lead is fully known from the POST response, so it's written straight
+        // into the cached list views it matches; a DUPLICATE may have mutated
+        // the existing row server-side (FCC adoption reassigns it), so those
+        // views are marked stale and refetch on their next visit.
+        if (!existed && lead?.id != null) {
+          // A list fetch already in flight (the Leads-tab nav warm fires on
+          // nav-intent, concurrent with this background POST) left the server
+          // BEFORE this lead existed — cancel it or its stale body lands over
+          // the upsert, stamped fresh, and the lead vanishes until the next
+          // refetch. A view whose FIRST load that cancel emptied refetches on
+          // mount (no data → mount fetch), now post-create.
+          await qc.cancelQueries({ predicate: (q) => isLeadsListKey(q.queryKey) });
+          upsertLeadIntoLists(qc, lead);
+        } else {
+          qc.invalidateQueries({ predicate: (q) => isLeadsListKey(q.queryKey) });
+        }
+        qc.invalidateQueries({ queryKey: ["/api/stats"] });
         qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
         // The map's camera fly to the real pin is a follow-on flourish — it
         // rides the server response, never the open sheet.

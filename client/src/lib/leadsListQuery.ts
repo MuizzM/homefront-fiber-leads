@@ -12,6 +12,7 @@
 // Those three drifted before: the warm asked for a key nobody read, so every
 // nav-intent downloaded a list page into a cache slot the page never looked at.
 // Build the key (and the URL) here and that class of bug cannot come back.
+import type { QueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import type { Lead } from "@shared/schema";
 
@@ -71,6 +72,120 @@ export function isLeadsListKey(queryKey: unknown): boolean {
   return Array.isArray(queryKey)
     && queryKey.length === LEADS_LIST_KEY_LENGTH
     && queryKey[0] === "/api/leads";
+}
+
+/** A cached list key, decoded back into the filters that built it. */
+export function parseLeadsListKey(queryKey: unknown): LeadsListFilters | null {
+  if (!isLeadsListKey(queryKey)) return null;
+  const [, search, status, city, state, rep, fiber, page] = queryKey as LeadsListKey;
+  return { search, status, city, state, rep, fiber, page };
+}
+
+/**
+ * Would the server include this lead in the view these filters describe?
+ * Mirrors getLeadsPage/searchLeadsPage: exact status/fiber, case-insensitive
+ * city/state, rep id or "unassigned", and the search LIKE over
+ * address/city/zip/contactName (SQLite LIKE is ASCII case-insensitive, so a
+ * lowercase containment check matches its verdict for this data; the query is
+ * deliberately NOT trimmed — the server doesn't trim either). Pure, so the
+ * optimistic insert and the post-save reconcile read the SAME rule and a row
+ * can never be painted into a view the server would filter out.
+ *
+ * SCOPE INVARIANT: this mirrors the FILTERS only, not the caller's role
+ * visibility scope. It is safe because the server guarantees a created lead is
+ * always inside its creator's list scope — admin/manager see everything, and a
+ * team_lead's create is auto-assigned to them (POST /api/leads). If a new
+ * caller role can ever create leads outside its own list scope, this matcher
+ * must learn about scope or the row will paint and then vanish on refetch.
+ */
+export function leadMatchesListFilters(
+  lead: Pick<Lead, "leadStatus" | "city" | "state" | "zip" | "address"> &
+    Partial<Pick<Lead, "contactName" | "assignedRepId" | "fiberStatus">>,
+  filters: Omit<LeadsListFilters, "page">,
+): boolean {
+  if (filters.status !== "all" && lead.leadStatus !== filters.status) return false;
+  if (filters.city !== "all" && (lead.city ?? "").toLowerCase() !== filters.city.toLowerCase()) return false;
+  if (filters.state !== "all" && (lead.state ?? "").toLowerCase() !== filters.state.toLowerCase()) return false;
+  if (filters.fiber !== "all" && lead.fiberStatus !== filters.fiber) return false;
+  if (filters.rep !== "all") {
+    if (filters.rep === "unassigned") {
+      if (lead.assignedRepId != null) return false;
+    } else if (lead.assignedRepId !== Number(filters.rep)) return false;
+  }
+  const q = filters.search.toLowerCase();
+  if (q) {
+    const hit = [lead.address, lead.city, lead.zip, lead.contactName]
+      .some(v => (v ?? "").toLowerCase().includes(q));
+    if (!hit) return false;
+  }
+  return true;
+}
+
+/**
+ * Write ONE lead into every cached list view it belongs to — the targeted
+ * alternative to invalidate-and-refetch after a create. Views the lead matches:
+ * page 0 gets the row prepended (newest-first is the server's ORDER BY, so the
+ * top of page 0 IS its real position); deeper pages only bump `total` and are
+ * marked stale without a fetch (their row windows shifted). Views the lead
+ * does not match are left untouched — a new lead cannot change their contents.
+ * `replaceTempId` reconciles an optimistic row in place: same index, real id,
+ * no remove-then-reinsert flash. If a concurrent refetch already wiped the temp
+ * row, the lead is inserted instead, and a row already present (an SSE repaint,
+ * a racing refetch that included it) is never duplicated.
+ */
+export function upsertLeadIntoLists(
+  qc: QueryClient,
+  lead: Lead,
+  opts: { replaceTempId?: number } = {},
+): void {
+  const entries = qc.getQueriesData<LeadsListResponse>({ predicate: q => isLeadsListKey(q.queryKey) });
+  const staleKeys: unknown[][] = [];
+  for (const [key, data] of entries) {
+    const filters = parseLeadsListKey(key);
+    if (!filters || !data || !Array.isArray(data.leads)) continue;
+    const withoutTemp = opts.replaceTempId != null && data.leads.some(l => l.id === opts.replaceTempId)
+      ? data.leads : null;
+    if (!leadMatchesListFilters(lead, filters)) {
+      // A temp row painted here no longer belongs (the server normalized a
+      // field out of this view) — drop it and hand back the optimistic +1.
+      if (withoutTemp) {
+        qc.setQueryData<LeadsListResponse>(key, {
+          ...data,
+          leads: data.leads.filter(l => l.id !== opts.replaceTempId),
+          total: Math.max(0, data.total - 1),
+        });
+      }
+      continue;
+    }
+    if (withoutTemp) {
+      // In-place swap: the row keeps its index, so nothing moves on screen.
+      qc.setQueryData<LeadsListResponse>(key, {
+        ...data,
+        leads: data.leads.map(l => (l.id === opts.replaceTempId ? lead : l)),
+      });
+    } else if (data.leads.some(l => l.id === lead.id)) {
+      qc.setQueryData<LeadsListResponse>(key, {
+        ...data,
+        leads: data.leads.map(l => (l.id === lead.id ? lead : l)),
+      });
+    } else if (filters.page === 0) {
+      qc.setQueryData<LeadsListResponse>(key, {
+        ...data,
+        leads: [lead, ...data.leads],
+        total: data.total + 1,
+      });
+    } else {
+      // Deeper pages: the row-window shifted server-side in a way the cache
+      // can't reproduce, and a blind total bump would double-count across an
+      // optimistic-insert + reconcile pair (each call sees no row to anchor
+      // on). Leave the data untouched and let the next visit refetch.
+      staleKeys.push([...key]);
+    }
+  }
+  // Deeper pages refetch on their next visit — never now, never the whole list.
+  for (const key of staleKeys) {
+    void qc.invalidateQueries({ queryKey: key, exact: true, refetchType: "none" });
+  }
 }
 
 /** The querystring the server expects for a given view (limit/offset included). */

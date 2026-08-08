@@ -53,6 +53,12 @@ function lead(id: number, over: Record<string, any> = {}) {
 // state while the server has not answered yet, then settle either way.
 let settleDelete: { resolve: () => void; reject: (e: Error) => void };
 let settleAdd: { resolve: () => void; reject: (e: Error) => void };
+// Arm with deferNextListGet() to hold the NEXT list GET open; its body is
+// snapshotted at request time (like a real server would), so a fetch that
+// starts pre-create carries a pre-create body no matter when it resolves.
+let pendingListGet = false;
+let settleListGet: { resolve: () => void } | null = null;
+const deferNextListGet = () => { pendingListGet = true; };
 
 function renderLeads(leadsDb: any[]) {
   apiRequest.mockImplementation((method: string, url: string, body?: any) => {
@@ -60,6 +66,10 @@ function renderLeads(leadsDb: any[]) {
       return new Promise<any>((resolve, reject) => {
         settleAdd = {
           resolve: () => {
+            // Mirror the server's canonical-address dedupe: an existing
+            // address answers 200 with the EXISTING row + existed:true.
+            const dup = leadsDb.find(l => l.address === body?.address);
+            if (dup) { resolve({ json: () => Promise.resolve({ ...dup, existed: true }) }); return; }
             const created = { ...lead(42), ...body, id: 42 };
             leadsDb.push(created);
             resolve({ json: () => Promise.resolve(created) });
@@ -82,7 +92,21 @@ function renderLeads(leadsDb: any[]) {
       });
     }
     if (url.startsWith("/api/leads/facets")) return Promise.resolve({ json: () => Promise.resolve({ facets: [] }) });
-    if (url.startsWith("/api/leads?")) return Promise.resolve({ json: () => Promise.resolve({ leads: [...leadsDb], total: leadsDb.length, limit: 100, offset: 0 }) });
+    if (url.startsWith("/api/leads?")) {
+      // Filter-aware, like the real endpoint — the filtered-view tests depend
+      // on the server excluding non-matching rows.
+      const params = new URLSearchParams(url.split("?")[1]);
+      const status = params.get("status");
+      const rows = leadsDb.filter(l => !status || l.leadStatus === status);
+      const payload = { leads: [...rows], total: rows.length, limit: 100, offset: 0 };
+      if (pendingListGet) {
+        pendingListGet = false;
+        return new Promise<any>(resolve => {
+          settleListGet = { resolve: () => resolve({ json: () => Promise.resolve(payload) }) };
+        });
+      }
+      return Promise.resolve({ json: () => Promise.resolve(payload) });
+    }
     if (url.startsWith("/api/stats")) return Promise.resolve({ json: () => Promise.resolve({ total: leadsDb.length, assigned: 0, unassigned: 0, qualified: 0, stale: 0, byStatus: {}, byFiberStatus: {}, byRep: {}, byTerritory: {} }) });
     if (url.startsWith("/api/onboarding/pipeline")) return Promise.resolve({ json: () => Promise.resolve({ records: [] }) });
     return Promise.resolve({ json: () => Promise.resolve([]) });
@@ -115,7 +139,7 @@ async function confirmDeleteOf(id: number) {
   fireEvent.click(await screen.findByTestId("btn-confirm-delete"));
 }
 
-beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); navigate.mockReset(); });
+beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); navigate.mockReset(); pendingListGet = false; settleListGet = null; });
 
 describe("Leads delete is optimistic", () => {
   it("removes the row and closes the dialog BEFORE the server responds", async () => {
@@ -154,39 +178,153 @@ describe("Leads delete is optimistic", () => {
   });
 });
 
-describe("Leads add is optimistic", () => {
-  it("closes the dialog and shows the new row BEFORE the POST resolves", async () => {
+// The create contract (flicker fix, 2026-08): the dialog stays open on
+// "Saving lead…" until the server confirms; the list keeps every existing row
+// PLUS exactly one provisional saving row; success reconciles the temp row to
+// the server row IN PLACE with NO list refetch (the refetch is what used to
+// race a stale in-flight GET and make new leads vanish, then reappear).
+describe("Leads add — saving state, continuity, reconcile", () => {
+  const listGets = () =>
+    apiRequest.mock.calls.filter(([m, u]) => m === "GET" && String(u).startsWith("/api/leads?"));
+
+  it("shows Saving lead…, keeps the list + one temp row, then reconciles in place without a refetch", async () => {
     renderLeads([lead(1)]);
     await screen.findByTestId("card-lead-1");
     await submitNewLead("99 Pine St");
 
-    // Server has NOT answered (settleAdd is still pending) — yet the dialog is
-    // closed, the optimistic row is visible, and the success toast fired.
-    await waitFor(() => expect(screen.getAllByText("99 Pine St").length).toBeGreaterThan(0));
+    // Server has NOT answered: the dialog is still open saying so, the list
+    // still shows the old row, and exactly ONE provisional row exists.
+    await waitFor(() => expect(screen.getAllByText("99 Pine St")).toHaveLength(1));
+    expect(screen.getByTestId("btn-save-lead-form").textContent).toContain("Saving lead…");
+    expect(screen.getByText("Saving…")).toBeTruthy();
+    expect(screen.getByTestId("card-lead-1")).toBeTruthy();
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Lead added" }));
+
+    // Settle: the server row (real id 42) replaces the temp row in place —
+    // still exactly one instance, never a moment with zero.
+    settleAdd.resolve();
+    await waitFor(() => expect(screen.getByTestId("card-lead-42")).toBeTruthy());
+    expect(screen.getAllByText("99 Pine St")).toHaveLength(1);
+    expect(screen.queryByText("Saving…")).toBeNull();
+    expect(screen.getByTestId("card-lead-1")).toBeTruthy();
     expect(screen.queryByTestId("btn-save-lead-form")).toBeNull();
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Lead added" }));
 
-    // Settle: the server row (real id 42) replaces the temp row on refetch.
+    // The whole flow re-used the ONE mount-time list fetch — a create is a
+    // cache write, not a 100-row reload.
+    expect(listGets()).toHaveLength(1);
+  });
+
+  it("keeps the new lead through a background list refetch", async () => {
+    const { qc } = renderLeads([lead(1)]);
+    await screen.findByTestId("card-lead-1");
+    await submitNewLead("99 Pine St");
+    // Wait for the temp row: onMutate is async, so the POST (and the settle
+    // handle) only exists once the optimistic write has landed.
+    await waitFor(() => expect(screen.getAllByText("99 Pine St")).toHaveLength(1));
     settleAdd.resolve();
+    await screen.findByTestId("card-lead-42");
+
+    // A later background refetch (staleTime expiry, another tab's knock…)
+    // returns the server list — the row must not blink out.
+    await qc.invalidateQueries();
     await waitFor(() => expect(screen.getByTestId("card-lead-42")).toBeTruthy());
-    expect(screen.getAllByText("99 Pine St").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("99 Pine St")).toHaveLength(1);
+  });
+
+  it("a stale list fetch that was in flight when the save started cannot wipe the new lead", async () => {
+    // THE headline race: a list GET leaves the server pre-create (here: a
+    // background refetch armed to hang), the create completes and reconciles,
+    // and only then does the stale body arrive. The mutation's cancelQueries
+    // must have discarded that fetch — if either cancel is removed, the
+    // pre-create body lands as fresh data and card-lead-42 vanishes.
+    const { qc } = renderLeads([lead(1)]);
+    await screen.findByTestId("card-lead-1");
+
+    deferNextListGet();
+    void qc.invalidateQueries(); // starts the doomed pre-create refetch
+    await waitFor(() => expect(settleListGet).not.toBeNull());
+
+    await submitNewLead("99 Pine St");
+    await waitFor(() => expect(screen.getAllByText("99 Pine St")).toHaveLength(1));
+    settleAdd.resolve();
+    await screen.findByTestId("card-lead-42");
+
+    // The stale pre-create body arrives LAST — and must change nothing.
+    settleListGet!.resolve();
+    await waitFor(() => expect(screen.getByTestId("card-lead-42")).toBeTruthy());
+    expect(screen.getAllByText("99 Pine St")).toHaveLength(1);
     expect(screen.getByTestId("card-lead-1")).toBeTruthy();
   });
 
-  it("removes the temp row and fires a destructive toast when the POST fails", async () => {
+  it("a double-click fires exactly one POST", async () => {
+    renderLeads([lead(1)]);
+    await screen.findByTestId("card-lead-1");
+    const posts = () => apiRequest.mock.calls.filter(([m, u]) => m === "POST" && u === "/api/leads");
+    await submitNewLead("99 Pine St");
+    // Second click lands in the same frame, before isPending re-renders — the
+    // synchronous ref guard is what blocks it, not the disabled button.
+    fireEvent.click(screen.getByTestId("btn-save-lead-form"));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    settleAdd.resolve();
+    await screen.findByTestId("card-lead-42");
+    expect(posts()).toHaveLength(1);
+    expect(screen.getAllByText("99 Pine St")).toHaveLength(1);
+  });
+
+  it("failed save: loud error, temp row withdrawn, form data intact for retry", async () => {
     renderLeads([lead(1)]);
     await screen.findByTestId("card-lead-1");
     await submitNewLead("99 Pine St");
-    await waitFor(() => expect(screen.getAllByText("99 Pine St").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("99 Pine St")).toHaveLength(1));
 
-    // Reject only now — the mutation already awaits this promise, so the
-    // rejection lands inside React Query's handled chain (no unhandled reject).
     settleAdd.reject(new Error("boom"));
     await waitFor(() => expect(screen.queryByText("99 Pine St")).toBeNull());
     expect(toast).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Couldn't add lead — boom", variant: "destructive" }),
     );
+    // The dialog is still open with everything typed — retry is one click.
+    expect((screen.getByTestId("form-address") as HTMLInputElement).value).toBe("99 Pine St");
+    expect(screen.getByTestId("btn-save-lead-form")).toBeTruthy();
     // The pre-existing row survives the rollback.
+    expect(screen.getByTestId("card-lead-1")).toBeTruthy();
+  });
+
+  it("duplicate address: temp row withdrawn, no second row, honest toast", async () => {
+    renderLeads([lead(1)]); // lead 1 lives at "1 Oak St"
+    await screen.findByTestId("card-lead-1");
+    await submitNewLead("1 Oak St");
+    await waitFor(() => expect(screen.getAllByText("1 Oak St").length).toBeGreaterThan(1));
+
+    settleAdd.resolve(); // server answers existed:true with the surviving row
+    await waitFor(() => expect(screen.getAllByText("1 Oak St")).toHaveLength(1));
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Already a lead" }));
+    expect(screen.queryByTestId("btn-save-lead-form")).toBeNull();
+  });
+
+  it("lead hidden by the active filter: no phantom row, explanatory toast", async () => {
+    renderLeads([lead(1, { leadStatus: "sold" })]);
+    await screen.findByTestId("card-lead-1");
+    // Narrow the view to Sold — the soon-to-be-created prospect doesn't match.
+    fireEvent.click(screen.getByRole("button", { name: /^Sold/ }));
+    await screen.findByTestId("card-lead-1");
+
+    await submitNewLead("99 Pine St");
+    // Wait for the POST to be issued (async onMutate), THEN assert the temp
+    // row was NOT painted into a view its status doesn't match — painting it
+    // everywhere was the old appear-then-vanish.
+    await waitFor(() => expect(
+      apiRequest.mock.calls.filter(([m, u]) => m === "POST" && u === "/api/leads"),
+    ).toHaveLength(1));
+    expect(screen.queryByText("99 Pine St")).toBeNull();
+    expect(screen.getByTestId("card-lead-1")).toBeTruthy();
+
+    settleAdd.resolve();
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Lead saved — hidden by current filters" }),
+    ));
+    // Saved, honestly absent — and never flashed in and out.
+    expect(screen.queryByText("99 Pine St")).toBeNull();
     expect(screen.getByTestId("card-lead-1")).toBeTruthy();
   });
 });

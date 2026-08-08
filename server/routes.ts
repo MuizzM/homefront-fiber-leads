@@ -2692,9 +2692,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // SQL — the old code hydrated every tenant row (53 cols × 50k) to serve a
     // 200-row page, and the interim search path capped BEFORE filtering
     // (dropping real matches — review finding).
+    const dbStarted = performance.now();
     const { rows, total } = search
       ? storage.searchLeadsPage(String(search), tid, repFilter, filterOpts)
       : storage.getLeadsPage(tid, repFilter, filterOpts);
+    // DB vs API split, DevTools-visible — same convention as /api/leads/map.
+    res.set("Server-Timing", `leads_db;dur=${(performance.now() - dbStarted).toFixed(2)}`);
     res.json({ leads: rows.map(r => stripProviderIds(r, user)), total, limit: lim, offset: off });
   });
   app.get("/api/leads/:id", requireAuth, (req, res) => {
@@ -2737,6 +2740,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   (globalThis as any).__bustMapCache = bustMapCache;
 
   app.post("/api/leads", requireTeamLead, async (req: any, res: any) => {
+    const handlerStarted = performance.now(); // Server-Timing: DB vs API split
     if (req.body?.contactPhone != null || req.body?.ownerPhone != null) {
       return res.status(400).json({
         error: "Phone data must be added through the Calling compliance module.",
@@ -2868,6 +2872,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       freshConfidence: undefined,
       freshSources: undefined,
     };
+    // An explicit assignedRepId must be a rep of the caller's tenant — the
+    // POST path used to pass it straight to the insert with none of the
+    // validation /assign and PATCH apply (cross-tenant hand-off via create).
+    if ((safeLead as any).assignedRepId != null) {
+      const targetRep = Number((safeLead as any).assignedRepId);
+      if (!Number.isInteger(targetRep) || targetRep <= 0) return res.status(400).json({ error: "Invalid assignedRepId" });
+      if (!repInCallerTenant(req.user, targetRep)) return res.status(404).json({ error: "Rep not found" });
+    } else if (String(req.user?.role ?? "") === "team_lead" && req.user?.teamMemberId != null) {
+      // A team_lead's manual create defaults to THEIR door. Their list reads
+      // are scoped to self + reports (leadVisibilityScope), so an unassigned
+      // create would save and then be INVISIBLE to its creator — the client
+      // confirms it into the list and the next refetch silently drops it
+      // (review finding). Admin/manager creates stay in the unassigned pool;
+      // their visibility is org-wide.
+      (safeLead as any).assignedRepId = req.user.teamMemberId;
+      (safeLead as any).assignedAt = new Date().toISOString();
+    }
     // GEOCODE IS OFF THE CRITICAL PATH. A typed-in address (no client coords)
     // used to block this response on a synchronous Mapbox call (up to an 8s
     // timeout), which gated the pin AND the card that opens on the returned id —
@@ -2878,7 +2899,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // beat later instead of freezing the card. On geocode failure the lead still
     // saves (list views show it), exactly as before.
     const needsGeocode = (safeLead as any).lat == null || (safeLead as any).lng == null;
+    const insertStarted = performance.now();
     const created = storage.createLead(safeLead as any);
+    const insertMs = performance.now() - insertStarted;
     // A brand-new door is a pin appearing, not a pin changing — "status" is the
     // closest the wire type gets, and the projection tells the map everything it
     // needs to draw it without a refetch.
@@ -2890,6 +2913,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // for a coords-present tap/locate add). Bust now so the immediate re-fetch
     // already includes the new pin — it stays put.
     bustMapCache(tenantId);
+    // lead_insert = the SQLite write alone; lead_total = the whole handler
+    // (auth already ran) — the gap between them is validation + dedupe + cache
+    // busts. Geocode is backgrounded below and never appears in either number.
+    res.set("Server-Timing", [
+      `lead_insert;dur=${insertMs.toFixed(2)}`,
+      `lead_total;dur=${(performance.now() - handlerStarted).toFixed(2)}`,
+    ].join(", "));
     res.status(201).json(stripProviderIds(created, req.user));
     if (needsGeocode) {
       const q = [safeLead.address, safeLead.city, safeLead.state, (safeLead as any).zip]

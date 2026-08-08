@@ -1,9 +1,10 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import {
-  LEADS_PAGE_SIZE, isLeadsListKey, leadsListQueryOptions, type LeadsListResponse,
+  LEADS_PAGE_SIZE, isLeadsListKey, leadMatchesListFilters, leadsListQueryOptions,
+  upsertLeadIntoLists, type LeadsListResponse,
 } from "@/lib/leadsListQuery";
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
@@ -40,11 +41,15 @@ import { useCan } from "@/lib/capabilities";
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
 
-// A lead changed: every cached PAGE of the list is now suspect, so mark them
-// stale (the active one refetches — that is what swaps an optimistic temp row
-// for the real server row). Deliberately NOT the bare ["/api/leads"] prefix:
-// that also matched ["/api/leads", id, "knocks"] / "enrichment", so renaming a
-// lead re-fetched the enrichment of whatever lead happened to be open.
+// A lead changed IN WAYS THE CACHE CAN'T REPRODUCE (update/delete/knock —
+// server-derived fields move): every cached PAGE of the list is suspect, so
+// mark them stale and let the active one refetch. Creates deliberately do NOT
+// come through here anymore — a new row is fully known from the POST response,
+// so upsertLeadIntoLists writes it into matching views without a refetch (the
+// refetch is what raced a stale in-flight GET and made new leads vanish).
+// Deliberately NOT the bare ["/api/leads"] prefix: that also matched
+// ["/api/leads", id, "knocks"] / "enrichment", so renaming a lead re-fetched
+// the enrichment of whatever lead happened to be open.
 function invalidateLeadLists(qc: QueryClient): void {
   void qc.invalidateQueries({ predicate: query => isLeadsListKey(query.queryKey) });
 }
@@ -116,9 +121,12 @@ function LeadForm({ initial, onSave, onCancel, saving }: {
     city: initial?.city ?? "",
     state: initial?.state ?? "NC",
     zip: initial?.zip ?? "",
-    // Preserve the existing fiber status on edit (this form has no field for it);
-    // hardcoding new_fiber here silently reset tenured/no_service leads on save.
-    fiberStatus: initial?.fiberStatus ?? "new_fiber",
+    // NO fiberStatus: the form has no field for it, and sending one is fatal
+    // on create — POST /api/leads hard-rejects any client-supplied "new_fiber"
+    // as a forged fresh-fiber claim (the old `?? "new_fiber"` default made
+    // EVERY manual add from this dialog 400 — witnessed live 2026-08-08).
+    // PATCH ignores the field entirely (not in its allowlist), so omitting it
+    // also preserves the existing status on edit, as the old comment intended.
     leadStatus: initial?.leadStatus ?? "prospect",
     contactName: initial?.contactName ?? "",
     contactEmail: initial?.contactEmail ?? "",
@@ -179,9 +187,11 @@ function LeadForm({ initial, onSave, onCancel, saving }: {
       </div>
       <div className="flex gap-2 pt-1">
         <Button variant="outline" onClick={onCancel} className="border-border flex-1">Cancel</Button>
+        {/* While the POST is in flight the button says so and stays disabled —
+            the form (and everything typed into it) survives a failed save. */}
         <Button onClick={() => onSave(form)} disabled={saving || !form.address || !form.city || !form.zip}
           className="bg-primary hover:bg-primary/90 text-white flex-1" data-testid="btn-save-lead-form">
-          {saving ? "Saving..." : "Save Lead"}
+          {saving ? (<><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Saving lead…</>) : "Save Lead"}
         </Button>
       </div>
     </div>
@@ -783,17 +793,26 @@ const LeadTableRow = memo(function LeadTableRow({
   onDelete: (id: number) => void;
 }) {
   const next = nextAction(lead);
+  // Negative id = the optimistic row of a save still in flight: visibly
+  // provisional, and its actions are held back until the server id exists
+  // (opening/editing/deleting a lead the server hasn't confirmed would 404).
+  const saving = lead.id < 0;
   const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
   return (
-    <tr data-testid={`card-lead-${lead.id}`} className="group hover:bg-muted/35 transition-colors">
-      <td className="px-4 py-3"><button onClick={() => onOpen(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+    <tr data-testid={`card-lead-${lead.id}`} className={`group hover:bg-muted/35 transition-colors${saving ? " opacity-70" : ""}`}>
+      <td className="px-4 py-3"><button onClick={() => !saving && onOpen(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
       <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
-      <td className="px-3 py-3"><button onClick={() => canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
+      <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
       <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-success" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
       <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
       <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
       <td className="px-3 py-3">
+        {saving ? (
+          <div className="flex items-center justify-end gap-1.5 text-2xs font-semibold text-muted-foreground" data-testid={`lead-row-saving-${lead.id}`}>
+            <RefreshCw className="w-3 h-3 animate-spin" />Saving…
+          </div>
+        ) : (
         <div className="flex items-center justify-end gap-0.5">
           {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
           {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
@@ -801,6 +820,7 @@ const LeadTableRow = memo(function LeadTableRow({
           {canEdit && <button onClick={() => onEdit(lead)} title="Edit" aria-label={`Edit ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" aria-hidden="true" /></button>}
           {canDelete && <button onClick={() => onDelete(lead.id)} title="Delete" aria-label={`Delete ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>}
         </div>
+        )}
       </td>
     </tr>
   );
@@ -815,9 +835,12 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
     ? `https://www.google.com/maps/dir/?api=1&destination=${lead.lat},${lead.lng}`
     : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`)}`;
   const next = nextAction(lead);
+  // Same provisional treatment as the desktop row: a save still in flight is
+  // visible but not actionable until the server id exists.
+  const saving = lead.id < 0;
   return (
-    <article className="render-lazy px-4 py-4" data-testid={`mobile-lead-${lead.id}`}>
-      <button onClick={() => onOpen(lead)} className="w-full text-left">
+    <article className={`render-lazy px-4 py-4${saving ? " opacity-70" : ""}`} data-testid={`mobile-lead-${lead.id}`}>
+      <button onClick={() => !saving && onOpen(lead)} className="w-full text-left">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
@@ -835,11 +858,17 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
           <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
         </div>
       </button>
+      {saving ? (
+        <div className="mt-3 h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex w-full items-center justify-center gap-1.5" data-testid={`lead-row-saving-${lead.id}`}>
+          <RefreshCw className="h-3.5 w-3.5 animate-spin" />Saving…
+        </div>
+      ) : (
       <div className="mt-3 grid grid-cols-3 gap-2">
         <button onClick={() => onOpen(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5"><ArrowUpRight className="h-4 w-4" />Open</button>
         {canOpenCalling ? <Link href={`/calling/lead/${lead.id}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4 text-primary" />Calling</Link> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4" />Protected</span>}
         <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Navigation className="h-4 w-4 text-primary" />Route</a>
       </div>
+      )}
     </article>
   );
 });
@@ -972,31 +1001,118 @@ export default function Leads() {
     for (const [key, data] of snapshots ?? []) qc.setQueryData(key, data);
   };
 
+  // One in-flight create at a time: the ref flips synchronously on the first
+  // click, so a double-tap in the same frame can't POST twice (isPending only
+  // updates after a microtask). The server's canonical-address dedupe stays as
+  // the backstop for anything that slips past.
+  const createInFlight = useRef(false);
+  // Dialog generation: Escape is allowed mid-save, and the user may re-open
+  // the dialog and start typing a DIFFERENT lead while the first save is
+  // still in flight. The delayed setAddOpen(false) may only close the dialog
+  // session it belongs to — closing a newer one would wipe a form mid-entry.
+  const dialogGen = useRef(0);
+  const openAddDialog = () => { dialogGen.current++; setAddOpen(true); };
+  const submitCreate = (data: Partial<InsertLead>) => {
+    if (createInFlight.current) return;
+    createInFlight.current = true;
+    createMutation.mutate(data);
+  };
+
   const createMutation = useMutation({
     mutationFn: async (data: Partial<InsertLead>) => {
       const res = await apiRequest("POST", "/api/leads", data);
       return res.json();
     },
     onMutate: async (data: Partial<InsertLead>) => {
-      await qc.cancelQueries({ queryKey: ["/api/leads"] });
+      // Cancel LIST fetches only (per-lead subqueries are unrelated): an
+      // in-flight page that resolved after this write would repaint pre-create
+      // rows over the optimistic one.
+      await qc.cancelQueries({ predicate: q => isLeadsListKey(q.queryKey) });
+      const snapshots = qc.getQueriesData({ predicate: q => isLeadsListKey(q.queryKey) });
       // Negative temp id keys the optimistic row and can never collide with a
-      // real (positive) server id. Only form-provided fields are shown — the
-      // onSettled refetch swaps in the server row with its real id and defaults.
-      const snapshots = patchLeadLists(cached => ({
-        leads: [{ id: -Date.now(), ...data } as Lead, ...cached.leads],
-        total: cached.total + 1,
-      }));
-      setAddOpen(false);
-      toast({ title: "Lead added" });
-      return { snapshots };
+      // real (positive) server id. Timestamps make "Last activity" read Today
+      // instead of Unknown. The row lands ONLY in cached views whose filters
+      // it matches — painting it into every view was what made it appear in a
+      // filtered list and then vanish on the next fetch.
+      const now = new Date().toISOString();
+      const tempId = -Date.now();
+      upsertLeadIntoLists(qc, {
+        // fiberStatus mirrors the column default — the form doesn't send one,
+        // and the row renderer calls .replace() on it.
+        id: tempId, assignedRepId: null, lastOutcome: null, leadScore: 0,
+        fiberStatus: "unknown", createdAt: now, updatedAt: now, ...data,
+      } as Lead);
+      // The dialog stays open showing "Saving lead…" — it closes when the
+      // server confirms, and a failure hands the intact form back.
+      const view = {
+        search: debouncedSearch, status: filterStatus, city: filterCity,
+        state: filterState, rep: filterRep, fiber: filterFiber, page,
+      };
+      return { snapshots, tempId, view, gen: dialogGen.current };
+    },
+    onSuccess: async (lead: any, vars, ctx) => {
+      if (lead?.existed === true) {
+        // The address already had a lead — the server returned the existing
+        // row instead of creating one (possibly ADOPTING it: an FCC ghost gets
+        // retagged and assigned server-side). Withdraw the temp row and let
+        // the lists refetch canonical state; leaving the temp would show the
+        // same door twice until a refetch silently ate one ("duplicate then
+        // it vanished").
+        restoreLeadLists(ctx?.snapshots);
+        if (ctx?.gen === dialogGen.current) setAddOpen(false);
+        void qc.invalidateQueries({ predicate: q => isLeadsListKey(q.queryKey) });
+        toast({
+          title: "Already a lead",
+          description: `${lead.address ?? vars.address ?? "This address"} is already in the pipeline — nothing was duplicated.`,
+        });
+        return;
+      }
+      // A list fetch still in flight left the server BEFORE this lead existed —
+      // let its stale body land and it would paint the new row away again.
+      await qc.cancelQueries({ predicate: q => isLeadsListKey(q.queryKey) });
+      // Targeted reconcile: the confirmed server row replaces the temp row in
+      // place (same index — no flash, no reorder) in every matching cached
+      // view. No list refetch: newest-first means the top of page 0 already IS
+      // this row's server position.
+      upsertLeadIntoLists(qc, lead as Lead, { replaceTempId: ctx?.tempId });
+      // A view whose FIRST load got cancelled above (saved while the page was
+      // still loading) has no data to patch — refetch it so it can't strand
+      // on an empty state.
+      void qc.invalidateQueries({ predicate: q => isLeadsListKey(q.queryKey) && q.state.data === undefined });
+      if (ctx?.gen === dialogGen.current) setAddOpen(false);
+      const view = ctx?.view;
+      if (view && !leadMatchesListFilters(lead as Lead, view)) {
+        toast({
+          title: "Lead saved — hidden by current filters",
+          description: `${lead.address ?? vars.address ?? "The lead"} was saved, but this view's filters exclude it. Clear filters to see it.`,
+        });
+      } else if (view && view.page > 0) {
+        toast({ title: "Lead added", description: "It's at the top of page 1 — newest first." });
+      } else {
+        toast({ title: "Lead added" });
+      }
+      // The KPI strip counts changed; that one small query refetches in
+      // parallel. Facets refetch ONLY when this lead introduces a city/state
+      // pair the dropdowns have never seen.
+      void qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      const facetsCache = qc.getQueryData<{ facets: Array<{ city: string; state: string }> }>(["/api/leads/facets"]);
+      const knownPlace = facetsCache?.facets?.some(f =>
+        (f.city ?? "").toLowerCase() === String(lead.city ?? "").toLowerCase()
+        && (f.state ?? "").toLowerCase() === String(lead.state ?? "").toLowerCase());
+      if (facetsCache && !knownPlace) void qc.invalidateQueries({ queryKey: ["/api/leads/facets"] });
     },
     onError: (e: any, _vars, ctx) => {
-      restoreLeadLists(ctx?.snapshots);
+      // The error is made visible BEFORE the temp row leaves the list —
+      // silently removing it first is exactly the "my lead vanished" report.
+      // The dialog stays open, so everything typed is still there to retry.
       toast({ title: `Couldn't add lead — ${String(e?.message ?? "request failed")}`, variant: "destructive" });
+      restoreLeadLists(ctx?.snapshots);
+      // Same first-load revival as the success path: a view whose initial
+      // fetch was cancelled by onMutate must not strand on an empty state.
+      void qc.invalidateQueries({ predicate: q => isLeadsListKey(q.queryKey) && q.state.data === undefined });
     },
     onSettled: () => {
-      invalidateLeadLists(qc);
-      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      createInFlight.current = false;
     },
   });
 
@@ -1108,7 +1224,7 @@ export default function Leads() {
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => navigate("/map")} className="h-9 border-border text-sm"><MapIcon className="w-4 h-4 mr-1.5" />Field map</Button>
-          {canAddLead && <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm h-9" data-testid="btn-add-lead-manual"><Plus className="w-4 h-4 mr-1.5" />Add lead</Button>}
+          {canAddLead && <Button onClick={openAddDialog} className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm h-9" data-testid="btn-add-lead-manual"><Plus className="w-4 h-4 mr-1.5" />Add lead</Button>}
         </div>
       </div>
 
@@ -1221,7 +1337,7 @@ export default function Leads() {
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="bg-card border-border text-foreground max-w-lg">
           <DialogHeader><DialogTitle className="text-base">Add Lead</DialogTitle></DialogHeader>
-          <LeadForm onSave={d => createMutation.mutate(d)} onCancel={() => setAddOpen(false)} saving={createMutation.isPending} />
+          <LeadForm onSave={submitCreate} onCancel={() => setAddOpen(false)} saving={createMutation.isPending} />
         </DialogContent>
       </Dialog>
 
