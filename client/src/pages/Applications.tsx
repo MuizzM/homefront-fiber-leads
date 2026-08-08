@@ -255,14 +255,24 @@ export default function Applications() {
   // irreversible). First tap arms the button, which auto-disarms after 3s;
   // only a second tap while armed fires the mutation.
   const [rejectArmed, setRejectArmed] = useState(false);
+  // Approving is the HIGHER-consequence decision on this screen — it creates
+  // the account, assigns the commission plan + reserve, re-parents downline
+  // members and issues four legal agreements — so it carries the same
+  // arm-then-confirm guard as Reject. One mis-click must not hire someone.
+  const [approveArmed, setApproveArmed] = useState(false);
   const [voidTarget, setVoidTarget] = useState<{ envelopeId: number; label: string } | null>(null);
   const [voidReason, setVoidReason] = useState("");
   const rejectTimer = useRef<number | null>(null);
+  const approveTimer = useRef<number | null>(null);
   useEffect(() => {
     setRejectArmed(false);
+    setApproveArmed(false);
     setVoidTarget(null);
     setVoidReason("");
-    return () => { if (rejectTimer.current) window.clearTimeout(rejectTimer.current); };
+    return () => {
+      if (rejectTimer.current) window.clearTimeout(rejectTimer.current);
+      if (approveTimer.current) window.clearTimeout(approveTimer.current);
+    };
   }, [selectedKey]);
 
   const pipeline = useQuery<PipelineResponse>({
@@ -908,7 +918,17 @@ export default function Applications() {
                     </div>
                   )}
                 </div>
-                <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commission &amp; reserve (what this approval pays)</h4><p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.commissionStructure ? "Opened on the terms this candidate was invited on. Approving assigns exactly what is shown." : "No terms travelled with this application, so the house plan is shown. Approving assigns exactly what is shown."}</p><CompTermsEditor value={reviewTerms} onChange={setReviewTerms} disabled={reviewMutation.isPending} /><textarea value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} placeholder="Decision reason / internal review notes" maxLength={1000} className="mt-3 min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none focus:border-primary" /><div className="mt-3 flex gap-2"><button onClick={() => reviewMutation.mutate({ status: "approved" })} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50" data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}Approve &amp; start onboarding</button><button onClick={() => {
+                <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Commission &amp; reserve (what this approval pays)</h4><p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.commissionStructure ? "Opened on the terms this candidate was invited on. Approving assigns exactly what is shown." : "No terms travelled with this application, so the house plan is shown. Approving assigns exactly what is shown."}</p><CompTermsEditor value={reviewTerms} onChange={setReviewTerms} disabled={reviewMutation.isPending} /><textarea value={reviewNotes} onChange={event => setReviewNotes(event.target.value)} placeholder="Decision reason / internal review notes" maxLength={1000} className="mt-3 min-h-20 w-full rounded-xl border border-border bg-background p-3 text-sm outline-none focus:border-primary" /><div className="mt-3 flex gap-2"><button onClick={() => {
+                  if (!approveArmed) {
+                    setApproveArmed(true);
+                    if (approveTimer.current) window.clearTimeout(approveTimer.current);
+                    approveTimer.current = window.setTimeout(() => setApproveArmed(false), 4000);
+                    return;
+                  }
+                  if (approveTimer.current) window.clearTimeout(approveTimer.current);
+                  setApproveArmed(false);
+                  reviewMutation.mutate({ status: "approved" });
+                }} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} aria-label={approveArmed ? "Confirm: approve and start onboarding on the terms shown" : "Approve and start onboarding"} className={approveArmed ? "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 text-sm font-semibold text-white hover:bg-emerald-600/90" : "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50"} data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}{approveArmed ? "Confirm — assigns the plan shown & sends agreements" : "Approve & start onboarding"}</button><button onClick={() => {
                   if (!rejectArmed) {
                     setRejectArmed(true);
                     if (rejectTimer.current) window.clearTimeout(rejectTimer.current);

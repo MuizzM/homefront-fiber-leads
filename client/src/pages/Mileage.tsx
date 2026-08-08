@@ -69,6 +69,17 @@ const STATUS_TONE: Record<string, string> = {
   PAID: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
 };
 
+// Human labels for the raw DB enum — a rep was reading "SUBMITTED" in caps next
+// to a lowercase "corrected" chip. "Awaiting review" matches the summary tile
+// and "Sent back" matches the rejection explainer line below it.
+const STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Draft",
+  SUBMITTED: "Awaiting review",
+  APPROVED: "Approved",
+  REJECTED: "Sent back",
+  PAID: "Paid",
+};
+
 function get<T>(url: string) {
   return apiRequest("GET", url).then(r => r.json() as Promise<T>);
 }
@@ -369,7 +380,7 @@ function TripRow({ trip, showRep }: { trip: Trip; showRep?: boolean }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium tabular-nums">{formatMiles(netMiles)}</span>
-          <Badge className={STATUS_TONE[trip.status] ?? ""} variant="secondary">{trip.status}</Badge>
+          <Badge className={STATUS_TONE[trip.status] ?? ""} variant="secondary">{STATUS_LABEL[trip.status] ?? trip.status}</Badge>
           {trip.source === "GPS" && <Badge variant="outline" className="text-xs">GPS</Badge>}
           {trip.adjustmentMilesHundredths !== 0 && (
             <Badge variant="outline" className="text-xs">corrected</Badge>
@@ -404,7 +415,7 @@ function TripRow({ trip, showRep }: { trip: Trip; showRep?: boolean }) {
 
 function ApprovalQueue() {
   const { toast } = useToast();
-  const { data: queue = [], isLoading } = useQuery<Trip[]>({
+  const { data: queue = [], isLoading, isError, refetch } = useQuery<Trip[]>({
     queryKey: ["/api/mileage/queue"],
     queryFn: () => get<Trip[]>("/api/mileage/queue"),
   });
@@ -431,7 +442,13 @@ function ApprovalQueue() {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {queue.length === 0 ? (
+        {isError ? (
+          // An approval queue that fails to load must never read as "all clear".
+          <div role="alert" className="py-6 text-center">
+            <p className="text-sm text-muted-foreground">Couldn't load the queue — trips may still be waiting.</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
+          </div>
+        ) : queue.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">Nothing waiting for review.</p>
         ) : (
           queue.map(t => (
@@ -447,15 +464,17 @@ function ApprovalQueue() {
               </div>
               <div className="flex shrink-0 gap-2">
                 <Button size="sm" variant="outline" data-testid={`mileage-approve-${t.id}`}
+                  aria-label={`Approve ${t.repName}'s ${formatMiles(t.milesHundredths)} trip`}
                   onClick={() => decide.mutate({ id: t.id, action: "approve" })}>
-                  <Check className="h-4 w-4" />
+                  <Check className="h-4 w-4" aria-hidden="true" />
                 </Button>
                 <Button size="sm" variant="ghost" data-testid={`mileage-reject-${t.id}`}
+                  aria-label={`Send back ${t.repName}'s trip with a reason`}
                   onClick={() => {
                     const reason = window.prompt("Why is this being sent back?");
                     if (reason?.trim()) decide.mutate({ id: t.id, action: "reject", reason: reason.trim() });
                   }}>
-                  <X className="h-4 w-4" />
+                  <X className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </div>
             </div>
@@ -472,11 +491,11 @@ export default function Mileage() {
   const canApprove = useCan("mileage.approve");
   const canExport = useCan("mileage.read.team");
 
-  const { data: consent } = useQuery<Consent>({
+  const { data: consent, isError: consentError, refetch: refetchConsent } = useQuery<Consent>({
     queryKey: ["/api/mileage/consent"],
     queryFn: () => get<Consent>("/api/mileage/consent"),
   });
-  const { data: trips = [], isLoading } = useQuery<Trip[]>({
+  const { data: trips = [], isLoading, isError: tripsError, refetch: refetchTrips } = useQuery<Trip[]>({
     queryKey: ["/api/mileage/trips"],
     queryFn: () => get<Trip[]>("/api/mileage/trips"),
   });
@@ -547,6 +566,16 @@ export default function Mileage() {
 
       {canApprove && <ApprovalQueue />}
 
+      {/* The GPS tracker hangs off consent — if that fetch fails, say so
+          instead of silently removing the whole tracking surface. */}
+      {consentError && (
+        <Card role="alert" data-testid="mileage-consent-error">
+          <CardContent className="flex items-center gap-3 py-4">
+            <p className="flex-1 text-sm text-muted-foreground">Couldn't load GPS tracking status.</p>
+            <Button variant="outline" size="sm" onClick={() => refetchConsent()}>Retry</Button>
+          </CardContent>
+        </Card>
+      )}
       {consent && <LocationDisclosure consent={consent} />}
       {consent?.mayStartGpsTrip && <GpsTracker openTrip={openTrip} />}
       <ManualEntry />
@@ -555,6 +584,13 @@ export default function Mileage() {
         <CardHeader className="pb-3"><CardTitle className="text-base">My mileage log</CardTitle></CardHeader>
         <CardContent>
           {isLoading ? <Skeleton className="h-24 w-full" />
+            : tripsError
+              // A tax/compliance record must never render a failed fetch as the
+              // reassuring "No trips logged yet."
+              ? <div role="alert" className="py-6 text-center">
+                  <p className="text-sm text-muted-foreground">Couldn't load your trips — the log is unchanged.</p>
+                  <Button variant="outline" size="sm" className="mt-2" onClick={() => refetchTrips()}>Retry</Button>
+                </div>
             : trips.length === 0
               ? <p className="py-6 text-center text-sm text-muted-foreground">No trips logged yet.</p>
               : trips.map(t => <TripRow key={t.id} trip={t} />)}

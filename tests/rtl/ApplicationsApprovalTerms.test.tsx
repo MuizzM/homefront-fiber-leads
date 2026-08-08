@@ -95,6 +95,9 @@ const TIERED_INVITE = {
 /** Scoped to the review panel — the invite form has its own editor on the same page. */
 const reviewPanel = () => within(screen.getByTestId("review-comp-terms"));
 const approve = () => screen.getByTestId("approve-start-onboarding");
+/** Approve is arm-then-confirm now (it assigns pay + issues agreements), so a
+ *  test that "approves" clicks twice: once to arm, once to fire. */
+const approveTwice = () => { fireEvent.click(approve()); fireEvent.click(approve()); };
 const approvalPatch = () => apiRequest.mock.calls.find(
   call => call[0] === "PATCH" && call[1] === "/api/onboarding/applications/42");
 
@@ -140,7 +143,7 @@ describe("the approval panel's comp terms", () => {
   it("THE REQUIREMENT: approving sends the ladder, so the rep is PAID what they signed", async () => {
     renderPage(TIERED_INVITE);
     await ready();
-    fireEvent.click(approve());
+    approveTwice();
 
     await waitFor(() => expect(approvalPatch()).toBeTruthy());
     const body = approvalPatch()![2] as any;
@@ -161,7 +164,7 @@ describe("the approval panel's comp terms", () => {
     renderPage(TIERED_INVITE);
     await ready();
     fireEvent.change(reviewPanel().getByTestId("comp-tier-0-rate"), { target: { value: "190" } });
-    fireEvent.click(approve());
+    approveTwice();
 
     await waitFor(() => expect(approvalPatch()).toBeTruthy());
     expect((approvalPatch()![2] as any).commission.tiers[0].rateCents).toBe(19_000);
@@ -172,7 +175,7 @@ describe("the approval panel's comp terms", () => {
     await ready();
     fireEvent.click(reviewPanel().getByTestId("comp-structure-flat"));
     fireEvent.change(reviewPanel().getByTestId("comp-flat-rate"), { target: { value: "200" } });
-    fireEvent.click(approve());
+    approveTwice();
 
     await waitFor(() => expect(approvalPatch()).toBeTruthy());
     const body = approvalPatch()![2] as any;
@@ -190,7 +193,7 @@ describe("the approval panel's comp terms", () => {
     fireEvent.change(reviewPanel().getByTestId("comp-tier-0-min"), { target: { value: "3" } });
     expect(reviewPanel().getByTestId("comp-terms-errors")).toBeInTheDocument();
     expect(approve()).toBeDisabled();
-    fireEvent.click(approve());
+    approveTwice();
     expect(approvalPatch()).toBeFalsy();
   });
 
@@ -203,7 +206,7 @@ describe("the approval panel's comp terms", () => {
 
     expect(screen.getByTestId("review-comp-terms").textContent).toMatch(/No terms travelled with this application/i);
 
-    fireEvent.click(approve());
+    approveTwice();
     await waitFor(() => expect(approvalPatch()).toBeTruthy());
     // Still an explicit, complete instrument — the ladder is stated even when
     // it is the house one, because a bare `{ structure: "TIERED" }` is what let

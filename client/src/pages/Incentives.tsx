@@ -23,6 +23,10 @@ import { cn } from "@/lib/utils";
 import { PageHeader, StatStrip, StatTile, SectionLabel } from "@/components/ui/page-scaffold";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { CampaignBoard } from "@/components/CampaignBoard";
@@ -374,6 +378,9 @@ function MyIncentives({ repKey }: { repKey: number | string }) {
                     <span className="text-[11px] tabular-nums text-muted-foreground" data-testid={`spiff-when-${s.id}`}>
                       {whenLabel(s.createdAt)}
                     </span>
+                    {/* The hint used to live only in title= — unreachable on the
+                        phones this page is read on. Say it in visible text. */}
+                    <span className="max-w-[140px] text-right text-2xs leading-tight text-muted-foreground/80">{st.hint}</span>
                   </div>
                 </li>
               );
@@ -464,6 +471,13 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
   });
 
   const busy = transition.isPending || bulk.isPending;
+
+  // "Mark paid" settles a bonus once, permanently (the page says so in its own
+  // header) — it gets a real confirm restating count + dollars, like Messages'
+  // retract and the payout submit. Approve stays one-click: it creates an owed
+  // state, it doesn't settle money. `bulk` preserves which ENDPOINT the tap
+  // came from — a one-row bulk selection still settles via the bulk route.
+  const [confirmPaid, setConfirmPaid] = useState<{ ids: number[]; totalCents: number; bulk: boolean } | null>(null);
 
   return (
     <section className="space-y-4" data-testid="team-heat">
@@ -576,7 +590,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                   <button
                     type="button"
                     disabled={busy || selectedApproved.length === 0}
-                    onClick={() => bulk.mutate({ ids: selectedApproved.map((s) => s.id), action: "paid" })}
+                    onClick={() => setConfirmPaid({ ids: selectedApproved.map((s) => s.id), totalCents: sumCents(selectedApproved), bulk: true })}
                     data-testid="bulk-paid"
                     className={cn(
                       "inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-secondary px-3 text-[13px] font-semibold text-foreground disabled:opacity-50",
@@ -633,7 +647,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                         </button>
                       ) : (
                         <button type="button" disabled={busy}
-                          onClick={() => transition.mutate({ id: s.id, action: "paid" })}
+                          onClick={() => setConfirmPaid({ ids: [s.id], totalCents: s.amountCents, bulk: false })}
                           data-testid={`paid-${s.id}`}
                           className={cn(
                             "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl bg-secondary px-3 text-sm font-semibold text-foreground disabled:opacity-50",
@@ -650,6 +664,32 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
           )}
         </div>
       )}
+
+      {/* Settle confirm — restates count and dollars; the action is permanent. */}
+      <AlertDialog open={!!confirmPaid} onOpenChange={(v) => !v && setConfirmPaid(null)}>
+        <AlertDialogContent className="bg-card border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mark {confirmPaid?.ids.length === 1 ? "this bonus" : `${confirmPaid?.ids.length ?? 0} bonuses`} paid?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {usd(confirmPaid?.totalCents ?? 0)} will be recorded as settled. Do this after the money
+              actually moves — marking paid is permanent and can't be undone here.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-border">Not yet</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="confirm-mark-paid"
+              onClick={() => {
+                if (!confirmPaid) return;
+                if (confirmPaid.bulk) bulk.mutate({ ids: confirmPaid.ids, action: "paid" });
+                else transition.mutate({ id: confirmPaid.ids[0], action: "paid" });
+                setConfirmPaid(null);
+              }}>
+              Mark paid — {usd(confirmPaid?.totalCents ?? 0)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }

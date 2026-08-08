@@ -7,7 +7,7 @@
 // stops trusting the whole program.
 
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -41,8 +41,29 @@ interface Progress {
   releasable: { releasable: boolean; daysRemaining: number };
 }
 
-const money = (cents: number) =>
-  `$${Math.floor(Math.abs(cents) / 100).toLocaleString("en-US")}${cents % 100 ? `.${String(Math.abs(cents) % 100).padStart(2, "0")}` : ""}`;
+// Sign-preserving: a clawback is negative money and must render that way —
+// the old formatter ran Math.abs and printed −$150 as "$150".
+const money = (cents: number) => {
+  const abs = Math.abs(cents);
+  const sign = cents < 0 ? "−" : "";
+  return `${sign}$${Math.floor(abs / 100).toLocaleString("en-US")}${abs % 100 ? `.${String(abs % 100).padStart(2, "0")}` : ""}`;
+};
+
+// Human labels for the raw DB enum — users were reading "REWARD_PENDING" and
+// "CLAWED_BACK" verbatim, underscores included.
+const STATUS_LABEL: Record<string, string> = {
+  APPLIED: "Applied",
+  HIRED: "Hired",
+  ACTIVATED: "Activated",
+  IN_PROGRESS: "In progress",
+  QUALIFIED: "Qualified",
+  REWARD_PENDING: "Reward pending",
+  APPROVED: "Approved",
+  PAID: "Paid",
+  REJECTED: "Rejected",
+  EXPIRED: "Expired",
+  CLAWED_BACK: "Clawed back",
+};
 
 const STATUS_TONE: Record<string, string> = {
   APPLIED: "bg-muted text-muted-foreground",
@@ -83,12 +104,24 @@ const get = <T,>(url: string) => apiRequest("GET", url).then(r => r.json() as Pr
 function MyLinkCard() {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
-  const { data: link, isLoading } = useQuery<MyLink>({
+  const { data: link, isLoading, isError, refetch } = useQuery<MyLink>({
     queryKey: ["/api/referrals/my-link"],
     queryFn: () => get<MyLink>("/api/referrals/my-link"),
   });
 
   if (isLoading) return <Skeleton className="h-40 w-full" />;
+  if (isError) {
+    // Returning null here deleted the whole "Refer a rep" card on a network
+    // blip — the rep had no link and no explanation.
+    return (
+      <Card role="alert" data-testid="referral-link-error">
+        <CardContent className="flex items-center gap-3 py-4">
+          <p className="flex-1 text-sm text-muted-foreground">Couldn't load your referral link.</p>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>Retry</Button>
+        </CardContent>
+      </Card>
+    );
+  }
   if (!link) return null;
 
   const copy = async () => {
@@ -127,7 +160,12 @@ function MyLinkCard() {
         )}
 
         <div className="flex items-center gap-2">
-          <code className="min-w-0 flex-1 truncate rounded-md bg-muted px-3 py-2 text-xs" data-testid="referral-url">
+          {/* break-all, not truncate: the unbroken URL's min-content width was
+              propagating up the flex chain and widening the ENTIRE page past a
+              375px viewport (a truncated flex item still contributes its full
+              nowrap width to the container's min-content). Wrapping keeps the
+              whole link visible AND lets the card shrink to any screen. */}
+          <code className="min-w-0 flex-1 break-all rounded-md bg-muted px-3 py-2 text-xs" data-testid="referral-url">
             {link.url}
           </code>
           <Button size="sm" variant="outline" onClick={copy} data-testid="referral-copy">
@@ -207,8 +245,16 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
   const { toast } = useToast();
   const canApprove = useCan("referral.approve");
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Approving releases a cash reward — arm-then-confirm (the app's standard
+  // two-tap guard for irreversible money actions), never a single tap.
+  const [armedApprove, setArmedApprove] = useState<number | null>(null);
+  useEffect(() => {
+    if (armedApprove == null) return;
+    const t = setTimeout(() => setArmedApprove(null), 4000);
+    return () => clearTimeout(t);
+  }, [armedApprove]);
 
-  const { data: referrals = [], isLoading } = useQuery<Referral[]>({
+  const { data: referrals = [], isLoading, isError, refetch } = useQuery<Referral[]>({
     queryKey: ["/api/referrals", scope],
     queryFn: () => get<Referral[]>(`/api/referrals${scope === "org" ? "?scope=org" : ""}`),
   });
@@ -235,7 +281,14 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {referrals.length === 0 ? (
+        {isError ? (
+          // A failed fetch is not "no referrals" — that empty copy told reps
+          // their pipeline was gone.
+          <div role="alert" className="py-6 text-center">
+            <p className="text-sm text-muted-foreground">Couldn't load referrals — nothing has changed.</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
+          </div>
+        ) : referrals.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">
             {scope === "org" ? "No referrals yet." : "Share your link to get started."}
           </p>
@@ -251,7 +304,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
                   <span className="truncate text-sm font-medium">
                     {r.referredName ?? r.referredEmail ?? "Applicant"}
                   </span>
-                  <Badge className={STATUS_TONE[r.status] ?? ""} variant="secondary">{r.status}</Badge>
+                  <Badge className={STATUS_TONE[r.status] ?? ""} variant="secondary">{STATUS_LABEL[r.status] ?? r.status}</Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {scope === "org" ? `Referred by ${r.referrerName} · ` : ""}
@@ -263,15 +316,26 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
                 {canApprove && r.status === "REWARD_PENDING" && (
                   <>
                     <Button size="sm" variant="outline" data-testid={`referral-approve-${r.id}`}
-                      onClick={() => decide.mutate({ id: r.id, action: "approve" })}>
-                      <Check className="h-4 w-4" />
+                      aria-label={armedApprove === r.id
+                        ? `Confirm: release the ${money(r.rewardAmountCents)} reward?`
+                        : `Approve the ${money(r.rewardAmountCents)} reward for ${r.referredName ?? r.referredEmail ?? "this referral"}`}
+                      aria-pressed={armedApprove === r.id}
+                      className={armedApprove === r.id ? "border-emerald-500/50 text-emerald-500" : undefined}
+                      disabled={decide.isPending}
+                      onClick={() => {
+                        if (armedApprove === r.id) { setArmedApprove(null); decide.mutate({ id: r.id, action: "approve" }); }
+                        else setArmedApprove(r.id);
+                      }}>
+                      {armedApprove === r.id ? <span className="text-xs font-semibold px-0.5">Release {money(r.rewardAmountCents)}?</span> : <Check className="h-4 w-4" aria-hidden="true" />}
                     </Button>
                     <Button size="sm" variant="ghost" data-testid={`referral-reject-${r.id}`}
+                      aria-label="Reject this referral with a reason"
+                      disabled={decide.isPending}
                       onClick={() => {
                         const reason = window.prompt("Why is this referral being rejected?");
                         if (reason?.trim()) decide.mutate({ id: r.id, action: "reject", reason: reason.trim() });
                       }}>
-                      <X className="h-4 w-4" />
+                      <X className="h-4 w-4" aria-hidden="true" />
                     </Button>
                   </>
                 )}

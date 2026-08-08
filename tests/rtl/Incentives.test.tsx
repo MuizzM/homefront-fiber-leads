@@ -256,13 +256,18 @@ describe("Incentives — admin view", () => {
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining("$45") })));
   });
 
-  it("bulk mark-paid sends only the approved rows", async () => {
+  it("bulk mark-paid confirms first (settling is permanent), then sends only the approved rows", async () => {
     apiRequest.mockResolvedValue({ json: async () => ({ changed: [{ id: 8 }], skipped: [], totalCents: 3000 }) });
     renderPage();
     await userEvent.click(await screen.findByTestId("queue-select-8"));
     const payButton = screen.getByTestId("bulk-paid");
     await waitFor(() => expect(payButton.textContent).toContain("$30"));
     await userEvent.click(payButton);
+    // The tap opens the settle confirm — nothing has been sent yet.
+    expect(apiRequest).not.toHaveBeenCalledWith("POST", "/api/spiffs/bulk/paid", { ids: [8] });
+    const confirm = await screen.findByTestId("confirm-mark-paid");
+    expect(confirm.textContent).toContain("$30");
+    await userEvent.click(confirm);
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("POST", "/api/spiffs/bulk/paid", { ids: [8] }));
   });
 
