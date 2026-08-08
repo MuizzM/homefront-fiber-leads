@@ -4,8 +4,9 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { queryClient, persistOptions } from "@/lib/queryClient";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { lazyRoute } from "@/lib/staleChunk";
 import { Lock } from "lucide-react";
-import { Suspense, lazy, startTransition, useEffect } from "react";
+import { Suspense, useDeferredValue, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
@@ -17,57 +18,59 @@ import { UpdatePrompt } from "@/components/UpdatePrompt";
 // Route-level code splitting — every in-app page ships as its own lazy chunk
 // (Mapbox/GL, recharts, the five scanners, etc. no longer weigh down the
 // initial load). The first paint only pulls the shell + login; the landing
-// page and any route the user visits are fetched on demand.
-const Dashboard = lazy(() => import("@/pages/Dashboard"));
-const Today = lazy(() => import("@/pages/Today"));
-const PropertyDetail = lazy(() => import("@/pages/PropertyDetail"));
-const FollowUps = lazy(() => import("@/pages/FollowUps"));
-const MapView = lazy(() => {
+// page and any route the user visits are fetched on demand. Factories go
+// through lazyRoute, so a chunk 404ing after a deploy reloads once into the
+// new build (lib/staleChunk.ts) instead of dead-ending in the ErrorBoundary.
+const Dashboard = lazyRoute(() => import("@/pages/Dashboard"));
+const Today = lazyRoute(() => import("@/pages/Today"));
+const PropertyDetail = lazyRoute(() => import("@/pages/PropertyDetail"));
+const FollowUps = lazyRoute(() => import("@/pages/FollowUps"));
+const MapView = lazyRoute(() => {
   // Kick the mapbox-gl CDN download (idempotent loader in index.html) the moment
   // the route chunk is requested instead of after it parses and the component
   // mounts — overlapping the two fetches shaves ~0.5-1.5s off time-to-map on LTE.
   (window as unknown as { __loadMapbox?: () => void }).__loadMapbox?.();
   return import("@/pages/MapView");
 });
-const Leads = lazy(() => import("@/pages/Leads"));
+const Leads = lazyRoute(() => import("@/pages/Leads"));
 // Area Console — the addressable read-and-act surface for one territory, plus
 // its index. Both are pure consumers of the existing /api/territories* routes.
-const Areas = lazy(() => import("@/pages/Areas"));
-const AreaDetail = lazy(() => import("@/pages/AreaDetail"));
-const Scanners = lazy(() => import("@/pages/Scanners"));
-const FiberIntelligence = lazy(() => import("@/pages/FiberIntelligence"));
-const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
-const Team = lazy(() => import("@/pages/Team"));
-const StatementPage = lazy(() => import("@/pages/StatementPage"));
-const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
-const Incentives = lazy(() => import("@/pages/Incentives"));
-const Mileage = lazy(() => import("@/pages/Mileage"));
-const Referrals = lazy(() => import("@/pages/Referrals"));
-const Messages = lazy(() => import("@/pages/Messages"));
-const Applications = lazy(() => import("@/pages/Applications"));
-const MyCommission = lazy(() => import("@/pages/MyCommission"));
-const CommissionConsole = lazy(() => import("@/pages/CommissionConsole"));
-const MyDocuments = lazy(() => import("@/pages/MyDocuments"));
-const TaxAndPay = lazy(() => import("@/pages/TaxAndPay"));
-const LiveMap = lazy(() => import("@/pages/LiveMap"));
-const ClockIn = lazy(() => import("@/pages/ClockIn"));
-const Profile = lazy(() => import("@/pages/Profile"));
-const Diagnostics = lazy(() => import("@/pages/Diagnostics"));
-const LoginActivity = lazy(() => import("@/pages/LoginActivity"));
-const Governance = lazy(() => import("@/pages/Governance"));
-const Billing = lazy(() => import("@/pages/Billing"));
-const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
-const Training = lazy(() => import("@/pages/Training"));
-const Coach = lazy(() => import("@/pages/Coach"));
-const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
-const CallingLead = lazy(() => import("@/pages/CallingLead"));
+const Areas = lazyRoute(() => import("@/pages/Areas"));
+const AreaDetail = lazyRoute(() => import("@/pages/AreaDetail"));
+const Scanners = lazyRoute(() => import("@/pages/Scanners"));
+const FiberIntelligence = lazyRoute(() => import("@/pages/FiberIntelligence"));
+const TokenSetup = lazyRoute(() => import("@/pages/TokenSetup"));
+const Team = lazyRoute(() => import("@/pages/Team"));
+const StatementPage = lazyRoute(() => import("@/pages/StatementPage"));
+const Leaderboard = lazyRoute(() => import("@/pages/Leaderboard"));
+const Incentives = lazyRoute(() => import("@/pages/Incentives"));
+const Mileage = lazyRoute(() => import("@/pages/Mileage"));
+const Referrals = lazyRoute(() => import("@/pages/Referrals"));
+const Messages = lazyRoute(() => import("@/pages/Messages"));
+const Applications = lazyRoute(() => import("@/pages/Applications"));
+const MyCommission = lazyRoute(() => import("@/pages/MyCommission"));
+const CommissionConsole = lazyRoute(() => import("@/pages/CommissionConsole"));
+const MyDocuments = lazyRoute(() => import("@/pages/MyDocuments"));
+const TaxAndPay = lazyRoute(() => import("@/pages/TaxAndPay"));
+const LiveMap = lazyRoute(() => import("@/pages/LiveMap"));
+const ClockIn = lazyRoute(() => import("@/pages/ClockIn"));
+const Profile = lazyRoute(() => import("@/pages/Profile"));
+const Diagnostics = lazyRoute(() => import("@/pages/Diagnostics"));
+const LoginActivity = lazyRoute(() => import("@/pages/LoginActivity"));
+const Governance = lazyRoute(() => import("@/pages/Governance"));
+const Billing = lazyRoute(() => import("@/pages/Billing"));
+const SuperAdmin = lazyRoute(() => import("@/pages/SuperAdmin"));
+const Training = lazyRoute(() => import("@/pages/Training"));
+const Coach = lazyRoute(() => import("@/pages/Coach"));
+const CallingQueue = lazyRoute(() => import("@/pages/CallingQueue"));
+const CallingLead = lazyRoute(() => import("@/pages/CallingLead"));
 
 // Radix Toast and the dismissable-layer/presence machinery behind it are ~9 KB
 // gzipped, and nothing renders a toast at first paint. The toast STORE lives in
 // hooks/use-toast.ts (types-only import of the primitive, so it stays cheap and
 // stays in the entry), which means a toast() fired before this chunk lands is
 // queued and rendered the moment it arrives — nothing is dropped.
-const Toaster = lazy(() => import("@/components/ui/toaster").then(m => ({ default: m.Toaster })));
+const Toaster = lazyRoute(() => import("@/components/ui/toaster").then(m => ({ default: m.Toaster })));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
 // while a page chunk loads — never a blank screen.
@@ -138,6 +141,21 @@ function CapabilityGuard({ role, capability, children }: {
 function AppRoutes() {
   const { user, isFirstRun, loading } = useAuth();
   const [location] = useHashLocation();
+  // The route stage renders from THIS value, one deferred step behind the live
+  // location. wouter keeps the location in useSyncExternalStore, and React
+  // hard-codes store-change re-renders to the urgent SyncLane (react-dom's
+  // forceStoreRerender never consults the transition context), so the old
+  // aroundNav={startTransition(...)} wrapper deferred nothing: a tap on a
+  // route whose chunk was still downloading committed the PageLoader fallback
+  // synchronously, tearing down the screen the rep was reading for the whole
+  // fetch — seconds on field LTE, and on EVERY first visit per route right
+  // after a deploy empties the chunk cache. The deferred re-render runs on a
+  // transition lane, which is the one path React keeps the previous page
+  // mounted and interactive on when the incoming lazy route suspends.
+  const deferredLocation = useDeferredValue(location);
+  // True exactly while an incoming route's chunk/render hasn't committed yet —
+  // drives the hairline pending bar so a slow tap still visibly "took".
+  const routePending = location !== deferredLocation;
   const role = user?.role;
 
   // Warm likely destinations only after the browser is idle. Save-Data and
@@ -205,21 +223,22 @@ function AppRoutes() {
   }
 
   return (
-    // aroundNav wraps every wouter navigation in a transition. Without it a tap
-    // on a route whose chunk is still downloading is an urgent update: React
-    // must commit immediately, so it tears the current screen down and paints
-    // the generic PageLoader skeleton for the whole download. Inside a
-    // transition React keeps the screen the rep is looking at — scrolled,
-    // populated and interactive — until the new one is ready to replace it.
-    // Warm chunks are unaffected (an already-resolved lazy renders synchronously).
-    <Router hook={useHashLocation} aroundNav={(nav, to, opts) => startTransition(() => nav(to, opts))}>
+    // Everything location-driven in the stage below — the ErrorBoundary reset,
+    // the keyed remount, the Switch match — runs off deferredLocation (see its
+    // comment above), so a cold chunk load keeps the outgoing page on screen.
+    // Nav highlights (Layout, BottomTabs) read useHashLocation directly and
+    // still flip urgently on tap; PageLoader now only appears when there is no
+    // previous page to keep (cold boot / deep link) or while a stale-chunk
+    // recovery reload is in flight (lib/staleChunk.ts parks the import).
+    <Router hook={useHashLocation}>
       <Layout>
-        <ErrorBoundary resetKey={location}>
+        {routePending && <div className="route-pending-bar" aria-hidden="true" data-testid="route-pending" />}
+        <ErrorBoundary resetKey={deferredLocation}>
         <Suspense fallback={<PageLoader />}>
         {/* Keyed by route → each page fades/slides in for a smooth tab switch.
             Also the single scroll container for tall pages (map pages fill it). */}
-        <div key={location} className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto">
-        <Switch>
+        <div key={deferredLocation} className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto">
+        <Switch location={deferredLocation}>
           {/* ── All roles ── */}
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
           <Route path="/">{role === "rep" ? <Redirect to="/today" />

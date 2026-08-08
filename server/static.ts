@@ -100,7 +100,7 @@ export function serveStatic(app: Express, distPath = path.resolve(__dirname, "pu
       // and serve the plain file. Whatever answers next sends a DIFFERENT body,
       // so every header staged above must go: a leftover Content-Encoding would
       // make the browser try to brotli-decode plain bytes, and if the plain
-      // file is gone too, the index.html fallback would carry a js Content-Type.
+      // file is gone too, the /assets/ 404 below must not go out mislabelled.
       res.removeHeader("Content-Encoding");
       res.removeHeader("Content-Type");
       res.removeHeader("Cache-Control");
@@ -117,6 +117,20 @@ export function serveStatic(app: Express, distPath = path.resolve(__dirname, "pu
       res.setHeader("Cache-Control", cacheControlFor(rel));
     },
   }));
+
+  // A missed /assets/ path is a hard 404, never the SPA fallback. Each deploy
+  // replaces dist/public wholesale, so a tab running the previous build asks
+  // for chunk names that no longer exist; handing it index.html feeds a
+  // dynamic import() HTML-as-JavaScript (and gave the service worker an HTML
+  // body to pin under an immutable URL). A clean 404 is exactly what the
+  // client's stale-chunk recovery (client/src/lib/staleChunk.ts) needs to
+  // reload into the new build. no-store because a 404 is heuristically
+  // cacheable (RFC 9110 §15.5.5) and this miss is transient by design.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!req.path.startsWith(IMMUTABLE_PREFIX)) return next();
+    res.setHeader("Cache-Control", "no-store");
+    res.status(404).end();
+  });
 
   // fall through to index.html if the file doesn't exist
   app.use("/{*path}", (_req, res) => {

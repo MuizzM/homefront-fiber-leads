@@ -9,6 +9,16 @@
       "autoPort": true
     },
     {
+      "name": "homefront-prod",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "NODE_ENV=production PORT=5099 DATA_DIR=.prod-verify SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log node dist/index.cjs"
+      ],
+      "port": 5099,
+      "autoPort": true
+    },
+    {
       "name": "homefront-verify",
       "runtimeExecutable": "sh",
       "runtimeArgs": [

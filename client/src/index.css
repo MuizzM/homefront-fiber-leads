@@ -230,6 +230,41 @@
   .app-route-stage { animation-duration: 140ms; }
 }
 
+/* Deferred-navigation hint: a fixed hairline that appears only when a tapped
+   route is still fetching its chunk after ~150ms (the fade delay hides
+   instant swaps). The outgoing screen stays mounted and interactive under it —
+   see the deferredLocation comment in App.tsx. */
+.route-pending-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  animation: route-pending-fade 200ms ease 150ms forwards;
+}
+.route-pending-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: 2px;
+  background: hsl(var(--primary));
+  animation: route-pending-slide 0.9s ease-in-out infinite;
+}
+@keyframes route-pending-fade { to { opacity: 1; } }
+@keyframes route-pending-slide {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(270%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-pending-bar { opacity: 1; animation: none; }
+  .route-pending-bar::before { width: 100%; animation: none; transform: none; }
+}
+
 /* One low-cost compositor shimmer for all route and card skeletons. The old
    opacity pulse made the whole surface repaint and looked like a stalled app. */
 @keyframes app-skeleton-shimmer {

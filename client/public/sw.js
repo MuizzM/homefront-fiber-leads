@@ -84,6 +84,19 @@ function isImmutableAsset(url) {
   return url.pathname.startsWith("/assets/");
 }
 
+/** Only the payloads a hashed chunk URL legitimately carries — JS and CSS —
+ *  may enter the immutable runtime cache. Anything else arriving with a 200
+ *  (the SPA fallback's index.html before the server 404-guarded /assets/
+ *  misses, a proxy or captive-portal interstitial) would be pinned forever
+ *  under a URL that is never refetched, and every later load of that chunk
+ *  gets HTML-as-JavaScript: the blank-tab-after-deploy failure. Fonts/images
+ *  under /assets/ simply skip this cache and ride the browser's HTTP cache,
+ *  which holds them under the same year-long immutable policy. */
+function isChunkPayload(res) {
+  const type = (res.headers.get("content-type") || "").toLowerCase();
+  return type.includes("javascript") || type.includes("text/css");
+}
+
 /** Keep the runtime cache bounded. cache.keys() returns insertion order, so the
  *  oldest entries go first. Runs after a put, never in the response path. */
 async function trimRuntimeCache(cache) {
@@ -132,7 +145,7 @@ self.addEventListener("fetch", (event) => {
         .then((cache) => cache.match(req))
         .catch(() => undefined)
         .then((cached) => cached || fetch(req).then((res) => {
-          if (res && res.status === 200) void putInRuntime(req, res.clone());
+          if (res && res.status === 200 && isChunkPayload(res)) void putInRuntime(req, res.clone());
           return res;
         })),
     );

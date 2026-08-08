@@ -58,3 +58,4 @@ lexington-newbuilds.json
 # subagent runs in isolation. Never project content, and committing one would
 # check a nested clone into the repo.
 .claude/worktrees/
+.prod-verify/
