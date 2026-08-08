@@ -6,7 +6,7 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { lazyRoute } from "@/lib/staleChunk";
 import { Lock } from "lucide-react";
-import { Suspense, startTransition, useEffect } from "react";
+import { Suspense, useDeferredValue, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
@@ -141,6 +141,21 @@ function CapabilityGuard({ role, capability, children }: {
 function AppRoutes() {
   const { user, isFirstRun, loading } = useAuth();
   const [location] = useHashLocation();
+  // The route stage renders from THIS value, one deferred step behind the live
+  // location. wouter keeps the location in useSyncExternalStore, and React
+  // hard-codes store-change re-renders to the urgent SyncLane (react-dom's
+  // forceStoreRerender never consults the transition context), so the old
+  // aroundNav={startTransition(...)} wrapper deferred nothing: a tap on a
+  // route whose chunk was still downloading committed the PageLoader fallback
+  // synchronously, tearing down the screen the rep was reading for the whole
+  // fetch — seconds on field LTE, and on EVERY first visit per route right
+  // after a deploy empties the chunk cache. The deferred re-render runs on a
+  // transition lane, which is the one path React keeps the previous page
+  // mounted and interactive on when the incoming lazy route suspends.
+  const deferredLocation = useDeferredValue(location);
+  // True exactly while an incoming route's chunk/render hasn't committed yet —
+  // drives the hairline pending bar so a slow tap still visibly "took".
+  const routePending = location !== deferredLocation;
   const role = user?.role;
 
   // Warm likely destinations only after the browser is idle. Save-Data and
@@ -208,21 +223,22 @@ function AppRoutes() {
   }
 
   return (
-    // aroundNav wraps every wouter navigation in a transition. Without it a tap
-    // on a route whose chunk is still downloading is an urgent update: React
-    // must commit immediately, so it tears the current screen down and paints
-    // the generic PageLoader skeleton for the whole download. Inside a
-    // transition React keeps the screen the rep is looking at — scrolled,
-    // populated and interactive — until the new one is ready to replace it.
-    // Warm chunks are unaffected (an already-resolved lazy renders synchronously).
-    <Router hook={useHashLocation} aroundNav={(nav, to, opts) => startTransition(() => nav(to, opts))}>
+    // Everything location-driven in the stage below — the ErrorBoundary reset,
+    // the keyed remount, the Switch match — runs off deferredLocation (see its
+    // comment above), so a cold chunk load keeps the outgoing page on screen.
+    // Nav highlights (Layout, BottomTabs) read useHashLocation directly and
+    // still flip urgently on tap; PageLoader now only appears when there is no
+    // previous page to keep (cold boot / deep link) or while a stale-chunk
+    // recovery reload is in flight (lib/staleChunk.ts parks the import).
+    <Router hook={useHashLocation}>
       <Layout>
-        <ErrorBoundary resetKey={location}>
+        {routePending && <div className="route-pending-bar" aria-hidden="true" data-testid="route-pending" />}
+        <ErrorBoundary resetKey={deferredLocation}>
         <Suspense fallback={<PageLoader />}>
         {/* Keyed by route → each page fades/slides in for a smooth tab switch.
             Also the single scroll container for tall pages (map pages fill it). */}
-        <div key={location} className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto">
-        <Switch>
+        <div key={deferredLocation} className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto">
+        <Switch location={deferredLocation}>
           {/* ── All roles ── */}
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
           <Route path="/">{role === "rep" ? <Redirect to="/today" />
