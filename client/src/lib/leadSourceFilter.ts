@@ -48,7 +48,7 @@ export const LEAD_SOURCE_OPTIONS: readonly LeadSourceOption[] = [
   },
   {
     key: "fcc_fresh",
-    label: "FCC fresh (H2-25)",
+    label: "FCC fresh (2025)",
     matches: (l) => l.leadTag === "fcc_fresh_block",
   },
   {

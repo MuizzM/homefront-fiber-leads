@@ -1,0 +1,156 @@
+name: Import FCC additions (production)
+
+# One-off data load: put the Cabarrus/Rowan five-city FCC fiber-addition pins
+# (Concord, Kannapolis, Salisbury, China Grove, Landis — 2025 additions per the
+# BDC Dec-2025 vs Dec-2024 filings) on the field map as fcc_fresh_block leads.
+# See script/import-fcc-pins.ts for exactly what a pin means and what is and
+# is not touched. Existing doors attach by canonical key and are left alone.
+#
+# Same rails as reset-areas.yml: the production SSH key exists only as a
+# repository secret, so the only thing that can reach the box is Actions, over
+# deploy.yml's pinned-host-key connection. The importer must already be in the
+# RUNNING image (deploy a build containing dist/import-fcc-pins.cjs first —
+# the run refuses with a clear error if the live image predates it).
+#
+# DRY RUN IS THE DEFAULT. `apply: true` additionally requires retyping the
+# org id into `confirm`. The write is undoable in-app: Map → admin →
+# Remove FCC leads purges unworked fcc-tagged doors in bulk.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Organization id to import into (prod org is 1)"
+        required: true
+        type: string
+      apply:
+        description: "WRITE. Leave unchecked for a dry run that changes nothing."
+        required: false
+        default: false
+        type: boolean
+      confirm:
+        description: "Required when apply is checked: retype the tenant id exactly"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-fcc-pins-production
+  cancel-in-progress: false
+
+jobs:
+  import:
+    name: ${{ inputs.apply && 'APPLY — import FCC addition pins' || 'Dry run — import FCC addition pins' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Validate inputs
+        env:
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Whitelist, not sanitize: this string is interpolated into a remote
+          # shell command, so anything but a bare id is refused outright.
+          if [[ ! "$TENANT" =~ ^[0-9]+$ ]]; then
+            echo "tenant must be a positive integer (got: $TENANT)" >&2
+            exit 1
+          fi
+          if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "$TENANT" ]; then
+            echo "Refusing to write: 'confirm' must exactly match 'tenant' ($TENANT)." >&2
+            echo "Re-run with confirm=$TENANT, or leave 'apply' unchecked for a dry run." >&2
+            exit 1
+          fi
+          echo "tenant=$TENANT  apply=$APPLY"
+
+      - name: Run the import on the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              bash -s -- "$TENANT" "$APPLY" <<'REMOTE'
+          set -euo pipefail
+          TENANT="$1"
+          APPLY="$2"
+          [[ "$TENANT" =~ ^[0-9]+$ ]]
+          [[ "$APPLY" =~ ^(true|false)$ ]]
+
+          cd /srv/homefront
+
+          # The image tag the LIVE release is running — deploy.sh records it in
+          # .deployed-tag. Reused rather than rebuilt, so the import runs the
+          # exact code serving traffic.
+          TAG="$(cat .deployed-tag 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            RUNNING="$(docker ps --filter 'ancestor=homefront-app' --format '{{.Image}}' | head -n1)"
+            TAG="${RUNNING##*:}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Could not determine the running image tag — refusing to guess" >&2
+            exit 1
+          fi
+          echo "running against image homefront-app:$TAG"
+
+          # The importer ships inside the image (bundled by script/build.ts).
+          # A live image from before this branch has no dist/import-fcc-pins.cjs
+          # — fail with the real reason instead of a bare ENOENT.
+          if ! APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+              run --rm --no-deps --entrypoint sh app -c 'test -f dist/import-fcc-pins.cjs'; then
+            echo "dist/import-fcc-pins.cjs is not in the running image — deploy a build containing it first (deploy.yml on this branch's commit)." >&2
+            exit 1
+          fi
+
+          if [ "$APPLY" = "true" ]; then MODE=(--apply); else MODE=(); fi
+
+          # `compose run` on the same volume, never `exec` into the live
+          # container — the app keeps serving and this cannot disturb it.
+          APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+            run --rm --no-deps --entrypoint node app \
+            dist/import-fcc-pins.cjs --tenant "$TENANT" "${MODE[@]}"
+          REMOTE
+
+      - name: What to do next
+        if: success()
+        shell: bash
+        run: |
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            echo "::notice::Import applied. Pins are live on the field map (FCC fresh chip / Latest view). Bulk undo for unworked ones: Map → admin → Remove FCC leads."
+          else
+            echo "::notice::Dry run only — nothing was written. Re-run with apply checked and confirm set to the tenant id to commit."
+          fi

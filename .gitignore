@@ -12,7 +12,10 @@ dist/
 ops-data/
 
 # SQLite database files — never commit; exposes demo data at rest
-data/
+# (data/* not data/, so the negated dataset below can survive the exclude)
+data/*
+# …except committed datasets the build ships (import-fcc-pins reads this one)
+!data/fcc-additions-cabarrus-rowan-2025.json
 data.db
 data.db-shm
 data.db-wal

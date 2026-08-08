@@ -51,7 +51,7 @@ describe("source option predicates", () => {
 
   it("offers Latest fiber FIRST, then the three documented options", () => {
     expect(LEAD_SOURCE_OPTIONS.map((o) => o.key)).toEqual(["latest", "fcc_fresh", "fcc_fiber", "field_verified"]);
-    expect(LEAD_SOURCE_OPTIONS.map((o) => o.label)).toEqual(["Latest fiber", "FCC fresh (H2-25)", "FCC fiber", "Field-verified"]);
+    expect(LEAD_SOURCE_OPTIONS.map((o) => o.label)).toEqual(["Latest fiber", "FCC fresh (2025)", "FCC fiber", "Field-verified"]);
   });
 
   it("latest + fcc_fiber partition the map: every pin is in exactly one of them", () => {

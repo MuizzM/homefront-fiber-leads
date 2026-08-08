@@ -65,7 +65,7 @@ async function buildAll() {
   // real /data volume, with no toolchain on the host and no SSH key in anyone's
   // hands (see .github/workflows/reset-areas.yml).
   console.log("building maintenance scripts...");
-  for (const entry of ["reset-areas"]) {
+  for (const entry of ["reset-areas", "import-fcc-pins"]) {
     await esbuild({
       entryPoints: [`script/${entry}.ts`],
       platform: "node",
@@ -101,6 +101,18 @@ async function buildAll() {
     console.log("copied GIS addresses to dist/");
   } catch (e) {
     console.warn("Could not copy GIS addresses:", e);
+  }
+
+  // FCC addition pins ride beside import-fcc-pins.cjs the same way — the
+  // bundled importer reads the JSON from its own directory in the image.
+  try {
+    await copyFile(
+      "data/fcc-additions-cabarrus-rowan-2025.json",
+      "dist/fcc-additions-cabarrus-rowan-2025.json"
+    );
+    console.log("copied FCC addition pins to dist/");
+  } catch (e) {
+    console.warn("Could not copy FCC addition pins:", e);
   }
 
 

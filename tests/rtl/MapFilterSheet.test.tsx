@@ -151,7 +151,7 @@ describe("fiber (FCC) source pills", () => {
     expect(screen.getByTestId("map-filter-source-all")).toBeInTheDocument();
     expect(screen.getByTestId("map-filter-source-latest").textContent).toContain("Latest fiber");
     expect(screen.getByTestId("map-filter-source-latest").textContent).toContain("51");
-    expect(screen.getByTestId("map-filter-source-fcc_fresh").textContent).toContain("FCC fresh (H2-25)");
+    expect(screen.getByTestId("map-filter-source-fcc_fresh").textContent).toContain("FCC fresh (2025)");
     expect(screen.getByTestId("map-filter-source-fcc_fresh").textContent).toContain("12");
     expect(screen.getByTestId("map-filter-source-fcc_fiber").textContent).toContain("FCC fiber");
     expect(screen.getByTestId("map-filter-source-fcc_fiber").textContent).toContain("34");
