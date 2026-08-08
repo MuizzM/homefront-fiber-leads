@@ -27,6 +27,7 @@ import {
   hiddenStatusPlain,
   type LeadVisibility,
 } from "../../client/src/components/AddLeadSheet";
+import { LEADS_LIST_DEFAULTS, leadsListKey } from "../../client/src/lib/leadsListQuery";
 
 // Emoji / pictographic detector — the honest surfacing copy is plain text only.
 // Extended_Pictographic matches every emoji glyph but NOT the em dash / ellipsis
@@ -147,6 +148,37 @@ describe("add-lead sheet perceived-latency contract", () => {
       description: expect.stringContaining("address failed validation"),
     }));
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it("a created lead is WRITTEN into the cached list view — per-lead subqueries stay untouched", async () => {
+    // The old bare ["/api/leads"] invalidation refetched every list page AND
+    // every per-lead subquery after each add. Now: targeted upsert only.
+    apiRequest.mockResolvedValue({ json: async () => ({
+      id: 42, existed: false, address: "402 Nard Ln", city: "Inman", state: "SC",
+      zip: "29349", leadStatus: "prospect", lat: 35.05, lng: -82.09,
+    }) });
+    const { qc } = renderSheet();
+    const listKey = leadsListKey(LEADS_LIST_DEFAULTS);
+    qc.setQueryData(listKey, { leads: [{ id: 1, address: "1 Oak St", city: "Inman", state: "SC", zip: "29349", leadStatus: "prospect" }], total: 1, limit: 100, offset: 0 });
+    qc.setQueryData(["/api/leads", 5, "knocks"], []);
+
+    await userEvent.click(screen.getByTestId("add-lead-submit"));
+    await waitFor(() => expect((qc.getQueryData(listKey) as any)?.leads.map((l: any) => l.id)).toEqual([42, 1]));
+    expect((qc.getQueryData(listKey) as any).total).toBe(2);
+    expect(qc.getQueryState(listKey)?.isInvalidated).toBe(false);
+    expect(qc.getQueryState(["/api/leads", 5, "knocks"])?.isInvalidated).toBe(false);
+  });
+
+  it("existed:true marks list views stale (server may have adopted the row) without touching their data", async () => {
+    apiRequest.mockResolvedValue({ json: async () => ({ id: 7, existed: true, visibility: vis({}) }) });
+    const { qc } = renderSheet();
+    const listKey = leadsListKey(LEADS_LIST_DEFAULTS);
+    const before = { leads: [], total: 0, limit: 100, offset: 0 };
+    qc.setQueryData(listKey, before);
+
+    await userEvent.click(screen.getByTestId("add-lead-submit"));
+    await waitFor(() => expect(qc.getQueryState(listKey)?.isInvalidated).toBe(true));
+    expect(qc.getQueryData(listKey)).toEqual(before);
   });
 
   it("the large sheet surface animates on GPU keyframes only — no transition-all, nothing >=300ms", () => {
