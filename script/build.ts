@@ -134,7 +134,7 @@ async function buildAll() {
   }
 }
 
-// ── Service-worker versioning ────────────────────────────────────────────────
+// ── Build versioning (service worker + page) ─────────────────────────────────
 // A browser decides a service worker is NEW by byte-comparing sw.js. The file
 // is copied verbatim out of client/public, so with a hardcoded version literal
 // every deploy shipped identical bytes: `updatefound` never fired and the
@@ -142,23 +142,33 @@ async function buildAll() {
 // the build's own asset filenames makes sw.js change exactly when the app
 // changes — and not when it doesn't, so an unchanged rebuild won't nag reps to
 // reload for nothing.
+//
+// The SAME digest is stamped into index.html (window.__HFS_BUILD__) so the
+// page knows which build IT is. That is what lets pwa.ts tell a genuine update
+// apart from the post-deploy race where a tab already boots the new build
+// while the old worker still controls it — without the page-side stamp, every
+// deploy ended with a redundant "update ready" prompt and a second reload.
+// Missing tokens are BUILD FAILURES for both files: shipping either unstamped
+// silently regresses the whole update flow.
 async function stampServiceWorker() {
-  const swPath = path.resolve("dist/public/sw.js");
-  let source: string;
-  try {
-    source = await readFile(swPath, "utf-8");
-  } catch {
-    throw new Error(`build: dist/public/sw.js is missing — the PWA shell would ship unversioned`);
-  }
-  if (!source.includes("__SW_BUILD__")) {
-    throw new Error("build: dist/public/sw.js has no __SW_BUILD__ token to stamp");
-  }
   // Asset filenames are content hashes, so the sorted list is a faithful,
   // reproducible fingerprint of the whole client build.
   const assets = (await readdir(path.resolve("dist/public/assets")).catch(() => [])).sort();
   const digest = createHash("sha256").update(assets.join("\n")).digest("hex").slice(0, 12);
-  await writeFile(swPath, source.replaceAll("__SW_BUILD__", digest), "utf-8");
-  console.log(`stamped service worker version: ${digest}`);
+  for (const rel of ["dist/public/sw.js", "dist/public/index.html"]) {
+    const file = path.resolve(rel);
+    let source: string;
+    try {
+      source = await readFile(file, "utf-8");
+    } catch {
+      throw new Error(`build: ${rel} is missing — the PWA shell would ship unversioned`);
+    }
+    if (!source.includes("__SW_BUILD__")) {
+      throw new Error(`build: ${rel} has no __SW_BUILD__ token to stamp`);
+    }
+    await writeFile(file, source.replaceAll("__SW_BUILD__", digest), "utf-8");
+  }
+  console.log(`stamped build version ${digest} into sw.js + index.html`);
 }
 
 // ── Precompressed static assets ──────────────────────────────────────────────

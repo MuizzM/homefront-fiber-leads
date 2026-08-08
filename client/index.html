@@ -24,6 +24,13 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="HomeFront" />
     <script>
+      // Build fingerprint, stamped by script/build.ts with the SAME digest it
+      // writes into sw.js — the update flow (client/src/lib/pwa.ts) compares
+      // the two so a tab that already runs a build is never prompted to
+      // "update" into it. Left unstamped in dev, where no SW registers anyway.
+      window.__HFS_BUILD__ = "__SW_BUILD__";
+    </script>
+    <script>
       // Apply saved theme before paint to avoid a flash (dark is the default).
       (function () {
         try {

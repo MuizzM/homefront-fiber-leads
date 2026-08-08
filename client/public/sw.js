@@ -5,7 +5,9 @@
 // have their own headers + a token that must not be persisted here).
 //
 // Update flow: the build stamps SW_VERSION → the new worker installs, the client
-// shows an "update ready" prompt, and skipWaiting()+reload swaps atomically.
+// compares SW_VERSION (via the GET_VERSION handshake below) against its own
+// stamped build and — only when they differ — shows an "update ready" prompt;
+// skipWaiting()+reload then swaps atomically.
 //
 // SW_VERSION IS STAMPED AT BUILD TIME (script/build.ts rewrites the __SW_BUILD__
 // token in dist/public/sw.js with a digest of the built assets). This is not
@@ -59,6 +61,14 @@ self.addEventListener("activate", (event) => {
 // Client → SW handshake for the update prompt.
 self.addEventListener("message", (event) => {
   if (event.data === "SKIP_WAITING") self.skipWaiting();
+  // Version handshake: the page (client/src/lib/pwa.ts) compares its own
+  // stamped build against this worker's before prompting. A tab that reloads
+  // right after a deploy already RUNS the new build — without this check it
+  // was prompted to "update" into the very code it was executing, paying a
+  // second full reload for nothing.
+  else if (event.data && event.data.type === "GET_VERSION" && event.ports[0]) {
+    event.ports[0].postMessage(SW_VERSION);
+  }
 });
 
 function isCacheable(url) {
