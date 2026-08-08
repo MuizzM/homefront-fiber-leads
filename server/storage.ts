@@ -5110,8 +5110,13 @@ export class Storage implements IStorage {
     // grouped MAX picks each rep's newest ping (id DESC breaks exact-timestamp
     // ties deterministically; the old sort left tie order unspecified), and the
     // outer ORDER BY preserves the previous newest-first output order.
+    // Shift-length recency window. Without it, every rep who EVER pinged
+    // rendered on the Live Map forever — a green "online" marker at a weeks-old
+    // location ("4380h ago" was observed). 8 hours covers any live shift while
+    // letting the map mean what its legend says.
+    const freshCutoff = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
     const tenantWhere = tenantId != null
-      ? "WHERE g.rep_id IN (SELECT id FROM team_members WHERE tenant_id = ?)"
+      ? "AND g.rep_id IN (SELECT id FROM team_members WHERE tenant_id = ?)"
       : "";
     return rawDb.prepare(
       `SELECT p.id, p.rep_id AS repId, p.user_id AS userId, p.lat, p.lng,
@@ -5122,9 +5127,9 @@ export class Storage implements IStorage {
             WHERE p2.rep_id = g.rep_id
             ORDER BY p2.ping_at DESC, p2.id DESC
             LIMIT 1)
-         ${tenantWhere}
+        WHERE p.ping_at >= ? ${tenantWhere}
         ORDER BY p.ping_at DESC`
-    ).all(...(tenantId != null ? [tenantId] : [])) as LocationPing[];
+    ).all(...(tenantId != null ? [freshCutoff, tenantId] : [freshCutoff])) as LocationPing[];
   }
   getPingsByRep(repId: number, limit = 50): LocationPing[] {
     return db.select().from(locationPings).where(eq(locationPings.repId, repId))

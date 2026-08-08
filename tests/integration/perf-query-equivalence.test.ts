@@ -135,20 +135,37 @@ describe("getVisitSummary", () => {
 });
 
 describe("getLatestPingPerRep", () => {
-  it("returns exactly the newest ping per rep, tenant-walled", () => {
+  it("returns exactly the newest ping per rep, tenant-walled, within the live window", () => {
     const mk = (repId: number, at: string, lat: number) =>
       rawDb.prepare("INSERT INTO location_pings (rep_id, user_id, lat, lng, accuracy, ping_at) VALUES (?,?,?,?,?,?)")
         .run(repId, userA.id, lat, -80.4, 5, at);
-    mk(repA.id, "2026-07-06T10:00:00.000Z", 35.1);
-    mk(repA.id, "2026-07-06T11:00:00.000Z", 35.2); // newest for A
-    mk(repB.id, "2026-07-06T09:00:00.000Z", 35.3);
-    mk(repOther.id, "2026-07-06T12:00:00.000Z", 35.4); // other tenant
+    // The query now carries a shift-length (8h) recency window, so fixtures use
+    // now-relative instants: a rep who last pinged weeks ago must NOT render as
+    // a live green marker on the map.
+    const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+    mk(repA.id, minsAgo(120), 35.1);
+    mk(repA.id, minsAgo(60), 35.2); // newest for A
+    mk(repB.id, minsAgo(180), 35.3);
+    mk(repOther.id, minsAgo(30), 35.4); // other tenant
     const rows = storage.getLatestPingPerRep(T1);
     expect(rows.map((r: any) => r.repId).sort()).toEqual([repA.id, repB.id].sort());
     expect(rows.find((r: any) => r.repId === repA.id).lat).toBe(35.2);
     // Unscoped call still sees every tenant's reps (super_admin view).
     const all = storage.getLatestPingPerRep();
     expect(all.some((r: any) => r.repId === repOther.id)).toBe(true);
+  });
+
+  it("drops reps whose newest ping is older than the live window", () => {
+    rawDb.prepare("DELETE FROM location_pings").run(); // isolate from the test above
+    const mk = (repId: number, at: string, lat: number) =>
+      rawDb.prepare("INSERT INTO location_pings (rep_id, user_id, lat, lng, accuracy, ping_at) VALUES (?,?,?,?,?,?)")
+        .run(repId, userA.id, lat, -80.4, 5, at);
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+    mk(repA.id, hoursAgo(1), 36.0);   // live
+    mk(repB.id, hoursAgo(200), 36.1); // stale — the "4380h ago green dot" bug
+    const rows = storage.getLatestPingPerRep(T1);
+    expect(rows.some((r: any) => r.repId === repA.id)).toBe(true);
+    expect(rows.some((r: any) => r.repId === repB.id)).toBe(false);
   });
 });
 

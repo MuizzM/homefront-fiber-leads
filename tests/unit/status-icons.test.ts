@@ -145,29 +145,46 @@ describe("data-driven Mapbox symbol mapping", () => {
     expect(STATUS_ICON.unworked.key).toBe("pin-prospect");
   });
 
-  it("registers the base pins AND every count variant through loadImage + addImage", async () => {
-    const images = new Map<string, { pixelRatio?: number } | undefined>();
-    const loaded: string[] = [];
-    const map = {
-      hasImage: (id: string) => images.has(id),
-      loadImage: (url: string, callback: (error: null, image: ImageData) => void) => {
-        loaded.push(url);
-        callback(null, {} as ImageData);
-      },
-      addImage: (id: string, _image: ImageData, options?: { pixelRatio?: number }) => { images.set(id, options); },
-    };
-    await registerPinImages(map);
-    const expectedCount = LEAD_MAP_STATUSES.length * (1 + KNOCK_BADGE_BUCKETS.length);
-    expect(loaded).toHaveLength(expectedCount);
-    const ids = [...images.keys()].sort();
-    const expected = LEAD_MAP_STATUSES.flatMap((status) => [
-      `pin-${status}`,
-      ...KNOCK_BADGE_BUCKETS.map((bucket) => `pin-${status}-k${bucket}`),
-    ]).sort();
-    expect(ids).toEqual(expected);
-    // 2x raster + pixelRatio keeps the ring/digits crisp at 40 logical px.
-    for (const options of images.values()) {
-      expect(options).toEqual({ pixelRatio: PIN_PIXEL_RATIO });
+  it("registers the base pins AND every count variant via the browser decoder, never a data: fetch", async () => {
+    // The pins are inline data: SVGs. map.loadImage would fetch() them, and the
+    // app's CSP connect-src has no data: entry — so registerOne now decodes
+    // data: URLs with an <img> element and NEVER touches map.loadImage. Stub a
+    // synchronously-loading Image so the decode path resolves under jsdom.
+    const RealImage = globalThis.Image;
+    class InstantImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_v: string) { queueMicrotask(() => this.onload?.()); }
+    }
+    // @ts-expect-error test stub
+    globalThis.Image = InstantImage;
+    try {
+      const images = new Map<string, { pixelRatio?: number } | undefined>();
+      const loaded: string[] = [];
+      const map = {
+        hasImage: (id: string) => images.has(id),
+        loadImage: (url: string, callback: (error: null, image: ImageData) => void) => {
+          loaded.push(url);
+          callback(null, {} as ImageData);
+        },
+        addImage: (id: string, _image: unknown, options?: { pixelRatio?: number }) => { images.set(id, options); },
+      };
+      await registerPinImages(map as any);
+      // Every URL is a data: URL, so the CSP-blocked Mapbox fetch path must
+      // never be exercised.
+      expect(loaded).toHaveLength(0);
+      const ids = [...images.keys()].sort();
+      const expected = LEAD_MAP_STATUSES.flatMap((status) => [
+        `pin-${status}`,
+        ...KNOCK_BADGE_BUCKETS.map((bucket) => `pin-${status}-k${bucket}`),
+      ]).sort();
+      expect(ids).toEqual(expected);
+      // 2x raster + pixelRatio keeps the ring/digits crisp at 40 logical px.
+      for (const options of images.values()) {
+        expect(options).toEqual({ pixelRatio: PIN_PIXEL_RATIO });
+      }
+    } finally {
+      globalThis.Image = RealImage;
     }
   });
 });

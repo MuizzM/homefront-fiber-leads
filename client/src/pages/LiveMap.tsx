@@ -81,6 +81,14 @@ export default function LiveMap() {
     toast({ title: "Location sharing stopped" });
   }
 
+  // Leaving the page must stop the pinger: without this cleanup, navigating
+  // away with sharing on kept posting the rep's GPS position every 60s for the
+  // rest of the session, with the "Sharing Location" badge no longer visible
+  // to tell them. Privacy first, battery second.
+  useEffect(() => () => {
+    if (trackingInterval.current) { clearInterval(trackingInterval.current); trackingInterval.current = null; }
+  }, []);
+
   // Init map — Mapbox GL is lazy-loaded (index.html); trigger the fetch on mount.
   useEffect(() => {
     if (!config?.token || !mapContainer.current || mapRef.current) return;
@@ -154,6 +162,10 @@ export default function LiveMap() {
     return `${Math.floor(m / 60)}h ago`;
   }
 
+  // "Active" means what the legend says: a ping in the last 15 minutes. Reps
+  // with older (≤8h, server-windowed) pings still render, as "earlier today".
+  const activeCount = pings.filter(p => Date.now() - new Date(p.pingAt).getTime() <= 15 * 60_000).length;
+
   return (
     <div className="w-full max-w-7xl mx-auto p-4 pt-5 pb-24 space-y-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -164,8 +176,8 @@ export default function LiveMap() {
         <div className="flex items-center gap-2">
           {/* Clocked in reps count */}
           {isManager && (
-            <Badge className={pings.length > 0 ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
-              <Radio className="w-3 h-3 mr-1" /> <span className="tabular-nums">{pings.length}</span>&nbsp;active
+            <Badge className={activeCount > 0 ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
+              <Radio className="w-3 h-3 mr-1" /> <span className="tabular-nums">{activeCount}</span>&nbsp;active
             </Badge>
           )}
           {/* Rep tracking toggle */}

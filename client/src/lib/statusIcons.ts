@@ -224,10 +224,14 @@ function loadBrowserImage(url: string): Promise<HTMLImageElement> {
 
 async function registerOne(map: ImageMap, id: string, url: string): Promise<void> {
   if (map.hasImage(id)) return;
-  // Mapbox's supported image formats vary by GL JS release. Always attempt
-  // map.loadImage as requested; the browser decoder is the production-safe
-  // fallback for releases that reject SVG data URLs.
-  const image = await loadMapImage(map, url).catch(() => loadBrowserImage(url));
+  // data: URLs go straight to the browser <img> decoder. map.loadImage fetch()es
+  // its URL, and the app's CSP connect-src (deliberately) has no data: entry —
+  // so every one of the ~70 pin registrations burned a guaranteed-failing fetch
+  // and a console error before falling back to the decoder anyway. Non-data
+  // URLs keep the Mapbox path (it handles pixel-ratio negotiation there).
+  const image = url.startsWith("data:")
+    ? await loadBrowserImage(url)
+    : await loadMapImage(map, url).catch(() => loadBrowserImage(url));
   if (!map.hasImage(id)) map.addImage(id, image, { pixelRatio: PIN_PIXEL_RATIO });
 }
 
