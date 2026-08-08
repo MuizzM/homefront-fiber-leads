@@ -13,6 +13,13 @@
 //
 // The fixture root deliberately contains a ".dot-checkout" path component:
 // that is the whole regression.
+//
+// A second contract joined later: the SPA fallback never answers for /assets/.
+// A deploy-replaced chunk must 404 so the client's stale-chunk recovery
+// (client/src/lib/staleChunk.ts) reloads into the new build — index.html here
+// meant HTML-as-JavaScript for the dynamic import and, worse, an HTML body the
+// service worker cached forever under the immutable chunk URL (the prod
+// blank-tabs-after-deploy failure).
 import { createServer, request as httpRequest, type Server, type IncomingHttpHeaders } from "node:http";
 import { brotliCompressSync } from "node:zlib";
 import fs from "node:fs";
@@ -106,13 +113,24 @@ describe("precompressed assets under a dot-directory checkout", () => {
     expect(res.body.toString()).toBe(PLAIN);
   });
 
-  it("reaches the index.html fallback with no stale js headers when both files are gone", async () => {
+  it("404s a vanished asset with the staged headers stripped — never the index.html fallback", async () => {
     const res = await rawGet("/assets/razed-0f9e8d.js", "br");
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
+    // The precompressed handler staged js/br headers before sendFile failed;
+    // none of them may survive onto the 404.
     expect(res.headers["content-encoding"]).toBeUndefined();
-    expect(res.headers["content-type"]).toContain("text/html");
-    expect(res.headers["cache-control"]).toBe("no-cache");
-    expect(res.body.toString()).toBe(INDEX_HTML);
+    expect(res.headers["content-type"] ?? "").not.toContain("text/html");
+    // Uncacheable: 404 is heuristically cacheable per RFC 9110, and this miss
+    // is transient (the reloaded client fetches the NEW build's chunk names).
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.body.length).toBe(0);
+  });
+
+  it("404s a chunk name from a previous build (never indexed, never on disk)", async () => {
+    const res = await rawGet("/assets/Leads-DEADBEEF.js", "br");
+    expect(res.status).toBe(404);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.body.length).toBe(0);
   });
 
   it("serves the app shell for SPA deep links", async () => {
