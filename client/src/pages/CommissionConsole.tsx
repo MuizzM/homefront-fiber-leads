@@ -77,8 +77,15 @@ function StatusChip({ status }: { status: string }) {
 export default function CommissionConsole() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const canClose = useCan("commission.read.all");        // manager/admin: finalize, export, adjust
-  const canPay = useCan("payouts.pay");                  // admin only: moves real money
+  // Two authority tiers, matching the server gates exactly:
+  // read.all (manager+) = see the whole week, export CSV, file PENDING adjustments.
+  // payouts.pay (admin) = settle money: finalize, mark paid, approve/reject
+  // adjustments, move reserves. The server enforces payouts.pay on
+  // /api/commission/week/transition and /adjustments/:id/decide — gating those
+  // buttons on read.all rendered them for managers as dead controls that 403'd
+  // after a confirm dialog quoting exact dollar totals.
+  const canReadAll = useCan("commission.read.all");
+  const canPay = useCan("payouts.pay");
   const canManageOrg = useCan("settings.manage.org");    // org settings (house amount)
   const canDownline = useCan("commission.read.downline"); // team_lead+: multi-level override sheet
   const [section, setSection] = useState<"overview" | "pay" | "downline">("overview");
@@ -99,7 +106,7 @@ export default function CommissionConsole() {
   const [anchorMs] = useState(() => Date.now());
   const weekRef = new Date(anchorMs + weekOffset * WEEK_MS).toISOString();
   const ovKey = ["/api/commission/week-overview", weekRef];
-  const { data: ov, isLoading, isError } = useQuery<Overview>({
+  const { data: ov, isLoading, isError, refetch: refetchWeek } = useQuery<Overview>({
     queryKey: ovKey,
     queryFn: () => apiRequest("GET", `/api/commission/week-overview?week=${encodeURIComponent(weekRef)}`).then(r => r.json()),
     refetchInterval: weekOffset === 0 ? 60_000 : false,  // live week ticks; history is settled
@@ -211,7 +218,7 @@ export default function CommissionConsole() {
         {/* "Pay reps" is finalize/export/adjust — only roles with
             commission.read.all can act there. Hiding it for team leads (who get
             a read-only Overview) avoids a tab that opens a blank panel. */}
-        {canClose && (
+        {canReadAll && (
           <button
             type="button"
             role="tab"
@@ -240,11 +247,17 @@ export default function CommissionConsole() {
       </div>
 
       {isError && (
-        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center text-sm text-muted-foreground">
-          Couldn't load the week. Retry in a moment.
+        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" role="alert">
+          <div className="text-sm font-semibold text-foreground">Couldn't load the week</div>
+          <div className="text-sm text-muted-foreground mt-1">Check your connection — nothing about the week's money has changed.</div>
+          <Button variant="outline" size="sm" className="mt-3 h-9 border-border" onClick={() => refetchWeek()} data-testid="week-retry">
+            Retry
+          </Button>
         </div>
       )}
-      {isLoading && <div className="h-48 rounded-2xl bg-card border border-border animate-pulse" />}
+      {/* The week skeleton belongs to Overview only — Pay/Downline render their
+          own data and shouldn't grow an unrelated pulsing block. */}
+      {isLoading && section === "overview" && <div className="h-48 rounded-2xl bg-card border border-border animate-pulse" />}
 
       {ov && section === "overview" && (
         <>
@@ -466,7 +479,7 @@ export default function CommissionConsole() {
                           <div className="font-medium text-foreground flex items-center gap-1.5">
                             {r.repName}
                             {r.structure && !r.planAccepted && (
-                              <span className="text-2xs font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-0.5">not accepted</span>
+                              <span className="text-2xs font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-0.5">plan not accepted</span>
                             )}
                           </div>
                           <div className="text-2xs text-muted-foreground flex items-center gap-1">
@@ -509,7 +522,7 @@ export default function CommissionConsole() {
           </div>
 
           {/* Closeout bar — manager/admin only */}
-          {canClose && (
+          {canReadAll && (
             <div className="rounded-2xl bg-card border border-border p-3 flex items-center gap-2 flex-wrap" data-testid="closeout-bar">
               <div className="text-xs text-muted-foreground mr-auto">
                 {openCount > 0
@@ -522,23 +535,34 @@ export default function CommissionConsole() {
                 data-testid="export-csv">
                 <Download className="w-3.5 h-3.5" /> Export CSV
               </a>
-              <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
-                disabled={openCount === 0 || transition.isPending}
-                onClick={() => setConfirmAction("FINALIZE")} data-testid="btn-finalize-week">
-                <Lock className="w-3.5 h-3.5 mr-1" /> Finalize week
-              </Button>
-              <Button size="sm" variant="outline" className="h-8 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 text-xs"
-                disabled={finalizedCount === 0 || transition.isPending}
-                onClick={() => setConfirmAction("MARK_PAID")} data-testid="btn-mark-paid">
-                <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Mark paid
-              </Button>
+              {/* Settling the week requires payouts.pay (the server refuses
+                  anything less), so a manager gets an honest review-only note
+                  instead of buttons that 403 after a confirm dialog. */}
+              {canPay ? (
+                <>
+                  <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
+                    disabled={openCount === 0 || transition.isPending}
+                    onClick={() => setConfirmAction("FINALIZE")} data-testid="btn-finalize-week">
+                    <Lock className="w-3.5 h-3.5 mr-1" /> Finalize week
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-8 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 text-xs"
+                    disabled={finalizedCount === 0 || transition.isPending}
+                    onClick={() => setConfirmAction("MARK_PAID")} data-testid="btn-mark-paid">
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Mark paid
+                  </Button>
+                </>
+              ) : (
+                <span className="text-2xs text-muted-foreground" data-testid="closeout-review-only">
+                  Review only — an admin finalizes and marks the week paid.
+                </span>
+              )}
             </div>
           )}
 
         </>
       )}
 
-      {section === "pay" && canClose && (
+      {section === "pay" && canReadAll && (
         <>
           {canManageOrg && <HouseAmountCard />}
           {canManageOrg && <OverrideConfigCard />}
@@ -590,7 +614,7 @@ export default function CommissionConsole() {
       </Dialog>
 
       {/* Statement drill-down */}
-      <StatementDrawer row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canClose} canMoveReserve={canPay} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] }); }} />
+      <StatementDrawer row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canReadAll} canDecideAdj={canPay} canMoveReserve={canPay} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] }); }} />
     </div>
   );
 }
@@ -736,8 +760,8 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
 
 // ── Drill-down: explain every dollar ──────────────────────────────────────────
 // Final total → tier math → the exact doors → adjustments → statement lineage.
-function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canMoveReserve, onClose }: {
-  row: OverviewRow | null; weekRef: string; weekLabel: string; canAdjust: boolean; canMoveReserve: boolean; onClose: () => void;
+function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, canMoveReserve, onClose }: {
+  row: OverviewRow | null; weekRef: string; weekLabel: string; canAdjust: boolean; canDecideAdj: boolean; canMoveReserve: boolean; onClose: () => void;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -906,13 +930,18 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canMoveReserve, o
                     <span className={`text-2xs font-bold uppercase ${a.status === "APPROVED" ? "text-emerald-400" : a.status === "REJECTED" ? "text-red-400" : "text-amber-400"}`}>{a.status.toLowerCase()}</span>
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">{a.reason}</div>
-                  {canAdjust && a.status === "PENDING" && (
+                  {/* Deciding an adjustment moves money — payouts.pay only, same
+                      as the server gate. Managers (read.all) file; admins decide. */}
+                  {canDecideAdj && a.status === "PENDING" && (
                     <div className="flex gap-1.5 mt-1.5">
                       <Button size="sm" variant="outline" className="h-6 text-2xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "APPROVE" })} data-testid={`btn-approve-adj-${a.id}`}>Approve</Button>
                       <Button size="sm" variant="ghost" className="h-6 text-2xs text-muted-foreground"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "REJECT" })}>Reject</Button>
                     </div>
+                  )}
+                  {!canDecideAdj && canAdjust && a.status === "PENDING" && (
+                    <div className="text-[11px] text-muted-foreground mt-1.5">Awaiting an admin's decision.</div>
                   )}
                 </div>
               ))}
@@ -992,6 +1021,13 @@ function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean })
           </div>
           {balance.isLoading ? (
             <div className="h-9 w-32 mt-2 rounded-lg bg-secondary animate-pulse" />
+          ) : balance.isError ? (
+            // A fetch failure is not a configuration fact — say so, and offer
+            // the retry. (This card used to render "not configured" on a blip.)
+            <div className="mt-2 text-sm">
+              <span className="font-semibold text-amber-400">Couldn't load the balance.</span>{" "}
+              <button type="button" className="text-primary hover:underline font-semibold" onClick={() => balance.refetch()} data-testid="balance-retry">Retry</button>
+            </div>
           ) : balance.data?.configured ? (
             <>
               <div className="mt-1.5 text-2xl font-semibold tabular-nums text-foreground">{usd(balance.data.availableCents)}</div>
@@ -1026,6 +1062,7 @@ function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean })
         weekRef={weekRef}
         canPay={canPay}
         availableCents={balance.data?.configured ? balance.data.availableCents : null}
+        balanceUnknown={balance.isError}
       />
       <PayoutHistory />
     </div>
@@ -1101,7 +1138,7 @@ function PayStatusCell({ r }: { r: PayoutRow }) {
 }
 
 // Keyed by weekRef in the parent, so switching weeks resets confirm + results.
-function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; canPay: boolean; availableCents: number | null }) {
+function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false }: { weekRef: string; canPay: boolean; availableCents: number | null; balanceUnknown?: boolean }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1147,7 +1184,11 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
   const payableCount = data?.payableCount ?? 0;
   const payableCents = data?.payableCents ?? 0;
   const estimatedCost = estimateStripeConnectCost(payableCents, payableCount);
-  const insufficientBalance = availableCents != null && payableCents > availableCents;
+  // Fail CLOSED on the balance guard: while the balance is unknown because its
+  // fetch errored, submitting real transfers stays blocked — an unknown balance
+  // must never behave like a sufficient one. (A still-loading balance keeps the
+  // button armed as before; the panel's own fetch gates the real submit.)
+  const insufficientBalance = (availableCents != null && payableCents > availableCents) || balanceUnknown;
   const nameFor = (id: number) => rows.find(r => r.repId === id)?.repName ?? `Rep #${id}`;
 
   return (
@@ -1226,7 +1267,10 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
 
           {canPay && insufficientBalance && (
             <div className="border-t border-red-500/25 px-4 py-3 flex items-start gap-2 text-xs text-red-400 bg-red-500/[0.06]" data-testid="payout-insufficient-balance">
-              <AlertTriangle className="w-3.5 h-3.5 mt-px flex-shrink-0" /> Add {usd(payableCents - (availableCents ?? 0))} to your available Stripe balance before paying this batch.
+              <AlertTriangle className="w-3.5 h-3.5 mt-px flex-shrink-0" />
+              {balanceUnknown
+                ? <>The Stripe balance couldn't be checked, so submitting is paused. Retry the balance above before paying this batch.</>
+                : <>Add {usd(payableCents - (availableCents ?? 0))} to your available Stripe balance before paying this batch.</>}
             </div>
           )}
 

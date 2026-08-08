@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { usd } from "@/lib/money";
 import {
@@ -103,9 +104,18 @@ export default function MyCommission() {
     queryFn: () => apiRequest("GET", "/api/commission/statements/me/current").then(r => r.json()),
   });
 
-  const { data: history = [] } = useQuery<any[]>({
-    queryKey: ["/api/commission/statements", "mine"],
-    queryFn: () => apiRequest("GET", "/api/commission/statements").then(r => r.json()),
+  // "Past weeks" is the CALLER'S history, never the org's. Without ?repId= the
+  // server widens the list to the caller's whole read scope — a team lead's
+  // downline, a manager's entire tenant — and every row renders the same bare
+  // week label, so ten reps' statements looked like ten inexplicable duplicates
+  // of the viewer's own week. The server authorizes the param via canReadRep,
+  // so it can only narrow, never widen.
+  const { user } = useAuth();
+  const myRepId = user?.teamMemberId ?? null;
+  const { data: history = [], isError: historyError, refetch: refetchHistory } = useQuery<any[]>({
+    queryKey: ["/api/commission/statements", "mine", myRepId],
+    queryFn: () => apiRequest("GET", `/api/commission/statements?repId=${myRepId}`).then(r => r.json()),
+    enabled: myRepId != null,
   });
 
   return (
@@ -217,13 +227,26 @@ export default function MyCommission() {
           Self-gating: renders nothing until the server reports payouts enabled. */}
       {!isLoading && !isError && data && !data.noRepProfile && <GetPaidSection />}
 
-      {/* Past weeks — a plain statement list */}
+      {/* Past weeks — a plain statement list. A failed fetch says so instead of
+          silently deleting the section (money history must never just vanish). */}
+      {historyError && (
+        <section className="rounded-xl bg-card border border-border p-4 text-center" role="alert" data-testid="history-error">
+          <div className="text-sm text-muted-foreground">Couldn't load your past weeks.</div>
+          <button onClick={() => refetchHistory()}
+            className="mt-2 inline-flex items-center justify-center min-h-11 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
+            Retry
+          </button>
+        </section>
+      )}
       {history.length > 0 && (
         <section className="rounded-xl bg-card border border-border overflow-hidden">
           <header className="px-4 py-3 border-b border-border flex items-center gap-2">
             <CalendarDays className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-semibold tracking-tight text-foreground">Past weeks</span>
-            <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{history.length}</span>
+            {/* Count matches what's on screen — never a number larger than the list. */}
+            <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
+              {history.length > 8 ? `last 8 of ${history.length}` : history.length}
+            </span>
           </header>
           <div className="divide-y divide-border">
             {history.slice(0, 8).map((s: any) => (
@@ -242,7 +265,7 @@ export default function MyCommission() {
                     onClick={() => setStmtId(Number(s.id))}
                     aria-label={`Open statement for ${s.local_week_label}`}
                     data-testid={`statement-${s.id}`}
-                    className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 active:scale-95 transition-all"
+                    className="relative inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 active:scale-95 transition-all after:absolute after:-inset-2"
                   >
                     <Printer className="w-4 h-4" />
                   </button>
@@ -600,9 +623,9 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
       <div className="flex items-center justify-between gap-2 px-5 pt-4">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Next target</span>
-          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-bold ${tint.chip}`}>
-            <RankChip rank={next} size="sm" /> {next.name}
-          </span>
+          {/* RankChip already carries the medal + name — wrapping it in a second
+              chip that repeated {next.name} rendered "Bronze Bronze". */}
+          <RankChip rank={next} />
         </div>
         <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400/90">
           <Clock className="w-3 h-3" aria-hidden="true" /> Close by Sunday night
@@ -868,8 +891,12 @@ function WeekView({ data }: { data: WeekResponse }) {
         </div>
       )}
 
-      {/* Tier ladder or flat rate */}
-      {isTiered ? (
+      {/* Tier ladder or flat rate. On OPEN tiered weeks the RankCard above
+          already renders every band (rate + range + current/next highlight), so
+          repeating the same rows here was pure duplicate scroll — this plain
+          card now serves only the weeks where the RankCard is absent (locked
+          statements, whose frozen rates are the record). */}
+      {isTiered ? (!(tiers.length > 0 && stateKey === "OPEN") &&
         <div className="rounded-xl bg-card border border-border overflow-hidden">
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
             <Layers className="w-4 h-4 text-muted-foreground" />
@@ -945,6 +972,9 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
     onSuccess: () => {
       toast({ title: "Plan accepted", description: "Your commission terms are locked to your file. Go sell." });
       qc.invalidateQueries({ queryKey: ["/api/commission/statements/me/current"] });
+      // The Past-weeks list reads a different key — refresh it too so the page
+      // never shows a stale history next to a fresh current week.
+      qc.invalidateQueries({ queryKey: ["/api/commission/statements"] });
     },
     onError: (e: any) => toast({ title: "Couldn't accept plan", description: e.message, variant: "destructive" }),
   });
