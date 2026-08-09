@@ -196,7 +196,7 @@ function logBreakerWait(runId: string): void {
   lastBreakerWaitLogAt = now;
   structuredLog("scan.engine.breaker_wait", {
     runId, waitMs: BREAKER_WAIT_MS,
-    reason: "shared proxy circuit COOLDOWN — yielding instead of claiming",
+    reason: "shared proxy circuit COOLDOWN - yielding instead of claiming",
   }, "warn");
 }
 function dedupSkipSecondsForRun(kind: string): number {
@@ -449,7 +449,7 @@ export async function runScanWorker(
                   address: t.address, city: t.city, state: t.state, zip: t.zip,
                   runId, source: run.kind, stage: "classified", status: "ok", attempt,
                   classification: "address_not_found",
-                  detail: `conclusive after ${attempt} needs-fix attempts — address not in Kinetic fabric (NOT no-service); quiet ${ANF_QUIET_DAYS}d then re-probe`,
+                  detail: `conclusive after ${attempt} needs-fix attempts - address not in Kinetic fabric (NOT no-service); quiet ${ANF_QUIET_DAYS}d then re-probe`,
                   tsEpoch: Date.now(),
                 });
                 recordFiberFailure({
@@ -916,7 +916,7 @@ function persistSnapshot(
       status: checkFailed ? "error" : "ok",
       attempt: 1, latencyMs,
       classification: checkFailed ? null : result.fiberStatus,
-      detail: checkFailed ? `not saved as conclusive — ${result.blocked ? "blocked/retry" : "unresolved"}` : `snapshot saved · ${result.fiberStatus}`,
+      detail: checkFailed ? `not saved as conclusive - ${result.blocked ? "blocked/retry" : "unresolved"}` : `snapshot saved · ${result.fiberStatus}`,
       tsEpoch: Date.now(),
     });
   } catch { /* telemetry best-effort */ }
@@ -1029,7 +1029,7 @@ export function resumeInterruptedRuns(): void {
       // remain in scan_targets for the next full sweep.
       if ((run.reopenCount ?? 0) >= REOPEN_BUDGET) {
         const closed = terminalizeQueuedTail(run.id, `re-open budget exhausted (${REOPEN_BUDGET} failed re-opens)`);
-        setRunStatus(run.id, "error", `re-open budget exhausted after ${REOPEN_BUDGET} failed re-opens — tail terminalized (${closed} skipped)`);
+        setRunStatus(run.id, "error", `re-open budget exhausted after ${REOPEN_BUDGET} failed re-opens - tail terminalized (${closed} skipped)`);
         structuredLog("scan.run.reopen_budget_exhausted", {
           runId: run.id, kind: run.kind, status: run.status,
           reopens: run.reopenCount ?? 0, tailClosed: closed,

@@ -35,7 +35,7 @@ describe("RepPicker", () => {
     expect(screen.getByTestId("rep-option-99")).toBeInTheDocument();
   });
 
-  it("hides the search box for a small team — it would just be noise", () => {
+  it("hides the search box for a small team - it would just be noise", () => {
     render(<RepPicker reps={[{ id: 1, name: "Ann" }, { id: 2, name: "Bo" }]} onChange={vi.fn()} />);
     expect(screen.queryByLabelText("Search reps")).not.toBeInTheDocument();
   });

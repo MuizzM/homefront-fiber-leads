@@ -47,7 +47,7 @@ function make(input: { key: string; geometry?: any; townName?: string }) {
   return job;
 }
 
-describe("terminalizeOrphanedElectedJobs — a stale elected box is a zombie, not permission to restart", () => {
+describe("terminalizeOrphanedElectedJobs - a stale elected box is a zombie, not permission to restart", () => {
   it("terminalizes ONLY the crash-orphaned elected scan; leaves background/town/live jobs alone", () => {
     const electedStale = make({ key: "elected-stale", geometry: AREA });
     const electedFresh = make({ key: "elected-fresh", geometry: AREA });

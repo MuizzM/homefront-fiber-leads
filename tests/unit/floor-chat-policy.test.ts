@@ -29,7 +29,7 @@ describe("validateChatMessage", () => {
     if (!over.ok) expect(over.error).toContain(String(FLOOR_CHAT_MESSAGE_MAX));
   });
 
-  it("measures the TRIMMED length — padding cannot push a valid message over", () => {
+  it("measures the TRIMMED length - padding cannot push a valid message over", () => {
     const padded = `  ${"x".repeat(FLOOR_CHAT_MESSAGE_MAX)}  `;
     expect(validateChatMessage(padded).ok).toBe(true);
   });
@@ -77,7 +77,7 @@ describe("chatInitials", () => {
 });
 
 describe("dmPairKey", () => {
-  it("is order-independent — 'message Bo' from either side is one room", () => {
+  it("is order-independent - 'message Bo' from either side is one room", () => {
     expect(dmPairKey(7, 3)).toBe(dmPairKey(3, 7));
     expect(dmPairKey(3, 7)).toBe("dm:3:7");
   });

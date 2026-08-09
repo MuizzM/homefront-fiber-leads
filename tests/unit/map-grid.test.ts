@@ -21,7 +21,7 @@ import {
   type MapGridCell,
 } from "@/lib/mapViewport";
 
-describe("viewportTierForWindow — tier selection by span", () => {
+describe("viewportTierForWindow - tier selection by span", () => {
   const win = (lngSpan: number, latSpan: number) => ({
     minLng: -80, minLat: 35, maxLng: -80 + lngSpan, maxLat: 35 + latSpan,
   });
@@ -55,7 +55,7 @@ describe("viewportTierForWindow — tier selection by span", () => {
   });
 });
 
-describe("gridCellForSpan — the ?cell=auto formula (mirrors the server)", () => {
+describe("gridCellForSpan - the ?cell=auto formula (mirrors the server)", () => {
   it("is span/24 snapped to 0.01° steps, clamped to [0.01°, 5°]", () => {
     expect(gridCellForSpan(3)).toBe(0.13);     // an over-cap city-region flip
     expect(gridCellForSpan(6)).toBe(0.25);
@@ -66,7 +66,7 @@ describe("gridCellForSpan — the ?cell=auto formula (mirrors the server)", () =
     expect(gridCellForSpan(200)).toBe(5);      // clamped at the max
   });
 
-  it("keeps ~24 cells across the view — cluster-like geometry, always far under the 5k cell cap", () => {
+  it("keeps ~24 cells across the view - cluster-like geometry, always far under the 5k cell cap", () => {
     for (const span of [1, 3.2, 5, 8, 12, 15]) {
       const cellsAcross = span / gridCellForSpan(span);
       // Snapping to the 0.01° lattice makes the ratio wobble around 24; the
@@ -159,7 +159,7 @@ describe("clampToGridGuard", () => {
   });
 });
 
-describe("gridCacheKey — 60s response cache identity", () => {
+describe("gridCacheKey - 60s response cache identity", () => {
   const w = { minLng: -84.3, minLat: 33.8, maxLng: -75.5, maxLat: 36.6 };
 
   it("is bbox + cell + tag", () => {
@@ -196,7 +196,7 @@ describe("sourceFilterToGridTag", () => {
   });
 });
 
-describe("sourceFilterToMapView — the lens as the server-side ?view=", () => {
+describe("sourceFilterToMapView - the lens as the server-side ?view=", () => {
   it("maps ONLY latest to a view; every other lens keeps a byte-stable URL", () => {
     expect(sourceFilterToMapView("latest")).toBe("latest");
     expect(sourceFilterToMapView("all")).toBeUndefined();
@@ -211,7 +211,7 @@ describe("sourceFilterToMapView — the lens as the server-side ?view=", () => {
   });
 });
 
-describe("gridCellsToGeoJson — what the density bubble renders", () => {
+describe("gridCellsToGeoJson - what the density bubble renders", () => {
   const cells: MapGridCell[] = [
     { lat: 35.375, lng: -80.375, n: 1241 },
     { lat: 35.875, lng: -79.875, n: 7 },

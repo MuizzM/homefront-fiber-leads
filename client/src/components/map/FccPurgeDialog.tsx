@@ -47,7 +47,7 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
       qc.invalidateQueries({ queryKey: ["/api/leads/map/grid"] });
       toast({
         title: `Removed ${res.removed} FCC lead${res.removed === 1 ? "" : "s"}`,
-        description: res.removed > 0 ? "Worked doors were protected and stay on the map." : "Nothing was unworked — every FCC door is protected.",
+        description: res.removed > 0 ? "Worked doors were protected and stay on the map." : "Nothing was unworked - every FCC door is protected.",
         severity: "success",
       });
       setConfirmText("");
@@ -104,29 +104,29 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
             </p>
           ) : preview.isError ? (
             <p role="alert" className="text-[13px] text-foreground" data-testid="fcc-purge-preview-error">
-              Couldn't load the preview — nothing can be removed until the counts are known.
+              Couldn't load the preview - nothing can be removed until the counts are known.
             </p>
           ) : p!.total === 0 ? (
-            <p className="text-[13px] text-muted-foreground">No FCC-imported leads found — there is nothing to remove.</p>
+            <p className="text-[13px] text-muted-foreground">No FCC-imported leads found - there is nothing to remove.</p>
           ) : (
             <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-[13px]">
               <dt className="text-muted-foreground">FCC-imported doors</dt>
               <dd className="text-right font-bold tabular-nums text-foreground" data-testid="fcc-purge-total">{p!.total}</dd>
-              <dt className="text-muted-foreground">Unworked — will be removed</dt>
+              <dt className="text-muted-foreground">Unworked - will be removed</dt>
               <dd className="text-right font-bold tabular-nums text-rose-400" data-testid="fcc-purge-removable">{p!.removable}</dd>
-              <dt className="text-muted-foreground">Worked — protected, stay</dt>
+              <dt className="text-muted-foreground">Worked - protected, stay</dt>
               <dd className="text-right font-bold tabular-nums text-foreground" data-testid="fcc-purge-protected">{p!.protected}</dd>
             </dl>
           )}
         </div>
 
-        {/* Typed confirmation — the purge has no undo. Only offered once the
+        {/* Typed confirmation - the purge has no undo. Only offered once the
             preview shows something is actually removable. */}
         {p != null && p.removable > 0 && (
           <div className="mt-4">
             <label htmlFor="fcc-purge-confirm" className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
-              Type <span className="font-bold text-foreground tracking-wide">REMOVE</span> to confirm — this cannot be undone.
+              Type <span className="font-bold text-foreground tracking-wide">REMOVE</span> to confirm - this cannot be undone.
             </label>
             <input
               id="fcc-purge-confirm" value={confirmText} onChange={(e) => setConfirmText(e.target.value)}

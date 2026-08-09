@@ -36,7 +36,7 @@ const sale = (o: Partial<SaleContext> = {}): SaleContext => ({ saleRef: "knock:1
 
 const cfg = (o: Partial<SpiffConfig> = {}): SpiffConfig => ({ ...DEFAULT_SPIFF_CONFIG, ...o });
 
-describe("decideSpiff — random branch boundary", () => {
+describe("decideSpiff - random branch boundary", () => {
   // A neutral snapshot: no deterministic trigger can fire, so only the roll matters.
   const neutral = snap({ currentStreakDays: 1, trailingAvgPerDay: 0, recentSalesCount: 1 });
   const c = cfg({ randomChancePct: 20, streakThresholdDays: 3, milestoneEvery: 10, improvementPct: 50 });
@@ -71,7 +71,7 @@ describe("decideSpiff — random branch boundary", () => {
   });
 });
 
-describe("decideSpiff — deterministic triggers", () => {
+describe("decideSpiff - deterministic triggers", () => {
   const c = cfg({ randomChancePct: 0, streakThresholdDays: 3, milestoneEvery: 10, improvementPct: 50 });
 
   it("streak: awards at the threshold", () => {
@@ -128,7 +128,7 @@ describe("decideSpiff — deterministic triggers", () => {
   });
 });
 
-describe("decideSpiff — daily cap (anti-farming)", () => {
+describe("decideSpiff - daily cap (anti-farming)", () => {
   const c = cfg({ randomChancePct: 100, streakThresholdDays: 3, milestoneEvery: 10, dailyCapPerRep: 2 });
 
   it("suppresses ALL awards once the cap is reached, even a milestone", () => {
@@ -145,7 +145,7 @@ describe("decideSpiff — daily cap (anti-farming)", () => {
   });
 });
 
-describe("decideSpiff — config-driven amount", () => {
+describe("decideSpiff - config-driven amount", () => {
   it("returns the configured amount in cents (flat back-compat alias)", () => {
     const d = decideSpiff(sale({ lifetimeSaleNumber: 10 }), snap(), 0.99, cfg({ amountCents: 7500 }));
     expect(d).toMatchObject({ awarded: true, amountCents: 7500, reason: "milestone" });
@@ -155,7 +155,7 @@ describe("decideSpiff — config-driven amount", () => {
 // ── The variable $25–$50 award ────────────────────────────────────────────────
 // The amount must be MONEY-GRADE: bounded, on a clean step, integer cents, and
 // bit-for-bit reproducible from the same seeded roll.
-describe("award amount — band, granularity and determinism", () => {
+describe("award amount - band, granularity and determinism", () => {
   const ROLLS = Array.from({ length: 400 }, (_, i) => i / 400);
   const REASONS: SpiffReason[] = ["random", "streak", "improvement", "milestone"];
   const LADDER = spiffAmountLadder(DEFAULT_SPIFF_CONFIG);
@@ -179,7 +179,7 @@ describe("award amount — band, granularity and determinism", () => {
     }
   });
 
-  it("is deterministic — the same roll always draws the same cents", () => {
+  it("is deterministic - the same roll always draws the same cents", () => {
     for (const reason of REASONS) {
       for (const u of [0, 0.0001, 0.3333333, 0.5, 0.87, 0.999999]) {
         expect(drawSpiffAmountCents(reason, u)).toBe(drawSpiffAmountCents(reason, u));
@@ -231,7 +231,7 @@ describe("award amount — band, granularity and determinism", () => {
   });
 });
 
-describe("award amount — reason weighting (rarer trigger, richer draw)", () => {
+describe("award amount - reason weighting (rarer trigger, richer draw)", () => {
   const ROLLS = Array.from({ length: 2000 }, (_, i) => i / 2000);
   const mean = (reason: SpiffReason) =>
     ROLLS.reduce((s, u) => s + drawSpiffAmountCents(reason, u), 0) / ROLLS.length;
@@ -322,7 +322,7 @@ describe("daily cap now bounds CENTS, not a count × flat amount", () => {
   });
 });
 
-describe("spiffTriggerGuide — the rep-facing rules copy", () => {
+describe("spiffTriggerGuide - the rep-facing rules copy", () => {
   it("describes all four triggers from the live config", () => {
     const guide = spiffTriggerGuide(DEFAULT_SPIFF_CONFIG);
     expect(guide.map((g) => g.reason).sort()).toEqual(["improvement", "milestone", "random", "streak"]);

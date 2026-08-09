@@ -132,7 +132,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                     ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
                     : "bg-white/[0.06] border-white/15 text-white/70"
                 }`}
-                title="Mark this door on behalf of the central team — no rep credit"
+                title="Mark this door on behalf of the central team - no rep credit"
               >
                 <Building2 className="w-3.5 h-3.5" />
                 {centralMode ? "Central: ON" : "Central mark"}
@@ -181,7 +181,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                   ? (h.actor ?? null)
                   : (h.actor ? shortRepName(h.actor) : null);
               const verb = h.type === "status_change" ? `marked ${meta?.label ?? h.status}`
-                : h.type === "assignment" ? `assigned to ${h.assignedTo ? shortRepName(h.assignedTo) : "—"}`
+                : h.type === "assignment" ? `assigned to ${h.assignedTo ? shortRepName(h.assignedTo) : " - "}`
                 : "added a note";
               const isLast = i === history.length - 1;
               return (

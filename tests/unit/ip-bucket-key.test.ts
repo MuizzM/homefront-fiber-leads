@@ -16,7 +16,7 @@ import { ipBucketKey, perUserKey } from "../../server/limiters";
 const req = (over: Partial<Request> & Record<string, any> = {}) =>
   ({ headers: {}, socket: {}, ...over }) as unknown as Request;
 
-describe("ipBucketKey — IPv6 bypass regression", () => {
+describe("ipBucketKey - IPv6 bypass regression", () => {
   it("collapses addresses inside one IPv6 /64 to a SINGLE bucket", () => {
     // Same /64, different hosts — an attacker rotating within their own block.
     const a = ipBucketKey("2a01:4ff:f0:6b71::1");
@@ -30,7 +30,7 @@ describe("ipBucketKey — IPv6 bypass regression", () => {
     expect(ipBucketKey("2a01:4ff:f0:6b71::1")).not.toBe(ipBucketKey("2a01:4ff:f0:9999::1"));
   });
 
-  it("leaves IPv4 addresses distinct — no accidental over-grouping", () => {
+  it("leaves IPv4 addresses distinct - no accidental over-grouping", () => {
     expect(ipBucketKey("203.0.113.7")).not.toBe(ipBucketKey("203.0.113.8"));
   });
 

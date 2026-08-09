@@ -146,7 +146,7 @@ export function rollDoorDrop(
   if (existing) {
     return {
       amountCents: Number(existing.c),
-      headline: `Door drop — ${usd(Number(existing.c))}`,
+      headline: `Door drop - ${usd(Number(existing.c))}`,
       reason: String(existing.reason),
       inserted: false,
     };

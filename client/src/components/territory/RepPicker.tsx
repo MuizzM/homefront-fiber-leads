@@ -212,7 +212,7 @@ export function RepPicker({
         // Never silently truncate: a manager who can't find someone needs to know
         // the list is cut, not conclude the rep doesn't exist.
         <div className="text-xs tabular-nums text-muted-foreground">
-          {hidden} more {hidden === 1 ? "rep" : "reps"} — keep typing to narrow the list.
+          {hidden} more {hidden === 1 ? "rep" : "reps"} - keep typing to narrow the list.
         </div>
       )}
     </div>

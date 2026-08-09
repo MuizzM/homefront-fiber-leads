@@ -259,7 +259,7 @@ function KnockLogger({ lead, team }: {
       <DialogHeader>
         <DialogTitle className="text-base flex items-center gap-2">
           <DoorOpen className="w-4 h-4 text-primary" />
-          Door Knock — {lead.address}
+          Door Knock - {lead.address}
         </DialogTitle>
       </DialogHeader>
       <div className="space-y-3">
@@ -281,7 +281,7 @@ function KnockLogger({ lead, team }: {
 
         {/* One-tap outcomes use the same shared model as the rep sheet. */}
         <div>
-          <Label className="text-xs text-muted-foreground">Outcome — tap to log</Label>
+          <Label className="text-xs text-muted-foreground">Outcome - tap to log</Label>
           <div className="grid grid-cols-2 gap-2 mt-1">
             {KNOCK_GRID.map(o => {
               const win = o.key === "sold";
@@ -764,7 +764,7 @@ function EnterpriseKpi({ label, value, helper, icon: Icon, tone = "text-primary"
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
         <Icon className={`w-4 h-4 ${tone}`} />
       </div>
-      <div className="text-2xl font-semibold tracking-tight tabular-nums mt-2" aria-label={value == null ? `${label} unavailable` : undefined}>{value == null ? "—" : value.toLocaleString()}</div>
+      <div className="text-2xl font-semibold tracking-tight tabular-nums mt-2" aria-label={value == null ? `${label} unavailable` : undefined}>{value == null ? " - " : value.toLocaleString()}</div>
       <div className="text-[11px] text-muted-foreground mt-1">{helper}</div>
     </div>
   );
@@ -1063,7 +1063,7 @@ export default function Leads() {
         void qc.invalidateQueries({ predicate: q => isLeadsListKey(q.queryKey) });
         toast({
           title: "Already a lead",
-          description: `${lead.address ?? vars.address ?? "This address"} is already in the pipeline — nothing was duplicated.`,
+          description: `${lead.address ?? vars.address ?? "This address"} is already in the pipeline - nothing was duplicated.`,
         });
         return;
       }
@@ -1083,11 +1083,11 @@ export default function Leads() {
       const view = ctx?.view;
       if (view && !leadMatchesListFilters(lead as Lead, view)) {
         toast({
-          title: "Lead saved — hidden by current filters",
+          title: "Lead saved - hidden by current filters",
           description: `${lead.address ?? vars.address ?? "The lead"} was saved, but this view's filters exclude it. Clear filters to see it.`,
         });
       } else if (view && view.page > 0) {
-        toast({ title: "Lead added", description: "It's at the top of page 1 — newest first." });
+        toast({ title: "Lead added", description: "It's at the top of page 1 - newest first." });
       } else {
         toast({ title: "Lead added" });
       }
@@ -1105,7 +1105,7 @@ export default function Leads() {
       // The error is made visible BEFORE the temp row leaves the list —
       // silently removing it first is exactly the "my lead vanished" report.
       // The dialog stays open, so everything typed is still there to retry.
-      toast({ title: `Couldn't add lead — ${String(e?.message ?? "request failed")}`, variant: "destructive" });
+      toast({ title: `Couldn't add lead - ${String(e?.message ?? "request failed")}`, variant: "destructive" });
       restoreLeadLists(ctx?.snapshots);
       // Same first-load revival as the success path: a view whose initial
       // fetch was cancelled by onMutate must not strand on an empty state.
@@ -1158,7 +1158,7 @@ export default function Leads() {
     },
     onError: (_e: any, _id, ctx) => {
       restoreLeadLists(ctx?.snapshots);
-      toast({ title: "Couldn't delete lead — restored", variant: "destructive" });
+      toast({ title: "Couldn't delete lead - restored", variant: "destructive" });
     },
     onSettled: () => {
       invalidateLeadLists(qc);

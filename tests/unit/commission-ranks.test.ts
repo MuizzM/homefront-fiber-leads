@@ -14,7 +14,7 @@ const TWO = [t(1, 6, 17500, 0), t(7, null, 22500, 1)];
 const FOUR = [t(1, 7, 15000, 0), t(8, 12, 20000, 1), t(13, 16, 25000, 2), t(17, null, 30000, 3)];
 
 describe("names count up from Bronze", () => {
-  it("a two-band ladder is Bronze then Silver — never opening on Platinum", () => {
+  it("a two-band ladder is Bronze then Silver - never opening on Platinum", () => {
     const p = rankProgress(TWO, 3)!;
     expect(p.ladder.map(r => r.name)).toEqual(["Bronze", "Silver"]);
   });
@@ -24,7 +24,7 @@ describe("names count up from Bronze", () => {
     expect(p.ladder.map(r => r.name)).toEqual(["Bronze", "Silver", "Gold", "Platinum"]);
   });
 
-  it("ladders deeper than the metals extend as Diamond II, III — no fake metals", () => {
+  it("ladders deeper than the metals extend as Diamond II, III - no fake metals", () => {
     expect(rankNameForBand(4, 6)).toBe("Diamond");
     expect(rankNameForBand(5, 6)).toBe("Diamond 2");
     expect(rankNameForBand(6, 7)).toBe("Diamond 3");
@@ -83,7 +83,7 @@ describe("edges a real week hits", () => {
     expect(p.progressToNext!).toBeLessThan(0.5);
   });
 
-  it("never shows a full bar while sales remain — the one lie a bar can tell", () => {
+  it("never shows a full bar while sales remain - the one lie a bar can tell", () => {
     // The confirmed review finding: at count = entry - 1 the old span rendered
     // 100% beside the text "1 sale to go". Reproduced on both ladder shapes.
     expect(rankProgress(FOUR, 12)!.progressToNext!).toBeLessThan(1);   // Silver 8-12, Gold at 13

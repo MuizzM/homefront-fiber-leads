@@ -26,7 +26,7 @@ const FLUSH_MS = 10_000;
 export class MapboxBudgetExhaustedError extends Error {
   readonly code = "MAPBOX_BUDGET_EXHAUSTED";
   constructor(scope: "daily" | "monthly") {
-    super(`Mapbox request budget exhausted (${scope} cap) — falling back to free OSM enumeration`);
+    super(`Mapbox request budget exhausted (${scope} cap) - falling back to free OSM enumeration`);
     this.name = "MapboxBudgetExhaustedError";
   }
 }

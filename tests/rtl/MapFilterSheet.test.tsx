@@ -168,7 +168,7 @@ describe("fiber (FCC) source pills", () => {
     expect(pills[0]).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("the footprint stays DISCOVERABLE with its count — one tap away from the default", () => {
+  it("the footprint stays DISCOVERABLE with its count - one tap away from the default", () => {
     const { onSource } = renderWithSources();
     const fiber = screen.getByTestId("map-filter-source-fcc_fiber");
     expect(fiber.textContent).toContain("FCC fiber");

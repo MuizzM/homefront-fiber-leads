@@ -73,7 +73,7 @@ describe("emit", () => {
     expect(n.c).toBe(1);
   });
 
-  it("scopes the dedupe key per tenant — two orgs may both have a sale 42", () => {
+  it("scopes the dedupe key per tenant - two orgs may both have a sale 42", () => {
     S.emit(sale(42, 1), NOW);
     S.emit(sale(42, 2), NOW);
     const n = rawDb.prepare("SELECT COUNT(*) c FROM domain_events").get() as any;
@@ -154,7 +154,7 @@ describe("subscriptions", () => {
     expect(S.cursorFor("incentives")).toBe(b.id);
   });
 
-  it("can be reset to replay history — the 'we should have been paying' fix", () => {
+  it("can be reset to replay history - the 'we should have been paying' fix", () => {
     const a = S.emit(sale(1), NOW);
     S.emit(sale(2), NOW);
     S.advanceCursor("incentives", 999, NOW);

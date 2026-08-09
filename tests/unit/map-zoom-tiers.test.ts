@@ -11,7 +11,7 @@ const ROOT = join(__dirname, "..", "..");
 const src = readFileSync(join(ROOT, "client/src/pages/MapView.tsx"), "utf8");
 const pins = readFileSync(join(ROOT, "client/src/lib/mapPins.ts"), "utf8");
 
-describe("tier dispatch — refreshViewportPins is the ONE entry point", () => {
+describe("tier dispatch - refreshViewportPins is the ONE entry point", () => {
   const body = src.slice(
     src.indexOf("const refreshViewportPins = useCallback"),
     src.indexOf("const refreshViewportPinsRef"),
@@ -25,7 +25,7 @@ describe("tier dispatch — refreshViewportPins is the ONE entry point", () => {
     expect(body).toContain("viewportTierForWindow(bounds.window, truncationEvidenceRef.current)");
   });
 
-  it("grid tier fetches the grid; pins tier fetches pins — never both", () => {
+  it("grid tier fetches the grid; pins tier fetches pins - never both", () => {
     expect(body).toContain('if (tier === "grid") fetchViewportGridRef.current();');
     expect(body).toContain("else fetchViewportPinsRef.current();");
   });
@@ -85,7 +85,7 @@ describe("the grid→pins handoff has NO empty gap", () => {
     expect(refresh).toContain("gridWindowLandedRef.current = false");
   });
 
-  it("the grid window landing releases the guard — success only", () => {
+  it("the grid window landing releases the guard - success only", () => {
     const body = src.slice(
       src.indexOf("const fetchViewportGrid = useCallback"),
       src.indexOf("const fetchViewportGridRef"),
@@ -121,7 +121,7 @@ describe("the grid→pins handoff has NO empty gap", () => {
   });
 });
 
-describe("density layers — one shared installer, init and style.load", () => {
+describe("density layers - one shared installer, init and style.load", () => {
   it("MapView never hand-copies the layer specs (the drift trap)", () => {
     expect(src).not.toContain("lead-density-circles\"\n");
     // Both install sites call the shared helper…
@@ -183,7 +183,7 @@ describe("the grid loader has pin-fetch parity", () => {
 });
 
 describe("the filter sheet never silently under-filters the grid tier", () => {
-  it("the zoomedOutNote names EVERY lens the aggregate can't express — status, rep, field-verified", () => {
+  it("the zoomedOutNote names EVERY lens the aggregate can't express - status, rep, field-verified", () => {
     const lensesStart = src.indexOf("const gridHiddenLenses = [");
     const lenses = src.slice(
       lensesStart,

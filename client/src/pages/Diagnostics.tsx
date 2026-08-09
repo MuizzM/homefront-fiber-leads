@@ -81,7 +81,7 @@ function Feed({ icon: Icon, title, subtitle, testid, isLoading, isError, items, 
         {isLoading ? <Skeleton className="h-8 my-2" /> :
           // The same honesty rule as the health panel: a failed fetch must never
           // read as "no failures — engines healthy" mid-outage.
-          isError ? <p className="text-[13px] text-muted-foreground py-4">Unknown — this feed didn't load.</p> :
+          isError ? <p className="text-[13px] text-muted-foreground py-4">Unknown - this feed didn't load.</p> :
           items && items.length > 0
             ? items.map((e, i) => <FeedRow key={i} e={e} />)
             : <p className="text-[13px] text-muted-foreground italic py-4">{empty}</p>}
@@ -121,12 +121,12 @@ export default function Diagnostics() {
           </div>
         </div>
       ) : isError ? (
-        // NEVER render a healthy panel when the fetch failed — that falsely
+        // NEVER render a healthy panel when the fetch failed - that falsely
         // reassures an admin during an actual outage.
         <div data-testid="diag-error" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-6 text-center">
           <AlertTriangle className="w-6 h-6 text-rose-400 mx-auto" strokeWidth={2} />
           <p className="mt-2 text-sm font-semibold text-rose-400">Couldn’t load diagnostics</p>
-          <p className="mt-1 text-xs text-muted-foreground">The health API is unreachable — status below is unknown, not healthy.</p>
+          <p className="mt-1 text-xs text-muted-foreground">The health API is unreachable - status below is unknown, not healthy.</p>
           <button onClick={() => refetch()} className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background">
             <RefreshCw className="w-3.5 h-3.5" strokeWidth={2.5} /> Retry
           </button>
@@ -137,7 +137,7 @@ export default function Diagnostics() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-px rounded-xl overflow-hidden border border-border bg-border">
             <div data-testid="diag-health-score" className="bg-card p-4 flex flex-col gap-1.5">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">System health</span>
-              <span className={`text-[32px] font-semibold leading-none tabular-nums ${tone.text}`}>{data?.healthScore ?? "—"}</span>
+              <span className={`text-[32px] font-semibold leading-none tabular-nums ${tone.text}`}>{data?.healthScore ?? " - "}</span>
             </div>
             <div className="bg-card p-4 flex flex-col gap-1.5 justify-between">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Status</span>
@@ -182,27 +182,27 @@ export default function Diagnostics() {
         <section className="rounded-xl bg-card border border-border">
           <Feed icon={AlertTriangle} title="Recent failures" testid="diag-failures"
             isLoading={isLoading} isError={isError} items={data?.recentFailures}
-            empty="No failed operations — engines healthy." />
+            empty="No failed operations - engines healthy." />
         </section>
         <section className="rounded-xl bg-card border border-border">
           <Feed icon={ShieldX} title="Permission denials" testid="diag-denials"
             isLoading={isLoading} isError={isError} items={data?.recentDenials}
-            empty="No blocked actions — access looks correct." />
+            empty="No blocked actions - access looks correct." />
         </section>
       </div>
 
-      {/* Sensitive / suspicious actions — the governance review feed */}
+      {/* Sensitive / suspicious actions - the governance review feed */}
       <section className="rounded-xl bg-card border border-border">
         <div className="flex items-center gap-2 px-4 pt-4">
           <ScrollText className="w-4 h-4 text-muted-foreground shrink-0" strokeWidth={2} />
           <div className="min-w-0">
             <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sensitive actions</h2>
-            <p className="text-[11px] text-muted-foreground/80 leading-tight">Commission edits, lead assignments, and blocked attempts — for governance review.</p>
+            <p className="text-[11px] text-muted-foreground/80 leading-tight">Commission edits, lead assignments, and blocked attempts - for governance review.</p>
           </div>
         </div>
         <div data-testid="diag-sensitive" className="px-4 pb-2 mt-1 divide-y divide-border/60 max-h-72 overflow-y-auto overscroll-contain">
           {isLoading ? <Skeleton className="h-8 my-2" /> :
-            isError ? <p className="text-[13px] text-muted-foreground py-4">Unknown — this feed didn't load.</p> :
+            isError ? <p className="text-[13px] text-muted-foreground py-4">Unknown - this feed didn't load.</p> :
             data && data.sensitiveActions.length > 0
               ? data.sensitiveActions.map((e, i) => <FeedRow key={i} e={e} />)
               : <p className="text-[13px] text-muted-foreground italic py-4">No sensitive actions in this window.</p>}
@@ -212,7 +212,7 @@ export default function Diagnostics() {
       {/* Version + read-model freshness footer */}
       {data && (
         <div data-testid="diag-footer" className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground pt-1 tabular-nums">
-          <span>App v{data.appVersion ?? "—"}</span>
+          <span>App v{data.appVersion ?? " - "}</span>
           <span className={data.readModelStale ? "text-amber-400" : ""}>
             Last event {ageLabel(data.readModelAgeMs)}{data.readModelStale ? " · stream looks quiet" : ""}
           </span>

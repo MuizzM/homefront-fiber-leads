@@ -53,7 +53,7 @@ describe("recording who holds an area", () => {
     expect(roles).toEqual({ 5: "primary", 6: "assignee" });
   });
 
-  it("is idempotent — a double-submitted assign does not create two live claims", () => {
+  it("is idempotent - a double-submitted assign does not create two live claims", () => {
     // This is the partial unique index doing the work, not a check-then-insert,
     // so two concurrent requests cannot both pass the check.
     const t = area();
@@ -160,7 +160,7 @@ describe("the database refuses to let history be rewritten", () => {
       .toThrow(/immutabl/i);
   });
 
-  it("still allows the one legitimate update — closing an open row", () => {
+  it("still allows the one legitimate update - closing an open row", () => {
     // The rules must not be so tight that removal itself is impossible.
     const t = area();
     store.openAssignment({ tenantId: 1, territoryId: t, repId: 5, actorUserId: ACTOR });

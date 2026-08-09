@@ -88,7 +88,7 @@ describe("the tripwire", () => {
     expect(lost).toContain("leads");
   });
 
-  it("survives the event it detects — the mark is NOT stored in the database", () => {
+  it("survives the event it detects - the mark is NOT stored in the database", () => {
     // The whole design point: the database was just emptied, and the evidence
     // that it used to hold 120 leads is still readable.
     const mark = JSON.parse(readFileSync(join(DATA_DIR, "backups", "watermark.json"), "utf8"));
@@ -143,7 +143,7 @@ describe("the snapshot", () => {
     seed(120);
   });
 
-  it("never throws — a failed backup must not be able to take the app down", () => {
+  it("never throws - a failed backup must not be able to take the app down", () => {
     // A directory where the snapshot file wants to be: VACUUM INTO cannot
     // overwrite, so this is a hard failure inside the module.
     const dir = join(DATA_DIR, "backups");

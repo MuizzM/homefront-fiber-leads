@@ -59,7 +59,7 @@ describe("getReadyToCallQueue", () => {
   });
 });
 
-describe("claimLead — advisory soft-lock (CAS)", () => {
+describe("claimLead - advisory soft-lock (CAS)", () => {
   it("first claimer wins; a second user is told who holds it", () => {
     const lead = seedLead();
     const a = store.claimLead({ tenantId: T1, leadId: lead, userId: 1, userName: "Alice" });
@@ -106,7 +106,7 @@ describe("recordCallOutcome", () => {
     expect(row.last_call_outcome).toBe("interested");
   });
 
-  it("is idempotent on client_id — a replay writes no second row", () => {
+  it("is idempotent on client_id - a replay writes no second row", () => {
     const lead = seedLead();
     const first = store.recordCallOutcome({ tenantId: T1, leadId: lead, repId: 5, userId: 9, outcome: "no_answer", clientId: "cid-1" });
     const replay = store.recordCallOutcome({ tenantId: T1, leadId: lead, repId: 5, userId: 9, outcome: "no_answer", clientId: "cid-1" });

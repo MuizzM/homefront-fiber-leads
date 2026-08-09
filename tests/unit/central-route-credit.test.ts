@@ -8,13 +8,13 @@
 import { describe, expect, it } from "vitest";
 import { resolveCreditedRepId } from "../../client/src/features/knocking/savedKnockReconciliation";
 
-describe("who gets credited — the central-routing predicate", () => {
+describe("who gets credited - the central-routing predicate", () => {
   it("Central Admin (no linked profile) on an UNASSIGNED lead → nobody to credit → central mark", () => {
     expect(resolveCreditedRepId({ id: 1, role: "admin", teamMemberId: null } as any, null)).toBeNull();
     expect(resolveCreditedRepId({ id: 1, role: "super_admin", teamMemberId: null } as any, null)).toBeNull();
   });
 
-  it("a manager on an ASSIGNED lead credits the assigned rep — never central-routed", () => {
+  it("a manager on an ASSIGNED lead credits the assigned rep - never central-routed", () => {
     expect(resolveCreditedRepId({ id: 1, role: "manager", teamMemberId: null } as any, 42)).toBe(42);
   });
 

@@ -69,7 +69,7 @@ function renderSheet(over: Record<string, any> = {}) {
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
 describe("add-lead sheet perceived-latency contract", () => {
-  it("renders the full prefilled form synchronously — no fetch gate, no sheet-wide spinner", () => {
+  it("renders the full prefilled form synchronously - no fetch gate, no sheet-wide spinner", () => {
     renderSheet();
     expect(screen.getByTestId("add-lead-sheet")).toBeInTheDocument();
     expect(screen.getByTestId("add-lead-address")).toHaveValue("402 Nard Ln");
@@ -82,7 +82,7 @@ describe("add-lead sheet perceived-latency contract", () => {
     expect(document.querySelector(".animate-spin")).toBeNull();
   });
 
-  it("submit closes the sheet on the SAME tap — before the POST resolves — with no Adding… phase", async () => {
+  it("submit closes the sheet on the SAME tap - before the POST resolves - with no Adding… phase", async () => {
     let resolvePost!: (v: unknown) => void;
     apiRequest.mockReturnValue(new Promise((resolve) => { resolvePost = resolve; }));
     const { onClose, onCreated } = renderSheet();
@@ -129,12 +129,12 @@ describe("add-lead sheet perceived-latency contract", () => {
     })));
     // No self-toast on a duplicate — and never the removed "opening it" copy.
     expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({
-      title: "Already in the system — opening it",
+      title: "Already in the system - opening it",
     }));
     expect(toast).not.toHaveBeenCalled();
   });
 
-  it("a failed background save fires a destructive toast naming the door — never a silent drop", async () => {
+  it("a failed background save fires a destructive toast naming the door - never a silent drop", async () => {
     apiRequest.mockRejectedValue(new Error("400: address failed validation"));
     const { onClose, onCreated } = renderSheet();
     await userEvent.click(screen.getByTestId("add-lead-submit"));
@@ -150,7 +150,7 @@ describe("add-lead sheet perceived-latency contract", () => {
     expect(onCreated).not.toHaveBeenCalled();
   });
 
-  it("a created lead is WRITTEN into the cached list view — per-lead subqueries stay untouched", async () => {
+  it("a created lead is WRITTEN into the cached list view - per-lead subqueries stay untouched", async () => {
     // The old bare ["/api/leads"] invalidation refetched every list page AND
     // every per-lead subquery after each add. Now: targeted upsert only.
     apiRequest.mockResolvedValue({ json: async () => ({
@@ -181,7 +181,7 @@ describe("add-lead sheet perceived-latency contract", () => {
     expect(qc.getQueryData(listKey)).toEqual(before);
   });
 
-  it("the large sheet surface animates on GPU keyframes only — no transition-all, nothing >=300ms", () => {
+  it("the large sheet surface animates on GPU keyframes only - no transition-all, nothing >=300ms", () => {
     renderSheet();
     const cls = screen.getByTestId("add-lead-sheet").className;
     expect(cls).toMatch(/\btransition-none\b/);
@@ -201,7 +201,7 @@ describe("add-lead sheet perceived-latency contract", () => {
 // The reason-aware decision behind BOTH existed handlers (one-tap add + the
 // AddLeadSheet submit) — pinned as a pure function so the field behavior can't
 // silently regress into the "says it exists but there's no pin" phantom.
-describe("planExistingLead — honest surfacing of a duplicate lead", () => {
+describe("planExistingLead - honest surfacing of a duplicate lead", () => {
   const ADDR = "402 Nard Ln";
 
   it("visible: flashes + flies to the real pin and opens it (today's behavior)", () => {
@@ -211,13 +211,13 @@ describe("planExistingLead — honest surfacing of a duplicate lead", () => {
     expect(plan.severity).toBe("success");
   });
 
-  it("ungeocoded: NO pin work — explains why and OPENS the lead by id (no pin required)", () => {
+  it("ungeocoded: NO pin work - explains why and OPENS the lead by id (no pin required)", () => {
     const plan = planExistingLead(ADDR, vis({ reason: "ungeocoded", geocoded: false, inYourScope: true }));
     expect(plan.fly).toBe(false);
     expect(plan.flash).toBe(false);
     expect(plan.onMap).toBe(false);
     expect(plan.open).toBe(true); // opens by id regardless of a rendered pin
-    expect(plan.toastTitle).toBe("Already a lead — not on your map");
+    expect(plan.toastTitle).toBe("Already a lead - not on your map");
     expect(plan.toastDescription).toContain(ADDR);
     expect(plan.toastDescription).toContain("map coordinates");
     expect(plan.toastDescription).toContain("Opening it");
@@ -233,7 +233,7 @@ describe("planExistingLead — honest surfacing of a duplicate lead", () => {
     expect(review.toastDescription).toContain("under review");
   });
 
-  it("out_of_scope: a locked-out caller is told it's another rep's/team's — and is NOT opened (no 404)", () => {
+  it("out_of_scope: a locked-out caller is told it's another rep's/team's - and is NOT opened (no 404)", () => {
     const locked = planExistingLead(ADDR, vis({ reason: "out_of_scope", inYourScope: false }));
     expect(locked.open).toBe(false); // never fabricate access
     expect(locked.toastDescription).toContain("another rep or team");

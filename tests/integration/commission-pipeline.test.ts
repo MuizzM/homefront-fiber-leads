@@ -241,7 +241,7 @@ describe("marking a sale mints exactly one pending commission for that rep", () 
     expect(rows[0].amount).toBe(100); // repA's plan, not repFreeze's $150
   });
 
-  it("books nothing when no structure covers the rep — never a phantom payout", async () => {
+  it("books nothing when no structure covers the rep - never a phantom payout", async () => {
     // Tenant C has no plans at all. A commission the server cannot explain must
     // not exist.
     const lead = makeLead(TENANT_C, repC.memberId);
@@ -375,7 +375,7 @@ describe("status transitions are a management action, not a rep action", () => {
     expect(commissionsFor(c.lead_id)[0].status).toBe("pending");
   });
 
-  it("a team lead cannot either — booking money starts at manager", async () => {
+  it("a team lead cannot either - booking money starts at manager", async () => {
     const c = await freshPending();
     const res = await patchCommission(c.id, leadRoleA.session, {
       expectedRevision: c.revision, expectedStatus: "pending", status: "approved",
@@ -416,7 +416,7 @@ describe("status transitions are a management action, not a rep action", () => {
     expect(after.revision).toBe(3);
   });
 
-  it("paid is terminal — it cannot be walked back to approved", async () => {
+  it("paid is terminal - it cannot be walked back to approved", async () => {
     const c = await freshPending();
     const a = await patchCommission(c.id, mgrA.session, {
       expectedRevision: c.revision, expectedStatus: "pending", status: "approved",
@@ -482,7 +482,7 @@ describe("one org can never read or mutate another org's commissions", () => {
     expect(rows.every((r) => r.repId === repB.memberId)).toBe(true);
   });
 
-  it("a MANAGER in org B — who can read every commission in their org — sees none of A's", async () => {
+  it("a MANAGER in org B - who can read every commission in their org - sees none of A's", async () => {
     const { status, rows } = await listCommissions(mgrB.session);
     expect(status).toBe(200);
     expect(rows.length).toBeGreaterThan(0); // B genuinely has commissions

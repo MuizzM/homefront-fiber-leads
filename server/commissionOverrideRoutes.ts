@@ -169,7 +169,7 @@ export function registerCommissionOverrideRoutes(app: Express, deps: Deps) {
       .map(ex => ({
         type: ex.reason === "OVERRIDE_REVERSED_AFTER_FINALIZE" ? "OVERRIDE_REVERSED_AFTER_FINALIZE" : "OVERRIDE_LOCKED_WEEK_EARN",
         repId: ex.downlineRepId, repName: ex.downlineRepName,
-        detail: `${ex.downlineRepName} — ${Math.abs(ex.amountCents) / 100} needs a manager adjustment.`,
+        detail: `${ex.downlineRepName} - ${Math.abs(ex.amountCents) / 100} needs a manager adjustment.`,
       }));
 
     const viewer = byId.get(target);
@@ -267,7 +267,7 @@ export function registerCommissionOverrideRoutes(app: Express, deps: Deps) {
         const owner = branchOwnerOf(repId, roster);
         if (owner != null && owner !== actor.teamMemberId) {
           return res.status(403).json({
-            error: "That member belongs to another manager's team — ask an admin to transfer them",
+            error: "That member belongs to another manager's team - ask an admin to transfer them",
             code: "OUT_OF_BRANCH",
           });
         }
@@ -288,7 +288,7 @@ export function registerCommissionOverrideRoutes(app: Express, deps: Deps) {
         patch[col] = v;
       }
       if (Object.keys(patch).length === 0) {
-        return res.status(400).json({ error: "Nothing to update — send overrideTeamLeadCents and/or overrideManagerCents.", code: "OVERRIDE_INVALID_RATE" });
+        return res.status(400).json({ error: "Nothing to update - send overrideTeamLeadCents and/or overrideManagerCents.", code: "OVERRIDE_INVALID_RATE" });
       }
       if (patch.tl !== undefined) {
         rawDb.prepare(`UPDATE team_members SET override_team_lead_cents = ? WHERE id = ?`).run(patch.tl, repId);

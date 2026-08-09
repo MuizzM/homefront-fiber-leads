@@ -87,7 +87,7 @@ describe("what the rep reads", () => {
       progress: {
         doors: 640, target: 0, remaining: 0, pct: 100, nextRewardCents: 0,
         earnedCents: 17_500, toppedOut: true,
-        headline: "640 verified doors this week — every bonus earned",
+        headline: "640 verified doors this week - every bonus earned",
       },
     }));
     expect(screen.queryByTestId("milestone-bar")).toBeNull();

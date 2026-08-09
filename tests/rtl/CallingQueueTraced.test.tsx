@@ -50,7 +50,7 @@ const tracedRows = [
   candidate({ queueId: "t2", leadId: 22, traced: true, address: "22 Federal Way",
     tracedBadge: { ready: false, label: "On the federal Do Not Call registry", reasons: ["federal_dnc"] } }),
   candidate({ queueId: "t3", leadId: 23, traced: true, address: "23 Stale Ct",
-    tracedBadge: { ready: false, label: "DNC check expired — re-scrubbing", reasons: ["scrub_expired"] } }),
+    tracedBadge: { ready: false, label: "DNC check expired - re-scrubbing", reasons: ["scrub_expired"] } }),
 ];
 
 const fiberRows = [

@@ -68,7 +68,7 @@ function fixtureFor(address: string): any {
       billingStatus: null,
       householdSegmentType: null,
       confidence: "LOW",
-      notes: "Check failed — no signal",
+      notes: "Check failed - no signal",
       rawResponse: undefined,
     };
   }
@@ -154,7 +154,7 @@ beforeAll(async () => {
     seed.run(a, "Testburg", "NC", "28100", lat, lng);
 });
 
-describe("budgeted scan engine (replay — zero proxy)", () => {
+describe("budgeted scan engine (replay - zero proxy)", () => {
   it("silently enrolls active-service NEW FIBER in prioritized monitoring without creating a lead", async () => {
     const inserted = rawDb.prepare(`INSERT INTO scan_targets
       (tenant_id,address,city,state,zip,lat,lng,source) VALUES (1,'COMING 12 Watch Way','Monitorburg','NC','28100',35.51,-80.41,'test')`).run();

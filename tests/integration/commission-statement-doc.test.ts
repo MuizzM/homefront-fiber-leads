@@ -96,7 +96,7 @@ afterAll(async () => {
   if (server) await new Promise<void>((resolve, reject) => server.close(e => (e ? reject(e) : resolve())));
 });
 
-describe("statement document — who may read it", () => {
+describe("statement document - who may read it", () => {
   it("the rep reads their OWN statement", async () => {
     const res = await request(`/api/commission/statements/${statementId}/document`, rep.session);
     expect(res.status).toBe(200);
@@ -114,7 +114,7 @@ describe("statement document — who may read it", () => {
     expect((await res.json() as any).code).toBe("UNAUTHORIZED_COMMISSION_ACTION");
   });
 
-  it("an admin of ANOTHER tenant gets 404, not 403 — the row must not be confirmed", async () => {
+  it("an admin of ANOTHER tenant gets 404, not 403 - the row must not be confirmed", async () => {
     expect((await request(`/api/commission/statements/${statementId}/document`, adminB.session)).status).toBe(404);
     expect((await request(`/api/commission/statements/${statementId}/statement.pdf`, adminB.session)).status).toBe(404);
   });
@@ -128,7 +128,7 @@ describe("statement document — who may read it", () => {
   });
 });
 
-describe("statement document — what it says", () => {
+describe("statement document - what it says", () => {
   it("names the tenant's own company, the rep, and the pay period", async () => {
     const doc = await (await request(`/api/commission/statements/${statementId}/document`, rep.session)).json() as any;
     expect(doc.company.name).toBe("Home Front Solutions"); // the seeded tenant's company_name
@@ -255,7 +255,7 @@ describe("statement provenance", () => {
     expect(second.statement.issuedAtIso).toBe(first.statement.issuedAtIso);
   });
 
-  it("MARK_PAID does not re-issue the statement — paying settles it, it does not reprint it", async () => {
+  it("MARK_PAID does not re-issue the statement - paying settles it, it does not reprint it", async () => {
     const before = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
     expect((await post(`/api/commission/statements/${statementId}/transition`, admin.session, { action: "MARK_PAID" })).status).toBe(200);
     const after = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
@@ -274,7 +274,7 @@ describe("tenant wordmark on the statement", () => {
     expect(doc.company.logoDataUri).toBeNull();
   });
 
-  it("ignores a filesystem path — a pay document never reads a path out of a mutable column", async () => {
+  it("ignores a filesystem path - a pay document never reads a path out of a mutable column", async () => {
     rawDb.prepare(`UPDATE tenants SET brand_logo = ? WHERE id = 1`).run("../../etc/passwd");
     const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
     expect(doc.company.logoDataUri).toBeNull();
@@ -366,7 +366,7 @@ describe("a locked statement's holdback is frozen with it", () => {
     rawDb.prepare(`UPDATE tenants SET commission_reserve_percent = 0 WHERE id = 1`).run();
   });
 
-  it("an OPEN week still computes live — it has no recorded hold yet and says it is a draft", async () => {
+  it("an OPEN week still computes live - it has no recorded hold yet and says it is a draft", async () => {
     const doc = await (await request(`/api/commission/statements/${statementId}/document`, admin.session)).json() as any;
     expect(doc.statement.status).toBe("PAID"); // from the provenance block above
     // …and the locked one is not a draft either way.

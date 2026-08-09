@@ -54,7 +54,7 @@ function renderWithClient(ui: React.ReactElement, impl: (url: string) => Promise
 beforeEach(() => apiRequest.mockReset());
 
 describe("diagnostics feeds under fetch failure", () => {
-  it("says the feeds are unknown — never 'engines healthy'", async () => {
+  it("says the feeds are unknown - never 'engines healthy'", async () => {
     // Fail via a THROWING json(): the rejection is born inside the promise
     // chain React Query already owns, so no orphan tick trips vitest's
     // unhandled-rejection tracker (a bare Promise.reject here did).
@@ -72,14 +72,14 @@ describe("diagnostics feeds under fetch failure", () => {
 });
 
 describe("governance under fetch failure", () => {
-  it("shows unknown metrics and an alert with retry — never '0 high-risk'", async () => {
+  it("shows unknown metrics and an alert with retry - never '0 high-risk'", async () => {
     renderWithClient(<Governance />, url =>
       url.includes("governance") ? Promise.reject(new Error("api down")) : Promise.resolve({ json: () => Promise.resolve([]) }),
     );
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(screen.getByRole("alert").textContent).toMatch(/unknown, not zero/i);
     // The three metric tiles all show the em-dash placeholder, not zeros.
-    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -91,7 +91,7 @@ describe("token status before data arrives", () => {
       setTimeout(() => res({ json: () => Promise.resolve({ hasToken: true, expiresIn: 1500, source: "proxy" }) }), 40)));
     expect(screen.getByText("Checking…")).toBeTruthy();
     expect(screen.queryByText("Token Expired")).toBeNull();
-    // The healthy state lands once data arrives — never the red alarm en route.
+    // The healthy state lands once data arrives - never the red alarm en route.
     await screen.findByText("Scanner Connected");
   });
 });

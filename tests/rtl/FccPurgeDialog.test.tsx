@@ -47,7 +47,7 @@ function renderDialog(over: Partial<React.ComponentProps<typeof FccPurgeDialog>>
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
 describe("fcc-purge safety contract", () => {
-  it("states the exact blast radius from the server preview — total, removable, protected", async () => {
+  it("states the exact blast radius from the server preview - total, removable, protected", async () => {
     mockApi();
     renderDialog();
     await waitFor(() => expect(screen.getByTestId("fcc-purge-total").textContent).toBe("120"));
@@ -83,7 +83,7 @@ describe("fcc-purge safety contract", () => {
     }
   });
 
-  it("goes inert when nothing is removable — no typed confirm, button disabled", async () => {
+  it("goes inert when nothing is removable - no typed confirm, button disabled", async () => {
     mockApi({ preview: { total: 5, removable: 0, protected: 5 } });
     renderDialog();
     await waitFor(() => expect(screen.getByTestId("fcc-purge-removable").textContent).toBe("0"));
@@ -113,7 +113,7 @@ describe("fcc-purge safety contract", () => {
 });
 
 describe("fcc-purge close hygiene", () => {
-  it("Escape closes, like the scrim and Cancel — and no armed state survives a reopen", async () => {
+  it("Escape closes, like the scrim and Cancel - and no armed state survives a reopen", async () => {
     mockApi();
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const onClose = vi.fn();

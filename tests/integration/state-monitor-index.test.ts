@@ -102,7 +102,7 @@ describe("the state-monitor index exists and is actually used", () => {
     expect(names).toContain(CITY_STATE_INDEX);
   });
 
-  it("SURVIVES A TABLE REBUILD — the failure mode the rebuild path warns about", () => {
+  it("SURVIVES A TABLE REBUILD - the failure mode the rebuild path warns about", () => {
     // Reproduce what the rebuild does: every index goes with the old table.
     rawDb.exec(`DROP INDEX IF EXISTS ${MARKET_SYNC_INDEX}`);
     rawDb.exec(`DROP INDEX IF EXISTS ${CITY_STATE_INDEX}`);
@@ -136,7 +136,7 @@ describe("heartbeat identity is stable across runs", () => {
     expect(after - before).toBe(1);
   });
 
-  it("the row still reports the CURRENT run — identity is stable, state is not", () => {
+  it("the row still reports the CURRENT run - identity is stable, state is not", () => {
     const row = rawDb.prepare(
       `SELECT run_id, status, concurrency FROM fiber_worker_heartbeats WHERE worker_id = ?`,
     ).get("scan:test-host:4242") as any;
@@ -144,7 +144,7 @@ describe("heartbeat identity is stable across runs", () => {
     expect(row.status).toBe("running");
   });
 
-  it("distinct workers still get distinct rows — the fix does not collapse real workers", () => {
+  it("distinct workers still get distinct rows - the fix does not collapse real workers", () => {
     const before = (rawDb.prepare(`SELECT COUNT(*) c FROM fiber_worker_heartbeats`).get() as any).c;
     ops.heartbeatWorker({ workerId: "scan:host-a:1", tenantId: 1, runId: "r", status: "running", concurrency: 1 });
     ops.heartbeatWorker({ workerId: "scan:host-b:1", tenantId: 1, runId: "r", status: "running", concurrency: 1 });

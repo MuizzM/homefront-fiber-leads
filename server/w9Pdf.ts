@@ -401,7 +401,7 @@ export function locateBackupWithholdingItem2(
   const start = runs.findIndex(r => r.text.trimStart().startsWith(ITEM2_PREFIXES[0]));
   if (start < 0) {
     throw new W9TemplateError(
-      "Part II item 2 ('I am not subject to backup withholding') was not found in the W-9 template's page-1 text — " +
+      "Part II item 2 ('I am not subject to backup withholding') was not found in the W-9 template's page-1 text - " +
       "the certification block moved. Re-derive the strike geometry before enabling backup-withholding submissions.",
     );
   }

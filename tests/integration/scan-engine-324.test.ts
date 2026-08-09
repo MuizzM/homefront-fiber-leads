@@ -45,7 +45,7 @@ const replay: import("../../server/scanEngine").Checker = async (a) => {
         lat: 35.4, lng: -80.9, fiberStatus: "unknown", fiberAvailable: false,
         isNewFiber: false, billingStatus: null, householdSegmentType: null,
         apiSource: "failed", blocked: true, confidence: "LOW",
-        notes: "provider throttle — token refreshed, retry",
+        notes: "provider throttle - token refreshed, retry",
       } as any,
       bytes: 12_000,
       checkFailed: true,

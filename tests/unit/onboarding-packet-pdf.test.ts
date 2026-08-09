@@ -66,7 +66,7 @@ describe("the onboarding packet", () => {
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
   });
 
-  it("renders a partial packet — a rep who has only been sent some agreements", async () => {
+  it("renders a partial packet - a rep who has only been sent some agreements", async () => {
     const pdf = await packet(DEFAULT_COMMISSION_TERMS, ["independent_contractor", "commission_agreement"] as const);
     expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
     expect(pdf.length).toBeGreaterThan(8_000);
@@ -81,7 +81,7 @@ describe("the onboarding packet", () => {
 });
 
 describe("branding", () => {
-  it("embeds the logo — the asset must actually reach the production image", async () => {
+  it("embeds the logo - the asset must actually reach the production image", async () => {
     // The logo ships to dist/public via Vite and is read from beside the bundle
     // at runtime. If that path is ever wrong the renderer degrades silently to
     // a wordmark, which looks fine in review and wrong on a signed contract.

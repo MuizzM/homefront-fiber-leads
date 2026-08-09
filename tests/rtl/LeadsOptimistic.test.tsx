@@ -171,7 +171,7 @@ describe("Leads delete is optimistic", () => {
     settleDelete.reject(new Error("boom"));
     await waitFor(() => expect(screen.getByTestId("card-lead-1")).toBeTruthy());
     expect(toast).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Couldn't delete lead — restored", variant: "destructive" }),
+      expect.objectContaining({ title: "Couldn't delete lead - restored", variant: "destructive" }),
     );
     // Both rows intact after rollback + reconciling refetch.
     expect(screen.getByTestId("card-lead-2")).toBeTruthy();
@@ -183,7 +183,7 @@ describe("Leads delete is optimistic", () => {
 // PLUS exactly one provisional saving row; success reconciles the temp row to
 // the server row IN PLACE with NO list refetch (the refetch is what used to
 // race a stale in-flight GET and make new leads vanish, then reappear).
-describe("Leads add — saving state, continuity, reconcile", () => {
+describe("Leads add - saving state, continuity, reconcile", () => {
   const listGets = () =>
     apiRequest.mock.calls.filter(([m, u]) => m === "GET" && String(u).startsWith("/api/leads?"));
 
@@ -281,7 +281,7 @@ describe("Leads add — saving state, continuity, reconcile", () => {
     settleAdd.reject(new Error("boom"));
     await waitFor(() => expect(screen.queryByText("99 Pine St")).toBeNull());
     expect(toast).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Couldn't add lead — boom", variant: "destructive" }),
+      expect.objectContaining({ title: "Couldn't add lead - boom", variant: "destructive" }),
     );
     // The dialog is still open with everything typed — retry is one click.
     expect((screen.getByTestId("form-address") as HTMLInputElement).value).toBe("99 Pine St");
@@ -321,7 +321,7 @@ describe("Leads add — saving state, continuity, reconcile", () => {
 
     settleAdd.resolve();
     await waitFor(() => expect(toast).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Lead saved — hidden by current filters" }),
+      expect.objectContaining({ title: "Lead saved - hidden by current filters" }),
     ));
     // Saved, honestly absent — and never flashed in and out.
     expect(screen.queryByText("99 Pine St")).toBeNull();

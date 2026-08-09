@@ -38,7 +38,7 @@ beforeAll(async () => {
   resetFootprint();
 });
 
-describe("YIELD_EXPLORE_FRACTION — tunable coverage reach", () => {
+describe("YIELD_EXPLORE_FRACTION - tunable coverage reach", () => {
   it("honors the env-set explore fraction (0.5 → half the cycle is discovery)", async () => {
     const { budgetShapeFactor } = await import("../../server/harvestScheduler");
     const raw = 20 / budgetShapeFactor(); // shapes to a 20-target budget

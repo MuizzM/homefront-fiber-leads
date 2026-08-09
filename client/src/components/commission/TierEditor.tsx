@@ -300,7 +300,7 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
 
       {preview.length > 0 && (
         // Stripe pairs the editor with a live preview of the thing being built.
-        // Here that means the week's pay at the bottom AND top of each band —
+        // Here that means the week's pay at the bottom AND top of each band -
         // the jump between one band's top and the next band's bottom is the
         // retroactive rule made visible, and it is not obvious from rates alone.
         <div className="rounded-md border border-border bg-secondary/40 p-2.5 text-xs" data-testid="tier-preview">

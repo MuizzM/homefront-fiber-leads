@@ -49,7 +49,7 @@ function doc(over: Record<string, any> = {}) {
       tierLabel: null, rateCents: 0, structure: null,
       issuedAtIso: "2026-08-06T02:02:00.000Z",
     },
-    planLabel: "—",
+    planLabel: " - ",
     lines: [], totals,
     payout: {
       earnedCents: totals.earnedCents, reservePercent: 0, reserveCents: 0,

@@ -171,7 +171,7 @@ export function evaluateRampDay(
   const minLessons = Math.max(1, int(cfg.minLessonsPerDay, 1));
 
   if (cards === 0 && lessons === 0) {
-    return no("no_work", `Do today's cards for ${usd(reward)} — ${daysLeft} day${daysLeft === 1 ? "" : "s"} of the ramp bonus left`);
+    return no("no_work", `Do today's cards for ${usd(reward)} - ${daysLeft} day${daysLeft === 1 ? "" : "s"} of the ramp bonus left`);
   }
 
   // The lesson path is what makes day one reachable: a rep whose deck is still
@@ -183,7 +183,7 @@ export function evaluateRampDay(
   }
 
   if (cfg.requireQueueCleared && due > 0) {
-    return no("queue_open", `${due} card${due === 1 ? "" : "s"} still due — clear them for ${usd(reward)}`);
+    return no("queue_open", `${due} card${due === 1 ? "" : "s"} still due - clear them for ${usd(reward)}`);
   }
 
   // Only meaningful once real cards were drilled; a lesson-only day has no
@@ -199,7 +199,7 @@ export function evaluateRampDay(
     inWindow,
     daysLeft,
     reason,
-    headline: `Training done — ${usd(reward)} earned today`,
+    headline: `Training done - ${usd(reward)} earned today`,
   };
 }
 
@@ -262,7 +262,7 @@ export function evaluateTrainingCompletion(
   // somebody finished. Paying on it would hand every rep the award at once.
   if (total <= 0) return no("");
   if (done < total) {
-    return no(`${remaining} lesson${remaining === 1 ? "" : "s"} left to finish training — ${usd(base + (inWindow ? kicker : 0))}`);
+    return no(`${remaining} lesson${remaining === 1 ? "" : "s"} left to finish training - ${usd(base + (inWindow ? kicker : 0))}`);
   }
 
   return {
@@ -273,7 +273,7 @@ export function evaluateTrainingCompletion(
     inWindow,
     lessonsRemaining: 0,
     reason: kicker > 0 ? "Finished training inside the ramp window" : "Finished training",
-    headline: `Training finished — ${usd(base + kicker)} earned`,
+    headline: `Training finished - ${usd(base + kicker)} earned`,
   };
 }
 

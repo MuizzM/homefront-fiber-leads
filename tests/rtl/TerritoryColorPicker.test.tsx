@@ -26,7 +26,7 @@ function Harness({ initial = BLUE, onPick }: { initial?: string; onPick?: (c: st
 }
 
 describe("<TerritoryColorPicker />", () => {
-  it("stays a single swatch until asked — the bar is already full", async () => {
+  it("stays a single swatch until asked - the bar is already full", async () => {
     render(<Harness />);
     expect(screen.queryByTestId("territory-color-grid")).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId("territory-color-trigger"));
@@ -80,7 +80,7 @@ describe("<TerritoryColorPicker />", () => {
     for (const c of TERRITORY_SWATCHES) expect(c).toMatch(/^#[0-9A-Fa-f]{6}$/);
   });
 
-  it("uses only the bright band — dark hues read as grey at fill opacity", () => {
+  it("uses only the bright band - dark hues read as grey at fill opacity", () => {
     // The palette's deep second half exists for pin halos, where the colour is a
     // solid ring. An area fill is translucent, so those hues would all collapse
     // toward the same murky grey and stop distinguishing anything.
@@ -113,7 +113,7 @@ describe("<TerritoryColorPicker />", () => {
   // panel sits at the TOP of the viewport inside an overflow-y-auto container,
   // where an upward grid lands in clipped negative overflow — on screen it was
   // simply invisible. That surface must be able to ask for downward.
-  it("opens upward by default — the lasso bar's geometry", async () => {
+  it("opens upward by default - the lasso bar's geometry", async () => {
     render(<Harness />);
     await userEvent.click(screen.getByTestId("territory-color-trigger"));
     expect(screen.getByTestId("territory-color-grid").className).toContain("bottom-[calc(100%+8px)]");

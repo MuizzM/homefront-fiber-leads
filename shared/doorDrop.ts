@@ -322,8 +322,8 @@ export function evaluateDoorDrop(
   return {
     drop: {
       amountCents: amount,
-      headline: `Door drop — ${usd(amount)}`,
-      reason: "Door drop — surprise bonus on a verified door",
+      headline: `Door drop - ${usd(amount)}`,
+      reason: "Door drop - surprise bonus on a verified door",
     },
   };
 }
@@ -348,8 +348,8 @@ export function dropStatusLine(
   const since = Math.max(0, Math.trunc(Number(doorsSinceLastDrop) || 0));
   if (since === 0) return "Any door can drop a surprise bonus.";
   const chance = dropChance(since, cfg);
-  if (chance >= 0.5) return `${since} doors since your last drop — one is due.`;
-  if (since >= Math.round(cfg.pityAtDoors * 0.25)) return `${since} doors since your last drop — the odds are climbing.`;
+  if (chance >= 0.5) return `${since} doors since your last drop - one is due.`;
+  if (since >= Math.round(cfg.pityAtDoors * 0.25)) return `${since} doors since your last drop - the odds are climbing.`;
   return "Any door can drop a surprise bonus.";
 }
 
@@ -380,7 +380,7 @@ export function validateDoorDropConfig(input: unknown): string | null {
   const leanest = leanestOddsFor(Number(c.pityAtDoors));
   if (Number(c.oddsOneIn) > leanest) {
     return `A guarantee at ${c.pityAtDoors} doors already pays about 1 in ${Math.floor(leanest)} `
-      + `on its own, so 1 in ${c.oddsOneIn} cannot be honoured — every drop would just be a `
+      + `on its own, so 1 in ${c.oddsOneIn} cannot be honoured - every drop would just be a `
       + `countdown. Raise the guarantee to about ${minimumPityFor(Number(c.oddsOneIn))} doors, `
       + `or set the odds to 1 in ${Math.floor(leanest)} or better.`;
   }

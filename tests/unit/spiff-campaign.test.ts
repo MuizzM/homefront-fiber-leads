@@ -33,7 +33,7 @@ const counters = (over: Partial<RepWindowCounters> = {}): RepWindowCounters => (
   ...over,
 });
 
-describe("triggerMet — what earns the bonus", () => {
+describe("triggerMet - what earns the bonus", () => {
   it("per_sale needs a sale in the window", () => {
     expect(triggerMet({ kind: "per_sale" }, counters())).toBe(false);
     expect(triggerMet({ kind: "per_sale" }, counters({ salesInWindow: 1 }))).toBe(true);
@@ -94,7 +94,7 @@ describe("progress and award never disagree", () => {
   }
 });
 
-describe("campaignProgress — the card a rep stares at", () => {
+describe("campaignProgress - the card a rep stares at", () => {
   it("counts down in the trigger's own unit, with a concrete next step", () => {
     const c = campaign({ trigger: { kind: "knocks_by_time", knocks: 40, byHourLocal: 12 } });
     const p = campaignProgress(c, counters({ knocksBeforeCutoffToday: 18 }), NOON);
@@ -127,10 +127,10 @@ describe("campaignProgress — the card a rep stares at", () => {
   });
 });
 
-describe("evaluateCampaign — the money", () => {
+describe("evaluateCampaign - the money", () => {
   it("pays a met trigger inside a live window", () => {
     const out = evaluateCampaign(campaign(), counters({ salesInWindow: 1 }), NOON);
-    expect(out).toEqual({ award: { campaignId: 1, repId: 7, amountCents: 7500, reason: "Power Hour — sale bonus" } });
+    expect(out).toEqual({ award: { campaignId: 1, repId: 7, amountCents: 7500, reason: "Power Hour - sale bonus" } });
   });
 
   it("pays nothing outside the window, or when paused/cancelled", () => {
@@ -160,7 +160,7 @@ describe("evaluateCampaign — the money", () => {
       .toEqual({ skip: "rep_cap_reached" });
   });
 
-  it("bounds the WHOLE campaign — the liability ceiling", () => {
+  it("bounds the WHOLE campaign - the liability ceiling", () => {
     // "$75 a sale, all markets" on a hot Saturday must not be an open cheque.
     const c = campaign({ campaignCapCents: 50_000 });
     expect(evaluateCampaign(c, counters({ salesInWindow: 1, awardedTotalCents: 49_000 }), NOON))
@@ -200,7 +200,7 @@ describe("isCampaignLive / hour12 / describeTrigger", () => {
   });
 });
 
-describe("validateCampaignInput — a manager cannot promise nonsense", () => {
+describe("validateCampaignInput - a manager cannot promise nonsense", () => {
   const ok = { name: "Power Hour", rewardCents: 7500, startsAtMs: START, endsAtMs: END, trigger: { kind: "per_sale" } as const };
 
   it("accepts a sane campaign", () => {
@@ -214,7 +214,7 @@ describe("validateCampaignInput — a manager cannot promise nonsense", () => {
     expect(validateCampaignInput({ ...ok, endsAtMs: START })).toMatch(/end after/i);
   });
 
-  it("refuses a month-long 'spiff' — that is a comp plan, not urgency", () => {
+  it("refuses a month-long 'spiff' - that is a comp plan, not urgency", () => {
     expect(validateCampaignInput({ ...ok, endsAtMs: START + 40 * 86_400_000 })).toMatch(/31 days/);
   });
 
@@ -249,11 +249,11 @@ describe("knocks_and_sale_by_time", () => {
     expect(triggerMet(trig, counters({ knocksBeforeCutoffToday: 20, firstSaleHourLocalToday: 11 }))).toBe(true);
   });
 
-  it("doors alone is not enough — walking past 20 doors is not selling", () => {
+  it("doors alone is not enough - walking past 20 doors is not selling", () => {
     expect(triggerMet(trig, counters({ knocksBeforeCutoffToday: 40 }))).toBe(false);
   });
 
-  it("a sale alone is not enough — one lucky door is not a morning's work", () => {
+  it("a sale alone is not enough - one lucky door is not a morning's work", () => {
     expect(triggerMet(trig, counters({ knocksBeforeCutoffToday: 3, firstSaleHourLocalToday: 9 }))).toBe(false);
   });
 
@@ -267,14 +267,14 @@ describe("knocks_and_sale_by_time", () => {
     const c = { ...campaign, trigger: trig };
     // Doors banked, sale outstanding — the motivating state, and it says so.
     const nearlyThere = campaignProgress(c, counters({ knocksBeforeCutoffToday: 22 }), c.startsAtMs + 1);
-    expect(nearlyThere.headline).toBe("Doors done — one sale before 3 PM takes it");
+    expect(nearlyThere.headline).toBe("Doors done - one sale before 3 PM takes it");
     expect(nearlyThere.nextStep).toBe("Close one before 3 PM.");
     expect(nearlyThere.met).toBe(false);
 
     // Sale banked, doors outstanding — track the half the rep controls.
     const doorsLeft = campaignProgress(c, counters({ knocksBeforeCutoffToday: 12, firstSaleHourLocalToday: 10 }), c.startsAtMs + 1);
     expect(doorsLeft.headline).toBe("12 of 20 doors before 3 PM");
-    expect(doorsLeft.nextStep).toBe("Sale's in — 8 more doors before 3 PM.");
+    expect(doorsLeft.nextStep).toBe("Sale's in - 8 more doors before 3 PM.");
 
     // Neither.
     const fresh = campaignProgress(c, counters(), c.startsAtMs + 1);

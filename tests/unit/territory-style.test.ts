@@ -175,7 +175,7 @@ describe("areas sit under the pins", () => {
     expect(territoryBeforeId(() => { throw new Error("style not loaded"); })).toBeUndefined();
   });
 
-  it("names only lead layers — never another territory layer", () => {
+  it("names only lead layers - never another territory layer", () => {
     // Inserting an area before another AREA would reintroduce the stacking bug
     // one polygon at a time.
     for (const id of TERRITORY_BEFORE_CANDIDATES) expect(id.startsWith("lead-")).toBe(true);

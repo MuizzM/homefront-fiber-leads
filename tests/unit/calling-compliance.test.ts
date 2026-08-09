@@ -331,7 +331,7 @@ describe("DNC coverage in simple mode", () => {
     }
   }
 
-  it("blocks a never-screened number — absence of evidence is not evidence of absence", () => {
+  it("blocks a never-screened number - absence of evidence is not evidence of absence", () => {
     inSimpleMode(() => {
       const result = evaluateCallingCompliance(eligible({
         nationalDncFresh: false, stateDncFresh: false,

@@ -78,7 +78,7 @@ describe("past weeks scope + honesty", () => {
     await waitFor(() => expect(screen.getAllByTestId(/^row-week-/).length).toBe(2));
   });
 
-  it("a failed history fetch says so with a retry — the section must not silently vanish", async () => {
+  it("a failed history fetch says so with a retry - the section must not silently vanish", async () => {
     renderPage(new Error("network down"));
     await waitFor(() => expect(screen.getByTestId("history-error")).toBeTruthy());
     expect(screen.getByTestId("history-error").textContent).toMatch(/couldn't load/i);

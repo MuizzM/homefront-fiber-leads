@@ -142,14 +142,14 @@ function CapabilityGuard({ role, capability, children }: {
 // The tabs worth keeping mounted after a visit: the heavy, constantly revisited
 // surfaces where a cold remount is what users feel as the "tab switch freeze"
 // (mapbox re-init on /map, chart + KPI rebuild on the dashboard, table rebuild
-// on /leads). Detail routes and admin one-offs are deliberately absent — they
+// on /leads). Detail routes and admin one-offs are deliberately absent - they
 // are cheap, parameterized (unbounded distinct locations), or rarely revisited.
 const KEEP_ALIVE_PATHS = new Set(["/today", "/map", "/leads", "/areas", "/calling", "/followups"]);
 // Stage cap. Active tab + three warm ones bounds memory (a hidden MapView keeps
 // its WebGL context alive); least-recently-used beyond that unmounts.
 const MAX_KEPT_STAGES = 4;
 // "/" renders Dashboard for office roles but is a pure <Redirect> for field and
-// calling roles — a kept hidden stage holding a Redirect would re-show as an
+// calling roles - a kept hidden stage holding a Redirect would re-show as an
 // empty page (the redirect effect fires on MOUNT, and a kept stage never
 // remounts). So "/" is kept exactly for the roles that get a real page there.
 const HOME_REDIRECT_ROLES = new Set(["rep", "calling_rep", "calling_manager", "compliance_admin", "auditor"]);

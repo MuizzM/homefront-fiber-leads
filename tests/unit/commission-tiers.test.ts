@@ -14,7 +14,7 @@ import {
 
 const T = DEFAULT_RETRO_TIERS;
 
-describe("retroactive calculation — the spec's exact dollar examples", () => {
+describe("retroactive calculation - the spec's exact dollar examples", () => {
   const cases: Array<[number, number]> = [
     [1, 15000],   // 1 × $150
     [7, 105000],  // 7 × $150 = $1,050

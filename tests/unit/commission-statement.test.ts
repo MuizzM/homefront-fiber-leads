@@ -20,7 +20,7 @@ beforeAll(async () => {
   svc = await import("../../server/commissionService");
 });
 
-describe("computeStatement — retroactive tiered dollar matrix", () => {
+describe("computeStatement - retroactive tiered dollar matrix", () => {
   const cases: Array<[number, number]> = [
     [0, 0], [1, 15000], [7, 105000], [8, 160000], [12, 240000],
     [13, 325000], [16, 400000], [17, 510000], [30, 900000],
@@ -42,7 +42,7 @@ describe("computeStatement — retroactive tiered dollar matrix", () => {
   });
 });
 
-describe("computeStatement — the statement invariant final = gross + adjustment", () => {
+describe("computeStatement - the statement invariant final = gross + adjustment", () => {
   it("adds a positive approved adjustment", () => {
     const c = svc.computeStatement({ planType: "TIERED", tierMode: "RETROACTIVE_WEEKLY", flatRateCents: null, tiers: DEFAULT_RETRO_TIERS, qualifiedSaleCount: 8, approvedAdjustmentCents: 5000 });
     expect(c.grossCommissionCents).toBe(160000);
@@ -56,7 +56,7 @@ describe("computeStatement — the statement invariant final = gross + adjustmen
   });
 });
 
-describe("computeStatement — flat plans", () => {
+describe("computeStatement - flat plans", () => {
   it("flat: 8 × $150 = $1,200, no tier", () => {
     const c = svc.computeStatement({ planType: "FLAT", tierMode: "RETROACTIVE_WEEKLY", flatRateCents: 15000, tiers: [], qualifiedSaleCount: 8, approvedAdjustmentCents: 0 });
     expect(c.grossCommissionCents).toBe(120000);
@@ -65,7 +65,7 @@ describe("computeStatement — flat plans", () => {
   });
 });
 
-describe("computeStatement — guards", () => {
+describe("computeStatement - guards", () => {
   it("rejects an unsupported tier mode", () => {
     expect(() => svc.computeStatement({ planType: "TIERED", tierMode: "PROGRESSIVE", flatRateCents: null, tiers: DEFAULT_RETRO_TIERS, qualifiedSaleCount: 5, approvedAdjustmentCents: 0 }))
       .toThrowError(/UNSUPPORTED_TIER_MODE|not supported/);
@@ -80,7 +80,7 @@ describe("computeStatement — guards", () => {
   });
 });
 
-describe("resolveAssignmentForWeek — effective-dated selection", () => {
+describe("resolveAssignmentForWeek - effective-dated selection", () => {
   const A = { id: 1, commissionPlanVersionId: 10, effectiveFrom: "2026-01-01", effectiveTo: "2026-06-01" };
   const B = { id: 2, commissionPlanVersionId: 20, effectiveFrom: "2026-06-01", effectiveTo: null };
   it("picks the window that contains the week start", () => {
@@ -109,7 +109,7 @@ describe("resolveAssignmentForWeek — effective-dated selection", () => {
   });
 });
 
-describe("assignmentsOverlap — prevents double-assignment", () => {
+describe("assignmentsOverlap - prevents double-assignment", () => {
   it("detects an overlap with an open-ended existing period", () => {
     const existing = [{ effectiveFrom: "2026-01-01", effectiveTo: null }];
     expect(svc.assignmentsOverlap(existing, { effectiveFrom: "2026-05-01", effectiveTo: null })).toBe(true);

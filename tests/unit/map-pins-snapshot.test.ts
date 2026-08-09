@@ -41,7 +41,7 @@ const PINS = [
 ];
 
 describe("snapshot key", () => {
-  it("embeds wire version, tenant, and user — all three invalidation axes", () => {
+  it("embeds wire version, tenant, and user - all three invalidation axes", () => {
     const key = mapPinsSnapshotKey(SCOPE_A);
     expect(key.startsWith(MAP_PINS_SNAPSHOT_PREFIX)).toBe(true);
     expect(key).toContain(`v${MAP_PINS_WIRE_VERSION}`);
@@ -79,7 +79,7 @@ describe("round-trip", () => {
   });
 });
 
-describe("invalidation — every bad payload reads as null", () => {
+describe("invalidation - every bad payload reads as null", () => {
   it("wire-version mismatch under the current key → null, and the entry is dropped", () => {
     const s = fakeStorage();
     const stale = { ...packMapPins(PINS), v: MAP_PINS_WIRE_VERSION - 1 };
@@ -110,7 +110,7 @@ describe("invalidation — every bad payload reads as null", () => {
   });
 });
 
-describe("identity scoping — shared-device safety", () => {
+describe("identity scoping - shared-device safety", () => {
   it("user B can never read user A's snapshot", () => {
     const s = fakeStorage();
     writeMapPinsSnapshot(SCOPE_A, PINS, s);
@@ -176,7 +176,7 @@ describe("MapView seeds and writes the snapshot correctly", () => {
     expect(writer).toContain("writeMapPinsSnapshot(scope, pins)");
   });
 
-  it("NEVER snapshots in viewport mode — a bbox window is a partial slice", () => {
+  it("NEVER snapshots in viewport mode - a bbox window is a partial slice", () => {
     const writer = src.slice(src.indexOf("const snapshotTimerRef"), src.indexOf("}, [mapPinData, user, viewportMode]);"));
     const guard = writer.indexOf("if (!user || viewportMode) return;");
     const write = writer.indexOf("writeMapPinsSnapshot");

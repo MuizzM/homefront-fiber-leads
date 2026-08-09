@@ -44,7 +44,7 @@ export function decideFreshFiber(input: FreshFiberEvidence): FreshFiberDecision 
       verdict: "fresh",
       isFreshFiber: true,
       label: "Fresh fiber",
-      message: "Yes—fresh fiber is available and no active subscriber is indicated.",
+      message: "Yes - fresh fiber is available and no active subscriber is indicated.",
     };
   }
 
@@ -52,6 +52,6 @@ export function decideFreshFiber(input: FreshFiberEvidence): FreshFiberDecision 
     verdict: "not_fresh",
     isFreshFiber: false,
     label: "Not fresh fiber",
-    message: "No—the provider did not return a fresh, unsubscribed fiber opportunity.",
+    message: "No - the provider did not return a fresh, unsubscribed fiber opportunity.",
   };
 }

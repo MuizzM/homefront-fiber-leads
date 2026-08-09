@@ -93,7 +93,7 @@ export function ReclaimAllDialog({
         {/* Blast radius — exact numbers, before anything is armed. */}
         <div className="mt-4 rounded-xl border border-border bg-secondary/40 px-4 py-3" data-testid="reclaim-all-impact">
           {impact.areaCount === 0 ? (
-            <p className="text-[13px] text-muted-foreground">No areas are currently held — there is nothing to reclaim.</p>
+            <p className="text-[13px] text-muted-foreground">No areas are currently held - there is nothing to reclaim.</p>
           ) : (
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
               <dt className="text-muted-foreground">Areas taken back</dt>
@@ -114,7 +114,7 @@ export function ReclaimAllDialog({
           <legend className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">What happens to their leads</legend>
           <div className="mt-2 space-y-2">
             {([
-              { key: "return_to_pool", title: "Return leads to the pool", body: "Doors go back to unassigned — ready to hand to new reps." },
+              { key: "return_to_pool", title: "Return leads to the pool", body: "Doors go back to unassigned - ready to hand to new reps." },
               { key: "keep_leads", title: "Reps keep their leads", body: "Areas come back, but each rep keeps the doors already assigned to them." },
             ] as const).map(o => (
               <label key={o.key} className={`flex items-start gap-3 rounded-xl border px-3.5 py-3 cursor-pointer transition-colors ${mode === o.key ? "border-primary/50 bg-primary/[0.07]" : "border-border hover:border-primary/25"}`}>
@@ -137,7 +137,7 @@ export function ReclaimAllDialog({
           <div className="mt-4">
             <label htmlFor="reclaim-all-confirm" className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
-              Type <span className="font-bold text-foreground tracking-wide">RECLAIM</span> to confirm — this cannot be undone.
+              Type <span className="font-bold text-foreground tracking-wide">RECLAIM</span> to confirm - this cannot be undone.
             </label>
             <input
               id="reclaim-all-confirm" value={confirmText} onChange={e => setConfirmText(e.target.value)}

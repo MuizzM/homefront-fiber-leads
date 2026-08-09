@@ -28,9 +28,9 @@ const CACHE_MAX_ENTRIES = 500;
 
 /** Fixed compliance footer — ALWAYS appended verbatim, never model-generated. */
 export const COMPLIANCE_FOOTER = [
-  "---- COMPLIANCE NOTES (REP GUIDANCE — NEVER READ ALOUD UNLESS REQUIRED) ----",
-  "1. Open every call the way the opener does — all four, every time: your real first name, Homefront Solutions (Kinetic's authorized fiber partner — you are a partner, never a Kinetic or Windstream employee), the words \"sales call\", and why you're calling: to offer Kinetic Fiber internet service.",
-  "2. If this household is on any Do-Not-Call list, has an active opt-out, or asks not to be called, stop — do not read this script. End the call politely and record the DO_NOT_CALL disposition right away. If someone would rather not get these calls, all they have to do is say so, and we won't call again.",
+  "---- COMPLIANCE NOTES (REP GUIDANCE - NEVER READ ALOUD UNLESS REQUIRED) ----",
+  "1. Open every call the way the opener does - all four, every time: your real first name, Homefront Solutions (Kinetic's authorized fiber partner - you are a partner, never a Kinetic or Windstream employee), the words \"sales call\", and why you're calling: to offer Kinetic Fiber internet service.",
+  "2. If this household is on any Do-Not-Call list, has an active opt-out, or asks not to be called, stop - do not read this script. End the call politely and record the DO_NOT_CALL disposition right away. If someone would rather not get these calls, all they have to do is say so, and we won't call again.",
   "3. Never claim that service or equipment costs nothing, never invent deadlines or urgency, and never criticize or disparage a competitor by name.",
   "4. This script is guidance only. Call eligibility is enforced separately by the compliance engine; a generated script is never authorization to dial.",
 ].join("\n");
@@ -46,8 +46,8 @@ const PROHIBITED_PATTERNS: RegExp[] = [
  * Bare Kinetic/Windstream employment claims ("Kinetic employee", "work for
  * Kinetic", "from Kinetic") are prohibited: the caller is an AUTHORIZED
  * PARTNER/DEALER, never an employee. A claim that is qualified as an
- * authorized partner/dealer/seller relationship — e.g. the legitimate phrase
- * "Kinetic's authorized fiber partner" — is truthful and must PASS the screen.
+ * authorized partner/dealer/seller relationship - e.g. the legitimate phrase
+ * "Kinetic's authorized fiber partner" - is truthful and must PASS the screen.
  */
 const BARE_AFFILIATION_PATTERNS: RegExp[] = [
   /\b(?:kinetic|windstream)[- ]employees?\b/i,
@@ -62,7 +62,7 @@ export const PROHIBITED_CONTENT_DESCRIPTION =
 
 export function containsProhibitedContent(text: string): boolean {
   if (PROHIBITED_PATTERNS.some((pattern) => pattern.test(text))) return true;
-  // An affiliation claim is prohibited only when it is BARE — i.e. not
+  // An affiliation claim is prohibited only when it is BARE - i.e. not
   // qualified as an authorized partner/dealer/seller relationship.
   return BARE_AFFILIATION_PATTERNS.some((pattern) => pattern.test(text))
     && !PARTNER_QUALIFIER_PATTERN.test(text);
@@ -145,13 +145,13 @@ function isOnComingSoonWatchlist(tenantId: number, lead: ScriptLeadRow): boolean
       if (rawDb.prepare(`SELECT 1 FROM coming_soon_watchlist
         WHERE tenant_id=? AND scan_target_id=? AND status='active' LIMIT 1`)
         .get(tenantId, lead.sourceScanTargetId)) return true;
-    } catch { /* watchlist table absent in this schema — fall through */ }
+    } catch { /* watchlist table absent in this schema - fall through */ }
   }
   try {
     if (rawDb.prepare(`SELECT 1 FROM coming_soon_watch
       WHERE tenant_id=? AND lower(address)=lower(?) AND lower(city)=lower(?) AND status='watching' LIMIT 1`)
       .get(tenantId, lead.address, lead.city)) return true;
-  } catch { /* coming_soon_watch table absent in this schema — fall through */ }
+  } catch { /* coming_soon_watch table absent in this schema - fall through */ }
   return false;
 }
 
@@ -182,7 +182,7 @@ export function buildScriptContext(input: {
     WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND lower(city)=lower(?)
       AND datetime(coalesce(fresh_confirmed_at,created_at)) >= datetime('now','-21 days')`)
     .get(tenantId, lead.city) as { n: number };
-  // Most-RECENTLY confirmed other fresh lead in the city — no proximity claim.
+  // Most-RECENTLY confirmed other fresh lead in the city - no proximity claim.
   const nearest = rawDb.prepare(`SELECT address FROM leads
     WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND lower(city)=lower(?) AND id<>?
     ORDER BY datetime(coalesce(fresh_confirmed_at,created_at)) DESC LIMIT 1`)
@@ -205,7 +205,7 @@ export function buildScriptContext(input: {
   };
 }
 
-/** Real first name only (first token of the full rep name) — never a persona. */
+/** Real first name only (first token of the full rep name) - never a persona. */
 function repFirstName(repName: string): string {
   const first = String(repName ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
   // Route fallback "your field representative" must not surface as a name.
@@ -221,7 +221,7 @@ function neighborhoodHook(context: ScriptContext): string {
       // claim matches the window. The count>1 guard and zero-count variant
       // are unchanged, and "including homes on X" is never a proximity claim.
       const momentum = freshCityCount21d > 1
-        ? ` — ${freshCityCount21d} homes in ${city} connected in the last three weeks${nearestFreshStreet ? `, including homes on ${nearestFreshStreet}` : ""}`
+        ? ` - ${freshCityCount21d} homes in ${city} connected in the last three weeks${nearestFreshStreet ? `, including homes on ${nearestFreshStreet}` : ""}`
         : "";
       return `Kinetic just dropped brand-new fiber in your neighborhood${momentum}. Your address on ${street} was just confirmed for the new build, so we're calling neighbors to answer questions and run a quick availability check.`;
     }
@@ -234,20 +234,20 @@ function neighborhoodHook(context: ScriptContext): string {
   }
 }
 
-/** Deterministic rules template — always works, always compliant. */
+/** Deterministic rules template - always works, always compliant. */
 export function buildTemplateSections(context: ScriptContext): ScriptSections {
   return {
     // Every compliance element stays: the rep's REAL first name, the company,
     // "authorized fiber partner" (never a Kinetic employee claim), the words
-    // "sales call", and the purpose — the Kinetic fiber rollout.
-    opener: `Hi, this is ${repFirstName(context.repName)} with ${context.companyName} — Kinetic's authorized fiber partner. Quick one, this is a sales call: Kinetic just dropped brand-new fiber in your neighborhood and we're running the rollout right now.`,
+    // "sales call", and the purpose - the Kinetic fiber rollout.
+    opener: `Hi, this is ${repFirstName(context.repName)} with ${context.companyName} - Kinetic's authorized fiber partner. Quick one, this is a sales call: Kinetic just dropped brand-new fiber in your neighborhood and we're running the rollout right now.`,
     neighborhoodHook: neighborhoodHook(context),
     valueProposition: `Kinetic Fiber runs on a fiber-optic line rather than older cable or copper, which means symmetrical upload and download speeds and a connection that holds up when everyone is home. For working from home, that means video calls that don't freeze; for streaming, no buffering at dinner time; and for gaming, low, consistent latency. It's a straightforward reliability upgrade, and I can check exactly what your address qualifies for.`,
     objectionHandlers: {
-      price: `That's a completely fair question. Pricing depends on the speed tier you choose, and many households find fiber costs about the same as what they already pay for slower service. With your permission, I can look up the exact plans and current pricing for your address — no obligation — so you can compare real numbers. Would that be useful?`,
-      currentProvider: `That makes sense — most people I speak with already have internet and it's a hassle to think about changing. The difference with fiber is consistency: the speeds you're promised hold up in the evening, and uploads match downloads, which matters for video calls and cloud backups. There's no pressure to switch today; would it help if I simply checked what your address qualifies for so you have the option?`,
-      renter: `Good question, and you're not alone — plenty of renters get fiber. Service is set up in your name, just like your current internet, and installation at an already-serviceable address is usually simple. If your landlord ever has questions, we can leave information for them. Can I check what your address qualifies for while I have you?`,
-      worksFine: `Glad to hear it's working — that's honestly the best starting point. Most folks I talk to felt the same until the whole household was online at once or a big upload crawled. Fiber is really about headroom: everything keeps working the same at 8 p.m. as it does at 8 a.m. Would you be open to a quick availability check so you know your options before you ever need them?`,
+      price: `That's a completely fair question. Pricing depends on the speed tier you choose, and many households find fiber costs about the same as what they already pay for slower service. With your permission, I can look up the exact plans and current pricing for your address - no obligation - so you can compare real numbers. Would that be useful?`,
+      currentProvider: `That makes sense - most people I speak with already have internet and it's a hassle to think about changing. The difference with fiber is consistency: the speeds you're promised hold up in the evening, and uploads match downloads, which matters for video calls and cloud backups. There's no pressure to switch today; would it help if I simply checked what your address qualifies for so you have the option?`,
+      renter: `Good question, and you're not alone - plenty of renters get fiber. Service is set up in your name, just like your current internet, and installation at an already-serviceable address is usually simple. If your landlord ever has questions, we can leave information for them. Can I check what your address qualifies for while I have you?`,
+      worksFine: `Glad to hear it's working - that's honestly the best starting point. Most folks I talk to felt the same until the whole household was online at once or a big upload crawled. Fiber is really about headroom: everything keeps working the same at 8 p.m. as it does at 8 a.m. Would you be open to a quick availability check so you know your options before you ever need them?`,
     },
     close: `Here's all I'd suggest: let me run a quick availability and speed check for ${context.address} right now. It takes about a minute, there's no obligation, and you'll know exactly what your address can get. If it makes sense, we can talk about next steps at whatever pace works for you. Can I run that check for you?`,
   };
@@ -255,13 +255,13 @@ export function buildTemplateSections(context: ScriptContext): ScriptSections {
 
 export function assembleScript(sections: ScriptSections): string {
   return [
-    "[OPENER — read verbatim]",
+    "[OPENER - read verbatim]",
     sections.opener,
     "",
-    "[WHY THIS HOME — neighborhood hook]",
+    "[WHY THIS HOME - neighborhood hook]",
     sections.neighborhoodHook,
     "",
-    "[VALUE — fiber vs. what they have today]",
+    "[VALUE - fiber vs. what they have today]",
     sections.valueProposition,
     "",
     "[OBJECTION HANDLERS]",
@@ -270,7 +270,7 @@ export function assembleScript(sections: ScriptSections): string {
     `If they rent the home: ${sections.objectionHandlers.renter}`,
     `If they say what they have works fine: ${sections.objectionHandlers.worksFine}`,
     "",
-    "[CLOSE — soft ask]",
+    "[CLOSE - soft ask]",
     sections.close,
     "",
     COMPLIANCE_FOOTER,
@@ -339,7 +339,7 @@ function validString(value: unknown, maxLength: number): value is string {
 }
 
 /**
- * Returns model-rephrased sections, or null on ANY failure — caller falls back
+ * Returns model-rephrased sections, or null on ANY failure - caller falls back
  * to the rules template verbatim. The compliance footer is never sent to or
  * accepted from the model.
  */
@@ -355,7 +355,7 @@ async function enhanceWithLlm(sections: ScriptSections, context: ScriptContext):
           role: "system",
           content: [
             "You rephrase outbound sales-call script sections for Kinetic Fiber (Windstream) internet so they sound natural and conversational.",
-            "Hard rules: keep every fact and placeholder value unchanged; never claim anything is free; never invent urgency, scarcity, or deadlines; never name or disparage a competitor; never remove or weaken the opening sales-call disclosure; never claim the caller is a Kinetic or Windstream employee — the caller is an authorized partner/dealer only; use only the rep's real name from the provided script and never invent a persona name.",
+            "Hard rules: keep every fact and placeholder value unchanged; never claim anything is free; never invent urgency, scarcity, or deadlines; never name or disparage a competitor; never remove or weaken the opening sales-call disclosure; never claim the caller is a Kinetic or Windstream employee - the caller is an authorized partner/dealer only; use only the rep's real name from the provided script and never invent a persona name.",
             `Respond with strict JSON only: {"opener": string, "neighborhoodHook": string, "valueProposition": string, "objectionHandlers": {"price": string, "currentProvider": string, "renter": string, "worksFine": string}, "close": string}.`,
           ].join(" "),
         },
@@ -411,7 +411,7 @@ type CacheEntry = { expiresAt: number; payload: Omit<GeneratedScript, "cached"> 
 const scriptCache = new Map<string, CacheEntry>();
 
 // The opener is a read-verbatim verbal disclosure containing the CALLING
-// user's name — the cache key must include the requesting user or a second
+// user's name - the cache key must include the requesting user or a second
 // rep would read the first rep's name aloud from a stale cache entry.
 function cacheKey(tenantId: number, userId: number, leadId: number): string {
   return `${tenantId}:${userId}:${leadId}:${SCRIPT_ENGINE_VERSION}`;
@@ -449,7 +449,7 @@ function cacheSet(tenantId: number, userId: number, leadId: number, payload: Omi
 
 export async function generateScriptForLead(input: {
   tenantId: number;
-  /** Requesting user — part of the cache key because the opener names them. */
+  /** Requesting user - part of the cache key because the opener names them. */
   userId: number;
   lead: ScriptLeadRow;
   repName: string;
@@ -482,7 +482,7 @@ export async function generateScriptForLead(input: {
   return { ...payload, cached: false };
 }
 
-/** Base template with placeholders — for admin preview of every section/variant. */
+/** Base template with placeholders - for admin preview of every section/variant. */
 export function baseTemplatePreview(): {
   version: string;
   cacheTtlSeconds: number;

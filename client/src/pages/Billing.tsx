@@ -50,9 +50,9 @@ function fmtPrice(usd: number | null): string {
   return usd == null ? "Custom" : usd === 0 ? "Free" : `$${usd.toLocaleString()}/mo`;
 }
 function fmtDate(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return " - ";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return Number.isNaN(d.getTime()) ? " - " : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 function fmtWhen(iso: string): string {
   const d = new Date(iso.includes("T") || iso.includes("Z") ? iso : iso.replace(" ", "T") + "Z");
@@ -122,7 +122,7 @@ export default function Billing() {
   }, [qc, toast]);
 
   const remainingLabel = useMemo(() => {
-    if (!summary) return "—";
+    if (!summary) return " - ";
     if (summary.unlimited) return "Unlimited";
     return `${(summary.creditsRemaining ?? 0).toLocaleString()} left`;
   }, [summary]);
@@ -164,7 +164,7 @@ export default function Billing() {
         // load-bearing false statement this page could make.
         <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" role="alert" data-testid="billing-error">
           <div className="text-sm font-semibold text-foreground">Couldn't load billing</div>
-          <div className="mt-1 text-sm text-muted-foreground">Your plan and credits are unchanged — this is a connection problem, not a billing state.</div>
+          <div className="mt-1 text-sm text-muted-foreground">Your plan and credits are unchanged - this is a connection problem, not a billing state.</div>
           <button onClick={() => refetch()}
             className="mt-4 inline-flex items-center justify-center min-h-11 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground hover:bg-secondary/80">
             Retry
@@ -176,9 +176,9 @@ export default function Billing() {
         <>
           {/* Stat strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatTile label="Plan" value={summary.planName ?? "—"} sub={fmtPrice(plans.find(p => p.key === summary.planKey)?.monthlyPriceUsd ?? null)} />
+            <StatTile label="Plan" value={summary.planName ?? " - "} sub={fmtPrice(plans.find(p => p.key === summary.planKey)?.monthlyPriceUsd ?? null)} />
             <StatTile label="Lead credits" value={summary.unlimited ? "∞" : summary.creditsUsed.toLocaleString()} sub={summary.unlimited ? "Unlimited" : `of ${summary.creditsIncluded.toLocaleString()} used`} accent />
-            <StatTile label="Seats" value={summary.seatsPaid || "—"} sub="paid seats" />
+            <StatTile label="Seats" value={summary.seatsPaid || " - "} sub="paid seats" />
             <StatTile label={summary.state === "trial" ? "Trial ends" : "Renews"} value={fmtDate(summary.state === "trial" ? summary.trialEndsAt : summary.cycleEnd)} />
           </div>
 
@@ -225,8 +225,8 @@ export default function Billing() {
                       <AlertTriangle className="w-4 h-4 shrink-0" />
                       {summary.level === "exhausted"
                         ? (summary.overageMode === "stop"
-                            ? "Credits exhausted — new lead delivery is paused until the cycle resets or you add credits."
-                            : "Credits exhausted — new leads are billing as overage.")
+                            ? "Credits exhausted - new lead delivery is paused until the cycle resets or you add credits."
+                            : "Credits exhausted - new leads are billing as overage.")
                         : "You've used 90%+ of this cycle's credits."}
                     </div>
                   )}
@@ -267,7 +267,7 @@ export default function Billing() {
                         <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${e.delta < 0 ? "text-foreground" : e.delta > 0 ? "text-emerald-400" : "text-muted-foreground"}`}>
                           {e.delta > 0 ? `+${e.delta}` : e.delta}
                         </td>
-                        <td className="px-4 sm:px-5 py-2.5 text-right tabular-nums text-muted-foreground">{e.balanceAfter ?? "—"}</td>
+                        <td className="px-4 sm:px-5 py-2.5 text-right tabular-nums text-muted-foreground">{e.balanceAfter ?? " - "}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -281,7 +281,7 @@ export default function Billing() {
   );
 }
 
-// Plan catalog grid — current plan highlighted, prices show "Custom" until set.
+// Plan catalog grid - current plan highlighted, prices show "Custom" until set.
 // When Stripe is enabled, non-current paid plans get a checkout button.
 function PlanGrid({ plans, current, stripeOn, onChoose }: { plans: Plan[]; current: PlanKey | null; stripeOn?: boolean; onChoose?: (planKey: string) => void }) {
   if (plans.length === 0) return null;
@@ -345,7 +345,7 @@ function NotProvisioned({ plans }: { plans: Plan[] }) {
         </div>
         <h2 className="mt-3 text-[16px] font-semibold tracking-tight text-foreground">Billing isn't set up for this workspace</h2>
         <p className="mt-1.5 text-[13px] text-muted-foreground max-w-md mx-auto">
-          This org runs with unlimited internal access — lead delivery isn't metered and nothing is gated.
+          This org runs with unlimited internal access - lead delivery isn't metered and nothing is gated.
           When you're ready to put it on a plan, a platform admin provisions billing and credit metering turns on.
         </p>
       </section>

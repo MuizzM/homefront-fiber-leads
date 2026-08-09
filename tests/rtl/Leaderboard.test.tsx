@@ -55,10 +55,10 @@ describe("Leaderboard defaults", () => {
     expect(screen.queryByText(/loading leaderboard/i)).toBeNull();
   });
 
-  it("a failed fetch shows em-dash tiles, never a fake 0", async () => {
+  it("a failed fetch shows dash placeholder tiles, never a fake 0", async () => {
     renderBoard("error");
     const sales = await screen.findByTestId("stat-sales");
-    await waitFor(() => expect(sales.textContent).toContain("\u2014")); // — em dash
+    await waitFor(() => expect(sales.textContent).toContain("-")); // dash placeholder
     expect(sales.textContent).not.toContain("0");
   });
 

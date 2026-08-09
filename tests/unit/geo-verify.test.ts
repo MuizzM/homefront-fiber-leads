@@ -25,7 +25,7 @@ const base: KnockLocationInput = {
   netState: "online",
 };
 
-describe("classifyKnockLocation — Verified", () => {
+describe("classifyKnockLocation - Verified", () => {
   it("in-range, accurate, online, well-timed → verified with a real distance", () => {
     const r = classifyKnockLocation(base);
     expect(r.status).toBe("verified");
@@ -36,7 +36,7 @@ describe("classifyKnockLocation — Verified", () => {
   });
 });
 
-describe("classifyKnockLocation — Needs Review (never silently verified)", () => {
+describe("classifyKnockLocation - Needs Review (never silently verified)", () => {
   it("outside the radius → needs_review, does NOT count as worked", () => {
     // ~0.01° north ≈ 1.1 km away
     const r = classifyKnockLocation({ ...base, repLat: 35.5592 });
@@ -78,7 +78,7 @@ describe("classifyKnockLocation — Needs Review (never silently verified)", () 
   });
 });
 
-describe("classifyKnockLocation — Invalid (tamper evidence wins over everything)", () => {
+describe("classifyKnockLocation - Invalid (tamper evidence wins over everything)", () => {
   it("mock location → invalid even when standing on the doorstep", () => {
     const r = classifyKnockLocation({ ...base, mockLocation: true });
     expect(r.status).toBe("invalid");

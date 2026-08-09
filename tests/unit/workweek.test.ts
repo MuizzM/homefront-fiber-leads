@@ -41,7 +41,7 @@ describe("half-open membership at the Sunday→Monday seam (across spring-forwar
   });
 });
 
-describe("DST is handled — week span is not a fixed 168h", () => {
+describe("DST is handled - week span is not a fixed 168h", () => {
   it("spring-forward week is 167 hours", () => {
     const b = weekBoundsFor("2026-03-04T12:00:00Z", NY); // Mar 2–8, contains spring-forward
     expect(H(b.nextWeekStartUtc) - H(b.weekStartUtc)).toBe(167);

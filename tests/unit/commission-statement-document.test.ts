@@ -40,7 +40,7 @@ const base = (over: Partial<StatementDocInput> = {}): StatementDocInput => ({
   ...over,
 });
 
-describe("allocateCents — parts always re-sum to the whole", () => {
+describe("allocateCents - parts always re-sum to the whole", () => {
   it("splits evenly when it divides", () => {
     expect(allocateCents(30000, 3)).toEqual([10000, 10000, 10000]);
   });
@@ -177,7 +177,7 @@ describe("buildStatementDocument", () => {
     expect(doc.payout.netPayCents).toBe(0);
   });
 
-  it("carries the tenant's own company name — never a hardcoded one", () => {
+  it("carries the tenant's own company name - never a hardcoded one", () => {
     const doc = buildStatementDocument(base({ company: { name: "Rockwell Fiber Partners", supportEmail: null } }));
     expect(doc.company.name).toBe("Rockwell Fiber Partners");
   });
@@ -192,9 +192,9 @@ describe("formatCents / planLabelFor", () => {
   });
 
   it("names the plan the way the rep's agreement does", () => {
-    expect(planLabelFor({ structure: "TIERED", tierLabel: "Tier 3 (7+)", rateCents: 15000 })).toBe("Tier 3 (7+) — $150.00 per sale");
-    expect(planLabelFor({ structure: "FLAT", tierLabel: null, rateCents: 5000 })).toBe("Flat — $50.00 per sale");
-    expect(planLabelFor({ structure: null, tierLabel: null, rateCents: 0 })).toBe("—");
+    expect(planLabelFor({ structure: "TIERED", tierLabel: "Tier 3 (7+)", rateCents: 15000 })).toBe("Tier 3 (7+) - $150.00 per sale");
+    expect(planLabelFor({ structure: "FLAT", tierLabel: null, rateCents: 5000 })).toBe("Flat - $50.00 per sale");
+    expect(planLabelFor({ structure: null, tierLabel: null, rateCents: 0 })).toBe(" - ");
   });
 });
 
@@ -209,7 +209,7 @@ describe("formatCents / planLabelFor", () => {
 // remembered: whatever rows the summary shows, the ones above "Earned this
 // period" must sum to exactly earnedCents.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("statementSummaryRows — the summary always adds up", () => {
+describe("statementSummaryRows - the summary always adds up", () => {
   const rowsFor = (money: Partial<StatementDocInput["money"]>, holdback: Partial<StatementDocInput["holdback"]> = {}) => {
     const doc = buildStatementDocument(base({
       money: { ...base().money, ...money } as StatementDocInput["money"],

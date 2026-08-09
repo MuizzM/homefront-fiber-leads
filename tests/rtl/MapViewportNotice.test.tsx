@@ -12,13 +12,13 @@ import { MapViewportNotice } from "@/components/map/MapViewportNotice";
 
 describe("MapViewportNotice", () => {
   it("renders the truncated-sample message as a polite status chip", () => {
-    render(<MapViewportNotice message="Showing a sample — zoom in for all pins" onDismiss={vi.fn()} testId="map-viewport-sample-notice" />);
+    render(<MapViewportNotice message="Showing a sample - zoom in for all pins" onDismiss={vi.fn()} testId="map-viewport-sample-notice" />);
     const chip = screen.getByTestId("map-viewport-sample-notice");
     expect(chip).toHaveAttribute("role", "status");
-    expect(chip.textContent).toContain("Showing a sample — zoom in for all pins");
+    expect(chip.textContent).toContain("Showing a sample - zoom in for all pins");
   });
 
-  it("has no over-wide-span usage anymore — wide zooms render the density grid", () => {
+  it("has no over-wide-span usage anymore - wide zooms render the density grid", () => {
     // The component is a generic chip, but the CALLER no longer has a zoom
     // condition (viewportNotice's unit tests pin that). Guard the page source
     // so the dead state can't creep back.
@@ -31,7 +31,7 @@ describe("MapViewportNotice", () => {
 
   it("the X dismisses via onDismiss and carries an accessible name", () => {
     const onDismiss = vi.fn();
-    render(<MapViewportNotice message="Showing a sample — zoom in for all pins" onDismiss={onDismiss} />);
+    render(<MapViewportNotice message="Showing a sample - zoom in for all pins" onDismiss={onDismiss} />);
     fireEvent.click(screen.getByTestId("map-viewport-notice-dismiss"));
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("Dismiss notice")).toBeInTheDocument();

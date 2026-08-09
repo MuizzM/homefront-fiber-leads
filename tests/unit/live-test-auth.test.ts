@@ -49,7 +49,7 @@ const ADDR = [
   FIX.address.postalCd,
 ] as const;
 
-describe("Live Test authentication flow — Decodo-exclusive", () => {
+describe("Live Test authentication flow - Decodo-exclusive", () => {
   beforeAll(async () => {
     process.env.KFS_AUTOMATION_AUTHORIZED = "false";
     process.env.KFS_TOKEN_POOL_WARM_MIN = "1";
@@ -64,7 +64,7 @@ describe("Live Test authentication flow — Decodo-exclusive", () => {
     scanner.__resetTokenTransportStateForTests();
   });
 
-  it("mints AND searches through Decodo only (proxyFetch) — address checked", async () => {
+  it("mints AND searches through Decodo only (proxyFetch) - address checked", async () => {
     proxyFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(200, FIX));
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(true);

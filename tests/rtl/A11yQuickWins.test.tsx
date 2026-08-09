@@ -62,7 +62,7 @@ function renderKnockSheet() {
   );
 }
 
-describe("LeadKnockSheet — icon-only header buttons", () => {
+describe("LeadKnockSheet - icon-only header buttons", () => {
   it("copy-address and close expose accessible names", () => {
     renderKnockSheet();
     // (Copy also appears in the utility row — both must be named.)
@@ -104,7 +104,7 @@ function renderMyCommissionPending() {
   return render(<QueryClientProvider client={qc}><MyCommission /></QueryClientProvider>);
 }
 
-describe("MyCommission — loading state", () => {
+describe("MyCommission - loading state", () => {
   it("announces itself as a busy status region", () => {
     renderMyCommissionPending();
     const status = screen.getByRole("status");

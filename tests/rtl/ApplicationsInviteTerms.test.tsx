@@ -116,7 +116,7 @@ describe("the invite form's comp terms", () => {
     expect(body.tiers).toBeUndefined();
   });
 
-  it("REFUSES to send an invalid ladder — the invite cannot be the half-configured thing again", async () => {
+  it("REFUSES to send an invalid ladder - the invite cannot be the half-configured thing again", async () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId("input-candidate-name")).toBeInTheDocument());
     fillCandidate();

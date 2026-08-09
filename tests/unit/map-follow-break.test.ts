@@ -27,7 +27,7 @@ function positions(re: RegExp): number[] {
   return out;
 }
 
-describe("user-is-interacting guard — the camera writer pauses under a finger", () => {
+describe("user-is-interacting guard - the camera writer pauses under a finger", () => {
   it("a pointerdown listener on the map surface SETS interacting (the guard has a writer)", () => {
     // The historical bug: `interacting` was checked but never assigned true.
     const setter = src.match(
@@ -68,7 +68,7 @@ describe("user-is-interacting guard — the camera writer pauses under a finger"
   });
 });
 
-describe("follow-break listeners — any user gesture breaks follow until re-tap", () => {
+describe("follow-break listeners - any user gesture breaks follow until re-tap", () => {
   it("dragstart plus zoom/rotate/pitch starts are wired to the break-out", () => {
     expect(src).toContain('map.on("dragstart", onDragStart)');
     const starts = src.match(
@@ -113,7 +113,7 @@ describe("follow-break listeners — any user gesture breaks follow until re-tap
   });
 });
 
-describe("gesture-handler disable/re-enable symmetry — no exit path leaves the map dead", () => {
+describe("gesture-handler disable/re-enable symmetry - no exit path leaves the map dead", () => {
   // Every draw tool that disables a mapbox gesture handler must re-enable it
   // on EVERY exit (the re-enables live in effect cleanups, which React runs on
   // completion, cancel, mode switch, style swap, and unmount alike).
@@ -148,7 +148,7 @@ describe("gesture-handler disable/re-enable symmetry — no exit path leaves the
   }
 });
 
-describe("mode exclusivity — draw tools and add-mode never stack", () => {
+describe("mode exclusivity - draw tools and add-mode never stack", () => {
   it("arming the lasso stands add-mode AND scan-draw down", () => {
     const lassoArm = src.match(
       /exitLasso\(\);\s*\n\s*setAddMode\(false\); \/\/ draw tools and add-mode are mutually exclusive[\s\S]{0,900}?setLassoMode\(true\)/,

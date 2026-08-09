@@ -149,7 +149,7 @@ export function MomentumOffer() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-semibold text-foreground" data-testid="momentum-meter-headline">
-              Warming up — {usd(data.nextAmountCents)} bonus if you get hot
+              Warming up - {usd(data.nextAmountCents)} bonus if you get hot
             </p>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
               <div className="h-full rounded-full bg-amber-500 transition-[width] duration-500 ease-out"

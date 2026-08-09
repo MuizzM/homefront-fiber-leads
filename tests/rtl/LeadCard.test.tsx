@@ -76,7 +76,7 @@ function renderCard(over: Record<string, any> = {}) {
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
 describe("lead card perceived-latency contract", () => {
-  it("renders the whole card synchronously from the prop payload — no fetch, no spinner", () => {
+  it("renders the whole card synchronously from the prop payload - no fetch, no spinner", () => {
     renderCard();
     // No awaits before any of these: the tap that selected the pin painted this.
     const card = screen.getByTestId("lead-card");
@@ -94,7 +94,7 @@ describe("lead card perceived-latency contract", () => {
     expect(document.querySelector(".animate-spin")).toBeNull();
   });
 
-  it("the large sheet surface animates on GPU keyframes only — no transition-all, nothing >=300ms", () => {
+  it("the large sheet surface animates on GPU keyframes only - no transition-all, nothing >=300ms", () => {
     renderCard();
     const cls = screen.getByTestId("lead-card").className;
     // The shadcn sheet base's bare `transition` (= all) is overridden off.

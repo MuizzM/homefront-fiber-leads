@@ -138,7 +138,7 @@ describe("hours aggregation", () => {
     rawDb.prepare(`DELETE FROM clock_sessions WHERE rep_id = ?`).run(repId);
   });
 
-  it("is tenant-scoped — another tenant's sessions never leak into the sum", () => {
+  it("is tenant-scoped - another tenant's sessions never leak into the sum", () => {
     const s = wk.weekStartUtc, e = wk.nextWeekStartUtc;
     seedSession(REP_T2, T2, new Date(Date.parse(s) + 8 * 3_600_000).toISOString(), new Date(Date.parse(s) + 12 * 3_600_000).toISOString());
     expect(hourly.hoursWorkedThisWeek(T1, REP, s, e).minutes).toBe(240); // REP's own sessions only

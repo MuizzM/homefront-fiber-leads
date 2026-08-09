@@ -149,9 +149,9 @@ describe("the payload is encrypted the way a browser decrypts it", () => {
     expect(decryptAsBrowser(encryptPayload(sub, msg), client, auth)).toBe(msg);
   });
 
-  it("handles non-ASCII — a rep's name is not guaranteed to be Latin", () => {
+  it("handles non-ASCII - a rep's name is not guaranteed to be Latin", () => {
     const { client, auth, sub } = makeSub();
-    const msg = JSON.stringify({ title: "José R. just closed one — 🔥" });
+    const msg = JSON.stringify({ title: "José R. just closed one - 🔥" });
     expect(decryptAsBrowser(encryptPayload(sub, msg), client, auth)).toBe(msg);
   });
 

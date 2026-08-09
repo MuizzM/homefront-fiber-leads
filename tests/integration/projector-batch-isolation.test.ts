@@ -34,7 +34,7 @@ function freshTarget(address: string): number {
   return id;
 }
 
-describe("projector per-candidate isolation — one bad door never discards the batch", () => {
+describe("projector per-candidate isolation - one bad door never discards the batch", () => {
   it("publishes every clean NEW FIBER + N candidate even when one collides with a foreign tenant", () => {
     const clean = [freshTarget("10 Clean St"), freshTarget("20 Clean St"), freshTarget("30 Clean St")];
 

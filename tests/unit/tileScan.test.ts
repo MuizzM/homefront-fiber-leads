@@ -102,7 +102,7 @@ describe("runTileScan (whole region)", () => {
     expect(done.totals.newBuilds).toBe(4);    // 4 × 1
   });
 
-  it("resumes — already-done tiles are not re-run", async () => {
+  it("resumes - already-done tiles are not re-run", async () => {
     const job = createTileScanJob("job2", REGION, { tileDeg: 0.02 }, NOW);
     job.tiles[0].status = "done"; job.tiles[0].leadCount = 5; job.tiles[0].addressCount = 3;
     let gathers = 0;

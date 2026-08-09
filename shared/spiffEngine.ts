@@ -396,9 +396,9 @@ export function spiffReasonLabel(reason: SpiffReason | null): string {
  *  its own (much bigger) piece of the card. */
 export function spiffReasonBlurb(reason: SpiffReason | null): string {
   switch (reason) {
-    case "random": return "Lucky drop — this one landed at random.";
+    case "random": return "Lucky drop - this one landed at random.";
     case "streak": return "Sales on back-to-back days. The streak paid.";
-    case "improvement": return "You outpaced your own average — best stretch yet.";
+    case "improvement": return "You outpaced your own average - best stretch yet.";
     case "milestone": return "Another career milestone in the books.";
     default: return "Recognition bonus earned.";
   }
@@ -420,7 +420,7 @@ export function spiffTriggerGuide(config: SpiffConfig = DEFAULT_SPIFF_CONFIG): A
     {
       reason: "streak",
       title: spiffReasonLabel("streak"),
-      how: `Sell on ${config.streakThresholdDays} days in a row — and again every ${config.streakThresholdDays} days after that.`,
+      how: `Sell on ${config.streakThresholdDays} days in a row - and again every ${config.streakThresholdDays} days after that.`,
     },
     {
       reason: "improvement",

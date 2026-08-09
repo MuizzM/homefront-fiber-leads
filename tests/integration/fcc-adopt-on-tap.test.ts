@@ -123,7 +123,7 @@ afterAll(async () => {
   if (server) await new Promise<void>((res, rej) => server.close((e) => (e ? rej(e) : res())));
 });
 
-describe("POST /api/leads — FCC adopt-on-tap", () => {
+describe("POST /api/leads - FCC adopt-on-tap", () => {
   it("(a) unworked fcc ghost → adopted: retagged off fcc, moved to the tap, assigned to the rep, and IN the viewport", async () => {
     const addr = { address: "100 Adopt Ln", city: "Kannapolis", state: "NC", zip: "28081" };
     const ghost = seedLead({ ...addr });
@@ -233,7 +233,7 @@ describe("POST /api/leads — FCC adopt-on-tap", () => {
     expect(body.id).toBeGreaterThan(0);
   });
 
-  it("tenant isolation: a tenant-A tap never adopts tenant-B's identical fcc ghost — it creates a new tenant-A lead (201)", async () => {
+  it("tenant isolation: a tenant-A tap never adopts tenant-B's identical fcc ghost - it creates a new tenant-A lead (201)", async () => {
     const addr = { address: "500 Cross Tenant Ln", city: "Kannapolis", state: "NC", zip: "28081" };
     const foreign = seedLead({ ...addr }, TENANT_B); // fcc ghost under tenant B only
     const foreignBefore = leadById(foreign.id);

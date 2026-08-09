@@ -90,7 +90,7 @@ function renderPanel(opts: { run?: unknown; list?: unknown; canRun?: boolean } =
   );
 }
 
-describe("AreaSkipTracePanel — blocked numbers are visible and inert", () => {
+describe("AreaSkipTracePanel - blocked numbers are visible and inert", () => {
   beforeEach(() => { apiRequest.mockClear(); });
 
   it("shows the traced owner name", async () => {
@@ -129,7 +129,7 @@ describe("AreaSkipTracePanel — blocked numbers are visible and inert", () => {
   });
 });
 
-describe("AreaSkipTracePanel — running it", () => {
+describe("AreaSkipTracePanel - running it", () => {
   beforeEach(() => { apiRequest.mockClear(); });
 
   it("reports the finished run in the words the operator asked for", async () => {
@@ -157,7 +157,7 @@ describe("AreaSkipTracePanel — running it", () => {
     expect(apiRequest).not.toHaveBeenCalled();
   });
 
-  it("hides the run button from a viewer who may not spend — never disables it", async () => {
+  it("hides the run button from a viewer who may not spend - never disables it", async () => {
     renderPanel({ canRun: false });
     await screen.findByTestId("dialing-list");
     expect(screen.queryByTestId("area-action-skip-trace")).toBeNull();
@@ -170,7 +170,7 @@ describe("AreaSkipTracePanel — running it", () => {
         run: { ...completedRun.run, status: "running", processedLeads: 40, dialablePhones: 0, finishedAt: null },
       },
     });
-    expect(await screen.findByTestId("skip-trace-summary")).toHaveTextContent("Running — 40 of 126 doors");
+    expect(await screen.findByTestId("skip-trace-summary")).toHaveTextContent("Running - 40 of 126 doors");
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "40");
   });
 

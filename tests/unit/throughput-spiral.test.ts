@@ -24,7 +24,7 @@ describe("dispatch capacity cannot spiral downward", () => {
     expect(provenHourlyCapacity(9000, 24_000)).toBe(9000);
   });
 
-  it("is monotonic in every input — more evidence never lowers capacity", () => {
+  it("is monotonic in every input - more evidence never lowers capacity", () => {
     const base = provenHourlyCapacity(1000, 48_000);
     expect(provenHourlyCapacity(2000, 48_000)).toBeGreaterThanOrEqual(base);
     expect(provenHourlyCapacity(1000, 96_000)).toBeGreaterThanOrEqual(base);

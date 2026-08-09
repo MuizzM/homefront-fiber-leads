@@ -43,7 +43,7 @@ describe("what a manager may post", () => {
       .toMatch(/over 240 characters/);
   });
 
-  it("refuses a four-figure promo — it goes to every phone in the org", () => {
+  it("refuses a four-figure promo - it goes to every phone in the org", () => {
     expect(validateAuthoredAnnouncement(ok({ amountCents: 100_000 }))).toBeNull();
     expect(validateAuthoredAnnouncement(ok({ amountCents: 100_001 }))).toMatch(/\$1,000/);
     expect(validateAuthoredAnnouncement(ok({ amountCents: -5 }))).toMatch(/whole number/);

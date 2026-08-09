@@ -97,7 +97,7 @@ export const OBJECTION_SECTION_HEADINGS: Readonly<Record<string, ObjectionKey>> 
   '"I had a bad experience"': "bad_experience",
   '"Not interested"': "not_interested",
   // m18-money-competitor — the graduate money / competitor deep-dives.
-  '"Too expensive" — isolate before you reframe': "price",
+  '"Too expensive" - isolate before you reframe': "price",
   '"We just got fiber from a competitor"': "competitor_fiber",
   "The bad-experience win-back": "bad_experience",
   // m18-book-it — the push-out family.
@@ -128,7 +128,7 @@ export const OBJECTION_CARD_GAPS: Readonly<Record<ObjectionKey, string | null>> 
   renter: null,
   already_have: null,
   no_card:
-    "Covered by lesson m13-no-card-objection (payment-compliance module), whose sections are technique-titled, not objection-titled — outside the m5/m12/m18 objection-section source set.",
+    "Covered by lesson m13-no-card-objection (payment-compliance module), whose sections are technique-titled, not objection-titled - outside the m5/m12/m18 objection-section source set.",
   leave_something:
     "Appears only as a brush-off line inside callback content (m6-callback quiz: 'Leave your card and we will call you'); no dedicated objection section exists yet.",
   hoa:

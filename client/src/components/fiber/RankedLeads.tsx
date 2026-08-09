@@ -117,7 +117,7 @@ export default function RankedLeads() {
     <div className="overflow-hidden rounded-2xl border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          <Flame className="h-3.5 w-3.5 text-orange-600 dark:text-orange-400" /> Top leads — ranked
+          <Flame className="h-3.5 w-3.5 text-orange-600 dark:text-orange-400" /> Top leads - ranked
         </div>
         {data && <div className="text-[11px] text-muted-foreground">{data.count} scored</div>}
       </div>
@@ -133,11 +133,11 @@ export default function RankedLeads() {
         // A distinct quiet failure state — an API error must never wear the
         // happy "no leads yet" empty state.
         <div className="px-4 py-8 text-center text-[13px] text-muted-foreground" data-testid="ranked-error">
-          Couldn&rsquo;t load rankings — retrying automatically.
+          Couldn&rsquo;t load rankings - retrying automatically.
         </div>
       ) : leads.length === 0 ? (
         <div className="px-4 py-8 text-center text-[13px] italic text-muted-foreground">
-          No ranked leads yet — confirmed fresh-fiber leads appear here ordered by how hot they are.
+          No ranked leads yet - confirmed fresh-fiber leads appear here ordered by how hot they are.
         </div>
       ) : (
         <>

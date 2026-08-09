@@ -101,7 +101,7 @@ describe("credit accounting", () => {
   });
 });
 
-describe("consumeCredit — the core delivery rule", () => {
+describe("consumeCredit - the core delivery rule", () => {
   it("delivers + decrements while credits remain", () => {
     const r = consumeCredit(base({ used: 10 }));
     expect(r.delivered).toBe(true);

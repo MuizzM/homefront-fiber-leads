@@ -43,7 +43,7 @@ function renderOps() {
 
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
-describe("BillingOps — staged plan/state changes", () => {
+describe("BillingOps - staged plan/state changes", () => {
   it("selecting a plan stages it (no POST) and shows the confirm strip naming tenant and plan", async () => {
     renderOps();
     const sel = await screen.findByTestId("plan-sel-1");

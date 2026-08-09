@@ -81,7 +81,7 @@ beforeEach(() => {
 });
 
 describe("commission console settlement authority", () => {
-  it("manager (read.all, no payouts.pay): closeout bar is review-only — no dead settle buttons", async () => {
+  it("manager (read.all, no payouts.pay): closeout bar is review-only - no dead settle buttons", async () => {
     grants.add("commission.read.all");
     grants.add("commission.read.downline");
     renderConsole();

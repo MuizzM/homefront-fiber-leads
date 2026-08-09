@@ -247,7 +247,7 @@ function writeAward(p: {
      -- NULL), and SQLite only matches an ON CONFLICT target to a partial index
      -- when the target repeats the predicate. Without the WHERE this raises
      -- "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE
-     -- constraint" — i.e. the idempotency this whole engine relies on would
+     -- constraint" - i.e. the idempotency this whole engine relies on would
      -- not merely be slower, it would not exist.
      ON CONFLICT(tenant_id, sale_ref) WHERE sale_ref IS NOT NULL DO NOTHING`,
   ).run(
@@ -328,7 +328,7 @@ function applyClawbacks(event: DomainEvent, nowIso: string): number {
       // once and only once.
       `clawback:${award.id}:e${event.id}`,
       -decision.amountCents,
-      `Clawback — ${award.reason}`,
+      `Clawback - ${award.reason}`,
       "approved", nowIso, award.campaign_id, event.id, award.incentive_type,
     );
     if (info.changes > 0) reversed += 1;

@@ -48,7 +48,7 @@ describe("session lifetime", () => {
     expect(storageMod.storage.getSession(s.id)).toBeTruthy();
   });
 
-  it("does not write on every request — only once the expiry has drifted", () => {
+  it("does not write on every request - only once the expiry has drifted", () => {
     const s = storageMod.storage.createSession(newUser("c@example.com"));
     // Freshly minted: already at a full TTL, so a renewal would move it by ~0.
     const before = (rawDb.prepare(`SELECT expires_at AS e FROM sessions WHERE id=?`).get(s.id) as any).e;

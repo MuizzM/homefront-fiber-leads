@@ -34,7 +34,7 @@ describe("reading the territory id off a feature", () => {
     expect(territoryIdFromLayer("territory-42")).toBe(42);
   });
 
-  it("reads the OUTLINE layer — the boundary tap that used to be discarded", () => {
+  it("reads the OUTLINE layer - the boundary tap that used to be discarded", () => {
     expect(territoryIdFromLayer("territory-42-outline")).toBe(42);
   });
 
@@ -91,7 +91,7 @@ describe("what a tap means", () => {
     expect(resolveTerritoryTap([feat("territory-42", 42)])).toEqual({ kind: "select", territoryId: 42 });
   });
 
-  it("selects from a BOUNDARY tap — the case that did nothing before", () => {
+  it("selects from a BOUNDARY tap - the case that did nothing before", () => {
     expect(resolveTerritoryTap([feat("territory-42-outline", 42)])).toEqual({ kind: "select", territoryId: 42 });
   });
 
@@ -132,7 +132,7 @@ describe("choosing which layers to hit-test", () => {
     expect(territoryTapLayers([7], () => true)).toEqual(["territory-7", "territory-7-outline"]);
   });
 
-  it("skips layers that are not on the map — querying a missing layer throws", () => {
+  it("skips layers that are not on the map - querying a missing layer throws", () => {
     const present = new Set(["territory-7"]);
     expect(territoryTapLayers([7, 8], (id) => present.has(id))).toEqual(["territory-7"]);
   });

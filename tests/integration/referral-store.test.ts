@@ -259,7 +259,7 @@ describe("the $500 / 6-sale walkthrough", () => {
     expect(result.requirements.find(r => r.key === "training")!.met).toBe(false);
   });
 
-  it("re-qualifying is idempotent — one threshold event, one qualified_at", () => {
+  it("re-qualifying is idempotent - one threshold event, one qualified_at", () => {
     const referral = walkToPending();
     R.recheckQualification({ tenantId: T1, referralId: referral.id, nowIso: LATER });
     R.recheckQualification({ tenantId: T1, referralId: referral.id, nowIso: LATER });
@@ -305,7 +305,7 @@ describe("approval and the clawback window", () => {
     expect(after.qualifyingSalesCount).toBe(5);
   });
 
-  it("does NOT silently reverse an already-approved reward — it raises an exception", () => {
+  it("does NOT silently reverse an already-approved reward - it raises an exception", () => {
     const referral = walkToPending();
     R.approveReward({ tenantId: T1, referralId: referral.id, actorUserId: ADMIN_USER, nowIso: LATER });
     rawDb.prepare(`UPDATE commission_sales SET status = 'CANCELLED' WHERE external_id = 'sale-11-0'`).run();

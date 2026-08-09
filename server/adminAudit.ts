@@ -58,7 +58,7 @@ export function ensureAdminAuditSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_admin_audit_actor_at ON admin_audit(actor_user_id, at DESC);
     CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit(target_type, target_id);
     -- "Show me what FAILED" is the highest-value filter in an incident, and it
-    -- selects a small slice of a large table — measured at 100k rows it was the
+    -- selects a small slice of a large table - measured at 100k rows it was the
     -- slowest indexed path (6ms) because it fell back to the at-ordered scan.
     CREATE INDEX IF NOT EXISTS idx_admin_audit_outcome_at ON admin_audit(outcome, at DESC);
 

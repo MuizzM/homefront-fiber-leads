@@ -99,7 +99,7 @@ export function buildDiagnostics(events: RawEvent[], nowMs: number, windowHours 
     { module: "permission", label: "Permission denials", severity: sev(denials.length, 5, 20),
       value: denials.length, hint: denials.length ? "Repeated denials can signal misconfigured access" : "No blocked actions" },
     { module: "commission", label: "Commission engine", severity: failures.length ? "critical" : "ok",
-      value: failures.length, hint: failures.length ? "Sales sold with no active plan — book manually" : "All sales scored by an active plan" },
+      value: failures.length, hint: failures.length ? "Sales sold with no active plan - book manually" : "All sales scored by an active plan" },
     { module: "assignment", label: "Assignment activity", severity: "ok",
       value: assignmentEvents.length, hint: `${assignmentEvents.length} assignments logged` },
     { module: "commission", label: "Structure changes", severity: structureChanges.length ? "info" : "ok",

@@ -86,7 +86,7 @@ describe("the liquid floating bar", () => {
 });
 
 describe("liquid motion: the sliding active pill", () => {
-  it("is ONE element, moved by GPU transform — not five pills toggling", () => {
+  it("is ONE element, moved by GPU transform - not five pills toggling", () => {
     window.location.hash = "#/today";
     render(<BottomTabs role="rep" />);
     const pills = screen.getAllByTestId("tab-active-pill");
@@ -155,7 +155,7 @@ describe("liquid motion: press state and entrance", () => {
     }
   });
 
-  it("plays the rise+fade entrance once per session — never again on remount", () => {
+  it("plays the rise+fade entrance once per session - never again on remount", () => {
     __resetBarEntranceForTests();
     window.location.hash = "#/today";
     const first = render(<BottomTabs role="rep" />);

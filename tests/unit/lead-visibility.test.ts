@@ -23,7 +23,7 @@ describe("repCanWorkLead", () => {
     expect(repCanWorkLead({ assignedRepId: 9, assignedTerritoryId: 100 }, SCOPE, AREAS)).toBe(true);
   });
 
-  it("OPEN FIELD is OFF by default — an unowned door is not a rep's to work", () => {
+  it("OPEN FIELD is OFF by default - an unowned door is not a rep's to work", () => {
     // Default off on purpose: an org that imported a market's whole FCC
     // footprint would otherwise hand every rep tens of thousands of doors
     // nobody assigned them. Assignment is how work gets distributed.
@@ -41,7 +41,7 @@ describe("repCanWorkLead", () => {
     expect(repCanWorkLead({ assignedRepId: 9, assignedTerritoryId: null }, SCOPE, AREAS)).toBe(false);
   });
 
-  it("a door in another team's area is denied — even with no rep on it", () => {
+  it("a door in another team's area is denied - even with no rep on it", () => {
     // Unassigned INSIDE someone else's area is not open field: the area is owned.
     expect(repCanWorkLead({ assignedRepId: null, assignedTerritoryId: 200 }, SCOPE, AREAS)).toBe(false);
   });
@@ -69,7 +69,7 @@ describe("repCanWorkLead", () => {
 });
 
 describe("repVisibilitySql", () => {
-  it("returns no predicate for an unscoped caller — admins see the tenant", () => {
+  it("returns no predicate for an unscoped caller - admins see the tenant", () => {
     expect(repVisibilitySql(undefined)).toBeNull();
   });
 
@@ -94,7 +94,7 @@ describe("repVisibilitySql", () => {
     expect(repVisibilitySql([7], "leads")).toContain("leads.assigned_rep_id IN (7)");
   });
 
-  it("inlines only integers — nothing else can reach the SQL string", () => {
+  it("inlines only integers - nothing else can reach the SQL string", () => {
     // Ids come from the session, but this fragment is string-composed, so the
     // coercion is the boundary that has to hold.
     const frag = repVisibilitySql([7, 8.9, NaN, Infinity] as unknown as number[], "l")!;

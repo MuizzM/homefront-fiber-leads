@@ -59,7 +59,7 @@ describe("normalizeZip5", () => {
   });
 });
 
-describe("splitDisplayAddress (card decomposition — presentational only)", () => {
+describe("splitDisplayAddress (card decomposition - presentational only)", () => {
   it("splits house number, street, and unit", () => {
     expect(splitDisplayAddress("485 Brown Acres Rd")).toEqual({ houseNumber: "485", street: "Brown Acres Rd", unit: "" });
     expect(splitDisplayAddress("123 Main St Apt 4")).toEqual({ houseNumber: "123", street: "Main St", unit: "Apt 4" });
@@ -103,14 +103,14 @@ describe("addressIdentityIssues (ADDRESS_REVIEW validation)", () => {
 });
 
 describe("address-key algorithmic fixes (audit)", () => {
-  it("every unit spelling keys identically — 'Apt #4' no longer double-folds to UNIT UNIT", () => {
+  it("every unit spelling keys identically - 'Apt #4' no longer double-folds to UNIT UNIT", () => {
     const forms = ["123 Main St #4", "123 Main St Apt 4", "123 Main St Apt #4", "123 Main St Unit #4", "123 Main St Unit 4"];
     const keys = forms.map(a => kineticLeadKeyOrNull(a, "Charlotte", "NC", "28202"));
     expect(new Set(keys).size).toBe(1);                    // all one canonical key
     expect(keys[0]).not.toContain("UNIT UNIT");
   });
 
-  it("street-less placeholders get NO key (no dedup) — distinct leads can't merge away", () => {
+  it("street-less placeholders get NO key (no dedup) - distinct leads can't merge away", () => {
     // "#", "Apt 5", "Unit 12" have no street identity → null → dedup disabled.
     expect(kineticLeadKeyOrNull("#", "Charlotte", "NC", "28202")).toBeNull();
     expect(kineticLeadKeyOrNull("Apt 5", "Charlotte", "NC", "28202")).toBeNull();

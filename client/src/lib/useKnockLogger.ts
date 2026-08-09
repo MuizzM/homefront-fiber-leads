@@ -105,7 +105,7 @@ export function useKnockLogger() {
     if (!isKnockableLeadId(lead.id)) {
       toast({
         title: "This door is still saving",
-        description: "The pin hasn't finished syncing yet — give it a second, then log the outcome again.",
+        description: "The pin hasn't finished syncing yet - give it a second, then log the outcome again.",
         variant: "destructive",
       });
       return false;

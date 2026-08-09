@@ -80,7 +80,7 @@ const PRESETS: Preset[] = [
   {
     key: "knocks_noon",
     label: "40 doors before noon",
-    blurb: "Pure effort — anyone who walks can win it.",
+    blurb: "Pure effort - anyone who walks can win it.",
     name: "Morning grind",
     rewardCents: 5_000,
     trigger: { kind: "knocks_by_time", knocks: 40, byHourLocal: 12 },
@@ -380,7 +380,7 @@ export function CampaignLauncher() {
 
       {isLoading ? null : running.length === 0 ? (
         <EmptyState icon={Megaphone} title="Nothing running" bordered testId="campaigns-empty"
-          description="Launch a contest and every rep sees it on their phone with live progress. The ones that move a slow afternoon are effort-based — knocks before a cutoff, not just sales." />
+          description="Launch a contest and every rep sees it on their phone with live progress. The ones that move a slow afternoon are effort-based - knocks before a cutoff, not just sales." />
       ) : (
         <ul className="space-y-2" data-testid="campaign-list">{running.map(row)}</ul>
       )}

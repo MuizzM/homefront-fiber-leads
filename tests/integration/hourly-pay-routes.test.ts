@@ -224,7 +224,7 @@ describe("pay disputes", () => {
     expect(asRep.status).toBe(403);
 
     const res = await request(`/api/pay/disputes/${disputeId}/resolve`, mgr1.session, {
-      method: "POST", body: JSON.stringify({ resolution: "upheld", note: "Hours verified against the territory log — paid correctly." }),
+      method: "POST", body: JSON.stringify({ resolution: "upheld", note: "Hours verified against the territory log - paid correctly." }),
     });
     expect(res.status).toBe(200);
     const d = await res.json() as any;
@@ -356,7 +356,7 @@ describe("gate fixes F1/F3/F4/F6", () => {
   });
 });
 
-describe("payroll CSV — appended hourly money-plane columns reconcile to the statement", () => {
+describe("payroll CSV - appended hourly money-plane columns reconcile to the statement", () => {
   it("original columns stable; hours/rate/pay/spiffs/reserve/total appended and summed", async () => {
     // rep1: $25/h (set above) + 8h in the week + 1 qualified sale on a $150 flat plan.
     seedSession(rep1.memberId, 1, new Date(Date.parse(wk.weekStartUtc) + 8 * 3_600_000).toISOString(),

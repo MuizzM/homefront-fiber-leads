@@ -44,7 +44,7 @@ const deadItem = (over: Partial<QueueSnapshot["deadItems"][number]> = {}) => ({
   clientId: "c1",
   leadId: 42,
   outcome: "interested" as const,
-  reason: "not authorized right now — sign out and back in, then retry",
+  reason: "not authorized right now - sign out and back in, then retry",
   retryable: true,
   ...over,
 });
@@ -55,7 +55,7 @@ beforeEach(() => {
   mockState.queue = { retryDead: vi.fn(), flush: vi.fn(async () => {}) };
 });
 
-describe("FieldStatusBar — needs attention with door + reason", () => {
+describe("FieldStatusBar - needs attention with door + reason", () => {
   it("renders nothing when online with an empty queue", () => {
     renderBar();
     expect(screen.queryByTestId("field-status")).toBeNull();
@@ -115,7 +115,7 @@ describe("FieldStatusBar — needs attention with door + reason", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  it("the pill clears itself when the dead lane self-heals — auto-retry delivered, no manual Retry", () => {
+  it("the pill clears itself when the dead lane self-heals - auto-retry delivered, no manual Retry", () => {
     mockState.snap = { ...mockState.snap, deadCount: 1, deadItems: [deadItem()] };
     const qc = new QueryClient();
     qc.setQueryData(["/api/leads/map"], { pins: [{ id: 42, address: "42 Oak St" }] });
@@ -142,12 +142,12 @@ describe("FieldStatusBar — needs attention with door + reason", () => {
     mockState.online = false;
     mockState.snap = { ...mockState.snap, pendingCount: 2 };
     renderBar();
-    expect(screen.getByTestId("field-status").textContent).toContain("Offline — 2 updates saved on this device");
+    expect(screen.getByTestId("field-status").textContent).toContain("Offline - 2 updates saved on this device");
   });
 });
 
 describe("the map overlay NEVER shows the syncing state (owner directive)", () => {
-  it("overlay renders nothing for a sustained online backlog — only offline and failures surface", () => {
+  it("overlay renders nothing for a sustained online backlog - only offline and failures surface", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mockState.online = true;
     mockState.snap = { pendingCount: 3, deadCount: 0, deadItems: [], byLead: {}, online: true };

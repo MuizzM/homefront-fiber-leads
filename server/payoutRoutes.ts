@@ -115,7 +115,7 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
         payoutStatus: existing?.status ?? null,
         eligible: elig.eligible,
         blockReason: reversed ? "payout_reversed" : elig.reason,
-        blockLabel: reversed ? "Payout was reversed — needs attention" : (elig.reason ? BLOCK_LABEL[elig.reason] : null),
+        blockLabel: reversed ? "Payout was reversed - needs attention" : (elig.reason ? BLOCK_LABEL[elig.reason] : null),
       };
     });
     const payableCents = rows.filter(r => r.eligible).reduce((s, r) => s + r.finalCommissionCents, 0);

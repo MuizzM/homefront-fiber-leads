@@ -155,10 +155,10 @@ export function verdictForPhone(phone: TracedPhone, nowMs: number): PhoneVerdict
  *  to treat every badge as noise. */
 export function dncExplanation(reasons: DncReason[]): string {
   if (reasons.length === 0) return "OK to call";
-  if (reasons.includes("tcpa_litigator")) return "Known TCPA litigator — do not dial";
+  if (reasons.includes("tcpa_litigator")) return "Known TCPA litigator - do not dial";
   if (reasons.includes("federal_dnc")) return "On the federal Do Not Call registry";
   if (reasons.includes("state_dnc")) return "On the state Do Not Call registry";
-  if (reasons.includes("scrub_expired")) return "DNC check expired — re-scrubbing";
+  if (reasons.includes("scrub_expired")) return "DNC check expired - re-scrubbing";
   return "Not DNC-checked yet";
 }
 

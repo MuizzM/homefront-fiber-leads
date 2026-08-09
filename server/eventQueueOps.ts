@@ -117,7 +117,7 @@ export function getState(subscriber: string, eventId: number): any {
  *
  * Returns false when another worker holds a live lease, or when the event is
  * backing off, or when an operator has set it aside. A lease older than
- * LEASE_TTL_MS is reclaimable — that is the crash-recovery path, and it is safe
+ * LEASE_TTL_MS is reclaimable - that is the crash-recovery path, and it is safe
  * because the work itself is idempotent (every award insert is ON CONFLICT DO
  * NOTHING against a unique key), so at worst the retry re-does committed work
  * and writes nothing new.
@@ -182,7 +182,7 @@ export function isHalted(state: any): boolean {
   return !!state && (state.status === "blocked" || (state.status === "failed" && Number(state.attempts) >= MAX_ATTEMPTS));
 }
 
-/** Statuses an operator has explicitly cleared — the queue may advance past them. */
+/** Statuses an operator has explicitly cleared - the queue may advance past them. */
 export function isOperatorCleared(state: any): boolean {
   return !!state && (state.status === "dead_lettered" || state.status === "resolved");
 }
@@ -190,7 +190,7 @@ export function isOperatorCleared(state: any): boolean {
 // ── Operator actions ─────────────────────────────────────────────────────────
 // Every one requires a reason and writes an append-only audit record. None of
 // them move money: retry re-runs idempotent work, dead-letter and resolve only
-// change whether the queue may advance — the underlying event row is never
+// change whether the queue may advance - the underlying event row is never
 // deleted, so its financial effect stays inspectable and replayable.
 
 export type OperatorAction = "RETRY" | "DEAD_LETTER" | "RESOLVE";
@@ -274,7 +274,7 @@ export function queueHealth(subscriber: string, cursor: number, backlog: number,
 }
 
 /**
- * Post-resolution recovery check. READ-ONLY — it reports, it never repairs.
+ * Post-resolution recovery check. READ-ONLY - it reports, it never repairs.
  *
  * Answers the three questions an operator has after clearing a stall: is the
  * cursor where the completed work says it should be, is anything still holding

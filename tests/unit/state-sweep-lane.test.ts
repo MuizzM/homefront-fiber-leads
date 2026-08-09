@@ -23,7 +23,7 @@ afterEach(() => sweep.__resetStateSweepLane());
 
 const tick = () => new Promise((r) => setImmediate(r));
 
-describe("enqueueStateSweepLane — one heavy sweep at a time", () => {
+describe("enqueueStateSweepLane - one heavy sweep at a time", () => {
   it("runs enqueued tasks strictly one at a time, never overlapping", async () => {
     let active = 0;
     let maxConcurrent = 0;

@@ -130,7 +130,7 @@ describe("authorizedScanAdmission is a real admission check", () => {
     expect((await run(null)).status).toBe(401);
   });
 
-  it("rejects a caller without scan.submit (403) — reps cannot spend scan budget", async () => {
+  it("rejects a caller without scan.submit (403) - reps cannot spend scan budget", async () => {
     const out = await run({ id: 7, role: "rep" });
     expect(out.status).toBe(403);
     expect(out.body.need).toBe("scan.submit");

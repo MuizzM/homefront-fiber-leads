@@ -223,7 +223,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           {territory.repIds.length > 1 ? "Assigned reps" : "Assigned rep"}
         </div>
         {territory.repIds.length === 0 ? (
-          <span className="text-xs text-muted-foreground italic">Unassigned — in the pool</span>
+          <span className="text-xs text-muted-foreground italic">Unassigned - in the pool</span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
             {territory.repIds.map(id => {
@@ -266,7 +266,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
                     <button
                       type="button"
                       aria-label={`Remove ${name} from this area`}
-                      title={`Remove ${name} — their doors here return to the pool`}
+                      title={`Remove ${name} - their doors here return to the pool`}
                       data-testid={`unassign-rep-${id}`}
                       disabled={busy}
                       onClick={() => setConfirmRemoveId(id)}
@@ -345,7 +345,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
             />
           </div>
           <div data-testid="area-worked-caption" className="mt-1 text-xs text-muted-foreground">
-            {progress.areaWorkedPct.toFixed(2)}% — {progress.verifiedWorkedLeads} of {progress.total} leads worked
+            {progress.areaWorkedPct.toFixed(2)}% - {progress.verifiedWorkedLeads} of {progress.total} leads worked
           </div>
 
           {/* Verification summary — icon + text (WCAG: not colour alone) */}
@@ -368,7 +368,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           <div className="mt-2.5 flex items-center justify-between text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5" title="Average distance from the lead when marked (verified activities)">
               <Ruler className="h-3.5 w-3.5" />
-              Avg {progress.avgDistanceM != null ? `${progress.avgDistanceM} m` : "—"}
+              Avg {progress.avgDistanceM != null ? `${progress.avgDistanceM} m` : " - "}
             </span>
             <span title="Configured maximum allowed distance for a mark to verify">Max allowed {progress.maxAllowedDistanceM} m</span>
           </div>

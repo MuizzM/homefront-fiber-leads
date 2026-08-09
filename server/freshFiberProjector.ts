@@ -116,7 +116,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
      WHERE s.state IN ('GA','NC','SC') AND s.tenant_id=?
        -- No historical requirement: a target qualifies on its flip stamp OR on
        -- the CURRENT conclusive answer alone (NEW FIBER + billing N is a Fresh
-       -- Lead now — no first_seen_fiber_at, detected flip, or corroboration
+       -- Lead now - no first_seen_fiber_at, detected flip, or corroboration
        -- needed to be considered).
        AND (s.first_seen_fiber_at IS NOT NULL
             OR (upper(COALESCE(latest.household_segment_type,''))='NEW FIBER'
@@ -125,7 +125,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
        -- fiber state on shared targets regardless of carrier. A frontier lead
        -- may ONLY be published from an actual Frontier serviceability verdict
        -- (notes start "Frontier fiber live"); Kinetic-fabric verdicts on a
-       -- frontier-tagged target are NOT Frontier leads — observed live
+       -- frontier-tagged target are NOT Frontier leads - observed live
        -- re-minting hundreds of false red pins after the strict cleanup.
        AND (COALESCE(s.carrier,'') <> 'frontier'
             OR latest.service_status LIKE 'Frontier fiber live%') ${filter}

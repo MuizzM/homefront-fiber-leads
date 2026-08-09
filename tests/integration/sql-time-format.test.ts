@@ -46,7 +46,7 @@ describe("the mixed-format comparison bug", () => {
     expect(q("SELECT (? >= ?) AS r", `${day}T23:30:00.000Z`, iso).r).toBe(1);   // later that day  → in
   });
 
-  it("emits the same shape JS toISOString() does — the two must sort together", () => {
+  it("emits the same shape JS toISOString() does - the two must sort together", () => {
     const iso = q(`SELECT ${isoDaysAgo(0)} AS t`).t as string;
     expect(iso).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(iso).toHaveLength(new Date().toISOString().length);

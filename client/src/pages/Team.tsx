@@ -249,7 +249,7 @@ function MemberFormUI({
               <SelectValue placeholder="Select supervisor" />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
-              <SelectItem value="none">— None (reports to Admin) —</SelectItem>
+              <SelectItem value="none"> - None (reports to Admin) - </SelectItem>
               {supervisors.map(m => (
                 <SelectItem key={m.id} value={String(m.id)}>
                   {m.name} · {roleInfo(m.role).short}
@@ -259,7 +259,7 @@ function MemberFormUI({
           </Select>
           {supervisors.length === 0 && (
             <p className="text-xs text-muted-foreground mt-1">
-              No {form.role === "rep" ? "team leads or managers" : "managers"} added yet — leave as top-level for now.
+              No {form.role === "rep" ? "team leads or managers" : "managers"} added yet - leave as top-level for now.
             </p>
           )}
         </div>
@@ -350,7 +350,7 @@ export default function Team() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/team"] });
-      toast({ title: "Override rates updated", description: "Applies to future sales only — settled weeks keep their frozen amounts." });
+      toast({ title: "Override rates updated", description: "Applies to future sales only - settled weeks keep their frozen amounts." });
     },
     onError: (error: any) => toast({ title: "Rates not saved", description: error.message, variant: "destructive" }),
   });
@@ -697,7 +697,7 @@ export default function Team() {
                       {canLifecycle(member) && member.active && (
                         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-400 hover:bg-amber-500/10"
                           onClick={() => setOffboardMember(member)} data-testid={`btn-offboard-rep-${member.id}`}
-                          aria-label={`Offboard ${member.name}`} title="Offboard — remove access, keep records">
+                          aria-label={`Offboard ${member.name}`} title="Offboard - remove access, keep records">
                           <UserMinus className="w-3.5 h-3.5" />
                         </Button>
                       )}
@@ -851,7 +851,7 @@ export default function Team() {
           <RoleSection title="Team leads" members={leads} role="team_lead" />
           <RoleSection title="Sales reps" members={reps} role="rep" />
 
-          {/* Former members — offboarded people keep their records but lose all
+          {/* Former members - offboarded people keep their records but lose all
               access. Anyone who outranks them can bring them back. */}
           {formerMembers.length > 0 && (
             <div>
@@ -919,7 +919,7 @@ export default function Team() {
         </div>
       )}
 
-      {/* Offboard confirm — spells out exactly what the kick does before it happens */}
+      {/* Offboard confirm - spells out exactly what the kick does before it happens */}
       <Dialog open={!!offboardMember} onOpenChange={v => !v && setOffboardMember(null)}>
         <DialogContent className="bg-card border-border text-foreground max-w-md">
           <DialogHeader>
@@ -938,7 +938,7 @@ export default function Team() {
               <KeyRound className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
               <div>
                 <div className="font-medium text-foreground">Login disabled &amp; signed out everywhere</div>
-                <div className="text-xs text-muted-foreground">Every live session ends now — not at their next login.</div>
+                <div className="text-xs text-muted-foreground">Every live session ends now - not at their next login.</div>
               </div>
             </div>
             {offboardMember && directReportsOf(offboardMember.id).length > 0 && (
@@ -1020,7 +1020,7 @@ export default function Team() {
               setForm={setEditForm}
               onSave={() => {
                 // Self-edits may only carry profile fields; other edits send the
-                // editable fields but never `active` — lifecycle changes go
+                // editable fields but never `active` - lifecycle changes go
                 // through Offboard/Reactivate so sessions and reports are handled.
                 const data: Partial<InsertTeamMember> = editMember.id === myMemberId
                   ? { name: editForm.name, phone: editForm.phone }
@@ -1071,7 +1071,7 @@ export default function Team() {
             </div>
           )}
 
-          {/* OVERRIDE RATES — what the upline keeps from each of this member's
+          {/* OVERRIDE RATES - what the upline keeps from each of this member's
               qualified sales, the same knobs the invite form sets for new
               hires, editable here for everyone who predates them. Hidden for
               manager rows (no slot above a manager ever pays) and gated on the
@@ -1253,7 +1253,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
   const blockedReason =
     structure === "TIERED" && !tierValidation.ok ? tierValidation.errors[0]
     : structure === "FLAT" && !(flatCents > 0) ? "Enter a per-sale rate above $0"
-    : structure === "FLAT" && flatCents > 100000 ? "Rate above $1,000/sale — check the number"
+    : structure === "FLAT" && flatCents > 100000 ? "Rate above $1,000/sale - check the number"
     : reserveBlocked;
 
   const assignMutation = useMutation({
@@ -1288,7 +1288,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
       <DialogContent className="bg-card border-border text-foreground max-w-md">
         <DialogHeader>
           <DialogTitle className="text-base flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-primary" /> Commission — {member?.name}
+            <Wallet className="w-4 h-4 text-primary" /> Commission - {member?.name}
           </DialogTitle>
         </DialogHeader>
 
@@ -1298,9 +1298,9 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
           {isLoading ? (
             <span className="text-muted-foreground">loading…</span>
           ) : curStruct === "FLAT" ? (
-            <span className="text-foreground font-semibold tabular-nums">Flat — ${((current.flatRateCents || 0) / 100).toLocaleString()}/sale</span>
+            <span className="text-foreground font-semibold tabular-nums">Flat - ${((current.flatRateCents || 0) / 100).toLocaleString()}/sale</span>
           ) : curStruct === "TIERED" ? (
-            <span className="text-foreground font-semibold">Tiered — {current.planName || "weekly ladder"}</span>
+            <span className="text-foreground font-semibold">Tiered - {current.planName || "weekly ladder"}</span>
           ) : (
             <span className="text-amber-400 font-medium">No plan assigned yet</span>
           )}
@@ -1328,7 +1328,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
           <div className="rounded-xl bg-secondary/30 border border-border p-2.5 mt-1">
             <p className="text-2xs text-muted-foreground mb-2">
               Total weekly sales set one rate for <span className="font-semibold text-foreground">every</span> sale
-              — hit the next band and the whole week re-prices at that rate.
+              - hit the next band and the whole week re-prices at that rate.
             </p>
             {/* The ladder was a fixed display. Editable now: bands stay tiled and
                 the last stays open-ended by construction, so a rep can never sell

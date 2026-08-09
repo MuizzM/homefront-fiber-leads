@@ -53,7 +53,7 @@ async function openOverrideRow() {
 
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
-describe("territory activity — admin override inline confirm", () => {
+describe("territory activity - admin override inline confirm", () => {
   it("never calls window.prompt anywhere in the flow", async () => {
     const promptSpy = vi.spyOn(window, "prompt");
     renderDrawer();
@@ -118,7 +118,7 @@ describe("territory activity — admin override inline confirm", () => {
 });
 
 // ── Drawer chrome: every control wired, none sub-44px ────────────────────────
-describe("territory activity — drawer chrome", () => {
+describe("territory activity - drawer chrome", () => {
   it("the close button is wired to onClose", async () => {
     const { onClose } = renderDrawer();
     await screen.findByTestId("activity-row");

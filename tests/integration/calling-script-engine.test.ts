@@ -145,7 +145,7 @@ function expectCompliantText(text: string) {
   expect(text).not.toMatch(/\b(spectrum|comcast|xfinity|at&t|verizon|frontier|centurylink)\b/i);
 }
 
-describe("rules template — deterministic and personalized", () => {
+describe("rules template - deterministic and personalized", () => {
   it("builds identical output for identical context (deterministic)", async () => {
     engine.__clearScriptCacheForTests();
     const lead = { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292",
@@ -251,7 +251,7 @@ describe("rules template — deterministic and personalized", () => {
   });
 });
 
-describe("LLM enhancement — never fails the endpoint", () => {
+describe("LLM enhancement - never fails the endpoint", () => {
   it("falls back to rules when no LLM is configured", async () => {
     engine.__clearScriptCacheForTests();
     const result = await engine.generateScriptForLead({
@@ -326,7 +326,7 @@ describe("LLM enhancement — never fails the endpoint", () => {
     }
     // The legitimate qualified phrases must PASS the screen.
     for (const good of [
-      "Hi, this is Riley with Homefront Solutions — Kinetic's authorized fiber partner.",
+      "Hi, this is Riley with Homefront Solutions - Kinetic's authorized fiber partner.",
       "We're an authorized Kinetic dealer running the local fiber rollout right now.",
       "I'm calling on behalf of Homefront Solutions, an authorized seller of Kinetic Fiber internet from Windstream.",
       "Homefront Solutions is an authorized partner for Kinetic fiber in this area.",
@@ -340,16 +340,16 @@ describe("LLM enhancement — never fails the endpoint", () => {
     engine.__setScriptEngineLlmTransportForTests(async () => JSON.stringify({
       // Disclosure + rep name survive, but the opener claims employment — the
       // prohibited-content screen must catch it before validation passes.
-      opener: "Hi, this is Riley Rep — I'm a Kinetic employee, and this is a sales call about new fiber service at 100 Maple Grove Ln in Lexington.",
+      opener: "Hi, this is Riley Rep - I'm a Kinetic employee, and this is a sales call about new fiber service at 100 Maple Grove Ln in Lexington.",
       neighborhoodHook: "Kinetic just dropped brand-new fiber in your neighborhood, with several homes connected in the last three weeks.",
-      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours — smooth video calls, streaming without buffering, and low-latency gaming.",
+      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours - smooth video calls, streaming without buffering, and low-latency gaming.",
       objectionHandlers: {
-        price: "Fair question — pricing depends on the tier, and many households pay about the same as they do now. Can I check exact plans?",
+        price: "Fair question - pricing depends on the tier, and many households pay about the same as they do now. Can I check exact plans?",
         currentProvider: "Totally understandable. The fiber difference is consistency at busy times. Can I check what your address qualifies for?",
         renter: "Renters can usually get fiber at serviceable addresses, and the account goes in your name. Can I check while I have you?",
         worksFine: "That's great to hear. Fiber adds headroom so everything keeps working when everyone is online. Open to a quick check?",
       },
-      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln — no obligation. Can I run that for you?",
+      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln - no obligation. Can I run that for you?",
     }));
     try {
       engine.__clearScriptCacheForTests();
@@ -371,20 +371,20 @@ describe("LLM enhancement — never fails the endpoint", () => {
     process.env.LLM_ENDPOINT = "http://llm.test/chat";
     const compliant = {
       neighborhoodHook: "Kinetic Fiber has just arrived on Maple Grove Ln in Lexington, with several homes confirmed for brand-new fiber in the last three weeks.",
-      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours — smooth video calls, streaming without buffering, and low-latency gaming.",
+      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours - smooth video calls, streaming without buffering, and low-latency gaming.",
       objectionHandlers: {
-        price: "Fair question — pricing depends on the tier, and many households pay about the same as they do now. Can I check exact plans?",
+        price: "Fair question - pricing depends on the tier, and many households pay about the same as they do now. Can I check exact plans?",
         currentProvider: "Totally understandable. The fiber difference is consistency at busy times. Can I check what your address qualifies for?",
         renter: "Renters can usually get fiber at serviceable addresses, and the account goes in your name. Can I check while I have you?",
         worksFine: "That's great to hear. Fiber adds headroom so everything keeps working when everyone is online. Open to a quick check?",
       },
-      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln — no obligation. Can I run that for you?",
+      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln - no obligation. Can I run that for you?",
     };
     const badOpeners = [
       // No "sales call" disclosure — mandatory opening language dropped.
       "Hi there, this is Riley Rep calling on behalf of Home Front Solutions about fiber service at 100 Maple Grove Ln in Lexington. Do you have about a minute?",
       // Disclosure present but the rep's own name is gone.
-      "Hi there, I'm calling on behalf of Home Front Solutions — this is a sales call about fiber service at 100 Maple Grove Ln in Lexington. Do you have about a minute?",
+      "Hi there, I'm calling on behalf of Home Front Solutions - this is a sales call about fiber service at 100 Maple Grove Ln in Lexington. Do you have about a minute?",
     ];
     try {
       for (const opener of badOpeners) {
@@ -407,16 +407,16 @@ describe("LLM enhancement — never fails the endpoint", () => {
   it("uses compliant model rephrasing when the LLM succeeds (footer still verbatim)", async () => {
     process.env.LLM_ENDPOINT = "http://llm.test/chat";
     engine.__setScriptEngineLlmTransportForTests(async () => JSON.stringify({
-      opener: "Hi there, this is Riley Rep calling on behalf of Home Front Solutions, an authorized seller of Kinetic Fiber from Windstream — this is a sales call about fiber service at 100 Maple Grove Ln in Lexington. Do you have about a minute?",
+      opener: "Hi there, this is Riley Rep calling on behalf of Home Front Solutions, an authorized seller of Kinetic Fiber from Windstream - this is a sales call about fiber service at 100 Maple Grove Ln in Lexington. Do you have about a minute?",
       neighborhoodHook: "Kinetic Fiber has just arrived on Maple Grove Ln in Lexington, with 4 homes confirmed for brand-new fiber in the last three weeks, including over by Oak Street.",
-      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours — smooth video calls for working from home, streaming without buffering, and low-latency gaming.",
+      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours - smooth video calls for working from home, streaming without buffering, and low-latency gaming.",
       objectionHandlers: {
-        price: "Fair question — pricing depends on the tier, and many households pay about the same as they do now. Can I check the exact plans for your address?",
+        price: "Fair question - pricing depends on the tier, and many households pay about the same as they do now. Can I check the exact plans for your address?",
         currentProvider: "Totally understandable. The fiber difference is consistency at busy times and uploads that match downloads. Can I check what your address qualifies for?",
         renter: "Renters can usually get fiber at serviceable addresses, and the account goes in your name. Can I check your address while I have you?",
         worksFine: "That's great to hear. Fiber adds headroom so everything keeps working when the whole household is online. Open to a quick availability check?",
       },
-      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln — no obligation. Can I run that for you?",
+      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln - no obligation. Can I run that for you?",
     }));
     try {
       engine.__clearScriptCacheForTests();
@@ -436,7 +436,7 @@ describe("LLM enhancement — never fails the endpoint", () => {
   });
 });
 
-describe("HTTP endpoints — gating, cache, footer", () => {
+describe("HTTP endpoints - gating, cache, footer", () => {
   it("GET /leads/:leadId/script returns a personalized script with metadata", async () => {
     engine.__clearScriptCacheForTests();
     const response = await request(`/api/v1/calling/leads/${mainLeadId}/script`, REP());

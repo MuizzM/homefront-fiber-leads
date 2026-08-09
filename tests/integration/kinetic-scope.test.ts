@@ -58,7 +58,7 @@ describe("scope suppression backfill", () => {
     expect(pins.join("|")).toContain("4 Kinetic NC St");
   });
 
-  it("is idempotent — a second run suppresses nothing new", () => {
+  it("is idempotent - a second run suppresses nothing new", () => {
     const before = (rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE lead_status='scope_suppressed'`).get() as any).n;
     runMigrations();
     const after = (rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE lead_status='scope_suppressed'`).get() as any).n;

@@ -26,7 +26,7 @@ describe("parseDbTime", () => {
   });
 });
 
-describe("scoreLead — recency", () => {
+describe("scoreLead - recency", () => {
   it("gives a just-lit lead the full recency weight and a 'lit just now' reason", () => {
     const { score, reasons } = scoreLead(base({ freshConfirmedAt: minutesAgo(0) }), NOW);
     expect(score).toBeCloseTo(RANK_WEIGHTS.RECENCY_MAX, 0);
@@ -55,18 +55,18 @@ describe("scoreLead — recency", () => {
   });
 });
 
-describe("scoreLead — newly lit (the coming-soon flip)", () => {
+describe("scoreLead - newly lit (the coming-soon flip)", () => {
   it("awards the flat bonus and names the prior state", () => {
     const comingSoon = scoreLead(base({ newlyLit: { priorState: "coming_soon" } }), NOW);
     expect(comingSoon.score).toBe(RANK_WEIGHTS.NEWLY_LIT_BONUS);
-    expect(comingSoon.reasons).toContain("newly lit — was coming soon");
+    expect(comingSoon.reasons).toContain("newly lit - was coming soon");
 
     const unavailable = scoreLead(base({ newlyLit: { priorState: "unavailable" } }), NOW);
-    expect(unavailable.reasons).toContain("newly lit — was unavailable");
+    expect(unavailable.reasons).toContain("newly lit - was unavailable");
   });
 });
 
-describe("scoreLead — new-build confidence", () => {
+describe("scoreLead - new-build confidence", () => {
   it("scales the bonus by source confidence", () => {
     const authoritative = scoreLead(base({ newBuild: { buildStage: "addressed", confidence: "authoritative" } }), NOW);
     expect(authoritative.score).toBe(RANK_WEIGHTS.NEW_BUILD_MAX * NEW_BUILD_CONFIDENCE_FACTOR.authoritative);
@@ -78,7 +78,7 @@ describe("scoreLead — new-build confidence", () => {
   });
 });
 
-describe("scoreLead — nearby green density", () => {
+describe("scoreLead - nearby green density", () => {
   it("scales with neighbor count and saturates at the cap", () => {
     const three = scoreLead(base({ nearbyFreshCount: 3 }), NOW);
     expect(three.score).toBeCloseTo(RANK_WEIGHTS.DENSITY_MAX * 3 / RANK_WEIGHTS.DENSITY_NEIGHBOR_CAP, 5);
@@ -96,7 +96,7 @@ describe("scoreLead — nearby green density", () => {
   });
 });
 
-describe("scoreLead — expansion cluster yield", () => {
+describe("scoreLead - expansion cluster yield", () => {
   it("awards proportional points and the 'cluster yielded N leads' reason", () => {
     const { score, reasons } = scoreLead(base({ clusterFreshFound: 6 }), NOW);
     expect(score).toBe(RANK_WEIGHTS.CLUSTER_YIELD_MAX * 6 / RANK_WEIGHTS.CLUSTER_YIELD_CAP);
@@ -110,11 +110,11 @@ describe("scoreLead — expansion cluster yield", () => {
   });
 });
 
-describe("scoreLead — territory fit", () => {
+describe("scoreLead - territory fit", () => {
   it("adds the small bonus for a routed lead, preferring the assigned-rep wording", () => {
     const assigned = scoreLead(base({ assignedRepId: 7 }), NOW);
     expect(assigned.score).toBe(RANK_WEIGHTS.TERRITORY_FIT_BONUS);
-    expect(assigned.reasons).toContain("assigned — actionable now");
+    expect(assigned.reasons).toContain("assigned - actionable now");
 
     const territory = scoreLead(base({ assignedTerritoryId: 3 }), NOW);
     expect(territory.score).toBe(RANK_WEIGHTS.TERRITORY_FIT_BONUS);
@@ -122,7 +122,7 @@ describe("scoreLead — territory fit", () => {
   });
 });
 
-describe("scoreLead — composite", () => {
+describe("scoreLead - composite", () => {
   it("sums every signal for the perfect door", () => {
     const { score, reasons } = scoreLead({
       freshConfirmedAt: minutesAgo(0),

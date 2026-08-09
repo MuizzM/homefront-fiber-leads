@@ -26,10 +26,10 @@ export function PaywallBanner() {
 
   let tone: "amber" | "red" | null = null;
   let msg = "";
-  if (data.access === "blocked") { tone = "red"; msg = "Your subscription is canceled — reactivate billing to restore access."; }
+  if (data.access === "blocked") { tone = "red"; msg = "Your subscription is canceled - reactivate billing to restore access."; }
   else if (data.access === "paywall") { tone = "red"; msg = "Your workspace is suspended for non-payment. Reactivate billing to restore full access."; }
-  else if (data.state === "past_due") { tone = "amber"; msg = "Payment is past due — update your billing to avoid interruption."; }
-  else if (data.level === "exhausted") { tone = "amber"; msg = "Lead credits are exhausted for this cycle — new lead delivery is paused."; }
+  else if (data.state === "past_due") { tone = "amber"; msg = "Payment is past due - update your billing to avoid interruption."; }
+  else if (data.level === "exhausted") { tone = "amber"; msg = "Lead credits are exhausted for this cycle - new lead delivery is paused."; }
   else if (data.level === "critical") { tone = "amber"; msg = "You've used 90%+ of this cycle's lead credits."; }
   if (!tone) return null;
 

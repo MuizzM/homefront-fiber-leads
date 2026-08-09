@@ -152,7 +152,7 @@ beforeEach(() => {
   contentOverride = null;
 });
 
-describe("My Documents — the signing ceremony", () => {
+describe("My Documents - the signing ceremony", () => {
   it("keeps signing disabled until the agreement is read, every consent is ticked, and a name is typed", async () => {
     renderPage();
     await openSigningDialog();

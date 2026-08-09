@@ -65,7 +65,7 @@ describe("what counts as hot", () => {
     expect(v.block).toBe("no_interest");
   });
 
-  it("does not arm right after a sale — there is nothing to convert", () => {
+  it("does not arm right after a sale - there is nothing to convert", () => {
     const v = evaluateMomentum(hot({ minutesSinceLastSale: 10 }), NOW);
     expect("offer" in v).toBe(false);
     if ("offer" in v) return;
@@ -143,7 +143,7 @@ describe("tiers", () => {
     expect(tierFor(100)).toBe(6_000);
   });
 
-  it("is order-independent — a config listing tiers backwards still pays correctly", () => {
+  it("is order-independent - a config listing tiers backwards still pays correctly", () => {
     const backwards = cfg({ tiers: [
       { atScore: 85, amountCents: 6_000 },
       { atScore: 55, amountCents: 2_500 },
@@ -241,7 +241,7 @@ describe("validation the server and the form share", () => {
     expect(validateMomentumConfig(cfg({ offerMinutes: 2 }))).toMatch(/Offer length/);
   });
 
-  it("refuses a pace multiple below 1 — that would arm for going slower", () => {
+  it("refuses a pace multiple below 1 - that would arm for going slower", () => {
     expect(validateMomentumConfig(cfg({ paceRatio: 0.5 }))).toMatch(/Pace multiple/);
   });
 

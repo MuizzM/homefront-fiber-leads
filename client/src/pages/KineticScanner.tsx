@@ -319,17 +319,17 @@ function Diagnostics({ state }: { state: any }) {
     ["Concurrency", state?.concurrency ?? 1],
     [
       "Heap Usage",
-      state?.memory?.heapUsedMb != null ? `${state.memory.heapUsedMb} MB` : "—",
+      state?.memory?.heapUsedMb != null ? `${state.memory.heapUsedMb} MB` : " - ",
     ],
     [
       "RSS Memory",
-      state?.memory?.rssMb != null ? `${state.memory.rssMb} MB` : "—",
+      state?.memory?.rssMb != null ? `${state.memory.rssMb} MB` : " - ",
     ],
     [
       "Last Heartbeat",
       state?.recheckWorker?.lastHeartbeat
         ? new Date(state.recheckWorker.lastHeartbeat).toLocaleTimeString()
-        : "—",
+        : " - ",
     ],
   ];
   return (
@@ -802,10 +802,10 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
                       className="border-t border-border hover:bg-secondary/25"
                     >
                       <td className="px-3 py-3 font-mono font-semibold">
-                        {a.sequentialId ?? "—"}
+                        {a.sequentialId ?? " - "}
                       </td>
                       <td className="px-3 py-3 font-mono text-2xs">
-                        {a.kineticAddressId ?? "—"}
+                        {a.kineticAddressId ?? " - "}
                       </td>
                       <td className="px-3 py-3">
                         <div className="font-semibold">
@@ -815,9 +815,9 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
                           {[a.city, a.state, a.zip].filter(Boolean).join(", ")}
                         </div>
                       </td>
-                      <td className="px-3 py-3">{a.technologyType ?? "—"}</td>
+                      <td className="px-3 py-3">{a.technologyType ?? " - "}</td>
                       <td className="px-3 py-3">
-                        {a.maximumQualification ?? "—"}
+                        {a.maximumQualification ?? " - "}
                       </td>
                       <td className="px-3 py-3">
                         <span
@@ -829,7 +829,7 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
                       <td className="px-3 py-3 text-2xs text-muted-foreground">
                         {a.lastChecked
                           ? new Date(a.lastChecked).toLocaleString()
-                          : "—"}
+                          : " - "}
                       </td>
                       <td className="px-3 py-3">
                         <button
@@ -1096,7 +1096,7 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
                     {l}
                   </div>
                   <div className="mt-1 font-mono text-xs font-semibold">
-                    {v ?? "—"}
+                    {v ?? " - "}
                   </div>
                 </div>
               ))}

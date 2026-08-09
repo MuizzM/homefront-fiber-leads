@@ -57,7 +57,7 @@ function decodeLogoDataUri(value: string | null | undefined): Buffer | null {
 
 function fmtDate(iso: string, timezone: string): string {
   const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "—";
+  if (!Number.isFinite(t)) return " - ";
   return new Date(t).toLocaleDateString("en-US", { timeZone: timezone, month: "short", day: "numeric" });
 }
 function fmtStamp(iso: string, timezone: string): string {
@@ -90,7 +90,7 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
     size: "LETTER", margins: { top: M.top, bottom: M.bottom, left: M.left, right: M.right },
     bufferPages: true,
     info: {
-      Title: `Commission Statement — ${docModel.rep.name} — ${docModel.period.label}`,
+      Title: `Commission Statement - ${docModel.rep.name} - ${docModel.period.label}`,
       Author: docModel.company.name,
       Subject: `Commission statement for ${docModel.period.label}`,
     },
@@ -122,12 +122,12 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
     // Period + status, right-aligned against the header.
     const headRight = M.left + CONTENT_W - 210;
     doc.font("Helvetica-Bold").fontSize(10).fillColor(INK)
-      .text(docModel.period.label || "—", headRight, M.top + 2, { width: 210, align: "right", lineBreak: false });
+      .text(docModel.period.label || " - ", headRight, M.top + 2, { width: 210, align: "right", lineBreak: false });
     doc.font("Helvetica").fontSize(8.5).fillColor(MUTED)
       .text(
         docModel.isDraft
-          ? `DRAFT · ${docModel.statement.status} · Statement #${docModel.statement.id ?? "—"}`
-          : `${docModel.statement.status} · Statement #${docModel.statement.id ?? "—"}`,
+          ? `DRAFT · ${docModel.statement.status} · Statement #${docModel.statement.id ?? " - "}`
+          : `${docModel.statement.status} · Statement #${docModel.statement.id ?? " - "}`,
         headRight, M.top + 18, { width: 210, align: "right", lineBreak: false });
 
     doc.moveTo(M.left, M.top + 42).lineTo(M.left + CONTENT_W, M.top + 42).lineWidth(1).strokeColor(BRAND).stroke();
@@ -186,9 +186,9 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
       // it is excluded from the house total — so it shows a dash, not a price
       // that would make the column stop adding up.
       if (cols.house) {
-        cell(doc, !line.counted || line.houseAmountCents == null ? "—" : formatCents(line.houseAmountCents), cols.house, y);
+        cell(doc, !line.counted || line.houseAmountCents == null ? " - " : formatCents(line.houseAmountCents), cols.house, y);
       }
-      cell(doc, line.counted ? formatCents(line.repCommissionCents) : "—", cols.pay, y);
+      cell(doc, line.counted ? formatCents(line.repCommissionCents) : " - ", cols.pay, y);
       y += ROW_H;
     };
 
@@ -212,7 +212,7 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
       doc.font("Helvetica-Bold").fontSize(8.5).fillColor(INK);
       cell(doc, `${docModel.totals.countedSaleCount} sales`, cols.door, y);
       if (cols.house) {
-        cell(doc, docModel.totals.houseAmountCents == null ? "—" : formatCents(docModel.totals.houseAmountCents), cols.house, y);
+        cell(doc, docModel.totals.houseAmountCents == null ? " - " : formatCents(docModel.totals.houseAmountCents), cols.house, y);
       }
       cell(doc, formatCents(docModel.totals.grossCommissionCents), cols.pay, y);
       y += 22;
@@ -271,7 +271,7 @@ export function renderCommissionStatementPdf(docModel: StatementDocument): Promi
     const capLine = docModel.payout.reserveCapCents == null
       ? "Held to cover chargebacks on cancelled sales."
       : docModel.payout.reserveAtCap
-        ? `Cap of ${formatCents(docModel.payout.reserveCapCents)} reached — nothing further is withheld.`
+        ? `Cap of ${formatCents(docModel.payout.reserveCapCents)} reached - nothing further is withheld.`
         : `Builds to a cap of ${formatCents(docModel.payout.reserveCapCents)}.`;
     doc.font("Helvetica").fontSize(8).fillColor(MUTED)
       .text(capLine, M.left + 14, y + 56, { width: panelW - 28 });

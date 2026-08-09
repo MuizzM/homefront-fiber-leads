@@ -4,7 +4,7 @@ import { proxyUrlFromEnv, rotateProxySession, getProxySessionId, __resetRotation
 describe("Decodo session rotation (single-flight reset)", () => {
   afterAll(() => { delete process.env.PROXY_URL; });
 
-  it("is not pinned after the first rotation — resumes rotating once the min-interval passes", async () => {
+  it("is not pinned after the first rotation - resumes rotating once the min-interval passes", async () => {
     // A dummy proxy URL: undici's ProxyAgent is lazy, so building one never
     // connects here. Regression guard for the sync-async-IIFE bug where the
     // in-flight guard stayed pinned to a resolved promise and disabled ALL

@@ -93,7 +93,7 @@ describe("the commission agreement states the terms", () => {
     expect(text).toMatch(/No chargeback reserve is withheld/i);
   });
 
-  it("explains the retroactive rule in words — the most misread term in the plan", () => {
+  it("explains the retroactive rule in words - the most misread term in the plan", () => {
     const text = commissionText(DEFAULT_COMMISSION_TERMS);
     expect(text).toMatch(/applies to EVERY qualified sale/i);
     expect(text).toMatch(/not only to the sales above/i);
@@ -146,7 +146,7 @@ describe("summarizeCommissionTerms", () => {
 });
 
 describe("describeCommissionTerms", () => {
-  it("never returns an empty description — a contract clause cannot be blank", () => {
+  it("never returns an empty description - a contract clause cannot be blank", () => {
     for (const terms of [
       DEFAULT_COMMISSION_TERMS,
       { ...DEFAULT_COMMISSION_TERMS, structure: "FLAT" as const, flatRateCents: 1, tiers: [] },

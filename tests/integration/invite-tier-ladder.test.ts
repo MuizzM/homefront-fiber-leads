@@ -114,7 +114,7 @@ function invitedApplication(email: string, tiers: CommissionTier[] | null) {
 }
 
 describe("the tier ladder on a recruiting invite", () => {
-  it("round-trips through storage — the ladder that comes back is the one that went in", () => {
+  it("round-trips through storage - the ladder that comes back is the one that went in", () => {
     const created = recruitingStore.createRecruitingInvite({
       tenantId: 1, candidateName: "Round Trip", candidateEmail: "roundtrip@ladder.example.com",
       invitedBy: null, commissionStructure: "TIERED", tiers: INVITED_LADDER,
@@ -372,7 +372,7 @@ describe("the invited ladder reaches the contract and the pay engine", () => {
     expect(paidTiers(email).map((t: any) => Number(t.rate_cents))).toEqual([17_500, 26_000]);
   });
 
-  it("THE TRAP: a commission object with no ladder does NOT inherit — it becomes the house bands", async () => {
+  it("THE TRAP: a commission object with no ladder does NOT inherit - it becomes the house bands", async () => {
     // Documented, not endorsed. `{ structure: "TIERED" }` outranks the invite's
     // stored ladder because the fallback only fires when `commission` is
     // absent, and assignStructureToRep then falls through to the standard

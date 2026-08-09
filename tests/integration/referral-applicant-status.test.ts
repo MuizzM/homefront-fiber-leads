@@ -175,7 +175,7 @@ describe("what the referred person sees", () => {
 describe("what the referred person must NEVER see", () => {
   beforeEach(() => { referralId = seedReferral({ sales: 2, training: true }); });
 
-  it("no reward amount — not even a zero", async () => {
+  it("no reward amount - not even a zero", async () => {
     const raw = await (await call("/api/referrals/my-status", referred.session)).text();
     // The reward is the REFERRER's compensation. A zero would invite "why is my
     // bonus $0"; any real figure is someone else's pay.

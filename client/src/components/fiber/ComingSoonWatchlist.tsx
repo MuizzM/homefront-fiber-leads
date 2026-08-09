@@ -116,11 +116,11 @@ export default function ComingSoonWatchlist() {
         ))}</div>
       ) : data === null ? (
         <div className="px-4 py-8 text-center text-[13px] italic text-muted-foreground">
-          The watchlist feed is warming up — flagged Coming Soon addresses will appear here as their completion dates approach.
+          The watchlist feed is warming up - flagged Coming Soon addresses will appear here as their completion dates approach.
         </div>
       ) : items.length === 0 ? (
         <div className="px-4 py-8 text-center text-[13px] italic text-muted-foreground">
-          Nothing on the watchlist yet — Coming Soon addresses land here and are re-checked as completion approaches.
+          Nothing on the watchlist yet - Coming Soon addresses land here and are re-checked as completion approaches.
         </div>
       ) : (
         <>

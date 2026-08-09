@@ -29,9 +29,9 @@ const src = readFileSync(join(process.cwd(), "client/src/pages/MapView.tsx"), "u
 /** The body of finish() — from its declaration to the next sibling handler. */
 const finishBody = (() => {
   const at = src.indexOf("const finish = () => {");
-  expect(at, "finish() not found in MapView — did the lasso effect move?").toBeGreaterThan(-1);
+  expect(at, "finish() not found in MapView - did the lasso effect move?").toBeGreaterThan(-1);
   const end = src.indexOf("const cancelStroke", at);
-  expect(end, "cancelStroke not found after finish() — cannot bound the body").toBeGreaterThan(at);
+  expect(end, "cancelStroke not found after finish() - cannot bound the body").toBeGreaterThan(at);
   return src.slice(at, end);
 })();
 
@@ -68,11 +68,11 @@ describe("the simplification tolerance cannot visibly move the boundary", () => 
   // off, and nothing else in the system would notice.
   const declared = (() => {
     const m = src.match(/const LASSO_SIMPLIFY_TOLERANCE_DEG\s*=\s*([0-9.e+-]+)/i);
-    expect(m, "LASSO_SIMPLIFY_TOLERANCE_DEG not found — was the tolerance inlined?").not.toBeNull();
+    expect(m, "LASSO_SIMPLIFY_TOLERANCE_DEG not found - was the tolerance inlined?").not.toBeNull();
     return Number(m![1]);
   })();
 
-  it("is a real, positive tolerance — simplification actually happens", () => {
+  it("is a real, positive tolerance - simplification actually happens", () => {
     // simplifyRing treats a non-positive tolerance as a no-op copy, which would
     // leave up to MAX_POINTS vertices on every point-in-polygon call forever.
     expect(Number.isFinite(declared)).toBe(true);
@@ -106,7 +106,7 @@ describe("a ring that fails validation is not saved", () => {
     const failAt = finishBody.indexOf("if (!verdict.ok)");
     expect(failAt, "validateRing's result is never branched on").toBeGreaterThan(-1);
     const storeAt = finishBody.indexOf("setLassoPoints(ring)");
-    expect(storeAt, "the ring is never stored — did the state setter change?").toBeGreaterThan(-1);
+    expect(storeAt, "the ring is never stored - did the state setter change?").toBeGreaterThan(-1);
     expect(failAt).toBeLessThan(storeAt);
 
     const failureBlock = finishBody.slice(failAt, storeAt);
@@ -129,7 +129,7 @@ describe("a ring that fails validation is not saved", () => {
 describe("each rejection reason is a sentence a rep can act on", () => {
   const table = (() => {
     const at = src.indexOf("const LASSO_RING_REJECTION");
-    expect(at, "no rejection message table — is the raw enum being shown?").toBeGreaterThan(-1);
+    expect(at, "no rejection message table - is the raw enum being shown?").toBeGreaterThan(-1);
     return src.slice(at, src.indexOf("\n};", at));
   })();
 
@@ -219,7 +219,7 @@ describe("what is saved and what is selected are the same shape", () => {
     expect(assignAt).toBeLessThan(finishBody.indexOf("render(true)"));
   });
 
-  it("still posts lassoPoints — the polygon, never the enclosed leads", () => {
+  it("still posts lassoPoints - the polygon, never the enclosed leads", () => {
     // Pinned in lasso-default-action.test.ts too, and worth restating here:
     // now that lassoPoints holds the CLEANED ring, this is the line that carries
     // the whole fix to the server.

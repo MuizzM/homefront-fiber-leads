@@ -94,7 +94,7 @@ describe("house-numbers preference (localStorage)", () => {
   });
 });
 
-describe("formatFilterCount — counts never dominate", () => {
+describe("formatFilterCount - counts never dominate", () => {
   it("keeps four-digit-and-under counts raw", () => {
     expect(formatFilterCount(0)).toBe("0");
     expect(formatFilterCount(7)).toBe("7");
@@ -136,7 +136,7 @@ describe("selected-pin dimming", () => {
 });
 
 describe("selected-pin ring reads on EVERY basemap", () => {
-  it("white stroke over a dark neutral scrim — never a faint tint that dies on light streets", () => {
+  it("white stroke over a dark neutral scrim - never a faint tint that dies on light streets", () => {
     const paint = SELECTED_RING_SPEC.paint;
     expect(paint["circle-stroke-color"]).toBe("#ffffff");
     expect(paint["circle-stroke-width"]).toBe(3);

@@ -102,14 +102,14 @@ export function scoreMarket(m: MarketAggregate, nowMs: number): MarketCard {
       reasons.push(`${m.newlyLive} address${m.newlyLive === 1 ? "" : "es"} just went live`);
     } else if (freshnessDays != null) {
       freshness = 14 * Math.exp(-freshnessDays / 21);
-      if (freshnessDays > 21) reasons.push(`${Math.round(freshnessDays)}d since last verified — re-scan for change`);
+      if (freshnessDays > 21) reasons.push(`${Math.round(freshnessDays)}d since last verified - re-scan for change`);
     }
   }
 
   // ── Force 3: headroom (0..14) — only when there are doors to work ───────────
   const headroom = m.leads > 0 ? 14 * (1 - saturation) : 0;
-  if (m.leads > 0 && saturation >= 0.6) reasons.push(`${Math.round(saturation * 100)}% worked — saturating`);
-  else if (m.leads >= 20 && saturation <= 0.15) reasons.push("barely touched — wide open");
+  if (m.leads > 0 && saturation >= 0.6) reasons.push(`${Math.round(saturation * 100)}% worked - saturating`);
+  else if (m.leads >= 20 && saturation <= 0.15) reasons.push("barely touched - wide open");
 
   // ── Force 4: proven demand from the field (−8..+16) ─────────────────────────
   let proven = 0;
@@ -119,7 +119,7 @@ export function scoreMarket(m: MarketAggregate, nowMs: number): MarketCard {
   if (oc && oc.knocks >= 20) {
     if (conversionRate! >= 0.12) { proven = 16; reasons.push(`proven: ${(conversionRate! * 100).toFixed(0)}% sold-per-knock in the field`); }
     else if (conversionRate! >= 0.05) { proven = 8; reasons.push(`converts: ${(conversionRate! * 100).toFixed(0)}% sold-per-knock`); }
-    else if (conversionRate! < 0.02) { proven = -8; reasons.push("worked hard, low conversion — deprioritized"); }
+    else if (conversionRate! < 0.02) { proven = -8; reasons.push("worked hard, low conversion - deprioritized"); }
   }
 
   // ── Force 5: discoverability (0..12) — unexplored upside, capped below doors ─
@@ -129,8 +129,8 @@ export function scoreMarket(m: MarketAggregate, nowMs: number): MarketCard {
   const emptyVerified = m.verified >= 200 && m.verifiedNewFiber === 0 && confirmedUnworked === 0;
   const discover = emptyVerified ? 0
     : 12 * (1 - coverage) * satur(unverified, 3_000) * (m.leads > 200 ? 0.3 : 1);
-  if (emptyVerified) reasons.push("scanned — no new fiber found here");
-  else if (m.leads === 0 && unverified > 500) reasons.push(`unexplored — ${unverified.toLocaleString()} addresses to check`);
+  if (emptyVerified) reasons.push("scanned - no new fiber found here");
+  else if (m.leads === 0 && unverified > 500) reasons.push(`unexplored - ${unverified.toLocaleString()} addresses to check`);
 
   const priority = clamp(0, 100, opportunity + freshness + headroom + proven + discover);
 

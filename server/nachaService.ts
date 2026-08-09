@@ -41,7 +41,7 @@ const alpha = (s: string, len: number) => s.replace(/[^A-Za-z0-9 .&'-]/g, " ").t
 const num = (n: number, len: number) => String(Math.trunc(Math.abs(n))).padStart(len, "0").slice(-len);
 
 /** Next banking day (Mon–Fri) on/after `from`, as YYMMDD. Federal holidays are
- * the operator's call — BofA rejects on holidays with a clear error, and the
+ * the operator's call - BofA rejects on holidays with a clear error, and the
  * file can be regenerated with a new effective date via ?fileIdModifier. */
 export function nextBankingDay(from: Date): Date {
   const d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate()));
@@ -66,9 +66,9 @@ export function buildNachaFile(params: {
 
   const company = getCompanyProfileSecrets(tenantId);
   if (!company) {
-    throw new NachaError("COMPANY_PROFILE_MISSING", "Company profile is not configured — an admin must complete PUT /api/company-profile (legalName, ein, dfiAccount, dfiRouting, companyId) before the first ACH export.", 409);
+    throw new NachaError("COMPANY_PROFILE_MISSING", "Company profile is not configured - an admin must complete PUT /api/company-profile (legalName, ein, dfiAccount, dfiRouting, companyId) before the first ACH export.", 409);
   }
-  if (!isValidAbaRouting(company.dfiRouting)) throw new NachaError("COMPANY_PROFILE_INVALID", "Company profile dfiRouting fails ABA checksum — fix it via PUT /api/company-profile.", 409);
+  if (!isValidAbaRouting(company.dfiRouting)) throw new NachaError("COMPANY_PROFILE_INVALID", "Company profile dfiRouting fails ABA checksum - fix it via PUT /api/company-profile.", 409);
   const odfi8 = company.dfiRouting.slice(0, 8);
 
   // THE money-math reuse point: identical computation to /api/commission/week-export.csv.

@@ -219,7 +219,7 @@ describe("query plans", () => {
     expect(plan).toContain("idx_scan_targets_cell");
   });
 
-  it("the OUTER candidate scan stays sequential — never a tenant-prefix index crawl", () => {
+  it("the OUTER candidate scan stays sequential - never a tenant-prefix index crawl", () => {
     // Observed live: with the new tenant-prefixed indexes present, the planner
     // chose SEARCH idx_scan_targets_street (tenant_id=?) for the 949k-row
     // outer table — index order + one random rowid lookup per row, a 19-minute

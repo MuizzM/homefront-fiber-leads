@@ -21,7 +21,7 @@ describe("budgetShapeFactor (Eastern time)", () => {
     expect(budgetShapeFactor(new Date("2026-07-21T06:00:00Z"))).toBe(1.5); // 02:00 EDT
     expect(easternHour(new Date("2026-07-21T06:00:00Z"))).toBe(2);
   });
-  it("is neutral during Eastern knock hours (no daytime cut — budget is not the constraint)", () => {
+  it("is neutral during Eastern knock hours (no daytime cut - budget is not the constraint)", () => {
     expect(budgetShapeFactor(new Date("2026-07-21T14:00:00Z"))).toBe(1.0); // 10:00 EDT
     expect(easternHour(new Date("2026-07-21T14:00:00Z"))).toBe(10);
   });

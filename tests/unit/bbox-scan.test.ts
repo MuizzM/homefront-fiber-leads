@@ -63,7 +63,7 @@ describe("validateScanBbox", () => {
 });
 
 describe("adaptiveGridStep", () => {
-  it("samples a tight box densely — far finer than the old fixed 0.0012° step", () => {
+  it("samples a tight box densely - far finer than the old fixed 0.0012° step", () => {
     const tight: BboxLL = { south: 35.500, north: 35.503, west: -80.410, east: -80.407 };
     const step = adaptiveGridStep(tight, { minSamplesPerSide: 6, maxPoints: 5000 });
     // shortSide 0.003° / 6 = 0.0005° → denser than 0.0012, above the 0.00035 floor.

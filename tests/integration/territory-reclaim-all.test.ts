@@ -107,7 +107,7 @@ describe("who may sweep", () => {
 });
 
 describe("the sweep itself", () => {
-  it("empties every held area, releases the leads, skips archived, leaves the other tenant alone — then finds nothing on a second pass", async () => {
+  it("empties every held area, releases the leads, skips archived, leaves the other tenant alone - then finds nothing on a second pass", async () => {
     // Tenant 1: two held areas (one shared), one already-empty, one archived.
     const a1 = seedArea([fx.repA.memberId]);
     const a2 = seedArea([fx.repA.memberId, fx.repB.memberId]);

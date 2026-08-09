@@ -54,7 +54,7 @@ describe("scan_targets uniqueness is (address, city, state), not address alone",
     expect(leads.map(l => l.city).sort()).toEqual(["Broadway", "Sanford"]);
   });
 
-  it("re-checking the SAME house (same city) reuses its one target — no duplicate", () => {
+  it("re-checking the SAME house (same city) reuses its one target - no duplicate", () => {
     persist(freshObs("500 Pine Ave", "Cary", "NC", "27511"));
     persist(freshObs("500 Pine Ave", "Cary", "NC", "27511"));
     const n = (rawDb.prepare(`SELECT COUNT(*) n FROM scan_targets WHERE lower(trim(address))='500 pine ave' AND lower(trim(city))='cary'`).get() as any).n;

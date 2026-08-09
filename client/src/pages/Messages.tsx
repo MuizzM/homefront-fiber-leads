@@ -144,7 +144,7 @@ export default function Messages() {
       <PageHeader
         title="Messages"
         icon={MessagesSquare}
-        subtitle="One room for the whole floor — the chat, the announcements, and the board."
+        subtitle="One room for the whole floor - the chat, the announcements, and the board."
       />
 
       {/* Same segmented-pill grammar as the leaderboard's range filter. */}
@@ -303,7 +303,7 @@ function AnnouncementFeed() {
       {isLoading && <Skeleton className="h-24 w-full rounded-2xl" data-testid="announcement-feed-loading" />}
       {!isLoading && isError && (
         <div role="alert" className="rounded-2xl border border-border bg-card p-4 text-center" data-testid="announcement-feed-error">
-          <p className="text-[13px] text-muted-foreground">Couldn't load the feed — new posts may be waiting.</p>
+          <p className="text-[13px] text-muted-foreground">Couldn't load the feed - new posts may be waiting.</p>
           <button onClick={() => refetch()} className="mt-2 inline-flex min-h-11 items-center justify-center rounded-lg border border-border bg-secondary px-4 text-[13px] font-semibold text-foreground">Retry</button>
         </div>
       )}
@@ -392,7 +392,7 @@ function BoardPanel() {
 
       {!isLoading && isError && (
         <p className="rounded-2xl border border-border bg-card p-4 text-center text-[13px] text-muted-foreground" data-testid="board-error">
-          Couldn't load the board. It's still running — check your connection.
+          Couldn't load the board. It's still running - check your connection.
         </p>
       )}
 
@@ -445,7 +445,7 @@ function BoardPanel() {
   );
 }
 
-// ── The sent log — unchanged in behavior, now living on the announcements tab ─
+// ── The sent log - unchanged in behavior, now living on the announcements tab ─
 /** Everything this org has broadcast, newest first, with what it reached. */
 function SentLog() {
   const { data, isLoading } = useQuery<{ items: SentItem[] }>({ queryKey: SENT_KEY });
@@ -560,7 +560,7 @@ function SentRow({ item, now }: { item: SentItem; now: number }) {
             <AlertDialogTitle>Retract this post?</AlertDialogTitle>
             <AlertDialogDescription>
               “{item.headline}” comes off the feed for everyone who hasn't opened it yet.
-              {isPromo && " The phones it already buzzed can't be unbuzzed — if it needs correcting, post the correction."}
+              {isPromo && " The phones it already buzzed can't be unbuzzed - if it needs correcting, post the correction."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -581,7 +581,7 @@ function SentRow({ item, now }: { item: SentItem; now: number }) {
 /** "8 of 14 read".
  *
  *  Read, not delivered. A delivery number counts phones we managed to reach,
- *  which reads as attention and is not — and a manager deciding whether to say
+ *  which reads as attention and is not - and a manager deciding whether to say
  *  something a second time needs to know how many people actually looked. */
 function ReadCount({ read, audience }: { read: number; audience: number }) {
   if (audience <= 0) return <span data-testid="sent-read-count">no one to reach yet</span>;

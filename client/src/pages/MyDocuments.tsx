@@ -239,7 +239,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                 url={`/api/onboarding/documents/${record!.id}/preview.pdf`}
                 openBeaconUrl={`/api/onboarding/documents/${record!.id}/preview-opened`}
                 fileName={`${snapshot.title.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}-review.pdf`}
-                title={`${snapshot.title} — full document`}
+                title={`${snapshot.title} - full document`}
                 testId="agreement-pdf-review"
                 // Loading the complete document IS the review surface: the rep
                 // can scroll, zoom and page through every clause natively. The
@@ -263,7 +263,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                 </div>
                 <p className="text-2xs text-muted-foreground mt-1" aria-live="polite">
                   Section {Math.min(sectionIndex + 1, Math.max(snapshotSectionCount, 1))} of {Math.max(snapshotSectionCount, 1)}
-                  {readToEnd ? " — you reached the end" : ""}
+                  {readToEnd ? " - you reached the end" : ""}
                 </p>
               </div>
               <Button variant="outline" size="sm" className="h-8 flex-shrink-0 text-xs" onClick={jumpToEnd} data-testid="skip-to-agreement-end">
@@ -472,7 +472,7 @@ export default function MyDocuments() {
                 <CheckCircle2 className="h-5 w-5" aria-hidden="true" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-foreground">Every agreement is signed — you're field-ready.</p>
+                <p className="text-sm font-semibold text-foreground">Every agreement is signed - you're field-ready.</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">Your executed PDFs live below, hash-verified, whenever you need them.</p>
               </div>
             </section>
@@ -483,8 +483,8 @@ export default function MyDocuments() {
           </section>
           <section className="rounded-2xl bg-card border border-border overflow-hidden"><div className="divide-y divide-border">
             {/* The W-9 is onboarding paperwork the company requires before it can
-                pay anyone, so it belongs IN the packet — one list of everything a
-                rep owes, with one progress number — rather than as a separate
+                pay anyone, so it belongs IN the packet - one list of everything a
+                rep owes, with one progress number - rather than as a separate
                 destination they have to remember to visit. It links out to the
                 tax form because a W-9 is filled in, not counter-signed like an
                 agreement; the form itself opens the real IRS PDF. */}

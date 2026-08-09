@@ -239,7 +239,7 @@ async function open(session: string | undefined, query = "", extraHeaders: Recor
     leads, leadIds: () => leads().map((f) => Number(f.data?.leadId)),
     ready: async () => {
       const got = await waitFor(() => frames.some((f) => f.event === "ready"));
-      expect(got, "no ready frame — the client would paint nothing until the first write").toBe(true);
+      expect(got, "no ready frame - the client would paint nothing until the first write").toBe(true);
       return frames.find((f) => f.event === "ready")!;
     },
     awaitLead: (leadId, budgetMs) => waitFor(() => leads().some((f) => Number(f.data?.leadId) === leadId), budgetMs),
@@ -341,7 +341,7 @@ describe("delivery is authorized per frame, not per connection", () => {
     await stream.close();
   });
 
-  it("a rep NOT on the area receives nothing for it — same tenant, same stream", async () => {
+  it("a rep NOT on the area receives nothing for it - same tenant, same stream", async () => {
     // THE property. repC is a fully authorized field identity in the same org;
     // only the area assignment differs.
     const foreignDoor = door(privateArea, repA.memberId, 1);
@@ -395,7 +395,7 @@ describe("tenant isolation", () => {
   // case that separates them: leadVisibilityScope() returns undefined for
   // manager/admin, so repCanAccessLead() answers TRUE for every door in every
   // org and the tenant comparison is the ONLY thing left standing.
-  it("a tenant-2 MANAGER never receives a tenant-1 event — the rep-scope check cannot help here", async () => {
+  it("a tenant-2 MANAGER never receives a tenant-1 event - the rep-scope check cannot help here", async () => {
     const t1Door = door(sharedArea, repA.memberId, 1);
     const t2Door = door(foreignArea, repZ.memberId, 2);
     const stream = await open(managerZ.session);
@@ -590,7 +590,7 @@ describe("no secret material on the wire", () => {
     // A "notes" frame says an open card should refetch; it never carries the
     // body, which is precisely where a customer's phone number ends up.
     const noteFrame = stream.leads().find((f) => Number(f.data.leadId) === id && f.data.type === "notes");
-    expect(noteFrame, "no notes event — the PII assertion above proved nothing").toBeTruthy();
+    expect(noteFrame, "no notes event - the PII assertion above proved nothing").toBeTruthy();
     expect(noteFrame!.data).not.toHaveProperty("notes");
     await stream.close();
   });

@@ -215,12 +215,12 @@ export async function sendOnboardingWelcome(input: {
     // approval or a manager resend collapses to one email per applicant.
     idempotencyKey: `onboarding-welcome-${sha256(input.email.toLowerCase()).slice(0, 48)}`,
     tags: [{ name: "category", value: "onboarding_welcome" }],
-    text: `Welcome to the team, ${input.name}. Your application has been approved. Sign in to review and complete your onboarding: ${link} — on the sign-in screen, enter this email and tap "Send code" to get a one-time sign-in code.`,
+    text: `Welcome to the team, ${input.name}. Your application has been approved. Sign in to review and complete your onboarding: ${link} - on the sign-in screen, enter this email and tap "Send code" to get a one-time sign-in code.`,
     html: emailShell("Welcome to the team", `
       <p style="margin:0 0 16px">Hi ${escapeHtml(input.name)}, your application has been <strong>approved</strong>.</p>
       <p style="margin:0 0 20px">Sign in to review and complete your onboarding documents:</p>
       <p style="margin:0 0 20px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Sign in to get started</a></p>
-      <p style="margin:0;font-size:12px;color:#8a97a4">On the sign-in screen, enter this email and tap &ldquo;Send code&rdquo; — a one-time sign-in code will arrive that expires in 10 minutes.</p>`),
+      <p style="margin:0;font-size:12px;color:#8a97a4">On the sign-in screen, enter this email and tap &ldquo;Send code&rdquo; - a one-time sign-in code will arrive that expires in 10 minutes.</p>`),
   });
 }
 
@@ -431,7 +431,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       const badTerms = parsed.error.issues.some(issue => compFields.has(String(issue.path[0])));
       return res.status(400).json({
         error: badTerms
-          ? "Check the commission terms — a rate, ladder or reserve is outside the allowed range."
+          ? "Check the commission terms - a rate, ladder or reserve is outside the allowed range."
           : "Enter the candidate's full name and a valid email address",
       });
     }
@@ -494,7 +494,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     const invitedDownlineIds = [...new Set(parsed.data.invitedDownlineIds ?? [])];
     if (invitedDownlineIds.length > 0) {
       if (invitedRole === "rep") {
-        return res.status(400).json({ error: "A rep cannot be given a downline — only team leads and managers supervise", code: "INVALID_DOWNLINE" });
+        return res.status(400).json({ error: "A rep cannot be given a downline - only team leads and managers supervise", code: "INVALID_DOWNLINE" });
       }
       for (const downlineId of invitedDownlineIds) {
         if (downlineId === invitedSupervisorId) {

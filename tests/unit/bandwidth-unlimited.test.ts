@@ -19,7 +19,7 @@ beforeAll(async () => {
 });
 beforeEach(() => gov._resetGovernorForTests());
 
-describe("unlimited Decodo plan — uninterrupted scanning, rotate don't freeze", () => {
+describe("unlimited Decodo plan - uninterrupted scanning, rotate don't freeze", () => {
   it("reports unlimited mode", () => {
     expect(gov.isUnlimitedProxyMode()).toBe(true);
   });
@@ -31,7 +31,7 @@ describe("unlimited Decodo plan — uninterrupted scanning, rotate don't freeze"
     expect(gov.bandwidthBudgetScale()).toBe(1.5); // hunt-harder ceiling, not throttled
   });
 
-  it("a 407 denial burst NEVER opens the circuit / freezes — it rotates instead", () => {
+  it("a 407 denial burst NEVER opens the circuit / freezes - it rotates instead", () => {
     let rotations = 0;
     gov.setProxyRotateHook(() => { rotations += 1; });
     for (let i = 0; i < 20; i++) gov.noteProxyAuthFailure();

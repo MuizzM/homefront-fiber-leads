@@ -14,7 +14,7 @@ import {
 beforeEach(() => { __resetToastsForTest(); vi.useFakeTimers(); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); __resetToastsForTest(); });
 
-describe("timing by severity — everything auto-dismisses", () => {
+describe("timing by severity - everything auto-dismisses", () => {
   it("routine ~2.5s; important ~6s (longer beat, still temporary)", () => {
     expect(resolveDuration({ severity: "success" })).toBe(SUCCESS_DISMISS_MS);
     expect(resolveDuration({ severity: "info" })).toBe(SUCCESS_DISMISS_MS);
@@ -47,7 +47,7 @@ describe("dedupe signature", () => {
   });
 });
 
-describe("reducer — instant replace, max two visible", () => {
+describe("reducer - instant replace, max two visible", () => {
   const mk = (id: string, over: any = {}) => ({ id, title: id, open: true, ...over });
   it("a second toast shows IMMEDIATELY alongside the first (no queueing)", () => {
     let s = { toasts: [] } as any;
@@ -56,7 +56,7 @@ describe("reducer — instant replace, max two visible", () => {
     expect(s.toasts.map((t: any) => t.id)).toEqual(["b", "a"]); // newest first
     expect(s.toasts.every((t: any) => t.open)).toBe(true);       // both visible
   });
-  it("a third toast pushes the oldest into its exit — never three open", () => {
+  it("a third toast pushes the oldest into its exit - never three open", () => {
     let s = { toasts: [] } as any;
     s = reducer(s, { type: "ADD_TOAST", toast: mk("a") } as any);
     s = reducer(s, { type: "ADD_TOAST", toast: mk("b") } as any);
@@ -78,7 +78,7 @@ describe("reducer — instant replace, max two visible", () => {
 });
 
 describe("live behavior through toast()", () => {
-  it("a duplicate message is dropped — recorded/shown once, not twice", () => {
+  it("a duplicate message is dropped - recorded/shown once, not twice", () => {
     // Fire the same error three times rapidly (a retry-storm). Dedupe must
     // collapse them: the error center keeps exactly one entry.
     toast({ title: "Save failed", severity: "error" });
@@ -105,7 +105,7 @@ describe("live behavior through toast()", () => {
     e.dismiss(); s.dismiss();
   });
 
-  it("explicit duration:null is the opt-out — that toast never auto-dismisses", () => {
+  it("explicit duration:null is the opt-out - that toast never auto-dismisses", () => {
     toast({ title: "Stay put", severity: "error", duration: null });
     vi.advanceTimersByTime(ERROR_DISMISS_MS * 10);
     expect(vi.getTimerCount()).toBe(0); // no dismiss was ever scheduled

@@ -81,7 +81,7 @@ afterAll(async () => {
 });
 
 describe("who may purge", () => {
-  it("a rep, a team lead, and a manager are all refused — preview and purge alike", async () => {
+  it("a rep, a team lead, and a manager are all refused - preview and purge alike", async () => {
     for (const who of [fx.rep, fx.lead, fx.manager]) {
       expect((await req("/api/leads/fcc-purge/preview", who.session)).status).toBe(403);
       expect((await req("/api/leads/fcc-purge", who.session, { method: "POST", body: "{}" })).status).toBe(403);

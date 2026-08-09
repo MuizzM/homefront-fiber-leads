@@ -111,7 +111,7 @@ describe("the drawn ring survives the save", () => {
     expect(JSON.parse(territory.polygon)).toEqual(ring);
   });
 
-  it("keeps the concavity — the mouth of the C stays OUTSIDE the area", async () => {
+  it("keeps the concavity - the mouth of the C stays OUTSIDE the area", async () => {
     // The assertion a hull cannot pass. If the saved shape were a convex hull,
     // this point would fall inside it.
     const west = nextWest();

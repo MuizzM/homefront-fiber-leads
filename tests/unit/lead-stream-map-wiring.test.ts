@@ -27,7 +27,7 @@ function callbackBody(name: string): string {
   return src.slice(start, end > start ? end : start + 6000);
 }
 
-describe("a pushed event paints immediately — no refetch on the hot path", () => {
+describe("a pushed event paints immediately - no refetch on the hot path", () => {
   const body = callbackBody("applyLeadEvent");
 
   it("merges through the shared, unit-tested merge (no local fork of the rule)", () => {
@@ -39,7 +39,7 @@ describe("a pushed event paints immediately — no refetch on the hot path", () 
     expect(src.includes("function mergePushedPin")).toBe(false);
   });
 
-  it("recolors the one feature imperatively and coalesces the re-cluster — the local-knock path", () => {
+  it("recolors the one feature imperatively and coalesces the re-cluster - the local-knock path", () => {
     expect(body).toContain("featureByIdRef.current.get(pushed.id)");
     expect(body).toContain("pinDisplayState(merged)");
     expect(body).toContain("pendingKnockPaintRef.current = pushed.id");
@@ -66,7 +66,7 @@ describe("the stream subscription and its recovery edges", () => {
     expect(block).toContain("onEvent: (evt) => applyLeadEventRef.current(evt)");
   });
 
-  it("a lost cursor (resync) refetches the whole scope — a hole nothing can detect otherwise", () => {
+  it("a lost cursor (resync) refetches the whole scope - a hole nothing can detect otherwise", () => {
     const resyncAt = block.indexOf("onResync:");
     expect(resyncAt).toBeGreaterThan(-1);
     expect(block.slice(resyncAt, resyncAt + 400)).toContain('invalidateQueries({ queryKey: ["/api/leads/map"] })');

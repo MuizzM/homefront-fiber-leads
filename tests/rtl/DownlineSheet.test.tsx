@@ -103,7 +103,7 @@ describe("the downline override sheet", () => {
     expect(screen.getByTestId("tile-override-settled").textContent).toContain("$0");
   });
 
-  it("rolls up per member with a depth chip — L1 direct vs L2 nested", async () => {
+  it("rolls up per member with a depth chip - L1 direct vs L2 nested", async () => {
     renderSheet();
     const direct = await screen.findByTestId("rollup-row-7");
     expect(direct.textContent).toContain("Rex Rep");
@@ -133,7 +133,7 @@ describe("the downline override sheet", () => {
     expect(screen.getByTestId("downline-viewas")).toBeInTheDocument();
   });
 
-  it("omits the picker entirely for a plain team lead — omitted, not disabled", async () => {
+  it("omits the picker entirely for a plain team lead - omitted, not disabled", async () => {
     canReadAll = false;
     renderSheet();
     await screen.findByTestId("downline-sheet");

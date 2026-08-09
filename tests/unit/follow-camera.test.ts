@@ -53,7 +53,7 @@ function pump(M: FollowState, fixes: FollowFix[], opts: { fps?: number; tail?: n
 
 const dist = (a: Sample, b: Sample) => Math.hypot(a.camx - b.camx, a.camy - b.camy);
 
-describe("followCamera — first fix + geometry", () => {
+describe("followCamera - first fix + geometry", () => {
   it("seeds camera exactly on the first fix (no glide-in from null island)", () => {
     const M = createFollowState();
     const r = ingestFix(M, { lat: ANCHOR.lat, lon: ANCHOR.lon, speed: 0, heading: null, tSec: 0 });
@@ -70,7 +70,7 @@ describe("followCamera — first fix + geometry", () => {
   });
 });
 
-describe("followCamera — no shake (the field complaint)", () => {
+describe("followCamera - no shake (the field complaint)", () => {
   it("rejects ±5 m jitter into low lateral wobble while cruising straight", () => {
     const M = createFollowState();
     const s = pump(M, drive({ speed: 13.4, headingDeg: 0, seconds: 14, jitter: 5, seed: 7 }));
@@ -119,7 +119,7 @@ describe("followCamera — no shake (the field complaint)", () => {
   });
 });
 
-describe("followCamera — responsiveness + robustness", () => {
+describe("followCamera - responsiveness + robustness", () => {
   it("does not overshoot when decelerating to a stop (Doppler-reported)", () => {
     const M = createFollowState();
     // cruise, then a realistic 3 s deceleration (Doppler falls), then parked.
@@ -172,7 +172,7 @@ describe("followCamera — responsiveness + robustness", () => {
   });
 });
 
-describe("followCamera — frame-rate independence", () => {
+describe("followCamera - frame-rate independence", () => {
   it("converges to the same camera position at 30 vs 120 fps", () => {
     const track = drive({ speed: 8, headingDeg: 30, seconds: 12, jitter: 4, seed: 42 });
     const a = pump(createFollowState(), track, { fps: 30 });

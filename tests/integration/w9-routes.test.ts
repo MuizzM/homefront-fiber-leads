@@ -104,7 +104,7 @@ afterAll(async () => {
   if (server) await new Promise<void>((resolve, reject) => server.close((e) => e ? reject(e) : resolve()));
 });
 
-describe("POST /api/me/w9 — Line 3a tax classification is required and coherent", () => {
+describe("POST /api/me/w9 - Line 3a tax classification is required and coherent", () => {
   it("rejects a submission with no classification at all", async () => {
     const res = await postW9(repSession, { ...w9Body(), taxClassification: undefined });
     expect(res.status).toBe(400);
@@ -148,8 +148,8 @@ describe("POST /api/me/w9 — Line 3a tax classification is required and coheren
   });
 });
 
-describe("POST /api/me/w9 — Part II item 2 (backup withholding)", () => {
-  it("requires an explicit answer — silence no longer means 'not subject'", async () => {
+describe("POST /api/me/w9 - Part II item 2 (backup withholding)", () => {
+  it("requires an explicit answer - silence no longer means 'not subject'", async () => {
     const res = await postW9(repSession, { ...w9Body(), subjectToBackupWithholding: undefined });
     expect(res.status).toBe(400);
     expect((await res.json() as any).error).toMatch(/subjectToBackupWithholding/);
@@ -189,7 +189,7 @@ describe("POST /api/me/w9 — Part II item 2 (backup withholding)", () => {
   });
 });
 
-describe("POST /api/me/w9 — non-Latin legal names", () => {
+describe("POST /api/me/w9 - non-Latin legal names", () => {
   it("Cyrillic onboards successfully (transliterated), and records both forms", async () => {
     const res = await postW9(repSession, w9Body({ legalName: "Иван Петров", signatureName: "Иван Петров" }));
     expect(res.status).toBe(201);
@@ -198,7 +198,7 @@ describe("POST /api/me/w9 — non-Latin legal names", () => {
     expect(JSON.parse(row.rendered_names).legalName).toBe("Ivan Petrov"); // what printed
   });
 
-  it("CJK is a 400 with an explanation — never a 500 that blocks onboarding", async () => {
+  it("CJK is a 400 with an explanation - never a 500 that blocks onboarding", async () => {
     const res = await postW9(repSession, w9Body({ legalName: "张伟", signatureName: "张伟" }));
     expect(res.status).toBe(400);
     const body = await res.json() as any;
@@ -216,7 +216,7 @@ describe("the full-SSN document never rests on disk", () => {
     expect(existsSync(dir) && readdirSync(dir).length > 0).toBe(false);
   });
 
-  it("pdf_path is never populated — the record is the encrypted row, not a file", () => {
+  it("pdf_path is never populated - the record is the encrypted row, not a file", () => {
     const rows = rawDb.prepare(`SELECT pdf_path FROM w9_forms`).all() as Array<{ pdf_path: string | null }>;
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every(r => r.pdf_path === null)).toBe(true);
@@ -235,7 +235,7 @@ describe("who may download a rep's full W-9", () => {
     expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(1000);
   });
 
-  it("a MANAGER is forbidden — oversight sees masked status, never the numbers", async () => {
+  it("a MANAGER is forbidden - oversight sees masked status, never the numbers", async () => {
     const res = await request(`/api/team-members/${repTmId}/w9/pdf`, managerSession);
     expect(res.status).toBe(403);
     expect((await res.json() as any).need).toBe("payouts.pay");
@@ -281,7 +281,7 @@ describe("audit + secrecy", () => {
     for (const row of all) expect(row.details ?? "").not.toContain(SSN);
   });
 
-  it("no W-9 response body contains the full TIN — masked only", async () => {
+  it("no W-9 response body contains the full TIN - masked only", async () => {
     for (const [path, session] of [["/api/me/w9", repSession], [`/api/team-members/${repTmId}/w9`, managerSession]] as const) {
       const text = await (await request(path, session)).text();
       expect(text).not.toContain(SSN);

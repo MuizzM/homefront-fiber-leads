@@ -114,7 +114,7 @@ export function scoreLead(signals: LeadRankSignals, nowMs: number): { score: num
   // Newly lit — the proven coming-soon/unavailable → live flip.
   if (signals.newlyLit) {
     score += W.NEWLY_LIT_BONUS;
-    reasons.push(`newly lit — was ${signals.newlyLit.priorState === "coming_soon" ? "coming soon" : "unavailable"}`);
+    reasons.push(`newly lit - was ${signals.newlyLit.priorState === "coming_soon" ? "coming soon" : "unavailable"}`);
   }
 
   // New-build confidence.
@@ -142,7 +142,7 @@ export function scoreLead(signals: LeadRankSignals, nowMs: number): { score: num
   // Territory fit — already routed, a rep can act on it right now.
   if (signals.assignedRepId != null || signals.assignedTerritoryId != null) {
     score += W.TERRITORY_FIT_BONUS;
-    reasons.push(signals.assignedRepId != null ? "assigned — actionable now" : "inside an assigned territory");
+    reasons.push(signals.assignedRepId != null ? "assigned - actionable now" : "inside an assigned territory");
   }
 
   return { score: Math.round(score * 10) / 10, reasons };

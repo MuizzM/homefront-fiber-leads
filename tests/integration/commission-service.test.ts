@@ -83,7 +83,7 @@ describe("end-to-end statement calculation", () => {
     expect(out.statement.week_start_utc).toBe(weekStartUtc);
   });
 
-  it("is idempotent — ONE row; calculation_version bumps ONLY on material change", () => {
+  it("is idempotent - ONE row; calculation_version bumps ONLY on material change", () => {
     const first = svc.getStatementById(T1, svc.listStatements(T1, { repIds: [REP], weekStartUtc })[0].id);
     // Unchanged inputs → pure read: same version, same money, no audit noise.
     svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP, weekReference: WEEK_REF, actorId: 1, requestId: "test-2" });
@@ -102,7 +102,7 @@ describe("end-to-end statement calculation", () => {
     svc.transitionSale(T1, 1, "bump-1", "REVERSE");
   });
 
-  it("half-open week boundary — a sale qualified before the week start does not count", () => {
+  it("half-open week boundary - a sale qualified before the week start does not count", () => {
     const before = new Date(Date.parse(weekStartUtc) - 3_600_000).toISOString(); // 1h before start
     svc.upsertSale(T1, 1, { repId: REP, externalId: "before-week", status: "QUALIFIED", soldAt: before, qualifiedAt: before });
     const out = svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP, weekReference: WEEK_REF, actorId: 1 });
@@ -138,7 +138,7 @@ describe("adjustments preserve final = gross + Σ(approved)", () => {
   });
 });
 
-describe("immutability — locked statements refuse recalculation", () => {
+describe("immutability - locked statements refuse recalculation", () => {
   it("FINALIZED then recalculate → STATEMENT_LOCKED", () => {
     const stmt = svc.listStatements(T1, { repIds: [REP], weekStartUtc })[0];
     svc.transitionStatement(T1, 1, stmt.id, "FINALIZE");
@@ -321,7 +321,7 @@ describe("custom edited ladders reach the money engine (the placebo-editor bug)"
     expect(cur.tiers[1]).toMatchObject({ minimumSales: 7, maximumSales: null, rateCents: 22500 });
   });
 
-  it("the WEEK'S PAY computes at the custom rate — the end-to-end proof", () => {
+  it("the WEEK'S PAY computes at the custom rate - the end-to-end proof", () => {
     // 7 sales at the custom 7+ band: retroactive means 7 × $225 = $1,575.
     // The standard ladder would have paid 7 × $200 = $1,400 — if this asserts
     // 157500 and gets 140000, the editor is a placebo again.
@@ -339,7 +339,7 @@ describe("custom edited ladders reach the money engine (the placebo-editor bug)"
     expect(a.versionId).toBe(b.versionId);
   });
 
-  it("a DIFFERENT ladder gets a different version — rates are never shared by accident", () => {
+  it("a DIFFERENT ladder gets a different version - rates are never shared by accident", () => {
     const a = svc.getOrCreateCustomTieredVersion(T3, 1, LADDER as any);
     const c = svc.getOrCreateCustomTieredVersion(T3, 1, [
       { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17500, label: "1-6" },
@@ -475,7 +475,7 @@ describe("commission anti-gaming guards (retroactive pay is worth cheating for)"
     svc.assignStructureToRep(T4, 1, { repId: REP_B, structure: "TIERED", effectiveFrom: "2026-01-01" });
   });
 
-  it("GUARD 1a — a teammate cannot steal a booked sale's credit by re-knocking it", () => {
+  it("GUARD 1a - a teammate cannot steal a booked sale's credit by re-knocking it", () => {
     // Rep A sells a shared-territory door. Rep B re-marks it sold. The money
     // must stay with A — the ON CONFLICT upsert used to flip rep_id to B.
     svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(1), knockId: 1, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
@@ -485,7 +485,7 @@ describe("commission anti-gaming guards (retroactive pay is worth cheating for)"
     expect(svc.calculateOrRecalculateStatement({ tenantId: T4, repId: REP_B, weekReference: WEEK_REF, actorId: 1 }).computation.qualifiedSaleCount).toBe(0);
   });
 
-  it("GUARD 1b — a rep cannot drag their own prior-week sale into a richer current week", () => {
+  it("GUARD 1b - a rep cannot drag their own prior-week sale into a richer current week", () => {
     // Book in the target week, then re-knock 'now' a week later. The sale's
     // pay-week must not move — re-timing used to overwrite qualified_at.
     svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(2), knockId: 3, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
@@ -495,7 +495,7 @@ describe("commission anti-gaming guards (retroactive pay is worth cheating for)"
     expect(after.qualified_at).toBe(before.qualified_at);        // week frozen at first sale
   });
 
-  it("GUARD 2 — backdating beyond the correction window is clamped, not honored", () => {
+  it("GUARD 2 - backdating beyond the correction window is clamped, not honored", () => {
     // A knock claiming it happened 60 days ago (default window is 30) cannot
     // drop a sale into an arbitrary old week; it clamps to the window floor.
     svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(3), knockId: 5, soldAt: farPastTs(), serverReceivedAt: inWeekTs, actorId: 1 });
@@ -507,7 +507,7 @@ describe("commission anti-gaming guards (retroactive pay is worth cheating for)"
     expect(Date.parse(sale.qualified_at)).toBeGreaterThan(Date.parse(farPastTs()));
   });
 
-  it("GUARD 3 — a sale targeting a FINALIZED week is booked PENDING, never counted", () => {
+  it("GUARD 3 - a sale targeting a FINALIZED week is booked PENDING, never counted", () => {
     // Rep books a real week, it finalizes, then a late/backdated sale aims at
     // the locked week. It must land PENDING (manual review), not silently paid.
     svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_B, leadId: lead(10), knockId: 6, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
@@ -566,7 +566,7 @@ describe("week overview + Sunday closeout", () => {
     expect(again.results.every(r => r.result.startsWith("already"))).toBe(true);
   });
 
-  it("a reversal AFTER finalize never changes the locked number — it becomes an exception", () => {
+  it("a reversal AFTER finalize never changes the locked number - it becomes an exception", () => {
     const before = svc.getStatementForWeek(T1, 1004, WEEK_REF).statement;
     svc.reverseFieldSale(T1, undefined as any, 1); // guard: bogus lead id is a no-op
     // reverse a real sold door post-finalize
@@ -600,7 +600,7 @@ describe("config week-key is frozen once a week is locked (double-pay guard)", (
     svc.batchTransitionWeek(T6, 1, WEEK_REF, "FINALIZE");
   });
 
-  it("refuses a timezone or week-start change while a locked week exists — it would re-key and double-pay", () => {
+  it("refuses a timezone or week-start change while a locked week exists - it would re-key and double-pay", () => {
     // Changing the week key would orphan the FINALIZED statement under its old
     // key and let the same QUALIFIED sales be counted+paid again under the new one.
     expect(() => svc.updateOrgConfig(T6, 1, { commissionTimezone: "America/Chicago" }))
@@ -636,7 +636,7 @@ describe("post-finalize correction workflow (reviewer criticals)", () => {
   });
 
   it("CRITICAL: an approved adjustment on a FINALIZED week APPLIES without re-pricing gross", () => {
-    const adj = svc.createAdjustment(T1, 1, { statementId: stmtId, amountCents: -20000, reason: "Install cancelled — post-finalize clawback" });
+    const adj = svc.createAdjustment(T1, 1, { statementId: stmtId, amountCents: -20000, reason: "Install cancelled - post-finalize clawback" });
     const res = svc.decideAdjustment(T1, 2, adj.id, "APPROVE");
     expect(res.statement.status).toBe("FINALIZED");            // still locked
     expect(res.statement.gross_commission_cents).toBe(160000); // gross FROZEN — never re-tiered
@@ -782,7 +782,7 @@ describe("upsertSale write guards (sale re-attribution / re-dating / locked week
 // REVIEW FIXES. An adversarial review of the guards above reproduced four
 // defects in them. Each test below is the reproduction, kept as a regression pin.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("upsertSale guards — defects found in review", () => {
+describe("upsertSale guards - defects found in review", () => {
   const T8 = 9008, REP_A = 8001, REP_B = 8002;
 
   beforeAll(() => {
@@ -890,7 +890,7 @@ describe("upsertSale guards — defects found in review", () => {
   });
 });
 
-describe("backfillFieldSales — defect found in review", () => {
+describe("backfillFieldSales - defect found in review", () => {
   // §1.3 — GUARD 3 threw STATEMENT_LOCKED for a sold door whose week was already
   // finalized. With no per-lead catch, one such lead aborted the whole boot
   // sweep, permanently: rows already created are skipped next boot, so the same

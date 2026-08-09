@@ -85,7 +85,7 @@ export function PitchDrillCard({
             </>
           ) : (
             <div className="text-sm-minus text-muted-foreground" data-testid="pitch-recorder-unsupported">
-              Say the script out loud twice — once reading it, once from memory.
+              Say the script out loud twice - once reading it, once from memory.
             </div>
           )}
           {/* 3-take self-rating: the rep judges their own delivery, honestly. */}

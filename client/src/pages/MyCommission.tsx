@@ -157,7 +157,7 @@ export default function MyCommission() {
       {isError && (
         <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" data-testid="commission-error">
           <div className="text-sm font-semibold text-foreground">Couldn't load your commission</div>
-          <div className="text-sm text-muted-foreground mt-1">Check your connection and try again — your money data is safe.</div>
+          <div className="text-sm text-muted-foreground mt-1">Check your connection and try again - your money data is safe.</div>
           <button onClick={() => refetch()}
             className="mt-4 inline-flex items-center justify-center h-10 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
             Retry
@@ -169,7 +169,7 @@ export default function MyCommission() {
         <EmptyState
           icon={<Info className="w-6 h-6 text-amber-400" />}
           title="No rep profile linked yet"
-          body="Your login isn't linked to a sales profile. Ask your manager to finish your onboarding — then your weekly commission shows up here."
+          body="Your login isn't linked to a sales profile. Ask your manager to finish your onboarding - then your weekly commission shows up here."
         />
       )}
 
@@ -181,7 +181,7 @@ export default function MyCommission() {
         />
       )}
 
-      {/* Plan acceptance — the direct-onboarding handshake. Until accepted, the
+      {/* Plan acceptance - the direct-onboarding handshake. Until accepted, the
           terms are front and center with one clear action. */}
       {!isLoading && data?.structure && !data.structure.acceptedAt && (
         <AcceptPlanCard structure={data.structure} />
@@ -191,7 +191,7 @@ export default function MyCommission() {
         <WeekView data={data} />
       )}
 
-      {/* What counts — the exact doors behind this week's number */}
+      {/* What counts - the exact doors behind this week's number */}
       {!isLoading && data && (data.sales?.length ?? 0) > 0 && (
         <section className="rounded-xl bg-card border border-border overflow-hidden" data-testid="week-sales">
           <header className="px-4 py-3 border-b border-border flex items-center gap-2">
@@ -223,11 +223,11 @@ export default function MyCommission() {
         </section>
       )}
 
-      {/* Get paid — connect a Stripe payout account + see payout history.
+      {/* Get paid - connect a Stripe payout account + see payout history.
           Self-gating: renders nothing until the server reports payouts enabled. */}
       {!isLoading && !isError && data && !data.noRepProfile && <GetPaidSection />}
 
-      {/* Past weeks — a plain statement list. A failed fetch says so instead of
+      {/* Past weeks - a plain statement list. A failed fetch says so instead of
           silently deleting the section (money history must never just vanish). */}
       {historyError && (
         <section className="rounded-xl bg-card border border-border p-4 text-center" role="alert" data-testid="history-error">
@@ -352,10 +352,10 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
       {/* What this IS, said first and in plain language. */}
       <p className="px-4 pt-3 text-[11px] leading-snug text-muted-foreground" data-testid="reserve-explainer">
         A small part of each week's pay is set aside to cover sales that later cancel or charge back.
-        It builds up to a maximum and then stops — nothing more is held after that.
+        It builds up to a maximum and then stops - nothing more is held after that.
       </p>
 
-      {/* This week's split — earned → −reserve → net paid (the alias pattern). */}
+      {/* This week's split - earned → −reserve → net paid (the alias pattern). */}
       <dl className="px-4 py-3 space-y-2 text-[13px]">
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Earned this week</dt>
@@ -404,7 +404,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         {atCap ? (
           <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug font-medium text-emerald-400 [.light_&]:text-emerald-700" data-testid="reserve-at-cap">
             <ShieldCheck className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden="true" />
-            You're fully covered — nothing more is being held. Your whole commission is paid to you each week.
+            You're fully covered - nothing more is being held. Your whole commission is paid to you each week.
           </p>
         ) : (
           <p className="mt-2 text-[11px] leading-snug text-muted-foreground" data-testid="reserve-remaining">
@@ -415,12 +415,12 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         )}
 
         <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
-          Your reserve is released by your admin — it is never taken automatically. After your contract ends,
+          Your reserve is released by your admin - it is never taken automatically. After your contract ends,
           the remaining balance is released within 90 days, less any valid chargebacks, reversals, or amounts owed.
         </p>
       </div>
 
-      {/* History — every hold, chargeback, and release with its date and reason.
+      {/* History - every hold, chargeback, and release with its date and reason.
           The ledger is append-only, so this list is the complete record. */}
       {entries.length > 0 && (
         <div className="border-t border-border" data-testid="reserve-history">
@@ -451,9 +451,9 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
   );
 }
 
-// ── Override earnings — what my downline earned me this week ──────────────────
+// ── Override earnings - what my downline earned me this week ──────────────────
 // Self-fetching and self-gating, like GetPaidSection: a plain rep with no
-// downline and no ledger rows must see NOTHING — no empty card, no explainer
+// downline and no ledger rows must see NOTHING - no empty card, no explainer
 // about a program that doesn't apply to them. Loading and errors also render
 // null: this is a bonus layer on the page, never a hole in it.
 // Payable and held are SEPARATE figures (the EarningsToday rule: certain and
@@ -485,7 +485,7 @@ function OverrideEarningsCard() {
       </header>
 
       {/* Payable is the headline; held and settled stand apart as their own
-          muted figures — never blended into one number. */}
+          muted figures - never blended into one number. */}
       <div className="px-4 py-3 flex items-end justify-between gap-3 flex-wrap">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Payable this week</div>
@@ -513,7 +513,7 @@ function OverrideEarningsCard() {
 
       {rows.length === 0 ? (
         <div className="px-4 py-3 border-t border-border text-xs text-muted-foreground" data-testid="override-no-rows">
-          No override earnings this week — they appear as your downline closes doors.
+          No override earnings this week - they appear as your downline closes doors.
         </div>
       ) : (
         <div className="divide-y divide-border border-t border-border">
@@ -527,7 +527,7 @@ function OverrideEarningsCard() {
                 <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
                   {r.soldAt
                     ? new Date(r.soldAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
-                    : "—"}
+                    : " - "}
                   {r.saleStatus && <SaleChip status={r.saleStatus} />}
                 </div>
               </div>
@@ -542,7 +542,7 @@ function OverrideEarningsCard() {
         </div>
       )}
 
-      {/* Reconciliation against the frozen statement — only when one exists. */}
+      {/* Reconciliation against the frozen statement - only when one exists. */}
       {data.statementOverrideCents != null && (
         <footer className="px-4 py-2.5 border-t border-border bg-secondary/30 flex items-center justify-between text-xs" data-testid="override-statement-footer">
           <span className="text-muted-foreground">Included in your statement</span>
@@ -554,11 +554,11 @@ function OverrideEarningsCard() {
 }
 
 // ── Rank presentation ─────────────────────────────────────────────────────────
-// Metal tints tuned for the dark card at AA. Presentation ONLY — names and
+// Metal tints tuned for the dark card at AA. Presentation ONLY - names and
 // math come from shared/commissionRanks, which projects the same ladder the
 // money engine pays from.
 // Each tint carries BOTH themes: the base classes are tuned for the dark card,
-// and the [.light_&] arbitrary variants re-tune the text for the white card —
+// and the [.light_&] arbitrary variants re-tune the text for the white card -
 // slate-300 on white is 1.26:1, invisible. Bars darken in light mode too so
 // the fill stays visible against the light track.
 const RANK_TINTS: Record<string, { chip: string; bar: string }> = {
@@ -587,7 +587,7 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
   );
   if (!p) return null;  // a broken ladder gets no rank rail, not a wrong one
 
-  // Top of the ladder — a calm "you've maxed it" state, not a goal card.
+  // Top of the ladder - a calm "you've maxed it" state, not a goal card.
   if (p.atTop || !p.next) {
     return (
       <div className="rounded-2xl bg-card border border-border p-5" data-testid="rank-card">
@@ -619,11 +619,11 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
 
   return (
     <div className="rounded-2xl bg-card border border-border overflow-hidden" data-testid="rank-card">
-      {/* Next target header — Silver framed prominently (Grab Driver "Next tier"). */}
+      {/* Next target header - Silver framed prominently (Grab Driver "Next tier"). */}
       <div className="flex items-center justify-between gap-2 px-5 pt-4">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Next target</span>
-          {/* RankChip already carries the medal + name — wrapping it in a second
+          {/* RankChip already carries the medal + name - wrapping it in a second
               chip that repeated {next.name} rendered "Bronze Bronze". */}
           <RankChip rank={next} />
         </div>
@@ -632,7 +632,7 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
         </span>
       </div>
 
-      {/* HERO — the upside, not the tier name. */}
+      {/* HERO - the upside, not the tier name. */}
       <div className="px-5 pt-3" data-testid="rank-next">
         <p className="text-[15px] font-semibold text-foreground leading-tight">
           {p.salesToNext} more sale{p.salesToNext === 1 ? "" : "s"} unlock{p.salesToNext === 1 ? "s" : ""}
@@ -701,7 +701,7 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
   );
 }
 
-// The whole climb — every rung visible (Crypto.com stations / Grab criteria).
+// The whole climb - every rung visible (Crypto.com stations / Grab criteria).
 function RankRail({ p, className = "", secondary = false }: { p: NonNullable<ReturnType<typeof rankProgress>>; className?: string; secondary?: boolean }) {
   return (
     <div className={className}>
@@ -720,7 +720,7 @@ function RankRail({ p, className = "", secondary = false }: { p: NonNullable<Ret
                 <RankChip rank={r} size="sm" />
                 <span className={`truncate text-[11px] ${reached || isNext ? "text-foreground" : "text-muted-foreground"}`}>
                   {r.minimumSales}{r.maximumSales == null ? "+" : `–${r.maximumSales}`} sales
-                  {isCurrent && <span className="sr-only"> — your current rank</span>}
+                  {isCurrent && <span className="sr-only"> - your current rank</span>}
                 </span>
               </div>
               <span className={`text-xs tabular-nums font-semibold ${reached || isNext ? "text-foreground" : "text-muted-foreground"}`}>
@@ -745,7 +745,7 @@ function WeekView({ data }: { data: WeekResponse }) {
   const retro = comp?.retro ?? null;
   const isTiered = structure?.structure !== "FLAT";
   const tiers = structure?.tiers ?? [];
-  // Money state — real statement status, falling back to a live projection.
+  // Money state - real statement status, falling back to a live projection.
   const stateKey = (stmt?.status ?? (data.locked ? "FINALIZED" : "OPEN")) as string;
   const state = WEEK_STATE[stateKey] ?? WEEK_STATE.OPEN;
   // The rate a rep earns on their FIRST sale (never render "$0 per sale").
@@ -753,7 +753,7 @@ function WeekView({ data }: { data: WeekResponse }) {
 
   return (
     <>
-      {/* Week strip — this week's commission as a hairline-divided finance strip,
+      {/* Week strip - this week's commission as a hairline-divided finance strip,
           with an ALWAYS-present money-state badge */}
       <div className="rounded-xl bg-card border border-border overflow-hidden">
         <div className="p-5">
@@ -779,11 +779,11 @@ function WeekView({ data }: { data: WeekResponse }) {
               : <>{count} qualified sale{count === 1 ? "" : "s"} · {usd(rateCents)} per sale{isTiered && comp?.tierLabel ? ` · ${comp.tierLabel}` : ""}</>}
           </div>
           {stateKey === "OPEN" && (
-            <div className="mt-1 text-[11px] text-muted-foreground">This is a live projection — it can still change until the week closes Sunday night.</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">This is a live projection - it can still change until the week closes Sunday night.</div>
           )}
           {/* THE number a rep is really asking for: what lands in their pocket
-              after the tenant's chargeback reserve. Stated in the hero — not
-              buried in the reserve card — whenever a holdback is configured.
+              after the tenant's chargeback reserve. Stated in the hero - not
+              buried in the reserve card - whenever a holdback is configured.
               (Gusto/Stripe payout grammar: gross above, take-home called out.) */}
           {data.holdback?.current && data.holdback.current.reservePercent > 0 && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.08] px-3.5 py-2.5" data-testid="hero-net-pay">
@@ -803,7 +803,7 @@ function WeekView({ data }: { data: WeekResponse }) {
           <MetricCell label="Base pay" value={usd(grossCents)} />
         </div>
 
-        {/* Adjustments — a deduction is NEVER an unexplained number */}
+        {/* Adjustments - a deduction is NEVER an unexplained number */}
         {(data.adjustments?.length ?? 0) > 0 && (
           <div className="border-t border-border p-4 space-y-1.5" data-testid="hero-adjustments">
             <div className="flex items-center justify-between text-xs">
@@ -814,7 +814,7 @@ function WeekView({ data }: { data: WeekResponse }) {
               <div key={a.id} className="flex items-start justify-between text-xs gap-3">
                 <span className="text-muted-foreground min-w-0">
                   <span className={a.amount_cents < 0 ? "text-rose-400 font-semibold" : "text-emerald-400 font-semibold"}>{a.amount_cents < 0 ? "Deduction" : "Bonus"}</span>
-                  {" — "}{a.reason}
+                  {" - "}{a.reason}
                 </span>
                 <span className={`tabular-nums flex-shrink-0 ${a.amount_cents < 0 ? "text-rose-400" : "text-emerald-400"}`}>{a.amount_cents > 0 ? "+" : "−"}{usd(Math.abs(a.amount_cents))}</span>
               </div>
@@ -823,7 +823,7 @@ function WeekView({ data }: { data: WeekResponse }) {
         )}
       </div>
 
-      {/* Why the week dropped MORE than one sale — the retroactive rule in
+      {/* Why the week dropped MORE than one sale - the retroactive rule in
           reverse, said out loud. When a canceled deal pulls the count below a
           band boundary, every surviving sale reprices down too: losing the 7th
           on a 1-6 $175 / 7+ $225 ladder is not −$225, it is −$525. Without
@@ -851,12 +851,12 @@ function WeekView({ data }: { data: WeekResponse }) {
             </div>
             <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
               {reversedCount === 1 ? "A canceled deal" : `${reversedCount} canceled deals`} pulled you out of the{" "}
-              <span className="font-semibold text-foreground">{wouldBe.tierLabel}</span> band — tiers are retroactive,
+              <span className="font-semibold text-foreground">{wouldBe.tierLabel}</span> band - tiers are retroactive,
               so your {count} remaining sale{count === 1 ? "" : "s"} repriced from {usd(wouldBe.rateCents)} to{" "}
               {usd(rateCents)} each. That's {usd(dropCents)} in total, not just the lost sale.
             </p>
             <p className="mt-1.5 text-[11px] text-muted-foreground">
-              Win it back: the week is still open — {retro?.salesUntilNextTier != null
+              Win it back: the week is still open - {retro?.salesUntilNextTier != null
                 ? `${retro.salesUntilNextTier} more sale${retro.salesUntilNextTier === 1 ? "" : "s"} puts every door back at the higher rate.`
                 : "another qualified sale can restore the band."}
             </p>
@@ -864,7 +864,7 @@ function WeekView({ data }: { data: WeekResponse }) {
         );
       })()}
 
-      {/* Override earnings — money the rep's DOWNLINE produced for them. A
+      {/* Override earnings - money the rep's DOWNLINE produced for them. A
           separate additive layer, so it gets its own card between the week
           strip and the reserve; it never folds into the hero number silently. */}
       <OverrideEarningsCard />
@@ -887,13 +887,13 @@ function WeekView({ data }: { data: WeekResponse }) {
       {isTiered && retro && retro.salesUntilNextTier == null && count > 0 && (
         <div className="rounded-xl bg-card border border-emerald-500/30 p-4 flex items-center gap-3">
           <Trophy className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-          <span className="text-sm text-foreground">You're in the <strong>top tier</strong> this week — every sale pays {usd(rateCents)}.</span>
+          <span className="text-sm text-foreground">You're in the <strong>top tier</strong> this week - every sale pays {usd(rateCents)}.</span>
         </div>
       )}
 
       {/* Tier ladder or flat rate. On OPEN tiered weeks the RankCard above
           already renders every band (rate + range + current/next highlight), so
-          repeating the same rows here was pure duplicate scroll — this plain
+          repeating the same rows here was pure duplicate scroll - this plain
           card now serves only the weeks where the RankCard is absent (locked
           statements, whose frozen rates are the record). */}
       {isTiered ? (!(tiers.length > 0 && stateKey === "OPEN") &&
@@ -972,7 +972,7 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
     onSuccess: () => {
       toast({ title: "Plan accepted", description: "Your commission terms are locked to your file. Go sell." });
       qc.invalidateQueries({ queryKey: ["/api/commission/statements/me/current"] });
-      // The Past-weeks list reads a different key — refresh it too so the page
+      // The Past-weeks list reads a different key - refresh it too so the page
       // never shows a stale history next to a fresh current week.
       qc.invalidateQueries({ queryKey: ["/api/commission/statements"] });
     },
@@ -1007,7 +1007,7 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
         </div>
       )}
       {structure.structure === "TIERED" && structure.tiers.length > 1 && (
-        // The example is derived from THIS rep's actual second band — it used
+        // The example is derived from THIS rep's actual second band - it used
         // to hardcode "Hit 8" from the standard ladder, which stated wrong
         // terms for anyone on a custom plan, on the exact card that freezes
         // terms to their file.
@@ -1090,7 +1090,7 @@ function GetPaidSection() {
     mutationFn: () => apiRequest("POST", "/api/payouts/connect").then(r => r.json()),
     onSuccess: (res: { url?: string }) => {
       if (res?.url) { window.location.href = res.url; return; }
-      toast({ title: "Couldn't start setup", description: "No onboarding link came back — try again in a moment.", variant: "destructive" });
+      toast({ title: "Couldn't start setup", description: "No onboarding link came back - try again in a moment.", variant: "destructive" });
     },
     onError: (e: any) => toast({ title: "Payouts aren't ready yet", description: e?.message ?? "Please try again shortly.", variant: "destructive" }),
   });
@@ -1167,7 +1167,7 @@ function GetPaidSection() {
           )}
           {account.onboardingStatus === "restricted" && (
             <div className="mt-4 flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400" data-testid="payout-status-note">
-              <XCircle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" /> Action needed — reconnect to finish verification.
+              <XCircle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" /> Action needed - reconnect to finish verification.
             </div>
           )}
 
@@ -1207,7 +1207,7 @@ function PayoutRow({ item }: { item: PayoutHistoryItem }) {
         <div className="text-[11px] text-muted-foreground tabular-nums truncate">
           {when
             ? new Date(when).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
-            : "—"}
+            : " - "}
           {item.statementId != null ? ` · Statement #${item.statementId}` : ""}
         </div>
       </div>

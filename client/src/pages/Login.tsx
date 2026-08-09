@@ -64,9 +64,9 @@ export default function Login() {
       setStep("code");
       if (developmentCode) setCode(developmentCode);
       setResendIn(30);
-      toast({ title: developmentCode ? "Local sign-in code filled in — tap Verify & sign in."
-        : emailDelivered ? "Code sent — check your email."
-        : "Code created, but email is delayed — ask your manager for it.",
+      toast({ title: developmentCode ? "Local sign-in code filled in - tap Verify & sign in."
+        : emailDelivered ? "Code sent - check your email."
+        : "Code created, but email is delayed - ask your manager for it.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
     } catch (err: any) {
       setFormError(err.message || "Something went wrong");
@@ -83,9 +83,9 @@ export default function Login() {
       const { code: developmentCode, emailDelivered } = await requestCode();
       setCode(developmentCode ?? "");
       setResendIn(30);
-      toast({ title: developmentCode ? "New local code filled in — tap Verify & sign in."
-        : emailDelivered ? "New code sent — check your email."
-        : "New code created, but email is delayed — ask your manager for it.",
+      toast({ title: developmentCode ? "New local code filled in - tap Verify & sign in."
+        : emailDelivered ? "New code sent - check your email."
+        : "New code created, but email is delayed - ask your manager for it.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
     } catch (err: any) {
       setFormError(err.message || "Something went wrong");

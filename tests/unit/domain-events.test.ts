@@ -74,7 +74,7 @@ describe("rewardKey", () => {
     expect(rewardKey(3, 900, 12)).toBe(rewardKey(3, 900, 12));
   });
 
-  it("lets ONE event pay several recipients — the referral and override case", () => {
+  it("lets ONE event pay several recipients - the referral and override case", () => {
     // The event is about the referred rep; the money goes to the referrer. If
     // the key ignored the recipient, only the first beneficiary would ever be
     // paid.
@@ -106,7 +106,7 @@ describe("validateEventInput", () => {
     expect(validateEventInput(valid)).toEqual([]);
   });
 
-  it("requires a real tenant — an org-less event has no isolation", () => {
+  it("requires a real tenant - an org-less event has no isolation", () => {
     expect(validateEventInput({ ...valid, tenantId: 0 }).join()).toMatch(/tenantId/);
     expect(validateEventInput({ ...valid, tenantId: -1 }).join()).toMatch(/tenantId/);
   });

@@ -106,7 +106,7 @@ export function RampBonusCard() {
 
             {data.daysPaid > 0 && (
               <p className="mt-2 text-[12px] text-muted-foreground" data-testid="ramp-days-paid">
-                {data.daysPaid} training day{data.daysPaid === 1 ? "" : "s"} banked so far —{" "}
+                {data.daysPaid} training day{data.daysPaid === 1 ? "" : "s"} banked so far - {" "}
                 {usd(data.daysPaid * data.rewardCents)}.
               </p>
             )}
@@ -150,7 +150,7 @@ export function RampBonusCard() {
 
         {data.inWindow && (
           <p className="mt-2 text-[12px] text-muted-foreground" data-testid="ramp-rule">
-            Clear every card due that day — at least {data.minCardsPerDay} of them, worked properly. Paid on your commission statement.
+            Clear every card due that day - at least {data.minCardsPerDay} of them, worked properly. Paid on your commission statement.
           </p>
         )}
       </CardContent>

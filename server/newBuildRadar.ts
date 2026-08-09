@@ -60,10 +60,10 @@ const OVERPASS_TILES: OverpassArea[] = [
 // (see SC_COUNTY_SOURCES). Cherokee and Union counties expose no public ArcGIS
 // REST at all, so their Kinetic markets (e.g. Gaffney, Union) stay OSM-only.
 const KNOWN_GAPS: Array<{ state: string; source: string; scope: string; note: string }> = [
-  { state: "SC", source: "sc_rfa_gis", scope: "SC statewide", note: "No public SC statewide address FeatureServer exists (RFA 911 data not published as open REST; AGOL search 0 results) — authoritative SC coverage is per-county via sc_county_addr; counties without open GIS fall back to OSM Overpass" },
-  { state: "SC", source: "sc_cherokee_gis", scope: "Cherokee county", note: "Cherokee County (Gaffney) publishes parcels only via qPublic/Schneider (no public ArcGIS REST) — OSM Overpass only until an open endpoint appears" },
-  { state: "SC", source: "sc_union_gis", scope: "Union county", note: "Union County SC publishes maps only via WTH GIS viewer (no public ArcGIS REST) — OSM Overpass only until an open endpoint appears" },
-  { state: "NC", source: "county_permits", scope: "residential permits", note: "County residential-permit feeds (NC and SC) are fragmented and not uniformly published as open APIs — not wired; new construction is detected via authoritative new address points + OSM new buildings instead" },
+  { state: "SC", source: "sc_rfa_gis", scope: "SC statewide", note: "No public SC statewide address FeatureServer exists (RFA 911 data not published as open REST; AGOL search 0 results) - authoritative SC coverage is per-county via sc_county_addr; counties without open GIS fall back to OSM Overpass" },
+  { state: "SC", source: "sc_cherokee_gis", scope: "Cherokee county", note: "Cherokee County (Gaffney) publishes parcels only via qPublic/Schneider (no public ArcGIS REST) - OSM Overpass only until an open endpoint appears" },
+  { state: "SC", source: "sc_union_gis", scope: "Union county", note: "Union County SC publishes maps only via WTH GIS viewer (no public ArcGIS REST) - OSM Overpass only until an open endpoint appears" },
+  { state: "NC", source: "county_permits", scope: "residential permits", note: "County residential-permit feeds (NC and SC) are fragmented and not uniformly published as open APIs - not wired; new construction is detected via authoritative new address points + OSM new buildings instead" },
 ];
 
 let _ready = false;

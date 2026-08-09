@@ -144,7 +144,7 @@ export function milestoneProgress(
       doors: n, target: 0, remaining: 0, pct: 100, nextRewardCents: 0,
       earnedCents, toppedOut: true,
       headline: norm.rungs.length
-        ? `${n} verified doors ${when} — every bonus earned`
+        ? `${n} verified doors ${when} - every bonus earned`
         : `${n} verified doors ${when}`,
     };
   }
@@ -181,7 +181,7 @@ export function validateLadder(input: unknown): string | null {
   if (!l || typeof l !== "object") return "The ladder is missing.";
   if (l.period !== "week" && l.period !== "day") return "The period must be a week or a day.";
   if (!Array.isArray(l.rungs)) return "The ladder needs a list of milestones.";
-  if (l.rungs.length > 8) return "Use at most 8 milestones — a ladder nobody can recite is not an incentive.";
+  if (l.rungs.length > 8) return "Use at most 8 milestones - a ladder nobody can recite is not an incentive.";
 
   for (const r of l.rungs) {
     const doors = Number(r?.doors), reward = Number(r?.rewardCents);

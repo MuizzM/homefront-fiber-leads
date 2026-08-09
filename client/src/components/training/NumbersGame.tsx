@@ -114,7 +114,7 @@ export default function NumbersGame() {
         <div className="text-right">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Ladder band</div>
           <div className="text-sm font-bold tabular-nums text-primary">
-            {retro.tierLabel ?? "—"}{retro.rateCents > 0 ? ` · ${formatUsdCents(retro.rateCents)}/sale` : ""}
+            {retro.tierLabel ?? " - "}{retro.rateCents > 0 ? ` · ${formatUsdCents(retro.rateCents)}/sale` : ""}
           </div>
         </div>
       </div>
@@ -146,7 +146,7 @@ export default function NumbersGame() {
         </div>
       </div>
 
-      {/* The funnel — where the week actually comes from */}
+      {/* The funnel - where the week actually comes from */}
       <div className="mt-4 flex items-stretch gap-2" role="group" aria-label="Weekly funnel at field-average rates">
         <FunnelStat icon={DoorOpen} label="Knocks" value={doorsPerWeek} sub={`${DAYS_PER_WEEK} days`} />
         <FunnelStat icon={MessageCircle} label="Answers" value={conversations} sub="~35% open" />
@@ -154,7 +154,7 @@ export default function NumbersGame() {
         <FunnelStat icon={Handshake} label="Sales" value={sales} sub="~12% close" />
       </div>
 
-      {/* The behavioral payoff — the ladder nudge in the pay engine's own words */}
+      {/* The behavioral payoff - the ladder nudge in the pay engine's own words */}
       <p className="mt-3 rounded-xl border border-border bg-background px-3 py-2.5 text-xs leading-relaxed text-muted-foreground" data-testid="numbers-game-nudge">
         {tierProgressMessage(retro)}{" "}
         <span className="text-foreground">
@@ -163,7 +163,7 @@ export default function NumbersGame() {
         </span>
       </p>
       <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/60">
-        Field-average rates, house ladder — your live plan and week are on My commission. This is the shape, not a promise.
+        Field-average rates, house ladder - your live plan and week are on My commission. This is the shape, not a promise.
       </p>
     </div>
   );

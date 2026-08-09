@@ -36,7 +36,7 @@ beforeAll(async () => {
 });
 
 describe("restored migrations execute under the real ESM module runtime", () => {
-  it("ensureAdminAuditSchema ran — the admin_audit table exists", () => {
+  it("ensureAdminAuditSchema ran - the admin_audit table exists", () => {
     // Previously: `require("./adminAudit")` threw, the catch logged
     // "[migration] admin audit schema: require is not defined", and the table
     // was simply absent. Admin history surviving a redeploy is the whole point
@@ -47,7 +47,7 @@ describe("restored migrations execute under the real ESM module runtime", () => 
     expect(t).toBeTruthy();
   });
 
-  it("backfillAddressReview ran — a coordinate-less lead is quarantined", async () => {
+  it("backfillAddressReview ran - a coordinate-less lead is quarantined", async () => {
     // Depends on addressIdentityIssues from @shared/addressKey. If that import
     // regresses to a require, the backfill no-ops and this lead stays a
     // prospect — i.e. a lead with broken identity keeps reaching field reps.
@@ -92,7 +92,7 @@ describe("restored migrations execute under the real ESM module runtime", () => 
     expect(typeof mod.syncFreshFiberQueue).toBe("function");
   });
 
-  it("migrations are idempotent — a second run changes nothing", async () => {
+  it("migrations are idempotent - a second run changes nothing", async () => {
     const s = await import("../../server/storage");
     const before = (rawDb.prepare(`SELECT COUNT(*) c FROM leads`).get() as any).c;
     expect(() => s.runMigrations()).not.toThrow();

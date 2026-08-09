@@ -148,7 +148,7 @@ describe("post-deploy tab that already runs the new build", () => {
   });
 });
 
-describe("genuine update — a tab actually running an old build", () => {
+describe("genuine update - a tab actually running an old build", () => {
   it("prompts, applies on tap, and reloads exactly once on controllerchange", async () => {
     const { container, reload } = await bootControlledTab();
     const sw = new FakeWorker("def456"); // a different build than the page's
@@ -173,7 +173,7 @@ describe("genuine update — a tab actually running an old build", () => {
   });
 });
 
-describe("unknowable versions fall back to prompting — never to silence", () => {
+describe("unknowable versions fall back to prompting - never to silence", () => {
   it("an unstamped page (dev, or a stamping regression) prompts without querying", async () => {
     delete window.__HFS_BUILD__;
     const { container } = await bootControlledTab();
@@ -190,7 +190,7 @@ describe("unknowable versions fall back to prompting — never to silence", () =
     expect(prompts).toBe(1);
   });
 
-  it("a worker predating the handshake never answers — timeout, then prompt", async () => {
+  it("a worker predating the handshake never answers - timeout, then prompt", async () => {
     const { container } = await bootControlledTab();
     const sw = new FakeWorker(null); // swallows GET_VERSION like old sw.js did
     await installNewWorker(container, sw); // settle() runs out the query timeout

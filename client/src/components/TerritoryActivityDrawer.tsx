@@ -28,7 +28,7 @@ type SortKey = "newest" | "oldest" | "closest" | "farthest" | "status";
 
 function fmtTime(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return Number.isNaN(d.getTime()) ? " - " : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId: number; onClose: () => void }) {
@@ -60,7 +60,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
       qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
       setOverrideFor(null);
       setOverrideReason("");
-      toast({ title: "Verification overridden — logged to the audit trail" });
+      toast({ title: "Verification overridden - logged to the audit trail" });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -186,7 +186,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
                         <span data-testid="distance-when-marked">{formatDistance(a.distanceM)}</span>
                         {a.gpsAccuracyM != null && <><span>·</span><span>GPS ±{Math.round(a.gpsAccuracyM)} m</span></>}
                       </div>
-                      <div className="text-2xs text-muted-foreground/70">{a.rep ?? "—"} · {fmtTime(a.knockedAt)}</div>
+                      <div className="text-2xs text-muted-foreground/70">{a.rep ?? " - "} · {fmtTime(a.knockedAt)}</div>
                     </div>
                   </button>
 
@@ -200,9 +200,9 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
                       )}
                       {/* Immutable audit fields */}
                       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-2xs">
-                        <div><dt className="text-muted-foreground">Marked (device)</dt><dd className="text-foreground/90">{a.deviceTs ? fmtTime(a.deviceTs) : "—"}</dd></div>
-                        <div><dt className="text-muted-foreground">Received (server)</dt><dd className="text-foreground/90">{a.serverTs ? fmtTime(a.serverTs) : "—"}</dd></div>
-                        <div><dt className="text-muted-foreground">Network</dt><dd className="text-foreground/90">{a.netState ?? "—"}</dd></div>
+                        <div><dt className="text-muted-foreground">Marked (device)</dt><dd className="text-foreground/90">{a.deviceTs ? fmtTime(a.deviceTs) : " - "}</dd></div>
+                        <div><dt className="text-muted-foreground">Received (server)</dt><dd className="text-foreground/90">{a.serverTs ? fmtTime(a.serverTs) : " - "}</dd></div>
+                        <div><dt className="text-muted-foreground">Network</dt><dd className="text-foreground/90">{a.netState ?? " - "}</dd></div>
                         <div><dt className="text-muted-foreground">Activity ID</dt><dd className="text-foreground/90 tabular-nums">#{a.knockId}</dd></div>
                       </dl>
                       {isAdmin && (() => {

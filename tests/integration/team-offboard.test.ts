@@ -91,7 +91,7 @@ afterAll(async () => {
 });
 
 describe("offboard authority matrix (strictly above)", () => {
-  it("a team lead offboards their own rep — login disabled, sessions dead NOW", async () => {
+  it("a team lead offboards their own rep - login disabled, sessions dead NOW", async () => {
     // The rep is logged in and working.
     const before = await request("/api/team", fx.leadRepA.session);
     expect(before.status).toBe(200);
@@ -181,7 +181,7 @@ describe("offboard authority matrix (strictly above)", () => {
 });
 
 describe("reactivation follows the same authority", () => {
-  it("a manager brings back an offboarded rep — member and login both active again", async () => {
+  it("a manager brings back an offboarded rep - member and login both active again", async () => {
     const res = await reactivate(fx.leadRepA.memberId, fx.managerA.session);
     expect(res.status).toBe(200);
     expect(((await res.json()) as any).member.active).toBe(true);
@@ -403,7 +403,7 @@ describe("a kick beats session renewal", () => {
     expect((await request("/api/team", rep.session)).status).toBe(401);
   });
 
-  it("a still-employed rep keeps working — renewal only ever helps the active", async () => {
+  it("a still-employed rep keeps working - renewal only ever helps the active", async () => {
     const rep = makePerson("Rep Still Working", "rep", { reportsToId: fx.teamLead.memberId });
     // Nearly-expired session, mid-shift: renewal must carry them through.
     rawDb.prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")

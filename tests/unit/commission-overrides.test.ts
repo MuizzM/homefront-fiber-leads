@@ -24,7 +24,7 @@ const roster = (over: Partial<Record<number, Partial<UplineChainMemberInput>>> =
   return new Map(base.map(m => [m.id, { ...m, ...(over[m.id] ?? {}) }]));
 };
 
-describe("downlineOf — BFS below a root, cycle-safe", () => {
+describe("downlineOf - BFS below a root, cycle-safe", () => {
   const members: DownlineMemberRef[] = [
     { id: 1, reportsToId: null },
     { id: 2, reportsToId: 1 },
@@ -54,7 +54,7 @@ describe("downlineOf — BFS below a root, cycle-safe", () => {
   });
 });
 
-describe("resolveOverrideChain — hop-budgeted upward walk", () => {
+describe("resolveOverrideChain - hop-budgeted upward walk", () => {
   it("walks rep → team_lead → manager with levels", () => {
     const { chain, corrupt } = resolveOverrideChain(3, roster());
     expect(corrupt).toBe(false);
@@ -64,7 +64,7 @@ describe("resolveOverrideChain — hop-budgeted upward walk", () => {
     ]);
   });
 
-  it("a cycle fails closed with an EMPTY chain — corrupt data earns zero", () => {
+  it("a cycle fails closed with an EMPTY chain - corrupt data earns zero", () => {
     const m = roster();
     m.set(1, { id: 1, role: "manager", reportsToId: 3, active: true }); // mgr reports to the rep
     const { chain, corrupt } = resolveOverrideChain(3, m);
@@ -81,7 +81,7 @@ describe("resolveOverrideChain — hop-budgeted upward walk", () => {
   });
 });
 
-describe("computeFlatOverrides — one award per slot, house keeps unfilled slots", () => {
+describe("computeFlatOverrides - one award per slot, house keeps unfilled slots", () => {
   it("pays TL $25 and manager $75 on a full chain", () => {
     const { chain } = resolveOverrideChain(3, roster());
     const { awards } = computeFlatOverrides(chain, RATES);
@@ -108,7 +108,7 @@ describe("computeFlatOverrides — one award per slot, house keeps unfilled slot
   // them handed the money to the house over signature timing. A truly departed
   // leader never reaches this function at all: offboard and delete both re-home
   // their reports, which takes them out of every chain.
-  it("a not-yet-activated upline still earns — signature timing is not a pay decision", () => {
+  it("a not-yet-activated upline still earns - signature timing is not a pay decision", () => {
     const { chain } = resolveOverrideChain(3, roster({ 2: { active: false } }));
     const { awards, chainSnapshot } = computeFlatOverrides(chain, RATES);
     expect(awards).toEqual([
@@ -127,7 +127,7 @@ describe("computeFlatOverrides — one award per slot, house keeps unfilled slot
     expect(chainSnapshot.find(n => n.repId === 2)?.skipReason).toBe("zero_rate");
   });
 
-  it("only the FIRST node of a role earns — a second manager above earns nothing", () => {
+  it("only the FIRST node of a role earns - a second manager above earns nothing", () => {
     const m = roster();
     m.set(1, { id: 1, role: "manager", reportsToId: 5, active: true }); // mgr chain: 1 → 5
     const { chain } = resolveOverrideChain(3, m);
@@ -137,7 +137,7 @@ describe("computeFlatOverrides — one award per slot, house keeps unfilled slot
   });
 });
 
-describe("resolveSellerRates — per-hire rates win, NULL inherits", () => {
+describe("resolveSellerRates - per-hire rates win, NULL inherits", () => {
   it("a seller's own rates replace the org defaults column by column", () => {
     expect(resolveSellerRates(RATES, { overrideTeamLeadCents: 1000, overrideManagerCents: 9900 }))
       .toEqual({ basis: "FLAT_PER_SALE", teamLeadCents: 1000, managerCents: 9900 });
@@ -157,7 +157,7 @@ describe("resolveSellerRates — per-hire rates win, NULL inherits", () => {
   });
 });
 
-describe("validateOverridePatch — tri-state config boundary", () => {
+describe("validateOverridePatch - tri-state config boundary", () => {
   it("absent keys touch nothing", () => {
     expect(validateOverridePatch({})).toEqual({ patch: {} });
   });
@@ -168,7 +168,7 @@ describe("validateOverridePatch — tri-state config boundary", () => {
     expect(patch).toEqual({ overridesEnabled: false, overrideTeamLeadCents: 0 });
   });
 
-  it("whole integer cents only — a float is a client bug, not money", () => {
+  it("whole integer cents only - a float is a client bug, not money", () => {
     expect(validateOverridePatch({ overrideManagerCents: 75.5 }).error).toMatch(/whole number/);
     expect(validateOverridePatch({ overrideManagerCents: -1 }).error).toMatch(/whole number/);
     expect(validateOverridePatch({ overrideManagerCents: 7500 }).patch.overrideManagerCents).toBe(7500);
@@ -180,7 +180,7 @@ describe("validateOverridePatch — tri-state config boundary", () => {
   });
 });
 
-describe("statement document — override line", () => {
+describe("statement document - override line", () => {
   const docInput = (overrideCents: number | undefined): StatementDocInput => ({
     company: { name: "Test Org" },
     rep: { id: 1, name: "Doc Rep" },
@@ -207,7 +207,7 @@ describe("statement document — override line", () => {
     expect(doc.payout.netPayCents).toBe(10000);
   });
 
-  it("absent override input reads as zero — pre-override callers unchanged", () => {
+  it("absent override input reads as zero - pre-override callers unchanged", () => {
     const doc = buildStatementDocument(docInput(undefined));
     expect(doc.totals.overrideCents).toBe(0);
     expect(doc.totals.earnedCents).toBe(0);

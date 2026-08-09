@@ -188,7 +188,7 @@ export function AreaSkipTracePanel({
                   : <AlertTriangle className="h-4 w-4 text-amber-500" aria-hidden="true" />}
               <span className="text-[13px] font-medium text-foreground" data-testid="skip-trace-summary">
                 {active
-                  ? `Running — ${run.processedLeads} of ${run.eligibleLeads} doors`
+                  ? `Running - ${run.processedLeads} of ${run.eligibleLeads} doors`
                   : summaryLine(run)}
               </span>
             </div>
@@ -232,7 +232,7 @@ export function AreaSkipTracePanel({
         {/* Honest about what this list is. A rep who reads "dialable" as
             "cleared to call" has been misled by the product. */}
         <p className="mt-1 text-[12px] text-muted-foreground">
-          A worklist, not a call approval — every dial re-runs the full check in the Calling
+          A worklist, not a call approval - every dial re-runs the full check in the Calling
           workspace. Numbers are masked here.
         </p>
 
@@ -290,7 +290,7 @@ export function AreaSkipTracePanel({
             </ul>
             <div className="mt-3 text-[12px] text-muted-foreground" data-testid="dialing-list-totals">
               {list.dialablePhones} of {list.totalPhones} numbers dialable
-              {list.truncated && " — showing the first page only"}
+              {list.truncated && " - showing the first page only"}
             </div>
           </>
         )}

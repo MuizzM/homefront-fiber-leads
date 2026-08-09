@@ -178,7 +178,7 @@ describe("a drop is paid exactly once", () => {
 });
 
 describe("the ledger stores one timestamp format", () => {
-  it("every spiffs row is ISO — a mixed column silently disables the caps", async () => {
+  it("every spiffs row is ISO - a mixed column silently disables the caps", async () => {
     // Not a style rule. created_at is compared and ORDERed as TEXT, and SQLite's
     // datetime('now') default ('2026-08-03 21:05:00') does not interleave with
     // the ISO form: ' ' sorts before 'T', so every default-shaped row sorts ahead

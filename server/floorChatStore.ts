@@ -88,7 +88,7 @@ export function ensureFloorChatSchema(): void {
       ON floor_chat_thread_members(user_id);
 
     -- Per-(user, thread) watermark. The floor keeps its original single-row
-    -- table above — one watermark per user predates threads, and migrating a
+    -- table above - one watermark per user predates threads, and migrating a
     -- live column into a composite key buys nothing but risk.
     CREATE TABLE IF NOT EXISTS floor_chat_thread_reads (
       user_id INTEGER NOT NULL,
@@ -343,7 +343,7 @@ export function createGroup(
     throw Object.assign(new Error("Pick at least one member besides yourself."), { httpStatus: 400 });
   }
   if (crew.length > GROUP_MEMBER_MAX) {
-    throw Object.assign(new Error(`A group tops out at ${GROUP_MEMBER_MAX} people — past that, use the floor.`), { httpStatus: 400 });
+    throw Object.assign(new Error(`A group tops out at ${GROUP_MEMBER_MAX} people - past that, use the floor.`), { httpStatus: 400 });
   }
   const info = rawDb.prepare(
     `INSERT INTO floor_chat_threads (tenant_id, kind, name, dm_key, created_by_user_id, created_at)
@@ -489,7 +489,7 @@ export function updateGroupMembers(
   for (const uid of removeUserIds) prospective.delete(Math.trunc(Number(uid) || 0));
   prospective.delete(0);
   if (prospective.size > GROUP_MEMBER_MAX) {
-    throw Object.assign(new Error(`A group tops out at ${GROUP_MEMBER_MAX} people — past that, use the floor.`), { httpStatus: 400 });
+    throw Object.assign(new Error(`A group tops out at ${GROUP_MEMBER_MAX} people - past that, use the floor.`), { httpStatus: 400 });
   }
   if (prospective.size === 0) {
     throw Object.assign(new Error("That would empty the group. Disband it instead."), { httpStatus: 400 });

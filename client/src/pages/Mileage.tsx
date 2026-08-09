@@ -135,7 +135,7 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
             <p className="font-medium">Location is on for trips you start</p>
             <p className="text-muted-foreground">
               {consent.backgroundOptIn
-                ? "Your phone may keep measuring while the app is in the background — only during a trip you started."
+                ? "Your phone may keep measuring while the app is in the background - only during a trip you started."
                 : "Measured only while this screen is open, during a trip you started."}
             </p>
           </div>
@@ -182,7 +182,7 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
             Allow location for trips
           </Button>
           <Button variant="ghost" data-testid="mileage-consent-decline" onClick={() => setBackground(false)}>
-            Not now — I'll log by hand
+            Not now - I'll log by hand
           </Button>
         </div>
       </CardContent>
@@ -250,7 +250,7 @@ function GpsTracker({ openTrip }: { openTrip: Trip | null }) {
             <div className="rounded-md bg-emerald-500/10 p-3 text-sm">
               <p className="font-medium text-emerald-700 dark:text-emerald-400">Trip running</p>
               <p className="text-muted-foreground">
-                Started {openTrip.startedAt ? new Date(openTrip.startedAt).toLocaleTimeString() : "—"}
+                Started {openTrip.startedAt ? new Date(openTrip.startedAt).toLocaleTimeString() : " - "}
                 {openTrip.purpose ? ` · ${openTrip.purpose}` : ""}
               </p>
             </div>
@@ -267,7 +267,7 @@ function GpsTracker({ openTrip }: { openTrip: Trip | null }) {
               <Label htmlFor="trip-purpose" className="text-xs">What is this trip for?</Label>
               <Input
                 id="trip-purpose" data-testid="mileage-purpose"
-                placeholder="Door knocking — Oakwood"
+                placeholder="Door knocking - Oakwood"
                 value={purpose} onChange={e => setPurpose(e.target.value)}
               />
             </div>
@@ -304,7 +304,7 @@ function ManualEntry() {
       toast({ title: "Trip saved as a draft" });
     },
     onError: (e: any) => {
-      // A suspected duplicate is a QUESTION, not a refusal — the rep may
+      // A suspected duplicate is a QUESTION, not a refusal - the rep may
       // legitimately have driven the same route twice today.
       if (e?.code === "MILEAGE_DUPLICATE_SUSPECTED") {
         setDuplicateAck(true);
@@ -348,7 +348,7 @@ function ManualEntry() {
         </div>
         <div>
           <Label htmlFor="m-purpose" className="text-xs">Business purpose</Label>
-          <Input id="m-purpose" data-testid="mileage-manual-purpose" placeholder="Door knocking — Oakwood"
+          <Input id="m-purpose" data-testid="mileage-manual-purpose" placeholder="Door knocking - Oakwood"
             value={form.purpose} onChange={e => setForm(f => ({ ...f, purpose: e.target.value }))} />
         </div>
         <Button
@@ -445,7 +445,7 @@ function ApprovalQueue() {
         {isError ? (
           // An approval queue that fails to load must never read as "all clear".
           <div role="alert" className="py-6 text-center">
-            <p className="text-sm text-muted-foreground">Couldn't load the queue — trips may still be waiting.</p>
+            <p className="text-sm text-muted-foreground">Couldn't load the queue - trips may still be waiting.</p>
             <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
           </div>
         ) : queue.length === 0 ? (
@@ -549,7 +549,7 @@ export default function Mileage() {
                   themselves, so the log's value IS the record — say that. */}
               <p className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="mileage-money-off">
                 <FileDown className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Your organization does not reimburse mileage — this log is for your own records.
+                Your organization does not reimburse mileage - this log is for your own records.
                 Export it for your tax return; as a contractor you deduct these miles yourself.
               </p>
             </CardContent>
@@ -588,7 +588,7 @@ export default function Mileage() {
               // A tax/compliance record must never render a failed fetch as the
               // reassuring "No trips logged yet."
               ? <div role="alert" className="py-6 text-center">
-                  <p className="text-sm text-muted-foreground">Couldn't load your trips — the log is unchanged.</p>
+                  <p className="text-sm text-muted-foreground">Couldn't load your trips - the log is unchanged.</p>
                   <Button variant="outline" size="sm" className="mt-2" onClick={() => refetchTrips()}>Retry</Button>
                 </div>
             : trips.length === 0

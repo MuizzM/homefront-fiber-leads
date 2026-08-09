@@ -33,7 +33,7 @@ describe("pointInRing", () => {
   });
 });
 
-describe("selectPointsInPolygon — bbox rejection matches exact-only", () => {
+describe("selectPointsInPolygon - bbox rejection matches exact-only", () => {
   // 2,000 pseudo-random points across a 30×30 area (deterministic, no RNG).
   const pts = Array.from({ length: 2000 }, (_, i) => ({
     id: i,

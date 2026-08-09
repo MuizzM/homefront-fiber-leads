@@ -141,7 +141,7 @@ describe("an update by one rep is visible to the other", () => {
     expect(hist[0].actor).toBe("Ann Rivera");
   });
 
-  it("the second rep can also knock it — shared means shared", async () => {
+  it("the second rep can also knock it - shared means shared", async () => {
     const area = sharedArea([fx.repA.memberId, fx.repB.memberId]);
     const id = lead(area, fx.repA.memberId);
     const res = await req(`/api/leads/${id}/knock`, fx.repB.session, {

@@ -757,7 +757,7 @@ export async function liveTestAddress(
     out.classification = "pending_auth";
     out.pendingAuth = true;
     out.wouldSaveLead = false;
-    stages.push({ stage: "Classification", ok: false, detail: `PENDING_AUTH — ${why}; address kept for retry, NOT a no-service verdict` });
+    stages.push({ stage: "Classification", ok: false, detail: `PENDING_AUTH - ${why}; address kept for retry, NOT a no-service verdict` });
     return out;
   };
 
@@ -772,7 +772,7 @@ export async function liveTestAddress(
     const token = await mintThroughApprovedFlow();
     stages.push({ stage: "Token minted", ok: true, detail: `fresh token · ${token.length} chars` });
   } catch (firstErr: any) {
-    stages.push({ stage: "Token minted", ok: false, detail: `mint failed (${String(firstErr?.message ?? firstErr)}) — invalidating stale state, retrying once` });
+    stages.push({ stage: "Token minted", ok: false, detail: `mint failed (${String(firstErr?.message ?? firstErr)}) - invalidating stale state, retrying once` });
     try {
       const token = await mintThroughApprovedFlow();
       stages.push({ stage: "Token minted (retry)", ok: true, detail: `fresh token · ${token.length} chars` });
@@ -791,7 +791,7 @@ export async function liveTestAddress(
   // ONCE before giving up — never a duplicate concurrent request.
   let result = await scanAddressDirect(address, city, state, zip, "manual");
   if (result.blocked && isAuthBlock(result)) {
-    stages.push({ stage: "Auth retry", ok: true, detail: "Search returned 401/403 — token invalidated, reminting and retrying same address once" });
+    stages.push({ stage: "Auth retry", ok: true, detail: "Search returned 401/403 - token invalidated, reminting and retrying same address once" });
     try {
       const token = await mintThroughApprovedFlow();
       stages.push({ stage: "Token re-minted", ok: true, detail: `fresh token · ${token.length} chars` });
@@ -806,15 +806,15 @@ export async function liveTestAddress(
   stages.push({
     stage: "HTTP result", ok: httpOk,
     detail: httpOk ? "HTTP 200 OK"
-      : result.blocked ? "throttled/auth-blocked (401/403/429) — transient, address kept pending for retry"
-      : `no conclusive answer — ${result.notes || "infra error"} (NOT a no-service verdict)`,
+      : result.blocked ? "throttled/auth-blocked (401/403/429) - transient, address kept pending for retry"
+      : `no conclusive answer - ${result.notes || "infra error"} (NOT a no-service verdict)`,
   });
 
   if (!httpOk) {
     stages.push({ stage: "Response", ok: false, detail: result.notes || "non-conclusive response" });
     // An auth/throttle block is PENDING_AUTH (retriable), not a service verdict.
     if (result.blocked && isAuthBlock(result)) return markPendingAuth("Search API kept returning 401/403 after retry");
-    stages.push({ stage: "Classification", ok: false, detail: `unresolved (infra) — ${result.blocked ? "throttled" : "error"}; NOT a no-service verdict` });
+    stages.push({ stage: "Classification", ok: false, detail: `unresolved (infra) - ${result.blocked ? "throttled" : "error"}; NOT a no-service verdict` });
     return out;
   }
 
@@ -835,7 +835,7 @@ export async function liveTestAddress(
   out.classification = classification;
   out.wouldSaveLead = isTarget;
   stages.push({ stage: "Classification", ok: true, detail: `${classification} · fiber=${isFiber} · segment=${result.householdSegmentType || "?"} · billing=${billing || "?"}` });
-  stages.push({ stage: "Lead saved", ok: out.wouldSaveLead, detail: out.wouldSaveLead ? "YES — fresh fiber, no active billing" : `no — ${classification}` });
+  stages.push({ stage: "Lead saved", ok: out.wouldSaveLead, detail: out.wouldSaveLead ? "YES - fresh fiber, no active billing" : `no - ${classification}` });
   return out;
 }
 
@@ -905,8 +905,8 @@ async function scanAddressDirect(
   // recheck; zero token spend is wasted on a session that cannot exist yet.
   if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true" && authorizedTokenPool.snapshot().ready === 0) {
     base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
-    base.notes = "No authorized session — automation not authorized (unresolved, recheck)";
-    emit("error", { status: "error", detail: "automation not authorized — no session, check skipped" });
+    base.notes = "No authorized session - automation not authorized (unresolved, recheck)";
+    emit("error", { status: "error", detail: "automation not authorized - no session, check skipped" });
     return base;
   }
 
@@ -923,8 +923,8 @@ async function scanAddressDirect(
     // The address is never marked no-fiber and never marked scanned; the next
     // run / daily recheck revisits it.
     base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
-    base.notes = `No authorized session — ${String(err?.message ?? err)} (unresolved, recheck)`;
-    emit("error", { status: "error", detail: `no authorized Decodo session — ${String(err?.message ?? err).slice(0, 80)}`, sessionId: getProxySessionId() });
+    base.notes = `No authorized session - ${String(err?.message ?? err)} (unresolved, recheck)`;
+    emit("error", { status: "error", detail: `no authorized Decodo session - ${String(err?.message ?? err).slice(0, 80)}`, sessionId: getProxySessionId() });
     return base;
   }
   emit("token_ready", { status: "info", sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4) });
@@ -958,8 +958,8 @@ async function scanAddressDirect(
       // rotation. Fire-and-forget — this result is already `blocked`/requeued.
       void rotateProxySession(`search ${res.status}`);
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
-      base.notes = `Upstream ${res.status} (token/session) — token invalidated, Decodo session rotated, address requeued`;
-      emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `auth ${res.status} — token invalidated, Decodo session rotated`, detail: "PENDING_AUTH — retrying same address on a fresh session" });
+      base.notes = `Upstream ${res.status} (token/session) - token invalidated, Decodo session rotated, address requeued`;
+      emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `auth ${res.status} - token invalidated, Decodo session rotated`, detail: "PENDING_AUTH - retrying same address on a fresh session" });
       if (res.status === 403) {
         structuredLog("scan.provider.access_denied", { status: 403, source }, "warn");
         const alertHook = (globalThis as any).__alertProviderAccessDenied;
@@ -976,8 +976,8 @@ async function scanAddressDirect(
       // no-service verdict.
       void rotateProxySession(`upstream ${res.status}`);
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
-      base.notes = `Upstream ${res.status} (transient) — Decodo session rotated, address requeued immediately`;
-      emit("blocked", { status: "blocked", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `${res.status === 429 ? "rate-limited" : "server error"} — session rotated, retrying immediately on fresh IP`, detail: "transient — kept pending, NOT a no-service verdict" });
+      base.notes = `Upstream ${res.status} (transient) - Decodo session rotated, address requeued immediately`;
+      emit("blocked", { status: "blocked", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `${res.status === 429 ? "rate-limited" : "server error"} - session rotated, retrying immediately on fresh IP`, detail: "transient - kept pending, NOT a no-service verdict" });
       structuredLog("scan.provider.rate_limited", { status: res.status, source }, "warn");
       return base;
     }
@@ -1000,8 +1000,8 @@ async function scanAddressDirect(
         // into ONE rotation; fire-and-forget — the result is already requeued.
         void rotateProxySession(`search ${res.status}`);
         base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
-        base.notes = `Upstream ${res.status} — token invalidated + Decodo session rotated (switch ${rotations}/3), address requeued`;
-        emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `HTTP ${res.status} — fresh token + session (switch ${rotations}/3), retrying same address`, detail: diag || `HTTP ${res.status}` });
+        base.notes = `Upstream ${res.status} - token invalidated + Decodo session rotated (switch ${rotations}/3), address requeued`;
+        emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `HTTP ${res.status} - fresh token + session (switch ${rotations}/3), retrying same address`, detail: diag || `HTTP ${res.status}` });
         structuredLog("scan.provider.4xx_rotate", { status: res.status, source, switch: rotations }, "warn");
         return base;
       }
@@ -1011,7 +1011,7 @@ async function scanAddressDirect(
       fourXxRotations.delete(tokenAddressKey);
       base.fiberStatus = "unknown"; base.confidence = "LOW";
       base.notes = `API returned ${res.status} after 3 fresh-token retries (unresolved, request-contract issue)`;
-      emit("bad_request", { status: "bad_request", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `HTTP ${res.status} persisted across 3 token switches — diagnose request contract`, detail: diag || `HTTP ${res.status}` });
+      emit("bad_request", { status: "bad_request", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `HTTP ${res.status} persisted across 3 token switches - diagnose request contract`, detail: diag || `HTTP ${res.status}` });
       structuredLog("scan.provider.bad_request", { status: res.status, source, detail: diag.slice(0, 120) }, "warn");
       return base;
     }
@@ -1023,8 +1023,8 @@ async function scanAddressDirect(
     } catch {
       // 200 with an unparseable body = malformed → unresolved (recheck), not no-fiber.
       base.fiberStatus = "unknown"; base.confidence = "LOW";
-      base.notes = "Malformed 200 response (unparseable) — unresolved, recheck";
-      emit("error", { status: "error", httpStatus: res.status, latencyMs: searchMs, detail: "malformed 200 body (unparseable) — unresolved, recheck" });
+      base.notes = "Malformed 200 response (unparseable) - unresolved, recheck";
+      emit("error", { status: "error", httpStatus: res.status, latencyMs: searchMs, detail: "malformed 200 body (unparseable) - unresolved, recheck" });
       return base;
     }
     base.rawResponse = data;
@@ -1060,7 +1060,7 @@ async function scanAddressDirect(
         httpStatus: 200,
         latencyMs: searchMs,
         classification: "unresolved/address_identity_mismatch",
-        detail: "successful provider response failed exact echoed-address identity — unresolved, NOT no-service",
+        detail: "successful provider response failed exact echoed-address identity - unresolved, NOT no-service",
       });
       return base;
     }
@@ -1118,7 +1118,7 @@ async function scanAddressDirect(
             emit("searching", {
               status: "info", httpStatus: 200, latencyMs: searchMs, sessionId: getProxySessionId(),
               tokenSuffix: tokenLease.token.slice(-4),
-              retryReason: `${vr} — applying one reliable address suggestion and re-searching once`,
+              retryReason: `${vr} - applying one reliable address suggestion and re-searching once`,
               detail: `applied address suggestion: ${maskSuggestedAddress(cAddress, cCity, cState, cZip)} (${selection.reason})`,
             });
             // SAME transport, SAME authorized-token + proxyFetch path; depth+1 bounds it.
@@ -1137,13 +1137,13 @@ async function scanAddressDirect(
               base.apiSource = "failed";
               base.fiberStatus = "unknown";
               base.confidence = "LOW";
-              base.notes = `Non-conclusive (${vr}); suggestion resolved a materially different address and cannot be attached to the original scan target — unresolved, recheck`;
+              base.notes = `Non-conclusive (${vr}); suggestion resolved a materially different address and cannot be attached to the original scan target - unresolved, recheck`;
               emit("error", {
                 status: "error",
                 httpStatus: 200,
                 latencyMs: searchMs,
                 classification: "unresolved/address_identity_mismatch",
-                detail: `correction resolved but changed canonical identity (${vr}) — not attached to original target`,
+                detail: `correction resolved but changed canonical identity (${vr}) - not attached to original target`,
               });
               return base;
             }
@@ -1154,8 +1154,8 @@ async function scanAddressDirect(
             // preserved so the engine's AddressNeedsFix backoff cadence still applies.
             base.apiSource = "failed";
             base.confidence = "LOW";
-            base.notes = `Non-conclusive (${vr}); applied suggestion "${cAddress}" but it did not resolve to a serviceable answer — unresolved, recheck (NOT no-service)`;
-            emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `correction did not resolve (${vr}) — unresolved, NOT no-service` });
+            base.notes = `Non-conclusive (${vr}); applied suggestion "${cAddress}" but it did not resolve to a serviceable answer - unresolved, recheck (NOT no-service)`;
+            emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `correction did not resolve (${vr}) - unresolved, NOT no-service` });
             return base;
           }
         }
@@ -1166,7 +1166,7 @@ async function scanAddressDirect(
       base.apiSource = "failed";
       base.confidence = "LOW";
       base.notes = `Non-conclusive response (success=false, ${vr || "no validationResult"})`;
-      emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `non-conclusive (success=false, ${vr || "no validationResult"}) — unresolved, NOT no-service` });
+      emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `non-conclusive (success=false, ${vr || "no validationResult"}) - unresolved, NOT no-service` });
       return base;
     }
 
@@ -1256,8 +1256,8 @@ async function scanAddressDirect(
       // dfAddressId on TENURED addresses is significantly lower (older record) than NEW FIBER.
       const hasBilling = isActiveBilling(data.address?.billingStatus);
       base.notes = hasBilling
-        ? `TENURED — long-established fiber address, already a Kinetic subscriber. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`
-        : `TENURED — long-established fiber address, NOT a current subscriber. Prime upgrade target. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`;
+        ? `TENURED - long-established fiber address, already a Kinetic subscriber. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`
+        : `TENURED - long-established fiber address, NOT a current subscriber. Prime upgrade target. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`;
     } else if (isFiber) {
       base.fiberStatus = "existing_fiber";
       base.confidence = "HIGH";
@@ -1310,8 +1310,8 @@ async function scanAddressDirect(
     base.fiberStatus = "unknown";
     base.confidence = "LOW";
     base.blocked = true;
-    base.notes = `Check failed (transient) — ${err.message}`;
-    emit("error", { status: "error", latencyMs: Date.now() - searchStart, retryReason: `transient — ${String(err?.message ?? err).slice(0, 60)}`, detail: "network/timeout — kept pending for retry, NOT no-service" });
+    base.notes = `Check failed (transient) - ${err.message}`;
+    emit("error", { status: "error", latencyMs: Date.now() - searchStart, retryReason: `transient - ${String(err?.message ?? err).slice(0, 60)}`, detail: "network/timeout - kept pending for retry, NOT no-service" });
   } finally {
     tokenLease?.release();
   }

@@ -150,7 +150,7 @@ beforeAll(async () => {
 
 afterAll(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); });
 
-describe("default policy — install-gated hold", () => {
+describe("default policy - install-gated hold", () => {
   it("sold knock books a pending, install-held commission excluded from every payable total", async () => {
     const lead = makeLead(1, rep1.memberId);
     expect((await knock(lead.id, rep1.session, "sold")).status).toBe(201);
@@ -349,7 +349,7 @@ describe("tenant pay policy endpoints", () => {
   });
 });
 
-describe("chargeback reserve — untouched by the install hold", () => {
+describe("chargeback reserve - untouched by the install hold", () => {
   it("the holdback split still applies to released money, and only to released money", async () => {
     // An isolated third tenant so nothing above leaks into this assertion.
     const TENANT_C = storage.createTenant({
@@ -394,7 +394,7 @@ describe("chargeback reserve — untouched by the install hold", () => {
   });
 });
 
-describe("hold scope — pay-eligibility ONLY", () => {
+describe("hold scope - pay-eligibility ONLY", () => {
   it("a held sale still counts as a REAL sale for campaign counters and incentive triggers", async () => {
     // Tenant B's policy is ON (toggled back above). The sale is held for PAY…
     const lead = makeLead(TENANT_B, rep2.memberId);
@@ -419,7 +419,7 @@ describe("hold scope — pay-eligibility ONLY", () => {
 });
 
 describe("install-hold adoption migration (rollout safety)", () => {
-  it("releases commissions that were already pending pre-deploy — once — and never touches post-deploy holds", () => {
+  it("releases commissions that were already pending pre-deploy - once - and never touches post-deploy holds", () => {
     // A pre-deploy row: pending, never confirmed, created long before the
     // first-boot adoption mark (booked under the old payable-immediately
     // contract — the deploy must not silently freeze it).

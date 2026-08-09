@@ -111,7 +111,7 @@ export function gateProgress(s: Pick<TrainingGateState, "completedLessons" | "re
   return {
     completed, required, remaining, pct,
     headline: remaining === 0
-      ? "Training complete — everything is unlocked"
+      ? "Training complete - everything is unlocked"
       : `${remaining} lesson${remaining === 1 ? "" : "s"} left to unlock the app`,
   };
 }
@@ -120,6 +120,6 @@ export function gateProgress(s: Pick<TrainingGateState, "completedLessons" | "re
 export function validateRequiredLessons(value: unknown, totalAvailable: number): string | null {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0) return "Required lessons must be a whole number of 0 or more.";
-  if (n > totalAvailable) return `There are only ${totalAvailable} lessons — the requirement cannot exceed that.`;
+  if (n > totalAvailable) return `There are only ${totalAvailable} lessons - the requirement cannot exceed that.`;
   return null;
 }

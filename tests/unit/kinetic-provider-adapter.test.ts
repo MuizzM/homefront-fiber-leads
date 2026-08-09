@@ -105,7 +105,7 @@ describe("Kinetic evidence boundary", () => {
       ).rejects.toMatchObject({ code: "RATE_LIMITED" });
     expect(gateway.status()).toMatchObject({
       circuitOpen: true,
-      circuitReason: "repeated rate limits — rotating Decodo session",
+      circuitReason: "repeated rate limits - rotating Decodo session",
     });
   });
 });

@@ -96,7 +96,7 @@ describe("storing traced phones", () => {
     expect(row.tracedOwnerName).toBe("Dana Reyes");
   });
 
-  it("is idempotent per number — a re-run refreshes rather than duplicating", () => {
+  it("is idempotent per number - a re-run refreshes rather than duplicating", () => {
     const leadId = seedLead({ id: 9101 });
     const phone = { number: "+19195550102", confidence: 0.9, dnc: true, scrubbedAtMs: null };
     area.storeTracedPhones({ tenantId, leadId, ownerName: null, phones: [phone] });
@@ -121,7 +121,7 @@ describe("storing traced phones", () => {
     expect(area.tracedPhonesForLead(tenantId, leadId)[0].scrubbedAtMs).toBe(scrubbedAt);
   });
 
-  it("never stores a dnc boolean — only flags and a scrub time", () => {
+  it("never stores a dnc boolean - only flags and a scrub time", () => {
     const columns = (rawDb.prepare("PRAGMA table_info('lead_traced_phones')").all() as Array<{ name: string }>)
       .map(c => c.name);
     expect(columns).toContain("scrubbed_at_ms");
@@ -130,7 +130,7 @@ describe("storing traced phones", () => {
   });
 });
 
-describe("dialing list — the verdict is derived on every read", () => {
+describe("dialing list - the verdict is derived on every read", () => {
   function seedScrubbed(leadId: number, scrubbedAtMs: number | null, flags: Record<string, boolean> = {}) {
     seedLead({ id: leadId });
     area.storeTracedPhones({
@@ -171,7 +171,7 @@ describe("dialing list — the verdict is derived on every read", () => {
     expect(verdictForPhone(stored, later).reasons).toContain("scrub_expired");
   });
 
-  it("keeps blocked numbers ON the list by default — the rule is don't dial, not don't know", () => {
+  it("keeps blocked numbers ON the list by default - the rule is don't dial, not don't know", () => {
     seedScrubbed(9204, null);
     const all = area.buildAreaDialingList({ tenantId, territoryId: TERRITORY_ID });
     expect(all.entries[0].phones).toHaveLength(1);

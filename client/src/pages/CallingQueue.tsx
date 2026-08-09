@@ -80,7 +80,7 @@ function TracedRow({ candidate }: { candidate: CallingCandidate }) {
   return (
     <li className="render-lazy">
       <Link href={`/calling/lead/${candidate.leadId}`} data-testid={`traced-lead-${candidate.leadId}`}
-        aria-label={`${candidate.address} — ${candidate.tracedBadge?.label ?? "Traced"}`}
+        aria-label={`${candidate.address} - ${candidate.tracedBadge?.label ?? "Traced"}`}
         className={cn("group flex items-center gap-3 px-4 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
           ready ? "hover:bg-secondary/40 active:bg-secondary/60" : "opacity-60 hover:bg-secondary/20")}>
         <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ready ? "bg-emerald-500" : "bg-red-500")} />
@@ -178,7 +178,7 @@ function MetricCell({ label, value, dot }: { label: string; value: number | null
         {dot && <span aria-hidden="true" className={cn("h-1.5 w-1.5 rounded-full", dot)} />}
         {label}
       </div>
-      <div className="mt-1 text-lg font-semibold leading-6 tabular-nums text-foreground">{value ?? "—"}</div>
+      <div className="mt-1 text-lg font-semibold leading-6 tabular-nums text-foreground">{value ?? " - "}</div>
     </div>
   );
 }
@@ -330,7 +330,7 @@ export default function CallingQueue() {
             {(callbackGroups.overdue.length + callbackGroups.today.length) > 0 && (
               <section aria-label="Due callbacks" className="overflow-hidden rounded-2xl border border-sky-500/25 bg-card" data-testid="due-callbacks">
                 <div className="border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-sky-600 dark:text-sky-400">
-                  Due callbacks — {callbackGroups.overdue.length} overdue · {callbackGroups.today.length} today
+                  Due callbacks - {callbackGroups.overdue.length} overdue · {callbackGroups.today.length} today
                 </div>
                 <ul className="divide-y divide-border/60">
                   {[...callbackGroups.overdue, ...callbackGroups.today].slice(0, 8).map(cb => {

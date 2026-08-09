@@ -28,7 +28,7 @@ function makeTrip(over: Partial<Parameters<typeof M.createTrip>[0]> = {}) {
   return M.createTrip({
     tenantId: T1, repId: REP, userId: 1,
     tripDate: TODAY, startLocation: "123 Main St", endLocation: "456 Oak Ave",
-    milesHundredths: 1234, purpose: "Door knocking — Oakwood", source: "MANUAL",
+    milesHundredths: 1234, purpose: "Door knocking - Oakwood", source: "MANUAL",
     nowIso: NOW, todayIso: TODAY, ...over,
   });
 }
@@ -70,7 +70,7 @@ describe("creating trips", () => {
     expect(() => makeTrip({ tripDate: "2026-08-07" })).toThrow(/future/);
   });
 
-  it("is idempotent on clientId — an offline replay returns the same trip", () => {
+  it("is idempotent on clientId - an offline replay returns the same trip", () => {
     const a = makeTrip({ clientId: "abc-123" });
     const b = makeTrip({ clientId: "abc-123" });
     expect(b.id).toBe(a.id);
@@ -250,7 +250,7 @@ describe("events", () => {
 describe("each rep controls their own location tracking", () => {
   const REP_USER = 1, OTHER_USER = 2;
 
-  it("starts OFF for everyone — consent is never assumed", () => {
+  it("starts OFF for everyone - consent is never assumed", () => {
     const consent = M.getConsent(T1, REP_USER);
     expect(consent.disclosureAcceptedAt).toBeNull();
     expect(consent.backgroundOptIn).toBe(false);
@@ -307,7 +307,7 @@ describe("each rep controls their own location tracking", () => {
     expect(maySampleInBackground(consent, false)).toBe(false);
   });
 
-  it("is PER REP — one rep's choice never speaks for another", () => {
+  it("is PER REP - one rep's choice never speaks for another", () => {
     M.setConsent({ tenantId: T1, userId: REP_USER, accepted: true, backgroundOptIn: true, version: "v1", nowIso: NOW });
     expect(M.getConsent(T1, OTHER_USER).disclosureAcceptedAt).toBeNull();
     expect(M.getConsent(T1, OTHER_USER).backgroundOptIn).toBe(false);
@@ -330,7 +330,7 @@ describe("each rep controls their own location tracking", () => {
 describe("an admin can lock and unlock tracking", () => {
   const REP_USER = 1, ADMIN_USER = 77;
 
-  it("defaults to REP_CHOICE — the org has not taken the decision away", () => {
+  it("defaults to REP_CHOICE - the org has not taken the decision away", () => {
     expect(M.getGpsPolicy(T1)).toBe("REP_CHOICE");
   });
 

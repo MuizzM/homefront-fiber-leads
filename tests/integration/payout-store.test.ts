@@ -83,7 +83,7 @@ describe("connected accounts", () => {
   });
 });
 
-describe("payout ledger — double-pay guard + transitions", () => {
+describe("payout ledger - double-pay guard + transitions", () => {
   it("UNIQUE(statement_id): a second createPendingPayout for the same statement returns the existing row", () => {
     const first = P.createPendingPayout({ tenantId: 1, repId: 10, statementId: 500, amountCents: 124000, destinationAccountId: "acct_10", createdBy: 1 });
     expect(first.created).toBe(true);

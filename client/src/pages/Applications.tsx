@@ -650,7 +650,7 @@ export default function Applications() {
                 className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
                 data-testid="invite-supervisor-select"
               >
-                <option value="none">— None (reports to Admin) —</option>
+                <option value="none"> - None (reports to Admin) - </option>
                 {inviteSupervisors.map(member => (
                   <option key={member.id} value={String(member.id)}>{member.name} · {memberRoleLabel(member.role)}</option>
                 ))}
@@ -665,7 +665,7 @@ export default function Applications() {
               what the candidate sees or signs. */}
           {inviteRole !== "manager" && (
             <div className="rounded-xl border border-border bg-background/40 p-3" data-testid="invite-override-rates">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Upline keep per sale (overrides — not shown to the candidate)</div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Upline keep per sale (overrides - not shown to the candidate)</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div>
                   <label htmlFor="invite-override-tl" className="mb-1 block text-[11px] text-muted-foreground">Team lead keeps</label>
@@ -715,7 +715,7 @@ export default function Applications() {
               <p className="mb-2 text-[11px] text-muted-foreground">
                 {inviteDownlineIds.length > 0
                   ? `${inviteDownlineIds.length === 1 ? "1 member moves" : `${inviteDownlineIds.length} members move`} under them when this hire is approved.`
-                  : "Optional — leave empty and they start with no reports."}
+                  : "Optional - leave empty and they start with no reports."}
               </p>
               {inviteDownlineOptions.length === 0 ? (
                 <p className="text-[11px] text-muted-foreground">No eligible members to assign yet.</p>
@@ -776,7 +776,7 @@ export default function Applications() {
               <div className="p-10 text-center" role="alert" data-testid="pipeline-error">
                 <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-amber-400" />
                 <p className="text-sm font-medium text-foreground">Couldn&apos;t load the candidate pipeline</p>
-                <p className="mt-1 text-xs text-muted-foreground">Check your connection — your candidates are safe. Don&apos;t re-invite anyone until this loads.</p>
+                <p className="mt-1 text-xs text-muted-foreground">Check your connection - your candidates are safe. Don&apos;t re-invite anyone until this loads.</p>
                 <button type="button" onClick={() => pipeline.refetch()} data-testid="pipeline-retry"
                   className="mt-4 inline-flex h-9 items-center justify-center rounded-lg border border-border bg-secondary px-4 text-sm font-semibold text-foreground active:scale-95 transition-transform">
                   Retry
@@ -812,7 +812,7 @@ export default function Applications() {
                 {selected.stage === "under_review" && canReview && <div className="mt-4 border-t border-border pt-4" data-testid="review-comp-terms">
                 <div className="mb-4" data-testid="review-hierarchy">
                   <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Role &amp; upline (what this approval creates)</h4>
-                  <p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.invitedRole ? "Opened on the role and supervisor this candidate was invited with." : "No hierarchy travelled with this application — approving as a top-level rep unless you change it."}</p>
+                  <p className="mb-2 text-[11px] text-muted-foreground">{selected.invite?.invitedRole ? "Opened on the role and supervisor this candidate was invited with." : "No hierarchy travelled with this application - approving as a top-level rep unless you change it."}</p>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div>
                       <label htmlFor="review-role" className="sr-only">Role</label>
@@ -837,7 +837,7 @@ export default function Applications() {
                         className="h-10 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary disabled:opacity-50"
                         data-testid="review-supervisor-select"
                       >
-                        <option value="none">— None (top level) —</option>
+                        <option value="none"> - None (top level) - </option>
                         {reviewSupervisors.map(member => (
                           <option key={member.id} value={String(member.id)}>{member.name} · {memberRoleLabel(member.role)}</option>
                         ))}
@@ -846,7 +846,7 @@ export default function Applications() {
                   </div>
                   {selected.invite?.invitedSupervisorActive === false && (
                     <p className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-400" data-testid="review-supervisor-offboarded">
-                      The proposed supervisor{selected.invite.invitedSupervisorName ? ` (${selected.invite.invitedSupervisorName})` : ""} was offboarded — pick a replacement or approve as top-level.
+                      The proposed supervisor{selected.invite.invitedSupervisorName ? ` (${selected.invite.invitedSupervisorName})` : ""} was offboarded - pick a replacement or approve as top-level.
                     </p>
                   )}
                   {/* Per-hire override rates — approval stamps these onto the new
@@ -928,7 +928,7 @@ export default function Applications() {
                   if (approveTimer.current) window.clearTimeout(approveTimer.current);
                   setApproveArmed(false);
                   reviewMutation.mutate({ status: "approved" });
-                }} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} aria-label={approveArmed ? "Confirm: approve and start onboarding on the terms shown" : "Approve and start onboarding"} className={approveArmed ? "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 text-sm font-semibold text-white hover:bg-emerald-600/90" : "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50"} data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}{approveArmed ? "Confirm — assigns the plan shown & sends agreements" : "Approve & start onboarding"}</button><button onClick={() => {
+                }} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} aria-label={approveArmed ? "Confirm: approve and start onboarding on the terms shown" : "Approve and start onboarding"} className={approveArmed ? "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 text-sm font-semibold text-white hover:bg-emerald-600/90" : "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50"} data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserCheck className="h-4 w-4" />}{approveArmed ? "Confirm - assigns the plan shown & sends agreements" : "Approve & start onboarding"}</button><button onClick={() => {
                   if (!rejectArmed) {
                     setRejectArmed(true);
                     if (rejectTimer.current) window.clearTimeout(rejectTimer.current);
@@ -962,7 +962,7 @@ export default function Applications() {
 
                   {canReview && !pipeline.data?.gustoConfigured && (
                     <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-secondary/50 px-3 py-2 text-[11px] text-muted-foreground">
-                      <span className="flex items-center gap-1.5"><PlugZap className="h-3.5 w-3.5" />Gusto isn’t connected — confirm employees manually or set the API keys.</span>
+                      <span className="flex items-center gap-1.5"><PlugZap className="h-3.5 w-3.5" />Gusto isn’t connected - confirm employees manually or set the API keys.</span>
                       <button onClick={() => gustoVerifyMutation.mutate()} disabled={gustoVerifyMutation.isPending} className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-2 font-semibold hover:bg-background">{gustoVerifyMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}Test</button>
                     </div>
                   )}

@@ -38,7 +38,7 @@ describe("token pool minting is not gated on an unset env var", () => {
     }
   });
 
-  it("the real scanner module leases without the flag — the stall cannot recur", async () => {
+  it("the real scanner module leases without the flag - the stall cannot recur", async () => {
     // Exercises the ACTUAL pool the scanner constructs (mint wired to gatedMint),
     // with the transport stubbed so no network/proxy call is made. If someone
     // re-adds an env gate around mint, this fails.

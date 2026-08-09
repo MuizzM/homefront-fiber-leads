@@ -49,7 +49,7 @@ beforeAll(async () => {
     ]));
 });
 
-describe("Field Map — 345 James Allgood Dr end-to-end (production worker path)", () => {
+describe("Field Map - 345 James Allgood Dr end-to-end (production worker path)", () => {
   const targetId = () => Number(rawDb.prepare(`SELECT id FROM scan_targets WHERE address='345 James Allgood Dr'`).get() as any)?.id;
 
   it("checks the address, creates ONE fresh lead, and pins it at 35.020537,-82.078668", async () => {

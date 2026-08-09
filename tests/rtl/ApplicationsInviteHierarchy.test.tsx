@@ -71,7 +71,7 @@ async function ready() {
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
 describe("the invite form's role & upline", () => {
-  it("caps the role options at HIRABLE_ROLES — a manager sees rep and team lead, never manager", async () => {
+  it("caps the role options at HIRABLE_ROLES - a manager sees rep and team lead, never manager", async () => {
     renderPage();
     await ready();
     const values = Array.from(roleSelect().options).map(option => option.value);
@@ -94,7 +94,7 @@ describe("the invite form's role & upline", () => {
     expect(supervisorSelect().value).toBe("5");
   });
 
-  it("changing the role RESETS the supervisor — a team lead can't keep a team-lead upline", async () => {
+  it("changing the role RESETS the supervisor - a team lead can't keep a team-lead upline", async () => {
     renderPage();
     await ready();
     // The manager deliberately picks Tara for a rep invite…
@@ -146,7 +146,7 @@ describe("the invite form's role & upline", () => {
 describe("the invite form's downline picker", () => {
   const downlineBox = () => screen.queryByTestId("invite-downline");
 
-  it("is hidden for a rep hire — a rep supervises nobody", async () => {
+  it("is hidden for a rep hire - a rep supervises nobody", async () => {
     renderPage();
     await ready();
     expect(roleSelect().value).toBe("rep");
@@ -187,7 +187,7 @@ describe("the invite form's downline picker", () => {
     expect((invitePost()![2] as any).invitedDownlineIds).toEqual([9]);
   });
 
-  it("switching back to rep clears the picks — a rep invite carries an empty list", async () => {
+  it("switching back to rep clears the picks - a rep invite carries an empty list", async () => {
     renderPage();
     await ready();
     fireEvent.change(roleSelect(), { target: { value: "team_lead" } });

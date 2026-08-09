@@ -270,7 +270,7 @@ export function runComingSoonTick(now = Date.now()): ComingSoonTickResult {
         tenantId: tenant_id, city, state,
         targetIds: rows.map((r) => r.scan_target_id),
         runKind: "coming_soon_watch",
-        label: `Coming Soon watch — ${city}, ${state}`,
+        label: `Coming Soon watch - ${city}, ${state}`,
       });
       result.enqueued += run.queued;
       result.runs.push(run.runId);

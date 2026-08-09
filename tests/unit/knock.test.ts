@@ -47,7 +47,7 @@ const ALL_PIN_STATES: PinDisplayState[] = [
   "already_customer",
 ];
 
-describe("OUTCOMES — totality", () => {
+describe("OUTCOMES - totality", () => {
   it("defines exactly 9 outcomes with unique keys (8 rep statuses + needs_verification)", () => {
     expect(OUTCOMES).toHaveLength(9);
     expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(9);
@@ -101,7 +101,7 @@ describe("deriveWasHome / isKnockOutcome", () => {
   });
 });
 
-describe("pinDisplayState — truth table", () => {
+describe("pinDisplayState - truth table", () => {
   it("callback renders as its own display state even though it stores follow_up", () => {
     expect(
       pinDisplayState({ leadStatus: "follow_up", visited: 1, lastOutcome: "callback" }),
@@ -199,7 +199,7 @@ describe("summarizeByDisplayState (lasso breakdown)", () => {
 });
 
 describe("BULK_STATUS_OUTCOMES (lasso Modify Status)", () => {
-  it("only leadStatus-pure, non-commission dispositions — never sold/not_home/callback", () => {
+  it("only leadStatus-pure, non-commission dispositions - never sold/not_home/callback", () => {
     expect(BULK_STATUS_OUTCOMES).toContain("prospect");
     expect(BULK_STATUS_OUTCOMES).toContain("interested");
     expect(BULK_STATUS_OUTCOMES).toContain("follow_up");
@@ -262,7 +262,7 @@ describe("nearestUnworkedLead", () => {
     expect(best?.id).toBe(6);
   });
 
-  it("INCLUDES a not_home pin — a not-home door is a revisit, not a dead end", () => {
+  it("INCLUDES a not_home pin - a not-home door is a revisit, not a dead end", () => {
     const notHome = pin(1, 50, { leadStatus: "prospect", visited: 1, lastOutcome: "not_home" });
     const best = nearestUnworkedLead(HOME, [notHome, pin(2, 200)]);
     expect(best?.id).toBe(1);
@@ -351,16 +351,16 @@ describe("makeClientId", () => {
   });
 });
 
-describe("already_customer — the door is done, but it is not hostile", () => {
+describe("already_customer - the door is done, but it is not hostile", () => {
   // "They already have fiber" was previously forced into Not Interested, which
   // is wrong twice: the map paints the block red (burned turf, when it is
   // actually competitor-density data), and an accidental "sold" had no
   // correction that said what the door really was.
-  it("persists as not_interested — no new LeadStatus, no schema ripple", () => {
+  it("persists as not_interested - no new LeadStatus, no schema ripple", () => {
     expect(OUTCOME_TO_STATUS.already_customer).toBe("not_interested");
   });
 
-  it("renders its own pin, split from not_interested by lastOutcome — the callback precedent", () => {
+  it("renders its own pin, split from not_interested by lastOutcome - the callback precedent", () => {
     expect(pinDisplayState({ leadStatus: "not_interested", lastOutcome: "already_customer" }))
       .toBe("already_customer");
     expect(pinDisplayState({ leadStatus: "not_interested", lastOutcome: "not_interested" }))
@@ -380,11 +380,11 @@ describe("already_customer — the door is done, but it is not hostile", () => {
     expect(keys.indexOf("already_customer")).toBe(keys.indexOf("not_interested") + 1);
   });
 
-  it("is NOT a bulk-lasso status — its pin needs a real knock's lastOutcome", () => {
+  it("is NOT a bulk-lasso status - its pin needs a real knock's lastOutcome", () => {
     expect(isBulkStatusOutcome("already_customer")).toBe(false);
   });
 
-  it("wears its own color — never sold's green, never not_interested's red", () => {
+  it("wears its own color - never sold's green, never not_interested's red", () => {
     expect(STATE_COLORS.already_customer).not.toBe(STATE_COLORS.not_interested);
     expect(STATE_COLORS.already_customer).not.toBe(STATE_COLORS.sold);
   });

@@ -21,7 +21,7 @@ describe("status machine", () => {
     expect(canMileageTransition("APPROVED", "PAID")).toBe(true);
   });
 
-  it("FREEZES an approved trip — no path back to draft or submitted", () => {
+  it("FREEZES an approved trip - no path back to draft or submitted", () => {
     // This is the rule that makes a correction an adjustment rather than an
     // edit, the same way a FINALIZED statement refuses to recalculate.
     expect(canMileageTransition("APPROVED", "DRAFT")).toBe(false);
@@ -64,7 +64,7 @@ describe("rate resolution", () => {
     expect(resolveRateForDate(rates, "2026-06-30")?.id).toBe(1);
   });
 
-  it("returns null before any rate exists — never a guessed federal figure", () => {
+  it("returns null before any rate exists - never a guessed federal figure", () => {
     expect(resolveRateForDate(rates, "2025-12-31")).toBeNull();
     expect(resolveRateForDate([], "2026-08-06")).toBeNull();
   });
@@ -230,7 +230,7 @@ describe("trip validation", () => {
   const today = "2026-08-06";
   const ok = {
     tripDate: "2026-08-06", startLocation: "A", endLocation: "B",
-    milesHundredths: 1200, purpose: "Door knocking — Oakwood", source: "MANUAL" as const,
+    milesHundredths: 1200, purpose: "Door knocking - Oakwood", source: "MANUAL" as const,
   };
 
   it("accepts a well-formed manual trip", () => {
@@ -246,7 +246,7 @@ describe("trip validation", () => {
     expect(validateTrip({ ...ok, tripDate: "2026-07-02" }, today)).toEqual([]);
   });
 
-  it("requires a purpose — that is what makes the record defensible", () => {
+  it("requires a purpose - that is what makes the record defensible", () => {
     expect(validateTrip({ ...ok, purpose: "  " }, today).join()).toMatch(/purpose/);
   });
 

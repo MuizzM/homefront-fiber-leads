@@ -211,7 +211,7 @@ export function recordWeeklyHold(input: {
     ).run(
       tenantId, repId, holdback.reserveCents, input.statementId ?? null, weekStartUtc,
       input.weekLabel ?? null,
-      `Weekly chargeback reserve — ${holdback.reservePercent}% of ${holdback.earnedCents} cents earned`,
+      `Weekly chargeback reserve - ${holdback.reservePercent}% of ${holdback.earnedCents} cents earned`,
       input.actorId ?? null, new Date().toISOString(),
     );
     // changes === 0 means a concurrent writer won the unique index. Not an error:
@@ -276,7 +276,7 @@ function validateMovement(amountCents: any, reason: any): { amount: number; reas
     throw new ReserveError("RESERVE_INVALID_AMOUNT", "Amount must be a whole number of cents above zero.");
   }
   if (amountCents > MAX_RESERVE_CENTS) {
-    throw new ReserveError("RESERVE_INVALID_AMOUNT", "Amount is implausibly large — check the number.");
+    throw new ReserveError("RESERVE_INVALID_AMOUNT", "Amount is implausibly large - check the number.");
   }
   const r = typeof reason === "string" ? reason.trim() : "";
   if (!r) throw new ReserveError("RESERVE_REASON_REQUIRED", "A reason is required.");
@@ -299,7 +299,7 @@ function appendNegativeEntry(input: {
     if (amount > previousBalanceCents) {
       throw new ReserveError("RESERVE_INSUFFICIENT_BALANCE",
         kind === "drawdown"
-          ? "That chargeback is larger than the rep's reserve balance. The reserve can never go negative — reduce the amount or use a commission adjustment for the remainder."
+          ? "That chargeback is larger than the rep's reserve balance. The reserve can never go negative - reduce the amount or use a commission adjustment for the remainder."
           : "That release is larger than the rep's reserve balance. The reserve can never go negative.");
     }
     const now = new Date().toISOString();

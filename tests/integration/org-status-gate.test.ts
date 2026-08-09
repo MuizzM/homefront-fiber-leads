@@ -126,13 +126,13 @@ describe("a SUSPENDED organization loses access", () => {
     expect((await res.json()).code).toBe("ORGANIZATION_INACTIVE");
   });
 
-  it("refuses the org's admin too — suspension is not a role question", async () => {
+  it("refuses the org's admin too - suspension is not a role question", async () => {
     const res = await req("/api/team", doomedAdminSession);
     expect(res.status).toBe(403);
     expect((await res.json()).code).toBe("ORGANIZATION_INACTIVE");
   });
 
-  it("REVIEW FIX: does NOT leave the recruiting plane open — a dead org cannot keep hiring", async () => {
+  it("REVIEW FIX: does NOT leave the recruiting plane open - a dead org cannot keep hiring", async () => {
     // The gate originally reused the TRAINING allowlist, which answers a
     // different question ("what does an untrained rep need to become
     // employable") and therefore exempted /api/onboarding — the routes that

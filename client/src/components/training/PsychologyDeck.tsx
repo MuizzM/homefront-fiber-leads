@@ -27,7 +27,7 @@ const TIPS: readonly PsychTip[] = [
     icon: Gift,
     principle: "Reciprocity",
     hook: "Give something first. Even thirty seconds of useful information counts.",
-    atTheDoor: "“Before anything else — the construction on your street? That's fiber conduit. Here's what that means for your address.”",
+    atTheDoor: "“Before anything else - the construction on your street? That's fiber conduit. Here's what that means for your address.”",
     why: "People repay value with attention. Lead with a fact they didn't have, and listening back feels owed, not granted.",
   },
   {
@@ -35,7 +35,7 @@ const TIPS: readonly PsychTip[] = [
     icon: Users,
     principle: "Social proof",
     hook: "Nobody wants to be first. Everybody wants to be next.",
-    atTheDoor: "“I just set up the Hendersons two doors down — same install window, if you want it.”",
+    atTheDoor: "“I just set up the Hendersons two doors down - same install window, if you want it.”",
     why: "Uncertainty makes people copy their neighbors. Name real nearby installs. Proximity is the proof; the street sells the street.",
   },
   {
@@ -43,7 +43,7 @@ const TIPS: readonly PsychTip[] = [
     icon: TrendingDown,
     principle: "Loss aversion",
     hook: "Losing $20 stings roughly twice as hard as winning $20 feels good.",
-    atTheDoor: "“You're paying for copper speeds fiber left behind — every month at the old price is money already spent.”",
+    atTheDoor: "“You're paying for copper speeds fiber left behind - every month at the old price is money already spent.”",
     why: "Frame the status quo as the cost. People move faster to stop a leak than to chase a gain. The math is identical; the feeling isn't.",
   },
   {
@@ -75,7 +75,7 @@ const TIPS: readonly PsychTip[] = [
     icon: Tag,
     principle: "Labeling",
     hook: "Tell people who they are, kindly, and they'll act like it.",
-    atTheDoor: "“You seem like someone who does the homework before switching anything — so here are the actual numbers.”",
+    atTheDoor: "“You seem like someone who does the homework before switching anything - so here are the actual numbers.”",
     why: "Handed a flattering identity, people perform it. A “homework” person now has to look at your numbers. That's the label doing the work.",
   },
   {
@@ -83,7 +83,7 @@ const TIPS: readonly PsychTip[] = [
     icon: Sparkles,
     principle: "Peak-end rule",
     hook: "People remember the peak and the ending, and almost nothing else.",
-    atTheDoor: "Whatever the answer, end warm: “Either way — the conduit work wraps this month, so you'll have options. Good talking with you.”",
+    atTheDoor: "Whatever the answer, end warm: “Either way - the conduit work wraps this month, so you'll have options. Good talking with you.”",
     why: "Today's no is remembered by its last five seconds. End generous and the callback knock starts from warmth, not from a slammed door.",
   },
 ];
@@ -154,7 +154,7 @@ export default function PsychologyDeck() {
         <div>
           <SectionLabel>Door psychology</SectionLabel>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            Eight moves borrowed from behavioral science — tap a card, get the words.
+            Eight moves borrowed from behavioral science - tap a card, get the words.
           </p>
         </div>
         <span

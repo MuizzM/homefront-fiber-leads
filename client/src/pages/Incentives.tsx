@@ -137,7 +137,7 @@ const STATUS_COPY: Record<string, { label: string; hint: string; className: stri
   },
   approved: {
     label: "Approved",
-    hint: "Cleared — payout queued",
+    hint: "Cleared - payout queued",
     className: "bg-primary/15 text-primary",
   },
   paid: {
@@ -273,18 +273,18 @@ function MoneyHero({ data, isLoading, isError }: {
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-primary"
                   data-testid="stat-total">
-              {isError ? "—" : usd(runningTotal)}
+              {isError ? " - " : usd(runningTotal)}
             </span>
             <span className="flex flex-wrap items-center gap-1.5">
               <span data-testid="stat-pending"
                     className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
                 <Clock className="h-3 w-3" aria-hidden="true" />
-                {isError ? "—" : usd(awaiting)} awaiting
+                {isError ? " - " : usd(awaiting)} awaiting
               </span>
               <span data-testid="stat-paid"
                     className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
                 <Wallet className="h-3 w-3" aria-hidden="true" />
-                {isError ? "—" : usd(totals?.paidCents ?? 0)} paid
+                {isError ? " - " : usd(totals?.paidCents ?? 0)} paid
               </span>
             </span>
           </div>
@@ -299,7 +299,7 @@ function MoneyHero({ data, isLoading, isError }: {
             <HeatMeter heat={isError ? 0 : data?.heat ?? 0} testId="my-heat" />
           </div>
           <p className="mt-1.5 text-[12px] text-muted-foreground">
-            Streak, pace, improvement — the hotter you run, the more surprise bonuses the algorithm drops.
+            Streak, pace, improvement - the hotter you run, the more surprise bonuses the algorithm drops.
           </p>
         </div>
       </CardContent>
@@ -312,7 +312,7 @@ function EarnGuide({ band }: { band: AwardBand }) {
   return (
     <Card className="rounded-2xl">
       <CardContent className="p-4">
-        <SectionLabel className="mb-2">Surprise bonuses — what you can earn</SectionLabel>
+        <SectionLabel className="mb-2">Surprise bonuses - what you can earn</SectionLabel>
         <p className="text-sm text-foreground">
           Every recognition bonus is worth{" "}
           <span className="font-bold tabular-nums" data-testid="earn-band">
@@ -519,8 +519,8 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
       const skipped = result?.skipped?.length ?? 0;
       toast({
         title: action === "approve"
-          ? `Approved ${n} bonus${n === 1 ? "" : "es"} — ${usd(result?.totalCents ?? 0)}`
-          : `Marked ${n} bonus${n === 1 ? "" : "es"} paid — ${usd(result?.totalCents ?? 0)}`,
+          ? `Approved ${n} bonus${n === 1 ? "" : "es"} - ${usd(result?.totalCents ?? 0)}`
+          : `Marked ${n} bonus${n === 1 ? "" : "es"} paid - ${usd(result?.totalCents ?? 0)}`,
         description: skipped > 0 ? `${skipped} already handled by someone else.` : undefined,
       });
     },
@@ -558,7 +558,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <SectionLabel>Approve &amp; pay</SectionLabel>
             <p className="text-[11px] text-muted-foreground">
-              Approving owes it. Marking paid settles it — once, permanently.
+              Approving owes it. Marking paid settles it - once, permanently.
             </p>
           </div>
 
@@ -689,7 +689,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       <div>
-        <SectionLabel className="mb-2">Team heat — the algorithm's read</SectionLabel>
+        <SectionLabel className="mb-2">Team heat - the algorithm's read</SectionLabel>
         {isLoading ? (
           <div className="space-y-2" data-testid="team-heat-loading" aria-busy="true">
             {[0, 1, 2].map((i) => <Skeleton key={i} className="h-14 w-full rounded-2xl" />)}
@@ -734,14 +734,14 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {/* Settle confirm — restates count and dollars; the action is permanent. */}
+      {/* Settle confirm - restates count and dollars; the action is permanent. */}
       <AlertDialog open={!!confirmPaid} onOpenChange={(v) => !v && setConfirmPaid(null)}>
         <AlertDialogContent className="bg-card border-border">
           <AlertDialogHeader>
             <AlertDialogTitle>Mark {confirmPaid?.ids.length === 1 ? "this bonus" : `${confirmPaid?.ids.length ?? 0} bonuses`} paid?</AlertDialogTitle>
             <AlertDialogDescription>
               {usd(confirmPaid?.totalCents ?? 0)} will be recorded as settled. Do this after the money
-              actually moves — marking paid is permanent and can't be undone here.
+              actually moves - marking paid is permanent and can't be undone here.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -754,7 +754,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                 else transition.mutate({ id: confirmPaid.ids[0], action: "paid" });
                 setConfirmPaid(null);
               }}>
-              Mark paid — {usd(confirmPaid?.totalCents ?? 0)}
+              Mark paid - {usd(confirmPaid?.totalCents ?? 0)}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -767,7 +767,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
 // The editors live behind disclosures. Both are always-on money faucets whose
 // forms run to a dozen fields; a manager comes here at most weekly, and an open
 // form on every visit is how the queue ended up below the fold in the old
-// layout. The launcher stays open — launching IS the frequent task.
+// layout. The launcher stays open - launching IS the frequent task.
 function ConfigDisclosure({ icon: Icon, title, description, children, testId }: {
   icon: LucideIcon; title: string; description: string; children: ReactNode; testId?: string;
 }) {
@@ -799,11 +799,11 @@ function ManageTab() {
       <div className="space-y-2">
         <SectionLabel>Standing programs</SectionLabel>
         <ConfigDisclosure icon={Footprints} title="Door bonus ladder" testId="manage-milestones"
-          description="The always-on knock ladder — rungs, rewards, and what a perfect week costs.">
+          description="The always-on knock ladder - rungs, rewards, and what a perfect week costs.">
           <MilestoneLadderEditor />
         </ConfigDisclosure>
         <ConfigDisclosure icon={Gift} title="Door drops" testId="manage-drops"
-          description="Random drops on verified doors — odds, awards, caps, and the daily bill.">
+          description="Random drops on verified doors - odds, awards, caps, and the daily bill.">
           <DoorDropEditor />
         </ConfigDisclosure>
       </div>
@@ -847,7 +847,7 @@ export default function Incentives() {
   const isManager = role === "manager" || role === "admin" || role === "super_admin";
   const isAdmin = role === "admin" || role === "super_admin";
   // Launching a campaign COMMITS MONEY, so it rides the same capability as
-  // editing the commission plan (team lead and up) — not the manager role check
+  // editing the commission plan (team lead and up) - not the manager role check
   // above, which would silently hide it from the team leads who hold the
   // permission on the server.
   const canLaunch = can(role as AppRole | undefined, "commission.structure.manage");
@@ -858,7 +858,7 @@ export default function Incentives() {
   const band = useAwardBand(mine.data?.band);
 
   // The team query is fetched at page level for managers so the Team tab can
-  // wear the open-item count BEFORE anyone opens it — the Deel "action
+  // wear the open-item count BEFORE anyone opens it - the Deel "action
   // required (n)" pattern. Same key as TeamHeat's own query, so it is one
   // request, not two. Badge only for admins: they are the ones who can act.
   const team = useQuery<TeamResponse>({
@@ -878,7 +878,7 @@ export default function Incentives() {
       <PageHeader
         title="Incentives"
         icon={Gift}
-        subtitle="Every bonus you can earn — training, doors, sales — on top of commission."
+        subtitle="Every bonus you can earn - training, doors, sales - on top of commission."
       />
 
       {/* Keyed on identity: if auth resolves late (or the viewer changes), the

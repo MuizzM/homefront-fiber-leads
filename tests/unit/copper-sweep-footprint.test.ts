@@ -43,7 +43,7 @@ beforeAll(async () => {
 });
 
 describe("copper-upgrade sweep footprint gate", () => {
-  it("sweeps only footprint cities — out-of-footprint copper never claims budget", () => {
+  it("sweeps only footprint cities - out-of-footprint copper never claims budget", () => {
     startTargetRun.mockClear();
     const { queued } = runCopperUpgradeSweep(1);
     expect(queued).toBe(2);
@@ -52,7 +52,7 @@ describe("copper-upgrade sweep footprint gate", () => {
     expect(ids).not.toContain(2); // Hillsborough-class dilution is gone
   });
 
-  it("fails OPEN without the market table — bare replay DBs sweep everything as before", () => {
+  it("fails OPEN without the market table - bare replay DBs sweep everything as before", () => {
     rawDb.exec("DROP TABLE state_fiber_markets");
     resetFootprint();
     startTargetRun.mockClear();

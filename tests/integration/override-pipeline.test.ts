@@ -112,7 +112,7 @@ describe("flat earn + statement fold", () => {
     expect(mgrStmt.statement.final_commission_cents).toBe(7500);
   });
 
-  it("missing TL slot: a rep reporting straight to a manager pays only the manager — house keeps the $25", () => {
+  it("missing TL slot: a rep reporting straight to a manager pays only the manager - house keeps the $25", () => {
     const lead = sell(repDirect.memberId);
     const rows = ledgerFor(lead);
     expect(rows).toHaveLength(1);
@@ -177,7 +177,7 @@ describe("reversal", () => {
     expect(blockFor(tl.memberId).payCents).toBe(tlBefore - 2500);
   });
 
-  it("re-qualify after reversal earns fresh (seq 2) with a fresh snapshot — pays once net", () => {
+  it("re-qualify after reversal earns fresh (seq 2) with a fresh snapshot - pays once net", () => {
     const lead = sell(rep.memberId);
     svc.reverseFieldSale(TENANT, lead, null);
     svc.transitionSale(TENANT, null, `lead:${lead}`, "QUALIFY");
@@ -277,7 +277,7 @@ describe("per-hire rates (chosen at invite time)", () => {
     expect(ledgerFor(lead).find(r => r.beneficiary_rep_id === tl.memberId)!.amount_cents).toBe(1000);
   });
 
-  it("one column set, the other inherits — and a rep with NULL rates is byte-identical to before the feature", () => {
+  it("one column set, the other inherits - and a rep with NULL rates is byte-identical to before the feature", () => {
     rawDb.prepare(`UPDATE team_members SET override_manager_cents = 5000 WHERE id = ?`).run(repDirect.memberId);
     const lead = sell(repDirect.memberId);
     const rows = ledgerFor(lead);

@@ -120,7 +120,7 @@ describe("delivery is filtered per event, not per tenant", () => {
     expect(text).toContain(`"leadId":${id}`);
   });
 
-  it("a rep NOT on the area receives nothing for it — same tenant", async () => {
+  it("a rep NOT on the area receives nothing for it - same tenant", async () => {
     // THE property. Same org, same stream, no access → no event.
     const a = area([fx.repA.memberId]);
     const id = door(a, fx.repA.memberId);
@@ -221,7 +221,7 @@ describe("frames carry what a client needs to order and resume", () => {
     // Take a live epoch from a connection that is allowed to have one.
     const probe = await collect(fx.repA.session, async () => {}, 200);
     const epoch = probe.text.match(/"epoch":"([A-Za-z0-9_-]+)"/)?.[1];
-    expect(epoch, "no epoch announced — replay cannot be tested").toBeTruthy();
+    expect(epoch, "no epoch announced - replay cannot be tested").toBeTruthy();
 
     await knock(id, fx.repA.session);                 // now in the replay buffer
 

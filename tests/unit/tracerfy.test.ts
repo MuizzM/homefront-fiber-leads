@@ -117,7 +117,7 @@ describe("what a rep is told", () => {
   });
 });
 
-describe("routing — the part that gets you sued", () => {
+describe("routing - the part that gets you sued", () => {
   it("never returns a DNC number as dialable", () => {
     const verdicts = [
       verdictForPhone(phone({ number: "+15550000001" }), NOW),

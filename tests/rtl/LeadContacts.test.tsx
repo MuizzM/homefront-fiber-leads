@@ -21,7 +21,7 @@ function phone(over: Partial<TracedPhone> = {}): TracedPhone {
 
 const ADDR = "123 Main St, Concord, NC 28025";
 
-describe("the name — the thing a skip trace is actually bought for", () => {
+describe("the name - the thing a skip trace is actually bought for", () => {
   it("shows the traced owner name as the headline", () => {
     render(<LeadContacts ownerName="Dana Whitfield" address={ADDR} nowMs={NOW} />);
     expect(screen.getByTestId("lead-contact-name").textContent).toBe("Dana Whitfield");
@@ -49,7 +49,7 @@ describe("a DNC number stays visible but cannot be dialled", () => {
     expect(row.textContent).toContain("(555) 999-0000");
   });
 
-  it("is NOT a tel: link — this is the whole safety property", () => {
+  it("is NOT a tel: link - this is the whole safety property", () => {
     render(<LeadContacts ownerName="D W" address={ADDR} phones={[dncPhone]} nowMs={NOW} />);
     const row = screen.getByTestId("lead-phone-+15559990000");
     expect(row.tagName).not.toBe("A");
@@ -97,7 +97,7 @@ describe("a clean number is one tap to call", () => {
   });
 });
 
-describe("a mixed household — the realistic case", () => {
+describe("a mixed household - the realistic case", () => {
   // Today's real numbers: 264 traced, 149 blocked, 101 clean. Most cards will
   // carry both kinds at once, and the two must not be confusable.
   const phones = [

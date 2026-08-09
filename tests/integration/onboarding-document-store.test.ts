@@ -604,7 +604,7 @@ describe("first-party onboarding signing store", () => {
     expect(managerView[2].payload).toMatchObject({ contentSha256: store.getSigningDocument(row.id)!.contentSha256 });
   });
 
-  it("sends a CODE-FREE approval notice — never an embedded login code", async () => {
+  it("sends a CODE-FREE approval notice - never an embedded login code", async () => {
     // The welcome email must not carry an authentication secret: approval is a
     // manager action, and a code is only ever born from the rep's own request
     // on the sign-in screen. This pins that the email links to sign-in and

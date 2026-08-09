@@ -65,7 +65,7 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
         {failed > 0
           ? needsAttentionText(failed, deadAddress, oldestDead?.reason ?? null)
           : !online
-            ? `Offline — ${pending ? `${pending} update${pending === 1 ? "" : "s"} saved on this device` : "new work will save on this device"}`
+            ? `Offline - ${pending ? `${pending} update${pending === 1 ? "" : "s"} saved on this device` : "new work will save on this device"}`
             : `Syncing ${pending} field update${pending === 1 ? "" : "s"}…`}
       </span>
       {canRetry && (

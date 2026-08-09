@@ -51,7 +51,7 @@ describe("provisioning (dark → metered)", () => {
   });
 });
 
-describe("meterQualifiedLead — consume only on delivery, idempotent", () => {
+describe("meterQualifiedLead - consume only on delivery, idempotent", () => {
   it("is a NO-OP when the tenant has no billing row (dark)", () => {
     const r = B.meterQualifiedLead(T2, 5);
     expect(r.metered).toBe(false);

@@ -100,7 +100,7 @@ export default function Leaderboard() {
               whose sale vanished after a correction deserves to read why here,
               not to file a ticket about a broken leaderboard. */}
           <p className="text-[11px] text-muted-foreground/80 mt-0.5" data-testid="leaderboard-counting-rule">
-            Only doors still marked sold count — corrected or reversed sales drop off automatically.
+            Only doors still marked sold count - corrected or reversed sales drop off automatically.
           </p>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 pt-1" aria-label="Live, updates every 30 seconds">
@@ -166,10 +166,10 @@ export default function Leaderboard() {
           A failed or still-loading fetch must NEVER read as "0 sales" — the
           tiles show an honest em-dash until real numbers exist. */}
       <StatStrip columns={4}>
-        <StatTile label="Team knocks" value={isLoading || isError ? "—" : totals.knocks} icon={DoorOpen} testId="stat-knocks" />
-        <StatTile label="Contacts" value={isLoading || isError ? "—" : totals.contacts} icon={PhoneCall} testId="stat-contacts" />
-        <StatTile label="Callbacks" value={isLoading || isError ? "—" : totals.callbacks} icon={CalendarCheck} testId="stat-callbacks" />
-        <StatTile label="Team sales" value={isLoading || isError ? "—" : totals.sales} icon={Zap} accent testId="stat-sales" />
+        <StatTile label="Team knocks" value={isLoading || isError ? " - " : totals.knocks} icon={DoorOpen} testId="stat-knocks" />
+        <StatTile label="Contacts" value={isLoading || isError ? " - " : totals.contacts} icon={PhoneCall} testId="stat-contacts" />
+        <StatTile label="Callbacks" value={isLoading || isError ? " - " : totals.callbacks} icon={CalendarCheck} testId="stat-callbacks" />
+        <StatTile label="Team sales" value={isLoading || isError ? " - " : totals.sales} icon={Zap} accent testId="stat-sales" />
       </StatStrip>
 
       {/* Your rank — pinned summary so a rep never scrolls to find themselves */}
@@ -264,7 +264,7 @@ export default function Leaderboard() {
                   <div className="text-xs text-muted-foreground capitalize">{entry.rep.role}</div>
                 </div>
 
-                {/* Secondary metrics — muted, desktop only */}
+                {/* Secondary metrics - muted, desktop only */}
                 <div className="hidden md:flex items-center gap-6 flex-shrink-0">
                   <Metric icon={DoorOpen} val={entry.knocks} label="Knocks" />
                   <Metric icon={PhoneCall} val={entry.contacts} label="Contacts" />
@@ -272,13 +272,13 @@ export default function Leaderboard() {
                   <Metric val={conversionRate(entry.contacts, entry.sales)} label="Conv." />
                 </div>
 
-                {/* Primary metric — sales, big + tabular */}
+                {/* Primary metric - sales, big + tabular */}
                 <div className="text-right flex-shrink-0 min-w-[52px] pl-2 sm:pl-4">
                   <div className="text-xl font-bold tabular-nums text-emerald-400 leading-none">{entry.sales}</div>
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-1">Sales</div>
                 </div>
 
-                {/* Sales share — thin hairline accent along the bottom edge */}
+                {/* Sales share - thin hairline accent along the bottom edge */}
                 {totals.sales > 0 && (
                   <div
                     className="absolute bottom-0 left-0 h-0.5 bg-emerald-400/40"

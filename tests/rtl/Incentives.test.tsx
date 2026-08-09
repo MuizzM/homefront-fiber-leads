@@ -93,7 +93,7 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-describe("Incentives — rep view", () => {
+describe("Incentives - rep view", () => {
   beforeEach(() => { mockAuth.user = { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 }; });
 
   it("shows the rep's own spiff feed and heat, but not the team surface", async () => {
@@ -216,11 +216,11 @@ describe("Incentives — rep view", () => {
     renderPage({ failMine: true });
     await openTab("activity");
     expect(await screen.findByTestId("my-spiffs-error")).toBeTruthy();
-    expect(screen.getByTestId("stat-total").textContent).toContain("—");
+    expect(screen.getByTestId("stat-total").textContent).toContain(" - ");
   });
 });
 
-describe("Incentives — admin view", () => {
+describe("Incentives - admin view", () => {
   beforeEach(() => { mockAuth.user = { id: 3, name: "Ada Admin", role: "admin", teamMemberId: undefined }; });
 
   it("wears the open-item count on the Team tab before it is opened", async () => {

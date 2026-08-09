@@ -158,7 +158,7 @@ async function approve(applicationId: number, extra: Record<string, unknown> = {
 const memberByEmail = (email: string): any =>
   rawDb.prepare("SELECT * FROM team_members WHERE email = ? AND tenant_id = 1").get(email);
 
-describe("POST /api/onboarding/invitations — role + upline at invite time", () => {
+describe("POST /api/onboarding/invitations - role + upline at invite time", () => {
   it("defaults the role to rep and the upline to the inviter's own roster row", async () => {
     const { status, body } = await postInvite(managerSession, {
       name: "Default Candidate", email: "default@override.example.com",
@@ -168,7 +168,7 @@ describe("POST /api/onboarding/invitations — role + upline at invite time", ()
     expect(body.invitation.invitedSupervisorId).toBe(managerMember.id);
   });
 
-  it("refuses a role the inviter could not hire directly — a manager cannot invite a manager", async () => {
+  it("refuses a role the inviter could not hire directly - a manager cannot invite a manager", async () => {
     const { status } = await postInvite(managerSession, {
       name: "Peer Manager", email: "peer@override.example.com", invitedRole: "manager",
     });
@@ -195,7 +195,7 @@ describe("POST /api/onboarding/invitations — role + upline at invite time", ()
   });
 });
 
-describe("GET /api/onboarding/invitations/resolve — the public token view", () => {
+describe("GET /api/onboarding/invitations/resolve - the public token view", () => {
   it("exposes a role label but NEVER the supervisor id or name", async () => {
     const invite = recruitingStore.createRecruitingInvite({
       tenantId: 1, candidateName: "Resolve Candidate", candidateEmail: "resolve@override.example.com",
@@ -254,7 +254,7 @@ describe("approval writes the invited hierarchy", () => {
     expect((rawDb.prepare("SELECT role FROM users WHERE email = ?").get(email) as any).role).toBe("rep");
   });
 
-  it("an INVALID explicit override fails loud — 400, and nothing was approved", async () => {
+  it("an INVALID explicit override fails loud - 400, and nothing was approved", async () => {
     const email = "loud-fail@override.example.com";
     const { invite, application } = invitedApplication(email, { invitedRole: "rep" });
     const { status, body } = await approve(application.id, { hierarchy: { reportsToId: 999_999 } });
@@ -350,7 +350,7 @@ describe("commission.read.downline widens a team lead's read scope", () => {
   });
 });
 
-describe("per-hire override rates — chosen at invite time, stamped at approval", () => {
+describe("per-hire override rates - chosen at invite time, stamped at approval", () => {
   it("the invite POST accepts the rate keys and stores them on the invite", async () => {
     const { status, body } = await postInvite(managerSession, {
       name: "Rated Candidate", email: "rated@override.example.com",
@@ -403,7 +403,7 @@ describe("per-hire override rates — chosen at invite time, stamped at approval
   });
 });
 
-describe("PATCH /api/commission/reps/:repId/override-rates — editing existing members", () => {
+describe("PATCH /api/commission/reps/:repId/override-rates - editing existing members", () => {
   async function patchRates(session: string, repId: number, body: Record<string, unknown>) {
     const response = await realFetch(`${baseUrl}/api/commission/reps/${repId}/override-rates`, {
       method: "PATCH",
@@ -434,7 +434,7 @@ describe("PATCH /api/commission/reps/:repId/override-rates — editing existing 
     expect((await patchRates(managerSession, foreignMember.id, { overrideTeamLeadCents: 1000 })).status).toBe(404);
   });
 
-  it("is gated on commission.overrides.manage — a team lead holds no rate pen", async () => {
+  it("is gated on commission.overrides.manage - a team lead holds no rate pen", async () => {
     const { status } = await patchRates(teamLeadSession, deepRepMember.id, { overrideTeamLeadCents: 1000 });
     expect(status).toBe(403);
   });
@@ -450,7 +450,7 @@ describe("PATCH /api/commission/reps/:repId/override-rates — editing existing 
   });
 });
 
-describe("hire-time downline — a leader arrives with their team", () => {
+describe("hire-time downline - a leader arrives with their team", () => {
   const reportsToOf = (id: number): number | null =>
     (rawDb.prepare("SELECT reports_to_id AS r FROM team_members WHERE id = ?").get(id) as any)?.r ?? null;
 

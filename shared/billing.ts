@@ -163,7 +163,7 @@ export function consumeCredit(c: CreditState): ConsumeResult {
     case "auto_purchase": // (adapter tops up credits; here it's treated as deliver+bill)
       return { delivered: true, overage: true, requiresApproval: false, next: { ...c, used: c.used + 1, overageUsed: c.overageUsed + 1 } };
     case "require_approval":
-      return { delivered: false, overage: false, requiresApproval: true, next: c, reason: "credit limit reached — approval required" };
+      return { delivered: false, overage: false, requiresApproval: true, next: c, reason: "credit limit reached - approval required" };
     case "stop":
     default:
       return { delivered: false, overage: false, requiresApproval: false, next: c, reason: "credit limit reached" };

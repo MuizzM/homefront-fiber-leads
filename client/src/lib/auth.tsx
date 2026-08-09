@@ -143,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
         toast(revoked
           ? { title: "Access removed", description: "Your account was deactivated by your team. Contact your manager if this is unexpected." }
-          : { title: "Session expired", description: "Please sign back in — anything you logged is saved and will sync." });
+          : { title: "Session expired", description: "Please sign back in - anything you logged is saved and will sync." });
       })().finally(() => { confirming = null; });
     });
     return () => setUnauthorizedHandler(null);

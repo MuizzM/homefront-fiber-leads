@@ -42,7 +42,7 @@ function renderDialog(over: Partial<React.ComponentProps<typeof ReclaimAllDialog
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
 describe("reclaim-all safety contract", () => {
-  it("states the exact blast radius — held areas only, pool and archived excluded", () => {
+  it("states the exact blast radius - held areas only, pool and archived excluded", () => {
     renderDialog();
     expect(screen.getByTestId("reclaim-all-area-count").textContent).toBe("2");
     expect(screen.getByTestId("reclaim-all-rep-count").textContent).toBe("2");
@@ -69,7 +69,7 @@ describe("reclaim-all safety contract", () => {
     expect(toast).toHaveBeenCalled();
   });
 
-  it("goes inert when nothing is held — no typed confirm, button disabled", () => {
+  it("goes inert when nothing is held - no typed confirm, button disabled", () => {
     renderDialog({ areas: [{ id: 3, repIds: [], status: "unassigned" }] });
     expect(screen.getByTestId("reclaim-all-impact").textContent).toContain("nothing to reclaim");
     expect(screen.queryByTestId("reclaim-all-confirm-input")).toBeNull();
@@ -93,7 +93,7 @@ describe("reclaim-all close hygiene", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("no armed confirmation survives a cancel — reopening starts disarmed", () => {
+  it("no armed confirmation survives a cancel - reopening starts disarmed", () => {
     apiRequest.mockResolvedValue({ json: () => Promise.resolve({ ok: true, reclaimed: 2, repsAffected: 2, leadsAffected: 5 }) });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const onClose = vi.fn();

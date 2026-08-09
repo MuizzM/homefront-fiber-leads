@@ -80,7 +80,7 @@ describe("map settings sheet contract", () => {
     expect(screen.getByText("Show every knockable door on the map.")).toBeTruthy();
   });
 
-  it("reports a switch tap through that toggle's onToggle only — no self-flipping", () => {
+  it("reports a switch tap through that toggle's onToggle only - no self-flipping", () => {
     const { toggles } = renderSheet();
     fireEvent.click(screen.getByTestId("map-toggle-territories"));
     expect(toggles[1].onToggle).toHaveBeenCalledTimes(1);

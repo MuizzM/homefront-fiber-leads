@@ -8,7 +8,7 @@ const at = 1_000_000_000_000;
 const run = (over: Partial<AreaScanState> = {}): AreaScanState =>
   ({ status: "running", jobId: "job1", boxKey: "b1", startedAt: at, found: 0, checked: 0, error: null, ...over });
 
-describe("area scan machine — only an explicit election starts a scan", () => {
+describe("area scan machine - only an explicit election starts a scan", () => {
   it("COLD LAUNCH: hydrate with no persisted scan → idle (never auto-starts)", () => {
     expect(areaScanReducer(IDLE, { type: "HYDRATE", persisted: null, now: at })).toEqual(IDLE);
   });
@@ -38,7 +38,7 @@ describe("area scan machine — only an explicit election starts a scan", () => 
   });
 });
 
-describe("area scan machine — only the OWNED job drives the indicator", () => {
+describe("area scan machine - only the OWNED job drives the indicator", () => {
   it("ignores JOB_UPDATE for a different (background/stale) job", () => {
     const s = run();
     expect(areaScanReducer(s, { type: "JOB_UPDATE", jobId: "OTHER", active: true })).toBe(s);
@@ -59,7 +59,7 @@ describe("area scan machine — only the OWNED job drives the indicator", () => 
   });
 });
 
-describe("area scan machine — refresh mid-scan vs crash/zombie", () => {
+describe("area scan machine - refresh mid-scan vs crash/zombie", () => {
   it("REFRESH mid-scan: a RECENT persisted running scan resumes DISPLAY", () => {
     const persisted: PersistedScan = { status: "running", jobId: "job1", boxKey: "b1", startedAt: at };
     const s = areaScanReducer(IDLE, { type: "HYDRATE", persisted, now: at + 60_000 }); // 1 min later
@@ -84,7 +84,7 @@ describe("area scan machine — refresh mid-scan vs crash/zombie", () => {
   });
 });
 
-describe("area scan machine — reconnect verification (persisted state is never the sole truth)", () => {
+describe("area scan machine - reconnect verification (persisted state is never the sole truth)", () => {
   // Refresh mid-scan resumes DISPLAY, then the caller verifies with the backend.
   const resumed = (): AreaScanState =>
     areaScanReducer(IDLE, { type: "HYDRATE", persisted: { status: "running", jobId: "job1", boxKey: "b1", startedAt: at }, now: at + 60_000 });
@@ -112,7 +112,7 @@ describe("area scan machine — reconnect verification (persisted state is never
   });
 });
 
-describe("area scan machine — stop, dismiss, persistence", () => {
+describe("area scan machine - stop, dismiss, persistence", () => {
   it("STOP cancels a running scan", () => {
     expect(areaScanReducer(run(), { type: "STOP" }).status).toBe("cancelled");
   });

@@ -92,7 +92,7 @@ export function robotsTxt(): string {
     .join("\n\n");
 
   return [
-    "# Homefront portal — private application, not a public website.",
+    "# Homefront portal - private application, not a public website.",
     "# Every route that serves data requires a session; there is nothing here",
     "# for a crawler to index.",
     "",

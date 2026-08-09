@@ -145,8 +145,8 @@ export function AreaDeleteDialog({
                 Its <span className="font-semibold text-foreground tabular-nums">{total.toLocaleString()}</span>{" "}
                 {total === 1 ? "door stays" : "doors stay"} in the system
                 {repPolicy === "keep"
-                  ? <> and keep the rep working {total === 1 ? "it" : "them"} — {total === 1 ? "it" : "they"} just won't belong to an area any more.</>
-                  : <> — {total === 1 ? "it goes" : "they go"} back to the pool, ready to be assigned again.</>}
+                  ? <> and keep the rep working {total === 1 ? "it" : "them"} - {total === 1 ? "it" : "they"} just won't belong to an area any more.</>
+                  : <> - {total === 1 ? "it goes" : "they go"} back to the pool, ready to be assigned again.</>}
               </p>
               {!!target?.sold && (
                 <p className="text-muted-foreground">

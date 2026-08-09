@@ -115,7 +115,7 @@ function seedRun(runId: string) {
   bus.emitStage({
     ...base, stage: "retry", status: "pending_auth", httpStatus: 403,
     sessionId: "decodo-s3", tokenSuffix: FULL_TOKEN.slice(-4),
-    retryReason: `auth 403 from ${PROXY_URL} — rotating session`,
+    retryReason: `auth 403 from ${PROXY_URL} - rotating session`,
     detail: `upstream rejected ${BASIC_AUTH} with token ${FULL_TOKEN}`,
     tsEpoch: t + 3,
   });
@@ -129,7 +129,7 @@ function request(path: string, sessionId: string, init: RequestInit = {}) {
   });
 }
 
-describe("run-scoped scan stage feed — authorization", () => {
+describe("run-scoped scan stage feed - authorization", () => {
   it("lets a MANAGER (capability scan.submit, not admin) read their own tenant's run", async () => {
     const response = await request(`/api/scan/runs/${RUN_A}/stages`, managerSession);
     expect(response.status).toBe(200);
@@ -141,7 +141,7 @@ describe("run-scoped scan stage feed — authorization", () => {
     expect(typeof body.paused).toBe("boolean");
   });
 
-  it("refuses a plain REP — scanning is not field work", async () => {
+  it("refuses a plain REP - scanning is not field work", async () => {
     // A rep knocking doors has no reason to read a discovery run, and holding
     // scan.submit is what let them start one. The UI hides the affordance; this
     // is the half that holds when someone calls the endpoint directly.
@@ -162,7 +162,7 @@ describe("run-scoped scan stage feed — authorization", () => {
   });
 });
 
-describe("run-scoped scan stage feed — tenant isolation", () => {
+describe("run-scoped scan stage feed - tenant isolation", () => {
   it("does not serve another tenant's run even to that other tenant's ADMIN", async () => {
     const response = await request(`/api/scan/runs/${RUN_A}/stages`, otherTenantSession);
     expect(response.status).toBe(404); // 404 not 403 — never confirm a foreign run id exists
@@ -174,7 +174,7 @@ describe("run-scoped scan stage feed — tenant isolation", () => {
     expect(response.status).toBe(404);
   });
 
-  it("ignores a client-supplied tenant hint — the wall is the session's tenant", async () => {
+  it("ignores a client-supplied tenant hint - the wall is the session's tenant", async () => {
     const response = await request(`/api/scan/runs/${RUN_B}/stages?tenantId=2&tenant_id=2`, managerSession);
     expect(response.status).toBe(404);
   });
@@ -192,7 +192,7 @@ describe("run-scoped scan stage feed — tenant isolation", () => {
   });
 });
 
-describe("run-scoped scan stage feed — no secret material", () => {
+describe("run-scoped scan stage feed - no secret material", () => {
   it("never emits a token, JWT, proxy credential, or upstream URL", async () => {
     const response = await request(`/api/scan/runs/${RUN_A}/stages`, managerSession);
     const raw = await response.text();
@@ -236,7 +236,7 @@ describe("run-scoped scan stage feed — no secret material", () => {
   });
 });
 
-describe("run-scoped scan stage feed — bounded", () => {
+describe("run-scoped scan stage feed - bounded", () => {
   it("caps rows regardless of the requested limit", async () => {
     const response = await request(`/api/scan/runs/${RUN_BOUNDED}/stages?limit=100000`, managerSession);
     expect(response.status).toBe(200);
@@ -262,7 +262,7 @@ describe("run-scoped scan stage feed — bounded", () => {
   });
 });
 
-describe("run-scoped scan stage feed — SSE lifecycle", () => {
+describe("run-scoped scan stage feed - SSE lifecycle", () => {
   it("streams only this run's events and releases its relay listener on disconnect", async () => {
     const baseline = events.scanEventListenerCount();
 

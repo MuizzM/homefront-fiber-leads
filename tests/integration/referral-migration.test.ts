@@ -50,7 +50,7 @@ describe("a NEW install", () => {
     expect(indexExists()).toBe(true);
   });
 
-  it("is idempotent — re-running is a no-op", () => {
+  it("is idempotent - re-running is a no-op", () => {
     R.ensureOneReferralPerApplicationIndex();
     expect(R.ensureOneReferralPerApplicationIndex()).toEqual({ installed: true, conflicts: 0 });
   });

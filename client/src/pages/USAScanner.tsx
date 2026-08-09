@@ -151,7 +151,7 @@ export default function USAScanner() {
                 qc.invalidateQueries({ queryKey: ["/api/leads"] });
                 qc.invalidateQueries({ queryKey: ["/api/stats"] });
                 setCompletedScans(prev => new Set([...prev, `${city},${state}`]));
-                toast({ title: `Done — ${city}, ${state}`, description: `${s.summary?.fresh ?? s.summary?.new_fiber ?? 0} fresh-fiber leads saved` });
+                toast({ title: `Done - ${city}, ${state}`, description: `${s.summary?.fresh ?? s.summary?.new_fiber ?? 0} fresh-fiber leads saved` });
               }
             } catch {}
           }, 2000);
@@ -185,7 +185,7 @@ export default function USAScanner() {
                   setCompletedScans(prev => new Set([...prev, `${city},${state}`]));
                   qc.invalidateQueries({ queryKey: ["/api/leads"] });
                   qc.invalidateQueries({ queryKey: ["/api/stats"] });
-                  toast({ title: `Done — ${city}, ${state}`, description: "New fiber leads saved to map" });
+                  toast({ title: `Done - ${city}, ${state}`, description: "New fiber leads saved to map" });
                 }
               } catch {}
               evType = "";
@@ -344,10 +344,10 @@ export default function USAScanner() {
                 <div>
                   <div className="font-semibold tracking-tight text-sm text-foreground">
                     {activeScan.city}, {activeScan.state}
-                    {activeScan.status === "pulling" && <span className="text-muted-foreground ml-2 font-normal">— harvesting addresses…</span>}
+                    {activeScan.status === "pulling" && <span className="text-muted-foreground ml-2 font-normal"> - harvesting addresses…</span>}
                     {activeScan.status === "scanning" && activeScan.total > 0 &&
-                      <span className="text-muted-foreground ml-2 font-normal tabular-nums">— {activeScan.done.toLocaleString()} / {activeScan.total.toLocaleString()}</span>}
-                    {activeScan.status === "done" && <span className="text-emerald-400 ml-2 font-normal">— complete</span>}
+                      <span className="text-muted-foreground ml-2 font-normal tabular-nums"> - {activeScan.done.toLocaleString()} / {activeScan.total.toLocaleString()}</span>}
+                    {activeScan.status === "done" && <span className="text-emerald-400 ml-2 font-normal"> - complete</span>}
                   </div>
                   {activeScan.newFiber > 0 && (
                     <div className="flex items-center gap-1.5 mt-1">
@@ -451,7 +451,7 @@ export default function USAScanner() {
           className="h-9 px-2 bg-background border border-border rounded-lg text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
         >
           <option value="all">All States</option>
-          {allStates.map(s => <option key={s} value={s}>{s} — {STATE_NAMES[s]}</option>)}
+          {allStates.map(s => <option key={s} value={s}>{s} - {STATE_NAMES[s]}</option>)}
         </select>
       </div>
 

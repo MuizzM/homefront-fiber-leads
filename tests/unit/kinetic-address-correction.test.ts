@@ -70,7 +70,7 @@ const GUARDRAIL_QUERY = { address: "410 Maplewod Steet", city: "Inman", state: "
 const BOUND_SUGGESTION = { addressLine1: "512 Piney Grove Rd", city: "Inman", stateProvinceCd: "SC", postalCd: "29349" };
 const BOUND_QUERY = { address: "512 Piney Grov Road", city: "Inman", state: "SC", zip: "29349" };
 
-describe("Kinetic scanner — apply reliable address suggestions instead of repeating unchanged requests", () => {
+describe("Kinetic scanner - apply reliable address suggestions instead of repeating unchanged requests", () => {
   // Default transport: satisfy every token mint (so background pool-warming never
   // sees an undefined response) and treat any stray search as a benign no-suggestion
   // non-answer. Each test overrides the SEARCH behavior via trackedSearch.
@@ -161,7 +161,7 @@ describe("Kinetic scanner — apply reliable address suggestions instead of repe
     expect(searched).toEqual(["345 James Allgood Drive", "345 James Allgood Dr"]);
   });
 
-  it("falls back to non-conclusive (never NO_SERVICE) when suggestions are ambiguous — no correction attempted", async () => {
+  it("falls back to non-conclusive (never NO_SERVICE) when suggestions are ambiguous - no correction attempted", async () => {
     const searched = trackedSearch(() => json(200, needsFix("AddressSuggestions", [
       { addressLine1: "100 Main St", city: "Inman", stateProvinceCd: "SC", postalCd: "29349" },
       { addressLine1: "200 Elm Ave", city: "Inman", stateProvinceCd: "SC", postalCd: "29349" },
@@ -188,7 +188,7 @@ describe("Kinetic scanner — apply reliable address suggestions instead of repe
     expect(searched).toHaveLength(1);
   });
 
-  it("GUARDRAIL: a correction that resolves to AddressNotFound stays unresolved — NEVER becomes NO_SERVICE", async () => {
+  it("GUARDRAIL: a correction that resolves to AddressNotFound stays unresolved - NEVER becomes NO_SERVICE", async () => {
     const searched = trackedSearch(a =>
       a.includes("Maplewood") ? json(200, addressNotFound) : json(200, needsFix("AddressNeedsFix", [GUARDRAIL_SUGGESTION])));
 
@@ -215,7 +215,7 @@ describe("Kinetic scanner — apply reliable address suggestions instead of repe
   });
 });
 
-describe("selectReliableAddressSuggestion — suggestion-selection heuristic", () => {
+describe("selectReliableAddressSuggestion - suggestion-selection heuristic", () => {
   it("picks a single unambiguous suggestion", () => {
     const sel = selectReliableAddressSuggestion({ addressCandidates: [RELIABLE_SUGGESTION] });
     expect(sel.suggestion?.addressLine1).toBe("345 James Allgood Dr");
@@ -246,7 +246,7 @@ describe("selectReliableAddressSuggestion — suggestion-selection heuristic", (
       { addressLine1: "2 B St", city: "X", exactMatch: true },
     ] });
     expect(sel.suggestion).toBeNull();
-    expect(sel.reason).toMatch(/exact-match suggestions — ambiguous/);
+    expect(sel.reason).toMatch(/exact-match suggestions - ambiguous/);
   });
 
   it("does not apply a single explicitly low-confidence suggestion", () => {

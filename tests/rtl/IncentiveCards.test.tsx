@@ -42,11 +42,11 @@ const doorDay = (o: Partial<any> = {}) => ({
 const ramp = (o: Partial<any> = {}) => ({
   visible: true, inWindow: true, tenureDay: 3, windowDays: 14, daysLeft: 12,
   rewardCents: 5_000, earnedToday: false, blockedBy: "no_work",
-  headline: "Do today's cards for $50 — 12 days of the ramp bonus left",
+  headline: "Do today's cards for $50 - 12 days of the ramp bonus left",
   cardsToday: 0, minCardsPerDay: 10, daysPaid: 2,
   completion: {
     enabled: true, paid: false, lessonsCompleted: 40, lessonsTotal: 91,
-    remaining: 51, awardCents: 10_000, headline: "51 lessons left to finish training — $100",
+    remaining: 51, awardCents: 10_000, headline: "51 lessons left to finish training - $100",
   },
   ...o,
 });
@@ -89,7 +89,7 @@ describe("the genuine-day card", () => {
 
   it("says a held day is held, not merely unearned", async () => {
     renderCard(<DoorDayCard />, "/api/me/door-day",
-      doorDay({ needsReview: true, headline: "Location problems on today's knocks — held for review." }));
+      doorDay({ needsReview: true, headline: "Location problems on today's knocks - held for review." }));
     expect((await screen.findByTestId("door-day-review")).textContent).toContain("held until a manager reviews");
   });
 

@@ -210,7 +210,7 @@ describe("W-9: submit is blocked until the required answers exist", () => {
 });
 
 describe("W-9: the conditional Line 3a answers", () => {
-  it("LLC is not an answer on its own — the C/S/P letter is required", async () => {
+  it("LLC is not an answer on its own - the C/S/P letter is required", async () => {
     const { postW9 } = wire();
     renderPage();
     await w9FormReady();
@@ -395,7 +395,7 @@ describe("direct deposit", () => {
     expect(screen.getByTestId("error-accountType")).toBeInTheDocument();
   });
 
-  it("shows only last4 + type after saving — never the account number again", async () => {
+  it("shows only last4 + type after saving - never the account number again", async () => {
     wire();
     const { container } = renderPage();
     await screen.findByTestId("bank-form");
@@ -461,7 +461,7 @@ describe("house style", () => {
     expect(document.body.textContent ?? "").not.toMatch(PICTO);
   });
 
-  it("labels every input — a screen-reader user can complete the form", async () => {
+  it("labels every input - a screen-reader user can complete the form", async () => {
     wire();
     renderPage();
     await w9FormReady();

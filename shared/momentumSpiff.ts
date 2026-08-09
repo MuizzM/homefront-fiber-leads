@@ -278,7 +278,7 @@ export { usd };
 /** The ledger line, and what the rep reads on their statement weeks later. */
 export function momentumReason(amountCents: number): string {
   void amountCents;
-  return "Hot streak — closed while running hot";
+  return "Hot streak - closed while running hot";
 }
 
 /** Milliseconds left on a live offer; 0 once expired. */

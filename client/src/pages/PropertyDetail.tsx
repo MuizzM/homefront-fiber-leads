@@ -165,7 +165,7 @@ export default function PropertyDetail() {
             <SectionLabel>Fiber</SectionLabel>
             <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
               <FactRow icon={Zap} tone="text-primary" label="Status" value={FIBER_LABEL[lead.fiberStatus ?? "unknown"] ?? lead.fiberStatus ?? "Unknown"} />
-              {(lead.maxDownloadMbps || lead.speedTier) && <FactRow icon={Wifi} label="Speed" value={lead.maxDownloadMbps ? `${lead.maxDownloadMbps} Mbps${lead.techType ? ` · ${lead.techType}` : ""}` : (lead.speedTier ?? "—")} />}
+              {(lead.maxDownloadMbps || lead.speedTier) && <FactRow icon={Wifi} label="Speed" value={lead.maxDownloadMbps ? `${lead.maxDownloadMbps} Mbps${lead.techType ? ` · ${lead.techType}` : ""}` : (lead.speedTier ?? " - ")} />}
               {lead.competitorName && <FactRow icon={Building2} label="Current provider" value={`${lead.competitorName}${lead.competitorSpeedMbps ? ` · ${lead.competitorSpeedMbps} Mbps` : ""}`} />}
               {lead.householdSegmentType && <FactRow icon={UserIcon} label="Segment" value={lead.householdSegmentType} />}
             </div>
@@ -189,7 +189,7 @@ export default function PropertyDetail() {
             {histQ.isLoading ? (
               <div className="space-y-3 rounded-xl border border-border bg-card p-4"><Skeleton className="h-5 w-3/4" /><Skeleton className="h-5 w-2/3" /><Skeleton className="h-5 w-1/2" /></div>
             ) : !histQ.data?.length ? (
-              <div className="rounded-xl border border-border bg-card p-6 text-center text-[13px] text-muted-foreground" data-testid="detail-history-empty">No knocks yet — you'll be the first at this door.</div>
+              <div className="rounded-xl border border-border bg-card p-6 text-center text-[13px] text-muted-foreground" data-testid="detail-history-empty">No knocks yet - you'll be the first at this door.</div>
             ) : (
               <div className="rounded-xl border border-border bg-card p-4">
                 <ol className="relative">
@@ -201,7 +201,7 @@ export default function PropertyDetail() {
         )}
       </div>
 
-      {/* Sticky-in-flow primary CTA — reserves its own height, pins to the
+      {/* Sticky-in-flow primary CTA - reserves its own height, pins to the
           scrollport bottom, and can never overlap the content above it. */}
       {lead && (
         <div className="sticky bottom-0 z-10 mt-auto border-t border-border bg-background/90 backdrop-blur-md">
@@ -448,7 +448,7 @@ function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
           </button>
         ))}
         {!photosQ.isLoading && photos.length === 0 && (
-          <div className="flex items-center pl-1 text-[12px] text-muted-foreground">No photos yet — snap the house, equipment, or paperwork.</div>
+          <div className="flex items-center pl-1 text-[12px] text-muted-foreground">No photos yet - snap the house, equipment, or paperwork.</div>
         )}
       </div>
 
@@ -477,9 +477,9 @@ function SaveState({ state, online }: { state?: string; online: boolean }) {
   const map: Record<string, { icon: any; text: string; cls: string; spin?: boolean }> = {
     saving: { icon: RefreshCw, text: "Saving…", cls: "bg-primary/10 border-primary/25 text-primary", spin: true },
     queued: online
-      ? { icon: CloudUpload, text: "Queued — syncing", cls: "bg-primary/10 border-primary/25 text-primary" }
-      : { icon: WifiOff, text: "Saved offline — will sync", cls: "bg-muted border-border text-muted-foreground" },
-    error: { icon: AlertTriangle, text: "Didn't save — will retry", cls: "bg-rose-500/10 border-rose-500/30 text-rose-500" },
+      ? { icon: CloudUpload, text: "Queued - syncing", cls: "bg-primary/10 border-primary/25 text-primary" }
+      : { icon: WifiOff, text: "Saved offline - will sync", cls: "bg-muted border-border text-muted-foreground" },
+    error: { icon: AlertTriangle, text: "Didn't save - will retry", cls: "bg-rose-500/10 border-rose-500/30 text-rose-500" },
   };
   const m = map[state]; if (!m) return null;
   const Icon = m.icon;

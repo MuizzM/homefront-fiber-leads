@@ -22,7 +22,7 @@ export function toCsv(rows: Record<string, unknown>[]): string {
  *  survives here: quoted fields may contain commas and newlines, `""` is an
  *  escaped quote, and a row ends at `\n`, `\r\n` or a lone `\r`.
  *
- *  Deliberately does NOT map headers, trim, lowercase, or drop blank rows —
+ *  Deliberately does NOT map headers, trim, lowercase, or drop blank rows -
  *  those are per-caller contracts (record keys are wire format for some
  *  callers, normalised for others), so each caller keeps its own 2-3 line
  *  adapter on top and its output stays byte-identical. */
@@ -54,7 +54,7 @@ export function parseCsvRows(text: string): string[][] {
   return rows;
 }
 
-/** True when a tokenized row carries no content — the shape every caller uses
+/** True when a tokenized row carries no content - the shape every caller uses
  *  to drop blank lines (and the trailing row a file's final newline leaves). */
 export function isBlankCsvRow(row: string[]): boolean {
   return !row.some((v) => v !== "");

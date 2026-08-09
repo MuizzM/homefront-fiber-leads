@@ -83,7 +83,7 @@ describe("storage-level allocation", () => {
     expect(new Set(colors).size).toBe(colors.length);
   });
 
-  it("scopes allocation per tenant — a second org starts from the top of the palette", () => {
+  it("scopes allocation per tenant - a second org starts from the top of the palette", () => {
     const other = storage.createTeamMember({ name: "Tia Tenant Two", role: "rep", active: true, tenantId: 2 } as any);
     expect(other.color).toBe(REP_PALETTE[0]);
   });

@@ -179,9 +179,9 @@ export function allocateCents(totalCents: number, count: number): number[] {
 /** A human label for the comp plan that produced this statement. */
 export function planLabelFor(input: Pick<StatementDocInput["statement"], "structure" | "tierLabel" | "rateCents">): string {
   const rate = `$${(cents(input.rateCents) / 100).toFixed(2)} per sale`;
-  if (input.structure === "TIERED") return input.tierLabel ? `${input.tierLabel} — ${rate}` : `Tiered — ${rate}`;
-  if (input.structure === "FLAT") return `Flat — ${rate}`;
-  return input.tierLabel ?? "—";
+  if (input.structure === "TIERED") return input.tierLabel ? `${input.tierLabel} - ${rate}` : `Tiered - ${rate}`;
+  if (input.structure === "FLAT") return `Flat - ${rate}`;
+  return input.tierLabel ?? " - ";
 }
 
 /**

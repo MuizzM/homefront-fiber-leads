@@ -153,7 +153,7 @@ beforeEach(() => {
   apiRequest.mockResolvedValue({ json: async () => ({ ok: true }) });
 });
 
-describe("Messages hub — the conversation list", () => {
+describe("Messages hub - the conversation list", () => {
   it("opens on the list: floor pinned, DMs named after the other person, groups by name", async () => {
     renderPage();
     expect(await screen.findByTestId("chat-thread-list")).toBeInTheDocument();
@@ -179,7 +179,7 @@ describe("Messages hub — the conversation list", () => {
   });
 });
 
-describe("Messages hub — the floor room", () => {
+describe("Messages hub - the floor room", () => {
   it("opens from the list and renders the conversation", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -202,7 +202,7 @@ describe("Messages hub — the floor room", () => {
     expect((input as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("marks the room read on open — the badge and the room agree", async () => {
+  it("marks the room read on open - the badge and the room agree", async () => {
     const user = userEvent.setup();
     renderPage();
     await openFloor(user);
@@ -256,7 +256,7 @@ describe("Messages hub — the floor room", () => {
   });
 });
 
-describe("Messages hub — DMs and groups", () => {
+describe("Messages hub - DMs and groups", () => {
   it("opens a DM named after the other person, and offers NO moderation inside it", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -331,7 +331,7 @@ describe("Messages hub — DMs and groups", () => {
     });
   });
 
-  it("offers no remove on your own row — leaving is its own, confirmed act", async () => {
+  it("offers no remove on your own row - leaving is its own, confirmed act", async () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(await screen.findByTestId("thread-12"));
@@ -387,7 +387,7 @@ describe("Messages hub — DMs and groups", () => {
   });
 });
 
-describe("Messages hub — announcements tab", () => {
+describe("Messages hub - announcements tab", () => {
   it("gives a manager the composer and the sent log", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -442,7 +442,7 @@ describe("Messages hub — announcements tab", () => {
   });
 });
 
-describe("Messages hub — the board", () => {
+describe("Messages hub - the board", () => {
   it("shows the podium, the chasers, and where you stand", async () => {
     const user = userEvent.setup();
     renderPage();

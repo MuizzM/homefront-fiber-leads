@@ -221,7 +221,7 @@ describe.each(["calling_rep", "calling_manager", "compliance_admin", "auditor"] 
 );
 
 describe("field rep scope", () => {
-  it("cannot see a discovery job at all — scanning is not field work", async () => {
+  it("cannot see a discovery job at all - scanning is not field work", async () => {
     // The Scan Map used to be on every rep's field map because scan.submit sat
     // in the REP set. It starts at team lead now; this is the half that holds
     // when someone calls the endpoint directly instead of tapping the UI.

@@ -30,7 +30,7 @@ function walk(n: number, everySeconds: number, startMs = T0, firstLead = 1): Doo
 /** An honest shift: 60 doors over five hours, one every five minutes. */
 const HONEST_DAY = walk(60, 300);
 
-describe("countGenuineDoors — one house, one door", () => {
+describe("countGenuineDoors - one house, one door", () => {
   it("counts the same address exactly once, however many times it is tapped", () => {
     const events: DoorEvent[] = [
       { leadId: 1, atMs: T0 },
@@ -51,7 +51,7 @@ describe("countGenuineDoors — one house, one door", () => {
   });
 });
 
-describe("countGenuineDoors — the walk that did not happen", () => {
+describe("countGenuineDoors - the walk that did not happen", () => {
   it("drops a door logged inside the minimum gap", () => {
     // Sixty distinct addresses, four seconds apart: the drive-by list attack.
     // The four-minute burst survives only as one door per 20-second gap — 12 of
@@ -81,7 +81,7 @@ describe("countGenuineDoors — the walk that did not happen", () => {
   });
 });
 
-describe("countGenuineDoors — the rolling-hour ceiling", () => {
+describe("countGenuineDoors - the rolling-hour ceiling", () => {
   it("stops counting past the cap inside any 60 minutes", () => {
     // 40 doors 30s apart = 20 minutes. The cap is 25.
     const c = countGenuineDoors(walk(40, 30), cfg({ minGapSeconds: 20, maxPerRollingHour: 25 }));
@@ -108,7 +108,7 @@ describe("countGenuineDoors — the rolling-hour ceiling", () => {
   });
 });
 
-describe("evaluateDoorDay — the day has to have taken a day", () => {
+describe("evaluateDoorDay - the day has to have taken a day", () => {
   it("pays an honest 60-door shift", () => {
     const d = evaluateDoorDay(HONEST_DAY, 0, cfg());
     expect(d.qualifies).toBe(true);
@@ -152,7 +152,7 @@ describe("evaluateDoorDay — the day has to have taken a day", () => {
   });
 });
 
-describe("evaluateDoorDay — tamper voids the day, not just the bad knocks", () => {
+describe("evaluateDoorDay - tamper voids the day, not just the bad knocks", () => {
   it("withholds a qualifying day that carries hard tamper evidence", () => {
     const d = evaluateDoorDay(HONEST_DAY, 1, cfg());
     expect(d.qualifies).toBe(false);
@@ -173,7 +173,7 @@ describe("evaluateDoorDay — tamper voids the day, not just the bad knocks", ()
   });
 });
 
-describe("evaluateDoorDay — edges", () => {
+describe("evaluateDoorDay - edges", () => {
   it("pays nothing when disabled", () => {
     const d = evaluateDoorDay(HONEST_DAY, 0, cfg({ enabled: false }));
     expect(d.qualifies).toBe(false);
@@ -192,7 +192,7 @@ describe("evaluateDoorDay — edges", () => {
     expect(evaluateDoorDay(shuffled, 0, cfg()).qualifies).toBe(true);
   });
 
-  it("is deterministic — the same day always counts to the same number", () => {
+  it("is deterministic - the same day always counts to the same number", () => {
     const a = evaluateDoorDay(HONEST_DAY, 0, cfg());
     const b = evaluateDoorDay([...HONEST_DAY].reverse(), 0, cfg());
     expect(a.count.counted).toBe(b.count.counted);
@@ -209,7 +209,7 @@ describe("evaluateDoorDay — edges", () => {
   });
 });
 
-describe("doorDayProgress — what the rep is shown", () => {
+describe("doorDayProgress - what the rep is shown", () => {
   it("tracks the climb toward the target", () => {
     const p = doorDayProgress(evaluateDoorDay(walk(30, 300), 0, cfg()), cfg());
     expect(p.counted).toBe(30);

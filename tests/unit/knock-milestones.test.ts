@@ -31,7 +31,7 @@ describe("normalizing a hand-edited ladder", () => {
     expect(n.rungs.map(r => r.doors)).toEqual([100, 500]);
   });
 
-  it("drops duplicate door counts — two rungs at 100 would pay twice for one climb", () => {
+  it("drops duplicate door counts - two rungs at 100 would pay twice for one climb", () => {
     const n = normalizeLadder(ladder({ rungs: [
       { doors: 100, rewardCents: 2_500 },
       { doors: 100, rewardCents: 9_900 },
@@ -64,7 +64,7 @@ describe("rungs stack, they do not replace", () => {
     expect(ladderValueAt(ladder(), 99)).toBe(0);
   });
 
-  it("pays the exact rung at the exact count — 100 doors clears a 100-door rung", () => {
+  it("pays the exact rung at the exact count - 100 doors clears a 100-door rung", () => {
     expect(ladderValueAt(ladder(), 100)).toBe(2_500);
   });
 
@@ -174,7 +174,7 @@ describe("validation the server and the form share", () => {
     expect(validateLadder(DEFAULT_MILESTONE_LADDER)).toBeNull();
   });
 
-  it("refuses a four-figure milestone — that is a fat finger, not an incentive", () => {
+  it("refuses a four-figure milestone - that is a fat finger, not an incentive", () => {
     expect(validateLadder(ladder({ rungs: [{ doors: 100, rewardCents: 500_000 }] }))).toMatch(/\$1,000/);
   });
 
@@ -186,7 +186,7 @@ describe("validation the server and the form share", () => {
     expect(validateLadder(ladder({ rungs: [{ doors: 100, rewardCents: 0 }] }))).toMatch(/above zero/);
   });
 
-  it("refuses turning on a ladder with no usable rungs — it would silently do nothing", () => {
+  it("refuses turning on a ladder with no usable rungs - it would silently do nothing", () => {
     expect(validateLadder({ enabled: true, period: "week", rungs: [] })).toMatch(/at least one/);
   });
 

@@ -63,7 +63,7 @@ describe("Home Front Sign regulated core", () => {
   });
 });
 
-describe("Commission Agreement — required terms (spec)", () => {
+describe("Commission Agreement - required terms (spec)", () => {
   const commission = buildAgreementSnapshot({
     documentType: "commission_agreement",
     companyName: "Home Front Solutions LLC",
@@ -144,7 +144,7 @@ describe("Commission Agreement — required terms (spec)", () => {
 // enforceable — that is counsel's call, and the file's internal review note
 // says so. A test cannot make a clause good law; it can stop one silently
 // disappearing in a later edit.
-describe("Independent Contractor Agreement — protective provisions", () => {
+describe("Independent Contractor Agreement - protective provisions", () => {
   const ic = buildAgreementSnapshot({
     documentType: "independent_contractor",
     companyName: "HomeFront Solutions LLC",
@@ -234,7 +234,7 @@ describe("Independent Contractor Agreement — protective provisions", () => {
   });
 });
 
-describe("Commission Agreement — commission-only and post-termination", () => {
+describe("Commission Agreement - commission-only and post-termination", () => {
   const ca = buildAgreementSnapshot({
     documentType: "commission_agreement",
     companyName: "HomeFront Solutions LLC",

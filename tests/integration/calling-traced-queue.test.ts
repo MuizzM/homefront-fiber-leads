@@ -217,7 +217,7 @@ describe("once approved, traced doors are callable on their own evidence", () =>
     expect(decisionFor(leadId)).toBe("BLOCKED_STALE_DNC_DATA");
   });
 
-  it("is idempotent — re-syncing does not duplicate a queue entry", () => {
+  it("is idempotent - re-syncing does not duplicate a queue entry", () => {
     const leadId = tracedLead("800 Repeat St", "+13365550808");
     traced.syncTracedPhoneQueue(tenantId);
     traced.syncTracedPhoneQueue(tenantId);

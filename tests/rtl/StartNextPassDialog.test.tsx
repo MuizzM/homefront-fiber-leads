@@ -54,7 +54,7 @@ describe("StartNextPassDialog", () => {
     expect(await screen.findByRole("button", { name: "Start pass 3" })).toBeInTheDocument();
   });
 
-  it("says history is kept — never implies a wipe", async () => {
+  it("says history is kept - never implies a wipe", async () => {
     setup();
     expect(await screen.findByText(/stays in this area's history/i)).toBeInTheDocument();
     expect(screen.queryByText(/delete|erase|permanently remove/i)).not.toBeInTheDocument();
@@ -67,7 +67,7 @@ describe("StartNextPassDialog", () => {
     expect(within(alert).getByText(/3 doors have callbacks scheduled/i)).toBeInTheDocument();
   });
 
-  it("stays quiet when there are no callbacks at risk — no crying wolf", async () => {
+  it("stays quiet when there are no callbacks at risk - no crying wolf", async () => {
     setup({ callbacksAtRisk: 0 });
     await screen.findByText("7");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -174,7 +174,7 @@ describe("StartNextPassDialog", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
-  // ── Skeletons, then real tiles — never empty ghost boxes ──────────────────
+  // ── Skeletons, then real tiles - never empty ghost boxes ──────────────────
   it("shows skeleton tiles while the preview loads, then the real counts", async () => {
     let resolve!: (p: PassPreview) => void;
     render(
@@ -250,7 +250,7 @@ describe("StartNextPassDialog", () => {
   // ── Territory-UI audit: every exit works ──────────────────────────────────
   it("Escape cancels, like the scrim and the Cancel button", async () => {
     const { onCancel } = setup();
-    await screen.findByText("7"); // preview settled — dialog fully on screen
+    await screen.findByText("7"); // preview settled - dialog fully on screen
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledOnce();
   });

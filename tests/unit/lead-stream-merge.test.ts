@@ -59,7 +59,7 @@ function push(over: Partial<LeadStreamPin> = {}): LeadStreamPin {
   };
 }
 
-describe("outcome CAS ordering — the server's recency rule, mirrored", () => {
+describe("outcome CAS ordering - the server's recency rule, mirrored", () => {
   it("a push with a NEWER lastOutcomeAt recolors the pin", () => {
     const prev = localPin({ leadStatus: "interested", visited: true, lastOutcome: "interested", lastOutcomeAt: T(0) });
     const next = mergePushedPin(prev, push({ leadStatus: "sold", lastOutcome: "sold", lastOutcomeAt: T(5) }));
@@ -67,7 +67,7 @@ describe("outcome CAS ordering — the server's recency rule, mirrored", () => {
     expect(next.lastOutcomeAt).toBe(T(5));
   });
 
-  it("a push with an OLDER lastOutcomeAt is ignored — the pin keeps the newer state", () => {
+  it("a push with an OLDER lastOutcomeAt is ignored - the pin keeps the newer state", () => {
     // The race this encodes: phone B refetched the map AFTER a central mark
     // (baseline T5), then a stream frame for an earlier knock (T3) arrives
     // late over the network. The server's CAS already declared T5 the winner;
@@ -80,7 +80,7 @@ describe("outcome CAS ordering — the server's recency rule, mirrored", () => {
     expect(next.lastOutcomeAt).toBe(T(5));
   });
 
-  it("an EQUAL timestamp applies — mirrors the CAS's own self-tolerance on replay", () => {
+  it("an EQUAL timestamp applies - mirrors the CAS's own self-tolerance on replay", () => {
     const prev = localPin({ leadStatus: "interested", visited: true, lastOutcome: "interested", lastOutcomeAt: T(5) });
     const next = mergePushedPin(prev, push({ leadStatus: "sold", lastOutcome: "sold", lastOutcomeAt: T(5) }));
     expect(pinDisplayState(next)).toBe("sold");
@@ -126,17 +126,17 @@ describe("display fields the wire pin carries beyond the outcome", () => {
     expect(next.assignMark).toBe("priority");
   });
 
-  it("clears assignMark on null — every emit path projects the FULL post-write row", () => {
+  it("clears assignMark on null - every emit path projects the FULL post-write row", () => {
     const next = mergePushedPin(localPin({ assignMark: "priority" }), push({ assignMark: null }));
     expect(next.assignMark).toBeNull();
   });
 
-  it("merges doNotKnock in both directions — the compliance block must never lag", () => {
+  it("merges doNotKnock in both directions - the compliance block must never lag", () => {
     expect(mergePushedPin(localPin(), push({ doNotKnock: true })).doNotKnock).toBe(true);
     expect(mergePushedPin(localPin({ doNotKnock: true }), push({ doNotKnock: false })).doNotKnock).toBe(false);
   });
 
-  it("clears the assignment pair on null — the state that must drop a halo", () => {
+  it("clears the assignment pair on null - the state that must drop a halo", () => {
     const next = mergePushedPin(localPin(), push({ assignedRepId: null, assignedTerritoryId: null }));
     expect(next.assignedRepId).toBeNull();
     expect(next.assignedTerritoryId).toBeNull();
@@ -169,7 +169,7 @@ describe("what the merge must NOT touch", () => {
   });
 });
 
-describe("pinFromPushedLead — a door entering scope mid-shift", () => {
+describe("pinFromPushedLead - a door entering scope mid-shift", () => {
   it("carries the CAS clock and display fields, and leaves the knock clock unset", () => {
     const pin = pinFromPushedLead(push({
       leadStatus: "sold", lastOutcome: "sold", lastOutcomeAt: T(7),

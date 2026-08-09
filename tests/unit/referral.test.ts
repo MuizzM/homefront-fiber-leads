@@ -92,7 +92,7 @@ describe("qualification", () => {
     expect(r.salesRemaining).toBe(1);
   });
 
-  it("reports the checklist the rep sees — 3 of 6, not just false", () => {
+  it("reports the checklist the rep sees - 3 of 6, not just false", () => {
     // The progress display and the award rule come from this one call, which is
     // what stops the dashboard promising a reward approval then refuses.
     const r = evaluateQualification(facts({ approvedSalesCount: 3 }), CONFIG, NOW);
@@ -217,7 +217,7 @@ describe("anti-fraud", () => {
     expect(rejectAttribution(candidate({ applicantEmail: "rep@example.com" }), CONFIG, NOW)).toBe("self_referral");
   });
 
-  it("refuses an existing user — the referred person must be NEW", () => {
+  it("refuses an existing user - the referred person must be NEW", () => {
     expect(rejectAttribution(candidate({ applicantAlreadyHasAccount: true }), CONFIG, NOW)).toBe("existing_user");
   });
 
@@ -257,7 +257,7 @@ describe("changing the referrer", () => {
     expect(canChangeReferrer("IN_PROGRESS", false).reason).toMatch(/admin/);
   });
 
-  it("is refused outright once the money is committed — even for an admin", () => {
+  it("is refused outright once the money is committed - even for an admin", () => {
     // A referrer that can be re-pointed after approval is a reward that can be
     // redirected to whoever asks last.
     expect(canChangeReferrer("APPROVED", true).allowed).toBe(false);

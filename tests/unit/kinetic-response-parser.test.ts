@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { parseKineticResponse, classifyKineticResult, parseUqual } from "../../server/kineticResponseParser";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
-describe("canonical Kinetic parser + classifier — 345 James Allgood Dr regression", () => {
+describe("canonical Kinetic parser + classifier - 345 James Allgood Dr regression", () => {
   const parsed = parseKineticResponse(FIX);
 
   it("1) parses the real field paths incl. the stringified uqualProvisioningResult", () => {

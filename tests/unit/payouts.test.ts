@@ -32,7 +32,7 @@ describe("onboardingStatusFrom", () => {
   });
 });
 
-describe("payoutEligibility — the pay guard", () => {
+describe("payoutEligibility - the pay guard", () => {
   const base = (over: Partial<Parameters<typeof payoutEligibility>[0]> = {}) =>
     payoutEligibility({ statementStatus: "FINALIZED", finalCents: 1000, onboardingStatus: "enabled", existingPayoutStatus: null, ...over });
 

@@ -24,7 +24,7 @@ const goodDay = (o: Partial<RampDayInput> = {}): RampDayInput => ({
   ...o,
 });
 
-describe("isRampRep — the two-week window", () => {
+describe("isRampRep - the two-week window", () => {
   it("covers day 1 through the last day, inclusive", () => {
     expect(isRampRep(1)).toBe(true);
     expect(isRampRep(14)).toBe(true);
@@ -42,7 +42,7 @@ describe("isRampRep — the two-week window", () => {
   });
 });
 
-describe("evaluateRampDay — a day's training work", () => {
+describe("evaluateRampDay - a day's training work", () => {
   it("pays a new hire who cleared their cards", () => {
     const d = evaluateRampDay(goodDay(), cfg());
     expect(d.qualifies).toBe(true);
@@ -114,7 +114,7 @@ describe("evaluateRampDay — a day's training work", () => {
   });
 });
 
-describe("evaluateTrainingCompletion — finishing the curriculum", () => {
+describe("evaluateTrainingCompletion - finishing the curriculum", () => {
   it("pays base plus the kicker when finished inside the window", () => {
     const d = evaluateTrainingCompletion({ lessonsCompleted: 40, lessonsTotal: 40, tenureDay: 9 }, cfg());
     expect(d.qualifies).toBe(true);

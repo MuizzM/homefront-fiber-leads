@@ -1130,8 +1130,8 @@ export function runMigrations() {
        provider TEXT NOT NULL DEFAULT 'kinetic',
        source_type TEXT NOT NULL,          -- kfs_integration | licensed_feed | customer_import | partner
        provenance TEXT NOT NULL,           -- human/audit description of how we got authorization
-       allowed_markets TEXT,               -- JSON — city/zip scope, null = any within tenant
-       allowed_identifier_scope TEXT,      -- JSON — permitted provider id ranges/sets
+       allowed_markets TEXT,               -- JSON - city/zip scope, null = any within tenant
+       allowed_identifier_scope TEXT,      -- JSON - permitted provider id ranges/sets
        max_qps REAL NOT NULL DEFAULT 1,
        max_concurrency INTEGER NOT NULL DEFAULT 8,
        daily_budget INTEGER,
@@ -1160,7 +1160,7 @@ export function runMigrations() {
        active INTEGER NOT NULL DEFAULT 1,
        priority_class TEXT NOT NULL DEFAULT 'warm',  -- hot | warm | cold | retry | exploration
        priority_score REAL NOT NULL DEFAULT 0,
-       monitoring_policy TEXT,              -- JSON — cadence overrides
+       monitoring_policy TEXT,              -- JSON - cadence overrides
        next_check_at TEXT,                  -- the scheduler orders by this
        last_attempt_at TEXT,
        last_successful_observation_at TEXT,
@@ -3117,7 +3117,7 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
       console.log("[migration] scan_targets: rebuilt without UNIQUE(address); now unique by (address, city, state)");
     } else {
       // Table already lacks the old constraint (fresh DB, or a prior partial
-      // run) — just ensure the unique index exists now that dups are gone.
+      // run) - just ensure the unique index exists now that dups are gone.
       recreateIndexes();
     }
   })();
@@ -3126,13 +3126,13 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
 // ── One-time (idempotent) duplicate-lead merge + canonical uniqueness ──────────
 // Root cause of double pins: three lead-writer paths with no shared key and no DB
 // uniqueness, so the same address became two leads. This (a) stamps a canonical
-// address key on every existing lead, (b) merges duplicate groups — keeping the
-// richest survivor, repointing every child FK, coalescing useful fields — and
+// address key on every existing lead, (b) merges duplicate groups - keeping the
+// richest survivor, repointing every child FK, coalescing useful fields - and
 // (c) adds a partial UNIQUE index so duplicates are structurally impossible.
 // Idempotent + re-runnable: once merged, the group scan is a no-op.
 function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void {
   const cols = new Set((raw.prepare(`PRAGMA table_info(leads)`).all() as { name: string }[]).map(c => c.name));
-  if (!cols.has("canonical_key")) return; // ALTER didn't land yet — try next boot
+  if (!cols.has("canonical_key")) return; // ALTER didn't land yet - try next boot
 
   // Normalization-version gate: when the address alias table changes (e.g. a new
   // street-suffix synonym), existing keys were computed with the OLD rules and
@@ -3256,8 +3256,8 @@ function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void 
   // (WHERE canonical_key IS NOT NULL) mirrors idx_leads_confirmed_scan_target.
   raw.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_canonical ON leads(tenant_id, canonical_key) WHERE canonical_key IS NOT NULL`);
   const idxOk = raw.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_leads_canonical'`).get();
-  if (!idxOk) console.warn("[migration] CRITICAL: idx_leads_canonical was NOT created — duplicate leads are still possible");
-  else console.log("[migration] idx_leads_canonical UNIQUE index active — duplicate pins now structurally impossible");
+  if (!idxOk) console.warn("[migration] CRITICAL: idx_leads_canonical was NOT created - duplicate leads are still possible");
+  else console.log("[migration] idx_leads_canonical UNIQUE index active - duplicate pins now structurally impossible");
 
   // Record the normalization version last — only after a clean re-key + merge +
   // index, so a crash mid-migration re-runs it next boot rather than skipping.
@@ -4455,7 +4455,7 @@ export class Storage implements IStorage {
           SELECT 1 FROM knock_log k WHERE k.lead_id = l.id
             AND (l.last_outcome_at IS NULL OR k.knocked_at >= l.last_outcome_at)
         )
-        -- Already surfaced with its real schedule by arm 1 — never duplicate.
+        -- Already surfaced with its real schedule by arm 1 - never duplicate.
         AND l.id NOT IN (SELECT leadId FROM open_knock_callbacks)
     `).all(...params) as OpenCallback[];
     // Compound-SELECT ORDER BY can't use the COALESCE expression portably, and
@@ -5406,8 +5406,8 @@ export class Storage implements IStorage {
          inconclusive_attempts=0,
          -- Unchanged-negative streak for the yield engine's adaptive recheck
          -- cadence (yieldRollups.ts): +1 per conclusive negative, reset by a
-         -- conclusive positive, untouched otherwise. Maintained HERE — in the
-         -- same UPDATE every conclusive result already flows through — so no
+         -- conclusive positive, untouched otherwise. Maintained HERE - in the
+         -- same UPDATE every conclusive result already flows through - so no
          -- separate query ever has to derive it from availability_snapshots.
          neg_streak=CASE WHEN @fiberAvailable=0 THEN neg_streak+1
                          WHEN @fiberAvailable=1 THEN 0

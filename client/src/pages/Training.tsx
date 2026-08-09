@@ -359,7 +359,7 @@ function TeamProgressTable() {
                     {r.completedCount}<span className="text-muted-foreground"> / {total}</span>
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
-                    {r.avgQuizScore != null ? `${r.avgQuizScore}%` : "—"}
+                    {r.avgQuizScore != null ? `${r.avgQuizScore}%` : " - "}
                   </td>
                 </tr>
               ))}
@@ -389,7 +389,7 @@ function FastStartTrack({
         <SectionLabel className="text-primary">Get door-ready in 15 minutes</SectionLabel>
       </div>
       <p className="mt-1 text-sm leading-relaxed text-foreground">
-        New here? Start with these five. They are the highest-leverage lessons on the whole board — enough to knock your
+        New here? Start with these five. They are the highest-leverage lessons on the whole board - enough to knock your
         first block with a real pitch instead of winging it.
       </p>
       <ol className="mt-3 space-y-1.5">
@@ -621,7 +621,7 @@ export default function Training() {
                 <div className="mt-0.5 text-xl font-bold tabular-nums tracking-tight text-foreground" data-testid="training-hero-count">
                   {/* On error the count is UNKNOWN, not zero — "0 of 30" told a
                       finished rep their progress had been reset. */}
-                  {isLoading || isError ? "—" : `${doneCount} of ${total}`}{" "}
+                  {isLoading || isError ? " - " : `${doneCount} of ${total}`}{" "}
                   <span className="text-sm font-medium text-muted-foreground">lessons complete</span>
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
@@ -645,7 +645,7 @@ export default function Training() {
                 </div>
                 <div className="hidden flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex" data-testid="training-avg-quiz">
                   <Target className="h-4 w-4 text-primary" aria-hidden="true" />
-                  <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{avgQuiz != null ? `${avgQuiz}%` : "—"}</span>
+                  <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{avgQuiz != null ? `${avgQuiz}%` : " - "}</span>
                   <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">avg quiz</span>
                 </div>
               </div>
@@ -685,10 +685,10 @@ export default function Training() {
             <ChevronRight className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
           </button>
 
-          {/* Fast-start track — "start here" for reps still ramping */}
+          {/* Fast-start track - "start here" for reps still ramping */}
           {showFastStart && <FastStartTrack completedById={completedById} onOpen={setOpenLessonId} />}
 
-          {/* The interactive layer — motivation as arithmetic, psychology as a
+          {/* The interactive layer - motivation as arithmetic, psychology as a
               deck. These are the parts a rep opens twice. */}
           <NumbersGame />
           <PsychologyDeck />
@@ -711,7 +711,7 @@ export default function Training() {
                     </div>
                   </div>
 
-                  {/* Engagement layer — punchy hook, a real-talk field story, and
+                  {/* Engagement layer - punchy hook, a real-talk field story, and
                       one say-this-not-that swap. All optional and additive. */}
                   {(mod.hook || mod.fieldStory || mod.sayThisNotThat) && (
                     <div className="space-y-3 border-b border-border bg-secondary/20 px-4 py-3" data-testid={`training-module-engagement-${mod.id}`}>
@@ -767,7 +767,7 @@ export default function Training() {
                           )}
                           {/* Titles carry their meaning in the tail ("the assumptive
                               close: the full play" vs "…: the full pl…"), so they
-                              must wrap, not truncate. The summary stays one line —
+                              must wrap, not truncate. The summary stays one line -
                               it is a teaser, and the lesson page has the rest. */}
                           <span className="min-w-0 flex-1">
                             <span className="block text-[13px] font-semibold leading-snug text-foreground">{lesson.title}</span>

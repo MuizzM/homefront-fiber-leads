@@ -122,7 +122,7 @@ const rejectButton = () => screen.getByTestId("reject-application");
 // Retrying buys CI back while that is investigated properly. It is recorded
 // here rather than hidden because a retry on a UI test can mask a real product
 // bug, and the next person needs to know this one is unexplained, not solved.
-describe("Applications — two-step reject", { retry: 2 }, () => {
+describe("Applications - two-step reject", { retry: 2 }, () => {
   it("first tap only arms: rose 'Confirm reject', no mutation fires", async () => {
     renderPage();
     await screen.findByTestId("reject-application");

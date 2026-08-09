@@ -35,7 +35,7 @@ export const FREEZE_REASON_LABELS: Record<FreezeReason, string> = {
 /** Plain-language explanation shown in the confirm dialog. Written for a sales
  *  manager standing in a parking lot, not for an engineer reading a stack trace. */
 export const FREEZE_REASON_HELP: Record<FreezeReason, string> = {
-  sold: "Already sold — the next pass skips it so nobody knocks a customer.",
+  sold: "Already sold - the next pass skips it so nobody knocks a customer.",
   commission_linked: "A commission is recorded against this door. Re-opening it could pay twice.",
   do_not_knock: "The occupant asked us not to come back. This never resets.",
   pending_callback: "A rep promised to return. Resetting would drop that commitment.",

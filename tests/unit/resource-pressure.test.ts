@@ -33,7 +33,7 @@ describe("pressure level state machine", () => {
     expect(rp.rawPressureLevel(2000, 0, T)).toBe("emergency");
   });
 
-  it("classifies by WAL size — either trigger escalates", () => {
+  it("classifies by WAL size - either trigger escalates", () => {
     expect(rp.rawPressureLevel(20_000, 1600, T)).toBe("warn");
     expect(rp.rawPressureLevel(20_000, 2100, T)).toBe("throttle");
     expect(rp.rawPressureLevel(20_000, 3100, T)).toBe("pause");

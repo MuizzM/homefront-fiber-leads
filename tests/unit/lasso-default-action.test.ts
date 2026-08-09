@@ -23,7 +23,7 @@ describe("the lasso draws an area by default", () => {
     const decl = src.match(
       /useState<"assign"\s*\|\s*"status"\s*\|\s*"mark"\s*\|\s*"area">\(\s*"([a-z]+)"/,
     );
-    expect(decl, "lassoAction useState declaration not found — did it move?").not.toBeNull();
+    expect(decl, "lassoAction useState declaration not found - did it move?").not.toBeNull();
     expect(decl![1]).toBe("area");
   });
 
@@ -117,7 +117,7 @@ describe("arming the lasso suspends the browser's gestures too", () => {
     // lock IS the bug, so they belong in one place with no branch between them.
     const armIndex = src.indexOf("map.touchZoomRotate.disable()");
     const lockIndex = src.indexOf("lockGesturesForDrawing(mapGestureTarget(map))");
-    expect(armIndex, "map gesture disable not found — did it move?").toBeGreaterThan(-1);
+    expect(armIndex, "map gesture disable not found - did it move?").toBeGreaterThan(-1);
     expect(lockIndex, "gesture lock is never acquired").toBeGreaterThan(armIndex);
   });
 
@@ -172,7 +172,7 @@ describe("no control in the lasso panel can navigate or submit", () => {
         expect(tagStart, `${testid}: no button tag before it`).toBeGreaterThan(-1);
         expect(
           src.slice(tagStart, at).includes('type="button"'),
-          `${testid} has no explicit type="button" — it would submit a surrounding form`,
+          `${testid} has no explicit type="button" - it would submit a surrounding form`,
         ).toBe(true);
       }
       expect(seen, `${testid} not found in MapView`).toBeGreaterThan(0);
@@ -182,7 +182,7 @@ describe("no control in the lasso panel can navigate or submit", () => {
   it("types the four action tabs, whose testid is interpolated", () => {
     // Rendered from a map(), so `lasso-action-assign` never appears literally.
     const tab = src.indexOf("data-testid={`lasso-action-${key}`}");
-    expect(tab, "action tab not found — did the testid change?").toBeGreaterThan(-1);
+    expect(tab, "action tab not found - did the testid change?").toBeGreaterThan(-1);
     const tagStart = src.lastIndexOf("<button", tab);
     expect(src.slice(tagStart, tab)).toContain('type="button"');
   });
@@ -209,14 +209,14 @@ describe("no control in the lasso panel can navigate or submit", () => {
 describe("the area card is handed the numbers the server sent", () => {
   const propBlock = (() => {
     const at = src.indexOf("progress={");
-    expect(at, "progress prop not found — did it move?").toBeGreaterThan(-1);
+    expect(at, "progress prop not found - did it move?").toBeGreaterThan(-1);
     return src.slice(at, at + 2600);
   })();
 
   it("passes the operational counts, not just the location-verified ones", () => {
     // knocked is the one the panel's whole stats section is gated on.
     for (const field of ["knocked:", "sold:", "availableBase:"]) {
-      expect(propBlock, `${field} is not forwarded — the panel cannot show it`).toContain(field);
+      expect(propBlock, `${field} is not forwarded - the panel cannot show it`).toContain(field);
     }
   });
 
@@ -257,7 +257,7 @@ describe("management controls are gated on the viewer's role, not the area's sta
     // without a GL context. Each must be a conditional, never passed bare.
     for (const handler of ["onRename=", "onRecolor=", "onUnassignRep=", "onEditAssignees="]) {
       const at = src.indexOf(handler);
-      expect(at, `${handler} not found — did it move?`).toBeGreaterThan(-1);
+      expect(at, `${handler} not found - did it move?`).toBeGreaterThan(-1);
       const block = src.slice(at, at + 220);
       expect(block, `${handler} is not role-gated`).toMatch(/canManage|canAssign|can\w*\(/);
     }

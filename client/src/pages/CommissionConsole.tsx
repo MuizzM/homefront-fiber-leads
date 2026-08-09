@@ -119,7 +119,7 @@ export default function CommissionConsole() {
       const done = data.results.filter((r: any) => r.result === (action === "FINALIZE" ? "FINALIZED" : "PAID")).length;
       const skipped = data.results.length - done;
       toast({
-        title: action === "FINALIZE" ? `Week finalized — ${done} statement${done === 1 ? "" : "s"} locked` : `${done} statement${done === 1 ? "" : "s"} marked paid`,
+        title: action === "FINALIZE" ? `Week finalized - ${done} statement${done === 1 ? "" : "s"} locked` : `${done} statement${done === 1 ? "" : "s"} marked paid`,
         description: skipped > 0 ? `${skipped} already settled or skipped.` : "Every number on this week is now locked.",
       });
       qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] });
@@ -190,7 +190,7 @@ export default function CommissionConsole() {
             <div className="text-sm font-semibold">{ov?.bounds.localWeekLabel ?? "…"}</div>
             <div className="text-2xs text-muted-foreground">
               {weekOffset === 0
-                ? (ov?.weekEnded ? "Week closed — ready to finalize" : "Live · Mon–Sun · updates as doors close")
+                ? (ov?.weekEnded ? "Week closed - ready to finalize" : "Live · Mon–Sun · updates as doors close")
                 : weekOffset > 0 ? "Future week" : "Past week"}
             </div>
           </div>
@@ -249,7 +249,7 @@ export default function CommissionConsole() {
       {isError && (
         <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" role="alert">
           <div className="text-sm font-semibold text-foreground">Couldn't load the week</div>
-          <div className="text-sm text-muted-foreground mt-1">Check your connection — nothing about the week's money has changed.</div>
+          <div className="text-sm text-muted-foreground mt-1">Check your connection - nothing about the week's money has changed.</div>
           <Button variant="outline" size="sm" className="mt-3 h-9 border-border" onClick={() => refetchWeek()} data-testid="week-retry">
             Retry
           </Button>
@@ -321,7 +321,7 @@ export default function CommissionConsole() {
                     </span>
                     <span className="text-muted-foreground">
                       <button className="text-foreground font-medium hover:text-primary" onClick={() => { const r = ov.rows.find(x => x.repId === ex.repId); if (r) setDrillRep(r); }}>{ex.repName}</button>
-                      {" — "}{ex.detail}
+                      {" - "}{ex.detail}
                     </span>
                   </div>
                 ))}
@@ -329,7 +329,7 @@ export default function CommissionConsole() {
             </div>
           ) : (
             <div className="rounded-xl bg-card border border-border px-4 py-2.5 flex items-center gap-2 text-sm text-muted-foreground" data-testid="exceptions-clear">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" /> Nothing needs review — every number is explainable.
+              <ShieldCheck className="w-4 h-4 text-emerald-400" /> Nothing needs review - every number is explainable.
             </div>
           )}
 
@@ -498,17 +498,17 @@ export default function CommissionConsole() {
                           )}
                         </td>
                         <td className="px-2 py-2.5 text-muted-foreground">
-                          {r.rateCents > 0 ? <>{r.tierLabel ?? "Flat"} <span className="text-foreground/80 tabular-nums">{usd(r.rateCents)}</span></> : "—"}
+                          {r.rateCents > 0 ? <>{r.tierLabel ?? "Flat"} <span className="text-foreground/80 tabular-nums">{usd(r.rateCents)}</span></> : " - "}
                         </td>
                         <td className="px-2 py-2.5">
                           {r.status === "OPEN" && r.salesUntilNextTier != null && r.marginalJumpCents != null && r.marginalJumpCents > 0 ? (
                             <span className={`text-xs ${r.salesUntilNextTier <= 2 ? "text-amber-400 font-semibold" : "text-muted-foreground"}`}>
                               {r.salesUntilNextTier} to go → <span className="tabular-nums">+{usd(r.marginalJumpCents)}</span>
                             </span>
-                          ) : <span className="text-xs text-muted-foreground">—</span>}
+                          ) : <span className="text-xs text-muted-foreground">-</span>}
                         </td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-muted-foreground">
-                          {r.adjustmentCents !== 0 ? usdSigned(r.adjustmentCents) : "—"}
+                          {r.adjustmentCents !== 0 ? usdSigned(r.adjustmentCents) : " - "}
                         </td>
                         <td className="px-2 py-2.5 text-right tabular-nums font-bold text-foreground">{usd(r.finalCommissionCents)}</td>
                         <td className="px-4 py-2.5 text-right"><StatusChip status={r.status} /></td>
@@ -527,7 +527,7 @@ export default function CommissionConsole() {
               <div className="text-xs text-muted-foreground mr-auto">
                 {openCount > 0
                   ? <>Sunday closeout: <strong className="text-foreground">{openCount} open</strong> statement{openCount === 1 ? "" : "s"} will be recalculated, then locked.</>
-                  : finalizedCount > 0 ? "Week is finalized — export payroll, then mark paid." : "Week is settled."}
+                  : finalizedCount > 0 ? "Week is finalized - export payroll, then mark paid." : "Week is settled."}
               </div>
               <a href={`/api/commission/week-export.csv?week=${encodeURIComponent(weekRef)}`}
                 onClick={e => { e.preventDefault(); downloadCsv(weekRef); }}
@@ -553,7 +553,7 @@ export default function CommissionConsole() {
                 </>
               ) : (
                 <span className="text-2xs text-muted-foreground" data-testid="closeout-review-only">
-                  Review only — an admin finalizes and marks the week paid.
+                  Review only - an admin finalizes and marks the week paid.
                 </span>
               )}
             </div>
@@ -584,7 +584,7 @@ export default function CommissionConsole() {
           </DialogHeader>
           {confirmAction === "FINALIZE" ? (
             <div className="text-sm text-muted-foreground space-y-2">
-              <p><strong className="text-foreground">{openCount}</strong> open statement{openCount === 1 ? "" : "s"} ({usd(ov?.totals.projectedPayrollCents ?? 0)}) will be recalculated one final time and locked. Locked numbers never change silently — later corrections happen as audited adjustments.</p>
+              <p><strong className="text-foreground">{openCount}</strong> open statement{openCount === 1 ? "" : "s"} ({usd(ov?.totals.projectedPayrollCents ?? 0)}) will be recalculated one final time and locked. Locked numbers never change silently - later corrections happen as audited adjustments.</p>
               {!ov?.weekEnded && (
                 <p className="text-amber-400 flex items-start gap-1.5">
                   <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
@@ -674,7 +674,7 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
     onSuccess: () => {
       toast({
         title: mode === "drawdown" ? "Chargeback applied to the reserve" : "Reserve released",
-        description: `${repName}'s reserve ledger has a new entry. Nothing was rewritten — the history is intact.`,
+        description: `${repName}'s reserve ledger has a new entry. Nothing was rewritten - the history is intact.`,
       });
       setMode(null); setAmount(""); setReason("");
       qc.invalidateQueries({ queryKey: key });
@@ -685,9 +685,9 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
   if (!data || (data.reservePercent <= 0 && data.balanceCents === 0)) return null;
   const amountCents = amount.trim() === "" ? null : Math.round(parseFloat(amount) * 100);
   const blocked =
-    !reason.trim() ? "A reason is required — every reserve movement is audited"
+    !reason.trim() ? "A reason is required - every reserve movement is audited"
     : mode === "drawdown" && (amountCents == null || !(amountCents > 0)) ? "Enter an amount above $0"
-    : amountCents != null && amountCents > data.balanceCents ? `More than the ${usd(data.balanceCents)} balance — the reserve can never go negative`
+    : amountCents != null && amountCents > data.balanceCents ? `More than the ${usd(data.balanceCents)} balance - the reserve can never go negative`
     : mode === "release" && amountCents == null && data.balanceCents <= 0 ? "There is no balance to release"
     : null;
 
@@ -729,7 +729,7 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
             <div>
               <Label className="text-2xs text-muted-foreground">Reason (required, audited)</Label>
               <Input value={reason} onChange={e => setReason(e.target.value)}
-                placeholder={mode === "drawdown" ? "e.g. 12 Oak St cancelled in month 2 — carrier chargeback" : "e.g. Contract ended — releasing the remaining balance"}
+                placeholder={mode === "drawdown" ? "e.g. 12 Oak St cancelled in month 2 - carrier chargeback" : "e.g. Contract ended - releasing the remaining balance"}
                 className="bg-secondary border-border h-8 text-sm mt-1" data-testid="input-reserve-reason" />
             </div>
             <Button size="sm" className="h-7 text-xs w-full bg-primary hover:bg-primary/90 text-primary-foreground"
@@ -785,7 +785,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
       statementId: row!.statementId, amountCents: Math.round(parseFloat(adjAmount) * 100), reason: adjReason.trim(), type: "MANUAL",
     }).then(r => r.json()),
     onSuccess: () => {
-      toast({ title: "Adjustment filed", description: "Pending until approved — nothing changes silently." });
+      toast({ title: "Adjustment filed", description: "Pending until approved - nothing changes silently." });
       setAdjOpen(false); setAdjAmount(""); setAdjReason("");
       qc.invalidateQueries({ queryKey: ["/api/commission/statements", row?.statementId] });
     },
@@ -795,7 +795,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
     mutationFn: ({ id, decision }: { id: number; decision: "APPROVE" | "REJECT" }) =>
       apiRequest("POST", `/api/commission/adjustments/${id}/decide`, { decision }).then(r => r.json()),
     onSuccess: (_, vars) => {
-      toast({ title: vars.decision === "APPROVE" ? "Adjustment approved — statement re-priced" : "Adjustment rejected" });
+      toast({ title: vars.decision === "APPROVE" ? "Adjustment approved - statement re-priced" : "Adjustment rejected" });
       qc.invalidateQueries({ queryKey: ["/api/commission/statements", row?.statementId] });
       qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] });
       // An adjustment can resolve an override exception — refresh both surfaces.
@@ -821,7 +821,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
         <DialogHeader>
           <div className="flex items-center justify-between gap-3 pr-6">
             <DialogTitle className="text-base flex items-center gap-2 min-w-0">
-              <FileText className="w-4 h-4 text-primary shrink-0" /> <span className="truncate">{row.repName} — {weekLabel}</span>
+              <FileText className="w-4 h-4 text-primary shrink-0" /> <span className="truncate">{row.repName} - {weekLabel}</span>
             </DialogTitle>
             <button
               type="button"
@@ -909,7 +909,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
               </div>
               <div>
                 <Label className="text-2xs text-muted-foreground">Reason (required, audited)</Label>
-                <Input value={adjReason} onChange={e => setAdjReason(e.target.value)} placeholder="e.g. Customer cancelled install — clawback per policy"
+                <Input value={adjReason} onChange={e => setAdjReason(e.target.value)} placeholder="e.g. Customer cancelled install - clawback per policy"
                   className="bg-card border-border h-8 text-sm mt-1" data-testid="input-adj-reason" />
               </div>
               <Button size="sm" className="h-7 text-xs bg-primary hover:bg-primary/90 text-white w-full"
@@ -949,7 +949,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
           )}
         </div>
 
-        {/* Chargeback reserve — balance, cap, and the manual admin movements. */}
+        {/* Chargeback reserve - balance, cap, and the manual admin movements. */}
         <ReservePanel repId={row.repId} repName={row.repName} canMove={canMoveReserve} />
 
         <DialogFooter>
@@ -960,7 +960,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
   );
 }
 
-// ── Pay reps — Stripe Connect payout with review-then-confirm ──────────────────
+// ── Pay reps - Stripe Connect payout with review-then-confirm ──────────────────
 // After a week is finalized, the owner sends each rep their commission to a
 // connected Stripe account. Because this moves REAL money, the flow is a
 // deliberate two-step: review the batch + per-rep eligibility here, then
@@ -1022,7 +1022,7 @@ function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean })
           {balance.isLoading ? (
             <div className="h-9 w-32 mt-2 rounded-lg bg-secondary animate-pulse" />
           ) : balance.isError ? (
-            // A fetch failure is not a configuration fact — say so, and offer
+            // A fetch failure is not a configuration fact - say so, and offer
             // the retry. (This card used to render "not configured" on a blip.)
             <div className="mt-2 text-sm">
               <span className="font-semibold text-amber-400">Couldn't load the balance.</span>{" "}
@@ -1098,7 +1098,7 @@ function PayoutHistory() {
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium text-foreground truncate">{row.repName}</div>
                 <div className="text-[11px] text-muted-foreground">
-                  {new Date(row.paidAt ?? row.createdAt).toLocaleString()} · statement #{row.statementId ?? "—"}
+                  {new Date(row.paidAt ?? row.createdAt).toLocaleString()} · statement #{row.statementId ?? " - "}
                 </div>
                 {row.failureReason && <div className="text-[11px] text-red-400 mt-0.5 truncate">{row.failureReason}</div>}
               </div>
@@ -1162,7 +1162,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
       const failed = list.filter(x => x.failed).length;
       toast({
         title: paid > 0 ? `Paid ${paid} rep${paid === 1 ? "" : "s"}` : "No payouts sent",
-        description: failed > 0 ? `${failed} payout${failed === 1 ? "" : "s"} failed — see results below.` : "Paid statements flip to PAID as transfers settle.",
+        description: failed > 0 ? `${failed} payout${failed === 1 ? "" : "s"} failed - see results below.` : "Paid statements flip to PAID as transfers settle.",
         variant: failed > 0 ? "destructive" : undefined,
       });
       // Refresh both this panel AND the commission overview so paid statements flip to PAID.
@@ -1316,7 +1316,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
         </>
       )}
 
-      {/* Confirmation — restates the EXACT total + count before any money moves.
+      {/* Confirmation - restates the EXACT total + count before any money moves.
           Reachable only when Stripe is enabled and there is something to pay. */}
       <Dialog open={confirmOpen} onOpenChange={v => !v && setConfirmOpen(false)}>
         <DialogContent className="bg-card border-border text-foreground max-w-md">

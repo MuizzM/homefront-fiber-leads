@@ -107,7 +107,7 @@ describe("POST /api/chat", () => {
     expect(r.status).toBe(400);
   });
 
-  it("refuses a desk role — the room is the floor's, not the org's", async () => {
+  it("refuses a desk role - the room is the floor's, not the org's", async () => {
     const r = await post(fx.caller.session, "hello from the desk");
     expect(r.status).toBe(403);
     expect((await r.json()).need).toBe("field.app.use");
@@ -131,7 +131,7 @@ describe("GET /api/chat", () => {
     expect(r.latestId).toBe(m2);
   });
 
-  it("pages backwards with ?before= — the badge's whole-room count is reachable", async () => {
+  it("pages backwards with ?before= - the badge's whole-room count is reachable", async () => {
     const r = await (await req(`/api/chat?before=${m2}`, fx.manager.session)).json();
     expect(r.items.map((m: any) => m.id)).toEqual([m1]);
 
@@ -159,7 +159,7 @@ describe("POST /api/chat/read", () => {
     expect(page.unread).toBe(0);
   });
 
-  it("is monotonic — a stale mark from a second device cannot un-read", async () => {
+  it("is monotonic - a stale mark from a second device cannot un-read", async () => {
     const r = await req("/api/chat/read", fx.repB.session, { method: "POST", body: JSON.stringify({ upToId: 1 }) });
     expect((await r.json()).lastReadId).toBe(m2);
   });
@@ -172,14 +172,14 @@ describe("DELETE /api/chat/:id", () => {
     m3 = (await r.json()).id;
   });
 
-  it("refuses a rep deleting someone else's message — 404, room unchanged", async () => {
+  it("refuses a rep deleting someone else's message - 404, room unchanged", async () => {
     const r = await req(`/api/chat/${m1}`, fx.repB.session, { method: "DELETE" });
     expect(r.status).toBe(404);
     const page = await (await req("/api/chat", fx.manager.session)).json();
     expect(page.items.map((m: any) => m.id)).toContain(m1);
   });
 
-  it("misses cross-tenant with 404 — existence is never confirmed", async () => {
+  it("misses cross-tenant with 404 - existence is never confirmed", async () => {
     const r = await req(`/api/chat/${m1}`, fx.foreignRep.session, { method: "DELETE" });
     expect(r.status).toBe(404);
   });

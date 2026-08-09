@@ -126,7 +126,7 @@ describe("Areas index", () => {
 // ── The crew, on the card ───────────────────────────────────────────────────
 // The card printed one name for ground that can be walked by several reps, so a
 // shared area read as one rep's.
-describe("Areas index — who works each area", () => {
+describe("Areas index - who works each area", () => {
   it("names every holder on a shared area, not just the primary", async () => {
     renderPage([row({ id: 4, name: "Shared patch", status: "shared", repId: 5, repName: "Bo Rivera",
       repIds: [5, 6], repNames: ["Bo Rivera", "Talal Rep"] })]);

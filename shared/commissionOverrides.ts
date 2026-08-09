@@ -198,7 +198,7 @@ export function validateOverridePatch(body: any): { patch: OverridePatch; error?
   }
   if (body.overrideBasis !== undefined && body.overrideBasis !== null) {
     if (body.overrideBasis === "PERCENT_OF_COMMISSION") {
-      return { patch, error: "PERCENT_OF_COMMISSION overrides are not yet supported — only FLAT_PER_SALE is executable." };
+      return { patch, error: "PERCENT_OF_COMMISSION overrides are not yet supported - only FLAT_PER_SALE is executable." };
     }
     if (body.overrideBasis !== "FLAT_PER_SALE") {
       return { patch, error: "overrideBasis must be FLAT_PER_SALE." };

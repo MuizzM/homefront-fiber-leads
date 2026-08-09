@@ -46,7 +46,7 @@ describe("deferred route stage", () => {
     window.history.replaceState(null, "", "#/a");
   });
 
-  it("keeps the outgoing page on screen during a cold chunk load, then swaps — no skeleton, no delay", async () => {
+  it("keeps the outgoing page on screen during a cold chunk load, then swaps - no skeleton, no delay", async () => {
     let resolveB: ((m: { default: ComponentType }) => void) | undefined;
     const B = lazyRoute(() => new Promise<{ default: ComponentType }>((res) => { resolveB = res; }));
 

@@ -196,7 +196,7 @@ export function AreaAssigneeBar({
 
       {isLastHolder && (
         <p data-testid="area-assignee-last" className="mt-2 text-[11px] text-muted-foreground">
-          The last rep can't be removed here — use Reclaim to empty the area.
+          The last rep can't be removed here - use Reclaim to empty the area.
         </p>
       )}
 

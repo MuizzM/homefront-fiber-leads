@@ -255,7 +255,7 @@ export default function CityScanner() {
       setOverpassResult(result);
       toast({
         title: `${result.count.toLocaleString()} addresses found`,
-        description: `${result.cityName} — ready to scan`,
+        description: `${result.cityName} - ready to scan`,
       });
     } catch (e: any) {
       toast({ title: "Address pull failed", description: e.message, variant: "destructive" });
@@ -320,7 +320,7 @@ export default function CityScanner() {
         status: "running", total: data.total, done: 0, results: [],
         summary: emptySummary(data.total),
       });
-      toast({ title: "Pool re-scan started", description: `Re-checking ${Number(data.total).toLocaleString()} stored addresses — free, no geocoding` });
+      toast({ title: "Pool re-scan started", description: `Re-checking ${Number(data.total).toLocaleString()} stored addresses - free, no geocoding` });
       connectSseStream(data.jobId);
     } catch (e: any) {
       setScanning(false);
@@ -533,7 +533,7 @@ export default function CityScanner() {
                   onClick={rescanPool}
                   variant="outline"
                   className="gap-2"
-                  title={`Re-scan ${poolStats.total.toLocaleString()} stored addresses for availability changes — no geocoding cost`}
+                  title={`Re-scan ${poolStats.total.toLocaleString()} stored addresses for availability changes - no geocoding cost`}
                 >
                   <RefreshCw className="w-4 h-4" /> Re-scan Pool
                 </Button>
@@ -576,7 +576,7 @@ export default function CityScanner() {
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Worker State</span>
               {scannerState.isStuck ? (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/15 px-2.5 py-0.5 text-xs font-medium text-rose-400">
-                  <AlertCircle className="w-3 h-3" /> Stuck — no heartbeat {scannerState.secondsSinceHeartbeat}s
+                  <AlertCircle className="w-3 h-3" /> Stuck - no heartbeat {scannerState.secondsSinceHeartbeat}s
                 </span>
               ) : scannerState.isRunning && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-0.5 text-xs font-medium text-primary">
@@ -697,7 +697,7 @@ export default function CityScanner() {
         <Card className="bg-card border-border rounded-xl">
           <CardContent className="pt-10 pb-10 text-center">
             <CheckCircle className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
-            <p className="text-sm text-muted-foreground">Scan complete — no addresses returned results. Try a different city or check token status.</p>
+            <p className="text-sm text-muted-foreground">Scan complete - no addresses returned results. Try a different city or check token status.</p>
           </CardContent>
         </Card>
       )}

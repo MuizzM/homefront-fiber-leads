@@ -191,7 +191,7 @@ app.use(helmet({
 // to 'unsafe-inline' when index.html can't be read, and a security control that
 // fails open without saying so is one nobody notices is off.
 console.log(inlineScriptsAreHashed()
-  ? "[csp] inline scripts pinned by sha256 — 'unsafe-inline' is OFF for scripts"
+  ? "[csp] inline scripts pinned by sha256 - 'unsafe-inline' is OFF for scripts"
   : process.env.NODE_ENV === "development"
     ? "[csp] dev: Vite rewrites the served HTML, so script-src-elem keeps 'unsafe-inline'"
     : "[csp] WARNING: could not hash index.html; script-src-elem is falling back to 'unsafe-inline'");
@@ -662,7 +662,7 @@ app.use((req, res, next) => {
           if (!st.parkedLogged) {
             st.parkedLogged = true;
             structuredLog("cluster.worker_parked", { index, rapidCrashes: st.rapid, reason: "crash loop" });
-            console.error(`[cluster] worker index=${index} PARKED after ${st.rapid} rapid crashes — not respawning (SCAN_WORKER_MAX_RAPID_CRASHES to tune)`);
+            console.error(`[cluster] worker index=${index} PARKED after ${st.rapid} rapid crashes - not respawning (SCAN_WORKER_MAX_RAPID_CRASHES to tune)`);
           }
           return; // stop respawning this hopeless index; the rest of the fleet runs on
         }
@@ -676,7 +676,7 @@ app.use((req, res, next) => {
     const stopPrimary = (sig: string) => {
       if (primaryDown) return; primaryDown = true;
       const n = Object.keys(cluster.workers ?? {}).length;
-      console.log(`[cluster] ${sig} received — forwarding to ${n} worker(s)`);
+      console.log(`[cluster] ${sig} received - forwarding to ${n} worker(s)`);
       for (const id in cluster.workers) { try { cluster.workers[id]?.kill("SIGTERM"); } catch {} }
       // Give workers longer than their own 10s drain cap, then exit.
       const t = setTimeout(() => process.exit(0), 12_000);
@@ -1634,7 +1634,7 @@ app.use((req, res, next) => {
       401: "Authentication required.",
       403: "Access denied.",
       404: "Not found.",
-      409: "Conflict — resource already exists.",
+      409: "Conflict - resource already exists.",
       413: "Request too large.",
       429: "Too many requests. Please slow down.",
     };
@@ -1696,12 +1696,12 @@ app.use((req, res, next) => {
   const shutdown = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    log(`${signal} received — draining connections…`);
-    const force = setTimeout(() => { log("drain timed out — forcing exit"); process.exit(1); }, 10_000);
+    log(`${signal} received - draining connections…`);
+    const force = setTimeout(() => { log("drain timed out - forcing exit"); process.exit(1); }, 10_000);
     force.unref();
     httpServer.close(() => {
       try { rawDb.close(); } catch (e: any) { console.warn("[shutdown] db close:", e?.message); }
-      log("drained cleanly — exiting");
+      log("drained cleanly - exiting");
       process.exit(0);
     });
   };

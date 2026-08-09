@@ -8,7 +8,7 @@ import {
   ListGroup, ListRow, PageHeader, SectionLabel, StatDelta, StatStrip, StatTile,
 } from "../../client/src/components/ui/page-scaffold";
 
-describe("StatTile — the Revolut grammar", () => {
+describe("StatTile - the Revolut grammar", () => {
   it("puts the label ABOVE the number, reading order intact", () => {
     render(<StatTile label="Total Sales" value={41} icon={Zap} testId="t" />);
     const tile = screen.getByTestId("t");
@@ -29,7 +29,7 @@ describe("StatTile — the Revolut grammar", () => {
   });
 });
 
-describe("StatStrip — one container, hairline cells", () => {
+describe("StatStrip - one container, hairline cells", () => {
   it("is a single rounded bordered strip, not floating boxes", () => {
     const { container } = render(
       <StatStrip columns={2}><StatTile label="A" value={1} /><StatTile label="B" value={2} /></StatStrip>,
@@ -40,7 +40,7 @@ describe("StatStrip — one container, hairline cells", () => {
   });
 });
 
-describe("ListRow — the Linear grammar", () => {
+describe("ListRow - the Linear grammar", () => {
   it("renders title + one-line description + trailing control", () => {
     render(
       <ListGroup label="Power tools">

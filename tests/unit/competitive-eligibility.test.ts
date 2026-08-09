@@ -6,7 +6,7 @@ import {
   COMPETITIVE_ELIGIBILITY_VERSION,
 } from "../../shared/competitiveEligibility";
 
-describe("competitiveEligibility — canonical Spectrum-only gate", () => {
+describe("competitiveEligibility - canonical Spectrum-only gate", () => {
   it("Kinetic + Spectrum cable only → eligible", () => {
     const r = evaluateSingleCompetitor("Spectrum", "Cable");
     expect(r.decision).toBe("eligible");

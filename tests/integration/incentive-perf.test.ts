@@ -183,7 +183,7 @@ describe("the streak lookback is bounded by the streak being chased", () => {
     expect(counters.streakDaysMeetingBar).toBe(5);
   });
 
-  it("still reports a SHORT streak accurately — the bound must not inflate it", () => {
+  it("still reports a SHORT streak accurately - the bound must not inflate it", () => {
     // The bound is a ceiling, not a floor: a rep who has only cleared the bar
     // for a few days must still read as those few days, or the campaign would
     // pay early.

@@ -41,7 +41,7 @@ const leadCount = (address: string) =>
 const leadStatus = (address: string) =>
   (rawDb.prepare(`SELECT lead_status s FROM leads WHERE lower(address)=lower(?) AND tenant_id=?`).get(address, TENANT) as any)?.s;
 
-describe("competitive eligibility gate — projector enforcement", () => {
+describe("competitive eligibility gate - projector enforcement", () => {
   it("publishes NEW FIBER + N with Spectrum-cable competition", () => {
     const t = freshTarget("10 Spectrum St", "Spectrum", "Cable");
     project(TENANT, [t]);
@@ -61,13 +61,13 @@ describe("competitive eligibility gate — projector enforcement", () => {
     expect(leadCount("30 Google Dr")).toBe(0);
   });
 
-  it("does NOT publish an ambiguous (unknown) competitor — fail closed", () => {
+  it("does NOT publish an ambiguous (unknown) competitor - fail closed", () => {
     const t = freshTarget("40 Mystery Rd", "Randolph Telephone Telecommunications Inc.", null);
     project(TENANT, [t]);
     expect(leadCount("40 Mystery Rd")).toBe(0);
   });
 
-  it("THE owner fixture: 485 Brown Acres Rd, Salisbury NC — Kinetic FIBER/NEW FIBER/N + Spectrum Cable → exactly ONE deduplicated Fresh Lead", () => {
+  it("THE owner fixture: 485 Brown Acres Rd, Salisbury NC - Kinetic FIBER/NEW FIBER/N + Spectrum Cable → exactly ONE deduplicated Fresh Lead", () => {
     // ONE canonical pool row per house (UNIQUE address+city+state); two scans
     // of it — the real dedup flow — must yield exactly one published lead.
     const id = Number(rawDb.prepare(`INSERT INTO scan_targets (address,city,state,zip,lat,lng,tenant_id,source) VALUES (?,?,?,?,?,?,?,'osm')`)

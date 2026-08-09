@@ -72,7 +72,7 @@ export async function sendMailResilient(options: nodemailer.SendMailOptions): Pr
   } catch (error: any) {
     const message = String(error?.message ?? error);
     if (!CONNECTION_FAILURE.test(message)) throw error;
-    console.warn(`[mail] SMTP port ${primary} unreachable (${message.slice(0, 120)}) — failing over to ${fallback}`);
+    console.warn(`[mail] SMTP port ${primary} unreachable (${message.slice(0, 120)}) - failing over to ${fallback}`);
     await transportFor(fallback).sendMail(options);
   }
 }
@@ -106,7 +106,7 @@ const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial
 // Brand palette (from the logo): deep navy text, teal accent, light surfaces.
 const NAVY = "#12314c", SLATE = "#4a5a68", TEAL = "#3EA394", MUTED = "#8a97a4";
 
-// Professional, light-themed, table-based, fully inline-styled email shell —
+// Professional, light-themed, table-based, fully inline-styled email shell -
 // renders consistently across Gmail, Apple Mail, and Outlook. The logo is
 // embedded via CID (attach logoAttachment() at the send site). `bodyHtml` is
 // trusted, pre-inlined HTML; escape any user data with escapeHtml() first.

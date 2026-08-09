@@ -39,7 +39,7 @@ describe("MapLensNotice", () => {
     expect(screen.getByTestId("map-lens-notice")).toHaveTextContent("12,345 doors hidden");
   });
 
-  it("Show all clears the lens in one tap — the whole point of the chip", () => {
+  it("Show all clears the lens in one tap - the whole point of the chip", () => {
     const onShowAll = vi.fn();
     render(<MapLensNotice {...props} onShowAll={onShowAll} />);
     fireEvent.click(screen.getByTestId("map-lens-notice-show-all"));

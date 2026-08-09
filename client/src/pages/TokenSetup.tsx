@@ -57,7 +57,7 @@ export default function TokenSetup() {
             </p>
             <p className="text-xs text-muted-foreground mt-0.5">
               {unknown
-                ? (isError ? "Couldn't reach the token service — retrying automatically." : "Fetching the current token status.")
+                ? (isError ? "Couldn't reach the token service - retrying automatically." : "Fetching the current token status.")
                 : tokenOk
                   ? `Expires in ~${expiresMin} min · auto-refreshes via proxy`
                   : "Click refresh to reconnect via proxy"}

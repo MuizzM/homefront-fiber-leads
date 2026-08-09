@@ -101,7 +101,7 @@ afterAll(async () => { await new Promise<void>((resolve) => server.close(() => r
 // the feature still works for a tenant that WANTS it, so it switches it on.
 beforeAll(() => { rawDb.prepare(`UPDATE tenants SET open_field_enabled = 1`).run(); });
 
-describe("open field — a lead owned by nobody is workable by any rep in the tenant", () => {
+describe("open field - a lead owned by nobody is workable by any rep in the tenant", () => {
   it("a rep knocks an unassigned lead (no rep, no territory) → 201, knock logged, NOTHING assigned", async () => {
     const lead = makeLead(TENANT_A); // assignedRepId NULL, assignedTerritoryId NULL
     const r = await knock(lead.id, repA.session, "interested");
@@ -115,7 +115,7 @@ describe("open field — a lead owned by nobody is workable by any rep in the te
     expect(after.assignedTerritoryId).toBeNull(); // no auto-assign side effect.
   });
 
-  it("a SECOND rep can work the same open-field door — it belongs to no one", async () => {
+  it("a SECOND rep can work the same open-field door - it belongs to no one", async () => {
     const lead = makeLead(TENANT_A);
     expect((await knock(lead.id, repA.session, "not_home")).status).toBe(201);
     expect((await knock(lead.id, repB.session, "not_home")).status).toBe(201);
@@ -153,7 +153,7 @@ describe("the walls that must NOT move", () => {
     expect(storage.getLeadById(lead.id).leadStatus).toBe("prospect");
   });
 
-  it("a cross-tenant unassigned lead is still a 404 — open field stops at the tenant wall", async () => {
+  it("a cross-tenant unassigned lead is still a 404 - open field stops at the tenant wall", async () => {
     const lead = makeLead(TENANT_B); // nobody owns it, but it is not OUR nobody
     const r = await knock(lead.id, repA.session, "interested");
     expect(r.status).toBe(404);
@@ -173,7 +173,7 @@ describe("the walls that must NOT move", () => {
     expect((await knock(lead.id, repA.session, "interested")).status).toBe(201); // area holder works it
   });
 
-  it("managers are unaffected — an unassigned lead knocks exactly as before", async () => {
+  it("managers are unaffected - an unassigned lead knocks exactly as before", async () => {
     const lead = makeLead(TENANT_A);
     const r = await knock(lead.id, mgr.session, "not_home", { repId: mgr.memberId });
     expect(r.status).toBe(201);

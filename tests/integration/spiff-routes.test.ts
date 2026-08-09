@@ -139,7 +139,7 @@ describe("GET /api/spiffs/mine", () => {
   });
 });
 
-describe("GET /api/spiffs/team (algorithm data — manager+)", () => {
+describe("GET /api/spiffs/team (algorithm data - manager+)", () => {
   it("a rep is forbidden", async () => {
     expect((await request("/api/spiffs/team", repSession)).status).toBe(403);
   });
@@ -430,7 +430,7 @@ describe("bulk transitions stay tenant-walled and admin-only", () => {
   });
 });
 
-describe("GET /api/spiffs/mine — money read model", () => {
+describe("GET /api/spiffs/mine - money read model", () => {
   it("totals cover the whole ledger even though the feed is bounded", async () => {
     const rep = storage.createTeamMember({ name: "Long Tenure Rep", role: "rep", active: true, tenantId: 1 } as any).id;
     const user = storage.createUser({ name: "Long Tenure Rep", email: "long-spiff@example.com", role: "rep", active: true, tenantId: 1, teamMemberId: rep } as any);

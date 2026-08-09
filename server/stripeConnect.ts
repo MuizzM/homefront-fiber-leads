@@ -144,7 +144,7 @@ function applyConnectEvent(event: any): ConnectApplyResult {
         const matched = tenantId == null ? 0 : store.markPayoutReversedByTransfer(tenantId, intent.transferId);
         // A reversal we can't match to a payout row (e.g. a transfer whose response
         // was lost, so no row carries its id) must be surfaced, not silently acked.
-        if (matched === 0) console.warn(`[payouts] transfer.reversed ${intent.transferId} matched no payout row — needs reconciliation`);
+        if (matched === 0) console.warn(`[payouts] transfer.reversed ${intent.transferId} matched no payout row - needs reconciliation`);
       }
       return { applied: true, kind: intent.kind };
     }

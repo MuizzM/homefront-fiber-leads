@@ -145,7 +145,7 @@ describe("the ledger is the balance", () => {
     expect(reserve.getReserveBalanceCents(T1, rep1.memberId)).toBe(16000);
   });
 
-  it("the hold is IDEMPOTENT per (rep, week) — re-settling never double-holds", () => {
+  it("the hold is IDEMPOTENT per (rep, week) - re-settling never double-holds", () => {
     const before = reserve.getReserveBalanceCents(T1, rep1.memberId);
     const stmtId = svc.listStatements(T1, { repIds: [rep1.memberId], weekStartUtc: weekStartOf(WEEKS[0]) })[0].id;
 
@@ -226,7 +226,7 @@ describe("per-rep configuration", () => {
     expect(after.capSource).toBe("rep");
   });
 
-  it("the reserve STOPS at the cap — the hold is trimmed, then nothing is held", () => {
+  it("the reserve STOPS at the cap - the hold is trimmed, then nothing is held", () => {
     // rep1 is at $320 held with a $400 cap. A third $1,600 week would hold $160
     // uncapped; only $80 of room remains.
     expect(reserve.getReserveBalanceCents(T1, rep1.memberId)).toBe(32000);
@@ -289,13 +289,13 @@ describe("reserve_entries is append-only at the DB level", () => {
 describe("manual drawdown and release", () => {
   it("a drawdown reduces the balance and is recorded with its reason", () => {
     const before = reserve.getReserveBalanceCents(T1, rep1.memberId);
-    const out = reserve.applyDrawdown({ tenantId: T1, repId: rep1.memberId, amountCents: 5000, reason: "Chargeback — 12 Oak St cancelled", actorId: admin1.userId });
+    const out = reserve.applyDrawdown({ tenantId: T1, repId: rep1.memberId, amountCents: 5000, reason: "Chargeback - 12 Oak St cancelled", actorId: admin1.userId });
     expect(out.entry.amountCents).toBe(-5000);
     expect(out.balanceCents).toBe(before - 5000);
     expect(reserve.getReserveBalanceCents(T1, rep1.memberId)).toBe(before - 5000);
   });
 
-  it("a drawdown larger than the balance is REFUSED (400) — the balance never goes negative", async () => {
+  it("a drawdown larger than the balance is REFUSED (400) - the balance never goes negative", async () => {
     const before = reserve.getReserveBalanceCents(T1, rep1.memberId);
     const res = await request(`/api/commission/reps/${rep1.memberId}/reserve/drawdown`, admin1.session, {
       method: "POST", body: JSON.stringify({ amountCents: before + 1, reason: "too big" }),
@@ -337,7 +337,7 @@ describe("manual drawdown and release", () => {
     const before = reserve.getReserveBalanceCents(T1, rep1.memberId);
     expect(before).toBeGreaterThan(0);
     const res = await request(`/api/commission/reps/${rep1.memberId}/reserve/release`, admin1.session, {
-      method: "POST", body: JSON.stringify({ reason: "Contract ended — releasing the balance" }),
+      method: "POST", body: JSON.stringify({ reason: "Contract ended - releasing the balance" }),
     });
     expect(res.status).toBe(201);
     expect((await res.json()).entry.amountCents).toBe(-before);
@@ -396,7 +396,7 @@ describe("RBAC and tenant isolation", () => {
     expect(res.status).toBe(403);
   });
 
-  it("cross-tenant is 404, not 403 — no id-space probing", async () => {
+  it("cross-tenant is 404, not 403 - no id-space probing", async () => {
     const read = await request(`/api/commission/reps/${rep2.memberId}/reserve`, admin1.session);
     expect(read.status).toBe(404);
 

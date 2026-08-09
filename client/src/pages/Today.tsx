@@ -112,7 +112,7 @@ export default function Today() {
   });
   const clockIn = useMutation({
     mutationFn: () => apiRequest("POST", "/api/clock/in", {}).then(r => r.json()),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/clock/status"] }); toast({ title: "Clocked in — have a great shift" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/clock/status"] }); toast({ title: "Clocked in - have a great shift" }); },
     onError: (e: any) => toast({ title: "Couldn't clock in", description: String(e?.message ?? e), variant: "destructive" }),
   });
   // Clock-OUT lives here too so end-of-shift is one tap from the rep's home
@@ -123,7 +123,7 @@ export default function Today() {
     onSuccess: (s: any) => {
       qc.invalidateQueries({ queryKey: ["/api/clock/status"] });
       const m = s?.durationMinutes;
-      toast({ title: "Clocked out — shift saved", description: typeof m === "number" ? `${Math.floor(m / 60)}h ${m % 60}m logged` : undefined });
+      toast({ title: "Clocked out - shift saved", description: typeof m === "number" ? `${Math.floor(m / 60)}h ${m % 60}m logged` : undefined });
       setConfirmOut(false);
     },
     onError: (e: any) => { setConfirmOut(false); toast({ title: "Couldn't clock out", description: String(e?.message ?? e), variant: "destructive" }); },
@@ -246,7 +246,7 @@ export default function Today() {
               onClick={() => { if (confirmOut) clockOut.mutate(); else { setConfirmOut(true); setTimeout(() => setConfirmOut(false), 3000); } }}
               disabled={clockOut.isPending}
               data-testid="today-clock-out"
-              aria-label={confirmOut ? "Tap again to clock out" : "On the clock — tap to clock out"}
+              aria-label={confirmOut ? "Tap again to clock out" : "On the clock - tap to clock out"}
               className={`shrink-0 mt-1 inline-flex items-center gap-1.5 rounded-full border min-h-11 px-3.5 text-[12px] font-semibold active:scale-95 transition disabled:opacity-60 ${FOCUS} ${confirmOut ? "bg-red-500/15 text-red-500 border-red-500/30" : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"}`}
             >
               {clockOut.isPending
@@ -263,7 +263,7 @@ export default function Today() {
           <div role="status" aria-live="polite" className={`mt-3 flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px] ${offline ? "bg-muted border-border text-muted-foreground" : "bg-primary/10 border-primary/20 text-foreground"}`} data-testid="today-sync">
             {offline ? <WifiOff className="w-4 h-4 shrink-0" aria-hidden="true" /> : <RefreshCw className="w-4 h-4 shrink-0 text-primary animate-spin" aria-hidden="true" />}
             <span className="flex-1">
-              {offline ? "Offline — your taps are saved" : `Syncing ${snap.pendingCount} knock${snap.pendingCount === 1 ? "" : "s"}`}
+              {offline ? "Offline - your taps are saved" : `Syncing ${snap.pendingCount} knock${snap.pendingCount === 1 ? "" : "s"}`}
               {snap.deadCount > 0 && <span className="text-red-500"> · {snap.deadCount} failed</span>}
             </span>
           </div>
@@ -422,8 +422,8 @@ function Stat({ label, value, tone, accent = "bg-muted-foreground/50", border, e
       <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span className={`w-1.5 h-1.5 rounded-full ${accent}`} aria-hidden="true" />{label}
       </div>
-      {/* A failed query must not render as a real "0" — show an honest em-dash. */}
-      {error ? <div className="text-[25px] font-bold tabular-nums leading-none mt-1.5 text-muted-foreground/60" aria-label={`${label} unavailable`}>—</div>
+      {/* A failed query must not render as a real "0" - show an honest em-dash. */}
+      {error ? <div className="text-[25px] font-bold tabular-nums leading-none mt-1.5 text-muted-foreground/60" aria-label={`${label} unavailable`}>-</div>
         : value == null ? <Skeleton className="h-7 w-10 mt-1.5" /> : <div className={`text-[25px] font-bold tabular-nums leading-none mt-1.5 ${tone}`}>{value}</div>}
     </div>
   );
@@ -499,7 +499,7 @@ function ErrorCard({ onRetry }: { onRetry: () => void }) {
     <div className="rounded-2xl border border-border bg-card p-6 text-center" data-testid="today-error">
       <div className="w-11 h-11 rounded-xl bg-red-500/15 flex items-center justify-center mx-auto"><WifiOff className="w-5 h-5 text-red-500" aria-hidden="true" /></div>
       <div className="text-[15px] font-semibold text-foreground mt-3">Couldn't load your route</div>
-      <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">Check your connection and try again — nothing you've logged is lost.</div>
+      <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">Check your connection and try again - nothing you've logged is lost.</div>
       <button onClick={onRetry} className={`mt-4 inline-flex items-center gap-2 h-11 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><RefreshCw className="w-4 h-4" aria-hidden="true" />Retry</button>
     </div>
   );
@@ -520,7 +520,7 @@ function AllDoneCard({ sales }: { sales: number }) {
   return (
     <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-6 text-center" data-testid="today-alldone">
       <div className="w-11 h-11 rounded-xl bg-emerald-500/15 flex items-center justify-center mx-auto"><Trophy className="w-5 h-5 text-emerald-400" aria-hidden="true" /></div>
-      <div className="text-[15px] font-semibold text-foreground mt-3">Every door worked — nice shift</div>
+      <div className="text-[15px] font-semibold text-foreground mt-3">Every door worked - nice shift</div>
       <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">{sales > 0 ? `${sales} sale${sales === 1 ? "" : "s"} logged today.` : "Your route's clear."} New leads land here as they're assigned.</div>
       <Link href="/leaderboard" className={`mt-4 inline-flex items-center gap-2 h-11 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><Trophy className="w-4 h-4" aria-hidden="true" />See the leaderboard</Link>
     </div>

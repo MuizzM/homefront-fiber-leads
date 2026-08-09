@@ -32,11 +32,11 @@ export const SECRET_TEXT_PATTERNS: readonly RegExp[] = [
   /Basic [A-Za-z0-9+/=]{20,}/g,
   /Bearer eyJ[A-Za-z0-9._-]{20,}/g,
   /eyJ[A-Za-z0-9._-]{40,}/g,
-  /pk\.eyJ[A-Za-z0-9._-]{20,}/g, // Mapbox public tokens — served via /api/config/map only
+  /pk\.eyJ[A-Za-z0-9._-]{20,}/g, // Mapbox public tokens - served via /api/config/map only
 ];
 
 // Cheap pre-filter markers: EVERY pattern in SECRET_TEXT_PATTERNS requires one
-// of these substrings to match at all — "eyJ" (raw JWT, `Bearer eyJ…`, and the
+// of these substrings to match at all - "eyJ" (raw JWT, `Bearer eyJ…`, and the
 // `pk.eyJ…` Mapbox token all contain it), "Basic " (HTTP Basic), or "gokinetic"
 // (the upstream host/URL, case-insensitive). A string containing none of them
 // cannot match any pattern, so the 6-regex pass is pure waste on it. Keep this
@@ -49,7 +49,7 @@ export function scrubSecretText<T extends string | null | undefined>(value: T): 
   // Fast path for the overwhelming majority of response strings (addresses,
   // names, statuses, notes): if no secret marker is present, NO pattern can
   // match, so skip the six /g regexes entirely. This is the same result the
-  // full pass would produce — never weaker — at a fraction of the CPU, which
+  // full pass would produce - never weaker - at a fraction of the CPU, which
   // matters because the global response sanitizer runs this on every string of
   // every non-exempt response on the single Node thread (e.g. a 500-row lead
   // list is tens of thousands of strings). The `gokinetic` check is a

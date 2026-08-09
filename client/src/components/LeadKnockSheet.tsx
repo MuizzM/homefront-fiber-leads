@@ -694,7 +694,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         {noteState !== "idle" && (
           <span data-testid="note-save-state" data-state={noteState} className="text-2xs font-medium"
             style={{ color: noteState === "saved" ? "#34d399" : noteState === "conflict" ? "#f59e0b" : MUTED }}>
-            {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved — newer note exists" : "Saved to history"}
+            {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved - newer note exists" : "Saved to history"}
           </span>
         )}
       </div>
@@ -905,7 +905,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     data-testid="fcc-fiber-chip"
                     className="mt-1 inline-flex w-fit items-center rounded-full border border-amber-400/35 bg-amber-400/10 px-2 py-px text-2xs font-bold uppercase tracking-wide text-amber-300"
                   >
-                    FCC-reported fiber — verify at door
+                    FCC-reported fiber - verify at door
                   </span>
                 )}
               </div>
@@ -945,7 +945,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 className="mb-3 flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-2.5 text-[13px] font-semibold leading-snug text-rose-300"
               >
                 <ShieldOff className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span>Do not knock — resident asked us not to return</span>
+                <span>Do not knock - resident asked us not to return</span>
               </div>
             )}
             <QuickBody

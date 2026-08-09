@@ -121,7 +121,7 @@ describe("FIX 1: a QUALIFIED sale booked through upsertSale pays its upline", ()
     expect(rows.find(r => r.beneficiary_rep_id === mgr.memberId)).toMatchObject({ amount_cents: MGR_CENTS, beneficiary_role: "manager", status: "PAYABLE" });
   });
 
-  it("refreshes the affected unlocked statements — seller AND uplines", () => {
+  it("refreshes the affected unlocked statements - seller AND uplines", () => {
     const week = weekBoundsFor(inWeekTs, svc.loadOrgConfig(T)).weekStartUtc;
     // The seller's own statement exists and prices the sale.
     expect(stmtFor(rep.memberId, week).gross_commission_cents).toBe(20000);
@@ -131,7 +131,7 @@ describe("FIX 1: a QUALIFIED sale booked through upsertSale pays its upline", ()
     expect(stmtFor(mgr.memberId, week).final_commission_cents).toBe(MGR_CENTS);
   });
 
-  it("is IDEMPOTENT — the same upsert repeated mints no second earn and no second payment", () => {
+  it("is IDEMPOTENT - the same upsert repeated mints no second earn and no second payment", () => {
     const before = overridesFor(svc.getSaleByExternalId(T, "se-1").id).length;
     const tlBefore = stmtFor(tl.memberId, weekBoundsFor(inWeekTs, svc.loadOrgConfig(T)).weekStartUtc).override_pay_cents;
     for (let i = 0; i < 3; i++) {
@@ -241,7 +241,7 @@ describe("FIX 1: a locked week is never mutated by a sale write", () => {
   });
 });
 
-describe("FIX 1: isolation — a sale write cannot reach another org or another branch", () => {
+describe("FIX 1: isolation - a sale write cannot reach another org or another branch", () => {
   it("refuses a rep from a different organization outright", () => {
     const foreign = person("SE Foreign Rep", "rep", null, T_OTHER);
     let err: any;
@@ -495,7 +495,7 @@ describe("non-default basis with soldAt / qualifiedAt / installedAt in three dif
     expect(new Set([soldWeek, qualWeek, instWeek]).size).toBe(3);   // three distinct weeks
   });
 
-  it("pays in the INSTALLED_AT week — not the sold or qualified week", () => {
+  it("pays in the INSTALLED_AT week - not the sold or qualified week", () => {
     svc.upsertSale(T_BASIS, 1, {
       repId: bRep.memberId, externalId: "basis-1", status: "QUALIFIED",
       soldAt: soldTs, qualifiedAt: qualTs, installedAt: instTs,
@@ -631,7 +631,7 @@ describe("qualification basis has one source of truth", () => {
     svc.updateOrgConfig(T_DIV, null, { commissionQualificationBasis: "INSTALLED_AT" } as any);
   });
 
-  it("a basis change is refused once any week is locked — it would re-key locked weeks", () => {
+  it("a basis change is refused once any week is locked - it would re-key locked weeks", () => {
     const lockOrg = 7745;
     rawDb.prepare(
       `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name)
@@ -721,7 +721,7 @@ describe("every write path resolves dates the same way", () => {
     expect(landed?.c ?? 0).toBe(0);
   });
 
-  it("the clamp is auditable — requested, applied and reason are all recorded", () => {
+  it("the clamp is auditable - requested, applied and reason are all recorded", () => {
     const events = rawDb.prepare(
       `SELECT details FROM activity_log WHERE action = 'commission_sale.effective_date_clamped' ORDER BY id DESC LIMIT 1`,
     ).get() as any;

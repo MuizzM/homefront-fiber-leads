@@ -14,7 +14,7 @@ describe("knockedPct", () => {
     expect(knockedPct(1, 3)).toBe(33);
   });
 
-  it("is null when there are no doors — 0% of nothing is not progress", () => {
+  it("is null when there are no doors - 0% of nothing is not progress", () => {
     expect(knockedPct(0, 0)).toBeNull();
     expect(knockedPct(5, null)).toBeNull();
     expect(knockedPct(null, null)).toBeNull();
@@ -44,7 +44,7 @@ describe("shortDate", () => {
 });
 
 describe("shortRep", () => {
-  it("takes the first name — map labels are tight", () => {
+  it("takes the first name - map labels are tight", () => {
     expect(shortRep("Ann Rivera")).toBe("Ann");
     expect(shortRep("  Bo  Chen ")).toBe("Bo");
     expect(shortRep(null)).toBe("");
@@ -80,7 +80,7 @@ describe("territoryLabel", () => {
   });
 
   it("marks a completed area with its rep", () => {
-    expect(territoryLabel({ ...base, status: "completed" }, "full")).toBe("Maple Grove\nDone — Ann");
+    expect(territoryLabel({ ...base, status: "completed" }, "full")).toBe("Maple Grove\nDone - Ann");
   });
 
   it("omits the progress line when there are no doors yet", () => {

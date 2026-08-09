@@ -90,10 +90,10 @@ describe("bandwidth governor", () => {
   });
 });
 
-describe("graduated circuit breaker — probe-recover, never a 30-minute blackout", () => {
+describe("graduated circuit breaker - probe-recover, never a 30-minute blackout", () => {
   beforeEach(() => gov._resetGovernorForTests());
 
-  it("a trip is a BRIEF cooldown, then a probe trickle — not a hard freeze", () => {
+  it("a trip is a BRIEF cooldown, then a probe trickle - not a hard freeze", () => {
     for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
     // Cooldown: fully paused, but for seconds (bounded by CIRCUIT_COOLDOWN_MS),
     // not the old 30 minutes.

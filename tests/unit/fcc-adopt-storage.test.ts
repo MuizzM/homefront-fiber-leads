@@ -81,7 +81,7 @@ describe("storage.adoptFccLead", () => {
     expect(row(g.id).lead_tag).toBe("hot_lead");
   });
 
-  it("a WORKED fcc door (a knock) is protected — same 'removable' notion as the purge", () => {
+  it("a WORKED fcc door (a knock) is protected - same 'removable' notion as the purge", () => {
     const g = seed();
     storage.createKnock({ leadId: g.id, repId: REP, wasHome: false, outcome: "not_home" } as any);
     expect(storage.adoptFccLead(g.id, TENANT_A, { repId: REP, lat: 35.51, lng: -80.52 })).toBeUndefined();

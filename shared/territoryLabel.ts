@@ -85,7 +85,7 @@ export function territoryLabel(input: TerritoryLabelInput, detail: LabelDetail =
   const pct = knockedPct(input.knocked, input.total);
 
   if (input.status === "completed") {
-    return [areaName, rep ? `Done — ${rep}` : "Done"].filter(Boolean).join("\n");
+    return [areaName, rep ? `Done - ${rep}` : "Done"].filter(Boolean).join("\n");
   }
 
   if (detail === "compact") {

@@ -76,7 +76,7 @@ describe("upsertLeadIntoLists writes only where the row belongs", () => {
     expect(qc.getQueryState(key)?.isInvalidated).toBe(false);
   });
 
-  it("deeper pages get a no-fetch stale mark only — no row, no total change", () => {
+  it("deeper pages get a no-fetch stale mark only - no row, no total change", () => {
     // A blind total bump double-counted across the optimistic + reconcile
     // pair (each call sees no row to anchor on) — review finding. Deeper
     // pages now correct themselves on their next visit instead.
@@ -109,7 +109,7 @@ describe("upsertLeadIntoLists writes only where the row belongs", () => {
     expect(d2.total).toBe(201);
   });
 
-  it("replaceTempId swaps the optimistic row in place — same index, no total change", () => {
+  it("replaceTempId swaps the optimistic row in place - same index, no total change", () => {
     const qc = new QueryClient();
     const key = leadsListKey(filters());
     qc.setQueryData(key, listData([

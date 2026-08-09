@@ -73,7 +73,7 @@ describe("Training page", () => {
     expect(screen.getByTestId(`training-lesson-${firstLesson.id}`)).toBeTruthy();
   });
 
-  it("marks a lesson complete optimistically — the hero moves before the server answers", async () => {
+  it("marks a lesson complete optimistically - the hero moves before the server answers", async () => {
     mockApi({ postBehavior: "hang" });
     renderPage();
     await screen.findByTestId("training-hero-count");

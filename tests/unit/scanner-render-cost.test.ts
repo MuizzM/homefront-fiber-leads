@@ -66,9 +66,9 @@ describe("MapView lasso smoothing is frame-coalesced", () => {
   // Bound move() the same way lasso-geometry-wiring bounds finish().
   const moveBody = (() => {
     const at = map.indexOf("const move = (lngLat: any, point: any) => {");
-    expect(at, "lasso move() not found in MapView — did the effect move?").toBeGreaterThan(-1);
+    expect(at, "lasso move() not found in MapView - did the effect move?").toBeGreaterThan(-1);
     const end = map.indexOf("const finish = () => {", at);
-    expect(end, "finish() not found after move() — cannot bound the body").toBeGreaterThan(at);
+    expect(end, "finish() not found after move() - cannot bound the body").toBeGreaterThan(at);
     return map.slice(at, end);
   })();
 

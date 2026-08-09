@@ -29,7 +29,7 @@ import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { serveStatic } from "../../server/static";
 
-const PLAIN = 'console.log("the plain, uncompressed asset body — long enough to differ");\n';
+const PLAIN = 'console.log("the plain, uncompressed asset body - long enough to differ");\n';
 const BR = brotliCompressSync(Buffer.from(PLAIN));
 const INDEX_HTML = "<!doctype html><title>app shell</title>";
 
@@ -113,7 +113,7 @@ describe("precompressed assets under a dot-directory checkout", () => {
     expect(res.body.toString()).toBe(PLAIN);
   });
 
-  it("404s a vanished asset with the staged headers stripped — never the index.html fallback", async () => {
+  it("404s a vanished asset with the staged headers stripped - never the index.html fallback", async () => {
     const res = await rawGet("/assets/razed-0f9e8d.js", "br");
     expect(res.status).toBe(404);
     // The precompressed handler staged js/br headers before sendFile failed;

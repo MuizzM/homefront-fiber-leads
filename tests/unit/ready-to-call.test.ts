@@ -5,7 +5,7 @@ import {
 } from "../../shared/readyToCall";
 
 describe("Ready-to-Call identity coalescers", () => {
-  it("prefers owner name, then contact name, then 'Resident' — never a fake name", () => {
+  it("prefers owner name, then contact name, then 'Resident' - never a fake name", () => {
     expect(displayName({ ownerName: "Dana Owner", contactName: "x" })).toBe("Dana Owner");
     expect(displayName({ ownerName: " ", contactName: "Cara Contact" })).toBe("Cara Contact");
     expect(displayName({ ownerName: null, contactName: "" })).toBe("Resident");

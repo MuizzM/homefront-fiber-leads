@@ -26,7 +26,7 @@ function tapAddBody(): string {
 describe("one-tap add drops the pin BEFORE any network await", () => {
   const body = tapAddBody();
 
-  it("is not an async handler — the tap itself never awaits anything", () => {
+  it("is not an async handler - the tap itself never awaits anything", () => {
     expect(src).not.toContain("__onTapAddress = async");
   });
 
@@ -104,7 +104,7 @@ describe("one-tap add drops the pin BEFORE any network await", () => {
     expect(geoCatchArm).toContain("No address there");
   });
 
-  it("the halo flash is confirmation on a timer — never cleared by the network path", () => {
+  it("the halo flash is confirmation on a timer - never cleared by the network path", () => {
     const flash = body.indexOf("SEARCH_RESULT_SOURCE");
     const timerClear = body.indexOf("window.setTimeout");
     const firstAwait = body.indexOf("await reverseGeocode");
@@ -144,7 +144,7 @@ describe("no loading / syncing chrome during background map work", () => {
     expect(hint).not.toContain("animate-spin");
   });
 
-  it("no blocking overlay while the GL map spins up — the canvas is the loading state", () => {
+  it("no blocking overlay while the GL map spins up - the canvas is the loading state", () => {
     expect(src).not.toContain("Loading map…");
     expect(src).not.toContain("{!mapReady && !noToken && (");
     // The unrecoverable missing-token config error is the only full-cover state.
@@ -184,7 +184,7 @@ describe("no loading / syncing chrome during background map work", () => {
     expect(src).not.toContain("spanNoticeDismissed");
   });
 
-  it('the offline knock badge ("N to sync") STAYS — but only for a SUSTAINED backlog', () => {
+  it('the offline knock badge ("N to sync") STAYS - but only for a SUSTAINED backlog', () => {
     expect(src).toContain("{queueSnap.pendingCount} to sync");
     // The sub-second pending blip of a normal online save must never flash
     // the badge (owner report: "why do I still see syncing") — the gate

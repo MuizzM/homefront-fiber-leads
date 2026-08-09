@@ -176,7 +176,7 @@ export function renderSignedAgreementPdf(
   counterSign?: CounterSignEvidence,
 ): Promise<Buffer> {
   return renderPdfBuffer({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
-    Title: `${snapshot.title} — ${snapshot.signerName}`,
+    Title: `${snapshot.title} - ${snapshot.signerName}`,
     Author: snapshot.companyName,
     Subject: "Electronically signed onboarding agreement",
     CreationDate: new Date(evidence.signedAt),
@@ -254,9 +254,9 @@ export function renderSignedAgreementPdf(
  */
 export function renderAgreementPreviewPdf(snapshot: AgreementSnapshot): Promise<Buffer> {
   return renderPdfBuffer({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
-    Title: `${snapshot.title} — REVIEW COPY`,
+    Title: `${snapshot.title} - REVIEW COPY`,
     Author: snapshot.companyName,
-    Subject: "Unsigned onboarding agreement — review copy",
+    Subject: "Unsigned onboarding agreement - review copy",
   } }, doc => {
     renderAgreementBody(doc, snapshot);
 
@@ -271,7 +271,7 @@ export function renderAgreementPreviewPdf(snapshot: AgreementSnapshot): Promise<
     const noteY = doc.y + 14;
     doc.fillColor("#8a6100").font("Helvetica-Bold").fontSize(10).text("This copy is not signed", 74, noteY);
     doc.font("Helvetica").fontSize(9).fillColor("#6b5528")
-      .text("No signature has been applied to this document. Signing happens in the app, and the executed copy — with the signature certificate, timestamps and record hashes — is issued only after you complete the ceremony.",
+      .text("No signature has been applied to this document. Signing happens in the app, and the executed copy - with the signature certificate, timestamps and record hashes - is issued only after you complete the ceremony.",
         74, noteY + 17, { width: 464, lineGap: 2 });
 
     // Every page carries the mark, so a single printed page out of context
@@ -285,7 +285,7 @@ export function renderAgreementPreviewPdf(snapshot: AgreementSnapshot): Promise<
         .text("REVIEW COPY", 6, 360, { width: 600, align: "center" });
       doc.restore();
     }
-    addFooter(doc, "Home Front Sign • REVIEW COPY — NOT SIGNED");
+    addFooter(doc, "Home Front Sign • REVIEW COPY - NOT SIGNED");
   });
 }
 
@@ -313,9 +313,9 @@ export function renderOnboardingPacketPdf(input: {
   brandColor?: string | null;
 }): Promise<Buffer> {
   return renderPdfBuffer({ size: "LETTER", margins: { top: 54, bottom: 62, left: 58, right: 58 }, bufferPages: true, info: {
-    Title: `Onboarding agreements — ${input.signerName}`,
+    Title: `Onboarding agreements - ${input.signerName}`,
     Author: input.companyName,
-    Subject: "Onboarding agreement packet — review copy",
+    Subject: "Onboarding agreement packet - review copy",
   } }, doc => {
     // ── Cover ────────────────────────────────────────────────────────────
     const accent = accentFor(input.brandColor);
@@ -339,7 +339,7 @@ export function renderOnboardingPacketPdf(input: {
       const boxHeight = 54 + rows.length * 18;
       doc.roundedRect(58, boxTop, 496, boxHeight, 8).fillAndStroke(BRAND.tealWash, BRAND.tealEdge);
       doc.fillColor(accent).font("Helvetica-Bold").fontSize(11)
-        .text(terms.structure === "FLAT" ? "Your commission — flat rate" : "Your commission — tiered", 76, boxTop + 14);
+        .text(terms.structure === "FLAT" ? "Your commission - flat rate" : "Your commission - tiered", 76, boxTop + 14);
       let rowY = boxTop + 34;
       for (const row of rows) {
         doc.font("Helvetica").fontSize(9.5).fillColor(BRAND.ink).text(row.band, 76, rowY, { width: 300 });
@@ -361,7 +361,7 @@ export function renderOnboardingPacketPdf(input: {
     });
     doc.moveDown(1.4).font("Helvetica").fontSize(9).fillColor(BRAND.amber)
       .text(
-        "This packet is for reading. Signing happens one agreement at a time in the portal, so each signature is bound to the agreement it belongs to — this copy is not signed and is not an executed agreement.",
+        "This packet is for reading. Signing happens one agreement at a time in the portal, so each signature is bound to the agreement it belongs to - this copy is not signed and is not an executed agreement.",
         { lineGap: 2 });
 
     // ── Every agreement, in order ────────────────────────────────────────
@@ -379,6 +379,6 @@ export function renderOnboardingPacketPdf(input: {
       doc.moveDown(0.35).font("Helvetica").fontSize(9.5).fillColor(BRAND.ink).text(paragraph, { lineGap: 2.2 });
     }
 
-    addFooter(doc, `${input.companyName} · REVIEW COPY — not signed`);
+    addFooter(doc, `${input.companyName} · REVIEW COPY - not signed`);
   });
 }

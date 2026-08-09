@@ -23,14 +23,14 @@ const panel = (over: Partial<Parameters<typeof TerritoryDetailPanel>[0]> = {}) =
     />,
   );
 
-describe("TerritoryDetailPanel — remove a rep from an area", () => {
+describe("TerritoryDetailPanel - remove a rep from an area", () => {
   it("offers a labelled remove control per assigned rep", () => {
     panel();
     expect(screen.getByRole("button", { name: "Remove Ann Rivera from this area" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove Bo Chen from this area" })).toBeInTheDocument();
   });
 
-  it("does NOT fire on the first tap — it asks first", async () => {
+  it("does NOT fire on the first tap - it asks first", async () => {
     const onUnassignRep = vi.fn();
     panel({ onUnassignRep });
     await userEvent.click(screen.getByRole("button", { name: "Remove Ann Rivera from this area" }));
@@ -57,7 +57,7 @@ describe("TerritoryDetailPanel — remove a rep from an area", () => {
     expect(screen.getByRole("button", { name: "Remove Ann Rivera from this area" })).toBeInTheDocument();
   });
 
-  it("hides the control from a rep — the server also refuses, this is just honesty in the UI", () => {
+  it("hides the control from a rep - the server also refuses, this is just honesty in the UI", () => {
     panel({ currentUser: { role: "rep" } });
     expect(screen.queryByRole("button", { name: /Remove .* from this area/ })).not.toBeInTheDocument();
   });
@@ -100,7 +100,7 @@ describe("TerritoryDetailPanel — remove a rep from an area", () => {
 
   it("still shows an unassigned area as in the pool", () => {
     panel({ territory: { ...territory, repIds: [], status: "unassigned" as const } });
-    expect(screen.getByText(/Unassigned — in the pool/)).toBeInTheDocument();
+    expect(screen.getByText(/Unassigned - in the pool/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Remove .* from this area/ })).not.toBeInTheDocument();
   });
 });

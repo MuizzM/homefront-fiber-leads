@@ -132,7 +132,7 @@ async function loadUndici() {
       console.log(`[proxy-fetch] Pool created: ${POOL_SIZE} connections × ${PIPELINE} pipeline = ${POOL_SIZE * PIPELINE} slots`);
     }
   } catch {
-    console.warn("[proxy-fetch] undici not available — falling back to native fetch");
+    console.warn("[proxy-fetch] undici not available - falling back to native fetch");
     _proxyLoaded = true;
   }
 }
@@ -153,7 +153,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
     if (!_proxyLoaded) await undiciReady;
     // Still unavailable after a completed load = undici truly missing: fail
     // closed rather than ever sending an unproxied direct request.
-    if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing an unconfigured direct request");
+    if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable - refusing an unconfigured direct request");
     if (!_sharedDispatcher) _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
     // Count this request toward the proactive-rotation cadence, but DON'T rotate
     // before dispatching it — the request that trips the counter must run on the
@@ -202,7 +202,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
   // Dev/test (and an explicit ALLOW_DIRECT_EGRESS=true opt-in) may egress directly
   // so the suite + local dev run without a Decodo account.
   if (process.env.NODE_ENV === "production" && process.env.ALLOW_DIRECT_EGRESS !== "true") {
-    throw new Error("[proxy-fetch] No Decodo proxy configured in production — refusing direct egress (fail closed)");
+    throw new Error("[proxy-fetch] No Decodo proxy configured in production - refusing direct egress (fail closed)");
   }
   return fetch(url, opts);
 }

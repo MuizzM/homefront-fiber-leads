@@ -44,7 +44,7 @@ describe("polygonCovers keeps everything pointInPolygon already found", () => {
 });
 
 describe("the boundary itself", () => {
-  it("covers a door on the south edge — the street the line was drawn down", () => {
+  it("covers a door on the south edge - the street the line was drawn down", () => {
     expect(polygonCovers(35.55, -80.35, BOX)).toBe(true);
   });
 
@@ -59,7 +59,7 @@ describe("the boundary itself", () => {
     for (const [lng, lat] of BOX) expect(polygonCovers(lat, lng, BOX)).toBe(true);
   });
 
-  it("is the behaviour the strict ray-cast did NOT give — that is the bug", () => {
+  it("is the behaviour the strict ray-cast did NOT give - that is the bug", () => {
     // At least one of these edges/corners is rejected by the interior-only test.
     // Stated as a difference rather than pinning which one, because WHICH side a
     // ray-cast drops is a floating-point detail, not a contract.

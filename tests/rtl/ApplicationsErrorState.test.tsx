@@ -20,7 +20,7 @@ function renderPage() {
 }
 beforeEach(() => apiRequest.mockReset());
 
-describe("Applications pipeline — error state honesty", () => {
+describe("Applications pipeline - error state honesty", () => {
   const rejectPipeline = () => apiRequest.mockImplementation((_m: string, url: string) => {
     if (String(url).includes("/onboarding/pipeline")) return Promise.reject(new Error("network down"));
     return Promise.resolve({ json: () => Promise.resolve({ configured: true, records: [] }) });

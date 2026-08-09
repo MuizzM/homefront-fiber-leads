@@ -34,7 +34,7 @@ const RSS = `<?xml version="1.0"?><rss><channel>
   </item>
 </channel></rss>`;
 
-describe("build intel — RSS parsing + city extraction", () => {
+describe("build intel - RSS parsing + city extraction", () => {
   it("parses items with CDATA, entities, and both link styles", () => {
     const items = bi.parseRssItems(RSS);
     expect(items.length).toBe(2);
@@ -43,7 +43,7 @@ describe("build intel — RSS parsing + city extraction", () => {
     expect(items[0].description).toContain("Kannapolis");
   });
 
-  it('extracts "<City>, ST" mentions — including towns NOT in any known list (footprint growth)', () => {
+  it('extracts "<City>, ST" mentions - including towns NOT in any known list (footprint growth)', () => {
     const got = bi.extractCityMentions("Crews begin work in Rockwell, NC and later in Locust, N.C. this year.");
     expect(got).toContainEqual({ city: "rockwell", state: "nc" });
     expect(got).toContainEqual({ city: "locust", state: "nc" }); // no catalog needed
@@ -64,7 +64,7 @@ describe("build intel — RSS parsing + city extraction", () => {
   });
 });
 
-describe("build intel — signals, promotion rules, TTL, hot-zone union", () => {
+describe("build intel - signals, promotion rules, TTL, hot-zone union", () => {
   it("dedupes identical signals by hash", () => {
     const sig = { kind: "news" as const, source: "example.com", url: "https://example.com/x", title: "t", city: "concord", state: "nc" };
     expect(bi.recordSignal(sig)).toBe(true);

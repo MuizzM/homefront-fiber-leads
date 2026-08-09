@@ -10,7 +10,7 @@ const BASE = {
   techType: "FIBER", householdSegmentType: "NEW FIBER", billingStatus: "N",
 };
 
-describe("classifyKineticFreshLead — owner fixture matrix", () => {
+describe("classifyKineticFreshLead - owner fixture matrix", () => {
   it("THE canonical fixture: 485 Brown Acres Rd (Kinetic FIBER + Spectrum Cable) is eligible", () => {
     const r = classifyKineticFreshLead({
       ...BASE,
@@ -22,7 +22,7 @@ describe("classifyKineticFreshLead — owner fixture matrix", () => {
     expect(r.version).toBe(COMPETITIVE_ELIGIBILITY_VERSION);
   });
 
-  it("Kinetic + any cable brand → eligible (Comcast, Cox — brand is irrelevant)", () => {
+  it("Kinetic + any cable brand → eligible (Comcast, Cox - brand is irrelevant)", () => {
     for (const name of ["Comcast", "Cox", "Some Local Cableco"]) {
       expect(classifyKineticFreshLead({ ...BASE, competitors: [{ name, tech: "Cable" }] }).eligible).toBe(true);
     }

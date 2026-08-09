@@ -122,7 +122,7 @@ export function announceSale(f: SaleFacts): Announcement {
   const mine = Math.max(1, Math.trunc(f.salesToday) || 1);
   const team = Math.max(mine, Math.trunc(f.teamSalesToday) || mine);
   const body = mine >= 2
-    ? `That's ${mine} for ${who} today — ${team} on the board.`
+    ? `That's ${mine} for ${who} today - ${team} on the board.`
     : `${team} on the board today. Next one's out there.`;
 
   return {

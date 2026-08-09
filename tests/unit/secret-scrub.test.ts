@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { scrubSecretText, SECRET_TEXT_PATTERNS } from "../../server/secretScrub";
 
-describe("scrubSecretText — redaction is preserved by the fast path", () => {
+describe("scrubSecretText - redaction is preserved by the fast path", () => {
   // One representative value per pattern in SECRET_TEXT_PATTERNS, in order.
   const secrets: Array<[string, string]> = [
     ["gokinetic url", "call https://api.gokinetic.com/v2/submit?k=1 now"],
@@ -41,7 +41,7 @@ describe("scrubSecretText — redaction is preserved by the fast path", () => {
   it("leaves ordinary field text untouched (the common fast-path case)", () => {
     for (const clean of [
       "1428 Maple Ave, Charlotte NC 28205",
-      "Spoke with homeowner — callback Tuesday 4pm",
+      "Spoke with homeowner - callback Tuesday 4pm",
       "Jose Q. Rodriguez",
       "sold",
       "Basically we agreed", // 'Basic' without the trailing space must NOT trip it

@@ -99,7 +99,7 @@ describe("the lens that hid an assignment", () => {
     expect(all.hiddenByView).toBe(0);
   });
 
-  it("counts only the CALLER'S OWN hidden doors — never another rep's", async () => {
+  it("counts only the CALLER'S OWN hidden doors - never another rep's", async () => {
     // The other rep also holds footprint doors. Leaking them into this number
     // would tell a rep to go look for work that isn't theirs.
     const latest = await (await get("/api/leads/map/count?view=latest", rep.session)).json() as any;

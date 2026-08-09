@@ -169,7 +169,7 @@ function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => voi
               <Skeleton className="h-5 w-2/3" />
             </>
           ) : data.events.length === 0 ? (
-            <div className="py-6 text-center text-sm italic text-muted-foreground">No activity yet — first door's the hardest.</div>
+            <div className="py-6 text-center text-sm italic text-muted-foreground">No activity yet - first door's the hardest.</div>
           ) : (
             data.events.map(e => {
               const meta = isKnockOutcome(e.outcome) ? OUTCOME_META[e.outcome] : null;
@@ -218,7 +218,7 @@ export default function Dashboard() {
   });
 
   // Every render site below filters to s.date === today, so ask the server for
-  // exactly that day — the unparameterized call downloaded the tenant's entire
+  // exactly that day - the unparameterized call downloaded the tenant's entire
   // clock history to show one day's rows, and grew forever.
   const sessionsDate = new Date().toISOString().slice(0, 10);
   const { data: clockSessions = [], isLoading: clockLoading } = useQuery<any[]>({
@@ -251,8 +251,8 @@ export default function Dashboard() {
   });
 
   const statsFailed = statsError || leadStatsError;
-  const assigned = statsFailed ? "—" : (leadStats?.total ?? 0);
-  const dispositioned = typeof assigned === "number" ? assigned - (leadStats?.byStatus?.prospect ?? 0) : "—";
+  const assigned = statsFailed ? " - " : (leadStats?.total ?? 0);
+  const dispositioned = typeof assigned === "number" ? assigned - (leadStats?.byStatus?.prospect ?? 0) : " - ";
 
   const today = new Date().toISOString().slice(0, 10);
   const todayHours = clockSessions
@@ -300,11 +300,11 @@ export default function Dashboard() {
             of being clipped off the right edge with no scroll affordance. */}
         <div className="-mx-6 flex gap-2.5 overflow-x-auto px-6 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pill-row-fade md:mx-0 md:grid md:grid-cols-3 md:overflow-visible md:px-0 lg:grid-cols-5"
           data-testid="field-tiles">
-          <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? "—"} loading={statsLoading && !stats} tone="text-amber-400" icon={AlertCircle} chip="bg-amber-500/15" accent="bg-amber-500" />
+          <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? " - "} loading={statsLoading && !stats} tone="text-amber-400" icon={AlertCircle} chip="bg-amber-500/15" accent="bg-amber-500" />
           <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
           <FieldTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="text-sky-400" icon={Activity} chip="bg-sky-500/15" accent="bg-sky-500" />
-          <FieldTile label="Sold" value={statsFailed ? "—" : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
-          <FieldTile label="Follow-ups due" value={statsFailed ? "—" : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
+          <FieldTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
+          <FieldTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
         </div>
       </section>
 
@@ -395,7 +395,7 @@ export default function Dashboard() {
             </div>
           ) : newFiber.count === 0 ? (
             <div className="rounded-2xl border border-border bg-card px-4 py-5 text-[13px] italic text-muted-foreground">
-              No current fiber flips detected in the last 24 hours — the monitor is watching the address pool.
+              No current fiber flips detected in the last 24 hours - the monitor is watching the address pool.
             </div>
           ) : (
             <div className="divide-y divide-border overflow-hidden rounded-2xl border border-orange-500/25 bg-card">
@@ -428,7 +428,7 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* KPI metric bar — one clean hairline grid (Cal.com / Intercom), not eight cards */}
+      {/* KPI metric bar - one clean hairline grid (Cal.com / Intercom), not eight cards */}
       <section className="space-y-2.5">
         <h2 className={EYEBROW}>{isManager ? "Performance overview" : "Overview"}</h2>
         {statsError ? (
@@ -443,17 +443,17 @@ export default function Dashboard() {
           loading={statsLoading}
           items={[
             { label: "New fiber leads", icon: Zap, tone: "text-primary",
-              value: stats?.leads.newFiber ?? "—", sub: `${stats?.leads.unassigned ?? 0} unassigned` },
+              value: stats?.leads.newFiber ?? " - ", sub: `${stats?.leads.unassigned ?? 0} unassigned` },
             { label: "Knocks today", icon: Target, tone: "text-sky-400",
-              value: stats?.knocks.today ?? "—", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
+              value: stats?.knocks.today ?? " - ", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
             { label: "Week sales", icon: TrendingUp, tone: "text-violet-400",
-              value: stats?.knocks.weekSales ?? "—", sub: "last 7 days" },
+              value: stats?.knocks.weekSales ?? " - ", sub: "last 7 days" },
             { label: "Pending payout", icon: DollarSign, tone: "text-amber-400",
-              value: stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : "—", sub: `$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid` },
+              value: stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : " - ", sub: `$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid` },
             { label: "Kinetic addresses", icon: Wifi, tone: "text-orange-400",
-              value: stats?.kinetic.total ?? "—", sub: `${stats?.kinetic.live ?? 0} live` },
+              value: stats?.kinetic.total ?? " - ", sub: `${stats?.kinetic.live ?? 0} live` },
             { label: "Field hours", icon: Clock, tone: "text-rose-400",
-              value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : "—", sub: "clocked today" },
+              value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : " - ", sub: "clocked today" },
           ]}
         />
         )}
@@ -464,7 +464,7 @@ export default function Dashboard() {
         <section className="space-y-2.5">
           <h2 className={EYEBROW}>Quick actions</h2>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <a href="#/city-scan" aria-label="City Scan — find new fiber" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <a href="#/city-scan" aria-label="City Scan - find new fiber" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
                 <Radar className="h-[18px] w-[18px] text-primary" />
               </span>

@@ -23,7 +23,7 @@ const REASON_LABEL: Record<string, { label: string; tone: string }> = {
 };
 
 function reasonLabel(reason: string | null) {
-  return REASON_LABEL[reason ?? ""] ?? { label: reason ?? "—", tone: "text-muted-foreground" };
+  return REASON_LABEL[reason ?? ""] ?? { label: reason ?? " - ", tone: "text-muted-foreground" };
 }
 
 function timeLabel(iso: string): string {
@@ -55,7 +55,7 @@ export default function LoginActivity() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Login activity</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">Who tried to sign in, from where, and how it went — your organization only.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Who tried to sign in, from where, and how it went - your organization only.</p>
         </div>
         <button
           type="button"
@@ -79,7 +79,7 @@ export default function LoginActivity() {
         {loading ? (
           <div className="space-y-2 p-4">{[0,1,2].map(i => <div key={i} className="app-skeleton h-10 rounded-lg" />)}</div>
         ) : (summaryQuery.data?.summary.length ?? 0) === 0 ? (
-          <p className="p-4 text-xs text-muted-foreground">No login activity recorded yet — rows appear as people request codes and sign in.</p>
+          <p className="p-4 text-xs text-muted-foreground">No login activity recorded yet - rows appear as people request codes and sign in.</p>
         ) : (
           <ul className="divide-y divide-border/60">
             {summaryQuery.data!.summary.map(row => (

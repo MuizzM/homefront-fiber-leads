@@ -317,7 +317,7 @@ export function registerPayRoutes(app: Express, deps: Deps) {
       });
       if (result.exceptions.length && !allowPartial) {
         return res.status(409).json({
-          error: `${result.exceptions.length} approved-pay rep(s) are missing bank details or a W-9 — fix the roster or retry with ?allowPartial=1.`,
+          error: `${result.exceptions.length} approved-pay rep(s) are missing bank details or a W-9 - fix the roster or retry with ?allowPartial=1.`,
           code: "PAY_ROSTER_INCOMPLETE",
           exceptions: result.exceptions,
         });

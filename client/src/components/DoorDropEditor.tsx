@@ -175,7 +175,7 @@ export function DoorDropEditor() {
 
       <p className="text-[13px] text-muted-foreground">
         A surprise bonus that can land on any verified door, with no warning and no target
-        to hit. Unlike the ladder, a rep cannot work out when one is due — which is what
+        to hit. Unlike the ladder, a rep cannot work out when one is due - which is what
         keeps the next door worth knocking right after they've just been paid.
       </p>
 
@@ -197,7 +197,7 @@ export function DoorDropEditor() {
         {field("maxOrgCents", "Whole org / day", undefined, "decimal")}
       </div>
 
-      {/* The bill, before the save button — the number that stops this being
+      {/* The bill, before the save button - the number that stops this being
           switched on without anyone deciding to spend it. */}
       <div className="rounded-2xl border border-border bg-secondary/40 p-3" data-testid="drop-exposure">
         <SectionLabel className="mb-1">What this costs per day</SectionLabel>
@@ -208,7 +208,7 @@ export function DoorDropEditor() {
                    data-testid="drop-doors-assumed" onChange={e => setDoorsPerDay(e.target.value)} />
           </div>
           <p className="flex-1 text-sm font-semibold tabular-nums text-foreground" data-testid="drop-daily-cost">
-            {problem ? "—" : `${usd(daily)} / day across ${reps} active rep${reps === 1 ? "" : "s"}`}
+            {problem ? " - " : `${usd(daily)} / day across ${reps} active rep${reps === 1 ? "" : "s"}`}
           </p>
         </div>
         <p className="mt-1 text-[13px] text-muted-foreground">
@@ -220,7 +220,7 @@ export function DoorDropEditor() {
 
       {/* The curve, so the pair of numbers above is legible rather than trusted.
           Server-computed from the SAVED config, so it deliberately lags the form
-          — it describes what is running, not what is being typed. */}
+          - it describes what is running, not what is being typed. */}
       {!!data?.exposure.currentChanceAtDoors?.length && (
         <div className="rounded-2xl border border-border bg-card p-3" data-testid="drop-curve">
           <SectionLabel className="mb-1.5">Live curve · chance per door into a dry run</SectionLabel>

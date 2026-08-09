@@ -103,7 +103,7 @@ export function registerFiberOperationsRoutes(app: Express, deps: FiberOperation
       if (!ids.length) return res.status(409).json({ error: "No eligible addresses match this scan scope" });
       const city = input.city ?? (input.zip ? `ZIP ${input.zip}` : input.mode === "state" ? `${input.state} statewide` : "Selected area");
       const job = scanService.startTargetRun({ tenantId: tid, city, state: input.state, targetIds: ids,
-        createdBy: Number((req as any).user?.id), runKind: input.mode, label: input.label ?? `Fiber verification — ${city}` });
+        createdBy: Number((req as any).user?.id), runKind: input.mode, label: input.label ?? `Fiber verification - ${city}` });
       storage.logActivity(Number((req as any).user?.id), "fiber.job.created", "scan_run", undefined,
         { runId: job.runId, mode: input.mode, budget: job.budget }, req.ip, tid);
       res.status(202).json({ ...job, statusUrl: `/api/v1/fiber/jobs/${job.runId}`, eventsUrl: `/api/v1/fiber/jobs/${job.runId}/events` });

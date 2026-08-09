@@ -153,7 +153,7 @@ export function isDrillCardId(value: unknown): value is DrillCardId {
  *  sentence boundary, when that boundary leaves a meaningful stem (≥12 chars);
  *  otherwise the whole takeaway. Deterministic by construction. */
 function takeawayStem(takeaway: string): string {
-  const boundaries = [" — ", ": ", ". "];
+  const boundaries = [" - ", ": ", ". "];
   let cut = -1;
   for (const b of boundaries) {
     const i = takeaway.indexOf(b);

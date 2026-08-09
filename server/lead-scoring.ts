@@ -78,7 +78,7 @@ export function scoreLead(params: {
       leadTag: "coming_soon",
       leadScore: score,
       priority: "high",
-      reason: `NEW FIBER — has existing subscriber. Potential for upgrades or multi-household. Score: ${score}.`,
+      reason: `NEW FIBER - has existing subscriber. Potential for upgrades or multi-household. Score: ${score}.`,
     };
   }
 
@@ -95,7 +95,7 @@ export function scoreLead(params: {
       leadTag: "upgrade_target",
       leadScore: Math.max(0, score),
       priority: "high",
-      reason: `TENURED fiber, non-subscriber. Long-established fiber at this address — prime upgrade candidate. Score: ${Math.max(0, score)}.`,
+      reason: `TENURED fiber, non-subscriber. Long-established fiber at this address - prime upgrade candidate. Score: ${Math.max(0, score)}.`,
     };
   }
 

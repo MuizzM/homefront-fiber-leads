@@ -54,7 +54,7 @@ describe("the override config card", () => {
     expect(screen.getByTestId("override-config-card").textContent).toMatch(/Flat per sale/i);
   });
 
-  it("flipping the switch off HIDES the rate inputs — hide, don't print zeros", async () => {
+  it("flipping the switch off HIDES the rate inputs - hide, don't print zeros", async () => {
     renderCard(config());
     await waitFor(() => expect(screen.getByTestId("override-rate-inputs")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("override-enabled-switch"));
@@ -68,7 +68,7 @@ describe("the override config card", () => {
     expect(screen.queryByTestId("override-rate-inputs")).toBeNull();
   });
 
-  it("saving an enable PATCHes the exact tri-state body — flag plus both rates in integer cents", async () => {
+  it("saving an enable PATCHes the exact tri-state body - flag plus both rates in integer cents", async () => {
     renderCard(config({ overridesEnabled: false, overrideTeamLeadCents: 0, overrideManagerCents: 0 }));
     await waitFor(() => expect(screen.getByTestId("override-config-card")).toBeInTheDocument());
 

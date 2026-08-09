@@ -20,7 +20,7 @@ const counts = (o: Partial<AchievementCounts> = {}): AchievementCounts => ({
   dailySales: 0, careerSales: 0, centsAlreadyToday: 0, isRampRep: false, ...o,
 });
 
-describe("achievementsCleared — the daily rungs", () => {
+describe("achievementsCleared - the daily rungs", () => {
   it("pays nothing on the first sale of the day", () => {
     expect(achievementsCleared(counts({ dailySales: 1 }), cfg())).toEqual([]);
   });
@@ -47,7 +47,7 @@ describe("achievementsCleared — the daily rungs", () => {
   });
 });
 
-describe("achievementsCleared — the career rungs", () => {
+describe("achievementsCleared - the career rungs", () => {
   it("fires each career milestone as it is passed", () => {
     const a = achievementsCleared(counts({ careerSales: 50 }), cfg({ maxCentsPerRepPerDay: 0 }));
     expect(a.map(x => x.key)).toEqual(["career:10", "career:25", "career:50"]);
@@ -60,7 +60,7 @@ describe("achievementsCleared — the career rungs", () => {
   });
 });
 
-describe("achievementsCleared — who is on this ladder", () => {
+describe("achievementsCleared - who is on this ladder", () => {
   it("skips a rep still inside their ramp window", () => {
     expect(achievementsCleared(counts({ dailySales: 4, isRampRep: true }), cfg())).toEqual([]);
   });
@@ -75,14 +75,14 @@ describe("achievementsCleared — who is on this ladder", () => {
   });
 });
 
-describe("achievementsCleared — the daily cents cap", () => {
+describe("achievementsCleared - the daily cents cap", () => {
   it("drops rungs that no longer fit in the day's budget", () => {
     // $100 cap, $75 already banked: the $25 rung fits, the $50 does not.
     const a = achievementsCleared(counts({ dailySales: 4, centsAlreadyToday: 7_500 }), cfg());
     expect(a.map(x => x.amountCents)).toEqual([2_500]);
   });
 
-  it("drops a rung whole — part of a bonus is not a bonus", () => {
+  it("drops a rung whole - part of a bonus is not a bonus", () => {
     const a = achievementsCleared(counts({ dailySales: 4, centsAlreadyToday: 9_000 }), cfg());
     expect(a).toEqual([]);
   });
@@ -98,7 +98,7 @@ describe("achievementsCleared — the daily cents cap", () => {
   });
 });
 
-describe("achievementProgress — what the rep is chasing", () => {
+describe("achievementProgress - what the rep is chasing", () => {
   it("names the next daily rung in sales, not percentages", () => {
     const p = achievementProgress(counts({ dailySales: 1 }), cfg());
     expect(p.headline).toBe("1 more sale today for $25");
@@ -116,7 +116,7 @@ describe("achievementProgress — what the rep is chasing", () => {
     expect(p.headline).toBe("Every achievement bonus earned");
   });
 
-  it("shows a ramp rep nothing — they are on the other bonus", () => {
+  it("shows a ramp rep nothing - they are on the other bonus", () => {
     const p = achievementProgress(counts({ dailySales: 2, isRampRep: true }), cfg());
     expect(p.enabled).toBe(false);
     expect(p.headline).toBeNull();

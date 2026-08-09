@@ -84,7 +84,7 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>(r => server.close(() => r())));
 
 describe(`a rep at the ${MAX_ACTIVE_AREAS_PER_REP}-area cap cannot be given more`, () => {
-  it("via /assign — the path that already checked", async () => {
+  it("via /assign - the path that already checked", async () => {
     fillToCap(fx.full.memberId);
     const pooled = seedArea(fx.donor.memberId, "unassigned");
     const res = await req(`/api/territories/${pooled}/assign`, fx.manager.session, {
@@ -141,7 +141,7 @@ describe("the cap does not block legitimate moves", () => {
     expect(activeAreaCount(room.memberId)).toBe(1);
   });
 
-  it("returning an area to the pool is never capped — it frees ground, not takes it", async () => {
+  it("returning an area to the pool is never capped - it frees ground, not takes it", async () => {
     const area = seedArea(fx.full.memberId);
     const res = await req(`/api/territories/${area}/reclaim`, fx.manager.session, {
       method: "POST", body: JSON.stringify({ mode: "return_to_pool" }),

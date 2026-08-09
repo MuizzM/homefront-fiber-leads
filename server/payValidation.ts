@@ -87,7 +87,7 @@ export function validateW9Input(body: any): { ok: true; value: W9ValidatedInput 
   if (taxClassification === "llc") {
     const raw = String(body?.llcTaxClass ?? "").trim().toUpperCase();
     if (!W9_LLC_TAX_CLASSES.includes(raw as W9LlcTaxClass)) {
-      return { ok: false, error: "llcTaxClass is required for an LLC and must be exactly 'C' (C corporation), 'S' (S corporation), or 'P' (partnership) — Form W-9 Line 3a" };
+      return { ok: false, error: "llcTaxClass is required for an LLC and must be exactly 'C' (C corporation), 'S' (S corporation), or 'P' (partnership) - Form W-9 Line 3a" };
     }
     llcTaxClass = raw as W9LlcTaxClass;
   } else if (body?.llcTaxClass != null && String(body.llcTaxClass).trim() !== "") {
@@ -96,7 +96,7 @@ export function validateW9Input(body: any): { ok: true; value: W9ValidatedInput 
   if (taxClassification === "other") {
     const desc = String(body?.otherClassification ?? "").trim();
     if (desc.length < 2 || desc.length > 60) {
-      return { ok: false, error: "otherClassification is required (2–60 characters) when taxClassification is 'other' — Form W-9 Line 3a" };
+      return { ok: false, error: "otherClassification is required (2–60 characters) when taxClassification is 'other' - Form W-9 Line 3a" };
     }
     otherClassification = desc;
   } else if (body?.otherClassification != null && String(body.otherClassification).trim() !== "") {
@@ -130,11 +130,11 @@ export function validateW9Input(body: any): { ok: true; value: W9ValidatedInput 
   // whether it was true or not, and left the PAYER liable for the 24% it never
   // withheld.
   if (typeof body?.subjectToBackupWithholding !== "boolean") {
-    return { ok: false, error: "subjectToBackupWithholding must be true or false — the IRS certification (Part II, item 2) requires an explicit answer" };
+    return { ok: false, error: "subjectToBackupWithholding must be true or false - the IRS certification (Part II, item 2) requires an explicit answer" };
   }
   const subjectToBackupWithholding = body.subjectToBackupWithholding === true;
 
-  if (body?.consent !== true) return { ok: false, error: "consent must be true — an electronic-signature consent is required (ESIGN)" };
+  if (body?.consent !== true) return { ok: false, error: "consent must be true - an electronic-signature consent is required (ESIGN)" };
   const signatureName = String(body?.signatureName ?? "").trim();
   // ESIGN: the typed signature must match the legal name (case-insensitive) so
   // the signer affirms the certification under penalties of perjury.

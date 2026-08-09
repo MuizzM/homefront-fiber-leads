@@ -130,7 +130,7 @@ const leadState = (q: ReturnType<typeof createKnockQueue>, leadId: number) =>
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-describe("knockQueue — online happy path", () => {
+describe("knockQueue - online happy path", () => {
   it("POSTs once to /api/leads/:id/knock with the wire body (and NO wasHome)", async () => {
     const { q, post } = mkQueue();
     await q.enqueue({ leadId: 7, outcome: "interested" });
@@ -167,7 +167,7 @@ describe("knockQueue — online happy path", () => {
   });
 });
 
-describe("knockQueue — offline queueing", () => {
+describe("knockQueue - offline queueing", () => {
   it("durably stages a tap before asynchronous evidence capture or flushing", async () => {
     const storage = fakeStorage();
     const { q, post } = mkQueue({ storage });
@@ -245,7 +245,7 @@ describe("knockQueue — offline queueing", () => {
   });
 });
 
-describe("knockQueue — failure handling", () => {
+describe("knockQueue - failure handling", () => {
   it("keeps a transiently-failed (500) item pending and retries only after the backoff", async () => {
     let failures = 1;
     const { q, post, storage } = mkQueue({
@@ -276,7 +276,7 @@ describe("knockQueue — failure handling", () => {
     expect(leadState(q, 7)).toBe("saved");
   });
 
-  it("auto-resolves a terminal (404) failure — dropped with a reason, never a dead-letter, line keeps moving", async () => {
+  it("auto-resolves a terminal (404) failure - dropped with a reason, never a dead-letter, line keeps moving", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { q, post, onResolved, setOnline } = mkQueue({
       online: false,
@@ -438,7 +438,7 @@ describe("knockQueue — failure handling", () => {
   });
 });
 
-describe("knockQueue — rehydration triage (reload survival)", () => {
+describe("knockQueue - rehydration triage (reload survival)", () => {
   const baseItem = (over: Record<string, unknown> = {}) => ({
     clientId: `c-${Math.random().toString(36).slice(2)}`,
     leadId: 7,
@@ -613,7 +613,7 @@ describe("knockQueue — rehydration triage (reload survival)", () => {
   });
 });
 
-describe("knockQueue — restart-burst 403 classification", () => {
+describe("knockQueue - restart-burst 403 classification", () => {
   it("a 403 during a restart burst stays PENDING with the retry budget untouched, then delivers on recovery", async () => {
     let mode: "down" | "proxy403" | "ok" = "down";
     const { q, storage } = mkQueue({
@@ -671,7 +671,7 @@ describe("knockQueue — restart-burst 403 classification", () => {
   });
 });
 
-describe("knockQueue — self-healing dead lane (recovery signals)", () => {
+describe("knockQueue - self-healing dead lane (recovery signals)", () => {
   // Park one 403 dead item the way production does: bounded retries, then dead.
   const park403 = async (q: ReturnType<typeof createKnockQueue>) => {
     await q.enqueue({ leadId: 7, outcome: "sold" });
@@ -716,7 +716,7 @@ describe("knockQueue — self-healing dead lane (recovery signals)", () => {
     q.destroy();
   });
 
-  it("returning to the foreground (visibilitychange) sweeps the dead lane — pill clears with zero taps", async () => {
+  it("returning to the foreground (visibilitychange) sweeps the dead lane - pill clears with zero taps", async () => {
     let healthy = false;
     const { q, post } = mkQueue({
       post: async () => {
@@ -737,7 +737,7 @@ describe("knockQueue — self-healing dead lane (recovery signals)", () => {
     q.destroy();
   });
 
-  it("a successful delivery on the queue is itself a recovery signal — dead items ride the same flush", async () => {
+  it("a successful delivery on the queue is itself a recovery signal - dead items ride the same flush", async () => {
     let broken = true;
     const { q, post } = mkQueue({
       post: async () => {
@@ -798,7 +798,7 @@ describe("knockQueue — self-healing dead lane (recovery signals)", () => {
     }
   });
 
-  it("flush alone still never touches the dead lane — only recovery signals sweep it", async () => {
+  it("flush alone still never touches the dead lane - only recovery signals sweep it", async () => {
     const { q, post } = mkQueue({
       post: async () => {
         throw new Error("403: Forbidden");
@@ -813,7 +813,7 @@ describe("knockQueue — self-healing dead lane (recovery signals)", () => {
   });
 });
 
-describe("knockQueue — dedup and notes", () => {
+describe("knockQueue - dedup and notes", () => {
   it("treats a deduped replay ({id, deduped:true}) as success and wires recentSaves", async () => {
     const { q, patch } = mkQueue({ post: async () => ({ id: 42, deduped: true }) });
     await q.enqueue({ leadId: 7, outcome: "interested" });
@@ -828,7 +828,7 @@ describe("knockQueue — dedup and notes", () => {
     expect(patch.mock.calls[0][1]).toMatchObject({ notes: "gate code 4411" });
   });
 
-  it('merges a note into a still-queued item — the POST carries it, PATCH never fires', async () => {
+  it('merges a note into a still-queued item - the POST carries it, PATCH never fires', async () => {
     const { q, post, patch, setOnline } = mkQueue({ online: false });
     await q.enqueue({ leadId: 7, outcome: "interested" });
 
@@ -847,7 +847,7 @@ describe("knockQueue — dedup and notes", () => {
   });
 });
 
-describe("knockQueue — persistence resilience", () => {
+describe("knockQueue - persistence resilience", () => {
   it("degrades to memory-only when storage.setItem throws", async () => {
     const { q, post, setOnline } = mkQueue({
       storage: fakeStorage({ throwOnSet: true }),
@@ -874,7 +874,7 @@ describe("knockQueue — persistence resilience", () => {
   });
 });
 
-describe("knockQueue — snapshot semantics", () => {
+describe("knockQueue - snapshot semantics", () => {
   it("getSnapshot is referentially stable until state changes (useSyncExternalStore-safe)", async () => {
     const { q } = mkQueue({ online: false });
     const a = q.getSnapshot();

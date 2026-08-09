@@ -169,7 +169,7 @@ describe("the record cannot be rewritten (append-only, enforced by the DB)", () 
     expect(after.action).not.toBe("tampered");
   });
 
-  it("survives a re-run of migrations — history is not wiped by a redeploy", async () => {
+  it("survives a re-run of migrations - history is not wiped by a redeploy", async () => {
     const before = (rawDb.prepare("SELECT COUNT(*) c FROM admin_audit").get() as any).c;
     expect(before).toBeGreaterThan(0);
     // A redeploy re-runs migrations against the same volume-backed file.

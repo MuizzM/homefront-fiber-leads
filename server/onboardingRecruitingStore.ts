@@ -161,7 +161,7 @@ export function normalizeInviteCompTerms(input: {
   if (structure === "TIERED" && !proposed) {
     return {
       ok: false,
-      errors: ["A tiered invitation needs a tier ladder — pick the bands the candidate will be paid on."],
+      errors: ["A tiered invitation needs a tier ladder - pick the bands the candidate will be paid on."],
       terms: { structure, flatRateCents: null, tiers: null },
     };
   }

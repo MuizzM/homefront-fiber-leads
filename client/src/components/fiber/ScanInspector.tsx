@@ -346,7 +346,7 @@ export default function ScanInspector() {
         </div>
         {sortedRows.length === 0 && (
           <div className="px-4 py-8 text-center text-[13px] text-muted-foreground">
-            No addresses in flight. Start a scan (Field Map, city, or statewide) — rows appear here in real time.
+            No addresses in flight. Start a scan (Field Map, city, or statewide) - rows appear here in real time.
           </div>
         )}
         {sortedRows.map((r) => {
@@ -369,7 +369,7 @@ export default function ScanInspector() {
                   </span>
                   {r.classification && <span className="pl-0.5 text-2xs text-muted-foreground">{r.classification}</span>}
                 </div>
-                <div className="text-right text-[12px] tabular-nums text-muted-foreground">{r.latencyMs != null ? `${r.latencyMs}ms` : "—"}{r.httpStatus ? ` · ${r.httpStatus}` : ""}</div>
+                <div className="text-right text-[12px] tabular-nums text-muted-foreground">{r.latencyMs != null ? `${r.latencyMs}ms` : " - "}{r.httpStatus ? ` · ${r.httpStatus}` : ""}</div>
                 <div className="text-right text-[11px] tabular-nums text-muted-foreground">{rel(r.updatedAt)}</div>
               </button>
               {stale && r.retryReason && (

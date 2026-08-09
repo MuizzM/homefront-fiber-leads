@@ -124,14 +124,14 @@ describe("a DM is its two members' room", () => {
     expect((await (await req("/api/chat", fx.repB.session)).json()).threadsUnread).toBe(0);
   });
 
-  it("does not exist for anyone else — not even a manager", async () => {
+  it("does not exist for anyone else - not even a manager", async () => {
     expect((await (await req("/api/chat/threads", fx.manager.session)).json()).threads).toHaveLength(0);
     expect((await req(`/api/chat/threads/${dmId}`, fx.manager.session)).status).toBe(404);
     expect((await post(`/api/chat/threads/${dmId}`, fx.manager.session, { body: "hi" })).status).toBe(404);
     expect((await req(`/api/chat/threads/${dmId}`, fx.foreignRep.session)).status).toBe(404);
   });
 
-  it("lets nobody moderate inside it — own words only", async () => {
+  it("lets nobody moderate inside it - own words only", async () => {
     // The manager holds the moderation capability; a DM still refuses them.
     expect((await req(`/api/chat/${dmMsg}`, fx.manager.session, { method: "DELETE" })).status).toBe(404);
     // The author may always remove their own words.
@@ -139,7 +139,7 @@ describe("a DM is its two members' room", () => {
     expect((await own.json()).ok).toBe(true);
   });
 
-  it("cannot be dissolved by a third party — group deletion skips DMs", async () => {
+  it("cannot be dissolved by a third party - group deletion skips DMs", async () => {
     const r = await req(`/api/chat/threads/${dmId}`, fx.manager.session, { method: "DELETE" });
     expect(r.status).toBe(404);
   });
@@ -199,7 +199,7 @@ describe("groups", () => {
       .threads.some((t: any) => t.id === groupId)).toBe(false);
   });
 
-  it("dissolves whole — messages, members, room — and then 404s", async () => {
+  it("dissolves whole - messages, members, room - and then 404s", async () => {
     expect((await req(`/api/chat/threads/${groupId}`, fx.repA.session, { method: "DELETE" })).status).toBe(403);
     expect((await (await req(`/api/chat/threads/${groupId}`, fx.manager.session, { method: "DELETE" })).json()).ok).toBe(true);
     expect((await req(`/api/chat/threads/${groupId}`, fx.repA.session)).status).toBe(404);
@@ -217,7 +217,7 @@ describe("group guardrails", () => {
     expect((await r.json()).error).toContain("tops out");
   });
 
-  it("refuses picks that can't chat, naming them — never a quietly smaller crew", async () => {
+  it("refuses picks that can't chat, naming them - never a quietly smaller crew", async () => {
     const r = await post("/api/chat/threads", fx.lead.session, {
       kind: "group", name: "Ghost crew", memberIds: [fx.repA.memberId, fx.caller.memberId],
     });
@@ -226,7 +226,7 @@ describe("group guardrails", () => {
     expect(body.memberIds).toEqual([fx.caller.memberId]);
   });
 
-  it("refuses a removal that would empty the room — disbanding is the honest verb", async () => {
+  it("refuses a removal that would empty the room - disbanding is the honest verb", async () => {
     const made = await post("/api/chat/threads", fx.lead.session, {
       kind: "group", name: "Two of us", memberIds: [fx.repA.memberId],
     });
@@ -245,7 +245,7 @@ describe("group guardrails", () => {
 describe("leaving a group", () => {
   let tid = 0;
 
-  it("is any member's own choice — no capability, gone from their list, 404 after", async () => {
+  it("is any member's own choice - no capability, gone from their list, 404 after", async () => {
     tid = (await (await post("/api/chat/threads", fx.lead.session, {
       kind: "group", name: "Walkable", memberIds: [fx.repA.memberId, fx.repB.memberId],
     })).json()).threadId;
@@ -259,12 +259,12 @@ describe("leaving a group", () => {
     expect((await post(`/api/chat/threads/${tid}/leave`, fx.repA.session, {})).status).toBe(404);
   });
 
-  it("never applies to a DM — you can't walk out of a two-person room", async () => {
+  it("never applies to a DM - you can't walk out of a two-person room", async () => {
     const dm = (await (await post("/api/chat/threads", fx.repA.session, { kind: "dm", memberId: fx.repB.memberId })).json()).threadId;
     expect((await post(`/api/chat/threads/${dm}/leave`, fx.repA.session, {})).status).toBe(404);
   });
 
-  it("dissolves the room when the last member walks out — no orphaned messages", async () => {
+  it("dissolves the room when the last member walks out - no orphaned messages", async () => {
     await post(`/api/chat/threads/${tid}/leave`, fx.repB.session, {});
     await post(`/api/chat/threads/${tid}/leave`, fx.lead.session, {});
     // Nothing left to find — not even for a capability holder by id.

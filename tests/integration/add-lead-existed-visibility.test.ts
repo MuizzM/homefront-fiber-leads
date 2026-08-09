@@ -92,7 +92,7 @@ afterAll(async () => {
   if (server) await new Promise<void>((res, rej) => server.close((e) => (e ? rej(e) : res())));
 });
 
-describe("POST /api/leads existed branch — visibility.reason", () => {
+describe("POST /api/leads existed branch - visibility.reason", () => {
   it("visible: geocoded, in scope, normal status → reason 'visible' and the assigned rep is named", async () => {
     const addr = { address: "700 Visible Road", city: "Concord", state: "NC", zip: "28025" };
     seedLead({ ...addr, assignedRepId: fx.repA.memberId, leadStatus: "prospect", lat: 35.41, lng: -80.58 });

@@ -15,13 +15,13 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(__dirname, "..", "..");
 const src = readFileSync(join(ROOT, "client/src/pages/MapView.tsx"), "utf8");
 
-describe("Remove FCC imports — More-menu entry", () => {
+describe("Remove FCC imports - More-menu entry", () => {
   it("exists as a More-menu entry with the destructive label", () => {
     expect(src).toContain('testid: "ctl-fcc-purge"');
     expect(src).toContain('label: "Remove FCC imports"');
   });
 
-  it("is gated by canReclaimAll — the reclaim-all permission check, never a new/wider gate", () => {
+  it("is gated by canReclaimAll - the reclaim-all permission check, never a new/wider gate", () => {
     // canReclaimAll must come from the shared permission table…
     expect(src).toContain('const canReclaimAll = roleCan(user?.role, "reclaim_all_territories")');
     // …and the entry's spread must sit directly behind it.
@@ -33,7 +33,7 @@ describe("Remove FCC imports — More-menu entry", () => {
     expect(src.slice(gate + "...(canReclaimAll".length, entry)).not.toContain("...(can");
   });
 
-  it("the menu tap only opens the dialog — the purge itself stays behind the typed confirm", () => {
+  it("the menu tap only opens the dialog - the purge itself stays behind the typed confirm", () => {
     const entry = src.slice(src.indexOf('key: "fcc-purge"'), src.indexOf('testid: "ctl-fcc-purge"') + 400);
     expect(entry).toContain("setFccPurgeOpen(true)");
     expect(entry).not.toContain("apiRequest");

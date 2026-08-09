@@ -57,7 +57,7 @@ function renderDialog(target: AreaDeleteTarget | null = TARGET) {
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
 describe("AreaDeleteDialog", () => {
-  it("makes the blast radius concrete — the door count and the sales that survive", () => {
+  it("makes the blast radius concrete - the door count and the sales that survive", () => {
     mockDelete();
     renderDialog();
     expect(screen.getByTestId("area-delete-consequence")).toHaveTextContent("84");
@@ -65,7 +65,7 @@ describe("AreaDeleteDialog", () => {
     expect(screen.getByTestId("area-delete-dialog")).toHaveTextContent("Delete Maple Ridge?");
   });
 
-  it("DEFAULTS to clearing the rep — the fix for doors that stayed on Talal", async () => {
+  it("DEFAULTS to clearing the rep - the fix for doors that stayed on Talal", async () => {
     mockDelete();
     renderDialog();
     expect(screen.getByTestId("area-delete-policy-clear")).toHaveAttribute("aria-checked", "true");
@@ -84,7 +84,7 @@ describe("AreaDeleteDialog", () => {
     expect(screen.getByTestId("area-delete-policy-keep")).toHaveTextContent("Keep them with Talal");
   });
 
-  it("a CREW area still clears everyone — the count is doors, the names are reps", async () => {
+  it("a CREW area still clears everyone - the count is doors, the names are reps", async () => {
     // The rule does not care how many reps are on the ground: deleting unassigns
     // every door in the area from whoever holds it.
     mockDelete({ detached: 90, repCleared: 90, clearedRepNames: ["Talal", "Bo"] });
@@ -107,7 +107,7 @@ describe("AreaDeleteDialog", () => {
     ));
   });
 
-  it("the consequence copy tracks the choice — it never describes the other outcome", () => {
+  it("the consequence copy tracks the choice - it never describes the other outcome", () => {
     mockDelete();
     renderDialog();
     // Default: back to the pool, no mention of keeping a rep.

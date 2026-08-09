@@ -75,7 +75,7 @@ export function planExistingLead(address: string, visibility?: LeadVisibility): 
   const canOpen = visibility?.inYourScope === true;
   return {
     reason, onMap: false, fly: false, flash: false, open: canOpen,
-    toastTitle: "Already a lead — not on your map",
+    toastTitle: "Already a lead - not on your map",
     toastDescription: canOpen ? `${address}: ${why}. Opening it…` : `${address}: ${why}.`,
   };
 }
@@ -200,7 +200,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
           // tap), the server geocodes in the background and the pin lands a beat
           // later — say so instead of implying it's already on the map.
           const placing = lead?.lat == null || lead?.lng == null;
-          toast({ title: "Lead added", description: placing ? `${submittedAddress} — placing on map…` : submittedAddress });
+          toast({ title: "Lead added", description: placing ? `${submittedAddress} - placing on map…` : submittedAddress });
         }
         // Targeted list update, not the old bare ["/api/leads"] prefix
         // invalidation — that refetched every cached list page AND every
@@ -232,7 +232,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
         const msg = String(e?.message ?? "").replace(/^\s*\d{3}:\s*/, "");
         toast({
           title: "Couldn't add lead",
-          description: `${submittedAddress} didn't save${msg ? ` — ${msg}` : ". Try again."}`,
+          description: `${submittedAddress} didn't save${msg ? ` - ${msg}` : ". Try again."}`,
           variant: "destructive",
         });
       } finally {
@@ -279,7 +279,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
               )}
             </div>
             {initial?.lat != null && (
-              <p className="text-[12px] text-muted-foreground mt-1 flex items-center gap-1"><MapPin className="w-3 h-3" /> From the map — check the address below.</p>
+              <p className="text-[12px] text-muted-foreground mt-1 flex items-center gap-1"><MapPin className="w-3 h-3" /> From the map - check the address below.</p>
             )}
 
             <div className="mt-4 space-y-3">
@@ -313,7 +313,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
                   ))}
                 </div>
               </div>
-              <Field label="Owner name (optional)" value={ownerName} onChange={setOwnerName} placeholder="—"
+              <Field label="Owner name (optional)" value={ownerName} onChange={setOwnerName} placeholder=" - "
                 testid="add-lead-owner" autoComplete="name" autoCapitalize="words" enterKeyHint="done" />
               <p className="rounded-xl border border-border bg-secondary/50 px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
                 Phone data is added only through the licensed, compliance-gated Calling workspace.

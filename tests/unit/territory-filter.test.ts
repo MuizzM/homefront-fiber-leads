@@ -250,7 +250,7 @@ describe("activity date bounds", () => {
   });
 });
 
-describe("filters INTERSECT — each one narrows the list, never widens it", () => {
+describe("filters INTERSECT - each one narrows the list, never widens it", () => {
   it("requires query AND status AND rep together", () => {
     // Ann holds 1 (active) and 2 (shared). Adding a status chip must cut, not add.
     expect(ids(all({ query: "rivera", repIds: [3] }))).toEqual([1, 2]);
@@ -309,7 +309,7 @@ describe("sortTerritories orders by the chosen key", () => {
   });
 });
 
-describe("sort comparators are TOTAL — equal primary keys still order the same way", () => {
+describe("sort comparators are TOTAL - equal primary keys still order the same way", () => {
   // Every case here feeds the SAME rows in two different input orders and demands
   // the same output. A comparator that returns 0 on a tie passes the first
   // assertion and fails the second, because Array.sort would just preserve

@@ -283,7 +283,7 @@ describe("achievement bonuses pay for reachable sales counts", () => {
     expect(ledgerRows(closer.memberId, "achv:")).toBe(2);
   });
 
-  it("skips a rep still inside their ramp window — they are on the other bonus", async () => {
+  it("skips a rep still inside their ramp window - they are on the other bonus", async () => {
     const { awardAchievementsForRep } = await import("../../server/salesAchievementStore");
     // Same four sales, a rep hired today. The ladder pays them nothing because
     // the ramp bonus is already paying them $50 a day to train.

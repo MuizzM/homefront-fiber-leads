@@ -43,7 +43,7 @@ describe("recoverFromStaleChunk", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("never reloads when sessionStorage is unusable — an unbounded retry could loop", () => {
+  it("never reloads when sessionStorage is unusable - an unbounded retry could loop", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("storage disabled");
     });

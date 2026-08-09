@@ -72,7 +72,7 @@ describe("the dry spell is bounded", () => {
     expect(dropChance(90, c)).toBeLessThan(dropChance(110, c));
   });
 
-  it("a normal day is FLAT — no cold trough after a drop, no warm run to feel", () => {
+  it("a normal day is FLAT - no cold trough after a drop, no warm run to feel", () => {
     // The point of the mechanic. If the odds ramped from door 0, calibrating to
     // 1-in-45 would force the base down to ~1-in-366, making the doors right
     // after a payout nearly worthless — the exact trough random reinforcement
@@ -189,7 +189,7 @@ describe("caps", () => {
     expect(v.drop.amountCents).toBe(200);
   });
 
-  it("a capped rep does NOT burn the winning door — the counter keeps climbing", () => {
+  it("a capped rep does NOT burn the winning door - the counter keeps climbing", () => {
     // Caps are checked before the roll is spent. The pity counter is maintained
     // by the caller from ledger history, so a door refused at the cap still
     // counts toward tomorrow's drop rather than evaporating.

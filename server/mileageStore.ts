@@ -115,7 +115,7 @@ export function ensureMileageSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_mileage_adj_trip ON mileage_adjustments(tenant_id, trip_id);
     CREATE INDEX IF NOT EXISTS idx_mileage_adj_rep ON mileage_adjustments(tenant_id, rep_id, created_at);
 
-    -- Effective-dated org rates. NEVER edited — a new figure is a new row.
+    -- Effective-dated org rates. NEVER edited - a new figure is a new row.
     CREATE TABLE IF NOT EXISTS mileage_rates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL,
@@ -138,7 +138,7 @@ export function ensureMileageSchema(): void {
       background_opt_in INTEGER NOT NULL DEFAULT 0,
       revoked_at TEXT,
       -- An admin has pinned this worker's setting. A pin FREEZES; it never
-      -- grants — see applyConsentLock in shared/mileage.ts.
+      -- grants - see applyConsentLock in shared/mileage.ts.
       admin_locked INTEGER NOT NULL DEFAULT 0,
       locked_by INTEGER,
       locked_at TEXT,

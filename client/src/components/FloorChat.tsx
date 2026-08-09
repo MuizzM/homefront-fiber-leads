@@ -374,10 +374,10 @@ export function FloorChat({
       >
         {isLoading && <Skeleton className="h-24 w-full rounded-2xl" data-testid="chat-loading" />}
 
-        {/* A fetch failure is not a quiet room — say it, keep polling. */}
+        {/* A fetch failure is not a quiet room - say it, keep polling. */}
         {isError && !roomGone && (
           <p className="pb-2 text-center text-[12px] text-muted-foreground" data-testid="chat-connection-error">
-            Couldn't refresh the room — retrying.
+            Couldn't refresh the room - retrying.
           </p>
         )}
 
@@ -407,7 +407,7 @@ export function FloorChat({
               ? `Just you and ${roomName ?? "them"} in here. Nobody else can read it.`
               : roomKind === "group"
                 ? `Quiet in here. Everyone in ${roomName ?? "this group"} reads this room.`
-                : "Quiet in here. Say something — everyone on the floor reads this room."}
+                : "Quiet in here. Say something - everyone on the floor reads this room."}
           </p>
         )}
 

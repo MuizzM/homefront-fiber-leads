@@ -255,7 +255,7 @@ export function validateAchievementConfig(input: unknown): string | null {
     return "The ladder needs a daily list and a career list.";
   }
   if (c.daily.length > 6 || c.career.length > 8) {
-    return "Use at most 6 daily and 8 career rungs — a ladder nobody can recite is not an incentive.";
+    return "Use at most 6 daily and 8 career rungs - a ladder nobody can recite is not an incentive.";
   }
 
   for (const [label, rungs, max] of [["daily", c.daily, 50], ["career", c.career, 10_000]] as const) {

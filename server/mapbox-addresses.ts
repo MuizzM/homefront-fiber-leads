@@ -390,7 +390,7 @@ export async function harvestBboxAddresses(
     // per-box guess.
     if (!canSpendMapbox()) {
       console.warn(
-        `[deep-harvest] Mapbox budget exhausted — stopping paid enumeration at ${done}/${gridPoints.length}, returning ${seen.size} address(es)`,
+        `[deep-harvest] Mapbox budget exhausted - stopping paid enumeration at ${done}/${gridPoints.length}, returning ${seen.size} address(es)`,
       );
       break;
     }

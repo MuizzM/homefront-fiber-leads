@@ -18,7 +18,7 @@ const policy = (over: Partial<Parameters<typeof resolveEffectiveDates>[1]> = {})
   ...over,
 });
 
-describe("resolveEffectiveDates — the correction window", () => {
+describe("resolveEffectiveDates - the correction window", () => {
   it("leaves a timestamp inside the window untouched", () => {
     const r = resolveEffectiveDates({ soldAt: at(-3), qualifiedAt: at(-2) }, policy());
     expect(r.clamps).toEqual([]);
@@ -35,7 +35,7 @@ describe("resolveEffectiveDates — the correction window", () => {
     });
   });
 
-  it("pulls a FUTURE value back to the receipt time — a clock cannot run ahead of the server", () => {
+  it("pulls a FUTURE value back to the receipt time - a clock cannot run ahead of the server", () => {
     const r = resolveEffectiveDates({ soldAt: at(5) }, policy());
     expect(r.applied.soldAt).toBe(RECEIVED);
     expect(r.clamps[0]).toMatchObject({ reason: "AFTER_SERVER_RECEIPT", isBasisField: false });
@@ -67,7 +67,7 @@ describe("resolveEffectiveDates — the correction window", () => {
   });
 });
 
-describe("resolveEffectiveDates — the trust boundary", () => {
+describe("resolveEffectiveDates - the trust boundary", () => {
   it("clamps nothing for a trusted in-process caller (no serverReceivedAt)", () => {
     const r = resolveEffectiveDates({ soldAt: at(-400), qualifiedAt: at(-400) }, policy({ serverReceivedAt: null }));
     expect(r.clamps).toEqual([]);
@@ -81,7 +81,7 @@ describe("resolveEffectiveDates — the trust boundary", () => {
   });
 });
 
-describe("resolveEffectiveDates — basis selection", () => {
+describe("resolveEffectiveDates - basis selection", () => {
   it("picks the basis timestamp per the configured basis", () => {
     const input = { soldAt: at(-5), qualifiedAt: at(-4), installedAt: at(-3), activatedAt: at(-2) };
     expect(resolveEffectiveDates(input, policy({ basis: "SOLD_AT" })).basisTs).toBe(at(-5));

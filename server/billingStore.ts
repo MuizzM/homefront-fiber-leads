@@ -357,10 +357,10 @@ export function scanBlockReason(tenantId: number): ScanBlock | null {
   const row = getBilling(tenantId);
   if (!row) return null; // dark → allowed
   if (!isScanningAllowed(row.state)) {
-    return { code: `billing_${row.state}`, message: `Billing is ${row.state} — scanning is paused until it's resolved.`, state: row.state };
+    return { code: `billing_${row.state}`, message: `Billing is ${row.state} - scanning is paused until it's resolved.`, state: row.state };
   }
   if (!row.unlimited && row.overageMode === "stop" && creditsRemaining(toCreditState(row)) <= 0) {
-    return { code: "credits_exhausted", message: "Lead credits are exhausted for this cycle — add credits or wait for renewal.", state: row.state };
+    return { code: "credits_exhausted", message: "Lead credits are exhausted for this cycle - add credits or wait for renewal.", state: row.state };
   }
   return null;
 }

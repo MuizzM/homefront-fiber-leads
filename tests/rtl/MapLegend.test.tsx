@@ -52,7 +52,7 @@ describe("map pin-colors key contract", () => {
     expect(img!.getAttribute("src")).toBe("data:image/png;base64,AAAA");
   });
 
-  it("is a labelled read-only region — rows expose no buttons", () => {
+  it("is a labelled read-only region - rows expose no buttons", () => {
     renderKey();
     const region = screen.getByTestId("map-legend");
     expect(region).toHaveAttribute("role", "region");

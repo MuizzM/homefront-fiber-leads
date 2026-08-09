@@ -834,7 +834,7 @@ function assertWeekOpenForQualify(
     storage.logActivity(actorId, "commission_sale.locked_week_blocked", "commission_sale", saleId ?? undefined,
       { externalId, repId, weekStartUtc: target, status: lockedStmt.status }, undefined);
     throw new CommissionError("STATEMENT_LOCKED",
-      `Week ${target} is ${lockedStmt.status} for rep ${repId} — book the sale PENDING and qualify it in an open correction period.`, 409);
+      `Week ${target} is ${lockedStmt.status} for rep ${repId} - book the sale PENDING and qualify it in an open correction period.`, 409);
   }
 }
 
@@ -964,8 +964,8 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
           movesCredit, movesWeek, resurrects }, undefined);
       throw new CommissionError("SALE_CREDIT_LOCKED",
         movesCredit
-          ? `Sale ${input.externalId} already belongs to rep ${existing.rep_id} — reverse it before re-crediting.`
-          : `Sale ${input.externalId} is QUALIFIED in an earlier pay week — reverse it before re-dating.`,
+          ? `Sale ${input.externalId} already belongs to rep ${existing.rep_id} - reverse it before re-crediting.`
+          : `Sale ${input.externalId} is QUALIFIED in an earlier pay week - reverse it before re-dating.`,
         409);
     }
   }
@@ -1142,7 +1142,7 @@ const MAX_ADJUSTMENT_CENTS = 100_000_000;
 export function applyApprovedAdjustments(tenantId: number, statementId: number, actorId: number | null): any {
   const stmt = rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ? AND tenant_id = ?`).get(statementId, tenantId) as any;
   if (!stmt) throw new CommissionError("CROSS_TENANT_ACCESS", "Statement not found in tenant.", 404);
-  if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID — money already moved; correct on a future week.", 409);
+  if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID - money already moved; correct on a future week.", 409);
   const sum = sumApprovedAdjustments(tenantId, statementId);
   // gross AND the override block are FROZEN — never re-read from the ledgers.
   // Omitting the override column here would silently erase an upline's
@@ -1166,14 +1166,14 @@ export function createAdjustment(tenantId: number, actorId: number | null, input
 }): any {
   const stmt = rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ? AND tenant_id = ?`).get(input.statementId, tenantId) as any;
   if (!stmt) throw new CommissionError("CROSS_TENANT_ACCESS", "Statement not found in tenant.", 404);
-  if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID — book corrections on a future week, not a paid one.", 409);
+  if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID - book corrections on a future week, not a paid one.", 409);
   if (!Number.isInteger(input.amountCents) || input.amountCents === 0) throw new CommissionError("INVALID_ADJUSTMENT", "amountCents must be a non-zero integer.");
   if (Math.abs(input.amountCents) > MAX_ADJUSTMENT_CENTS) throw new CommissionError("INVALID_ADJUSTMENT", `Adjustment exceeds the ${formatUsdCents(MAX_ADJUSTMENT_CENTS)} limit.`);
   if (!input.reason || !input.reason.trim()) throw new CommissionError("INVALID_ADJUSTMENT", "A reason is required.");
   if (input.relatedSaleId != null && (stmt.status === "OPEN" || stmt.status === "REVIEW")) {
     const sale = rawDb.prepare(`SELECT status FROM commission_sales WHERE id = ? AND tenant_id = ?`).get(input.relatedSaleId, tenantId) as any;
     if (sale && sale.status === "REVERSED") {
-      throw new CommissionError("INVALID_ADJUSTMENT", "That sale is already reversed and excluded from this open week — no adjustment needed.", 409);
+      throw new CommissionError("INVALID_ADJUSTMENT", "That sale is already reversed and excluded from this open week - no adjustment needed.", 409);
     }
   }
   const info = rawDb.prepare(
@@ -1373,7 +1373,7 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
     ).get(tenantId);
     if (locked) {
       throw new CommissionError("WEEK_KEY_FROZEN",
-        "Timezone, week-start and qualification basis can't change once a week has been finalized or paid — they re-key locked weeks and risk paying their sales twice. Reopen/settle those weeks first.", 409);
+        "Timezone, week-start and qualification basis can't change once a week has been finalized or paid - they re-key locked weeks and risk paying their sales twice. Reopen/settle those weeks first.", 409);
     }
   }
   const sets: string[] = []; const params: any[] = [];
@@ -1853,7 +1853,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
     // closeout blockers) so a manager closes the punch first.
     if (hp.weekEnded && hp.openSessionCount > 0) {
       exceptions.push({ type: "OPEN_CLOCK_SESSION", repId: rep.id, repName: rep.name,
-        detail: `${hp.openSessionCount} open clock session(s) reach into this ended week — clock out (or correct the punch) before finalizing hourly pay.` });
+        detail: `${hp.openSessionCount} open clock session(s) reach into this ended week - clock out (or correct the punch) before finalizing hourly pay.` });
     }
     // Set when NO plan governs this week (either the calc threw, or it took the
     // hourly-only path) — drives SALES_WITHOUT_PLAN from the LEDGER counts so
@@ -1906,7 +1906,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
         ).get(tenantId, rep.id, bounds.weekStartUtc, bounds.nextWeekStartUtc, existing.finalized_at ?? existing.updated_at) as any;
         if (Number(lateReversals?.c ?? 0) > 0) {
           exceptions.push({ type: "REVERSED_AFTER_FINALIZE", repId: rep.id, repName: rep.name,
-            detail: `${lateReversals.c} sale(s) un-sold after the week was ${existing.status.toLowerCase()} — book a clawback adjustment.` });
+            detail: `${lateReversals.c} sale(s) un-sold after the week was ${existing.status.toLowerCase()} - book a clawback adjustment.` });
         }
       } else {
         // Open (or missing) — live recompute so the console is always current.
@@ -1941,7 +1941,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
 
     if (noPlanForWeek && (row.qualifiedSaleCount + row.pendingSaleCount) > 0) {
       exceptions.push({ type: "SALES_WITHOUT_PLAN", repId: rep.id, repName: rep.name,
-        detail: `${row.qualifiedSaleCount + row.pendingSaleCount} sale(s) this week but no commission plan assigned — these pay $0 until a plan is set.` });
+        detail: `${row.qualifiedSaleCount + row.pendingSaleCount} sale(s) this week but no commission plan assigned - these pay $0 until a plan is set.` });
     }
 
     if (structure && !acceptedAt && row.status !== "NO_PLAN") {
@@ -1977,8 +1977,8 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
       type: reversal ? "OVERRIDE_REVERSED_AFTER_FINALIZE" : "OVERRIDE_LOCKED_WEEK_EARN",
       repId: ex.beneficiaryRepId, repName: ex.beneficiaryName,
       detail: reversal
-        ? `${ex.downlineRepName}'s sale was un-sold after this week settled — book a ${formatUsdCents(Math.abs(ex.amountCents))} clawback adjustment, then resolve the override exception.`
-        : `A ${formatUsdCents(Math.abs(ex.amountCents))} override on ${ex.downlineRepName}'s sale landed in an already-locked week — book a manager adjustment, then resolve.`,
+        ? `${ex.downlineRepName}'s sale was un-sold after this week settled - book a ${formatUsdCents(Math.abs(ex.amountCents))} clawback adjustment, then resolve the override exception.`
+        : `A ${formatUsdCents(Math.abs(ex.amountCents))} override on ${ex.downlineRepName}'s sale landed in an already-locked week - book a manager adjustment, then resolve.`,
     });
   }
 
@@ -2197,7 +2197,7 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
         return { repId: s.rep_id, statementId: s.id, outcome: "skipped", code: "ALREADY_PAID", retryable: false, result: "already PAID" };
       }
       if (s.status !== "FINALIZED") {
-        return { repId: s.rep_id, statementId: s.id, outcome: "skipped", code: "NOT_FINALIZED", retryable: true, result: `skipped (${s.status} — finalize first)` };
+        return { repId: s.rep_id, statementId: s.id, outcome: "skipped", code: "NOT_FINALIZED", retryable: true, result: `skipped (${s.status} - finalize first)` };
       }
       const paid = rawDb.transaction(() => transitionStatement(tenantId, actorId, s.id, "MARK_PAID"))();
       return { repId: s.rep_id, statementId: paid.id, outcome: "ok", result: "PAID", finalCommissionCents: paid.final_commission_cents };

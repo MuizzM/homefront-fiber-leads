@@ -17,7 +17,7 @@ beforeAll(async () => {
 });
 beforeEach(() => mbx._resetMapboxBudgetForTests());
 
-describe("Mapbox spend governor — the ceiling that makes grid caps removable", () => {
+describe("Mapbox spend governor - the ceiling that makes grid caps removable", () => {
   it("allows spend under the cap and refuses once exhausted", () => {
     expect(mbx.canSpendMapbox()).toBe(true);
     for (let i = 0; i < 5; i++) mbx.recordMapboxRequests(1);

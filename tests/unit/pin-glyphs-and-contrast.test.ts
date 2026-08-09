@@ -50,7 +50,7 @@ describe("pin glyphs are vectors, never text", () => {
     }
   });
 
-  it("the sold pin still draws a dollar — vector strokes, not a glyph name", () => {
+  it("the sold pin still draws a dollar - vector strokes, not a glyph name", () => {
     const sold = PIN_SVGS.sold;
     // A vertical bar plus the S-curve: two stroked paths over the circle.
     const strokedPaths = sold.match(/<path[^>]*stroke="#fff"/g) ?? [];
@@ -58,7 +58,7 @@ describe("pin glyphs are vectors, never text", () => {
     expect(sold).toContain(STATUS_CONFIG.sold.color); // the disc keeps its fill
   });
 
-  it("the prospect pin keeps its down arrow — now as the glyph inside the circle", () => {
+  it("the prospect pin keeps its down arrow - now as the glyph inside the circle", () => {
     // The silhouette went flat-circle for every status (SalesRabbit reference);
     // the arrow survived as prospect's inner glyph so the learned vocabulary holds.
     expect(PIN_SVGS.prospect).toMatch(/M20 12\.5v13m-5\.5-5\.5 5\.5 5\.5 5\.5-5\.5/);
@@ -88,13 +88,13 @@ describe("card text is readable on the dark sheet", () => {
     }
   });
 
-  it("sold specifically — the one that failed — is now legible", () => {
+  it("sold specifically - the one that failed - is now legible", () => {
     // Before: #14532D at 2.11:1, effectively invisible.
     expect(STATUS_CONFIG.sold.onDark).toBeTruthy();
     expect(contrast(STATUS_CONFIG.sold.onDark!, CARD_BG)).toBeGreaterThan(7);
   });
 
-  it("the MAP colour is untouched — pins must stay distinguishable from prospect", () => {
+  it("the MAP colour is untouched - pins must stay distinguishable from prospect", () => {
     // The fix must not leak into the map: sold's deep green exists so a sold pin
     // never reads as a prospect pin at zoom.
     expect(STATUS_CONFIG.sold.color).toBe("#14532D");

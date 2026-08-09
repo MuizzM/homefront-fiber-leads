@@ -57,7 +57,7 @@ describe("inBBox / bboxParam", () => {
 describe("mergeViewportPins", () => {
   const pin = (id: number, lat: number, lng: number) => ({ id, lat, lng });
 
-  it("merges by id — fetched wins, survivors keep their objects", () => {
+  it("merges by id - fetched wins, survivors keep their objects", () => {
     const stale = pin(1, 35.5, -80.4);
     const fresh = { ...stale, leadStatus: "sold" } as any;
     const kept = pin(2, 35.45, -80.3);
@@ -93,7 +93,7 @@ describe("mergeViewportPins", () => {
 });
 
 describe("mode threshold", () => {
-  it("is 75k — the whole-org feed carries the org's ~62k default lens with headroom", () => {
+  it("is 75k - the whole-org feed carries the org's ~62k default lens with headroom", () => {
     // Measured Aug 2026: 62k pins = ~980KB gzipped wire, <1s load. The 2025
     // FCC import pushed the default lens over the old 60k cliff and flipped
     // every field map into windowed mode overnight; 75k keeps that lens on
@@ -119,7 +119,7 @@ describe("bboxExceedsSpanGuard (F4)", () => {
     expect(bboxExceedsSpanGuard({ minLng: -80.5, minLat: 5, maxLng: -80.2, maxLat: 50 })).toBe(true); // lat span 45°
   });
 
-  it("region/state zoom (over the OLD 3° guard) now fetches — the server samples it", () => {
+  it("region/state zoom (over the OLD 3° guard) now fetches - the server samples it", () => {
     // The owner's blank-map report: a whole-state view must fetch, not skip.
     const state = { minLng: -84.5, minLat: 33.7, maxLng: -75.4, maxLat: 36.6 }; // all of NC ~9°
     expect(bboxExceedsSpanGuard(expandBBox(state, VIEWPORT_FETCH_MARGIN))).toBe(false);
@@ -153,13 +153,13 @@ describe("viewportNotice (F1 chip wiring)", () => {
   const base = { viewportMode: true, truncated: false, sampleDismissed: false };
   it("truncated window → the sample notice", () => {
     expect(viewportNotice({ ...base, truncated: true })).toEqual({
-      kind: "sample", message: "Showing a sample — zoom in for all pins",
+      kind: "sample", message: "Showing a sample - zoom in for all pins",
     });
   });
   it("non-truncated window → no notice", () => {
     expect(viewportNotice(base)).toBeNull();
   });
-  it("there is NO zoom-in notice anymore — wide zooms render the density grid", () => {
+  it("there is NO zoom-in notice anymore - wide zooms render the density grid", () => {
     // The old spanTooWide/"Zoom in to load pins" dead state is gone: past the
     // pin span guard the grid tier renders, so the notice function has no
     // zoom branch at all.
@@ -170,7 +170,7 @@ describe("viewportNotice (F1 chip wiring)", () => {
     expect(viewportNotice({ ...base, truncated: true, sampleDismissed: true })).toBeNull();
     expect(viewportNotice({ ...base, viewportMode: false, truncated: true })).toBeNull();
   });
-  it("never warns on the grid tier — density bubbles are complete counts, not a sample", () => {
+  it("never warns on the grid tier - density bubbles are complete counts, not a sample", () => {
     expect(viewportNotice({ ...base, truncated: true, tier: "grid" })).toBeNull();
     expect(viewportNotice({ ...base, truncated: true, tier: "pins" })).not.toBeNull();
   });
@@ -192,7 +192,7 @@ describe("truncation evidence → tier prediction", () => {
     expect(predictWindowCount(CITY, { area: 0, windowCount: 10 })).toBeNull();
   });
 
-  it("keeps an over-cap-predicted window on the grid tier — a thinned sample is never rendered as pins", () => {
+  it("keeps an over-cap-predicted window on the grid tier - a thinned sample is never rendered as pins", () => {
     expect(tierFor(CITY, evidence)).toBe("grid");
     // Without evidence the same window is pins-tier (≤3° span).
     expect(tierFor(CITY)).toBe("pins");
@@ -256,7 +256,7 @@ describe("truncated latest-fetch wins (F1)", () => {
 import { firstUseEmptyStateEnabled } from "@/lib/mapViewport";
 
 describe("firstUseEmptyStateEnabled", () => {
-  it("NEVER shows in viewport mode — the mode itself proves the org has leads", () => {
+  it("NEVER shows in viewport mode - the mode itself proves the org has leads", () => {
     // Empty merged cache in viewport mode means unfetched/over-water/sampled,
     // not "no leads" — the count probe answered > threshold to get here.
     expect(firstUseEmptyStateEnabled({ viewportMode: true, pinsArrived: true, leadCount: 0 })).toBe(false);

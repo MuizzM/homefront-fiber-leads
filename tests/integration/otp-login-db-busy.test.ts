@@ -101,7 +101,7 @@ describe("OTP sign-in with a contested database", () => {
     expect((await after.json()).developmentCode).toMatch(/^\d{6}$/);
   });
 
-  it("a failed verify does not burn the code — the same digits work on retry", async () => {
+  it("a failed verify does not burn the code - the same digits work on retry", async () => {
     const email = "busy.verify@otp-busy.test";
     seedUser(email);
     const code = (await (await requestCode(email)).json()).developmentCode as string;

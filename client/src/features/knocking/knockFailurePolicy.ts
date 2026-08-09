@@ -107,7 +107,7 @@ export function terminalKnockReason(item: Pick<QueuedKnock, "leadId" | "lastErro
       // the scope wall), so "gone" and "not your area" are the same status —
       // name both, and give the one path that actually resolves it. Retry is
       // NOT offered: nothing the rep can do redeems this knock as-is.
-      return "the lead no longer exists or isn't in your assigned area — your manager can assign it";
+      return "the lead no longer exists or isn't in your assigned area - your manager can assign it";
     case 400:
     case 422:
       return "the server rejected it as invalid";
@@ -118,7 +118,7 @@ export function terminalKnockReason(item: Pick<QueuedKnock, "leadId" | "lastErro
 
 // The one path that resolves a scope-denied knock — assignment, never re-auth.
 export function scopeDeniedKnockReason(): string {
-  return "this door isn't in your assigned area — your manager can assign it";
+  return "this door isn't in your assigned area - your manager can assign it";
 }
 
 // Dead-lane copy for the forbidden/auth classes, split by the ACTUAL status
@@ -131,7 +131,7 @@ export function scopeDeniedKnockReason(): string {
 //         were simply unassigned). Point at the resolution that exists.
 export function forbiddenKnockReason(lastError?: string | null): string {
   if (knockFailureStatus(lastError) === 401) {
-    return "not authorized right now — sign out and back in, then retry";
+    return "not authorized right now - sign out and back in, then retry";
   }
   return scopeDeniedKnockReason();
 }
@@ -164,7 +164,7 @@ export function summarizeDeadKnock(item: QueuedKnock): DeadKnockSummary {
         ? forbiddenKnockReason(item.lastError)
         : kind === "terminal"
           ? terminalKnockReason(item)
-          : "delivery keeps failing — retry to send it now",
+          : "delivery keeps failing - retry to send it now",
     retryable: kind !== "terminal",
   };
 }
@@ -256,7 +256,7 @@ export function needsAttentionText(
   address: string | null,
   reason: string | null,
 ): string {
-  const suffix = reason ? ` — ${reason}` : "";
+  const suffix = reason ? ` - ${reason}` : "";
   if (count === 1) {
     return `${address ?? "1 field update"} needs attention${suffix}`;
   }

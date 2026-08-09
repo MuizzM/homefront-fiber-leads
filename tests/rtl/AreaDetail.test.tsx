@@ -98,7 +98,7 @@ beforeEach(() => {
   apiRequest.mockImplementation(async () => ({ json: async () => passPreview } as unknown as Response));
 });
 
-describe("AreaDetail — the area's own numbers", () => {
+describe("AreaDetail - the area's own numbers", () => {
   beforeEach(() => { mockAuth.user = { id: 2, name: "Mona Manager", role: "manager", teamMemberId: 4 }; });
 
   it("names the area, states its status, and shows the four headline figures", async () => {
@@ -183,7 +183,7 @@ describe("AreaDetail — the area's own numbers", () => {
   });
 });
 
-describe("AreaDetail — who may act", () => {
+describe("AreaDetail - who may act", () => {
   it("hides every lifecycle control from a plain rep", async () => {
     mockAuth.user = { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 };
     renderPage();
@@ -276,7 +276,7 @@ describe("AreaDetail — who may act", () => {
 // An area is many-to-many everywhere else in the product, but this screen could
 // only ever print ONE name — so a two-rep area read as one rep's ground, and
 // there was no way to remove the other from here at all.
-describe("AreaDetail — who works this area", () => {
+describe("AreaDetail - who works this area", () => {
   const CREW = {
     repId: 5, repName: "Bo Rivera",
     repIds: [5, 6], repNames: ["Bo Rivera", "Talal Rep"],

@@ -19,7 +19,7 @@ beforeAll(async () => {
 
 const TTL = 60_000;
 
-describe("primary-node lease — producers run on exactly one node across the fleet", () => {
+describe("primary-node lease - producers run on exactly one node across the fleet", () => {
   it("a lone node acquires the lease and holds it on renew", () => {
     const t = 1_000_000;
     expect(lease.tryAcquirePrimaryOn(db, "nodeA", t, TTL)).toBe(true);

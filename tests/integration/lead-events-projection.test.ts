@@ -149,7 +149,7 @@ describe("assign-mark paths", () => {
     }
   });
 
-  it("clearing a mark also emits — a stale triage chip is a wrong pin too", async () => {
+  it("clearing a mark also emits - a stale triage chip is a wrong pin too", async () => {
     const a = door();
     await req("/api/leads/bulk-mark", manager.session, {
       method: "POST", body: JSON.stringify({ leadIds: [a], mark: "hold" }),
@@ -177,7 +177,7 @@ describe("assign-mark paths", () => {
   });
 });
 
-describe("knock path — post-CAS projection", () => {
+describe("knock path - post-CAS projection", () => {
   it("a winning knock broadcasts its own outcome and clock", async () => {
     const leadId = door();
     const knockedAt = new Date(Date.now() - 5_000).toISOString();
@@ -194,7 +194,7 @@ describe("knock path — post-CAS projection", () => {
     expect(evts[0].lead?.lastOutcomeAt).toBe(knockedAt);
   });
 
-  it("a knock that LOSES the recency CAS still emits — carrying the WINNER, not the stale outcome", async () => {
+  it("a knock that LOSES the recency CAS still emits - carrying the WINNER, not the stale outcome", async () => {
     const leadId = door();
     // Central mark now — this is the newest disposition on the door.
     const central = await req(`/api/leads/${leadId}/central-disposition`, manager.session, {

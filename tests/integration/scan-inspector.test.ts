@@ -30,9 +30,9 @@ function emitLifecycle(key: string, addr: string, finalStage: "classified" | "re
     bus.emitStage({ ...base, stage: "parsing", status: "info", httpStatus: 200, latencyMs: 480, tsEpoch: t + 4 });
     bus.emitStage({ ...base, stage: "classified", status: "ok", httpStatus: 200, latencyMs: 480, classification: cls ?? "fresh_fiber", tsEpoch: t + 5 });
   } else if (finalStage === "retry") {
-    bus.emitStage({ ...base, stage: "retry", status: "pending_auth", httpStatus: 403, sessionId: "decodo-s3", tokenSuffix: FULL_TOKEN.slice(-4), retryReason: "auth 403 — token invalidated, Decodo session rotated", tsEpoch: t + 4 });
+    bus.emitStage({ ...base, stage: "retry", status: "pending_auth", httpStatus: 403, sessionId: "decodo-s3", tokenSuffix: FULL_TOKEN.slice(-4), retryReason: "auth 403 - token invalidated, Decodo session rotated", tsEpoch: t + 4 });
   } else {
-    bus.emitStage({ ...base, stage: "blocked", status: "blocked", httpStatus: 429, retryReason: "rate-limited — requeued", tsEpoch: t + 4 });
+    bus.emitStage({ ...base, stage: "blocked", status: "blocked", httpStatus: 429, retryReason: "rate-limited - requeued", tsEpoch: t + 4 });
   }
 }
 
@@ -58,7 +58,7 @@ describe("Scan Inspector event store", () => {
     expect(tl.map((e) => e.stage)).toEqual(["queued", "minting", "token_ready", "searching", "parsing", "classified"]);
   });
 
-  it("NEVER persists a full token — only the masked last-4 suffix", () => {
+  it("NEVER persists a full token - only the masked last-4 suffix", () => {
     const tl = events.getAddressTimeline("k|fresh", 20);
     const serialized = JSON.stringify(tl);
     expect(serialized).not.toContain("SUPERSECRETJWTPAYLOAD");

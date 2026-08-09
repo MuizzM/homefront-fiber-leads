@@ -171,7 +171,7 @@ const AREA_STATUS_META: Record<string, AreaStatusMeta> = {
     label: "Unassigned",
     chip: "bg-slate-500/15 text-slate-600 dark:text-slate-300",
     hero: "border-border from-muted/40 to-transparent",
-    blurb: "Nobody holds this area — it sits in the pool until you assign it.",
+    blurb: "Nobody holds this area - it sits in the pool until you assign it.",
   },
   archived: {
     label: "Archived",

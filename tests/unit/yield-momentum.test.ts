@@ -106,7 +106,7 @@ describe("build momentum score term", () => {
     expect(scoreOf(rows, A)).toBeGreaterThan(scoreOf(rows, E));
   });
 
-  it("momentum only reorders — it never changes which targets are due", () => {
+  it("momentum only reorders - it never changes which targets are due", () => {
     const rows = scoreDueTargets(1, 500).map((r: any) => r.id);
     // All six never-scanned probes are due regardless of momentum.
     for (const key of ["A", "B", "C", "D", "E", "F"]) expect(rows).toContain((globalThis as any)[key]);

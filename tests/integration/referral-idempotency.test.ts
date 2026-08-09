@@ -110,7 +110,7 @@ describe("clicks", () => {
 });
 
 describe("links", () => {
-  it("minting is idempotent — a rep keeps ONE code", () => {
+  it("minting is idempotent - a rep keeps ONE code", () => {
     const first = link();
     for (let i = 0; i < 5; i += 1) expect(link().code).toBe(first.code);
     const n = rawDb.prepare(`SELECT COUNT(*) AS n FROM referral_links`).get() as any;

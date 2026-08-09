@@ -105,7 +105,7 @@ describe("a new rep is locked to training", () => {
     }
   });
 
-  it("cannot log a knock — the whole point of the gate", async () => {
+  it("cannot log a knock - the whole point of the gate", async () => {
     const leadRow = storage.createLead({
       address: "1 Gate St", city: "Testville", state: "NC", zip: "27000",
       leadStatus: "new", tenantId: 1,
@@ -125,7 +125,7 @@ describe("a new rep is locked to training", () => {
     }
   });
 
-  it("can still sign out — never trap someone inside the app", async () => {
+  it("can still sign out - never trap someone inside the app", async () => {
     const throwaway = storage.createSession(newRep.userId).id;
     expect((await post("/api/auth/logout", throwaway)).status).toBe(200);
   });
@@ -216,7 +216,7 @@ describe("admin overrides", () => {
     expect((await request("/api/leads", secondNewRep.session)).status).toBe(403);
   });
 
-  it("a manager cannot either — the override sits with admin", async () => {
+  it("a manager cannot either - the override sits with admin", async () => {
     expect((await post(`/api/training/gate/${secondNewRep.userId}`, mgr.session, { required: false })).status).toBe(403);
   });
 
@@ -278,7 +278,7 @@ describe("admin overrides", () => {
     expect((await request("/api/leads", veteran.session)).status).not.toBe(403);
   });
 
-  it("locking an EXEMPT role changes nothing — a manager is never gated", async () => {
+  it("locking an EXEMPT role changes nothing - a manager is never gated", async () => {
     // The flag can be set on anyone, but the rule ignores it for exempt roles.
     // Without this, an admin could accidentally lock a manager out of the org.
     expect((await post(`/api/training/gate/${mgr.userId}`, admin.session, { required: true })).status).toBe(200);

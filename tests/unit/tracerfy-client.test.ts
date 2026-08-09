@@ -25,7 +25,7 @@ function stubFetch(routes: Record<string, any>) {
 beforeEach(() => { calls = []; process.env.TRACERFY_API_KEY = "test-key"; });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-describe("CSV parsing — their results are files, not JSON", () => {
+describe("CSV parsing - their results are files, not JSON", () => {
   it("handles quoted fields containing commas", () => {
     // Owner names do this constantly: "Smith, John Jr."
     const rows = parseCsv('phone,owner_name\n+15551230001,"Smith, John Jr."\n');
@@ -49,7 +49,7 @@ describe("CSV parsing — their results are files, not JSON", () => {
 describe("skipTraceLead", () => {
   const lead = { address: "1408 Winecoff School Rd", city: "Concord", state: "NC", zip: "28027" };
 
-  it("uses trace_type=advanced — 'normal' scored 0% on address-only lists", () => {
+  it("uses trace_type=advanced - 'normal' scored 0% on address-only lists", () => {
     stubFetch({
       "/v1/api/trace/": { queue_id: "q1" },
       "/v1/api/queue/q1": { status: "complete", download_url: "https://dl/x.csv" },
@@ -114,7 +114,7 @@ describe("skipTraceLead", () => {
   });
 });
 
-describe("scrubPhones — the part that decides what may be dialled", () => {
+describe("scrubPhones - the part that decides what may be dialled", () => {
   it("clears a number with no flags", async () => {
     stubFetch({
       "/v2/api/dnc/scrub/": { queue_id: "s1" },

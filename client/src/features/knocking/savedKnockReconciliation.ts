@@ -115,7 +115,7 @@ export function createSavedKnockReconciliation(
       const whole = Math.floor(Math.abs(award.amountCents) / 100).toLocaleString("en-US");
       const rem = Math.abs(award.amountCents) % 100;
       const amount = rem === 0 ? `$${whole}` : `$${whole}.${String(rem).padStart(2, "0")}`;
-      effects.notify({ title: "SPIFF earned", description: `${amount} — ${award.reason}` });
+      effects.notify({ title: "SPIFF earned", description: `${amount} - ${award.reason}` });
     }
 
     effects.invalidateQuery(["/api/leads/map"]);

@@ -74,7 +74,7 @@ export default function FiberIntelligence() {
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-4 pb-6 pt-4 sm:px-6">
       <header className="mb-3">
         <h1 className="text-[22px] font-bold tracking-tight text-foreground">Fiber Intelligence</h1>
-        <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC — one workspace.</p>
+        <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC - one workspace.</p>
       </header>
 
       <div className="relative sticky top-0 z-10 -mx-4 mb-4 sm:-mx-6">
@@ -196,7 +196,7 @@ function FreshNow() {
       </Suspense>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
         {isError
-          ? <span className="inline-flex items-center gap-1 text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost — showing last loaded data</span>
+          ? <span className="inline-flex items-center gap-1 text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost - showing last loaded data</span>
           : <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · last {hours === 24 ? "24h" : "7 days"}</span>}
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
@@ -205,7 +205,7 @@ function FreshNow() {
             <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-2 w-2 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
           ))}</div>
         ) : (data?.addresses?.length ?? 0) === 0 ? (
-          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No fresh fiber in this window — the pipeline is watching. New detections stream in here.</div>
+          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No fresh fiber in this window - the pipeline is watching. New detections stream in here.</div>
         ) : (
           <>
             <div className="divide-y divide-border">
@@ -234,7 +234,7 @@ function FreshNow() {
       {(changes?.rows?.length ?? 0) > 0 && (
         <div className="overflow-hidden rounded-2xl border border-border bg-card">
           <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest transitions — 7 days</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest transitions - 7 days</div>
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <span className="inline-flex items-center gap-1"><Flame className="h-3 w-3 text-orange-400" />{changes!.copperUpgrades} copper upgrades</span>
               <span>· pool {copperPool?.total ?? 0}</span>
@@ -329,7 +329,7 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
 
       {isAdmin && (
         <div className="space-y-2 pt-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations — live scan inspector</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations - live scan inspector</div>
           <Suspense fallback={<Skeleton className="h-64 w-full rounded-2xl" />}>
             <ScanInspector />
           </Suspense>
@@ -419,7 +419,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
         {isError
-          ? <span className="inline-flex items-center gap-1 text-[11px] text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost — showing last loaded data</span>
+          ? <span className="inline-flex items-center gap-1 text-[11px] text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost - showing last loaded data</span>
           : <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live</span>}
         <div className="ml-auto flex gap-1">
           {(["all", "NC", "SC"] as const).map((s) => (

@@ -202,7 +202,7 @@ describe("a shared door", () => {
     expect(new Set(rendered).size).toBe(1);
   });
 
-  it("renders identically on a repeat call — no hidden per-call state", () => {
+  it("renders identically on a repeat call - no hidden per-call state", () => {
     // reconcileLeadFeatures calls this once per door per snapshot and compares
     // the result to a cached signature; a non-deterministic output would rebuild
     // every feature on every refetch.
@@ -357,7 +357,7 @@ describe("an unassigned door", () => {
 describe("the halo paint expression", () => {
   const slots = Array.from({ length: HALO_MAX_RINGS }, (_, i) => i);
 
-  it("draws a ring, never a disc — the pin's status colour stays visible", () => {
+  it("draws a ring, never a disc - the pin's status colour stays visible", () => {
     for (const slot of slots) {
       const paint = haloRingPaint(slot);
       // Fully transparent fill. A tinted fill under a pin shifts its status hue.

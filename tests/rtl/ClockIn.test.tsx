@@ -84,7 +84,7 @@ describe("Field Hours day bucketing", () => {
     expect(within(weekTile).getByText("3h 0m")).toBeTruthy();    // both
   });
 
-  it("failed sessions fetch shows em-dashes and a retry, never 0m", async () => {
+  it("failed sessions fetch shows dash placeholders and a retry, never 0m", async () => {
     apiRequest.mockImplementation((...args: any[]) => {
       const url = String(args.find(a => typeof a === "string" && a.startsWith("/")) ?? "");
       if (url.includes("/clock/status")) return Promise.resolve({ json: () => Promise.resolve({ clockedIn: false, session: null }) });
@@ -96,7 +96,7 @@ describe("Field Hours day bucketing", () => {
     render(<QueryClientProvider client={qc}><ClockIn /></QueryClientProvider>);
     expect(await screen.findByTestId("sessions-error")).toBeTruthy();
     const todayTile = screen.getByText("Today").closest("div")!.parentElement!;
-    expect(within(todayTile).getByText("\u2014")).toBeTruthy();
+    expect(within(todayTile).getByText("-")).toBeTruthy();
     expect(within(todayTile).queryByText("0m")).toBeNull();
   });
 

@@ -49,7 +49,7 @@ export function OverrideConfigCard() {
       qc.setQueryData(["/api/commission/config"], cfg);
       toast({
         title: cfg.overridesEnabled
-          ? `Overrides on — ${usd(cfg.overrideTeamLeadCents)} team lead · ${usd(cfg.overrideManagerCents)} manager`
+          ? `Overrides on - ${usd(cfg.overrideTeamLeadCents)} team lead · ${usd(cfg.overrideManagerCents)} manager`
           : "Overrides off",
         description: cfg.overridesEnabled
           ? "Each qualified downline sale now pays the upline slots these amounts. Existing ledger rows keep their frozen rates."
@@ -90,7 +90,7 @@ export function OverrideConfigCard() {
           </Label>
           <p className="text-[12px] text-muted-foreground mt-0.5 max-w-md">
             Pays the first active team lead and manager above each seller a flat
-            amount per qualified sale — on top of the seller's own commission,
+            amount per qualified sale - on top of the seller's own commission,
             never out of it. Basis: <span className="text-foreground font-medium">Flat per sale</span>.
           </p>
         </div>

@@ -99,7 +99,7 @@ afterAll(async () => {
 let statementId = 0;
 let adjustmentId = 0;
 
-describe("A2 — team_lead money fabrication closed; manager books money", () => {
+describe("A2 - team_lead money fabrication closed; manager books money", () => {
   it("team_lead POST /api/commission/sales → 403 even for an OWN-team rep; manager → 201", async () => {
     // Rate config stays team_lead-capable (structure.manage unchanged)…
     const assign = await post("/api/commission/assign-structure", admin1.session, {
@@ -135,7 +135,7 @@ describe("A2 — team_lead money fabrication closed; manager books money", () =>
   });
 });
 
-describe("A1 — money lifecycle is payouts.pay (admin), never a manager read cap", () => {
+describe("A1 - money lifecycle is payouts.pay (admin), never a manager read cap", () => {
   it("statements/recalculate is a WRITE cap: team_lead → 403, manager → 200", async () => {
     const asLead = await post("/api/commission/statements/recalculate", tl1.session, {
       repId: rep1.memberId, week: new Date().toISOString(),
@@ -173,7 +173,7 @@ describe("A1 — money lifecycle is payouts.pay (admin), never a manager read ca
   });
 });
 
-describe("A3 — login-email retarget hijack closed + audited", () => {
+describe("A3 - login-email retarget hijack closed + audited", () => {
   it("manager cannot retarget a peer manager's member email; admin can, with an audit row", async () => {
     const hijack = await patch(`/api/team/${victim.memberId}`, mgr1.session, { email: "hijacked@lane-a.example.test" });
     expect(hijack.status).toBe(403);
@@ -203,7 +203,7 @@ describe("A3 — login-email retarget hijack closed + audited", () => {
   });
 });
 
-describe("A4 — super_admin passes the role guards it was excluded from", () => {
+describe("A4 - super_admin passes the role guards it was excluded from", () => {
   it("requireAdmin probe: GET /api/config/app", async () => {
     expect((await request("/api/config/app", super1.session)).status).toBe(200);
     expect((await request("/api/config/app", mgr1.session)).status).toBe(403); // unchanged for others

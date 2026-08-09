@@ -108,14 +108,14 @@ export function PushSetupCard({ className }: { className?: string }) {
               {/* The reason first. "So you don't miss a $50 challenge" is worth
                   more than any number of instructions. */}
               <p className="mt-0.5 text-[13px] text-muted-foreground">
-                It opens full-screen like a real app — and it's the only way iPhone will let us
+                It opens full-screen like a real app - and it's the only way iPhone will let us
                 alert you when a bonus or a $50 challenge goes live.
               </p>
               {/* SHOWN, not described. "Tap Share, scroll, tap Add to Home
                   Screen" names three taps in a sheet the rep has to recognise
                   first, and the Share glyph is the one iOS control nobody can
                   name. The animation plays the taps and ends on the destination
-                  — the icon sitting on a home screen. */}
+                  - the icon sitting on a home screen. */}
               <AddToHomeScreen className="mt-3" />
             </>
           ) : readiness.state === "denied" ? (
@@ -134,7 +134,7 @@ export function PushSetupCard({ className }: { className?: string }) {
               <p className="text-[13px] font-bold text-foreground">Get told when there's money on the table</p>
               <p className="mt-0.5 text-[13px] text-muted-foreground">
                 A ping when a bonus or a $50 challenge goes live, and when the team's closing.
-                Nothing else — no spam, and never outside your shift.
+                Nothing else - no spam, and never outside your shift.
               </p>
               <button
                 type="button" onClick={turnOn} disabled={busy}

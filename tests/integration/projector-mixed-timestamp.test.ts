@@ -24,7 +24,7 @@ function target(address: string): number {
     .run(address, "Inman", "SC", "29349", 35.02, -82.08, TENANT).lastInsertRowid);
 }
 
-describe("canonical availability_snapshots — mixed formats impossible; failed can't outrank/erase a Fresh Lead", () => {
+describe("canonical availability_snapshots - mixed formats impossible; failed can't outrank/erase a Fresh Lead", () => {
   it("the DB constraint rejects any snapshot lacking an integer epoch (no mixed formats)", () => {
     const tid = target("1 Guard St");
     // A raw insert with only a TEXT checked_at (the old defect) is rejected.
@@ -95,7 +95,7 @@ describe("canonical availability_snapshots — mixed formats impossible; failed 
   });
 });
 
-describe("canonical-address dedup — suffix/case variants attach, never duplicate", () => {
+describe("canonical-address dedup - suffix/case variants attach, never duplicate", () => {
   it("a Kinetic-canonical variant of an existing lead's address attaches to it", async () => {
     // Existing lead minted from the OSM-form address.
     const tidA = target("338 Farrell Road");

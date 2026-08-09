@@ -293,7 +293,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
               {[
                 {
                   label: "Score",
-                  value: typeof p.leadScore === "number" && p.leadScore > 0 ? String(p.leadScore) : "—",
+                  value: typeof p.leadScore === "number" && p.leadScore > 0 ? String(p.leadScore) : " - ",
                   tone: typeof p.leadScore === "number" && p.leadScore > 0 ? TONE.emerald : "text-muted-foreground",
                 },
                 {
@@ -305,7 +305,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
                   label: "Confidence",
                   value: p.freshConfidence === "cross_verified" ? "Verified"
                     : p.freshConfidence === "kinetic_new_fiber" ? "Kinetic"
-                    : "—",
+                    : " - ",
                   tone: p.freshConfidence === "cross_verified" || p.freshConfidence === "kinetic_new_fiber"
                     ? TONE.emerald
                     : "text-muted-foreground",

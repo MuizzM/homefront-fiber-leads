@@ -43,7 +43,7 @@ const RANK: Record<Role, number> = {
   super_admin: 4,
 };
 
-describe("can() — full permission matrix", () => {
+describe("can() - full permission matrix", () => {
   for (const action of Object.keys(MIN_ROLE) as Action[]) {
     for (const role of ROLES) {
       const allowed = RANK[role] >= RANK[MIN_ROLE[action]];
@@ -54,7 +54,7 @@ describe("can() — full permission matrix", () => {
   }
 });
 
-describe("can() — rep fail-closed (highest risk)", () => {
+describe("can() - rep fail-closed (highest risk)", () => {
   it("a rep can only view their own leads and nothing else", () => {
     expect(can("rep", "view_own_leads")).toBe(true);
     const forbidden: Action[] = [
@@ -71,7 +71,7 @@ describe("can() — rep fail-closed (highest risk)", () => {
     for (const action of forbidden) expect(can("rep", action)).toBe(false);
   });
 
-  it("team_lead can carve, assign and pull back areas — but cannot reset a pass", () => {
+  it("team_lead can carve, assign and pull back areas - but cannot reset a pass", () => {
     expect(can("team_lead", "create_territory")).toBe(true);
     expect(can("team_lead", "assign_territory")).toBe(true);
     // Pulling an area back is assignment work — a team lead's own job. What they

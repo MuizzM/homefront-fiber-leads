@@ -100,7 +100,7 @@ export function MilestoneLadderEditor() {
 
       <p className="text-[13px] text-muted-foreground">
         Pays automatically onto the rep's commission statement when they clear a rung.
-        Counts each address once, and only knocks GPS confirmed — re-knocking the same
+        Counts each address once, and only knocks GPS confirmed - re-knocking the same
         door, or logging from the truck, moves nothing.
       </p>
 

@@ -78,7 +78,7 @@ describe("CompTermsEditor", () => {
     expect(lastMax).toBeDisabled();
   });
 
-  it("will not let the last band be removed — a plan needs at least one", () => {
+  it("will not let the last band be removed - a plan needs at least one", () => {
     render(<Harness initial={{ ...DEFAULT_COMMISSION_TERMS, tiers: [DEFAULT_COMMISSION_TERMS.tiers[0]] }} />);
     expect(screen.getByTestId("comp-tier-0-remove")).toBeDisabled();
   });

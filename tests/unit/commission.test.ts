@@ -17,7 +17,7 @@ const base: CommissionStructure = {
 };
 const S = (o: Partial<CommissionStructure>): CommissionStructure => ({ ...base, ...o });
 
-describe("calcCommission — per type", () => {
+describe("calcCommission - per type", () => {
   it("flat pays the fixed amount regardless of sale value", () => {
     expect(calcCommission(S({ calcType: "flat", flatAmount: 120 }), 999)).toEqual(
       { amount: 120, calcType: "flat", tierMinBasis: null });
@@ -42,7 +42,7 @@ describe("calcCommission — per type", () => {
   });
 });
 
-describe("pickActiveStructure — governance at sale time", () => {
+describe("pickActiveStructure - governance at sale time", () => {
   it("chooses a plan whose window covers the sale date", () => {
     const plans = [
       S({ id: 1, effectiveFrom: "2026-01-01", effectiveTo: "2026-03-31" }),
@@ -79,7 +79,7 @@ describe("pickActiveStructure — governance at sale time", () => {
     expect(pickActiveStructure(plans, 9, "rep", "2026-05-01")).toBeNull();
   });
 
-  it("returns null when nothing covers the date — never guesses a payout", () => {
+  it("returns null when nothing covers the date - never guesses a payout", () => {
     const plans = [S({ effectiveFrom: "2026-08-01" })];
     expect(pickActiveStructure(plans, 9, "rep", "2026-07-01")).toBeNull();
   });

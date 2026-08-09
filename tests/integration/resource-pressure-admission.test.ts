@@ -59,7 +59,7 @@ describe("resource-pressure admission gate", () => {
     ).rejects.toThrow(dpc.AdmissionTimeoutError);
   });
 
-  it("a STALE pressure row fails open — bulk work admits normally", async () => {
+  it("a STALE pressure row fails open - bulk work admits normally", async () => {
     rp.publishPressure("emergency", 1000, 5000, 7000, "test", Date.now() - rp.PRESSURE_TTL_MS - 60_000);
     const c = coordinator();
     const result = await c.execute("bulk-2", "market", async () => ({ value: 3 }), codec);

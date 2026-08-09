@@ -95,7 +95,7 @@ describe("what it catches", () => {
     expect(f!.observed).toMatchObject({ externalId: "recon-ovr" });
   });
 
-  it("a negative reserve balance — more released than was ever held", () => {
+  it("a negative reserve balance - more released than was ever held", () => {
     const rep = person("Recon Reserve Rep", "rep", null);
     rawDb.prepare(
       `INSERT INTO reserve_entries (tenant_id, rep_id, kind, amount_cents, reason, created_at)
@@ -144,7 +144,7 @@ describe("what it catches", () => {
 });
 
 describe("it is READ-ONLY", () => {
-  it("changes nothing — every money table is byte-identical after a run", () => {
+  it("changes nothing - every money table is byte-identical after a run", () => {
     const snapshot = () => ({
       sales: rawDb.prepare(`SELECT * FROM commission_sales ORDER BY id`).all(),
       statements: rawDb.prepare(`SELECT * FROM commission_statements ORDER BY id`).all(),

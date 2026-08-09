@@ -671,12 +671,12 @@ const LASSO_RING_REJECTION: Record<
   "self-intersecting": {
     title: "That loop crosses over itself",
     description:
-      "Where the line crosses, there is no single inside — some doors would land outside the area you can see. Draw one clean loop without crossing back over your own line.",
+      "Where the line crosses, there is no single inside - some doors would land outside the area you can see. Draw one clean loop without crossing back over your own line.",
   },
   "too-small": {
     title: "That area is too small to assign",
     description:
-      "The loop came out under 100 m² — about the size of a single garage. Zoom out a little and draw around the doors you want to hand over.",
+      "The loop came out under 100 m² - about the size of a single garage. Zoom out a little and draw around the doors you want to hand over.",
   },
 };
 
@@ -1745,7 +1745,7 @@ export default function MapView() {
           : data.mode === "reassign"
             ? `reassigned (${data.leadsAffected} leads)`
             : "area reclaimed";
-      toast({ title: `Area reclaimed — ${label}`, severity: "success" });
+      toast({ title: `Area reclaimed - ${label}`, severity: "success" });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -2779,7 +2779,7 @@ export default function MapView() {
       (geolocate as any)._updateCamera = () => {};
     else if (import.meta.env.DEV)
       console.warn(
-        "[follow] GeolocateControl._updateCamera missing — single-writer guard inert",
+        "[follow] GeolocateControl._updateCamera missing - single-writer guard inert",
       );
 
     // Our navigation puck: one GPU-composited Marker (vivid blue core + white ring +
@@ -2923,7 +2923,7 @@ export default function MapView() {
         code === 1
           ? "Location is turned off for this app. On iPhone: Settings → Privacy & Security → Location Services → turn on, then find Safari/HomeFront and set “While Using.”"
           : code === 3
-            ? "Getting a GPS fix timed out — step outside or try again."
+            ? "Getting a GPS fix timed out - step outside or try again."
             : "Couldn’t get your location. Make sure Location Services is on.";
       toast({
         title: "Location unavailable",
@@ -3689,7 +3689,7 @@ export default function MapView() {
           removeTempPin();
           toast({
             title: "Couldn't add the lead",
-            description: `${resolved.address} didn't save — tap the house again to retry.`,
+            description: `${resolved.address} didn't save - tap the house again to retry.`,
             variant: "destructive",
           });
         }
@@ -5352,7 +5352,7 @@ export default function MapView() {
     if (!open.length) {
       toast({
         title: "Every door is worked",
-        description: "No open doors on your map right now — nice work.",
+        description: "No open doors on your map right now - nice work.",
       });
       return;
     }
@@ -5911,7 +5911,7 @@ export default function MapView() {
             return { ...old, pins };
           });
         }
-        toast({ title: "Central mark failed — reverted", description: String(e?.message ?? e), variant: "destructive" });
+        toast({ title: "Central mark failed - reverted", description: String(e?.message ?? e), variant: "destructive" });
         return false;
       }
     },
@@ -5967,7 +5967,7 @@ export default function MapView() {
             return { ...old, total: (old.total ?? old.pins.length) + 1, pins: [...old.pins, prevPin] };
           });
         }
-        toast({ title: "Delete failed — lead restored", description: String(e?.message ?? e), variant: "destructive" });
+        toast({ title: "Delete failed - lead restored", description: String(e?.message ?? e), variant: "destructive" });
       }
     },
     [selectedLeadId, leadById, canManage, qc, toast, setSelectedLeadId, scheduleClusterSetData],
@@ -6309,7 +6309,7 @@ export default function MapView() {
           <div className="glass-surface flex flex-col gap-2 border-teal-300/40 p-3" data-testid="live-test-panel">
             <div className="flex items-center gap-2">
               <Crosshair className="h-4 w-4 text-emerald-400" />
-              <span className="text-[13px] font-semibold text-white">Live Test — trace one address</span>
+              <span className="text-[13px] font-semibold text-white">Live Test - trace one address</span>
               <button onClick={() => { setLiveTestOpen(false); setLtResult(null); }} className="ml-auto grid h-11 w-11 place-items-center rounded-full text-white/60 hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button>
             </div>
             <div className="grid grid-cols-[1fr_1fr_44px_72px] gap-1.5">
@@ -6330,7 +6330,7 @@ export default function MapView() {
                   </div>
                 ))}
                 <div className={`rounded-lg p-2 text-[11px] font-semibold ${ltResult.checked ? (ltResult.wouldSaveLead ? "bg-emerald-500/15 text-emerald-300" : "bg-sky-500/15 text-sky-300") : ltResult.pendingAuth ? "bg-amber-500/15 text-amber-300" : "bg-red-500/15 text-red-300"}`}>
-                  {ltResult.checked ? `Checked — ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : ltResult.pendingAuth ? "PENDING_AUTH — token/auth flow failed after retry. Address kept for retry, NOT a no-service verdict." : "Not checked — failed at the red stage (infra error, not a no-service verdict)."}
+                  {ltResult.checked ? `Checked - ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : ltResult.pendingAuth ? "PENDING_AUTH - token/auth flow failed after retry. Address kept for retry, NOT a no-service verdict." : "Not checked - failed at the red stage (infra error, not a no-service verdict)."}
                 </div>
               </div>
             ) : (
@@ -6447,7 +6447,7 @@ export default function MapView() {
                       type="button"
                       onClick={() => setScanSheetHidden(true)}
                       aria-label="Minimize scan progress (scan keeps running)"
-                      title="Minimize — the scan keeps running"
+                      title="Minimize - the scan keeps running"
                       className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
                       data-testid="scan-minimize"
                     >
@@ -6505,7 +6505,7 @@ export default function MapView() {
                   { label: "Fresh", full: "Still fresh", value: scanSummary.stillFresh, tone: "text-emerald-300" },
                   { label: "Active", full: "Already customers", value: scanSummary.serviceActive, tone: "text-sky-400" },
                   { label: "Soon", full: "Fiber coming soon", value: scanSummary.comingSoon, tone: "text-amber-400" },
-                  { label: "Failed", full: "Unresolved — couldn't conclusively check", value: scanSummary.unresolved, tone: "text-white/50" },
+                  { label: "Failed", full: "Unresolved - couldn't conclusively check", value: scanSummary.unresolved, tone: "text-white/50" },
                 ].map((c) => (
                   <div
                     key={c.label}
@@ -6539,7 +6539,7 @@ export default function MapView() {
                       {String(scanSummary.coverage) === "sparse_source_data" || String(scanSummary.coverage) === "source_unavailable"
                         ? "sparse"
                         : "partial"}{" "}
-                      here — some properties may not be mapped yet, so this isn't guaranteed to be every address.
+                      here - some properties may not be mapped yet, so this isn't guaranteed to be every address.
                     </span>
                   </div>
                 )}
@@ -6549,7 +6549,7 @@ export default function MapView() {
 
       {/* The always-on status pill / chip row is gone (owner's minimal-map
           directive): the Filters sheet (rail button) is the one filter surface.
-          An ACTIVE filter is never invisible — the rail button carries a dot and
+          An ACTIVE filter is never invisible - the rail button carries a dot and
           a dismissible top-center chip renders inside the map below. */}
 
       {/* On mobile: left-3 → right-[68px] so the banner clears the icon cluster
@@ -6656,7 +6656,7 @@ export default function MapView() {
                   <>
                     <div className="text-sm font-medium mb-1">Map couldn't load</div>
                     <div className="text-xs text-muted-foreground">
-                      The map library didn't download. Check your signal — your leads and
+                      The map library didn't download. Check your signal - your leads and
                       knocks still work.
                     </div>
                     <button
@@ -6721,9 +6721,9 @@ export default function MapView() {
                 </p>
                 <p className="text-xs text-white/60 mt-1.5 leading-relaxed">
                   {isAdmin
-                    ? "Draw a box with the scan tool to find new-fiber homes, or import a list — they'll appear here as assignable pins."
+                    ? "Draw a box with the scan tool to find new-fiber homes, or import a list - they'll appear here as assignable pins."
                     : isRep
-                      ? "Doors assigned to you will appear here — check with your team lead."
+                      ? "Doors assigned to you will appear here - check with your team lead."
                       : "Once your team is assigned leads or territories, they'll show up here."}
                 </p>
               </div>
@@ -7096,7 +7096,7 @@ export default function MapView() {
                       aria-live="polite"
                       data-testid="lasso-sample-warning"
                     >
-                      The map is showing a sample of this area&apos;s pins —
+                      The map is showing a sample of this area&apos;s pins -
                       Assign, Status and Mark apply only to the doors loaded.
                       Zoom in to load every door, or save the loop as an Area.
                     </span>
@@ -7107,7 +7107,7 @@ export default function MapView() {
                       aria-live="polite"
                       data-testid="lasso-empty-note"
                     >
-                      No mapped doors inside this loop — it can still be saved as
+                      No mapped doors inside this loop - it can still be saved as
                       an area.
                     </span>
                   ) : (
@@ -7913,7 +7913,7 @@ export default function MapView() {
                   // The API refuses an empty set; say why here rather than let them press
                   // Save and get an error. Emptying an area is Reclaim's job.
                   <p className="text-xs text-amber-500">
-                    Pick at least one rep — to empty the area entirely, use Reclaim.
+                    Pick at least one rep - to empty the area entirely, use Reclaim.
                   </p>
                 )}
               </div>
@@ -8537,7 +8537,7 @@ export default function MapView() {
                   type="button"
                   onClick={() => setRepColorMode((v) => !v)}
                   data-testid="map-rep-color-mode"
-                  title="Color pins by assigned rep — see who owns each area"
+                  title="Color pins by assigned rep - see who owns each area"
                   className={`mb-2.5 w-full h-11 rounded-lg border text-[12px] font-semibold transition-colors ${
                     repColorMode
                       ? "bg-teal-500/30 border-teal-300/60 text-teal-100"

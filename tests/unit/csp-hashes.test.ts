@@ -22,7 +22,7 @@ describe("hashing inline scripts", () => {
     expect(inlineScriptHashes(`<script>${body}</script>`)).toEqual([sha(body)]);
   });
 
-  it("does NOT trim — a stripped newline is a hash the browser will not match", () => {
+  it("does NOT trim - a stripped newline is a hash the browser will not match", () => {
     // The single easiest way to break this. CSP hashes raw content; "tidying"
     // the string produces a token that looks right and matches nothing.
     const padded = "\n  var a = 1;\n";
@@ -31,7 +31,7 @@ describe("hashing inline scripts", () => {
     expect(inlineScriptHashes(`<script>${padded}</script>`)[0]).not.toBe(sha(trimmed));
   });
 
-  it("skips scripts with a src — those are covered by 'self'", () => {
+  it("skips scripts with a src - those are covered by 'self'", () => {
     const html = `<script src="/main.js"></script><script>inline()</script>`;
     expect(inlineScriptHashes(html)).toEqual([sha("inline()")]);
   });
@@ -76,7 +76,7 @@ describe("the policy it produces", () => {
     expect(list).toContain("https://api.mapbox.com");
   });
 
-  it("never pins in development — Vite rewrites the HTML it serves", () => {
+  it("never pins in development - Vite rewrites the HTML it serves", () => {
     // A stale dist/public/index.html on a dev machine used to win the candidate
     // scan and pin production hashes against Vite's transformed HTML, blocking
     // every inline script (including the react-refresh preamble): black screen.

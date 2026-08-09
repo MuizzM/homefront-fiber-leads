@@ -144,7 +144,7 @@ const apexEmailOf = (fx: Fixture) =>
 
 // ── Fix 1c first: the boot stamp re-run adopts NULL rows, so it must run BEFORE
 // any NULL-tenant fixture below is created.
-describe("Fix 1c — boot stamp stays authoritative (re-email path closed by 1a)", () => {
+describe("Fix 1c - boot stamp stays authoritative (re-email path closed by 1a)", () => {
   it("re-stamps on env-list change: an email leaving the list loses the flag at boot", async () => {
     const stamped = makePerson("Boot Apex", "admin", 1, "manager");
     const email = apexEmailOf(stamped);
@@ -165,14 +165,14 @@ describe("Fix 1c — boot stamp stays authoritative (re-email path closed by 1a)
   });
 });
 
-describe("Fix 1a — PATCH /api/users/:id super-admin immutability", () => {
+describe("Fix 1a - PATCH /api/users/:id super-admin immutability", () => {
   it("blocks a role change on a super admin (409 APEX_IMMUTABLE)", async () => {
     const res = await patch(`/api/users/${apexA.userId}`, admin1.session, { role: "manager" });
     expect(res.status).toBe(409);
     expect((await res.json() as any).code).toBe("APEX_IMMUTABLE");
   });
 
-  it("blocks an email change on a super admin (409 APEX_IMMUTABLE) — the re-email-to-escape path", async () => {
+  it("blocks an email change on a super admin (409 APEX_IMMUTABLE) - the re-email-to-escape path", async () => {
     const res = await patch(`/api/users/${apexA.userId}`, admin1.session, { email: "escaped@sec-a.example.test" });
     expect(res.status).toBe(409);
     expect((await res.json() as any).code).toBe("APEX_IMMUTABLE");
@@ -182,7 +182,7 @@ describe("Fix 1a — PATCH /api/users/:id super-admin immutability", () => {
     expect(same.status).toBe(200);
   });
 
-  it("blocks deactivation in the single-apex case — always", async () => {
+  it("blocks deactivation in the single-apex case - always", async () => {
     setApexEnv(apexEmailOf(apexA)); // one apex only
     try {
       const byAdmin = await patch(`/api/users/${apexA.userId}`, admin1.session, { active: false });
@@ -212,7 +212,7 @@ describe("Fix 1a — PATCH /api/users/:id super-admin immutability", () => {
   });
 });
 
-describe("Fix 1b — POST /api/users apex-email claim block", () => {
+describe("Fix 1b - POST /api/users apex-email claim block", () => {
   it("a tenant admin cannot CREATE a login on an apex email (403 LOGIN_EMAIL_RESERVED)", async () => {
     const res = await post("/api/users", admin1.session, {
       name: "Fake Apex", email: apexEmailOf(apexA), role: "rep",
@@ -240,7 +240,7 @@ describe("Fix 1b — POST /api/users apex-email claim block", () => {
   });
 });
 
-describe("Fix 2 — legacy commission self-deal", () => {
+describe("Fix 2 - legacy commission self-deal", () => {
   it("manager POST /api/commissions for THEMSELVES → 403 COMMISSION_SELF_DEAL; for another rep → 200", async () => {
     const self = await post("/api/commissions", mgr1.session, {
       repId: mgr1.memberId, amount: 5000, saleDate: "2026-01-05",
@@ -299,7 +299,7 @@ describe("Fix 2 — legacy commission self-deal", () => {
   });
 });
 
-describe("Fix 5 — NULL-tenant write walls", () => {
+describe("Fix 5 - NULL-tenant write walls", () => {
   it("knock POST: foreign-tenant users get 404 on a NULL-tenant lead; only a default-tenant admin may write", async () => {
     const lead = makeLead(null);
     expect((await knock(lead.id, repB.session)).status).toBe(404);
@@ -363,7 +363,7 @@ describe("Fix 5 — NULL-tenant write walls", () => {
   });
 });
 
-describe("Fix 6 — PATCH /api/knocks/:id scope + dangling leadId", () => {
+describe("Fix 6 - PATCH /api/knocks/:id scope + dangling leadId", () => {
   it("team_lead may annotate their OWN team's knocks only", async () => {
     const teamLeadLead = makeLead(1, { assignedRepId: rep1.memberId });
     const k1 = await knock(teamLeadLead.id, rep1.session);
@@ -395,7 +395,7 @@ describe("Fix 6 — PATCH /api/knocks/:id scope + dangling leadId", () => {
   });
 });
 
-describe("Fix 7 — GET /api/leads/ranked visibility scope", () => {
+describe("Fix 7 - GET /api/leads/ranked visibility scope", () => {
   it("a rep ranks only their own book; a manager ranks the whole tenant", async () => {
     const now = new Date().toISOString();
     const insert = rawDb.prepare(
@@ -420,7 +420,7 @@ describe("Fix 7 — GET /api/leads/ranked visibility scope", () => {
   });
 });
 
-describe("Fix 8 — assignment tenant validation", () => {
+describe("Fix 8 - assignment tenant validation", () => {
   it("POST /api/leads/:id/assign rejects a foreign member id (404), accepts an own-tenant rep", async () => {
     const lead = makeLead(1);
     const foreign = await post(`/api/leads/${lead.id}/assign`, admin1.session, { repId: mgrB.memberId });

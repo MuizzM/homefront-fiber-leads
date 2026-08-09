@@ -93,7 +93,7 @@ function gridRequestFor(map: ReturnType<typeof mapAt>) {
   return { tier: viewportTierForWindow(bounds.window), bbox: bboxParam(window), cell: gridCellForSpan(span) };
 }
 
-describe("grid window contract — a client-built grid request can NEVER blank the map", () => {
+describe("grid window contract - a client-built grid request can NEVER blank the map", () => {
   it("the observed production repro bbox answers 200 (float-dust span, not malformed)", async () => {
     // -72.9 − (-87.9) parses to 15.000000000000002 — this exact request 400'd
     // in production and silently blanked the density tier.

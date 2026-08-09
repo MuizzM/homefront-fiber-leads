@@ -65,7 +65,7 @@ describe("the browser stops scrolling while a finger draws", () => {
 });
 
 describe("the touchmove listener is registered so it can actually cancel", () => {
-  it("passes { passive: false } — without it preventDefault is forbidden", () => {
+  it("passes { passive: false } - without it preventDefault is forbidden", () => {
     // THE assertion in this file. A touchmove listener registered without this
     // flag is passive by default in every modern browser, and a passive listener
     // calling preventDefault is ignored with a console warning. Registering the

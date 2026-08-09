@@ -185,7 +185,7 @@ export const knockPostLimiter = createPerUserLimiter({
 export const chatPostLimiter = createPerUserLimiter({
   max: 120,
   methods: ["POST"],
-  message: "Slow down a moment — the floor can only read so fast.",
+  message: "Slow down a moment - the floor can only read so fast.",
 });
 
 // The room poll. Sized like the scan progress poll: sustained refresh on a
@@ -193,7 +193,7 @@ export const chatPostLimiter = createPerUserLimiter({
 export const chatReadLimiter = createPerUserLimiter({
   max: chatReadRateLimitMax(process.env.CHAT_READ_RATE_LIMIT_MAX),
   methods: ["GET", "HEAD"],
-  message: "Chat refresh budget reached for this account. The room updates on its own — give it a moment.",
+  message: "Chat refresh budget reached for this account. The room updates on its own - give it a moment.",
 });
 
 // Read-marks and deletes. Message posts also pass through here (same path

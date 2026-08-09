@@ -144,7 +144,7 @@ export function reconcile(opts: { tenantId?: number | null; nowIso: string; runI
       push({
         kind: "RESERVE_BALANCE_MISMATCH", severity: "critical",
         tenantId: r.tenantId, repId: r.repId, saleId: null, statementWeekUtc: null,
-        detail: `Reserve ledger sums to a NEGATIVE balance (${r.balance}c) across ${r.entries} entries — more was released than held.`,
+        detail: `Reserve ledger sums to a NEGATIVE balance (${r.balance}c) across ${r.entries} entries - more was released than held.`,
         observed: { balanceCents: Number(r.balance), entries: Number(r.entries) },
       });
     }
@@ -186,7 +186,7 @@ export function reconcile(opts: { tenantId?: number | null; nowIso: string; runI
     push({
       kind: "DUPLICATE_EARNING", severity: "critical",
       tenantId: r.tenantId, repId: r.repId, saleId: null, statementWeekUtc: null,
-      detail: `Event ${r.eventId} produced ${r.n} awards for one rep — an idempotency key has drifted.`,
+      detail: `Event ${r.eventId} produced ${r.n} awards for one rep - an idempotency key has drifted.`,
       observed: { sourceEventId: r.eventId, count: Number(r.n) },
     });
   }

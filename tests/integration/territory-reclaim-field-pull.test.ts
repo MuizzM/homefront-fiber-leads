@@ -141,7 +141,7 @@ describe("admin pulls an ACTIVE area with an assigned rep and worked doors", () 
   });
 });
 
-describe("the exact field case: the reps are DONE — the area is 'completed'", () => {
+describe("the exact field case: the reps are DONE - the area is 'completed'", () => {
   it("an area completed through POST /complete can still be reclaimed to the pool", async () => {
     const { id, patch } = seedArea("Finished patch", [fx.repA.memberId]);
     const doors = [1, 2].map((n) => seedWorkedLead(id, fx.repA.memberId, patch, 10 + n));
@@ -230,12 +230,12 @@ describe("the refusals", () => {
     expect((await reclaim(999999, fx.admin.session)).status).toBe(404);
   });
 
-  it("a rep may not reclaim anything — 403 by capability", async () => {
+  it("a rep may not reclaim anything - 403 by capability", async () => {
     const { id } = seedArea("Rep denied patch", [fx.repA.memberId]);
     expect((await reclaim(id, fx.repA.session)).status).toBe(403);
   });
 
-  it("an ARCHIVED area refuses with 409 — it is a record, not a live assignment", async () => {
+  it("an ARCHIVED area refuses with 409 - it is a record, not a live assignment", async () => {
     const { id } = seedArea("Archived patch", [fx.repA.memberId], { status: "archived" });
     const r = await reclaim(id, fx.admin.session);
     expect(r.status).toBe(409);

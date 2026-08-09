@@ -27,19 +27,19 @@ const wireFixture: callingApi.LeadScriptWire = {
     freshCityCount21d: 3, onComingSoonWatchlist: false, nearestFreshStreet: "Maple St",
   },
   sections: {
-    opener: "Hi, this is Alex with Homefront Solutions — Kinetic's authorized fiber partner. Quick one, this is a sales call: Kinetic just dropped brand-new fiber in your neighborhood and we're running the rollout right now.",
-    neighborhoodHook: "Kinetic just dropped brand-new fiber in your neighborhood — 3 homes in Lexington connected in the last three weeks, including homes on Maple St.",
+    opener: "Hi, this is Alex with Homefront Solutions - Kinetic's authorized fiber partner. Quick one, this is a sales call: Kinetic just dropped brand-new fiber in your neighborhood and we're running the rollout right now.",
+    neighborhoodHook: "Kinetic just dropped brand-new fiber in your neighborhood - 3 homes in Lexington connected in the last three weeks, including homes on Maple St.",
     valueProposition: "Kinetic Fiber runs on a fiber-optic line rather than older cable or copper, which means symmetrical upload and download speeds and a connection that holds up when everyone is home.",
     objectionHandlers: {
       price: "That's a completely fair question. Pricing depends on the speed tier you choose.",
-      currentProvider: "That makes sense — most people I speak with already have internet.",
-      renter: "Good question, and you're not alone — plenty of renters get fiber.",
-      worksFine: "Glad to hear it's working — that's honestly the best starting point.",
+      currentProvider: "That makes sense - most people I speak with already have internet.",
+      renter: "Good question, and you're not alone - plenty of renters get fiber.",
+      worksFine: "Glad to hear it's working - that's honestly the best starting point.",
     },
     close: "Here's all I'd suggest: let me run a quick availability and speed check for 148 Maple St right now.",
-    complianceFooter: "---- COMPLIANCE NOTES (REP GUIDANCE — NEVER READ ALOUD UNLESS REQUIRED) ----\n1. Open every call the way the opener does: your real first name, Homefront Solutions (Kinetic's authorized fiber partner), the words \"sales call\", and why you're calling.",
+    complianceFooter: "---- COMPLIANCE NOTES (REP GUIDANCE - NEVER READ ALOUD UNLESS REQUIRED) ----\n1. Open every call the way the opener does: your real first name, Homefront Solutions (Kinetic's authorized fiber partner), the words \"sales call\", and why you're calling.",
   },
-  script: "[OPENER — read verbatim]\n...",
+  script: "[OPENER - read verbatim]\n...",
 };
 
 /** Route the wire fixture through the real normalization the panel consumes. */
@@ -79,7 +79,7 @@ describe("LeadScriptPanel", () => {
     mockScript(wireFixture);
   });
 
-  it("renders the literal server shape — 4 objection rows, no crash", async () => {
+  it("renders the literal server shape - 4 objection rows, no crash", async () => {
     const user = userEvent.setup();
     renderPanel(7);
     expect(await screen.findByTestId("script-opener")).toHaveTextContent("Hi, this is Alex with Homefront Solutions");
@@ -132,7 +132,7 @@ describe("LeadScriptPanel", () => {
       model: "rules",
       sections: {
         opener: "Hi, this is the fiber team.",
-        objectionHandlers: { worksFine: "Glad to hear it — fiber is about headroom." },
+        objectionHandlers: { worksFine: "Glad to hear it - fiber is about headroom." },
       },
     });
     renderPanel();

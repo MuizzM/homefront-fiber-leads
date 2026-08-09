@@ -96,7 +96,7 @@ beforeAll(async () => {
 
 afterAll(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); });
 
-describe("C1 — client knockedAt is clamped, never trusted for CAS", () => {
+describe("C1 - client knockedAt is clamped, never trusted for CAS", () => {
   it("a forged-future knockedAt cannot poison the lead", async () => {
     const lead = makeLead(1, rep1.memberId);
     // Attacker: sold knock dated in the future — the old exploit froze the lead forever.
@@ -123,7 +123,7 @@ describe("C1 — client knockedAt is clamped, never trusted for CAS", () => {
   });
 });
 
-describe("C2 — superseded persisted + replay marker", () => {
+describe("C2 - superseded persisted + replay marker", () => {
   it("the stale knock row carries superseded=1 and idempotent replay returns it", async () => {
     const lead = makeLead(1, rep1.memberId);
     const t2 = new Date(Date.now() + 60_000).toISOString();
@@ -150,7 +150,7 @@ describe("C2 — superseded persisted + replay marker", () => {
   });
 });
 
-describe("C3 — dedupe replay: heal repairs, never resurrects, never bypasses the clamp", () => {
+describe("C3 - dedupe replay: heal repairs, never resurrects, never bypasses the clamp", () => {
   it("heal repairs a knock whose money effects are missing", async () => {
     const lead = makeLead(1, rep1.memberId);
     const client = `cas-heal-${lead.id}`;
@@ -229,7 +229,7 @@ describe("C3 — dedupe replay: heal repairs, never resurrects, never bypasses t
   });
 });
 
-describe("C4 — bulk-status advances the recency clock", () => {
+describe("C4 - bulk-status advances the recency clock", () => {
   it("a stale knock loses the CAS after a manager bulk mark", async () => {
     const lead = makeLead(1, rep1.memberId);
     // Manager bulk-marks the door not_interested NOW:
@@ -249,7 +249,7 @@ describe("C4 — bulk-status advances the recency clock", () => {
   });
 });
 
-describe("C5 — POST /api/commissions is honest about pre-existing pending", () => {
+describe("C5 - POST /api/commissions is honest about pre-existing pending", () => {
   it("returns {existed:true} instead of a phantom create", async () => {
     const lead = makeLead(1, rep1.memberId);
     const sold = await knock(lead.id, rep1.session, "sold", new Date().toISOString());
@@ -272,7 +272,7 @@ describe("C5 — POST /api/commissions is honest about pre-existing pending", ()
   });
 });
 
-describe("C6 — summary excludes superseded rows", () => {
+describe("C6 - summary excludes superseded rows", () => {
   it("superseded commissions do not inflate totals", async () => {
     // Fresh rep: baseline is exactly zero, so any superseded contribution is visible.
     const lead = makeLead(1, rep6.memberId);
@@ -289,7 +289,7 @@ describe("C6 — summary excludes superseded rows", () => {
   });
 });
 
-describe("M7 — leaderboard excludes superseded sold knocks", () => {
+describe("M7 - leaderboard excludes superseded sold knocks", () => {
   it("a superseded sold knock counts zero on the leaderboard", async () => {
     const lead = makeLead(1, rep7.memberId);
     const t2 = new Date(Date.now() + 60_000).toISOString();
@@ -304,7 +304,7 @@ describe("M7 — leaderboard excludes superseded sold knocks", () => {
   });
 });
 
-describe("M8 — a corrected sale leaves the leaderboard", () => {
+describe("M8 - a corrected sale leaves the leaderboard", () => {
   // The reported bug. M7 covers a sold knock that lost the CAS at write time
   // (superseded = 1). This is the OTHER order — the one reps actually hit:
   // mark sold by accident, then correct it with a NEWER knock. The sold row

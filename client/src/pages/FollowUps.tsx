@@ -93,7 +93,7 @@ export default function FollowUps() {
 
         {offline && (
           <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-muted px-3 py-2.5 text-[13px] text-muted-foreground">
-            <WifiOff className="w-4 h-4 shrink-0" /> Offline — showing your last synced follow-ups
+            <WifiOff className="w-4 h-4 shrink-0" /> Offline - showing your last synced follow-ups
           </div>
         )}
 

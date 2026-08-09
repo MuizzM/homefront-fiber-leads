@@ -72,7 +72,7 @@ function renderPage(overrides: any) {
 beforeEach(() => apiRequest.mockReset());
 
 describe("the rep's override earnings card", () => {
-  it("renders NOTHING for a plain rep — no downline, no rows", async () => {
+  it("renders NOTHING for a plain rep - no downline, no rows", async () => {
     renderPage(overridePayload({
       hasDownline: false,
       totals: { rowCount: 0, payableCents: 0, heldCents: 0, settledCents: 0 },
@@ -123,7 +123,7 @@ describe("the rep's override earnings card", () => {
     expect(screen.queryByTestId("override-statement-footer")).toBeNull();
   });
 
-  it("still renders the card for an upline with a downline but no rows yet — at $0", async () => {
+  it("still renders the card for an upline with a downline but no rows yet - at $0", async () => {
     renderPage(overridePayload({
       hasDownline: true,
       totals: { rowCount: 0, payableCents: 0, heldCents: 0, settledCents: 0 },

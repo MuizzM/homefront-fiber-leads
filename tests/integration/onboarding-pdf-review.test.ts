@@ -109,7 +109,7 @@ describe("agreement review copy", () => {
     expect(bytes.length).toBeGreaterThan(2000);
   });
 
-  it("opens INLINE — a download prompt mid-ceremony is a dead end", async () => {
+  it("opens INLINE - a download prompt mid-ceremony is a dead end", async () => {
     const res = await get(`/api/onboarding/documents/${documentId}/preview.pdf`, rep.session);
     expect(res.headers.get("content-disposition")).toContain("inline");
     expect(res.headers.get("content-disposition")).not.toContain("attachment");
@@ -158,7 +158,7 @@ describe("agreement review copy", () => {
 });
 
 describe("the official IRS Form W-9", () => {
-  it("serves the ACTUAL IRS template — not a re-creation", async () => {
+  it("serves the ACTUAL IRS template - not a re-creation", async () => {
     const res = await get("/api/onboarding/w9/blank.pdf", rep.session);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/pdf");
@@ -172,7 +172,7 @@ describe("the official IRS Form W-9", () => {
     expect(bytes.length).toBe(loadW9Template().length);
   });
 
-  it("includes the full form — the IRS instruction pages, not just page one", async () => {
+  it("includes the full form - the IRS instruction pages, not just page one", async () => {
     // A rep certifying under penalty of perjury should be able to read the
     // instructions that explain what they are certifying.
     const { PDFDocument } = await import("pdf-lib");
@@ -181,13 +181,13 @@ describe("the official IRS Form W-9", () => {
     expect(doc.getPageCount()).toBeGreaterThanOrEqual(5);
   });
 
-  it("opens inline and is cacheable — the one PDF that never varies by user", async () => {
+  it("opens inline and is cacheable - the one PDF that never varies by user", async () => {
     const res = await get("/api/onboarding/w9/blank.pdf", rep.session);
     expect(res.headers.get("content-disposition")).toContain("inline");
     expect(res.headers.get("cache-control")).toContain("private");
   });
 
-  it("needs a login, but not a pay capability — it carries nobody's data", async () => {
+  it("needs a login, but not a pay capability - it carries nobody's data", async () => {
     // The FILLED W-9 holds a live SSN and stays behind payouts.pay; the blank
     // government form is a public document any rep may read.
     expect((await fetch(`${baseUrl}/api/onboarding/w9/blank.pdf`)).status).toBe(401);

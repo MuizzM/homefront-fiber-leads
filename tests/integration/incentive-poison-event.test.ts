@@ -111,7 +111,7 @@ describe("a throwing event is isolated, reported, and retryable", () => {
     expect(result.lastEventId).toBeGreaterThan(0);
   });
 
-  it("does NOT skip ahead — the failed event stays claimable and order is preserved", () => {
+  it("does NOT skip ahead - the failed event stays claimable and order is preserved", () => {
     const e1 = saleApproved(1);
     const e2 = saleApproved(2);
     saleApproved(3);
@@ -226,7 +226,7 @@ describe("leases: two workers cannot process one event", () => {
     expect(awardsFor(REP)).toHaveLength(0);
   });
 
-  it("an EXPIRED lease is reclaimable — the worker-crash recovery path", () => {
+  it("an EXPIRED lease is reclaimable - the worker-crash recovery path", () => {
     const e = saleApproved(1);
     Q.acquireLease(S.SUBSCRIBER_NAME, e.id, "dead-worker");
     // Simulate the crash: the lease is left behind and ages out.

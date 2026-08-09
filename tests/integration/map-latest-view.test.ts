@@ -73,7 +73,7 @@ afterAll(() => new Promise<void>(r => server.close(() => r())));
 const LATEST_KEPT = () => [ids.fresh, ids.untagged, ids.otherTag, ids.verified, ids.repDoor];
 const LATEST_DROPPED = () => [ids.fiber1, ids.fiber2, ids.repFiber];
 
-describe("view=latest — full feed", () => {
+describe("view=latest - full feed", () => {
   it("drops the footprint import and keeps NULL/fresh/organic/verified pins", async () => {
     const body = await (await req("/api/leads/map?view=latest", fx.manager.session)).json();
     const pinIds = body.pins.map((p: any) => p.id);
@@ -111,7 +111,7 @@ describe("view=latest — full feed", () => {
   });
 });
 
-describe("view=latest — bbox windows", () => {
+describe("view=latest - bbox windows", () => {
   const bbox = "bbox=-80.6,35.4,-80.1,35.6";
 
   it("filters the window exactly like the feed (and the window count agrees)", async () => {
@@ -133,7 +133,7 @@ describe("view=latest — bbox windows", () => {
   });
 });
 
-describe("view=latest — density grid", () => {
+describe("view=latest - density grid", () => {
   const grid = "/api/leads/map/grid?bbox=-80.6,35.4,-80.1,35.6&cell=0.5";
   const sum = (cells: Array<{ n: number }>) => cells.reduce((a, c) => a + c.n, 0);
 
@@ -153,7 +153,7 @@ describe("view=latest — density grid", () => {
   });
 });
 
-describe("view=latest — scoping preserved", () => {
+describe("view=latest - scoping preserved", () => {
   it("the lens composes with rep scope: the rep's workable set, minus the footprint tag", async () => {
     // Self-serve open field is OPT-IN and off for this tenant, so the rep's
     // scope is exactly the two doors assigned to them. The lens then drops the

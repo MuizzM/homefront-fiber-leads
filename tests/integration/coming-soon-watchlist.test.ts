@@ -223,7 +223,7 @@ describe("watchlist tick", () => {
   }
   const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
-  it("rechecks hot (near/past ETA) at 6h, construction sources at 12h, undated at 24h — hot first", () => {
+  it("rechecks hot (near/past ETA) at 6h, construction sources at 12h, undated at 24h - hot first", () => {
     const hotDue = watched({ eta: iso(NOW + 5 * DAY), lastChecked: NOW - 7 * HOUR });
     const hotNotDue = watched({ eta: iso(NOW + 5 * DAY), lastChecked: NOW - 5 * HOUR });
     const soonDue = watched({ source: "new_build", lastChecked: NOW - 13 * HOUR });

@@ -221,7 +221,7 @@ export function CompTermsEditor({
               <p key={i}>{paragraph}</p>
             ))}
             <p className="text-[11px] italic">
-              This is the wording that goes into the Commission Agreement — rendered from the same terms the PDF is built from.
+              This is the wording that goes into the Commission Agreement - rendered from the same terms the PDF is built from.
             </p>
           </div>
         )}

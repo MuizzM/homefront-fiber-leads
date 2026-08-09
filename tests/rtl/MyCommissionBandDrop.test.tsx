@@ -136,7 +136,7 @@ describe("review-confirmed guards", () => {
   });
 });
 
-describe("the rank card — Bronze/Silver/Gold/Platinum on the rep's own ladder", () => {
+describe("the rank card - Bronze/Silver/Gold/Platinum on the rep's own ladder", () => {
   it("names the current week's rank and prices the climb retroactively", async () => {
     // 6 qualified on the 1-6/$175 · 7+/$225 ladder: a Bronze week, 1 sale from
     // Silver. The gain shown must be the WHOLE-week jump: 7 x $225 - 6 x $175
@@ -259,7 +259,7 @@ describe("the chargeback reserve (holdback) card", () => {
     expect(card).toHaveTextContent(/less any valid chargebacks/i);
   });
 
-  it("renders nothing when the tenant runs no reserve (percent 0) — never a fake $0 card", async () => {
+  it("renders nothing when the tenant runs no reserve (percent 0) - never a fake $0 card", async () => {
     renderPage(withHoldback({ holdback: {
       current: { reservePercent: 0, reserveCents: 0, netPayableCents: 105000, earnedCents: 105000 },
       ledger: { reservePercent: 0, reserveBalanceCents: 0, netPaidCents: 105000, earnedToDateCents: 105000 },

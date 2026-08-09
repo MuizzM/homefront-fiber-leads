@@ -203,7 +203,7 @@ describe("history survives the reset", () => {
     expect(passes[0].closedByName).toBe("Mona Manager");
   });
 
-  it("the pass ledger is append-only — the DATABASE refuses to rewrite it", async () => {
+  it("the pass ledger is append-only - the DATABASE refuses to rewrite it", async () => {
     const area = seedArea([fx.rep.memberId]);
     seedLead(area, fx.rep.memberId);
     await req(`/api/territories/${area}/next-pass`, fx.manager.session, {
@@ -285,7 +285,7 @@ describe("doors that must never re-open", () => {
     expect(leadOf(lead).leadStatus).toBe("prospect");
   });
 
-  it("do-not-knock is permanent — no option in the API clears it", async () => {
+  it("do-not-knock is permanent - no option in the API clears it", async () => {
     const area = seedArea([fx.rep.memberId]);
     const dnk = seedLead(area, fx.rep.memberId, { leadStatus: "not_interested", doNotKnock: true });
 
@@ -460,7 +460,7 @@ describe("who can do this", () => {
     expect(leadOf(lead).leadStatus).toBe("not_interested");
   });
 
-  it("a team lead cannot either — a reset wipes the whole team's outcomes", async () => {
+  it("a team lead cannot either - a reset wipes the whole team's outcomes", async () => {
     const area = seedArea([fx.rep.memberId]);
     const res = await req(`/api/territories/${area}/next-pass`, fx.lead.session, {
       method: "POST", body: JSON.stringify({ territoryAction: "keep" }),
@@ -477,7 +477,7 @@ describe("who can do this", () => {
     expect(res.status).toBe(401);
   });
 
-  it("a manager in another org gets 404, not 403 — no existence oracle", async () => {
+  it("a manager in another org gets 404, not 403 - no existence oracle", async () => {
     const area = seedArea([fx.rep.memberId]);
     const lead = seedLead(area, fx.rep.memberId, { leadStatus: "not_interested" });
 

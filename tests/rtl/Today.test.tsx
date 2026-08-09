@@ -121,7 +121,7 @@ function announcement(over: any = {}) {
   };
 }
 
-describe("Today — the rep's home", () => {
+describe("Today - the rep's home", () => {
   it("greets the rep by first name", async () => {
     renderToday();
     const h = await screen.findByTestId("today-greeting");
@@ -204,7 +204,7 @@ describe("Today — the rep's home", () => {
 // animation reached no one, and a manager could post an announcement that no rep
 // had any surface to read. Rendering correctly is worthless if nothing renders
 // you, so this block asserts placement, not appearance.
-describe("Today — announcements and the install prompt reach the rep", () => {
+describe("Today - announcements and the install prompt reach the rep", () => {
   it("puts the install-and-notify card ABOVE the earnings header", async () => {
     readiness.mockReturnValue({ state: "needs_install", isIOS: true, isStandalone: false });
     renderToday();

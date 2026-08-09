@@ -52,7 +52,7 @@ describe("template integrity (Form W-9 Rev. 3-2024, Cat. No. 10231X)", () => {
     expect(sha256(readFileSync(TEMPLATE))).toBe(W9_TEMPLATE_SHA256);
   });
 
-  it("a tampered template is rejected — a swapped revision can never be silently mis-filled", () => {
+  it("a tampered template is rejected - a swapped revision can never be silently mis-filled", () => {
     const bytes = new Uint8Array(readFileSync(TEMPLATE));
     bytes[bytes.length - 1] ^= 0xff; // one flipped byte
     expect(() => assertTemplateIntegrity(bytes, "tampered.pdf")).toThrow(W9TemplateError);
@@ -64,7 +64,7 @@ describe("template integrity (Form W-9 Rev. 3-2024, Cat. No. 10231X)", () => {
   });
 });
 
-describe("Line 3a — the signer's tax classification drives the checkbox", () => {
+describe("Line 3a - the signer's tax classification drives the checkbox", () => {
   const widgetFor = (c: W9TaxClassification) => CLASSIFICATION_CHECKBOX[c];
 
   it.each(W9_TAX_CLASSIFICATIONS)("%s checks exactly its own widget and no other", async (classification) => {
@@ -93,7 +93,7 @@ describe("Line 3a — the signer's tax classification drives the checkbox", () =
     expect(field.getText()).toBe(letter);
   });
 
-  it("an LLC with no C/S/P letter is refused — the form would be incomplete", async () => {
+  it("an LLC with no C/S/P letter is refused - the form would be incomplete", async () => {
     await expect(fillFresh({ taxClassification: "llc", llcTaxClass: null })).rejects.toThrow(W9FieldError);
     await expect(fillFresh({ taxClassification: "llc", llcTaxClass: "X" as any })).rejects.toThrow(/C, S, or P/);
   });
@@ -125,7 +125,7 @@ describe("Line 3a — the signer's tax classification drives the checkbox", () =
   });
 });
 
-describe("Part I — TIN slicing lands in the right MaxLen boxes", () => {
+describe("Part I - TIN slicing lands in the right MaxLen boxes", () => {
   it("an SSN splits 3-2-4 across f1_11 / f1_12 / f1_13", async () => {
     const { form } = await fillFresh({ tin: "123456789", tinType: "ssn" });
     const a = form.getTextField(`${P1}.f1_11[0]`);
@@ -147,7 +147,7 @@ describe("Part I — TIN slicing lands in the right MaxLen boxes", () => {
   });
 });
 
-describe("Part II item 2 — the backup-withholding strike", () => {
+describe("Part II item 2 - the backup-withholding strike", () => {
   it("is located from the page's own text at the certification block", async () => {
     const doc = await PDFDocument.load(loadW9Template());
     const helv = await doc.embedFont(StandardFonts.Helvetica);
@@ -184,7 +184,7 @@ describe("Part II item 2 — the backup-withholding strike", () => {
   });
 });
 
-describe("loud failure — no blank-but-valid W-9", () => {
+describe("loud failure - no blank-but-valid W-9", () => {
   it("a field id that is absent from the template throws W9FieldError", async () => {
     const doc = await PDFDocument.load(loadW9Template());
     const form = doc.getForm();
@@ -225,7 +225,7 @@ describe("non-Latin legal names", () => {
     expect(toPrintableLatin("Łukasz Ćwik").text).toBe("Lukasz Cwik");
   });
 
-  it("CJK has no Latin representation — a typed, explainable error (→ 400), never a 500", async () => {
+  it("CJK has no Latin representation - a typed, explainable error (→ 400), never a 500", async () => {
     await expect(renderW9Pdf(input({ legalName: "张伟", signatureName: "张伟" })))
       .rejects.toThrow(W9EncodingError);
     await expect(renderW9Pdf(input({ legalName: "张伟", signatureName: "张伟" })))

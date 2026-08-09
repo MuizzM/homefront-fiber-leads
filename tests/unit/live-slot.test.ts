@@ -40,7 +40,7 @@ describe("only one thing is ever primary", () => {
   });
 });
 
-describe("expired items are not low-priority — they are gone", () => {
+describe("expired items are not low-priority - they are gone", () => {
   it("drops anything past its deadline before ranking", () => {
     const r = resolveLiveSlot([
       item({ kind: "challenge", id: "dead", started: true, endsAtMs: mins(-1) }),
@@ -58,7 +58,7 @@ describe("expired items are not low-priority — they are gone", () => {
   });
 });
 
-describe("started beats unstarted — that's the whole ranking idea", () => {
+describe("started beats unstarted - that's the whole ranking idea", () => {
   it("a started challenge outranks an untouched one worth more", () => {
     // A rep 6 doors into 10 will finish. A rep at 0 has already decided not to.
     // Showing the started one is the only case where the card changes anything.
@@ -69,7 +69,7 @@ describe("started beats unstarted — that's the whole ranking idea", () => {
     expect(r.primary?.id).toBe("going");
   });
 
-  it("momentum outranks an UNSTARTED challenge — minutes beat hours", () => {
+  it("momentum outranks an UNSTARTED challenge - minutes beat hours", () => {
     const r = resolveLiveSlot([
       item({ kind: "challenge", id: "c", started: false, endsAtMs: mins(55) }),
       item({ kind: "momentum", id: "m", endsAtMs: mins(40) }),
@@ -130,7 +130,7 @@ describe("campaigns get promoted as they close", () => {
     expect(tie.primary?.id).toBe("big");
   });
 
-  it("is stable — identical items never shuffle between renders", () => {
+  it("is stable - identical items never shuffle between renders", () => {
     // A card that reorders on a background refetch reads as a glitch, and on a
     // touch screen it means the thing under your thumb changed.
     const a = item({ kind: "campaign", id: "aaa", endsAtMs: mins(120) });
@@ -147,7 +147,7 @@ describe("the countdown a rep reads", () => {
     expect(countdownLabel(0)).toBe("0 min");
   });
 
-  it("switches to hours above one — '63 min' reads as a clock, '1h 3m' doesn't", () => {
+  it("switches to hours above one - '63 min' reads as a clock, '1h 3m' doesn't", () => {
     expect(countdownLabel(63 * 60_000)).toBe("1h 3m");
     expect(countdownLabel(120 * 60_000)).toBe("2h");
   });

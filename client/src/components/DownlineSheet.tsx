@@ -166,7 +166,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
         <EmptyState
           icon={Users}
           title="Pick a leader"
-          description="Your login has no field profile of its own — choose a team lead or manager above to open their downline sheet."
+          description="Your login has no field profile of its own - choose a team lead or manager above to open their downline sheet."
           bordered
           testId="downline-pick-target"
         />
@@ -175,7 +175,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
       ) : isError || !sheet ? (
         <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" data-testid="downline-error">
           <div className="text-sm font-semibold text-foreground">Couldn't load the downline sheet</div>
-          <div className="text-sm text-muted-foreground mt-1">Check your connection and try again — the override ledger is safe.</div>
+          <div className="text-sm text-muted-foreground mt-1">Check your connection and try again - the override ledger is safe.</div>
           <button onClick={() => refetch()}
             className="mt-4 inline-flex items-center justify-center h-10 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
             Retry
@@ -226,7 +226,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
                     </span>
                     <span className="text-muted-foreground">
                       <span className="text-foreground font-medium">{ex.repName}</span>
-                      {" — "}{ex.detail}
+                      {" - "}{ex.detail}
                     </span>
                   </div>
                 ))}
@@ -234,7 +234,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
             </div>
           ) : (
             <div className="rounded-xl bg-card border border-border px-4 py-2.5 flex items-center gap-2 text-sm text-muted-foreground" data-testid="override-exceptions-clear">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" /> Nothing needs review — every number is explainable.
+              <ShieldCheck className="w-4 h-4 text-emerald-400" /> Nothing needs review - every number is explainable.
             </div>
           )}
 
@@ -295,7 +295,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
                             <div key={r.id} className="px-4 py-2.5 pl-11 flex items-center justify-between gap-3 text-sm" data-testid={`override-row-${r.id}`}>
                               <div className="min-w-0">
                                 <div className="text-sm text-foreground truncate">
-                                  {r.soldAt ? new Date(r.soldAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}
+                                  {r.soldAt ? new Date(r.soldAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : " - "}
                                   <span className="text-muted-foreground"> · {r.downlineRepName} ({roleShort(r.downlineRoleAtEarn)})</span>
                                 </div>
                                 <div className="mt-1 flex items-center gap-1.5">

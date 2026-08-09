@@ -111,7 +111,7 @@ describe("migration: rows that predate the basis column", () => {
     expect(JSON.stringify(snapshot())).toBe(before);
   });
 
-  it("only NEWLY written sales carry a snapshot — the migration adopts nothing retroactively", () => {
+  it("only NEWLY written sales carry a snapshot - the migration adopts nothing retroactively", () => {
     const legacy = rawDb.prepare(`SELECT qualification_basis AS b FROM commission_sales WHERE external_id = ?`).get("legacy-1") as any;
     expect(legacy.b).toBeNull();
 

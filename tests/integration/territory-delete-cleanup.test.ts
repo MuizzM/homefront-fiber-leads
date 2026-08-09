@@ -115,7 +115,7 @@ afterAll(async () => {
   if (server) await new Promise<void>((res, rej) => server.close((e) => (e ? rej(e) : res())));
 });
 
-describe("DELETE /api/territories/:id — the reported bug", () => {
+describe("DELETE /api/territories/:id - the reported bug", () => {
   it("THE REQUIREMENT: after deleting Talal's area, his doors are not his and not the area's", async () => {
     const areaId = seedArea([fx.talal.memberId]);
     const doors = [seedLead(fx.talal.memberId, areaId), seedLead(fx.talal.memberId, areaId)];
@@ -182,7 +182,7 @@ describe("DELETE /api/territories/:id — the reported bug", () => {
     expect(leadRow(directDoor).source).toBeNull();
   });
 
-  it("clears a PAST holder's doors — a keep_leads reclaim empties the list while the doors still name the rep", async () => {
+  it("clears a PAST holder's doors - a keep_leads reclaim empties the list while the doors still name the rep", async () => {
     const areaId = seedArea([], 1, {
       repId: fx.talal.memberId, assigneeIds: "[]",
       pastAssigneeIds: JSON.stringify([fx.talal.memberId]), status: "reclaimed",
@@ -210,7 +210,7 @@ describe("DELETE /api/territories/:id — the reported bug", () => {
     expect(await leadsVisibleTo(fx.talal.session)).toContain(door);
   });
 
-  it("an unrecognised policy is a 400 and changes NOTHING — a typo must not mass-unassign", async () => {
+  it("an unrecognised policy is a 400 and changes NOTHING - a typo must not mass-unassign", async () => {
     const areaId = seedArea([fx.talal.memberId]);
     const door = seedLead(fx.talal.memberId, areaId);
 
@@ -397,7 +397,7 @@ describe("an area is created with a CREW, not one rep", () => {
     expect(body.territory.status).toBe("active");
   });
 
-  it("validates EVERY rep before writing anything — a bad third leaves no area behind", async () => {
+  it("validates EVERY rep before writing anything - a bad third leaves no area behind", async () => {
     const areasBefore = storage.getTerritories(1).length;
     const { status } = await drawArea(fx.manager.session, {
       repIds: [fx.talal.memberId, fx.bo.memberId, 999_999],

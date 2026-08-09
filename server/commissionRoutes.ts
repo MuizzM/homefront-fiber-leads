@@ -158,7 +158,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     const owner = branchOwnerOf(repId, storage.getTeamMembers(tid(req)) as any[]);
     if (owner == null || owner === actor.teamMemberId) return false;
     res.status(403).json({
-      error: "That member belongs to another manager's team — ask an admin to transfer them",
+      error: "That member belongs to another manager's team - ask an admin to transfer them",
       code: "OUT_OF_BRANCH",
     });
     return true;
@@ -293,7 +293,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     const parsed = parseReservePatch(req.body || {});
     if (parsed.error) return res.status(400).json({ error: parsed.error, code: "RESERVE_INVALID_CONFIG" });
     if (Object.keys(parsed.patch).length === 0) {
-      return res.status(400).json({ error: "Nothing to update — send reservePercent and/or reserveCapCents.", code: "RESERVE_INVALID_CONFIG" });
+      return res.status(400).json({ error: "Nothing to update - send reservePercent and/or reserveCapCents.", code: "RESERVE_INVALID_CONFIG" });
     }
     try { res.json(reserve.setRepReserveConfig(tid(req), repId, uid(req), parsed.patch)); } catch (e) { fail(res, e); }
   });
@@ -498,7 +498,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
           const m = rowMoney(r);
           return [
             csvCell(r.repName), csvCell(r.status), r.qualifiedSaleCount,
-            csvCell(r.tierLabel ?? (r.structure === "FLAT" ? "Flat" : "—")),
+            csvCell(r.tierLabel ?? (r.structure === "FLAT" ? "Flat" : " - ")),
             money(r.rateCents), money(r.grossCommissionCents), money(r.adjustmentCents), money(r.finalCommissionCents),
             r.hours.toFixed(2), r.hourlyRateCents != null ? money(r.hourlyRateCents) : "", money(r.hourlyPayCents),
             money(m.spiffCents), money(m.reserveCents), money(m.totalCents),

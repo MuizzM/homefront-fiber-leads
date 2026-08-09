@@ -249,7 +249,7 @@ export async function pullCityAddressesTiled(bbox: Bbox, cityName: string, state
   const incomplete = failed + skipped + truncatedTiles;
   console.log(`[overpass] ${cityName}, ${stateName}: ${out.length} addresses across ${tiles.length} tiles (failed ${failed}, past-deadline ${skipped}, truncated ${truncatedTiles})`);
   if (incomplete > tiles.length * 0.25) {
-    console.warn(`[overpass] ${cityName}, ${stateName}: ${incomplete}/${tiles.length} tiles incomplete — result likely UNDER-counts; a re-pull may find more.`);
+    console.warn(`[overpass] ${cityName}, ${stateName}: ${incomplete}/${tiles.length} tiles incomplete - result likely UNDER-counts; a re-pull may find more.`);
   }
   return out;
 }

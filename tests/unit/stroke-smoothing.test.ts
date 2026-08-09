@@ -47,7 +47,7 @@ function inBBox(pts: Pt[], ref: Pt[]): boolean {
   );
 }
 
-describe("simplifyStroke — Ramer-Douglas-Peucker", () => {
+describe("simplifyStroke - Ramer-Douglas-Peucker", () => {
   it("drops collinear interior points and keeps the exact endpoints", () => {
     const line = [P(0, 0), P(1, 0), P(2, 0), P(3, 0), P(4, 0)];
     expect(simplifyStroke(line, 0.5)).toEqual([P(0, 0), P(4, 0)]);
@@ -86,7 +86,7 @@ describe("simplifyStroke — Ramer-Douglas-Peucker", () => {
   });
 });
 
-describe("chaikinSmooth — corner cutting", () => {
+describe("chaikinSmooth - corner cutting", () => {
   const open5 = [P(0, 0), P(2, 3), P(5, 1), P(7, 4), P(9, 0)];
 
   it("open vertex count follows 2^k * (n - 2) + 2, and default is 2 iterations", () => {
@@ -130,7 +130,7 @@ describe("chaikinSmooth — corner cutting", () => {
   });
 });
 
-describe("resampleStroke — even arc-length spacing", () => {
+describe("resampleStroke - even arc-length spacing", () => {
   it("exact-multiple open stroke: uniform spacing, both endpoints kept", () => {
     const out = resampleStroke([P(0, 0), P(10, 0)], 1);
     expect(out.length).toBe(11);
@@ -169,7 +169,7 @@ describe("resampleStroke — even arc-length spacing", () => {
   });
 });
 
-describe("smoothLassoRing — lasso completion pipeline", () => {
+describe("smoothLassoRing - lasso completion pipeline", () => {
   it("returns [] below minPoints distinct points; duplicates do not count", () => {
     const triangle = [P(0, 0), P(10, 0), P(5, 8)];
     expect(smoothLassoRing(triangle)).toEqual([]);

@@ -278,7 +278,7 @@ function normalizeAddrForDedup(addr: string): string {
     .join(" ");
 }
 
-// The scan/import dedup sites only ever need the normalized-address set — one
+// The scan/import dedup sites only ever need the normalized-address set - one
 // narrow single-column read instead of hydrating every ~45-column lead row
 // (plus an ORDER BY nothing consumed) through storage.getLeads. No tenantId
 // keeps the cross-tenant semantics the unscoped call sites had.
@@ -320,14 +320,14 @@ function otpMessage(to: string, code: string, name: string) {
   return {
     to,
     subject: "Your Home Front Solutions sign-in code",
-    text: `Hi ${(name || "").split(" ")[0] || "there"}, your Home Front Solutions sign-in code is ${code}. It expires in 10 minutes. Never share this code — we will never ask for it.`,
+    text: `Hi ${(name || "").split(" ")[0] || "there"}, your Home Front Solutions sign-in code is ${code}. It expires in 10 minutes. Never share this code - we will never ask for it.`,
     html: emailShell({
-      preheader: `Your sign-in code is ${code} — expires in 10 minutes`,
+      preheader: `Your sign-in code is ${code} - expires in 10 minutes`,
       heading: "Your sign-in code",
       bodyHtml:
         emailParagraph(`Hi ${first}, use this one-time code to sign in:`) +
         emailCodeBox(code) +
-        emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. Never share it — Home Front Solutions will never ask you for it.`),
+        emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. Never share it - Home Front Solutions will never ask you for it.`),
     }),
   };
 }
@@ -352,7 +352,7 @@ async function sendOtpEmail(to: string, code: string, name: string): Promise<"em
       });
       return "email";
     } catch (e: any) {
-      console.warn(`[otp] Resend API send failed (${String(e?.message ?? e).slice(0, 140)}) — trying SMTP`);
+      console.warn(`[otp] Resend API send failed (${String(e?.message ?? e).slice(0, 140)}) - trying SMTP`);
     }
   }
   // 2) SMTP with 587↔465 port failover (production only). Development NEVER
@@ -2529,7 +2529,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         return res.status(403).json({ error: "Forbidden", need: "commission.structure.manage" });
       }
       const wanted = boundedMemberIds(req.body?.memberIds);
-      if (!wanted) return res.status(400).json({ error: `A group tops out at ${GROUP_MEMBER_MAX} people — past that, use the floor.` });
+      if (!wanted) return res.status(400).json({ error: `A group tops out at ${GROUP_MEMBER_MAX} people - past that, use the floor.` });
       const resolved = resolveMemberIdsOrFail(Number(tenantId), wanted, res);
       if (!resolved) return; // 400 already written, naming the bad picks
       try {
@@ -2606,7 +2606,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const threadId = Number(req.params.id);
     if (tenantId == null || !Number.isFinite(threadId)) return res.status(404).json({ error: "Not found" });
     const wanted = boundedMemberIds(req.body?.addMemberIds);
-    if (!wanted) return res.status(400).json({ error: `A group tops out at ${GROUP_MEMBER_MAX} people — past that, use the floor.` });
+    if (!wanted) return res.status(400).json({ error: `A group tops out at ${GROUP_MEMBER_MAX} people - past that, use the floor.` });
     const add = wanted.length ? resolveMemberIdsOrFail(Number(tenantId), wanted, res) : [];
     if (!add) return; // 400 already written
     const remove = (Array.isArray(req.body?.removeUserIds) ? req.body.removeUserIds : [])
@@ -3240,7 +3240,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Atomic: idempotency check + apply + record in one transaction.
       const result = processWebhookEvent(event);
       // Unresolvable (event before the tenant row exists) → 422 so Stripe retries.
-      if (result.retriable) return res.status(422).json({ received: false, reason: "unresolved — will retry" });
+      if (result.retriable) return res.status(422).json({ received: false, reason: "unresolved - will retry" });
       res.json({ received: true, applied: result.applied, kind: result.kind, duplicate: !!result.duplicate });
     } catch (e: any) {
       console.error(`[billing] webhook ${event.type} error: ${e.message}`);
@@ -4194,7 +4194,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
 
       res.status(404).json({
-        error: "No free address source found for this city. OpenStreetMap returned nothing — try again (public Overpass is flaky), or an admin can pass source=mapbox to run a paid Mapbox harvest once.",
+        error: "No free address source found for this city. OpenStreetMap returned nothing - try again (public Overpass is flaky), or an admin can pass source=mapbox to run a paid Mapbox harvest once.",
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -4878,7 +4878,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         ? null
         : { address: t.address, city: t.city, state: t.state, zip: t.zip, lat: t.lat, lng: t.lng });
     if (!toScan.length) {
-      return res.json({ jobId: null, total: 0, source: "pool", message: "Every pooled address is already a lead — nothing new to check." });
+      return res.json({ jobId: null, total: 0, source: "pool", message: "Every pooled address is already a lead - nothing new to check." });
     }
     const jobId = `rescan_${Date.now()}`;
     const job: ScanJob = {
@@ -5227,7 +5227,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // could freely CREATE one there, which is the same edge in the same tree.
       if (!actorMayReachBranch((req as any).user, Number(parsed.data.reportsToId), tenantId)) {
         return res.status(403).json({
-          error: "That supervisor belongs to another manager's team — ask an admin to place this hire",
+          error: "That supervisor belongs to another manager's team - ask an admin to place this hire",
           code: "OUT_OF_BRANCH",
         });
       }
@@ -5328,7 +5328,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       : [];
     if (rejectedSelfFields.length > 0) {
       return res.status(403).json({
-        error: "You cannot change your own role, supervisor, or login email — ask someone above you",
+        error: "You cannot change your own role, supervisor, or login email - ask someone above you",
         code: "SELF_LIFECYCLE_FORBIDDEN",
       });
     }
@@ -5557,7 +5557,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   }
 
   const OUT_OF_BRANCH = {
-    error: "That member belongs to another manager's team — ask an admin to transfer them",
+    error: "That member belongs to another manager's team - ask an admin to transfer them",
     code: "OUT_OF_BRANCH",
   };
 
@@ -5811,7 +5811,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // than 30,000. Chunks yield the event loop between them, so the portal
     // stays responsive while a whole neighbourhood is handed to a rep.
     if (leadIds.length > MAX_BULK_ASSIGN_LEADS) {
-      return res.status(400).json({ error: `Too many leads — select at most ${MAX_BULK_ASSIGN_LEADS.toLocaleString()} at a time`, code: "BULK_TOO_LARGE" });
+      return res.status(400).json({ error: `Too many leads - select at most ${MAX_BULK_ASSIGN_LEADS.toLocaleString()} at a time`, code: "BULK_TOO_LARGE" });
     }
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
@@ -5896,7 +5896,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/leads/bulk-status", requireCapability("lead.disposition.update"), (req, res) => {
     const { leadIds, outcome } = req.body as { leadIds: number[]; outcome: string };
     if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
-    if (leadIds.length > MAX_BULK_LEADS) return res.status(400).json({ error: `Too many leads — select at most ${MAX_BULK_LEADS} at a time`, code: "BULK_TOO_LARGE" });
+    if (leadIds.length > MAX_BULK_LEADS) return res.status(400).json({ error: `Too many leads - select at most ${MAX_BULK_LEADS} at a time`, code: "BULK_TOO_LARGE" });
     if (!isBulkStatusOutcome(outcome)) return res.status(400).json({ error: "outcome not allowed for bulk edit" });
     const newStatus = OUTCOME_TO_STATUS[outcome as KnockOutcome];
     const user = (req as any).user;
@@ -5940,7 +5940,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
     // Cap the batch: each id runs synchronous SQLite work on the one event-loop
     // thread, so an unbounded array would stall the server for every user.
-    if (leadIds.length > 500) return res.status(400).json({ error: "Too many leads — select at most 500 at a time", code: "BULK_TOO_LARGE" });
+    if (leadIds.length > 500) return res.status(400).json({ error: "Too many leads - select at most 500 at a time", code: "BULK_TOO_LARGE" });
     if (!isLeadMarkOrClear(mark)) return res.status(400).json({ error: "Invalid mark", code: "INVALID_LEAD_MARK" });
     const value = normalizeLeadMark(mark);
     const user = (req as any).user;
@@ -6341,7 +6341,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (!sup && knockRow.repId) {
         const saleTenant = resolveKnockSaleTenant(knockRow.tenantId, getDefaultTenantId());
         if (saleTenant == null) {
-          const err: any = new Error("Knock has no resolvable tenant — refusing to book money");
+          const err: any = new Error("Knock has no resolvable tenant - refusing to book money");
           err.code = "KNOCK_TENANT_UNRESOLVABLE";
           throw err;
         }
@@ -6540,13 +6540,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // can never fix it, and booking into the caller's org is exactly the
       // cross-tenant money move this guard exists to refuse.
       if (e?.code === "KNOCK_TENANT_UNRESOLVABLE") {
-        return res.status(409).json({ error: "This door has no resolvable organization — the sale was not booked.", code: "KNOCK_TENANT_UNRESOLVABLE" });
+        return res.status(409).json({ error: "This door has no resolvable organization - the sale was not booked.", code: "KNOCK_TENANT_UNRESOLVABLE" });
       }
       // The bundle is atomic — a money-engine failure rolls the CAS back too,
       // so nothing is half-applied. The knock row stands as history; the client
       // retry re-runs the whole bundle idempotently.
       console.warn("[knock] money bundle failed:", e?.message);
-      return res.status(503).json({ error: "Could not apply the outcome — retry", retryable: true });
+      return res.status(503).json({ error: "Could not apply the outcome - retry", retryable: true });
     }
     // A knock changes the pin's visited state even when leadStatus is unchanged
     // (not_home) — bust this org's map layer explicitly.
@@ -6748,7 +6748,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             void pushToUsers(
               bonusTenant, [(req as any).user?.id].filter((n): n is number => Number.isFinite(n)),
               {
-                title: `You're running hot — ${feedUsd(momentumArmed.amountCents)} on the line`,
+                title: `You're running hot - ${feedUsd(momentumArmed.amountCents)} on the line`,
                 body: `Close one in the next ${Math.max(1, Math.round(momentumArmed.remainingMs / 60_000))} min and it's yours.`,
                 url: "/incentives", tag: "my-streak",
               },
@@ -7242,7 +7242,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       code: e?.code ?? null,
       error: String(e?.message ?? e).slice(0, 200),
     }, "error");
-    return res.status(503).json({ error: "Sign-in is briefly unavailable — please try again in a moment." });
+    return res.status(503).json({ error: "Sign-in is briefly unavailable - please try again in a moment." });
   }
 
   // Step 1: Request OTP code (email)
@@ -7579,7 +7579,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // have no org-chart position to keep in step, so they keep using this route.
     if (safeUpdate.role !== undefined && safeUpdate.role !== target.role && target.teamMemberId != null) {
       return res.status(409).json({
-        error: "This person is in the org chart — change their role from the Team page so the hierarchy, their reports, and their commissions move with it.",
+        error: "This person is in the org chart - change their role from the Team page so the hierarchy, their reports, and their commissions move with it.",
         code: "ROLE_CHANGE_WRONG_DOOR",
         use: `PATCH /api/team/${target.teamMemberId}`,
       });
@@ -7935,7 +7935,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Refuse with something the manager can act on instead of recording a lie.
     if (previewNextPass(t.id, tid ?? null).totals.total === 0) {
       return res.status(409).json({
-        error: "This area has no doors linked to it yet, so there is nothing to re-open. Assign it to a rep first — that links the doors inside its outline.",
+        error: "This area has no doors linked to it yet, so there is nothing to re-open. Assign it to a rep first - that links the doors inside its outline.",
         code: "NO_LINKED_DOORS",
       });
     }
@@ -8333,7 +8333,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // and there was no request that could ever remove them. Two reps on one area,
     // no way to unstick it.
     if (repIds.length === 0) {
-      return res.status(400).json({ error: "repIds required — use /reclaim to empty an area" });
+      return res.status(400).json({ error: "repIds required - use /reclaim to empty an area" });
     }
     const merged = Array.from(new Set(repIds));
     // Same wall the create path applies, so a crew that cannot be drawn cannot
@@ -9085,7 +9085,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       sendMailResilient({
         from: mailFrom(),
         to: adminInbox()!,
-        subject: `Territory Request — ${String(member.name).replace(/[\r\n]/g, " ").slice(0, 120)}`,
+        subject: `Territory Request - ${String(member.name).replace(/[\r\n]/g, " ").slice(0, 120)}`,
         html: `
           <h2>New Territory Request</h2>
           <p><strong>${escapeHtml(String(member.name))}</strong> has finished their current territory and is requesting a new one.</p>
@@ -9464,7 +9464,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const esc = (s: string) => String(s)
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-        const subject = `New Rep Application — ${String(fullName).replace(/[\r\n]/g, " ").slice(0, 120)}`;
+        const subject = `New Rep Application - ${String(fullName).replace(/[\r\n]/g, " ").slice(0, 120)}`;
         const html = `
             <h2>New Rep Application Received</h2>
             <table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">
@@ -9473,9 +9473,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               <tr><td style="padding:6px 12px;font-weight:bold;">Phone</td><td style="padding:6px 12px;">${esc(phone)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">City/Zip</td><td style="padding:6px 12px;">${esc(city)}, ${esc(state || "NC")} ${esc(zip)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Carriers</td><td style="padding:6px 12px;">${esc(Array.isArray(preferredCarriers) ? preferredCarriers.join(", ") : preferredCarriers)}</td></tr>
-              <tr><td style="padding:6px 12px;font-weight:bold;">Sales Exp.</td><td style="padding:6px 12px;">${hasSalesExperience === "true" ? "Yes" : "No"}${salesExperienceDetails ? " — " + esc(salesExperienceDetails) : ""}</td></tr>
+              <tr><td style="padding:6px 12px;font-weight:bold;">Sales Exp.</td><td style="padding:6px 12px;">${hasSalesExperience === "true" ? "Yes" : "No"}${salesExperienceDetails ? " - " + esc(salesExperienceDetails) : ""}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Transportation</td><td style="padding:6px 12px;">${hasReliableTransportation === "true" ? "Yes" : hasReliableTransportation === "false" ? "No" : "Not asked"}</td></tr>
-              <tr><td style="padding:6px 12px;font-weight:bold;">Referred by</td><td style="padding:6px 12px;">${esc(referralSource || "—")}</td></tr>
+              <tr><td style="padding:6px 12px;font-weight:bold;">Referred by</td><td style="padding:6px 12px;">${esc(referralSource || " - ")}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Source</td><td style="padding:6px 12px;">${esc(app2.applicationSource)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Role</td><td style="padding:6px 12px;">${esc(app2.desiredRole || "Field Representative")}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Headshot</td><td style="padding:6px 12px;">${headshotFile ? "✓ Uploaded" : "Not uploaded"}</td></tr>
@@ -9506,7 +9506,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
   );
 
-  // GET /api/onboarding/applications — admin/manager only, tenant-scoped
+  // GET /api/onboarding/applications - admin/manager only, tenant-scoped
   // (super_admin sees all orgs' inbound; a tenant admin sees only their own).
   app.get("/api/onboarding/applications", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
@@ -9514,14 +9514,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(storage.getRepApplications(status, tid));
   });
 
-  // PATCH /api/onboarding/applications/:id — approve or reject
+  // PATCH /api/onboarding/applications/:id - approve or reject
   app.patch("/api/onboarding/applications/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     const { status, reviewNotes } = req.body;
     // Mutable: when the reviewer doesn't pass explicit terms, the invite's
     // manager-chosen comp terms seed it (set just after the invite is loaded).
     let commission = req.body.commission;
-    // Optional reviewer override of the invite's role/upline — mirrors how the
+    // Optional reviewer override of the invite's role/upline - mirrors how the
     // `commission` object above outranks the invite's stored comp terms. The
     // override*Cents keys are the per-hire override rates (what the TL/manager
     // slots keep from this hire's sales); null = inherit the org default.
@@ -9600,16 +9600,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let teamMemberId: number | null = null;
     let commissionResult: any = null;
     let commissionWarning: string | null = null;
-    // The approved instrument, normalized, held for document issuance below —
+    // The approved instrument, normalized, held for document issuance below -
     // so the paper states what the reviewer approved, not what an earlier
     // invite row (or a prior engagement's stored terms) happens to say.
     let approvedCompTerms: Partial<CommissionTerms> | null = null;
     // The role/upline the reviewer approved (resolved just after the invite is
     // loaded). hierarchyWarning surfaces a stale INVITE choice that was safely
-    // degraded — explicit reviewer input never degrades, it 400s.
+    // degraded - explicit reviewer input never degrades, it 400s.
     let approvedRole: string = "rep";
     let resolvedSupervisorId: number | null = null;
-    // Existing members this leader hire takes over — re-homed once the new
+    // Existing members this leader hire takes over - re-homed once the new
     // member row exists (below), so a hire can arrive with their team already
     // reporting to them instead of the reviewer re-parenting each one by hand.
     let resolvedDownlineIds: number[] = [];
@@ -9625,7 +9625,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // any state change and cover BOTH the claim-existing AND create-new paths.
     // It previously lived inside `if (existing)` only, so approving a public
     // application whose email matched SUPER_ADMIN_EMAILS with no prior account
-    // fell to the `else` branch and minted a user for that email — which the
+    // fell to the `else` branch and minted a user for that email - which the
     // boot-time super-admin stamp (storage.ts) then promoted to platform owner
     // on the next restart. It also fired AFTER markInviteApproved, so the 400
     // left the invite approved while the application stayed pending. Hoisted
@@ -9646,7 +9646,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (status === "approved") {
       approvedRole = hierarchy?.role ?? recruitingInvite?.invitedRole ?? "rep";
       // Approval IS the hire, so the REVIEWER must hold the authority to hire
-      // this role even when it came from the invite — the inviter's authority
+      // this role even when it came from the invite - the inviter's authority
       // was checked at invite time, and roles can change in between. Unknown
       // role strings fail closed here too. super_admin approves with admin's
       // hiring authority (the requireAdmin comment above: the apex identity is
@@ -9666,7 +9666,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         if (supervisor && supervisor.active && isValidSupervisorRole(approvedRole, supervisor.role)) {
           resolvedSupervisorId = proposedSupervisorId;
         } else if (reviewerOverrodeSupervisor) {
-          // Explicit input fails LOUD — the POST /api/team contract.
+          // Explicit input fails LOUD - the POST /api/team contract.
           return res.status(400).json({ error: "Supervisor must be an active member of your organization who ranks above the new member", code: "INVALID_SUPERVISOR" });
         } else {
           // The INVITE's choice can go stale between send and approval (the
@@ -9684,7 +9684,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // promoted past the new leader, or become the leader's own supervisor.
       //
       // Explicit reviewer input fails LOUD (the POST /api/team contract);
-      // invite-carried entries degrade — the named member is skipped with a
+      // invite-carried entries degrade - the named member is skipped with a
       // warning rather than blocking a hire on weeks-old data.
       const reviewerOverrodeDownline = hierarchy?.downlineIds !== undefined;
       const proposedDownlineIds = [...new Set(
@@ -9692,9 +9692,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       )];
       if (proposedDownlineIds.length > 0) {
         if (approvedRole === "rep") {
-          const message = "A rep cannot be given a downline — only team leads and managers supervise";
+          const message = "A rep cannot be given a downline - only team leads and managers supervise";
           if (reviewerOverrodeDownline) return res.status(400).json({ error: message, code: "INVALID_DOWNLINE" });
-          addHierarchyWarning("The invitation listed a downline, but the approved role is rep — nobody was moved.");
+          addHierarchyWarning("The invitation listed a downline, but the approved role is rep - nobody was moved.");
         } else {
           const roster = storage.getTeamMembers(tenantId);
           for (const downlineId of proposedDownlineIds) {
@@ -9715,13 +9715,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               continue;
             }
             // Strictly-below, by EFFECTIVE role (a low field role must not
-            // shield a higher login) — the same authority the roster edit uses.
+            // shield a higher login) - the same authority the roster edit uses.
             if (!isValidSupervisorRole(effectiveMemberRole(tenantId, member), approvedRole)) {
               if (refuse(`A ${String(approvedRole).replace("_", " ")} cannot supervise ${member.name} (${String(member.role).replace("_", " ")})`,
                 `${member.name} no longer ranks below the new hire, so they were not moved.`)) return;
               continue;
             }
-            // The REVIEWER must also be allowed to act on this member — moving
+            // The REVIEWER must also be allowed to act on this member - moving
             // someone's reporting line is a roster edit, and approval is not a
             // side door around the strictly-above rule.
             if (!canActOnMember(reviewer?.role === "super_admin" ? "admin" : reviewer?.role, effectiveMemberRole(tenantId, member))) {
@@ -9755,7 +9755,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     if (status === "approved") {
-      // Create user account — OTP-only, no passwords stored or emailed
+      // Create user account - OTP-only, no passwords stored or emailed
       const existing = existingAccount;
       if (existing) {
         userId = existing.id;
@@ -9763,7 +9763,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // from another tenant. A stale/foreign rep link is detached, not moved.
         // Keep login active so the applicant can sign. Role: the guard above
         // ensures a claimed account is a plain rep, so setting the approved
-        // role is only ever a lateral keep or a promotion — never a demotion.
+        // role is only ever a lateral keep or a promotion - never a demotion.
         storage.updateUser(existing.id, {
           active: true,
           tenantId,
@@ -9777,7 +9777,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const newUser = storage.createUser({
           name: application.fullName,
           email: application.email,
-          passwordHash: "",   // OTP-only system — no password
+          passwordHash: "",   // OTP-only system - no password
           role: approvedRole,
           active: true,
           tenantId: tenantId ?? undefined,
@@ -9798,14 +9798,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           const match = roster.find((m: any) => (m.email || "").toLowerCase() === application.email.toLowerCase());
           if (match) {
             // A REUSED profile (usually a rehire) keeps what it already has:
-            // the role only ever moves UP — silent demotion is never an
-            // approval side-effect — and an existing reports-to edge is
+            // the role only ever moves UP - silent demotion is never an
+            // approval side-effect - and an existing reports-to edge is
             // respected. A NEW edge must not close a loop through the member's
             // own direct reports (the PATCH /api/team precedent).
             const patch: Record<string, unknown> = {};
             if ((hierarchyRank(approvedRole) ?? -1) > (hierarchyRank(match.role) ?? -1)) patch.role = approvedRole;
             else if (approvedRole !== match.role) {
-              addHierarchyWarning(`The existing profile keeps its ${match.role.replace("_", " ")} role — approval never demotes.`);
+              addHierarchyWarning(`The existing profile keeps its ${match.role.replace("_", " ")} role - approval never demotes.`);
             }
             if (resolvedSupervisorId != null && (match as any).reportsToId == null) {
               const chain = new Map<number, number | null>(roster.map((m: any) => [m.id, m.reportsToId ?? null]));
@@ -9817,7 +9817,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             }
             if (Object.keys(patch).length) storage.updateTeamMember(match.id, patch as any, tenantId ?? undefined);
             // users.role mirrors team_members.role string-for-string (the
-            // syncLoginAccount invariant) — when the reused profile kept a
+            // syncLoginAccount invariant) - when the reused profile kept a
             // HIGHER role than the approval proposed, the login follows it.
             const finalRole = (patch.role as string | undefined) ?? match.role;
             if (userId != null && finalRole !== approvedRole) storage.updateUser(userId, { role: finalRole } as any);
@@ -9836,7 +9836,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         }
         if (teamMemberId != null) storage.updateTeamMember(teamMemberId, { active: false }, tenantId ?? undefined);
 
-        // ── The recruiting sponsor edge — set ONCE, from the invite ──────────
+        // ── The recruiting sponsor edge - set ONCE, from the invite ──────────
         // recruited_by_* answers "who brought this person in" for recruiting
         // metrics; pay and authority keep following reports_to. Raw SQL with a
         // NULL-guarded WHERE so an approval retry matches zero rows instead of
@@ -9854,10 +9854,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           );
         }
 
-        // ── Per-hire override rates — reviewer's choice > invite's > inherit ─
+        // ── Per-hire override rates - reviewer's choice > invite's > inherit ─
         // What the TL/manager slots keep from each of THIS hire's qualified
         // sales. Stamped per COLUMN, and only where the member's rate is still
-        // NULL — an existing explicit rate on a reused roster member is a
+        // NULL - an existing explicit rate on a reused roster member is a
         // decision someone already made, never silently overwritten. Earned
         // ledger rows carry frozen snapshots and are untouched either way.
         if (teamMemberId != null) {
@@ -9880,7 +9880,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // ── Hand the new leader their downline ──────────────────────────────
         // Every id was validated above; the only thing that cannot be checked
         // until the member row EXISTS is the cycle, so it runs here against the
-        // live chain and skips (never throws) — a hire must not fail because
+        // live chain and skips (never throws) - a hire must not fail because
         // one reassignment would have looped. Overrides follow automatically:
         // from the next sale on, these members' uplines are the new leader's
         // chain. Already-earned ledger rows keep their frozen attribution.
@@ -9928,7 +9928,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           const flatRateCents = structure === "FLAT" ? Math.round(rawRateCents) : undefined;
           // Chargeback reserve is set AT ONBOARDING alongside the rate. Absent =
           // inherit the org default (which is what every rep got before this
-          // existed); an explicit null clears any override. Whole numbers only —
+          // existed); an explicit null clears any override. Whole numbers only -
           // a non-integer is dropped rather than rounded into someone's pay.
           const reservePercent = commission.reservePercent === undefined ? undefined
             : commission.reservePercent === null ? null
@@ -9946,7 +9946,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           // The same normalized instrument, kept for issueOnboardingDocuments as
           // the resolver override. Without it, issuance re-resolves from the
           // invite row and a reviewer's edit changes the PAY below while the
-          // signed agreement still states the invited numbers — the same
+          // signed agreement still states the invited numbers - the same
           // pay-vs-paper divergence the approval panel was just cured of, moved
           // into the PDF. Reserve fields ride only when explicitly set: a null
           // ("clear the override") is already persisted by assignStructureToRep,
@@ -9970,18 +9970,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           commissionWarning = "Account created, but no organization is set on your login, so a commission plan could not be assigned.";
         }
       } catch (e: any) {
-        // Surface the reason but keep the approval — the manager can fix the plan later.
+        // Surface the reason but keep the approval - the manager can fix the plan later.
         commissionWarning = e?.message || "Commission structure could not be assigned.";
         console.error("Onboarding commission assignment failed:", e?.message);
       }
 
-      // Notify the applicant they're approved — a CODE-FREE welcome that links
+      // Notify the applicant they're approved - a CODE-FREE welcome that links
       // them to the sign-in screen. Approval must never mint or mail a login
       // code (spec: a code is only born when the rep enters their email and taps
       // "Send code" on the portal, via /api/auth/otp/request). This used to call
       // createOtp here, so a manager's approval generated an authentication
       // secret the rep never requested. loginSentAt now records that the WELCOME
-      // was sent, not that a code was — the pipeline's "sign-in invite sent"
+      // was sent, not that a code was - the pipeline's "sign-in invite sent"
       // milestone, decoupled from code issuance.
       if (!(application.loginSentAt || recruitingInvite?.loginSentAt)) {
         try {
@@ -10073,11 +10073,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Training (D2D psychology & pitch curriculum) ─────────────────────────────
   // Content lives in shared/trainingContent.ts (client renders it directly);
-  // the server only stores per-user progress. All reads/writes are OWN-scope —
+  // the server only stores per-user progress. All reads/writes are OWN-scope -
   // the user and tenant come from the session, never from the request body, so
   // one rep can never write another rep's progress and tenant walls hold.
   // The rep's own gate status. Reachable WHILE gated (it lives under
-  // /api/training), which it has to be — the lock screen is rendered from it.
+  // /api/training), which it has to be - the lock screen is rendered from it.
   app.get("/api/training/gate", requireAuth, (req: Request, res: Response) => {
     res.json(trainingGateStatus((req as any).user));
   });
@@ -10099,7 +10099,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // Manual unlock / re-lock for one account. Reality outruns policy: a rep who
-  // trained in person, a rehire, a transfer. Admin-only — this is the override
+  // trained in person, a rehire, a transfer. Admin-only - this is the override
   // on a control that exists to stop untrained people working doors, so it sits
   // with the role that answers for that.
   app.post("/api/training/gate/:userId", requireAdmin, (req: Request, res: Response) => {
@@ -10138,7 +10138,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/training/lessons/:lessonId/complete", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
     const lessonId = String(req.params.lessonId ?? "");
-    // Only ids authored in the shared curriculum are storable — anything else
+    // Only ids authored in the shared curriculum are storable - anything else
     // is a 400, keeping the table free of junk rows a client bug could write.
     if (!isTrainingLessonId(lessonId)) {
       return res.status(400).json({ error: "Unknown lesson id" });
@@ -10155,7 +10155,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const progress = storage.upsertLessonComplete(user.id, user.tenantId, lessonId, quizScore);
     // This lesson may have been the last one. Evaluated after the write so it
     // sees the completed row, and idempotent on a per-rep key, so re-completing
-    // a lesson re-evaluates rather than re-paying. Never throws — finishing a
+    // a lesson re-evaluates rather than re-paying. Never throws - finishing a
     // lesson must not fail because a bonus could not be booked.
     payRampBonus(user);
     res.json(progress);
@@ -10177,7 +10177,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // pipeline. A manager may view and advance the gates; only an admin confirms
   // Gusto (payroll-adjacent) or runs the connectivity check. The badge photo is
   // stored under uploads/badges and streamed through an authed, tenant-walled
-  // route — the admin-only /uploads static handler can't carry the session
+  // route - the admin-only /uploads static handler can't carry the session
   // header from an <img> tag.
   const badgesDir = path.join(uploadsDir, "badges");
   if (!fs.existsSync(badgesDir)) fs.mkdirSync(badgesDir, { recursive: true });
@@ -10186,7 +10186,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       destination: (_req, _file, cb) => cb(null, badgesDir),
       filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).toLowerCase()),
     }),
-    // No text fields — fields:0/parts:2 stops an unbounded multipart text body
+    // No text fields - fields:0/parts:2 stops an unbounded multipart text body
     // from buffering into RAM before the file handler runs (same guard as lead
     // photos above).
     limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0, parts: 2, fieldSize: 1024 },
@@ -10217,7 +10217,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!ctx) return;
     const kind = req.params.kind;
     if (!isHrCheckpointKind(kind)) return res.status(400).json({ error: "Unknown checkpoint" });
-    // Gusto is payroll-adjacent — confirming it is admin-only. A manager may
+    // Gusto is payroll-adjacent - confirming it is admin-only. A manager may
     // still order/track the other gates.
     if (kind === "gusto" && (req as any).user?.role !== "admin" && (req as any).user?.role !== "super_admin") {
       return res.status(403).json({ error: "Only an administrator can confirm the Gusto record." });
@@ -10246,7 +10246,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const ctx = loadHrApplication(req, res);
     if (!ctx) { if (req.file) { try { fs.unlinkSync(req.file.path); } catch { /* best effort */ } } return; }
     if (!req.file) return res.status(400).json({ error: "No photo uploaded" });
-    // SEC-B: magic-byte validation — the extension filter alone is client-claims-only.
+    // SEC-B: magic-byte validation - the extension filter alone is client-claims-only.
     if (!uploadKindAllowed(req.file.path, ["jpeg", "png", "webp"])) {
       try { fs.unlinkSync(req.file.path); } catch { /* best effort */ }
       return res.status(415).json({ error: "Photo content is not a valid JPEG, PNG or WebP image." });
@@ -10280,7 +10280,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.sendFile(file);
   });
 
-  // Admin-only Gusto connectivity check — inert (configured:false, no network)
+  // Admin-only Gusto connectivity check - inert (configured:false, no network)
   // until GUSTO_API_TOKEN + GUSTO_COMPANY_ID are set.
   app.post("/api/onboarding/hr/gusto/verify", requireAdmin, async (_req: Request, res: Response) => {
     res.json(await verifyGustoConnection());
@@ -10288,13 +10288,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// NEW SAAS ROUTES — GPS, Clock, Coming Soon, Commissions, Activity Log
+// NEW SAAS ROUTES - GPS, Clock, Coming Soon, Commissions, Activity Log
 // These are appended below existing registerRoutes exports
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function registerSaasRoutes(app: any) {
   // ── GPS Location Pings ──────────────────────────────────────────────────────
-  // POST /api/location-pings — rep sends their GPS position
+  // POST /api/location-pings - rep sends their GPS position
   app.post("/api/location-pings", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const { lat, lng, accuracy, repId } = req.body;
@@ -10307,7 +10307,7 @@ export function registerSaasRoutes(app: any) {
     res.json(ping);
   });
 
-  // GET /api/location-pings/latest — latest ping per rep (admin/manager view)
+  // GET /api/location-pings/latest - latest ping per rep (admin/manager view)
   // Tenant-scoped: an org only ever sees its OWN reps' live locations.
   app.get("/api/location-pings/latest", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
@@ -10321,7 +10321,7 @@ export function registerSaasRoutes(app: any) {
     res.json(result);
   });
 
-  // GET /api/location-pings/:repId — history for a specific rep
+  // GET /api/location-pings/:repId - history for a specific rep
   app.get("/api/location-pings/:repId", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const repId = Number(req.params.repId);
@@ -10336,10 +10336,10 @@ export function registerSaasRoutes(app: any) {
   });
 
   // ── Clock Sessions ──────────────────────────────────────────────────────────
-  // POST /api/clock/in — clock in
+  // POST /api/clock/in - clock in
   app.post("/api/clock/in", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
-    // A rep can ONLY clock themselves in/out — never another rep. Higher roles
+    // A rep can ONLY clock themselves in/out - never another rep. Higher roles
     // may clock a specific rep (ride-alongs) via body.repId.
     const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
@@ -10352,10 +10352,10 @@ export function registerSaasRoutes(app: any) {
     res.json(session);
   });
 
-  // POST /api/clock/out — clock out
+  // POST /api/clock/out - clock out
   app.post("/api/clock/out", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
-    // A rep can ONLY clock themselves in/out — never another rep. Higher roles
+    // A rep can ONLY clock themselves in/out - never another rep. Higher roles
     // may clock a specific rep (ride-alongs) via body.repId.
     const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
@@ -10368,7 +10368,7 @@ export function registerSaasRoutes(app: any) {
     res.json(session);
   });
 
-  // GET /api/clock/status — current clock status for the logged-in rep
+  // GET /api/clock/status - current clock status for the logged-in rep
   app.get("/api/clock/status", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const repId = user.teamMemberId;
@@ -10377,7 +10377,7 @@ export function registerSaasRoutes(app: any) {
     res.json({ clockedIn: !!session, session: session ?? null });
   });
 
-  // GET /api/clock/sessions — all sessions (admin/manager) or own (rep)
+  // GET /api/clock/sessions - all sessions (admin/manager) or own (rep)
   app.get("/api/clock/sessions", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const date = req.query.date as string | undefined;
@@ -10397,7 +10397,7 @@ export function registerSaasRoutes(app: any) {
   });
 
   // ── Commissions ──────────────────────────────────────────────────────────────
-  // GET /api/commissions — admin sees all, rep sees own
+  // GET /api/commissions - admin sees all, rep sees own
   app.get("/api/commissions", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const tid = user.tenantId ?? undefined; // super_admin (null) = all tenants
@@ -10408,7 +10408,7 @@ export function registerSaasRoutes(app: any) {
       repId = user.teamMemberId ?? -1;
     } else if (req.query.repId) {
       repId = Number(req.query.repId);
-      // The ?repId filter must not become a cross-tenant IDOR — a manager may
+      // The ?repId filter must not become a cross-tenant IDOR - a manager may
       // only target a rep inside their own org.
       if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
       if (!canReadAll && !repInVisibilityScope(user, repId)) return res.status(403).json({ error: "Forbidden" });
@@ -10420,11 +10420,11 @@ export function registerSaasRoutes(app: any) {
       const visibleRepIds = new Set(Array.isArray(scope) ? scope : []);
       comms = comms.filter((commission) => commission.repId != null && visibleRepIds.has(commission.repId));
     }
-    // Mobile entries read "sold date · rep · address, city" — enrich once here
+    // Mobile entries read "sold date · rep · address, city" - enrich once here
     // (two Map builds, O(1) per row) instead of N client round-trips.
     const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
     const leadIds = [...new Set(comms.map(c => c.leadId).filter((id): id is number => id != null))];
-    // Fetch exactly the addresses these commissions reference — hydrating every
+    // Fetch exactly the addresses these commissions reference - hydrating every
     // lead in the tenant (68 columns × the whole table) to pluck two fields for
     // a handful of ids was this endpoint's entire cost.
     const leadAddr = new Map(
@@ -10434,9 +10434,9 @@ export function registerSaasRoutes(app: any) {
     // Install-hold overlay (additive): under a require-install-confirm policy a
     // sold-knock commission stays 'pending' but HELD until the install is
     // confirmed AND payable_after has passed. installHold is computed at read
-    // time — never a persisted lifecycle status. The field is named
+    // time - never a persisted lifecycle status. The field is named
     // installHold so it can never be conflated with the chargeback-reserve
-    // "holdback" (a different layer — statement-level reserve percentage).
+    // "holdback" (a different layer - statement-level reserve percentage).
     // super_admin (no tenant) reads every org; per-row policy is per tenant.
     const policyCache = new Map<number, ReturnType<typeof getTenantPayPolicy>>();
     const policyFor = (tenant: number | null | undefined) => {
@@ -10457,14 +10457,14 @@ export function registerSaasRoutes(app: any) {
     })));
   });
 
-  // POST /api/commissions — create a commission (manager/admin; auto-created on sale knock)
+  // POST /api/commissions - create a commission (manager/admin; auto-created on sale knock)
   app.post("/api/commissions", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
     const { repId, leadId, knockId, amount, saleDate, notes } = req.body;
     if (!repId || !amount || !saleDate) return res.status(400).json({ error: "repId, amount, saleDate required" });
     if (!repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
     // Self-deal guard (mirrors the hourly punch-correction pattern): a manager
-    // linked to a team member may not BOOK money for themselves — another
+    // linked to a team member may not BOOK money for themselves - another
     // manager (or the admin holding payouts.pay) must do it.
     if (user?.teamMemberId != null && Number(user.teamMemberId) === Number(repId)
       && !hasCapability(user.role, "payouts.pay")) {
@@ -10472,7 +10472,7 @@ export function registerSaasRoutes(app: any) {
     }
     const comm = storage.createCommission({ repId, leadId, knockId, amount, saleDate, notes, status: "pending", approvedBy: null, paidDate: null });
     // REVIEWER GATE: if the unique index returned a PRE-EXISTING pending row,
-    // say so — never audit a phantom creation with the manager's values.
+    // say so - never audit a phantom creation with the manager's values.
     if ((comm as any)?.preExisting) {
       storage.logActivity((req as any).user?.id ?? null, "commission.duplicate_skipped", "commission", (comm as any).id,
         { leadId, requestedAmount: amount, existingAmount: (comm as any).amount }, req.ip);
@@ -10482,7 +10482,7 @@ export function registerSaasRoutes(app: any) {
     res.json(comm);
   });
 
-  // PATCH /api/commissions/:id — update status (approve, mark paid, dispute)
+  // PATCH /api/commissions/:id - update status (approve, mark paid, dispute)
   app.patch("/api/commissions/:id", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
     const tenantId = Number(user?.tenantId);
@@ -10508,7 +10508,7 @@ export function registerSaasRoutes(app: any) {
       return res.status(400).json({ error: "Invalid commission update", details: parsed.error.flatten() });
     }
     // Self-deal guard (mirrors the hourly punch-correction pattern): a manager
-    // linked to a team member may not APPROVE or PAY their OWN commission row —
+    // linked to a team member may not APPROVE or PAY their OWN commission row -
     // approval/payment of self-booked money needs a second pair of hands (or
     // the admin holding payouts.pay). Dispute/note movement on own rows stays
     // allowed; booking money for OTHERS is unaffected.
@@ -10519,7 +10519,7 @@ export function registerSaasRoutes(app: any) {
       return res.status(403).json({ error: "You cannot approve or pay your own commission", code: "COMMISSION_SELF_DEAL" });
     }
     // Install-hold gate: a commission still inside its install-hold window can
-    // never be approved or paid — the hold exists precisely to keep uninstalled
+    // never be approved or paid - the hold exists precisely to keep uninstalled
     // sales out of the payable pipeline. Releasing early is not a manager
     // action; the window lifts when payable_after passes (or the tenant policy
     // stops requiring install confirmation).
@@ -10529,7 +10529,7 @@ export function registerSaasRoutes(app: any) {
         getTenantPayPolicy(tenantId),
       )) {
       return res.status(409).json({
-        error: "This commission is inside its install-hold window — confirm the install and wait for payable_after before approving it",
+        error: "This commission is inside its install-hold window - confirm the install and wait for payable_after before approving it",
         code: "INSTALL_HELD",
         payableAfter: (commission as any).payableAfter ?? null,
       });
@@ -10569,7 +10569,7 @@ export function registerSaasRoutes(app: any) {
     res.json(result.commission);
   });
 
-  // POST /api/commissions/:id/confirm-install — manager confirms the customer's
+  // POST /api/commissions/:id/confirm-install - manager confirms the customer's
   // install happened. Starts the hold clock: install_confirmed_at = now and
   // payable_after = now + tenant hold_days. The commission keeps its 'pending'
   // status; the computed installHold flag lifts when now >= payable_after.
@@ -10615,7 +10615,7 @@ export function registerSaasRoutes(app: any) {
     });
   });
 
-  // GET /api/commissions/summary — earnings summary per rep (admin/manager)
+  // GET /api/commissions/summary - earnings summary per rep (admin/manager)
   app.get("/api/commissions/summary", requireManager, (req: Request, res: Response) => {
     const tenantId = Number((req as any).user?.tenantId);
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
@@ -10625,7 +10625,7 @@ export function registerSaasRoutes(app: any) {
     // Install-hold overlay (additive): `installHold` is the dollar amount still
     // inside the install/hold window and `payable` is the pending+approved
     // money OUTSIDE it. The legacy `pending` total is unchanged so existing
-    // consumers and the chargeback-reserve math are unaffected — and the field
+    // consumers and the chargeback-reserve math are unaffected - and the field
     // is named installHold, never "hold", so it cannot be read as reserve
     // holdback.
     const policy = getTenantPayPolicy(tenantId);
@@ -10643,7 +10643,7 @@ export function registerSaasRoutes(app: any) {
     }));
   });
 
-  // ── Tenant pay policy — install-gated commission hold knobs (admin) ────────
+  // ── Tenant pay policy - install-gated commission hold knobs (admin) ────────
   // requireInstallConfirm=false restores the legacy pay flow (no hold).
   // holdDays is clamped 0–365. An absent row behaves as the defaults
   // (require install confirm, 90 days).
@@ -10671,7 +10671,7 @@ export function registerSaasRoutes(app: any) {
     res.json(policy);
   });
 
-  // GET /api/commission-rates — structure plans. Management-only: reps see
+  // GET /api/commission-rates - structure plans. Management-only: reps see
   // their commission RESULTS (via /api/commissions), never the structure config.
   app.get("/api/commission-rates", requireCapability("commission.structure.manage"), (req: Request, res: Response) => {
     // P0-3: scoped to the caller's org (super_admin = all orgs).
@@ -10680,7 +10680,7 @@ export function registerSaasRoutes(app: any) {
     res.json(storage.getCommissionRates(tid));
   });
 
-  // POST /api/commission-rates — create a commission structure (Admin/Manager/
+  // POST /api/commission-rates - create a commission structure (Admin/Manager/
   // Team Lead). Accepts flat | percentage | tiered with effective-date windows;
   // the actor is stamped for the audit trail.
   app.post("/api/commission-rates", requireCapability("commission.structure.manage"), (req: Request, res: Response) => {
@@ -10688,7 +10688,7 @@ export function registerSaasRoutes(app: any) {
     const b = req.body ?? {};
     const calcType: CalcType = ["flat", "percentage", "tiered"].includes(b.calcType) ? b.calcType : "flat";
     if (!b.name) return res.status(400).json({ error: "name required" });
-    // Per-type validation — never book a structure that can't be scored.
+    // Per-type validation - never book a structure that can't be scored.
     if (calcType === "flat" && !(Number(b.ratePerSale) > 0)) return res.status(400).json({ error: "flat plan needs ratePerSale > 0" });
     if (calcType === "percentage" && !(Number(b.percentage) > 0)) return res.status(400).json({ error: "percentage plan needs percentage > 0" });
     let tiersJson: string | null = null;
@@ -10702,7 +10702,7 @@ export function registerSaasRoutes(app: any) {
       return res.status(404).json({ error: "Rep not found" });
     }
     const rate = storage.createCommissionRate({
-      // The structure's org is the CALLER's org — never client-supplied.
+      // The structure's org is the CALLER's org - never client-supplied.
       // super_admin (tenantId null) creates a platform-wide structure.
       tenantId: user?.role === "super_admin" ? null : (user?.tenantId ?? null),
       name: String(b.name), role: b.role ?? null, repId: b.repId != null ? Number(b.repId) : null,
@@ -10717,24 +10717,24 @@ export function registerSaasRoutes(app: any) {
     res.json(rate);
   });
 
-  // PATCH /api/commission-rates/:id — edit a structure. Editing PUBLISHES a new
+  // PATCH /api/commission-rates/:id - edit a structure. Editing PUBLISHES a new
   // version (bumps `version`, re-stamps actor); commissions already booked keep
   // the version they were sold under, so payouts are never silently rewritten.
   app.patch("/api/commission-rates/:id", requireCapability("commission.structure.manage"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const id = Number(req.params.id);
-    // P0-3: scoped lookup — another org's structure is a 404, never an edit.
+    // P0-3: scoped lookup - another org's structure is a 404, never an edit.
     const tid: number | undefined = user?.role === "super_admin" ? undefined : (user?.tenantId ?? undefined);
     const existing = storage.getCommissionRates(tid).find(r => r.id === id);
     if (!existing) return res.status(404).json({ error: "Not found" });
-    // Allowlist — never let the body set id/createdAt/isActive/etc. (mass-assignment
+    // Allowlist - never let the body set id/createdAt/isActive/etc. (mass-assignment
     // of the PK would break structure refs; isActive would drop the row from payout
     // calc). Mirror the /api/leads + /api/users PATCH pattern.
     const ALLOWED_RATE_FIELDS = new Set(["name", "role", "repId", "ratePerSale", "calcType", "percentage", "tiers", "effectiveFrom", "effectiveTo"]);
     const patch: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(req.body ?? {})) if (ALLOWED_RATE_FIELDS.has(k)) patch[k] = v;
     if (Array.isArray(patch.tiers)) patch.tiers = JSON.stringify(patch.tiers);
-    // REVIEWER GATE (authz #3): retargeting repId must re-validate tenancy —
+    // REVIEWER GATE (authz #3): retargeting repId must re-validate tenancy -
     // the POST path validates, the PATCH path didn't.
     if (patch.repId != null && !repInCallerTenant(user, Number(patch.repId))) {
       return res.status(404).json({ error: "Not found" });
@@ -10755,7 +10755,7 @@ export function registerSaasRoutes(app: any) {
     const tid = (req as any).user?.tenantId ?? undefined; // super_admin (null) = platform-wide
     const windowHours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 168);
     // Pull a generous slice; buildDiagnostics windows + caps it. Cheap: one
-    // indexed desc scan, no per-row joins. Tenant-scoped — a manager's health
+    // indexed desc scan, no per-row joins. Tenant-scoped - a manager's health
     // cards reflect only their own org's activity.
     const raw = storage.getActivityLog(1000, tid).map(e => ({
       action: e.action, at: e.at, userId: e.userId,
@@ -10783,12 +10783,12 @@ export function registerSaasRoutes(app: any) {
     });
   });
 
-  // Effective permissions PREVIEW BY USER — pick a person, see exactly what
+  // Effective permissions PREVIEW BY USER - pick a person, see exactly what
   // their role grants, grouped by domain with high-risk flagged. Same shared
   // map as the middleware, so the preview is the real effective permission.
   app.get("/api/governance/user/:id/capabilities", requireCapability("settings.manage.org"), (req: Request, res: Response) => {
     // Tenant-scoped lookup: this walked the dense team_members id space and
-    // returned foreign members' names + effective roles — a clean org-chart
+    // returned foreign members' names + effective roles - a clean org-chart
     // enumeration primitive for any tenant admin.
     const govTid = (req as any).user?.tenantId ?? undefined;
     const member = storage.getTeamMemberById(Number(req.params.id), govTid);
@@ -10810,10 +10810,10 @@ export function registerSaasRoutes(app: any) {
   // ── Activity Log ──────────────────────────────────────────────────────────────
   app.get("/api/activity-log", requireManager, (req: Request, res: Response) => {
     const tid = (req as any).user?.tenantId ?? undefined; // super_admin (null) = all tenants
-    // SEC-B: clamp like the sibling /api/auth/login-attempts endpoint — a
+    // SEC-B: clamp like the sibling /api/auth/login-attempts endpoint - a
     // negative or unbounded limit used to flow straight into the storage read.
     const limit = clampActivityLogLimit(req.query.limit);
-    // Tenant-scoped audit stream — a manager never reads another org's actions,
+    // Tenant-scoped audit stream - a manager never reads another org's actions,
     // actor names, or client IPs.
     const entries = storage.getActivityLog(limit, tid);
     const users = storage.getAllUsers(tid);
@@ -10826,7 +10826,7 @@ export function registerSaasRoutes(app: any) {
     res.json(result);
   });
 
-  // ── Enhanced Stats — rep-scoped or tenant-wide ──────────────────────────────────
+  // ── Enhanced Stats - rep-scoped or tenant-wide ──────────────────────────────────
   app.get("/api/stats/saas", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
     const isRep = user?.role === "rep";
@@ -10842,12 +10842,12 @@ export function registerSaasRoutes(app: any) {
     //
     // AGGREGATES IN SQL, same as /api/stats after 9e50d70. This handler used to
     // fully hydrate leads, knocks, commissions and every clock session in tenant
-    // history — plus one getActiveClockSession per member — to emit a dozen
+    // history - plus one getActiveClockSession per member - to emit a dozen
     // scalars, and the Dashboard re-pays it every 30 seconds per viewer. The
     // walls and scope filters below are byte-for-byte the ones the hydrating
     // accessors applied; an EMPTY scope set still matches nothing (fail-closed).
     // Fields nothing renders (leads.total/sold, knocks.total, fieldHours) are
-    // gone — the Dashboard is this endpoint's only consumer.
+    // gone - the Dashboard is this endpoint's only consumer.
     const tid = user?.tenantId ?? undefined; // super_admin (null) = platform-wide
     const scopeSql = (col: string) =>
       scopeIds ? (scopeIds.length ? ` AND ${col} IN (${scopeIds.map(() => "?").join(",")})` : ` AND ${col} = -1`) : "";
@@ -10859,7 +10859,7 @@ export function registerSaasRoutes(app: any) {
     // the unassigned probe rides idx_leads_tenant_rep, and the fresh-fiber
     // count touches only its qualifying rows. The scope fragment stays on both
     // so scoped roles keep the exact same semantics (an IN(...) scope can never
-    // match a NULL rep, so `unassigned` stays 0 for them — as before).
+    // match a NULL rep, so `unassigned` stays 0 for them - as before).
     const leadAgg = {
       newFiber: (rawDb.prepare(
         `SELECT COUNT(*) AS n FROM leads ${wall()}${scopeSql("assigned_rep_id")}
@@ -10874,7 +10874,7 @@ export function registerSaasRoutes(app: any) {
     const today = new Date().toISOString().slice(0, 10);
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     // knocked_at > weekAgo bounds the scan to one week of knocks (all three
-    // SUMs are week/day-bounded — today's date prefix is a subset of the
+    // SUMs are week/day-bounded - today's date prefix is a subset of the
     // week), so the aggregate rides idx_knock_log_tenant_time instead of
     // walking the tenant's entire knock history every 30s poll.
     const knockAgg = rawDb.prepare(
@@ -10932,7 +10932,7 @@ export function registerSaasRoutes(app: any) {
   function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
     const user = (req as any).user;
     // P0-1 (K3 swarm): identity is the IMMUTABLE is_super_admin column (stamped
-    // at boot from env), never the user-editable email string — a tenant admin
+    // at boot from env), never the user-editable email string - a tenant admin
     // could previously self-promote by PATCHing their email to the apex value.
     if (!user || user.role !== "admin" || !(user as any).isSuperAdmin) {
       return res.status(403).json({ error: "Super-admin only" });
@@ -10940,7 +10940,7 @@ export function registerSaasRoutes(app: any) {
     next();
   }
 
-  // GET  /api/sa/tenants           — list all tenants
+  // GET  /api/sa/tenants           - list all tenants
   app.get("/api/sa/tenants", requireAuth, requireSuperAdmin, (_req: Request, res: Response) => {
     const allTenants = storage.getTenants();
     const enriched = allTenants.map(t => ({
@@ -10952,7 +10952,7 @@ export function registerSaasRoutes(app: any) {
     res.json(enriched);
   });
 
-  // GET  /api/sa/billing           — cross-tenant billing overview (ops dashboard)
+  // GET  /api/sa/billing           - cross-tenant billing overview (ops dashboard)
   // One row per tenant with its live billing summary (dark tenants report
   // enabled:false). Reuses billingSummary so it always matches the tenant's own
   // /api/billing view.
@@ -10966,7 +10966,7 @@ export function registerSaasRoutes(app: any) {
     res.json({ plans: Object.values(BILLING_PLANS), tenants });
   });
 
-  // POST /api/sa/tenants           — create a new tenant
+  // POST /api/sa/tenants           - create a new tenant
   app.post("/api/sa/tenants", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     try {
       const {
@@ -10999,7 +10999,7 @@ export function registerSaasRoutes(app: any) {
         ...auditContext(req),
         action: "tenant.created", targetType: "tenant", targetId: tenant.id,
         targetLabel: tenant.brandName ?? tenant.companyName,
-        // No `before` — the row did not exist. `after` is the created state
+        // No `before` - the row did not exist. `after` is the created state
         // (secrets redacted by the encoder).
         after: { slug: tenant.slug, companyName: tenant.companyName, ownerEmail: tenant.ownerEmail, plan: tenant.plan, monthlyFee: tenant.monthlyFee, maxReps: tenant.maxReps, status: tenant.status },
         tenantId: tenant.id, outcome: "success",
@@ -11015,14 +11015,14 @@ export function registerSaasRoutes(app: any) {
     }
   });
 
-  // GET  /api/sa/tenants/:id       — single tenant detail (includes secrets)
+  // GET  /api/sa/tenants/:id       - single tenant detail (includes secrets)
   app.get("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     const tenant = storage.getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: "Not found" });
     res.json({ ...tenant, stats: storage.getTenantStats(tenant.id) });
   });
 
-  // GET /api/admin/history — the operations console's history feed.
+  // GET /api/admin/history - the operations console's history feed.
   //
   // VISIBILITY: a super admin reads platform-wide (every tenant plus
   // tenant-less platform actions); any other admin/manager is walled to their
@@ -11058,7 +11058,7 @@ export function registerSaasRoutes(app: any) {
     res.json({ ...result, scope: isSuper ? (scope == null ? "platform" : `tenant:${scope}`) : `tenant:${scope}` });
   });
 
-  // Filter facets for the console's menus — same scoping rules as the feed.
+  // Filter facets for the console's menus - same scoping rules as the feed.
   app.get("/api/admin/history/facets", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
     const isSuper = Boolean(user?.isSuperAdmin) && user?.role === "admin";
@@ -11069,9 +11069,9 @@ export function registerSaasRoutes(app: any) {
     res.json({ ...adminAuditFacets(tenantId), outcomes: ADMIN_AUDIT_OUTCOMES, canSeeAllTenants: isSuper });
   });
 
-  // PATCH /api/sa/tenants/:id      — update tenant settings
+  // PATCH /api/sa/tenants/:id      - update tenant settings
   app.patch("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
-    // Allowlist — never let the body set id/createdAt (mass-assignment of the PK
+    // Allowlist - never let the body set id/createdAt (mass-assignment of the PK
     // would remap the tenant and orphan every tenant_id FK).
     const ALLOWED_TENANT_FIELDS = new Set([
       "companyName", "ownerName", "ownerEmail", "ownerPhone", "brandName", "brandColor", "brandLogo",
@@ -11083,7 +11083,7 @@ export function registerSaasRoutes(app: any) {
     const id = Number(req.params.id);
     // Read the CURRENT row first so history records real before/after values,
     // not just which field names were touched. Only the fields this request
-    // actually changed are recorded — an unchanged field is not history.
+    // actually changed are recorded - an unchanged field is not history.
     const previous = storage.getTenantById(id);
     const updated = storage.updateTenant(id, safeTenant);
     // Tenant config feeds the SSE streams' memoised open-field flag.
@@ -11097,7 +11097,7 @@ export function registerSaasRoutes(app: any) {
     }
     // Suspending through PATCH must revoke access as decisively as cancelling
     // through DELETE. Only DELETE swept sessions, so `status:"suspended"` set
-    // here left every live session alive — and because requireAuth slides the
+    // here left every live session alive - and because requireAuth slides the
     // expiry forward on each request, a device polling an allowlisted path kept
     // its session indefinitely.
     let sessionsRevoked = 0;
@@ -11131,14 +11131,14 @@ export function registerSaasRoutes(app: any) {
     res.json(updated);
   });
 
-  // DELETE /api/sa/tenants/:id     — suspend/delete tenant
+  // DELETE /api/sa/tenants/:id     - suspend/delete tenant
   app.delete("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     const tenant = storage.getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: "Not found" });
     const updated = storage.updateTenant(tenant.id, { status: "cancelled" });
     // orgStatusGate refuses this org's sessions on their next request anyway, but
     // sweeping them here makes the cancellation take effect at the moment it is
-    // ordered rather than on whatever each device happens to do next — and it
+    // ordered rather than on whatever each device happens to do next - and it
     // holds the line even if the gate is later made fail-open in more cases.
     let sessionsRevoked = 0;
     try {
@@ -11157,7 +11157,7 @@ export function registerSaasRoutes(app: any) {
     res.json({ ok: true, sessionsRevoked });
   });
 
-  // GET  /api/sa/revenue           — revenue summary across all tenants
+  // GET  /api/sa/revenue           - revenue summary across all tenants
   app.get("/api/sa/revenue", requireAuth, requireSuperAdmin, (_req: Request, res: Response) => {
     const allTenants = storage.getTenants().filter(t => t.status === "active");
     const summary = allTenants.map(t => {
@@ -11180,7 +11180,7 @@ export function registerSaasRoutes(app: any) {
     res.json(getCronStatus());
   });
 
-  // Live closed-loop scan engine status — the AIMD window, block rate, effective
+  // Live closed-loop scan engine status - the AIMD window, block rate, effective
   // throughput, and session refreshes of whatever scan is currently draining.
   app.get("/api/scan/engine-status", requireManager, (_req: Request, res: Response) => {
     res.json(getEngineStatus());
@@ -11266,7 +11266,7 @@ export function registerSaasRoutes(app: any) {
   // matches in registration order, so `/api/spiffs/bulk/approve` would otherwise
   // be swallowed by `/api/spiffs/:id/approve` with id = "bulk" (→ NaN → 404).
 
-  // Bulk approve — the "clear the queue" action. Per-row CAS in one transaction:
+  // Bulk approve - the "clear the queue" action. Per-row CAS in one transaction:
   // rows someone else already moved come back as `skipped`, never re-approved,
   // and only rows that actually changed are audited.
   app.post("/api/spiffs/bulk/approve", requireAdmin, (req: Request, res: Response) => {
@@ -11282,7 +11282,7 @@ export function registerSaasRoutes(app: any) {
     res.json(result);
   });
 
-  // Bulk mark-paid — the settlement action. This is the exactly-once boundary:
+  // Bulk mark-paid - the settlement action. This is the exactly-once boundary:
   // `paid` is terminal, and the per-row CAS makes a double submit a no-op rather
   // than a second payment.
   app.post("/api/spiffs/bulk/paid", requireAdmin, (req: Request, res: Response) => {

@@ -89,7 +89,7 @@ describe("the commission agreement's rate table", () => {
     }
   });
 
-  it("renders a 12-band ladder — the tallest legal one — into a valid PDF", async () => {
+  it("renders a 12-band ladder - the tallest legal one - into a valid PDF", async () => {
     const twelve: CommissionTerms = { ...DEFAULT_COMMISSION_TERMS, tiers: twelveBands() };
     expect(allRows(twelve)).toHaveLength(12);
     const pdf = await renderAgreementPreviewPdf(agreement(twelve));

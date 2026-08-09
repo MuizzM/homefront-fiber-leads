@@ -65,7 +65,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
 
   const KINDS: Array<{ id: AuthoredKind; label: string; hint: string; icon: typeof Megaphone }> = [
     { id: "promo", label: "Promo", hint: "Buzzes every phone", icon: BadgeDollarSign },
-    { id: "update", label: "Update", hint: "Feed only — no buzz", icon: Megaphone },
+    { id: "update", label: "Update", hint: "Feed only - no buzz", icon: Megaphone },
   ];
 
   return (
@@ -134,7 +134,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
           {/* Said plainly, because the alternative is a manager assuming this
               creates a bonus and reps assuming they've been paid one. */}
           <p className="mt-1 text-[12px] text-muted-foreground">
-            Shown on the card. It does not pay anything on its own — set up the incentive below.
+            Shown on the card. It does not pay anything on its own - set up the incentive below.
           </p>
         </div>
       )}
@@ -156,7 +156,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
         </div>
         {kind === "update" && (
           <p className="mt-2 text-[12px] text-muted-foreground">
-            An update won't buzz anyone — it waits in the feed until they look.
+            An update won't buzz anyone - it waits in the feed until they look.
           </p>
         )}
       </div>
@@ -185,7 +185,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
   );
 }
 
-/** Counts DOWN near the limit rather than always showing "12/80" — a counter
+/** Counts DOWN near the limit rather than always showing "12/80" - a counter
  *  that is always on trains people to ignore it. */
 function CharCount({ value, max }: { value: number; max: number }) {
   const left = max - value;

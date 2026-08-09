@@ -136,13 +136,13 @@ export function ChatThreadList({
             conversations" tells someone their DMs vanished. */}
         {!isLoading && isError && (
           <p className="px-4 py-6 text-center text-[13px] text-muted-foreground" data-testid="threads-error">
-            Couldn't load your conversations — check your connection.
+            Couldn't load your conversations - check your connection.
           </p>
         )}
 
         {!isLoading && !isError && !threads.length && (
           <p className="px-4 py-6 text-center text-[13px] text-muted-foreground" data-testid="threads-empty">
-            No conversations yet. Start one — a teammate, or a crew.
+            No conversations yet. Start one - a teammate, or a crew.
           </p>
         )}
 
@@ -237,13 +237,13 @@ function NewThreadSheet({
     [roster, myMemberId],
   );
 
-  // Group builder state — only rendered for canManage.
+  // Group builder state - only rendered for canManage.
   const [groupMode, setGroupMode] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const nameCheck = validateGroupName(groupName);
   const nameOverBy = groupName.trim().length - GROUP_NAME_MAX;
-  // The creator is the +1 — the picker caps one below the room's ceiling.
+  // The creator is the +1 - the picker caps one below the room's ceiling.
   const atCap = picked.size >= GROUP_MEMBER_MAX - 1;
 
   // A closed sheet forgets. Reopening "New message" mid-shift and finding
@@ -375,7 +375,7 @@ function NewThreadSheet({
               )}
               {atCap && (
                 <p className="text-[13px] text-muted-foreground" data-testid="group-cap-hint">
-                  That's the ceiling — a group tops out at {GROUP_MEMBER_MAX} people. Past that, use the floor.
+                  That's the ceiling - a group tops out at {GROUP_MEMBER_MAX} people. Past that, use the floor.
                 </p>
               )}
               <button
@@ -399,8 +399,8 @@ function NewThreadSheet({
   );
 }
 
-// ── Group roster — view for everyone in it ───────────────────────────────────
-// Three exits, three owners: a MEMBER leaves themselves (no capability — being
+// ── Group roster - view for everyone in it ───────────────────────────────────
+// Three exits, three owners: a MEMBER leaves themselves (no capability - being
 // in a room is their choice, not management's); a MANAGER removes others,
 // behind a confirm because a mis-tap here silently locks a teammate out; and
 // a manager DISBANDS the whole room, which is what removal-one-by-one was

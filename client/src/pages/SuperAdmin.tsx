@@ -287,7 +287,7 @@ function TenantCard({ tenant, onEdit, onDelete }: {
                 </div>
                 <div>
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Trial Ends</div>
-                  <div className="text-foreground">{tenant.trialEndsAt || "—"}</div>
+                  <div className="text-foreground">{tenant.trialEndsAt || " - "}</div>
                 </div>
                 <div>
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Created</div>
@@ -366,9 +366,9 @@ export default function SuperAdmin() {
   // "—", never "$0": a failed revenue fetch must not tell the platform owner
   // their MRR is zero.
   const metrics = [
-    { label: "Active Tenants", value: revenue ? revenue.tenantCount : "—", icon: Building2, color: "text-muted-foreground" },
-    { label: "Total MRR", value: revenue ? `$${revenue.totalMrr.toFixed(0)}` : "—", icon: TrendingUp, color: "text-emerald-400" },
-    { label: "Your MRR Cut", value: revenue ? `$${revenue.yourMrr.toFixed(0)}` : "—", icon: DollarSign, color: "text-primary" },
+    { label: "Active Tenants", value: revenue ? revenue.tenantCount : " - ", icon: Building2, color: "text-muted-foreground" },
+    { label: "Total MRR", value: revenue ? `$${revenue.totalMrr.toFixed(0)}` : " - ", icon: TrendingUp, color: "text-emerald-400" },
+    { label: "Your MRR Cut", value: revenue ? `$${revenue.yourMrr.toFixed(0)}` : " - ", icon: DollarSign, color: "text-primary" },
     { label: "Total Leads", value: tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-sky-400" },
   ];
 
@@ -451,7 +451,7 @@ export default function SuperAdmin() {
           <Card className="bg-card border-border">
             <CardContent className="py-12 text-center" data-testid="sa-tenants-error">
               <p className="text-sm font-semibold text-foreground">Couldn't load tenants</p>
-              <p className="text-sm text-muted-foreground mt-1">Your tenants are intact — this is a connection problem, not an empty list.</p>
+              <p className="text-sm text-muted-foreground mt-1">Your tenants are intact - this is a connection problem, not an empty list.</p>
               <button onClick={() => refetchTenants()}
                 className="mt-4 inline-flex items-center justify-center h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
                 Retry
@@ -462,7 +462,7 @@ export default function SuperAdmin() {
           <Card className="bg-card border-border">
             <CardContent className="py-12 text-center">
               <Building2 className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
-              <p className="text-sm text-muted-foreground">No tenants yet — add your first white-label client.</p>
+              <p className="text-sm text-muted-foreground">No tenants yet - add your first white-label client.</p>
             </CardContent>
           </Card>
         ) : (

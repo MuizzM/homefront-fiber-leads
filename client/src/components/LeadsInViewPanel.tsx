@@ -138,14 +138,14 @@ export function LeadsInViewPanel({
         {/* States — each one honest about WHY the list is empty, with the fix. */}
         {!showLeadsLayer ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-            <p className="text-[13px] text-white/60">The leads layer is hidden — the map is painting nothing.</p>
+            <p className="text-[13px] text-white/60">The leads layer is hidden - the map is painting nothing.</p>
             <button onClick={onShowLeadsLayer} className="h-11 px-4 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] text-[13px] font-bold">
               Show leads
             </button>
           </div>
         ) : orgTotal === 0 ? (
           <div className="flex-1 flex items-center justify-center px-6 text-center">
-            <p className="text-[13px] text-white/60">No leads on the map yet — scan an area or import a list to get started.</p>
+            <p className="text-[13px] text-white/60">No leads on the map yet - scan an area or import a list to get started.</p>
           </div>
         ) : totalOnMap === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
@@ -157,7 +157,7 @@ export function LeadsInViewPanel({
           </div>
         ) : leads.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-            <p className="text-[13px] text-white/60">No leads in this view — pan the map, or:</p>
+            <p className="text-[13px] text-white/60">No leads in this view - pan the map, or:</p>
             <button onClick={onFitAll} data-testid="leads-panel-fit-all"
               className="h-11 px-4 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] text-[13px] font-bold flex items-center gap-1.5">
               <Maximize2 className="w-3.5 h-3.5" /> Fit to all leads

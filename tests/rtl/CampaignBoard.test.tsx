@@ -57,7 +57,7 @@ describe("countdown", () => {
     expect(countdown(2 * 86_400_000 + 3 * HOUR)).toBe("2d 3h left");
   });
 
-  it("never shows a bare zero or a negative — the last minute says so in words", () => {
+  it("never shows a bare zero or a negative - the last minute says so in words", () => {
     expect(countdown(30_000)).toBe("Ends soon");
     expect(countdown(0)).toBe("Ended");
     expect(countdown(-5_000)).toBe("Ended");
@@ -83,7 +83,7 @@ describe("what the rep reads", () => {
     expect((screen.getByTestId("campaign-bar-1") as HTMLElement).style.width).toBe("45%");
   });
 
-  it("draws NO bar for a per-sale campaign — there is no finish line to fill", () => {
+  it("draws NO bar for a per-sale campaign - there is no finish line to fill", () => {
     renderCard(campaign({
       trigger: { kind: "per_sale" },
       progress: { ...campaign().progress, current: 2, target: 3, pct: 66, headline: "2 sales in this campaign", nextStep: "Every sale while this runs pays the bonus." },
@@ -95,7 +95,7 @@ describe("what the rep reads", () => {
   it("drops the next step and shows the earned amount once it is won", () => {
     renderCard(campaign({
       earnedCents: 5_000,
-      progress: { ...campaign().progress, current: 40, pct: 100, met: true, headline: "40 knocks in — bonus earned", nextStep: "" },
+      progress: { ...campaign().progress, current: 40, pct: 100, met: true, headline: "40 knocks in - bonus earned", nextStep: "" },
     }));
     expect(screen.queryByTestId("campaign-next-1")).toBeNull();
     expect(screen.getByTestId("campaign-earned-1").textContent).toContain("$50");

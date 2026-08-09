@@ -181,7 +181,7 @@ describe("POST /api/territories/:id/unassign", () => {
     expect(JSON.parse(row.after_json).repIds).not.toContain(fx.repA.memberId);
   });
 
-  it("a TEAM LEAD can unassign their own rep — the route gate the UI must match", async () => {
+  it("a TEAM LEAD can unassign their own rep - the route gate the UI must match", async () => {
     // assign_territory is team_lead+; the route is requireTeamLead + ownership.
     // This pins the server half of that contract so the UI gate can be checked
     // against a real number rather than an assumption.

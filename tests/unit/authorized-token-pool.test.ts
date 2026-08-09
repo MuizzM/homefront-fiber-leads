@@ -100,7 +100,7 @@ describe("AuthorizedTokenPool", () => {
     expect(pool.snapshot()).not.toHaveProperty("disabled");
   });
 
-  it("drains one token at a time across a sequential batch — 45 checks ride ONE token (sticky reuse)", async () => {
+  it("drains one token at a time across a sequential batch - 45 checks ride ONE token (sticky reuse)", async () => {
     const mint = vi.fn(async (slotId: number) => ({ token: `token-${slotId}`, expiresAt: Date.now() + 120_000 }));
     const pool = new AuthorizedTokenPool({
       maxSize: 100, warmMinimum: 4, maxChecksPerToken: 250, maxLeasesPerToken: 1_000,

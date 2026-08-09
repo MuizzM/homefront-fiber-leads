@@ -3,7 +3,7 @@ import { decideRespawn, type RespawnConfig } from "../../server/clusterRespawnPo
 
 const CFG: RespawnConfig = { minHealthyMs: 60_000, maxRapid: 8, backoffCapMs: 60_000 };
 
-describe("cluster respawn policy — crash-loop backoff without pegging the box", () => {
+describe("cluster respawn policy - crash-loop backoff without pegging the box", () => {
   it("a one-off crash after healthy uptime respawns fast and resets the counter", () => {
     const d = decideRespawn(2, 120_000, { rapid: 5 }, CFG); // was looping, but stayed up 2min
     expect(d).toEqual({ action: "respawn", delayMs: 1_000, rapid: 0 });
@@ -23,7 +23,7 @@ describe("cluster respawn policy — crash-loop backoff without pegging the box"
     expect(d).toEqual({ action: "park", delayMs: 0, rapid: 8 });
   });
 
-  it("the CONTROL worker (index 0) is never parked — it retries at the capped delay", () => {
+  it("the CONTROL worker (index 0) is never parked - it retries at the capped delay", () => {
     const d = decideRespawn(0, 500, { rapid: 20 }, CFG);
     expect(d.action).toBe("respawn");
     expect(d.delayMs).toBe(60_000); // capped, but always retries — the app needs a control worker

@@ -171,7 +171,7 @@ export function StartNextPassDialog({
                       <span className="tabular-nums font-medium shrink-0">{n}</span>
                       <span>
                         <span className="font-medium">{FREEZE_REASON_LABELS[reason]}</span>
-                        <span className="text-muted-foreground"> — {FREEZE_REASON_HELP[reason]}</span>
+                        <span className="text-muted-foreground"> - {FREEZE_REASON_HELP[reason]}</span>
                       </span>
                     </li>
                   ))}
@@ -247,7 +247,7 @@ export function StartNextPassDialog({
               </label>
 
               <p className="text-xs text-muted-foreground">
-                Pass {preview.currentPass} stays in this area's history — every knock, who made it, and what came of it.
+                Pass {preview.currentPass} stays in this area's history - every knock, who made it, and what came of it.
               </p>
             </>
           ) : null}

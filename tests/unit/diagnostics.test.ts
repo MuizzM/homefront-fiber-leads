@@ -39,7 +39,7 @@ describe("buildDiagnostics", () => {
     expect(model.healthScore).toBe(82); // 100 - min(6,10)*3
   });
 
-  it("windows events out — anything older than the window is ignored", () => {
+  it("windows events out - anything older than the window is ignored", () => {
     const model = buildDiagnostics([
       ev("commission.no_structure", 10),          // in 24h window
       ev("commission.no_structure", 60 * 48),     // 48h ago — excluded

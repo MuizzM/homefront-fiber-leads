@@ -132,7 +132,7 @@ function MyLinkCard() {
     } catch {
       // Clipboard is permission-gated and fails silently in some contexts;
       // showing the URL is the fallback that always works.
-      toast({ title: "Copy failed — select the link below instead" });
+      toast({ title: "Copy failed - select the link below instead" });
     }
   };
 
@@ -245,7 +245,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
   const { toast } = useToast();
   const canApprove = useCan("referral.approve");
   const [expanded, setExpanded] = useState<number | null>(null);
-  // Approving releases a cash reward — arm-then-confirm (the app's standard
+  // Approving releases a cash reward - arm-then-confirm (the app's standard
   // two-tap guard for irreversible money actions), never a single tap.
   const [armedApprove, setArmedApprove] = useState<number | null>(null);
   useEffect(() => {
@@ -285,7 +285,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
           // A failed fetch is not "no referrals" — that empty copy told reps
           // their pipeline was gone.
           <div role="alert" className="py-6 text-center">
-            <p className="text-sm text-muted-foreground">Couldn't load referrals — nothing has changed.</p>
+            <p className="text-sm text-muted-foreground">Couldn't load referrals - nothing has changed.</p>
             <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
           </div>
         ) : referrals.length === 0 ? (

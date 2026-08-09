@@ -106,11 +106,11 @@ export default function Governance() {
       <div>
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Capability governance</div>
         <h1 className="text-lg font-semibold tracking-tight text-foreground">Permissions</h1>
-        <p className="text-[13px] text-muted-foreground">What each role can do — read straight from the map the middleware enforces.</p>
+        <p className="text-[13px] text-muted-foreground">What each role can do - read straight from the map the middleware enforces.</p>
       </div>
 
       {/* A permissions console must never render "0 high-risk capabilities"
-          because a fetch failed — that is the exact false reassurance the
+          because a fetch failed - that is the exact false reassurance the
           Diagnostics page was built to avoid. */}
       {isError && (
         <div role="alert" className="rounded-xl bg-card border border-rose-500/30 p-5 text-center">
@@ -127,17 +127,17 @@ export default function Governance() {
       <div className="flex items-stretch rounded-xl bg-card border border-border divide-x divide-border">
         <div className="flex-1 px-4 py-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Roles</div>
-          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{data ? roles.length : "—"}</div>
+          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{data ? roles.length : " - "}</div>
         </div>
         <div className="flex-1 px-4 py-3">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Capabilities</div>
-          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{data ? totalCaps : "—"}</div>
+          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{data ? totalCaps : " - "}</div>
         </div>
         <div className="flex-1 px-4 py-3">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <AlertTriangle className="w-3 h-3 text-amber-400" /> High-risk
           </div>
-          <div className="text-[18px] font-semibold tracking-tight text-amber-400 tabular-nums">{data ? highRiskCaps : "—"}</div>
+          <div className="text-[18px] font-semibold tracking-tight text-amber-400 tabular-nums">{data ? highRiskCaps : " - "}</div>
         </div>
       </div>
 
@@ -164,7 +164,7 @@ export default function Governance() {
               <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">{g.domain}</div>
               {/* Matrix scrolls horizontally on narrow screens instead of
                   crushing capability names to a few characters (WCAG 1.4.10
-                  reflow — content stays reachable, it just scrolls). */}
+                  reflow - content stays reachable, it just scrolls). */}
               <div className="rounded-xl bg-card border border-border overflow-x-auto">
                 {/* Header row of roles */}
                 <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-border min-w-[520px]">
@@ -186,7 +186,7 @@ export default function Governance() {
                         <span key={r} className="w-[68px] flex justify-center" data-granted={granted}>
                           {/* A check glyph inside the dot + a real accessible
                               name: the grant state was previously encoded ONLY
-                              as a hue in a title tooltip — invisible to screen
+                              as a hue in a title tooltip - invisible to screen
                               readers, touch, and anyone who can't split the
                               tints. */}
                           <span

@@ -117,7 +117,7 @@ function fakeStorage(): SnapshotStorage {
 }
 
 describe("a viewport-mode org's cold-open requests", () => {
-  it("the count probe answers > threshold — the value the persisted mode hint replays", async () => {
+  it("the count probe answers > threshold - the value the persisted mode hint replays", async () => {
     const res = await req("/api/leads/map/count");
     expect(res.status).toBe(200);
     const body: any = await res.json();
@@ -161,7 +161,7 @@ describe("a viewport-mode org's cold-open requests", () => {
   });
 });
 
-describe("window snapshot round-trip — packed response to next-boot seed", () => {
+describe("window snapshot round-trip - packed response to next-boot seed", () => {
   const scope = { tenantId: 1, userId: 1 };
 
   it("a fetched window seeds the next boot when the persisted camera reopens there, and the boot fetch evicts disowned rows", async () => {
@@ -194,7 +194,7 @@ describe("window snapshot round-trip — packed response to next-boot seed", () 
   });
 });
 
-describe("server half — the windowed query plan", () => {
+describe("server half - the windowed query plan", () => {
   it("uses the map-window covering index (not a whole-tenant walk per pan)", () => {
     const plan = rawDb.prepare(`EXPLAIN QUERY PLAN SELECT l.id FROM leads l
       WHERE l.tenant_id = 1 AND l.lat IS NOT NULL AND l.lng IS NOT NULL
@@ -214,7 +214,7 @@ describe("server half — the windowed query plan", () => {
     expect(plan).toContain("COVERING INDEX idx_leads_map_window");
   });
 
-  it("the sampled (over-cap) path is still deterministic and id-ordered — its ORDER BY survived", async () => {
+  it("the sampled (over-cap) path is still deterministic and id-ordered - its ORDER BY survived", async () => {
     // A 2°+ window over 61k pins exceeds the 25k cap → sampled response.
     const spec = pinRequestFor(mapAt(9, 1920, 1080));
     const res = await req(spec.url);

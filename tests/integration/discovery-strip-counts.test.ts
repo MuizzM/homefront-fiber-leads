@@ -53,7 +53,7 @@ function makeExistingLead(targetId: number, address: string, confidence: string)
     .run(TENANT, address, "Inman", "SC", "29349", 35.02, -82.079, confidence, targetId).lastInsertRowid);
 }
 
-describe("Field Map strip counts — authoritative state, not this-run attempts", () => {
+describe("Field Map strip counts - authoritative state, not this-run attempts", () => {
   it("fresh_found counts authoritative (kinetic_new_fiber) leads, not only cross_verified", () => {
     const job = makeJob("strip-authoritative");
     // Provider results ARE the fresh signal (rule: fresh_found counts

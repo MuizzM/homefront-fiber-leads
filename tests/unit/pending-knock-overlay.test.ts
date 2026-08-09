@@ -92,7 +92,7 @@ describe("a refetch can no longer revert the pin", () => {
 
     const after = qc.getQueryData(["/api/leads/map"]) as any;
     const pin = after.pins.find((p: any) => p.id === 1);
-    expect(pin.lastOutcome, "the pin reverted — this is the reported bug").toBe("not_home");
+    expect(pin.lastOutcome, "the pin reverted - this is the reported bug").toBe("not_home");
     expect(pin.visited).toBe(true);
 
     // Once the knock reaches the server the overlay stops applying, and the very

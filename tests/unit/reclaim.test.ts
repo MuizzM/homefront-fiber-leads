@@ -38,7 +38,7 @@ function baseState(): TerritoryState {
   };
 }
 
-describe("reclaimTerritory — mode 1: keep_leads", () => {
+describe("reclaimTerritory - mode 1: keep_leads", () => {
   it("reclaims the boundary but leaves every lead assigned to its rep", () => {
     const next = reclaimTerritory(baseState(), "keep_leads", { actorId: 1, at: AT });
 
@@ -63,7 +63,7 @@ describe("reclaimTerritory — mode 1: keep_leads", () => {
   });
 });
 
-describe("reclaimTerritory — mode 2: return_to_pool (highest risk)", () => {
+describe("reclaimTerritory - mode 2: return_to_pool (highest risk)", () => {
   it("unassigns every enclosed lead back to the overall pool", () => {
     const next = reclaimTerritory(baseState(), "return_to_pool", { actorId: 1, at: AT });
 
@@ -81,7 +81,7 @@ describe("reclaimTerritory — mode 2: return_to_pool (highest risk)", () => {
   });
 });
 
-describe("reclaimTerritory — mode 3: reassign", () => {
+describe("reclaimTerritory - mode 3: reassign", () => {
   it("transfers the territory and all leads to the new rep", () => {
     const next = reclaimTerritory(baseState(), "reassign", { actorId: 1, newRepId: 12, at: AT });
 
@@ -95,7 +95,7 @@ describe("reclaimTerritory — mode 3: reassign", () => {
   });
 });
 
-describe("reclaimTerritory — purity guarantees (all modes)", () => {
+describe("reclaimTerritory - purity guarantees (all modes)", () => {
   const modes: ReclaimMode[] = ["keep_leads", "return_to_pool", "reassign"];
 
   it.each(modes)("does not mutate the input state (%s)", (mode) => {

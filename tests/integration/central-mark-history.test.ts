@@ -101,7 +101,7 @@ describe("Central Mark attribution", () => {
     expect(row.actor).toBe("Ann Rivera");                       // real field attribution kept
   });
 
-  it("is idempotent — a double-tapped mark with the same key writes ONE event", async () => {
+  it("is idempotent - a double-tapped mark with the same key writes ONE event", async () => {
     const lead = seedLead({ assignedRepId: null });
     const body = { outcome: "sold", idempotencyKey: "cm-dup-1" };
     await central(lead, fx.manager.session, body);

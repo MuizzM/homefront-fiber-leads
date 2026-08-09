@@ -70,7 +70,7 @@ describe("territoryHeldByAny", () => {
     expect(territoryHeldByAny({ repId: 9, assigneeIds: null }, [3])).toBe(false);
   });
 
-  it("matches when ANY id in the scope holds it — a team lead's whole roster", () => {
+  it("matches when ANY id in the scope holds it - a team lead's whole roster", () => {
     // leadVisibilityScope hands in [self, ...reports], so one hit is enough.
     expect(territoryHeldByAny({ repId: 3, assigneeIds: "[3]" }, [11, 12, 3])).toBe(true);
     expect(territoryHeldByAny({ repId: 3, assigneeIds: "[3]" }, [11, 12])).toBe(false);

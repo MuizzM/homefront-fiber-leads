@@ -115,7 +115,7 @@ afterAll(async () => {
   if (server) await new Promise<void>((res, rej) => server.close((e) => (e ? rej(e) : res())));
 });
 
-describe("GET /api/territories/:id/progress — rep reads their own area", () => {
+describe("GET /api/territories/:id/progress - rep reads their own area", () => {
   it("returns 200 with the penetration/completion stats for an area the rep holds", async () => {
     const r = await req(`/api/territories/${mineArea}/progress`, fx.repA.session);
     expect(r.status).toBe(200);
@@ -147,13 +147,13 @@ describe("GET /api/territories/:id/progress — rep reads their own area", () =>
   });
 });
 
-describe("GET /api/territories/:id/progress — everything else is a 404", () => {
+describe("GET /api/territories/:id/progress - everything else is a 404", () => {
   it("404s a rep asking about a teammate's area", async () => {
     const r = await req(`/api/territories/${otherArea}/progress`, fx.repA.session);
     expect(r.status).toBe(404);
   });
 
-  it("404s a rep asking about another tenant's area — existence not confirmed", async () => {
+  it("404s a rep asking about another tenant's area - existence not confirmed", async () => {
     const r = await req(`/api/territories/${foreignArea}/progress`, fx.repA.session);
     expect(r.status).toBe(404);
     // Identical shape to the not-held denial: nothing distinguishes "not

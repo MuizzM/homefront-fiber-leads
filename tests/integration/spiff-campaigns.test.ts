@@ -213,7 +213,7 @@ describe("launching a campaign", () => {
   });
 });
 
-describe("awarding — the money path", () => {
+describe("awarding - the money path", () => {
   it("pays once when the trigger is met, and NEVER twice for the same day", async () => {
     const { awardCampaignsForRep, createCampaign } = await import("../../server/spiffCampaignStore");
     const campaign = createCampaign(1, admin.userId, {
@@ -245,7 +245,7 @@ describe("awarding — the money path", () => {
     expect(row.s).toBe(5_000);
   });
 
-  it("the campaign cap is a real ceiling — it trims, then stops", async () => {
+  it("the campaign cap is a real ceiling - it trims, then stops", async () => {
     const { awardCampaignsForRep, createCampaign, campaignLiability } =
       await import("../../server/spiffCampaignStore");
     // $50 reward, $75 total cap: the first rep takes $50, the second takes the
@@ -277,7 +277,7 @@ describe("awarding — the money path", () => {
     expect(liability.awardCount).toBe(2);
   });
 
-  it("an award is an ordinary spiff — it rides the existing approval ledger", async () => {
+  it("an award is an ordinary spiff - it rides the existing approval ledger", async () => {
     const { createCampaign, awardCampaignsForRep } = await import("../../server/spiffCampaignStore");
     const campaign = createCampaign(1, admin.userId, {
       name: "Ledger check",
@@ -328,7 +328,7 @@ describe("awarding — the money path", () => {
       .find(a => a.campaignId === campaign.id)?.inserted).toBe(true);
   });
 
-  it("cancelling is terminal — a withdrawn promise cannot flicker back on", async () => {
+  it("cancelling is terminal - a withdrawn promise cannot flicker back on", async () => {
     const { createCampaign } = await import("../../server/spiffCampaignStore");
     const campaign = createCampaign(1, admin.userId, {
       name: "Withdrawn",

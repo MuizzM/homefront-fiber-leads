@@ -91,12 +91,12 @@ function contractorSections({ companyName }: TemplateContext): AgreementSection[
       heading: "2. Independent contractor status",
       paragraphs: [
         "Contractor is an independent contractor and NOT an employee, partner, joint venturer, franchisee, or agent of the Company. Contractor controls the manner, means, methods, sequence, hours, and schedule of the work, subject only to applicable law, customer consent, territory assignments, service-provider requirements, and the Company’s compliance and safety standards. The Company directs the RESULT to be achieved, not the manner in which Contractor achieves it.",
-        "Contractor supplies their own vehicle, phone, and ordinary equipment, bears their own expenses, and may engage their own helpers or subcontractors at Contractor’s sole cost — in which case Contractor is solely responsible for those persons, for their conduct, and for their pay, taxes, and insurance, and will bind them to obligations at least as protective as this Agreement.",
+        "Contractor supplies their own vehicle, phone, and ordinary equipment, bears their own expenses, and may engage their own helpers or subcontractors at Contractor’s sole cost - in which case Contractor is solely responsible for those persons, for their conduct, and for their pay, taxes, and insurance, and will bind them to obligations at least as protective as this Agreement.",
         "Contractor has NO authority to bind the Company or any service provider, to make representations or promises on the Company’s behalf beyond approved materials, to alter customer pricing or terms, to hold themself out as an employee, or to open accounts, incur obligations, or accept service of process for the Company.",
       ],
     },
     {
-      heading: "3. Taxes — Form 1099, no withholding",
+      heading: "3. Taxes - Form 1099, no withholding",
       paragraphs: [
         "Contractor is compensated on a commission-only basis and is paid as an independent contractor. The Company will NOT withhold federal, state, or local income tax, FICA/Social Security, Medicare, unemployment insurance, or any other amount from Contractor’s compensation. Contractor is solely responsible for self-employment tax, estimated tax payments, and all federal, state, and local taxes arising from this engagement.",
         "Contractor will furnish a completed and accurate IRS Form W-9 (or Form W-8 series if applicable) before any payment is made. The Company will report compensation on IRS Form 1099-NEC where required by law. The Company may withhold payment until a valid taxpayer identification number is on file, and may apply backup withholding if required by the Internal Revenue Code.",

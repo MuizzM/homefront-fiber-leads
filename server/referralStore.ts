@@ -102,7 +102,7 @@ export function ensureReferralSchema(): void {
       WHERE referred_user_id IS NOT NULL AND status NOT IN ('REJECTED','EXPIRED') AND deleted_at IS NULL;
     -- Click de-duplication. A counter that increments on every request counts a
     -- refresh, a back-button, and a prefetch as three people, which makes the
-    -- one number a rep actually watches meaningless — and makes inflating it
+    -- one number a rep actually watches meaningless - and makes inflating it
     -- free. The dedupe key is coarse on purpose (see clickDedupeKey): it must
     -- collapse one person revisiting, without needing an identifier we have no
     -- business assigning to an anonymous visitor.

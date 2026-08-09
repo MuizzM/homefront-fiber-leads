@@ -267,7 +267,7 @@ export function viewportNotice(opts: {
   if (!opts.viewportMode) return null;
   if (opts.tier === "grid") return null;
   if (opts.truncated && !opts.sampleDismissed) {
-    return { kind: "sample", message: "Showing a sample — zoom in for all pins" };
+    return { kind: "sample", message: "Showing a sample - zoom in for all pins" };
   }
   return null;
 }

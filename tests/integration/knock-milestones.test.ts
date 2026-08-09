@@ -127,7 +127,7 @@ describe("the counter cannot be farmed", () => {
     expect(paid.s).toBe(0);
   });
 
-  it("120 doors logged from the couch earn nothing — only GPS-confirmed knocks count", async () => {
+  it("120 doors logged from the couch earn nothing - only GPS-confirmed knocks count", async () => {
     const { awardMilestonesForRep, verifiedDoorCount, periodWindow } =
       await import("../../server/knockMilestoneStore");
     // Every knock is on a DIFFERENT door, so the distinct filter is satisfied —
@@ -148,7 +148,7 @@ describe("the counter cannot be farmed", () => {
     expect(verifiedDoorCount(1, couch.memberId, before.startIso, before.endIso)).toBe(start);
   });
 
-  it("a superseded knock does not count — it was applied to nothing", async () => {
+  it("a superseded knock does not count - it was applied to nothing", async () => {
     const { verifiedDoorCount, periodWindow } = await import("../../server/knockMilestoneStore");
     const win = periodWindow(1, "week", Date.now());
     const before = verifiedDoorCount(1, couch.memberId, win.startIso, win.endIso);
@@ -199,7 +199,7 @@ describe("clearing rungs", () => {
     expect(card.progress.headline).toBe("147 more verified doors this week for $50");
   });
 
-  it("rungs STACK — clearing 250 keeps the 100 already banked", async () => {
+  it("rungs STACK - clearing 250 keeps the 100 already banked", async () => {
     const { awardMilestonesForRep } = await import("../../server/knockMilestoneStore");
     const more = makeDoors(150);
     more.forEach(id => knock(rep.memberId, id, "verified")); // 103 + 150 = 253

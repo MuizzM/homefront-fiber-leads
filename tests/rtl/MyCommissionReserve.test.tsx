@@ -50,7 +50,7 @@ const BUILDING_RESERVE = {
   latestHold: { id: 3, kind: "hold", amountCents: 10500, weekLabel: "Jul 27 – Aug 2, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-08-02T00:00:00Z" },
   entries: [
     { id: 3, kind: "hold", amountCents: 10500, weekLabel: "Jul 27 – Aug 2, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-08-02T00:00:00Z" },
-    { id: 2, kind: "drawdown", amountCents: -15000, weekLabel: null, reason: "Chargeback — 12 Oak St cancelled", createdAt: "2026-07-20T00:00:00Z" },
+    { id: 2, kind: "drawdown", amountCents: -15000, weekLabel: null, reason: "Chargeback - 12 Oak St cancelled", createdAt: "2026-07-20T00:00:00Z" },
     { id: 1, kind: "hold", amountCents: 64500, weekLabel: "Jul 20 – Jul 26, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-07-26T00:00:00Z" },
   ],
 };
@@ -110,12 +110,12 @@ describe("the rep's chargeback reserve", () => {
     expect(explainer.textContent).toMatch(/stops/i);
   });
 
-  it("lists the history — holds, chargebacks, and releases with dates and reasons", async () => {
+  it("lists the history - holds, chargebacks, and releases with dates and reasons", async () => {
     renderPage(weekPayload(BUILDING), BUILDING_RESERVE);
     const history = await screen.findByTestId("reserve-history");
     expect(history.textContent).toContain("Held from your pay");
     expect(history.textContent).toContain("Used for a cancellation");
-    expect(history.textContent).toContain("Chargeback — 12 Oak St cancelled");
+    expect(history.textContent).toContain("Chargeback - 12 Oak St cancelled");
     expect(history.textContent).toContain("Jul 27 – Aug 2, 2026");
     // Signs are shown from the rep's point of view: a drawdown leaves the pot.
     expect(screen.getByTestId("reserve-entry-2").textContent).toContain("−$150");

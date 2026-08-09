@@ -60,14 +60,14 @@ describe("address normalization (expanded suffix/directional/unit folding)", () 
   });
 
   // The LEAD dedup key must never false-merge two DIFFERENT keyless addresses.
-  describe("kineticLeadKeyOrNull — no false-merge for blank/garbage addresses", () => {
+  describe("kineticLeadKeyOrNull - no false-merge for blank/garbage addresses", () => {
     it("returns NULL when there is no usable street address (so the UNIQUE index doesn't apply)", () => {
       expect(kineticLeadKeyOrNull("", "Charlotte", "NC", "28202")).toBeNull();
       expect(kineticLeadKeyOrNull("   ", "Charlotte", "NC", "28202")).toBeNull();
       expect(kineticLeadKeyOrNull("!!!", "Charlotte", "NC", "28202")).toBeNull(); // punctuation-only → empty part
     });
 
-    it("two DIFFERENT blank-address leads in the same city both key to NULL — never merge onto one", () => {
+    it("two DIFFERENT blank-address leads in the same city both key to NULL - never merge onto one", () => {
       // Before the fix both were "|CHARLOTTE|NC|28202" → the leads UNIQUE index
       // merged them and LOST a real distinct lead.
       const a = kineticLeadKeyOrNull("", "Charlotte", "NC", "28202");

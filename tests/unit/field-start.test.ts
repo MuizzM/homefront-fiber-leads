@@ -17,14 +17,14 @@ const NOW = 1_800_000_000_000; // fixed epoch — Date.now() is the caller's job
 
 const fix = (ageMs: number) => ({ lat: 35.545, lng: -80.41, at: NOW - ageMs });
 
-describe("pickRepStartCamera — GPS-only launch", () => {
+describe("pickRepStartCamera - GPS-only launch", () => {
   it("fresh GPS cache paints at street-level zoom (door-knocking, not city view)", () => {
     const start = pickRepStartCamera(fix(60_000), NOW);
     expect(start).toEqual({ center: [-80.41, 35.545], zoom: STREET_ZOOM, source: "gps-cache" });
     expect(STREET_ZOOM).toBeGreaterThanOrEqual(16); // guardrail: streets + doors visible
   });
 
-  it("a stale GPS cache (past TTL) is ignored — rep likely drove elsewhere", () => {
+  it("a stale GPS cache (past TTL) is ignored - rep likely drove elsewhere", () => {
     expect(pickRepStartCamera(fix(LAST_FIX_TTL_MS + 1), NOW)).toBeNull();
   });
 

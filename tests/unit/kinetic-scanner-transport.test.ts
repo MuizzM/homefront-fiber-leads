@@ -88,7 +88,7 @@ describe("Kinetic scanner transport hardening", () => {
     expect(searches).toBe(1);
   });
 
-  it("on 429 returns a blocked result (one attempt) for the worker to requeue — no in-loop wait", async () => {
+  it("on 429 returns a blocked result (one attempt) for the worker to requeue - no in-loop wait", async () => {
     let searches = 0;
     proxyFetch.mockImplementation(async (url: string) => {
       if (url.includes("/api/v1/auth/session")) return json(200, { access_token: "fresh", expires_in: 2_100 });

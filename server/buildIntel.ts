@@ -134,10 +134,10 @@ export interface CityMention { city: string; state: string }
 
 /**
  * Extract "<City>, N.C."-style mentions from free text, plus word-boundary hits
- * against a known-city list (the live footprint catalog at tick time — so
+ * against a known-city list (the live footprint catalog at tick time - so
  * directory-discovered cities match too). A city named in prose WITHOUT a state
  * marker only counts via the known list (its state comes from the catalog);
- * "City, ST" patterns work even for towns the catalog has never seen — that is
+ * "City, ST" patterns work even for towns the catalog has never seen - that is
  * the footprint-GROWTH path.
  */
 export function extractCityMentions(
@@ -215,11 +215,11 @@ function upsertPromotion(
 
 /**
  * Promotion rules over the signal window:
- *   official ≥1 → promote (long TTL) — Windstream said so.
+ *   official ≥1 → promote (long TTL) - Windstream said so.
  *   news ≥ newsMinArticles distinct URLs → promote.
  *   permit count ≥ permitMin → promote (construction surge).
  *   OUR OWN drops ≥ dropMin fresh_fiber_confirmed leads in a city within the
- *     drop window → promote — "we found new builds, the surrounding city turns
+ *     drop window → promote - "we found new builds, the surrounding city turns
  *     on". The scanner's own confirmed drops are the strongest signal of all;
  *     the street-level counterpart (ring fan-out around each drop) is the
  *     cluster-expansion engine.
@@ -253,14 +253,14 @@ export function evaluatePromotions(): Array<{ city: string; state: string; reaso
     upsertPromotion(r.city, r.state, reason, evidence, ttl, promoted);
   }
   // Fresh-drop clusters from our own scanner. Guarded: a bare replay/test DB
-  // may not have the leads table — signal-based promotion must still work.
+  // may not have the leads table - signal-based promotion must still work.
   // datetime(created_at) normalizes the column's two live formats ('YYYY-MM-DD
   // HH:MM:SS' from the projector, ISO-with-T from createLead) before the window
-  // compare — a raw string compare over-includes ISO rows on the boundary day.
+  // compare - a raw string compare over-includes ISO rows on the boundary day.
   try {
     const dropWindow = CFG.dropWindowDays();
     // A city already promoted this run (e.g. by an OFFICIAL signal with its
-    // longer TTL) is not re-upserted by the drop rule — last-writer-wins on
+    // longer TTL) is not re-upserted by the drop rule - last-writer-wins on
     // expires_at would silently shorten the official promotion's TTL.
     const already = new Set(promoted.map((p) => `${p.city}:${p.state}`));
     const drops = rawDb.prepare(
@@ -283,7 +283,7 @@ export function evaluatePromotions(): Array<{ city: string; state: string; reaso
       ).all(d.city, d.state, `-${dropWindow} days`);
       upsertPromotion(d.city, d.state, `fresh-drop cluster (${d.n}/${dropWindow}d)`, evidence, CFG.ttlDays(), promoted);
     }
-  } catch { /* leads table absent — external-signal promotion unaffected */ }
+  } catch { /* leads table absent - external-signal promotion unaffected */ }
   return promoted;
 }
 
@@ -298,7 +298,7 @@ export function listDynamicHotMarkets(): Array<{ city: string; state: string; re
 
 /**
  * The hot-market burst's city list: env "city:st" entries UNIONED with active
- * dynamic promotions, deduped, order-stable (env first — operator intent wins).
+ * dynamic promotions, deduped, order-stable (env first - operator intent wins).
  */
 export function listHotMarkets(envSpec: string): Array<{ city: string; state: string }> {
   const out = new Map<string, { city: string; state: string }>();
@@ -311,7 +311,7 @@ export function listHotMarkets(envSpec: string): Array<{ city: string; state: st
       const key = `${d.city}:${d.state}`;
       if (!out.has(key)) out.set(key, { city: d.city, state: d.state });
     }
-  } catch { /* dynamic table unavailable — env list still works */ }
+  } catch { /* dynamic table unavailable - env list still works */ }
   return [...out.values()];
 }
 

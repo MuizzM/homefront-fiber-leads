@@ -340,7 +340,7 @@ async function drainFreshAlerts(tenantId: number): Promise<number> {
         if (!response.ok) throw new Error(`webhook ${response.status}`);
       }
       if (emailReady) {
-        const addresses = cluster.addresses.slice(0, 15).map((p: any) => `<li>${escapeHtml(p.address)}, ${escapeHtml(p.city)}, ${escapeHtml(p.state)} — ${escapeHtml(p.confidence)}</li>`).join("");
+        const addresses = cluster.addresses.slice(0, 15).map((p: any) => `<li>${escapeHtml(p.address)}, ${escapeHtml(p.city)}, ${escapeHtml(p.state)} - ${escapeHtml(p.confidence)}</li>`).join("");
         await sendMailResilient({
           from: mailFrom(), to: email,
           subject: `Fresh Kinetic fiber: ${cluster.density} doors in ${cluster.city}, ${cluster.state}`,

@@ -24,7 +24,7 @@ describe("normalizeAddressKey", () => {
   });
 });
 
-describe("mergeAddresses — dedupe order / precedence", () => {
+describe("mergeAddresses - dedupe order / precedence", () => {
   it("higher-precision provider owns the coordinates; sources union", () => {
     const merged = mergeAddresses([
       R("mapbox", "primary", [A("100 Main St", 35.6, -82.0)]),
@@ -66,7 +66,7 @@ describe("mergeAddresses — dedupe order / precedence", () => {
   });
 });
 
-describe("buildCoverageReport — coverageRatio + classification", () => {
+describe("buildCoverageReport - coverageRatio + classification", () => {
   it("partial geocoder vs full parcels → 0.6 partial, 4 new-build candidates", () => {
     const rep = buildCoverageReport(BOX, [
       R("mapbox", "primary", GEOCODED),
@@ -118,7 +118,7 @@ describe("buildCoverageReport — coverageRatio + classification", () => {
   });
 });
 
-describe("buildCoverageReport — no primary enumerator ran (free preview / Mapbox down)", () => {
+describe("buildCoverageReport - no primary enumerator ran (free preview / Mapbox down)", () => {
   it("reports UNKNOWN, not a confident 0% / all-new-builds", () => {
     // Parcel + overpass only (Mapbox excluded, as in a free preview).
     const rep = buildCoverageReport(BOX, [

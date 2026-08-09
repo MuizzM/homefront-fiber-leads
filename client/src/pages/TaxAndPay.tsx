@@ -83,7 +83,7 @@ interface BankStatus {
 const CLASSIFICATION_COPY: Record<TaxClassification, { label: string; blurb: string }> = {
   individual: {
     label: "Individual / sole proprietor, or single-member LLC",
-    blurb: "You work for yourself and report this income on Schedule C of your personal tax return. This is the right answer for almost every rep — including a single-member LLC that has not elected corporate tax treatment.",
+    blurb: "You work for yourself and report this income on Schedule C of your personal tax return. This is the right answer for almost every rep - including a single-member LLC that has not elected corporate tax treatment.",
   },
   c_corp: {
     label: "C corporation",
@@ -103,7 +103,7 @@ const CLASSIFICATION_COPY: Record<TaxClassification, { label: string; blurb: str
   },
   llc: {
     label: "Limited liability company (LLC)",
-    blurb: "An LLC with more than one member, or one that elected corporate tax treatment. Pick this only if you then know how the IRS taxes it — you must give the letter C, S or P below.",
+    blurb: "An LLC with more than one member, or one that elected corporate tax treatment. Pick this only if you then know how the IRS taxes it - you must give the letter C, S or P below.",
   },
   other: {
     label: "Something else",
@@ -112,9 +112,9 @@ const CLASSIFICATION_COPY: Record<TaxClassification, { label: string; blurb: str
 };
 
 const LLC_CLASS_COPY: Record<LlcTaxClass, string> = {
-  C: "C — the LLC is taxed as a C corporation",
-  S: "S — the LLC is taxed as an S corporation",
-  P: "P — the LLC is taxed as a partnership",
+  C: "C - the LLC is taxed as a C corporation",
+  S: "S - the LLC is taxed as an S corporation",
+  P: "P - the LLC is taxed as a partnership",
 };
 
 // The certification the signer is affirming, verbatim from IRS Form W-9
@@ -338,7 +338,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
     if (name.length < 2 || name.length > 120) e.legalName = "Enter your full legal name as it appears on your Social Security card or IRS notice (2–120 characters).";
     if (businessName.trim().length > 120) e.businessName = "Business name must be 120 characters or fewer.";
     if (!taxClassification) e.taxClassification = "Choose the one federal tax classification that describes you. This is required on the form.";
-    if (taxClassification === "llc" && !llcTaxClass) e.llcTaxClass = "An LLC must say how the IRS taxes it — choose C, S or P.";
+    if (taxClassification === "llc" && !llcTaxClass) e.llcTaxClass = "An LLC must say how the IRS taxes it - choose C, S or P.";
     if (taxClassification === "other") {
       const desc = otherClassification.trim();
       if (desc.length < 2 || desc.length > 60) e.otherClassification = "Describe your classification in 2–60 characters.";
@@ -355,10 +355,10 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
     if (exemptPayeeCode.trim().length > 8) e.exemptPayeeCode = "Exempt payee code must be 8 characters or fewer.";
     if (fatcaExemptionCode.trim().length > 12) e.fatcaExemptionCode = "FATCA exemption code must be 12 characters or fewer.";
     if (accountNumbers.trim().length > 80) e.accountNumbers = "Account numbers must be 80 characters or fewer.";
-    if (backupWithholding !== "no" && backupWithholding !== "yes") e.backupWithholding = "Answer the backup-withholding question — the IRS certification requires an explicit yes or no.";
+    if (backupWithholding !== "no" && backupWithholding !== "yes") e.backupWithholding = "Answer the backup-withholding question - the IRS certification requires an explicit yes or no.";
     if (!consent) e.consent = "You must agree to the certification to sign this form electronically.";
     if (signatureName.trim().toLowerCase() !== name.toLowerCase() || !signatureName.trim()) {
-      e.signatureName = "Type your legal name exactly as you entered it above — this is your signature.";
+      e.signatureName = "Type your legal name exactly as you entered it above - this is your signature.";
     }
     return e;
   }, [legalName, businessName, taxClassification, llcTaxClass, otherClassification, line1, city, state,
@@ -447,7 +447,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
             <h3 className="text-sm font-semibold text-foreground">Read the official IRS Form W-9</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               The questions below are the same ones on the government form, asked in plain language.
-              You are signing under penalties of perjury — open the real form and its instructions first.
+              You are signing under penalties of perjury - open the real form and its instructions first.
             </p>
           </div>
           <Button
@@ -467,7 +467,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
             <PdfReviewPane
               url="/api/onboarding/w9/blank.pdf"
               fileName="irs-form-w9.pdf"
-              title="IRS Form W-9 (Rev. 3-2024) — official form and instructions"
+              title="IRS Form W-9 (Rev. 3-2024) - official form and instructions"
               testId="w9-official-pane"
             />
           </div>
@@ -481,7 +481,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
         <Field
           id="w9-legal-name"
           label="Full legal name"
-          hint="Exactly as it appears on your Social Security card or IRS notice. Use the Latin (romanized) spelling — the IRS form is printed in a Latin-alphabet font."
+          hint="Exactly as it appears on your Social Security card or IRS notice. Use the Latin (romanized) spelling - the IRS form is printed in a Latin-alphabet font."
           error={show("legalName")}
         >
           {aria => (
@@ -556,7 +556,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
             <Field
               id="w9-other-classification"
               label="Describe your classification. This is required."
-              hint="A few words, 2–60 characters — this is printed on the form's 'Other' line."
+              hint="A few words, 2–60 characters - this is printed on the form's 'Other' line."
               error={show("otherClassification")}
             >
               {aria => (
@@ -572,7 +572,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
         <legend className="sr-only">Foreign partners, owners or beneficiaries</legend>
         <SectionLabel>Line 3b</SectionLabel>
         <LegalCheckbox checked={foreignPartners} onChange={setForeignPartners} testId="checkbox-foreign-partners">
-          My partnership, trust or estate has foreign partners, owners or beneficiaries and I am providing this form to a partnership, trust or estate that has a direct or indirect foreign partner, owner or beneficiary. Leave this unticked if you are an individual — it does not apply to you.
+          My partnership, trust or estate has foreign partners, owners or beneficiaries and I am providing this form to a partnership, trust or estate that has a direct or indirect foreign partner, owner or beneficiary. Leave this unticked if you are an individual - it does not apply to you.
         </LegalCheckbox>
       </fieldset>
 
@@ -625,7 +625,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
         <div>
           <SectionLabel>Taxpayer identification number</SectionLabel>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Stored encrypted. Nobody in the app — including your manager — can read it back; after you file, this screen shows only the last four digits.
+            Stored encrypted. Nobody in the app - including your manager - can read it back; after you file, this screen shows only the last four digits.
           </p>
         </div>
         {/* Native radios already form a group by `name`; the nested fieldset
@@ -638,7 +638,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
             checked={tinType === "ssn"}
             onChange={() => { setTinType("ssn"); setTin(""); }}
             title="Social Security number (SSN)"
-            blurb="Use this if you are paid as yourself — the answer for most reps."
+            blurb="Use this if you are paid as yourself - the answer for most reps."
             testId="tin-type-ssn"
           />
           <RadioCard
@@ -654,7 +654,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
         <Field
           id="w9-tin"
           label={tinType === "ssn" ? "Social Security number" : "Employer Identification Number"}
-          hint="9 digits. Hidden as you type — use Show to check it before you sign."
+          hint="9 digits. Hidden as you type - use Show to check it before you sign."
           error={show("tin")}
         >
           {aria => (
@@ -709,7 +709,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
           Has the IRS notified you that you are subject to backup withholding?
         </legend>
         <p id="w9-backup-withholding-help" className="text-xs leading-relaxed text-muted-foreground">
-          Backup withholding means the IRS told you, in writing, that 24% of payments like these must be withheld and sent to them — usually after unreported interest or dividends. If that has never happened to you, the answer is No. Answering Yes means 24% of every payout is withheld from you and paid to the IRS.
+          Backup withholding means the IRS told you, in writing, that 24% of payments like these must be withheld and sent to them - usually after unreported interest or dividends. If that has never happened to you, the answer is No. Answering Yes means 24% of every payout is withheld from you and paid to the IRS.
         </p>
         <div className="space-y-2">
           <RadioCard
@@ -717,7 +717,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
             value="no"
             checked={backupWithholding === "no"}
             onChange={() => setBackupWithholding("no")}
-            title="No — the IRS has never notified me"
+            title="No - the IRS has never notified me"
             blurb="This is the answer for almost everyone."
             testId="backup-withholding-no"
           />
@@ -726,7 +726,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
             value="yes"
             checked={backupWithholding === "yes"}
             onChange={() => setBackupWithholding("yes")}
-            title="Yes — the IRS notified me and it has not been lifted"
+            title="Yes - the IRS notified me and it has not been lifted"
             blurb="Item 2 of the certification below is crossed out on your filed form, and 24% of your pay is withheld."
             testId="backup-withholding-yes"
           />
@@ -798,7 +798,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
 
 function classificationSummary(status: W9Status): string {
   const base = CLASSIFICATION_COPY[status.taxClassification]?.label ?? status.taxClassification;
-  if (status.taxClassification === "llc" && status.llcTaxClass) return `${base} — taxed as ${status.llcTaxClass}`;
+  if (status.taxClassification === "llc" && status.llcTaxClass) return `${base} - taxed as ${status.llcTaxClass}`;
   if (status.taxClassification === "other" && status.otherClassification) return `${base}: ${status.otherClassification}`;
   return base;
 }
@@ -850,7 +850,7 @@ function W9Filed({ status, onRefile }: { status: W9Status; onRefile: () => void 
         />
         <SummaryRow
           label="Backup withholding"
-          value={status.subjectToBackupWithholding ? "Yes — 24% is withheld from your pay" : "No"}
+          value={status.subjectToBackupWithholding ? "Yes - 24% is withheld from your pay" : "No"}
         />
         <SummaryRow label="Signed by" value={status.signatureName} />
       </dl>
@@ -867,7 +867,7 @@ function W9Filed({ status, onRefile }: { status: W9Status; onRefile: () => void 
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row">
         <Button type="button" variant="outline" onClick={onRefile} data-testid="w9-refile">
-          Something changed — file a new W-9
+          Something changed - file a new W-9
         </Button>
         <Button type="button" variant="outline" onClick={() => setReviewing(true)} data-testid="w9-review">
           <FileText className="mr-2 h-4 w-4" aria-hidden="true" />
@@ -914,7 +914,7 @@ function BankForm({ onSaved, onCancel, showCancel }: {
 
   const errors = useMemo<BankErrors>(() => {
     const e: BankErrors = {};
-    if (!/^\d{9}$/.test(routing)) e.routing = "A routing number is exactly 9 digits — it is the leftmost number on the bottom of a check.";
+    if (!/^\d{9}$/.test(routing)) e.routing = "A routing number is exactly 9 digits - it is the leftmost number on the bottom of a check.";
     else if (!isValidAbaRouting(routing)) e.routing = "That routing number fails the bank checksum, so it is not a real one. Check it against your bank's app or a check.";
     if (!isValidAccountNumber(account)) e.account = "An account number is 4–17 digits.";
     if (!confirmAccount) e.confirmAccount = "Enter your account number a second time so we can be sure it is right.";
@@ -1054,7 +1054,7 @@ function BankSaved({ status, onReplace }: { status: BankStatus; onReplace: () =>
       <div className="flex items-start gap-2 rounded-xl border border-border bg-secondary/20 px-3.5 py-3">
         <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden="true" />
         <p className="text-xs leading-relaxed text-foreground">
-          Your pay goes to this account. We keep only the last four digits on screen — nobody in the app can read the rest back.
+          Your pay goes to this account. We keep only the last four digits on screen - nobody in the app can read the rest back.
         </p>
       </div>
       <dl className="divide-y divide-border">
@@ -1224,7 +1224,7 @@ export default function TaxAndPay() {
           <div className="flex items-start gap-2 rounded-xl border border-border bg-secondary/30 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
             <ShieldCheck className="mt-px h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
             <span>
-              Your Social Security number and bank account are encrypted before they are stored and are never shown again — not to you, not to your manager. Every access to your signed W-9 document is recorded.
+              Your Social Security number and bank account are encrypted before they are stored and are never shown again - not to you, not to your manager. Every access to your signed W-9 document is recorded.
             </span>
           </div>
         </>

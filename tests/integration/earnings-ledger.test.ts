@@ -135,7 +135,7 @@ describe("projection", () => {
     expect(L.projectPeriod({ tenantId: T1, repId: REP, statementId: paid, nowIso: NOW }).rows[0].status).toBe("PAID");
   });
 
-  it("is idempotent — rebuilding changes nothing", () => {
+  it("is idempotent - rebuilding changes nothing", () => {
     const id = statement();
     adjustment(id, -5_000);
     L.projectPeriod({ tenantId: T1, repId: REP, statementId: id, nowIso: NOW });
@@ -158,7 +158,7 @@ describe("projection", () => {
   });
 });
 
-describe("reconciliation — the proof the mirror is faithful", () => {
+describe("reconciliation - the proof the mirror is faithful", () => {
   it("re-sums exactly to the statement's own final figure", () => {
     const id = statement({ gross: 160_000, adjustment: -5_000, final: 155_000 });
     adjustment(id, -5_000);
@@ -171,7 +171,7 @@ describe("reconciliation — the proof the mirror is faithful", () => {
     expect(result.statementCents).toBe(155_000);
   });
 
-  it("EXCLUDES native money — the statement never knew about it", () => {
+  it("EXCLUDES native money - the statement never knew about it", () => {
     const id = statement({ gross: 160_000, final: 160_000 });
     L.projectPeriod({ tenantId: T1, repId: REP, statementId: id, nowIso: NOW });
 

@@ -23,7 +23,7 @@ function callbackBody(name: string): string {
   return src.slice(start, end > start ? end : start + 6000);
 }
 
-describe("central mark is optimistic — recolor before the round-trip", () => {
+describe("central mark is optimistic - recolor before the round-trip", () => {
   const body = callbackBody("handleCentralMark");
   const firstAwait = body.indexOf("await apiRequest");
 
@@ -50,7 +50,7 @@ describe("central mark is optimistic — recolor before the round-trip", () => {
     expect(after).toContain("reverted");
   });
 
-  it("adopts the SERVER's CAS clock on success — the optimistic client timestamp must not outlive the response", () => {
+  it("adopts the SERVER's CAS clock on success - the optimistic client timestamp must not outlive the response", () => {
     // The optimistic write stamps lastOutcomeAt with the CLIENT clock (the
     // only clock available pre-response). If the device runs ahead of the
     // server, a pin left holding that future timestamp beats every genuinely
@@ -64,7 +64,7 @@ describe("central mark is optimistic — recolor before the round-trip", () => {
   });
 });
 
-describe("delete lead is optimistic — pin vanishes before the round-trip", () => {
+describe("delete lead is optimistic - pin vanishes before the round-trip", () => {
   const body = callbackBody("handleDeleteLead");
   const firstAwait = body.indexOf("await apiRequest");
 

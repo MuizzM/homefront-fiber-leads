@@ -65,7 +65,7 @@ describe("trainingReviewQueue", () => {
     expect(storage.map.has("hf.trainingReviews.v1.42")).toBe(false);
   });
 
-  it("dedupes an identical (cardId, reviewedAt) — a double-tap queues once", async () => {
+  it("dedupes an identical (cardId, reviewedAt) - a double-tap queues once", async () => {
     const post = vi.fn().mockResolvedValue({ ok: true, updated: 1 });
     const q = make({ post, storage: memStorage() });
     const review = { cardId: "card:m1-a:takeaway:0", grade: "easy" as const, reviewedAt: "2025-01-01T10:00:00.000Z" };

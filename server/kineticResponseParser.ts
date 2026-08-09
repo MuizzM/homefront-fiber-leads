@@ -288,7 +288,7 @@ export function selectReliableAddressSuggestion(data: any): AddressSuggestionSel
   if (candidates.length === 1) {
     const only = candidates[0];
     if (only.score != null && only.score < SUGGESTION_LOW_FLOOR) {
-      return { candidates, suggestion: null, reason: `single low-confidence suggestion (${only.score.toFixed(2)}) — not applied` };
+      return { candidates, suggestion: null, reason: `single low-confidence suggestion (${only.score.toFixed(2)}) - not applied` };
     }
     return { candidates, suggestion: only, reason: "single unambiguous suggestion" };
   }
@@ -300,7 +300,7 @@ export function selectReliableAddressSuggestion(data: any): AddressSuggestionSel
     return { candidates, suggestion: exacts[0], reason: "single exact-match suggestion among several" };
   }
   if (exacts.length > 1) {
-    return { candidates, suggestion: null, reason: `${exacts.length} exact-match suggestions — ambiguous` };
+    return { candidates, suggestion: null, reason: `${exacts.length} exact-match suggestions - ambiguous` };
   }
 
   const ranked = [...candidates].sort((x, y) => (y.score ?? -1) - (x.score ?? -1));
@@ -312,5 +312,5 @@ export function selectReliableAddressSuggestion(data: any): AddressSuggestionSel
     return { candidates, suggestion: top, reason: `top suggestion score ${top.score.toFixed(2)} clears threshold` };
   }
 
-  return { candidates, suggestion: null, reason: `${candidates.length} ambiguous suggestions — none clearly top-ranked` };
+  return { candidates, suggestion: null, reason: `${candidates.length} ambiguous suggestions - none clearly top-ranked` };
 }

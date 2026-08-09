@@ -22,7 +22,7 @@ const RULE = "#E3E8ED";
 const RULE_SOFT = "#EEF1F4";
 
 const STATUS_TEXT: Record<string, { label: string; note: string; color: string }> = {
-  OPEN:      { label: "Projected",  note: "This week is still live — the amount can change until it's finalized.", color: "#B45309" },
+  OPEN:      { label: "Projected",  note: "This week is still live - the amount can change until it's finalized.", color: "#B45309" },
   REVIEW:    { label: "In review",  note: "This statement is being reviewed and is not yet final.",                color: "#0369A1" },
   FINALIZED: { label: "Finalized",  note: "This statement is finalized and locked for payout.",                    color: "#155159" },
   PAID:      { label: "Paid",       note: "This statement has been paid.",                                          color: "#15803D" },
@@ -32,7 +32,7 @@ const shortDate = (iso: string, tz: string) => {
   const t = Date.parse(iso);
   return Number.isFinite(t)
     ? new Date(t).toLocaleDateString(undefined, { timeZone: tz, month: "short", day: "numeric" })
-    : "—";
+    : " - ";
 };
 
 function Shell({ children, onClose, actions }: { children: React.ReactNode; onClose: () => void; actions?: React.ReactNode }) {
@@ -102,7 +102,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading your statement…
               </div>
             : <div className="py-10 text-[13px]" style={{ color: MUTED }} data-testid="statement-error">
-                Couldn't load this statement. Close and try again — your pay data is safe.
+                Couldn't load this statement. Close and try again - your pay data is safe.
               </div>}
         </Paper>
       </Shell>
@@ -127,11 +127,11 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
       </td>
       {doc.showHouseColumn && (
         <td className="py-2 text-right tabular-nums" style={{ color: l.counted ? INK : FAINT }}>
-          {l.counted && l.houseAmountCents != null ? money(l.houseAmountCents) : "—"}
+          {l.counted && l.houseAmountCents != null ? money(l.houseAmountCents) : " - "}
         </td>
       )}
       <td className="py-2 text-right tabular-nums" style={{ color: l.counted ? INK : FAINT }}>
-        {l.counted ? money(l.repCommissionCents) : "—"}
+        {l.counted ? money(l.repCommissionCents) : " - "}
       </td>
     </tr>
   );
@@ -177,7 +177,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
       }
     >
       <Paper>
-        {/* Header — logo + the tenant's own company name, never a hardcoded one */}
+        {/* Header - logo + the tenant's own company name, never a hardcoded one */}
         <div className="flex items-start justify-between gap-6 pb-7" style={{ borderBottom: `1px solid ${RULE}` }}>
           <div className="flex items-start gap-4 min-w-0">
             {/* The tenant's own wordmark when it has one, else the bundled mark,
@@ -193,8 +193,8 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
               <div className="text-[20px] font-bold tracking-tight truncate" data-testid="statement-company">{doc.company.name}</div>
               <div className="text-[13px]" style={{ color: MUTED }}>Commission Statement</div>
               <div className="mt-3 space-y-0.5 text-[12.5px]" style={{ color: MUTED }}>
-                <div><span className="inline-block w-[92px]" style={{ color: FAINT }}>Statement</span> #{doc.statement.id ?? "—"}</div>
-                <div><span className="inline-block w-[92px]" style={{ color: FAINT }}>Pay period</span> {doc.period.label || "—"}</div>
+                <div><span className="inline-block w-[92px]" style={{ color: FAINT }}>Statement</span> #{doc.statement.id ?? " - "}</div>
+                <div><span className="inline-block w-[92px]" style={{ color: FAINT }}>Pay period</span> {doc.period.label || " - "}</div>
                 {/* A locked week carries its real issue date; an open one is a
                     preview of a number that still moves, and says so. */}
                 <div>
@@ -259,7 +259,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
                   <td className="py-2">{doc.totals.countedSaleCount} sales</td>
                   {doc.showHouseColumn && (
                     <td className="py-2 text-right tabular-nums" data-testid="statement-house-total">
-                      {doc.totals.houseAmountCents == null ? "—" : money(doc.totals.houseAmountCents)}
+                      {doc.totals.houseAmountCents == null ? " - " : money(doc.totals.houseAmountCents)}
                     </td>
                   )}
                   <td className="py-2 text-right tabular-nums">{money(doc.totals.grossCommissionCents)}</td>
@@ -297,7 +297,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
               {doc.payout.reserveCapCents == null
                 ? "Held to cover chargebacks on cancelled sales."
                 : doc.payout.reserveAtCap
-                  ? `Cap of ${money(doc.payout.reserveCapCents)} reached — nothing further is withheld.`
+                  ? `Cap of ${money(doc.payout.reserveCapCents)} reached - nothing further is withheld.`
                   : `Builds to a cap of ${money(doc.payout.reserveCapCents)}.`}
             </div>
             {capPct != null && (

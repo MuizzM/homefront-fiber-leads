@@ -10,7 +10,7 @@ import {
   HIRABLE_ROLES,
 } from "@shared/teamHierarchy";
 
-describe("canActOnMember — strictly-above authority", () => {
+describe("canActOnMember - strictly-above authority", () => {
   it("team_lead acts on rep only", () => {
     expect(canActOnMember("team_lead", "rep")).toBe(true);
     expect(canActOnMember("team_lead", "team_lead")).toBe(false);
@@ -49,7 +49,7 @@ describe("canActOnMember — strictly-above authority", () => {
   });
 });
 
-describe("canHireRole / HIRABLE_ROLES — hire what you could offboard", () => {
+describe("canHireRole / HIRABLE_ROLES - hire what you could offboard", () => {
   it("mirrors the strictly-above rule exactly", () => {
     for (const [actor, hirable] of Object.entries(HIRABLE_ROLES)) {
       for (const role of hirable) {
@@ -130,7 +130,7 @@ describe("hierarchyRank", () => {
   });
 });
 
-describe("branchOwnerOf — whose people are these", () => {
+describe("branchOwnerOf - whose people are these", () => {
   // rep(3) → tl(2) → mgr(1); rep(4) directly under mgr(1); rep(5) unowned.
   const roster = [
     { id: 1, role: "manager", reportsToId: null, active: true },
@@ -149,11 +149,11 @@ describe("branchOwnerOf — whose people are these", () => {
     expect(branchOwnerOf(1, roster)).toBe(1);
   });
 
-  it("a top-level member is UNOWNED — adoptable rather than stranded", () => {
+  it("a top-level member is UNOWNED - adoptable rather than stranded", () => {
     expect(branchOwnerOf(5, roster)).toBeNull();
   });
 
-  it("an INACTIVE manager does not own a branch — their orphans stay reachable", () => {
+  it("an INACTIVE manager does not own a branch - their orphans stay reachable", () => {
     const departed = roster.map(m => m.id === 1 ? { ...m, active: false } : m);
     expect(branchOwnerOf(3, departed)).toBeNull();
   });
@@ -180,7 +180,7 @@ describe("branchOwnerOf — whose people are these", () => {
 // bug that let a team lead sitting BELOW a promoted manager keep collecting
 // overrides. One edge makes that disagreement impossible to express.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("uplineSlotsOf — derived manager / team lead", () => {
+describe("uplineSlotsOf - derived manager / team lead", () => {
   const ref = (id: number, role: string, reportsToId: number | null, active = true) => ({ id, role, reportsToId, active });
   // mgr(1) ← tl(2) ← rep(3);  rep(4) reports straight to mgr(1)
   const roster = [ref(1, "manager", null), ref(2, "team_lead", 1), ref(3, "rep", 2), ref(4, "rep", 1)];
@@ -189,7 +189,7 @@ describe("uplineSlotsOf — derived manager / team lead", () => {
     expect(uplineSlotsOf(3, roster)).toEqual({ teamLeadId: 2, managerId: 1 });
   });
 
-  it("a rep reporting straight to a manager has NO team lead — never invents one", () => {
+  it("a rep reporting straight to a manager has NO team lead - never invents one", () => {
     expect(uplineSlotsOf(4, roster)).toEqual({ teamLeadId: null, managerId: 1 });
   });
 
@@ -223,7 +223,7 @@ describe("uplineSlotsOf — derived manager / team lead", () => {
     expect(uplineSlotsOf(30, [ref(30, "rep", 999)])).toEqual({ teamLeadId: null, managerId: null });
   });
 
-  it("an INACTIVE upline still fills its slot — departure is handled by re-homing, not the active flag", () => {
+  it("an INACTIVE upline still fills its slot - departure is handled by re-homing, not the active flag", () => {
     // Mirrors computeFlatOverrides, which deliberately does not gate on active:
     // the members this would catch are new hires mid-signature whose teams are
     // already selling.

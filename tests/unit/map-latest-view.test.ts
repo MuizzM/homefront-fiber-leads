@@ -24,7 +24,7 @@ describe("the count probe drives the mode decision with the FILTERED total", () 
     expect(block).toContain('?view=${countView}');
   });
 
-  it("is keyed by view — a lens switch probes fresh, never reuses the other view's total", () => {
+  it("is keyed by view - a lens switch probes fresh, never reuses the other view's total", () => {
     expect(src).toContain('queryKey: ["/api/leads/map/count", countView ?? "all"]');
   });
 
@@ -52,7 +52,7 @@ describe("every tier carries the lens server-side", () => {
     expect(block).toContain("&view=${mapView}");
   });
 
-  it("the full-feed cache key stays [\"/api/leads/map\"] — one entry every writer targets", () => {
+  it("the full-feed cache key stays [\"/api/leads/map\"] - one entry every writer targets", () => {
     // Optimistic updates, the viewport merge, and the SSE/visibility
     // invalidations all address this ONE key; the lens rides the URL and a
     // switch invalidates (below), so no writer needs to know the view.

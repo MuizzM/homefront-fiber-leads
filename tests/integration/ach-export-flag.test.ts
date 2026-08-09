@@ -143,7 +143,7 @@ describe("GET /api/pay/nacha with the flag explicitly enabled", () => {
   });
 });
 
-describe("the 1099 summary is untouched — it is read-only reporting", () => {
+describe("the 1099 summary is untouched - it is read-only reporting", () => {
   it("keeps working while the ACH export is disabled", async () => {
     const res = await request("/api/pay/1099-summary", managerSession);
     expect(res.status).toBe(200);

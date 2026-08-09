@@ -100,7 +100,7 @@ export function classifyFrontierResponse(
   const redirectReason = String(svc.redirect?.reason ?? "");
   if (/VZ_ELIGIBLE|VERIZON/i.test(redirectReason)) {
     base.fiberStatus = "no_service";
-    base.notes = `Verizon-sold territory (${redirectReason}) — not Frontier fiber`;
+    base.notes = `Verizon-sold territory (${redirectReason}) - not Frontier fiber`;
     return base;
   }
   const tech = String(svc.techAvailable ?? "").toUpperCase();
@@ -116,8 +116,8 @@ export function classifyFrontierResponse(
     base.householdSegmentType = "NEW FIBER";
     base.billingStatus = existing ? "Y" : "N";
     base.notes = existing
-      ? `Frontier fiber live (plant ${plant || tech}) — existing service on address (watch)`
-      : `Frontier fiber live (plant ${plant || tech}) with NO existing service — fresh lead`;
+      ? `Frontier fiber live (plant ${plant || tech}) - existing service on address (watch)`
+      : `Frontier fiber live (plant ${plant || tech}) with NO existing service - fresh lead`;
     return base;
   }
   if (svc.isFutureFiberEligible || (svc.fiberBuildOutStatus ?? "").length > 0) {
@@ -128,12 +128,12 @@ export function classifyFrontierResponse(
     base.fiberStatus = "new_fiber";
     base.householdSegmentType = "NEW FIBER";
     base.billingStatus = "Y";
-    base.notes = `Frontier fiber building (futureFiber=${!!svc.isFutureFiberEligible} buildOut=${svc.fiberBuildOutStatus || "?"}) — coming soon watch`;
+    base.notes = `Frontier fiber building (futureFiber=${!!svc.isFutureFiberEligible} buildOut=${svc.fiberBuildOutStatus || "?"}) - coming soon watch`;
     return base;
   }
   if (plant === "COPPER" || tech === "COPPER" || tech === "SMARTVOICE") {
     base.fiberStatus = "copper";
-    base.notes = `Frontier copper plant (${plant || tech}) — copper→fiber upgrade pool`;
+    base.notes = `Frontier copper plant (${plant || tech}) - copper→fiber upgrade pool`;
     return base;
   }
   // NO_TERMINAL / NONE / no-sam-record — definitively unserved.
@@ -196,19 +196,19 @@ export async function scanFrontierAddress(
     if (res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500) {
       if (via === "proxy") void rotateProxySession(`frontier predictive ${res.status}`);
       base.blocked = true;
-      base.notes = `Frontier predictive ${res.status} — Decodo session rotated, address requeued`;
+      base.notes = `Frontier predictive ${res.status} - Decodo session rotated, address requeued`;
       return base;
     }
     if (!res.ok) {
       if (via === "proxy") void rotateProxySession(`frontier predictive ${res.status}`);
       base.blocked = true;
-      base.notes = `Frontier predictive ${res.status} — session rotated, requeued`;
+      base.notes = `Frontier predictive ${res.status} - session rotated, requeued`;
       return base;
     }
     preds = (await res.json()) as FrontierPrediction[];
   } catch (err: any) {
     base.blocked = true;
-    base.notes = `Frontier predictive transport error — ${String(err?.message ?? err).slice(0, 100)} (requeued)`;
+    base.notes = `Frontier predictive transport error - ${String(err?.message ?? err).slice(0, 100)} (requeued)`;
     return base;
   }
   if (!Array.isArray(preds) || preds.length === 0) {
@@ -248,19 +248,19 @@ export async function scanFrontierAddress(
     // a footprint verdict. Never record no_service off a direct answer; requeue.
     if (via === "direct") {
       base.blocked = true;
-      base.notes = "Frontier predictive returned no in-footprint candidate via direct egress (edge-poisoned response) — requeued";
+      base.notes = "Frontier predictive returned no in-footprint candidate via direct egress (edge-poisoned response) - requeued";
       return base;
     }
     base.fiberStatus = "no_service";
     base.apiSource = "kinetic_live";
     base.confidence = "HIGH";
-    base.notes = "Address not in Frontier fabric (no exact-address candidate — neighbor substitution refused)";
+    base.notes = "Address not in Frontier fabric (no exact-address candidate - neighbor substitution refused)";
     return base;
   }
   if (!pred.inFootprint) {
     if (via === "direct") {
       base.blocked = true;
-      base.notes = "Frontier predictive edge-poisoned via direct egress (exact candidate flagged out-of-footprint) — requeued";
+      base.notes = "Frontier predictive edge-poisoned via direct egress (exact candidate flagged out-of-footprint) - requeued";
       return base;
     }
     base.fiberStatus = "no_service";
@@ -346,14 +346,14 @@ export async function scanFrontierAddress(
     if (res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500 || !res.ok) {
       if (viaSvc === "proxy") void rotateProxySession(`frontier serviceability ${res.status}`);
       base.blocked = true;
-      base.notes = `Frontier serviceability ${res.status} — Decodo session rotated, address requeued`;
+      base.notes = `Frontier serviceability ${res.status} - Decodo session rotated, address requeued`;
       if (res.status === 403) structuredLog("scan.provider.access_denied", { status: 403, source: "frontier" }, "warn");
       return base;
     }
     svc = (await res.json()) as FrontierServiceability;
   } catch (err: any) {
     base.blocked = true;
-    base.notes = `Frontier serviceability transport error — ${String(err?.message ?? err).slice(0, 100)} (requeued)`;
+    base.notes = `Frontier serviceability transport error - ${String(err?.message ?? err).slice(0, 100)} (requeued)`;
     return base;
   }
   if (svc.success === false) {
@@ -372,7 +372,7 @@ export async function scanFrontierAddress(
     // recorded as no-service.
     if (viaSvc === "proxy") void rotateProxySession("frontier svc success=false");
     base.blocked = true;
-    base.notes = `Frontier error envelope (${String(svc.errorMessage ?? "unknown").slice(0, 90)}) — session rotated, requeued`;
+    base.notes = `Frontier error envelope (${String(svc.errorMessage ?? "unknown").slice(0, 90)}) - session rotated, requeued`;
     return base;
   }
   base.rawResponse = svc;

@@ -23,13 +23,13 @@ const TALAL = 7;
 const BO = 8;
 const CAM = 9;
 
-describe("areaGrantedRepIds — everyone this area is or was held by (audit, not the delete rule)", () => {
+describe("areaGrantedRepIds - everyone this area is or was held by (audit, not the delete rule)", () => {
   it("takes the live holder list", () => {
     expect(areaGrantedRepIds({ repId: TALAL, assigneeIds: JSON.stringify([TALAL, BO]) }))
       .toEqual([TALAL, BO]);
   });
 
-  it("INCLUDES past assignees — a keep_leads reclaim empties the live list while the doors still name the rep", () => {
+  it("INCLUDES past assignees - a keep_leads reclaim empties the live list while the doors still name the rep", () => {
     // reclaimTerritory("keep_leads") → repIds [], leads UNCHANGED, so "who was
     // this area's" is not answerable from assigneeIds alone.
     const ids = areaGrantedRepIds({
@@ -56,12 +56,12 @@ describe("areaGrantedRepIds — everyone this area is or was held by (audit, not
   });
 });
 
-describe("areaDeleteClearsRep — the per-door rule", () => {
+describe("areaDeleteClearsRep - the per-door rule", () => {
   it("clears a door held by a rep", () => {
     expect(areaDeleteClearsRep({ id: 1, assignedRepId: TALAL })).toBe(true);
   });
 
-  it("clears a door held by a rep who never held the AREA — one rule, no exceptions", () => {
+  it("clears a door held by a rep who never held the AREA - one rule, no exceptions", () => {
     // An earlier draft spared these. Whether the assignment came through the
     // area or straight from a manager is a distinction the person deleting the
     // area cannot see: deleting is a statement about the ground.
@@ -72,7 +72,7 @@ describe("areaDeleteClearsRep — the per-door rule", () => {
     expect(areaDeleteClearsRep({ id: 3, assignedRepId: null })).toBe(false);
   });
 
-  it("policy 'keep' clears nobody — that is the whole point of the escape hatch", () => {
+  it("policy 'keep' clears nobody - that is the whole point of the escape hatch", () => {
     expect(areaDeleteClearsRep({ id: 1, assignedRepId: TALAL }, "keep")).toBe(false);
   });
 
@@ -138,7 +138,7 @@ describe("parseAreaDeleteRepPolicy", () => {
     expect(parseAreaDeleteRepPolicy("keep")).toBe("keep");
   });
 
-  it("REFUSES anything else rather than falling back — a typo must not mass-unassign", () => {
+  it("REFUSES anything else rather than falling back - a typo must not mass-unassign", () => {
     for (const bad of ["keeep", "KEEP", "true", 1, {}, ["clear"]]) {
       expect(parseAreaDeleteRepPolicy(bad)).toBeNull();
     }

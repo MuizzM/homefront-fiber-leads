@@ -38,7 +38,7 @@ describe("allocateRepColor", () => {
     expect(new Set(used).size).toBe(REP_PALETTE.length);
   });
 
-  it("returns null once all 24 hues are worn — the store-NULL / hash-fallback signal", () => {
+  it("returns null once all 24 hues are worn - the store-NULL / hash-fallback signal", () => {
     expect(allocateRepColor(REP_PALETTE)).toBeNull();
   });
 

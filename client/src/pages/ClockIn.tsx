@@ -72,7 +72,7 @@ export default function ClockIn() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clock/status"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clock/sessions"] });
-      toast({ title: "Clocked in — have a great shift", severity: "success" });
+      toast({ title: "Clocked in - have a great shift", severity: "success" });
     },
     onError: (e: any) => toast({ title: "Couldn't clock in", description: e?.message ?? "Check your connection and try again.", variant: "destructive" }),
   });
@@ -84,7 +84,7 @@ export default function ClockIn() {
       queryClient.invalidateQueries({ queryKey: ["/api/clock/sessions"] });
       toast({ title: `Clocked out · ${formatDuration(data?.durationMinutes ?? 0)} in field` });
     },
-    onError: () => toast({ title: "Couldn't clock out", description: "Your session is still running — try again.", variant: "destructive" }),
+    onError: () => toast({ title: "Couldn't clock out", description: "Your session is still running - try again.", variant: "destructive" }),
   });
 
   const todaySessions = sessions.filter(s => localDayKey(s.clockedIn) === today);
@@ -115,7 +115,7 @@ export default function ClockIn() {
             // think their hours stopped counting (they didn't; the server has it).
             <div className="text-center py-4" data-testid="clock-status-error">
               <div className="text-sm font-semibold text-foreground">Can't reach the server</div>
-              <div className="text-sm text-muted-foreground mt-1">Your clock status is unknown right now — if you clocked in, your hours are still counting.</div>
+              <div className="text-sm text-muted-foreground mt-1">Your clock status is unknown right now - if you clocked in, your hours are still counting.</div>
               <button onClick={() => refetchStatus()}
                 className="mt-3 inline-flex items-center justify-center h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
                 Retry
@@ -177,14 +177,14 @@ export default function ClockIn() {
       {/* Metric strip */}
       <Card className="bg-card border-border rounded-xl">
         <div className="grid grid-cols-3 divide-x divide-border">
-          {/* A failed sessions fetch must never read as "0m worked" — the
+          {/* A failed sessions fetch must never read as "0m worked" - the
               server still has the hours; the em-dash says "unknown", not zero. */}
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
               <Clock className="w-3.5 h-3.5 text-primary" aria-hidden="true" /> Today
             </div>
             <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground" aria-label={sessionsError ? "Today's hours unavailable" : undefined}>
-              {sessionsError ? "—" : formatDuration(todayMinutes)}
+              {sessionsError ? " - " : formatDuration(todayMinutes)}
             </p>
           </div>
           <div className="p-3.5 md:p-5">
@@ -192,14 +192,14 @@ export default function ClockIn() {
               <TrendingUp className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" /> This week
             </div>
             <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground" aria-label={sessionsError ? "This week's hours unavailable" : undefined}>
-              {sessionsError ? "—" : formatDuration(weekMinutes)}
+              {sessionsError ? " - " : formatDuration(weekMinutes)}
             </p>
           </div>
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
               <Users className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" /> {isManager ? "Active now" : "My status"}
             </div>
-            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{isManager ? (sessionsError ? "—" : activeSessions.length) : (isOnClock ? 1 : 0)}</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{isManager ? (sessionsError ? " - " : activeSessions.length) : (isOnClock ? 1 : 0)}</p>
           </div>
         </div>
       </Card>
@@ -245,10 +245,10 @@ export default function ClockIn() {
           {sessionsLoading ? (
             <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-secondary" />)}</div>
           ) : sessionsError ? (
-            // A fetch failure is NOT "no sessions yet" — say so, offer retry.
+            // A fetch failure is NOT "no sessions yet" - say so, offer retry.
             <div className="p-5 text-center" data-testid="sessions-error">
               <p className="text-sm font-semibold text-foreground">Couldn't load your sessions</p>
-              <p className="text-sm text-muted-foreground mt-1">Your hours are safe on the server — check your connection.</p>
+              <p className="text-sm text-muted-foreground mt-1">Your hours are safe on the server - check your connection.</p>
               <button onClick={() => refetchSessions()}
                 className="mt-3 inline-flex items-center justify-center h-11 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
                 Retry
@@ -268,7 +268,7 @@ export default function ClockIn() {
                     <p className="text-xs text-muted-foreground tabular-nums">
                       {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                       {" → "}
-                      {s.clockedOut ? new Date(s.clockedOut).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                      {s.clockedOut ? new Date(s.clockedOut).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : " - "}
                     </p>
                   </div>
                   <Badge className="bg-secondary text-muted-foreground border-transparent rounded-full text-xs tabular-nums">

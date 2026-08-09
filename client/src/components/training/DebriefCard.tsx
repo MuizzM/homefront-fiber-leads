@@ -139,7 +139,7 @@ export function DebriefCard({
             FOCUS,
           )}
         >
-          Done — see you at the first door
+          Done - see you at the first door
         </button>
       )}
     </div>

@@ -50,7 +50,7 @@ describe("the lasso assigns an area to a crew", () => {
     expect(map).toContain("disabled={!lassoRepIds.length || assignAreaMutation.isPending}");
   });
 
-  it("marks the first pick as primary — it drives the colour, name and the doors' rep", () => {
+  it("marks the first pick as primary - it drives the colour, name and the doors' rep", () => {
     expect(map).toContain("idx === 0 && lassoRepIds.length > 1");
   });
 });
@@ -74,7 +74,7 @@ describe("the Area tab shows and edits the whole crew", () => {
     expect(detail).toContain("[...holders.map(h => h.id), repId]");
   });
 
-  it("arms removal before firing it — the doors go with the rep", () => {
+  it("arms removal before firing it - the doors go with the rep", () => {
     expect(detail).toContain("setConfirmRemoveId(h.id)");
   });
 });

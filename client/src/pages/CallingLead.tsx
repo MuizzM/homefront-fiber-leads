@@ -47,7 +47,7 @@ function TracedPhonePanel({ detail, onSwitched }: {
       toast({
         title: result.alreadyActive ? "Already the working number" : "Switched to this number",
         description: result.invalidatedAuthorizations > 0
-          ? "The previous call authorization was cancelled — run the compliance check again."
+          ? "The previous call authorization was cancelled - run the compliance check again."
           : "Run the compliance check before dialling.",
       });
       onSwitched();
@@ -66,7 +66,7 @@ function TracedPhonePanel({ detail, onSwitched }: {
           <h2 className="text-sm font-semibold">Other numbers for this address</h2>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             The trace returned {options.length} numbers for this door, {dialable} of them clear of the registries.
-            Switching runs a fresh compliance check — a suppressed number stays suppressed.
+            Switching runs a fresh compliance check - a suppressed number stays suppressed.
           </p>
         </div>
       </div>
@@ -331,7 +331,7 @@ export default function CallingLead() {
   const [notes, setNotes] = useState("");
   const [callbackAt, setCallbackAt] = useState("");
   // AUDIT FIX: permanently-suppressing outcomes (DNC/revoke/wrong-number)
-  // used to fire on a single thumb-tap mid-call — one slip permanently burns a
+  // used to fire on a single thumb-tap mid-call - one slip permanently burns a
   // number. These four now arm first ("Confirm?"), fire on second tap.
   const SUPPRESSING: ReadonlySet<DispositionCode> = new Set(["DO_NOT_CALL", "CONSENT_REVOKED", "WRONG_NUMBER", "WRONG_PARTY"]);
   const [armedDisposition, setArmedDisposition] = useState<DispositionCode | null>(null);
@@ -354,7 +354,7 @@ export default function CallingLead() {
     const tick = () => {
       const remaining = expirySeconds(authorization.expiresAt);
       setExpiresIn(remaining);
-      // AUDIT FIX: an expired authorization used to leave the rep stranded —
+      // AUDIT FIX: an expired authorization used to leave the rep stranded -
       // start disabled forever with no way back but a page reload.
       if (remaining <= 0) {
         setAuthorization(null);
@@ -367,7 +367,7 @@ export default function CallingLead() {
   }, [authorization]);
   useEffect(() => () => { setAuthorization(null); setActiveAttempt(null); }, []);
   // Lead-to-lead navigation (the completion card's "Next eligible lead" CTA)
-  // keeps this route mounted — reset all per-lead UI state so a saved outcome
+  // keeps this route mounted - reset all per-lead UI state so a saved outcome
   // or revealed number can never bleed into the next lead's screen.
   useEffect(() => {
     setEvaluation(null); setHumanReady(false); setAuthorization(null); setActiveAttempt(null);
@@ -397,7 +397,7 @@ export default function CallingLead() {
     setActiveAttempt(null);
     setAuthorization(null);
     setCopied(false);
-    setCompleted(suppressed ? "Suppressed — permanent internal DNC" : "Attempt closed in another session");
+    setCompleted(suppressed ? "Suppressed - permanent internal DNC" : "Attempt closed in another session");
     toast({ title: suppressed ? "STOP recorded" : "Attempt closed",
       description: suppressed
         ? "The number was suppressed in another session and removed from this screen."
@@ -418,7 +418,7 @@ export default function CallingLead() {
     mutationFn: (code: DispositionCode) => saveDisposition(activeAttempt!.attemptId, {
       code, notes: notes.trim() || undefined,
       // QA GATE FIX (C1): the datetime-local input is wall time in the LEAD's
-      // timezone — interpret it there so instant and label agree (previously
+      // timezone - interpret it there so instant and label agree (previously
       // the instant was device-local while the label claimed the lead's zone).
       callbackAt: code === "CALLBACK_REQUESTED"
         ? (wallTimeToIso(callbackAt, detailQuery.data?.decision?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone) ?? new Date(callbackAt).toISOString())
@@ -439,11 +439,11 @@ export default function CallingLead() {
       reason: optOutReason, channel: activeAttempt ? "live_call" : "other",
       sourceRef: activeAttempt?.attemptId ?? "manual-ui-stop-request",
     }),
-    onSuccess: () => { setCompleted("Suppressed — permanent internal DNC"); setActiveAttempt(null); setAuthorization(null); void queryClient.invalidateQueries({ predicate: query => String(query.queryKey[0] ?? "").startsWith("/api/v1/calling") }); toast({ title: "STOP recorded", description: "The number was immediately suppressed and pending call authorizations were invalidated." }); },
+    onSuccess: () => { setCompleted("Suppressed - permanent internal DNC"); setActiveAttempt(null); setAuthorization(null); void queryClient.invalidateQueries({ predicate: query => String(query.queryKey[0] ?? "").startsWith("/api/v1/calling") }); toast({ title: "STOP recorded", description: "The number was immediately suppressed and pending call authorizations were invalidated." }); },
     onError: (error: Error) => toast({ title: "STOP was not recorded", description: error.message, variant: "destructive" }),
   });
   // Completion CTA: jump straight to the top ELIGIBLE lead (skipping the one
-  // just dispositioned — it may still be in a stale queue snapshot). Honest
+  // just dispositioned - it may still be in a stale queue snapshot). Honest
   // fallback: no eligible lead or a failed fetch returns the rep to the queue.
   const nextLeadMutation = useMutation({
     mutationFn: async () => {
@@ -467,7 +467,7 @@ export default function CallingLead() {
     onError: (error: Error) => { void detailQuery.refetch(); toast({ title: "Number was not copied", description: error.message, variant: "destructive" }); } });
   const revokeMutation = useMutation({ mutationFn: () => revokeCallingConsent(detailQuery.data!.consent.id!, {
     scope: "all_manual_voice_call_consent", method: "other", evidenceRef: revocationEvidence.trim(),
-  }), onSuccess: () => { setCompleted("Suppressed — consent revoked"); setActiveAttempt(null); void queryClient.invalidateQueries({ predicate: query => String(query.queryKey[0] ?? "").startsWith("/api/v1/calling") }); toast({ title: "Consent revoked", description: "The revocation and permanent internal DNC suppression were recorded together." }); },
+  }), onSuccess: () => { setCompleted("Suppressed - consent revoked"); setActiveAttempt(null); void queryClient.invalidateQueries({ predicate: query => String(query.queryKey[0] ?? "").startsWith("/api/v1/calling") }); toast({ title: "Consent revoked", description: "The revocation and permanent internal DNC suppression were recorded together." }); },
     onError: (error: Error) => toast({ title: "Consent revocation failed", description: error.message, variant: "destructive" }) });
 
   const currentDecision = evaluation?.evaluation ?? detailQuery.data?.decision;

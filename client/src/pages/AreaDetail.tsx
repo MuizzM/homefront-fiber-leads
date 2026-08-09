@@ -462,7 +462,7 @@ export default function AreaDetail() {
                 <div className="flex items-baseline justify-between gap-2">
                   <dt className="text-muted-foreground">Last pass closed</dt>
                   <dd className="font-semibold text-foreground">
-                    {lastPass ? shortDate(lastPass.closedAt) ?? "—" : canSeePasses ? "None yet" : "—"}
+                    {lastPass ? shortDate(lastPass.closedAt) ?? " - " : canSeePasses ? "None yet" : " - "}
                   </dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-2">
@@ -640,7 +640,7 @@ export default function AreaDetail() {
 
             {canAssign && !pool && (
               <p className="mt-2 text-[12px] leading-snug text-muted-foreground" data-testid="area-holder-note">
-                Removing a rep takes this area out of their app and hands their doors in it back — the doors stay in the area for whoever is left.
+                Removing a rep takes this area out of their app and hands their doors in it back - the doors stay in the area for whoever is left.
               </p>
             )}
           </div>
@@ -729,7 +729,7 @@ export default function AreaDetail() {
             ) : (assignmentsQuery.data ?? []).length === 0 ? (
               <EmptyState
                 icon={UserCog} bordered title="No tenures recorded yet"
-                description="Each rep's stint on this area — who put them on and who took them off — is recorded here."
+                description="Each rep's stint on this area - who put them on and who took them off - is recorded here."
                 testId="area-roster-empty"
               />
             ) : (
@@ -773,8 +773,8 @@ export default function AreaDetail() {
               <MiniStat label="Contacted" value={area.contacted} hint={`${pct(area.contactRate)}% of doors knocked answered`} testId="area-stat-contacted" />
               <MiniStat label="Nobody home" value={area.notHome} hint="Knocked, no answer yet" testId="area-stat-nothome" />
               <MiniStat label="Untouched" value={area.untouched} hint="Available doors never knocked" testId="area-stat-untouched" />
-              <MiniStat label="Disqualified" value={area.disqualified} hint="Terminal no — out of the base" testId="area-stat-disqualified" />
-              <MiniStat label="Unavailable" value={area.unavailable} hint="Do not knock — out of the base" testId="area-stat-unavailable" />
+              <MiniStat label="Disqualified" value={area.disqualified} hint="Terminal no - out of the base" testId="area-stat-disqualified" />
+              <MiniStat label="Unavailable" value={area.unavailable} hint="Do not knock - out of the base" testId="area-stat-unavailable" />
               <MiniStat label="Knock attempts" value={area.attempts} hint="Every knock, including repeat visits" testId="area-stat-attempts" />
             </div>
             {/* "Every rate" was false: contact rate divides by doors KNOCKED,
@@ -802,13 +802,13 @@ export default function AreaDetail() {
                 <span className="inline-flex items-center gap-1.5">
                   <Ruler className="h-3.5 w-3.5" aria-hidden="true" />
                   Average distance when marked{" "}
-                  <span className="tabular-nums text-foreground">{area.avgDistanceM != null ? `${area.avgDistanceM} m` : "—"}</span>
+                  <span className="tabular-nums text-foreground">{area.avgDistanceM != null ? `${area.avgDistanceM} m` : " - "}</span>
                 </span>
                 <span>Max allowed <span className="tabular-nums">{area.maxAllowedDistanceM} m</span></span>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Counts are knocks, not doors: one door knocked three times contributes three verdicts.
-                Area worked is <span className="tabular-nums text-foreground">{area.areaWorkedPct}%</span> —
+                Area worked is <span className="tabular-nums text-foreground">{area.areaWorkedPct}%</span> -
                 {" "}{area.verifiedWorkedLeads} of {area.total} doors have a location-verified worked knock.
               </p>
             </div>
@@ -846,7 +846,7 @@ export default function AreaDetail() {
           <SectionLabel>Map</SectionLabel>
           {Array.isArray(area.polygon) && area.polygon.length >= 3 ? (
             <>
-              {/* The boundary itself — same paint rule as the Field Map, fitted
+              {/* The boundary itself - same paint rule as the Field Map, fitted
                   to the area. Knocking and editing stay on the Field Map; this
                   answers "where is it" without leaving the console. */}
               <div className="mt-3">

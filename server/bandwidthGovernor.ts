@@ -294,7 +294,7 @@ export function isProxyCircuitOpen(): boolean {
   const open = recoverStep >= 0 && Date.now() < cooldownUntil;
   if (open && Date.now() - circuitLogAt > 30_000) {
     circuitLogAt = Date.now();
-    console.warn(`[bandwidth] circuit COOLDOWN — proxy paused ${Math.round((cooldownUntil - Date.now()) / 1000)}s, then probe-recovers (auth/limit denials)`);
+    console.warn(`[bandwidth] circuit COOLDOWN - proxy paused ${Math.round((cooldownUntil - Date.now()) / 1000)}s, then probe-recovers (auth/limit denials)`);
   }
   return open;
 }

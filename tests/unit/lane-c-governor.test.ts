@@ -84,7 +84,7 @@ const waitFor = async (cond: () => boolean, ms = 5_000): Promise<void> => {
 };
 
 // ── C1: shared breaker ────────────────────────────────────────────────────────
-describe("C1 — circuit breaker state is fleet-shared via governor_state", () => {
+describe("C1 - circuit breaker state is fleet-shared via governor_state", () => {
   it("process A trips it (8 denials) → a fresh 'process' sees it open via the DB row", async () => {
     expect(gov.isProxyCircuitOpen()).toBe(false);
     for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
@@ -129,7 +129,7 @@ describe("C1 — circuit breaker state is fleet-shared via governor_state", () =
 });
 
 // ── C2: engine honors the breaker ─────────────────────────────────────────────
-describe("C2 — runScanWorker backs off while the shared breaker is open", () => {
+describe("C2 - runScanWorker backs off while the shared breaker is open", () => {
   it("never claims a batch during COOLDOWN and logs scan.engine.breaker_wait", async () => {
     const runId = "lane-c-c2";
     intel.createScanRun({ id: runId, tenantId: 1, kind: "market", label: "lane-c", budget: 10 });
@@ -161,7 +161,7 @@ describe("C2 — runScanWorker backs off while the shared breaker is open", () =
 });
 
 // ── C3: re-open error budget ──────────────────────────────────────────────────
-describe("C3 — stranded-run re-open has an error budget", () => {
+describe("C3 - stranded-run re-open has an error budget", () => {
   it("stops re-opening after 5 failed re-opens, alerts once, and terminalizes the tail", async () => {
     const runId = "lane-c-c3";
     intel.createScanRun({ id: runId, tenantId: 1, kind: "market", label: "lane-c", budget: 10 });
@@ -200,7 +200,7 @@ describe("C3 — stranded-run re-open has an error budget", () => {
 });
 
 // ── C4: fleet heartbeat ───────────────────────────────────────────────────────
-describe("C4 — fleet heartbeat", () => {
+describe("C4 - fleet heartbeat", () => {
   it("emitFleetHeartbeat emits scan.fleet.heartbeat with the expected fields", () => {
     engine.emitFleetHeartbeat();
     const beats = structuredEvents().filter((l) => l.event === "scan.fleet.heartbeat");

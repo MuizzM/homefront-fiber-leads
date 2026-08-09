@@ -127,7 +127,7 @@ describe("what the branch rule BLOCKS", () => {
 });
 
 describe("what it must keep ALLOWING", () => {
-  it("a manager still runs their own branch — rename, re-home, re-price", async () => {
+  it("a manager still runs their own branch - rename, re-home, re-price", async () => {
     expect((await patchMember(repA.memberId, mgrA.session, { name: "Rep Alpha Renamed" })).status).toBe(200);
     // Move their own rep from under their team lead to directly under themselves.
     expect((await patchMember(repA.memberId, mgrA.session, { reportsToId: mgrA.memberId })).status).toBe(200);
@@ -137,7 +137,7 @@ describe("what it must keep ALLOWING", () => {
     await patchMember(repA.memberId, mgrA.session, { reportsToId: leadA.memberId });
   });
 
-  it("an UNOWNED member is adoptable — the case the subtree rule would have stranded", async () => {
+  it("an UNOWNED member is adoptable - the case the subtree rule would have stranded", async () => {
     // Nobody's branch: no manager anywhere above them.
     const orphan = person("Orphan Rep", "rep", null);
     const res = await patchMember(orphan.memberId, mgrA.session, { reportsToId: mgrA.memberId });
@@ -156,7 +156,7 @@ describe("what it must keep ALLOWING", () => {
     expect((await patchMember(strandedRep.memberId, mgrA.session, { reportsToId: mgrA.memberId })).status).toBe(200);
   });
 
-  it("a TEAM LEAD keeps acting on their own reps — their branch owner is the manager ABOVE them", async () => {
+  it("a TEAM LEAD keeps acting on their own reps - their branch owner is the manager ABOVE them", async () => {
     // The naive branch rule refused this: branchOwnerOf(rep) is mgrA, which is
     // not the team lead, so a team lead could not offboard their own rep.
     const leadRep = person("Lead Owned Rep", "rep", leadA.memberId);
@@ -164,7 +164,7 @@ describe("what it must keep ALLOWING", () => {
     expect((await offboard(leadRep.memberId, leadA.session)).status).toBe(200);
   });
 
-  it("an ADMIN arbitrates across branches — that is the transfer path", async () => {
+  it("an ADMIN arbitrates across branches - that is the transfer path", async () => {
     const res = await patchMember(repB.memberId, admin.session, { reportsToId: mgrA.memberId });
     expect(res.status).toBe(200);
     expect(reportsToOf(repB.memberId)).toBe(mgrA.memberId);
@@ -263,12 +263,12 @@ describe("the branch rule on commission money writes", () => {
       .toMatchObject({ r: repA.memberId });
   });
 
-  it("an ADMIN still writes across branches — that is the arbitration path", async () => {
+  it("an ADMIN still writes across branches - that is the arbitration path", async () => {
     const res = await bookSale(admin.session, repB.memberId, "admin-cross-sale-1");
     expect(res.status).toBe(201);
   });
 
-  it("an UNOWNED rep stays writable — branchOwnerOf fails open by design", async () => {
+  it("an UNOWNED rep stays writable - branchOwnerOf fails open by design", async () => {
     const orphan = person("Money Orphan", "rep", null);
     const res = await bookSale(mgrA.session, orphan.memberId, "orphan-sale-1");
     expect(res.status).toBe(201);
@@ -308,12 +308,12 @@ describe("the branch rule on hiring", () => {
     expect(res.status).toBe(201);
   });
 
-  it("a top-level hire (no supervisor) is unaffected — nobody's branch to poach", async () => {
+  it("a top-level hire (no supervisor) is unaffected - nobody's branch to poach", async () => {
     const res = await hire(mgrA.session, { name: "Top Level Hire", role: "rep" });
     expect(res.status).toBe(201);
   });
 
-  it("an ADMIN places hires anywhere — that is the arbitration path", async () => {
+  it("an ADMIN places hires anywhere - that is the arbitration path", async () => {
     const res = await hire(admin.session, { name: "Admin Placed", role: "rep", reportsToId: mgrB.memberId });
     expect(res.status).toBe(201);
   });
@@ -383,7 +383,7 @@ describe("hierarchy audit trail", () => {
     expect(meta.movedTo).toBe(mgrA.memberId);
   });
 
-  it("records the IMPLICIT move too — a promotion that outgrew its own supervisor", async () => {
+  it("records the IMPLICIT move too - a promotion that outgrew its own supervisor", async () => {
     const climber = person("Audit Climber", "rep", leadA.memberId);
     const res = await patchMember(climber.memberId, admin.session, { role: "manager" });
     expect(res.status).toBe(200);
@@ -442,7 +442,7 @@ describe("one door for role changes", () => {
     expect(res.status).toBe(200);
   });
 
-  it("still allows role changes on logins with NO roster row — they have no org-chart position to keep in step", async () => {
+  it("still allows role changes on logins with NO roster row - they have no org-chart position to keep in step", async () => {
     const compliance = storage.createUser({
       name: "Compliance Only", email: "compliance.only@branch.example.test",
       role: "auditor", active: true, tenantId: TENANT,

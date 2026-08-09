@@ -46,15 +46,15 @@ function classifyAvailabilityTransition(prev: ScanSnapshot, result: ScanResult):
   // FAILED CHECK GUARD (product law): a timeout/error tells us nothing. Do not
   // record it, do not count it as unavailable, do not fire "went stale".
   if (result.checkFailed) {
-    return { status: "check_failed", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: false, reason: "check failed — no signal, will recheck" };
+    return { status: "check_failed", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: false, reason: "check failed - no signal, will recheck" };
   }
 
   const hot = isHotFiber(result);
 
   if (!prev.everScanned) {
     return hot
-      ? { status: "checked_available", isNewlyLive: false, shouldCreateLead: true, recordSnapshot: true, reason: "first scan — already live" }
-      : { status: "checked_unavailable", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "first scan — not serviceable" };
+      ? { status: "checked_available", isNewlyLive: false, shouldCreateLead: true, recordSnapshot: true, reason: "first scan - already live" }
+      : { status: "checked_unavailable", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "first scan - not serviceable" };
   }
 
   if (hot && !prev.wasLive) {
@@ -64,7 +64,7 @@ function classifyAvailabilityTransition(prev: ScanSnapshot, result: ScanResult):
     return { status: "still_available", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "already known live" };
   }
   if (!hot && prev.wasLive) {
-    return { status: "went_stale", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "was live, now unavailable — review" };
+    return { status: "went_stale", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "was live, now unavailable - review" };
   }
   return { status: "checked_unavailable", isNewlyLive: false, shouldCreateLead: false, recordSnapshot: true, reason: "still not serviceable" };
 }
@@ -182,7 +182,7 @@ describe("clusterOpportunities", () => {
     for (const c of clusters) expect(c.hull.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("is deterministic — same input, same clusters and ids", () => {
+  it("is deterministic - same input, same clusters and ids", () => {
     const pts: OppPoint[] = Array.from({ length: 40 }, (_, i) => ({ id: i, lat: 35.5 + (i % 8) * 0.0006, lng: -80.4 + Math.floor(i / 8) * 0.0006, isNewFiber: true }));
     const a = clusterOpportunities(pts);
     const b = clusterOpportunities([...pts].reverse());
@@ -199,7 +199,7 @@ describe("clusterOpportunities", () => {
     expect(fresh.score).toBeGreaterThan(worn.score);
   });
 
-  it("REGRESSION: bounds cluster diameter — a chained mega-blob is split into walkable areas", () => {
+  it("REGRESSION: bounds cluster diameter - a chained mega-blob is split into walkable areas", () => {
     // A long single-linkage chain ~4km across (each point within a grid cell of
     // its neighbor). Without a span cap this is ONE un-deployable cluster.
     const pts: OppPoint[] = Array.from({ length: 200 }, (_, i) => ({

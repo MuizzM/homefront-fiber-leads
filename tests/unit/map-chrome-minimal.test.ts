@@ -26,7 +26,7 @@ describe("the lasso rail button is permanent for every role allowed to lasso", (
     expect(between, "ctl-lasso must be gated by canAssign only").toContain("{canAssign && (");
   });
 
-  it("the rail can never auto-hide — the opacity-0 fade machinery is gone", () => {
+  it("the rail can never auto-hide - the opacity-0 fade machinery is gone", () => {
     // The old secondary-chrome fade could strand the whole rail (lasso
     // included) at opacity-0 pointer-events-none when a gesture's end event
     // was swallowed. Primary chrome must not opt into it, and the machinery
@@ -51,7 +51,7 @@ describe("the lasso rail button is permanent for every role allowed to lasso", (
 });
 
 describe("removed / relocated chrome", () => {
-  it("no floating Scan Map button — it is a More-menu entry with the same gate", () => {
+  it("no floating Scan Map button - it is a More-menu entry with the same gate", () => {
     // Menu form (`testid: "scan-map-btn"`), never the old floating form
     // (`data-testid="scan-map-btn"`).
     expect(src).not.toContain('data-testid="scan-map-btn"');
@@ -60,7 +60,7 @@ describe("removed / relocated chrome", () => {
     expect(entry, "Scan map entry must stay behind canSubmitScan").toContain("canSubmitScan");
   });
 
-  it("no add-lead FAB — it is a More-menu entry behind canAssign", () => {
+  it("no add-lead FAB - it is a More-menu entry behind canAssign", () => {
     expect(src).not.toContain('data-testid="fab-add-lead"');
     expect(src).toContain('data-testid="ctl-add-lead"'); // rail button (owner ask), not a menu entry
   });
@@ -97,7 +97,7 @@ describe("removed / relocated chrome", () => {
 
 describe("rep pin-colors key is opt-in, dismissible, and never at rest", () => {
   it("reps get a Pin colors entry in the More menu (managers keep Legend & rep areas)", () => {
-    // The rep entry lives in the ELSE branch of the manager-legend gate — the
+    // The rep entry lives in the ELSE branch of the manager-legend gate - the
     // two roles each get exactly one legend surface, never both.
     const managerEntry = src.indexOf('testid: "ctl-legend"');
     const repEntry = src.indexOf('testid: "ctl-pin-key"');
@@ -110,7 +110,7 @@ describe("rep pin-colors key is opt-in, dismissible, and never at rest", () => {
     expect(src).toContain(
       '{mapReady && isRep && pinKeyOpen && bottomSlot !== "knock" && (',
     );
-    // Collapsed by default — nothing new sits on the map at rest.
+    // Collapsed by default - nothing new sits on the map at rest.
     expect(src).toMatch(/const \[pinKeyOpen, setPinKeyOpen\] = useState\(false\)/);
   });
 
@@ -126,8 +126,8 @@ describe("rep pin-colors key is opt-in, dismissible, and never at rest", () => {
 describe("empty and edge states", () => {
   it("the first-use empty state covers EVERY role, with rep-specific copy", () => {
     // Gated through firstUseEmptyStateEnabled: the pins payload must have
-    // ARRIVED (no "no leads" flash during the first fetch — owner report),
-    // and in viewport mode it never renders at all — an empty merged window
+    // ARRIVED (no "no leads" flash during the first fetch - owner report),
+    // and in viewport mode it never renders at all - an empty merged window
     // over an org with >60k leads is a skipped/sampled window, not "no leads"
     // (second owner report: blank "no leads" map at region zoom).
     expect(src).toContain(

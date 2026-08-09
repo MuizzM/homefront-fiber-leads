@@ -18,7 +18,7 @@ describe("packed map-pin wire format", () => {
     expect(unpackMapPins<typeof pins[number]>(packed)).toEqual({ pins, total: 2, truncated: false });
   });
 
-  it("ships windowCount ONLY with truncated:true — the honest-tier contract", () => {
+  it("ships windowCount ONLY with truncated:true - the honest-tier contract", () => {
     // Over-cap window, nosample form: empty rows + the true count, so the
     // client can render grid aggregates and predict when pins fit again.
     const over = packMapPins([], { truncated: true, windowCount: 39_002, total: 0 });

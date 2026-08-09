@@ -35,7 +35,7 @@ describe("computeHoldback", () => {
     expect(neg.netPayableCents).toBe(-5000);
   });
 
-  it("clamps a nonsensical rate to 0..100 — never reserves more than the whole", () => {
+  it("clamps a nonsensical rate to 0..100 - never reserves more than the whole", () => {
     expect(computeHoldback({ earnedCents: 1000, reservePercent: 250 }).reserveCents).toBe(1000);
     expect(computeHoldback({ earnedCents: 1000, reservePercent: -5 }).reserveCents).toBe(0);
   });
@@ -61,7 +61,7 @@ describe("rollupReserve", () => {
 //   min(round(earned × pct / 100), max(0, cap − currentBalance))
 // and the trimmed cents are PAID to the rep, not lost — so reserve + net still
 // equals earned at every input, cap or no cap.
-describe("computeHoldback — cap", () => {
+describe("computeHoldback - cap", () => {
   const cap = 250_000;   // $2,500, the product default
 
   it("holds the full percentage while comfortably below the cap", () => {
@@ -81,7 +81,7 @@ describe("computeHoldback — cap", () => {
     expect(h.netPayableCents).toBe(90_000);
   });
 
-  it("TRIMS a hold that would overshoot — the cap is never exceeded", () => {
+  it("TRIMS a hold that would overshoot - the cap is never exceeded", () => {
     // balance 245_000, room 5_000; 10% of 100_000 would be 10_000.
     const h = computeHoldback({ earnedCents: 100_000, reservePercent: 10, reserveCapCents: cap, currentBalanceCents: 245_000 });
     expect(h.reserveCents).toBe(5_000);              // trimmed to the room
@@ -132,7 +132,7 @@ describe("computeHoldback — cap", () => {
     expect(computeHoldback({ earnedCents: 1_000, reservePercent: -5, reserveCapCents: cap, currentBalanceCents: 0 }).reserveCents).toBe(0);
   });
 
-  it("treats a missing / zero / negative cap as UNCAPPED — the pre-cap behaviour", () => {
+  it("treats a missing / zero / negative cap as UNCAPPED - the pre-cap behaviour", () => {
     const noCap = computeHoldback({ earnedCents: 100_000, reservePercent: 10, currentBalanceCents: 10_000_000 });
     expect(noCap.reserveCents).toBe(10_000);
     expect(noCap.reserveCapCents).toBeNull();

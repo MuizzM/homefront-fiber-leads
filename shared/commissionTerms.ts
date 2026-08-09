@@ -129,10 +129,10 @@ export function describeCommissionTerms(terms: CommissionTerms): string[] {
     const rows = tierRows(terms);
     out.push(
       "Contractor is paid on a RETROACTIVE tier ladder. The total number of qualified sales in a commission week " +
-      "selects one tier, and that tier's rate then applies to EVERY qualified sale in that week — not only to the " +
+      "selects one tier, and that tier's rate then applies to EVERY qualified sale in that week - not only to the " +
       "sales above the tier's threshold.",
     );
-    out.push(`The ladder for this engagement is: ${rows.map((r) => `${r.band} — ${r.rate}`).join("; ")}.`);
+    out.push(`The ladder for this engagement is: ${rows.map((r) => `${r.band} - ${r.rate}`).join("; ")}.`);
     const example = terms.tiers.find((t) => t.minimumSales > 1) ?? terms.tiers[0];
     if (example) {
       out.push(

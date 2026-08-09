@@ -263,14 +263,14 @@ class KineticEvidenceGateway {
       // means a fresh session is always available; no manual recovery is ever
       // required and no address is ever dropped or mis-classified.
       if (result.outcome === "denied") {
-        this.trip("access denied (403) — rotating Decodo session", 5_000);
+        this.trip("access denied (403) - rotating Decodo session", 5_000);
         throw new KineticEvidenceUnavailableError(
           "ACCESS_DENIED",
           "Evidence source denied this session; rotate Decodo session and retry the same address.",
         );
       }
       if (result.outcome === "challenge") {
-        this.trip("challenge or CAPTCHA — rotating Decodo session", 10_000);
+        this.trip("challenge or CAPTCHA - rotating Decodo session", 10_000);
         throw new KineticEvidenceUnavailableError(
           "CHALLENGE",
           "Challenge/CAPTCHA on this egress IP; rotate Decodo session and retry the same address.",
@@ -281,7 +281,7 @@ class KineticEvidenceGateway {
         if (this.circuit.rateLimitCount >= 3)
           // No upstream-hint waits: rotate the Decodo session (fresh egress IP)
           // and cool off only long enough for the rotation to land.
-          this.trip("repeated rate limits — rotating Decodo session", 5_000);
+          this.trip("repeated rate limits - rotating Decodo session", 5_000);
         throw new KineticEvidenceUnavailableError(
           "RATE_LIMITED",
           "Evidence source rate-limited this session; rotate Decodo session and retry the same address.",

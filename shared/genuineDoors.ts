@@ -244,7 +244,7 @@ export function evaluateDoorDay(
   // cleared the bar. Paying a day that contains spoofed GPS would teach exactly
   // the wrong lesson, and "the clean ones still counted" is the loophole.
   if (cfg.voidOnTamper && int(tamperedKnocks) > 0) {
-    return no("tamper", "Location problems on today's knocks — held for review.", true);
+    return no("tamper", "Location problems on today's knocks - held for review.", true);
   }
 
   if (count.counted < target) {
@@ -255,7 +255,7 @@ export function evaluateDoorDay(
   // Enough doors, too fast a day. Told plainly, because a rep who cleared 60 and
   // got nothing deserves to know it was the clock and not a bug.
   if (count.spanMinutes < minSpan) {
-    return no("span", `${target} doors counted, but inside ${formatSpan(count.spanMinutes)} — the bonus needs a full ${formatSpan(minSpan)} on the doors.`);
+    return no("span", `${target} doors counted, but inside ${formatSpan(count.spanMinutes)} - the bonus needs a full ${formatSpan(minSpan)} on the doors.`);
   }
 
   return {
@@ -265,7 +265,7 @@ export function evaluateDoorDay(
     blockedBy: null,
     needsReview: false,
     reason: `${target} genuine doors in a day`,
-    headline: `${count.counted} genuine doors today — ${usd(reward)} earned`,
+    headline: `${count.counted} genuine doors today - ${usd(reward)} earned`,
   };
 }
 

@@ -35,7 +35,7 @@ describe("saveLeadNote", () => {
     expect(r).toEqual({ status: "conflict", serverNotes: "other device", updatedAt: "v2" });
   });
 
-  it("network failure: stashes durably and reports queued — the note is never dropped", async () => {
+  it("network failure: stashes durably and reports queued - the note is never dropped", async () => {
     const post: NotePoster = vi.fn().mockRejectedValue(new Error("offline"));
     const r = await saveLeadNote(post, 9, "field note", null);
     expect(r).toEqual({ status: "queued" });
@@ -69,7 +69,7 @@ describe("flushPendingNotes", () => {
   });
 });
 
-describe("mergeNotes — two-device merge", () => {
+describe("mergeNotes - two-device merge", () => {
   it("keeps both sides when they diverge", () => {
     expect(mergeNotes("server text", "local text")).toBe("server text\nlocal text");
   });

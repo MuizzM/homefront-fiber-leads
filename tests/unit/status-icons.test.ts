@@ -21,7 +21,7 @@ describe("canonical lead status pins", () => {
     expect(STATUS_CONFIG.follow_up.color).toBe("#F97316");
   });
 
-  it("renders every status as a flat circle — identity lives in glyph + color", () => {
+  it("renders every status as a flat circle - identity lives in glyph + color", () => {
     // SalesRabbit reference: one silhouette, seven glyph/colour identities.
     for (const status of LEAD_MAP_STATUSES) {
       expect(STATUS_CONFIG[status].shape).toBe("circle");
@@ -62,7 +62,7 @@ describe("canonical lead status pins", () => {
     }
   });
 
-  it("marks the unworked door with the white top-right badge — and only that door", () => {
+  it("marks the unworked door with the white top-right badge - and only that door", () => {
     // The reference's "?" disc; ours is a neutral vector dot on the white disc.
     expect(PIN_SVGS.prospect).toContain('cx="32" cy="8" r="7" fill="#fff"');
     expect(PIN_SVGS.prospect).toContain('r="2.2" fill="#334155"');
@@ -100,7 +100,7 @@ describe("knock-count badge", () => {
     expect(pinIconId("not_home", 12)).toBe(`pin-not_home-k${KNOCK_BADGE_MAX}`);
   });
 
-  it("draws the count as vector strokes on the white disc — dark on white, no fonts", () => {
+  it("draws the count as vector strokes on the white disc - dark on white, no fonts", () => {
     for (const bucket of KNOCK_BADGE_BUCKETS) {
       const svg = pinCountSvg("not_home", bucket);
       expect(svg).toContain('cx="32" cy="8" r="7" fill="#fff"');

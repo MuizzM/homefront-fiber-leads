@@ -62,7 +62,7 @@ describe("source option predicates", () => {
 });
 
 describe("AND composition with the status filter", () => {
-  it("source narrows, status narrows further — both apply at once", () => {
+  it("source narrows, status narrows further - both apply at once", () => {
     const worked = { ...LEADS[1], id: 6, visited: true, lastOutcome: "not_home", knockCount: 1, lastKnockedAt: "2026-07-03T00:00:00Z" };
     const leads = [...LEADS, worked] as any[];
     // Mirrors MapView's visibleLeads: source first, then display-state status.
@@ -117,7 +117,7 @@ describe("isFccReportedLead", () => {
   });
 });
 
-describe("persistence (v2 — Latest fiber is the default for everyone)", () => {
+describe("persistence (v2 - Latest fiber is the default for everyone)", () => {
   beforeEach(() => localStorage.clear());
 
   it("the key is v2 (the bump that applies the new default once)", () => {

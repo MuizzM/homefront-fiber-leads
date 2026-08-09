@@ -197,7 +197,7 @@ export function campaignProgress(
     case "knocks_by_time": {
       current = counters.knocksBeforeCutoffToday; target = Math.max(1, t.knocks);
       const left = Math.max(0, target - current);
-      headline = met ? `${target} knocks in — bonus earned` : `${current} of ${target} knocks before ${hour12(t.byHourLocal)}`;
+      headline = met ? `${target} knocks in - bonus earned` : `${current} of ${target} knocks before ${hour12(t.byHourLocal)}`;
       nextStep = met ? "" : `${left} more knock${left === 1 ? "" : "s"} before ${hour12(t.byHourLocal)}.`;
       break;
     }
@@ -209,14 +209,14 @@ export function campaignProgress(
     case "sales_in_day": {
       current = counters.salesToday; target = Math.max(1, t.sales);
       const left = Math.max(0, target - current);
-      headline = met ? `${current} sales today — bonus earned` : `${current} of ${target} sales today`;
+      headline = met ? `${current} sales today - bonus earned` : `${current} of ${target} sales today`;
       nextStep = met ? "" : `${left} more sale${left === 1 ? "" : "s"} today.`;
       break;
     }
     case "knock_streak": {
       current = counters.streakDaysMeetingBar; target = Math.max(1, t.days);
       const left = Math.max(0, target - current);
-      headline = met ? `${current}-day streak — bonus earned` : `Day ${current} of ${target}`;
+      headline = met ? `${current}-day streak - bonus earned` : `Day ${current} of ${target}`;
       nextStep = met ? "" : `${left} more day${left === 1 ? "" : "s"} at ${t.knocksPerDay}+ knocks.`;
       break;
     }
@@ -233,13 +233,13 @@ export function campaignProgress(
 
       if (met) {
         current = 2; target = 2;
-        headline = `${doorsTarget} doors and a sale before ${by} — bonus earned`;
+        headline = `${doorsTarget} doors and a sale before ${by} - bonus earned`;
         nextStep = "";
       } else if (doorsDone) {
         // The motivating state: the hard, slow half is banked and one sale
         // collects it. Say exactly that.
         current = 1; target = 2;
-        headline = `Doors done — one sale before ${by} takes it`;
+        headline = `Doors done - one sale before ${by} takes it`;
         nextStep = `Close one before ${by}.`;
       } else {
         // Track doors, because that is the half the rep controls directly.
@@ -247,7 +247,7 @@ export function campaignProgress(
         const left = Math.max(0, doorsTarget - current);
         headline = `${current} of ${doorsTarget} doors before ${by}`;
         nextStep = saleDone
-          ? `Sale's in — ${left} more door${left === 1 ? "" : "s"} before ${by}.`
+          ? `Sale's in - ${left} more door${left === 1 ? "" : "s"} before ${by}.`
           : `${left} more door${left === 1 ? "" : "s"} and a sale before ${by}.`;
       }
       break;
@@ -307,11 +307,11 @@ export function evaluateCampaign(
 export function awardReason(c: SpiffCampaign): string {
   const t = c.trigger;
   switch (t.kind) {
-    case "per_sale":        return `${c.name} — sale bonus`;
-    case "knocks_by_time":  return `${c.name} — ${t.knocks} knocks before ${hour12(t.byHourLocal)}`;
-    case "sale_by_time":    return `${c.name} — sale before ${hour12(t.byHourLocal)}`;
-    case "sales_in_day":    return `${c.name} — ${t.sales} sales in a day`;
-    case "knock_streak":    return `${c.name} — ${t.days}-day knock streak`;
+    case "per_sale":        return `${c.name} - sale bonus`;
+    case "knocks_by_time":  return `${c.name} - ${t.knocks} knocks before ${hour12(t.byHourLocal)}`;
+    case "sale_by_time":    return `${c.name} - sale before ${hour12(t.byHourLocal)}`;
+    case "sales_in_day":    return `${c.name} - ${t.sales} sales in a day`;
+    case "knock_streak":    return `${c.name} - ${t.days}-day knock streak`;
     default:                return c.name;
   }
 }
@@ -348,7 +348,7 @@ export function validateCampaignInput(input: {
   if (end <= start) return "The campaign must end after it starts.";
   // Urgency is the point. A month-long "spiff" is just a comp plan, and it stops
   // reading as something to act on today.
-  if (end - start > 31 * 86_400_000) return "A campaign can run for at most 31 days — use the commission plan for anything longer.";
+  if (end - start > 31 * 86_400_000) return "A campaign can run for at most 31 days - use the commission plan for anything longer.";
 
   const t = input.trigger;
   if (!t || !CAMPAIGN_TRIGGER_KINDS.includes(t.kind)) return "Choose what earns the bonus.";

@@ -46,7 +46,7 @@ const SHAPES: Shape[] = [
   // Open field is OPT-IN and OFF by default, so an unowned door is nobody's to
   // work until an admin turns it on. What matters here is that BOTH encodings
   // agree about that — the parity assertion below covers it either way.
-  { label: "OPEN FIELD — no rep, no area", repId: null, territory: null, workable: false },
+  { label: "OPEN FIELD - no rep, no area", repId: null, territory: null, workable: false },
   { label: "assigned to another rep", repId: -2, territory: null, workable: false },
   { label: "unassigned but inside ANOTHER team's area", repId: null, territory: "theirs", workable: false },
   { label: "another rep, inside their own area", repId: -2, territory: "theirs", workable: false },
@@ -128,7 +128,7 @@ describe("the access predicate and the map SQL answer the same question", () => 
   it("REGRESSION: an unassigned door is NOT on a rep's map", async () => {
     // The owner's report: reps opened the app and saw the entire imported FCC
     // footprint. Unowned ground is not a rep's to work by default.
-    const id = leadIdFor.get("OPEN FIELD — no rep, no area")!;
+    const id = leadIdFor.get("OPEN FIELD - no rep, no area")!;
     const pins = await (await get(`/api/leads/map?format=packed`, rep.session)).json() as any;
     const ids: number[] = (pins.pins ?? pins.rows ?? []).map((p: any) => Number(p.id ?? p[0]));
     expect(ids).not.toContain(id);
@@ -143,7 +143,7 @@ describe("the access predicate and the map SQL answer the same question", () => 
     expect(count.total).toBe(feed);
   });
 
-  it("another team's ground stays invisible — widening open field did not widen theft", async () => {
+  it("another team's ground stays invisible - widening open field did not widen theft", async () => {
     const denied = ["assigned to another rep", "unassigned but inside ANOTHER team's area", "another rep, inside their own area"];
     const pins = await (await get(`/api/leads/map?format=packed`, rep.session)).json() as any;
     const ids: number[] = (pins.pins ?? pins.rows ?? []).map((p: any) => Number(p.id ?? p[0]));

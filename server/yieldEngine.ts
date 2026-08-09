@@ -446,7 +446,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
     DROP TABLE IF EXISTS temp.yf_fresh_cells;
     -- TYPED columns are load-bearing: CREATE TABLE AS SELECT ROUND(…) yields
     -- NO column affinity, and SQLite cannot SEEK a REAL probe into a
-    -- none-affinity index — the cell joins silently degrade to a full index
+    -- none-affinity index - the cell joins silently degrade to a full index
     -- scan PER OUTER ROW (observed live: 8.8-minute cycles; the local repro
     -- hid it because its signal tables were empty).
     CREATE TEMP TABLE yf_fresh_cells (clat REAL NOT NULL, clng REAL NOT NULL, hits INTEGER NOT NULL);

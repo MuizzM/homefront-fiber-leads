@@ -52,7 +52,7 @@ describe("apiRequest GET share vs mutations", () => {
     expect(await (await stale).json()).toEqual({ v: "stale" });
   });
 
-  it("apiUpload (multipart) busts the share too — uploads mutate", async () => {
+  it("apiUpload (multipart) busts the share too - uploads mutate", async () => {
     const fetchMock = vi.fn()
       .mockImplementationOnce(() => new Promise<Response>(() => { /* stale GET never settles */ }))
       .mockImplementationOnce(() => Promise.resolve(new Response('{"ok":true}', { status: 200 })))

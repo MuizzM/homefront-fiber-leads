@@ -60,7 +60,7 @@ describe("pruneFinishedRunTargets", () => {
     expect(countFor("old_done")).toBe(0);
   });
 
-  it("keeps a RUNNING run's queue however old the run is — those rows are the run", () => {
+  it("keeps a RUNNING run's queue however old the run is - those rows are the run", () => {
     // A long market run legitimately carries weeks-old queued rows it is still
     // working through. Deleting them would silently truncate live work.
     seedRun("live", "running", null, 40);
@@ -162,7 +162,7 @@ describe("prune leaves a durable record", () => {
     expect(JSON.parse(row.removed_json).scan_run_targets).toBe(12);
   });
 
-  it("records a run that removed nothing — silence must not look like absence", () => {
+  it("records a run that removed nothing - silence must not look like absence", () => {
     prune.runDbPrune();
     const before = (rawDb.prepare("SELECT COUNT(*) n FROM db_prune_runs").get() as any).n;
     prune.runDbPrune();
@@ -177,7 +177,7 @@ describe("prune leaves a durable record", () => {
   });
 });
 
-describe("isPruneDue — scheduling that survives a busy box", () => {
+describe("isPruneDue - scheduling that survives a busy box", () => {
   beforeEach(() => { try { rawDb.prepare("DELETE FROM db_prune_runs").run(); } catch { /* not created yet */ } });
 
   it("is due when nothing has ever run", () => {

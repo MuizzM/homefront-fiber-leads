@@ -136,7 +136,7 @@ async function openDetails() {
   expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "details");
 }
 
-describe("<LeadKnockSheet /> — three-level model", () => {
+describe("<LeadKnockSheet /> - three-level model", () => {
   it("QUICK is the default open state for a newly selected lead", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
@@ -217,7 +217,7 @@ describe("<LeadKnockSheet /> — three-level model", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — unified outcomes grid", () => {
+describe("<LeadKnockSheet /> - unified outcomes grid", () => {
   it("ONE grid holds every disposition: primary four lead, the rest follow, fixed order", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
@@ -302,7 +302,7 @@ describe("<LeadKnockSheet /> — unified outcomes grid", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — header: one status line, max one badge", () => {
+describe("<LeadKnockSheet /> - header: one status line, max one badge", () => {
   it("fresh fiber rides the status line as the single badge (no stacked badge rows)", () => {
     renderSheet({ lead: baseLead({ leadTag: "fresh_fiber_confirmed" }) });
     const badges = screen.getAllByTestId("knock-status-badge");
@@ -312,7 +312,7 @@ describe("<LeadKnockSheet /> — header: one status line, max one badge", () => 
     expect(screen.getByTestId("knock-status-line").contains(badges[0])).toBe(true);
   });
 
-  it("a review flag outranks fresh fiber — still exactly one badge", () => {
+  it("a review flag outranks fresh fiber - still exactly one badge", () => {
     renderSheet({ lead: baseLead({ leadStatus: "address_review", leadTag: "fresh_fiber_confirmed" }) });
     const badges = screen.getAllByTestId("knock-status-badge");
     expect(badges).toHaveLength(1);
@@ -326,7 +326,7 @@ describe("<LeadKnockSheet /> — header: one status line, max one badge", () => 
   });
 });
 
-describe("<LeadKnockSheet /> — double-submit guard", () => {
+describe("<LeadKnockSheet /> - double-submit guard", () => {
   it("a rapid double-fire of the same tap marks ONCE", async () => {
     const { props } = renderSheet();
     const btn = screen.getByTestId("knock-outcome-not_home");
@@ -337,7 +337,7 @@ describe("<LeadKnockSheet /> — double-submit guard", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — utility row, Call gating", () => {
+describe("<LeadKnockSheet /> - utility row, Call gating", () => {
   it("utility row: Directions (Google, never mapbox) + Copy as icon-sized buttons", () => {
     renderSheet();
     const a = screen.getByTestId("action-directions");
@@ -375,7 +375,7 @@ describe("<LeadKnockSheet /> — utility row, Call gating", () => {
     second.unmount();
   });
 
-  it("Call renders ONLY when a valid phone exists — a tel: link, never the raw number", () => {
+  it("Call renders ONLY when a valid phone exists - a tel: link, never the raw number", () => {
     const { container } = renderSheet({ lead: baseLead({ phone: "+1 (555) 867-5309" }) });
     const call = screen.getByTestId("action-call");
     expect(call).toHaveAttribute("href", "tel:+1 (555) 867-5309");
@@ -384,8 +384,8 @@ describe("<LeadKnockSheet /> — utility row, Call gating", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — manager actions (Details only, permission-gated)", () => {
-  it("reps never see the manager row — not in quick, not even in Details", async () => {
+describe("<LeadKnockSheet /> - manager actions (Details only, permission-gated)", () => {
+  it("reps never see the manager row - not in quick, not even in Details", async () => {
     renderSheet(); // canManage defaults to false
     expect(screen.queryByTestId("knock-manager-row")).not.toBeInTheDocument();
     await openDetails();
@@ -462,7 +462,7 @@ describe("<LeadKnockSheet /> — manager actions (Details only, permission-gated
     expect(screen.queryByTestId("knock-delete")).not.toBeInTheDocument();
   });
 
-  it("reads 'Delete lead' at rest and works on ANY lead — an FCC-imported door included", async () => {
+  it("reads 'Delete lead' at rest and works on ANY lead - an FCC-imported door included", async () => {
     const onDelete = vi.fn();
     renderSheet({ canManage: true, onDelete, lead: baseLead({ leadTag: "fcc_fresh_block" }) });
     await openDetails();
@@ -473,7 +473,7 @@ describe("<LeadKnockSheet /> — manager actions (Details only, permission-gated
     expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
-  it("an armed delete auto-disarms after 4s — a stale confirm can never fire", () => {
+  it("an armed delete auto-disarms after 4s - a stale confirm can never fire", () => {
     vi.useFakeTimers();
     try {
       const onDelete = vi.fn();
@@ -501,7 +501,7 @@ describe("<LeadKnockSheet /> — manager actions (Details only, permission-gated
   });
 });
 
-describe("<LeadKnockSheet /> — notes and history (unchanged model)", () => {
+describe("<LeadKnockSheet /> - notes and history (unchanged model)", () => {
   // Notes default to a slim "+ Add note" chip; the textarea appears on focus.
   async function openComposer(): Promise<HTMLTextAreaElement> {
     await userEvent.click(screen.getByTestId("note-add-chip"));
@@ -591,7 +591,7 @@ describe("<LeadKnockSheet /> — notes and history (unchanged model)", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — perceived latency: instant open, instant close", () => {
+describe("<LeadKnockSheet /> - perceived latency: instant open, instant close", () => {
   // Deferred query client: detail + history promises stay PENDING until flush()
   // — proving the shell never waits on the network.
   function deferredRender(overrides: Record<string, any> = {}) {
@@ -647,7 +647,7 @@ describe("<LeadKnockSheet /> — perceived latency: instant open, instant close"
     expect(screen.getByTestId("note-add-chip")).toBeInTheDocument();
   });
 
-  it("never shows a sheet-wide spinner — pending history gets a per-section skeleton in Details", async () => {
+  it("never shows a sheet-wide spinner - pending history gets a per-section skeleton in Details", async () => {
     const { flush } = deferredRender();
     // Nothing spins anywhere while both queries are pending.
     expect(document.querySelector(".animate-spin")).toBeNull();
@@ -665,14 +665,14 @@ describe("<LeadKnockSheet /> — perceived latency: instant open, instant close"
     expect(list.querySelectorAll(".animate-pulse")).toHaveLength(0);
   });
 
-  it("a status tap works IMMEDIATELY — before any fetch has resolved", async () => {
+  it("a status tap works IMMEDIATELY - before any fetch has resolved", async () => {
     const { props } = deferredRender();
     await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
     expect(props.onKnock).toHaveBeenCalledWith("not_home");
     expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
   });
 
-  it("entry/exit chrome: 200ms GPU transform only — no transition-all, nothing >=300ms", () => {
+  it("entry/exit chrome: 200ms GPU transform only - no transition-all, nothing >=300ms", () => {
     deferredRender();
     const cls = screen.getByTestId("knock-sheet").className;
     expect(cls).toMatch(/\btransition-transform\b/);
@@ -696,12 +696,12 @@ describe("<LeadKnockSheet /> — perceived latency: instant open, instant close"
   });
 });
 
-describe("<LeadKnockSheet /> — do-not-knock banner", () => {
+describe("<LeadKnockSheet /> - do-not-knock banner", () => {
   it("renders a prominent alert at the top of the body when the lead is flagged", () => {
     renderSheet({ lead: baseLead({ doNotKnock: 1 }) }); // server sends 0/1
     const banner = screen.getByTestId("dnk-banner");
     expect(banner).toHaveAttribute("role", "alert");
-    expect(banner).toHaveTextContent("Do not knock — resident asked us not to return");
+    expect(banner).toHaveTextContent("Do not knock - resident asked us not to return");
     // Rose treatment — this must read as a hard stop, not a status chip.
     expect(banner.className).toMatch(/rose/);
   });
@@ -715,7 +715,7 @@ describe("<LeadKnockSheet /> — do-not-knock banner", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — chrome and lifecycle", () => {
+describe("<LeadKnockSheet /> - chrome and lifecycle", () => {
   it("the assign row is capability-gated OFF for reps (fail-closed without lead.assign)", async () => {
     renderSheet(); // test auth context has no user → useCan fails closed
     await openDetails();
@@ -760,7 +760,7 @@ describe("FCC-reported fiber chip", () => {
   it("renders the amber verify-at-door chip for fcc_fresh_block", () => {
     renderSheet({ lead: baseLead({ leadTag: "fcc_fresh_block" }) });
     const chip = screen.getByTestId("fcc-fiber-chip");
-    expect(chip.textContent).toBe("FCC-reported fiber — verify at door");
+    expect(chip.textContent).toBe("FCC-reported fiber - verify at door");
   });
 
   it("renders the chip for fcc_fiber_d25 (same fcc family)", () => {
@@ -792,7 +792,7 @@ describe("FCC-reported fiber chip", () => {
 // client). So the panel could never render. Contacts now come from the per-lead
 // fetch instead. These tests pin that, and pin the id guard that keeps one
 // door's numbers off another door's card.
-describe("LeadKnockSheet — traced contacts", () => {
+describe("LeadKnockSheet - traced contacts", () => {
   const DAY = 86_400_000;
   const CONTACTS = {
     id: 7,

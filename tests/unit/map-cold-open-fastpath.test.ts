@@ -66,7 +66,7 @@ const PINS = [
 ];
 
 // ── Part 1a: persisted viewport mode ─────────────────────────────────────────
-describe("persisted viewport mode — the no-probe-wait boot hint", () => {
+describe("persisted viewport mode - the no-probe-wait boot hint", () => {
   it("key is versioned and identity-scoped", () => {
     const key = mapViewportModeKey(SCOPE_A);
     expect(key.startsWith(MAP_VIEWPORT_MODE_PREFIX)).toBe(true);
@@ -111,7 +111,7 @@ describe("persisted viewport mode — the no-probe-wait boot hint", () => {
 });
 
 // ── Part 1b: window-scoped snapshot ──────────────────────────────────────────
-describe("window snapshot — instant first paint for viewport orgs", () => {
+describe("window snapshot - instant first paint for viewport orgs", () => {
   it("key embeds wire version + tenant + user (same axes as the full-feed family)", () => {
     const key = mapWindowSnapshotKey(SCOPE_A);
     expect(key.startsWith(MAP_WINDOW_SNAPSHOT_PREFIX)).toBe(true);
@@ -186,7 +186,7 @@ describe("window snapshot — instant first paint for viewport orgs", () => {
 });
 
 // ── Part 1c: the seed gate (camera view ∩ snapshot window) ───────────────────
-describe("cameraViewBBox + bboxIntersects — seed only where the camera opens", () => {
+describe("cameraViewBBox + bboxIntersects - seed only where the camera opens", () => {
   it("the persisted camera over the snapshot window intersects", () => {
     const view = cameraViewBBox([-80.4, 35.5], 15, 390, 844);
     expect(bboxIntersects(view, WINDOW)).toBe(true);
@@ -208,7 +208,7 @@ describe("cameraViewBBox + bboxIntersects — seed only where the camera opens",
 });
 
 // ── Part 1d: seed replacement — the complete boot window may evict ───────────
-describe("mergeViewportPins evictWindow — server truth replaces the seed", () => {
+describe("mergeViewportPins evictWindow - server truth replaces the seed", () => {
   const keep = { minLng: -81, minLat: 35, maxLng: -80, maxLat: 36 };
   const fetchedWindow = { minLng: -80.6, minLat: 35.4, maxLng: -80.3, maxLat: 35.6 };
   const seeded = [
@@ -224,7 +224,7 @@ describe("mergeViewportPins evictWindow — server truth replaces the seed", () 
     expect(r.pruned).toBe(1);
   });
 
-  it("without evictWindow (sampled fetches, ordinary pans) absence never evicts — the standing rule", () => {
+  it("without evictWindow (sampled fetches, ordinary pans) absence never evicts - the standing rule", () => {
     const r = mergeViewportPins(seeded, fetched, keep);
     expect(r.pins.map((p) => p.id).sort()).toEqual([1, 2, 3, 4]);
     expect(r.pruned).toBe(0);
@@ -301,7 +301,7 @@ describe("MapView no-waterfall wiring", () => {
     expect(writer).toContain("snapshotScopeRef.current");
   });
 
-  it("pins and grid fetches are independent — neither chains behind the other", () => {
+  it("pins and grid fetches are independent - neither chains behind the other", () => {
     const pins = block("const fetchViewportPins = useCallback", "const fetchViewportPinsRef");
     const grid = block("const fetchViewportGrid = useCallback", "const fetchViewportGridRef");
     expect(pins).not.toContain("fetchViewportGrid");

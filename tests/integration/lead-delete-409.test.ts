@@ -138,7 +138,7 @@ describe("history-bearing lead", () => {
 });
 
 describe("unchanged semantics", () => {
-  it("a rep is refused (requireManager unchanged) — never a 500", async () => {
+  it("a rep is refused (requireManager unchanged) - never a 500", async () => {
     const id = seedLead();
     const res = await del(id, fx.rep.session);
     expect([401, 403]).toContain(res.status);

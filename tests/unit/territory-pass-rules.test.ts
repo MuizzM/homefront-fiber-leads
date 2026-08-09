@@ -130,7 +130,7 @@ describe("rollUpPass", () => {
 });
 
 describe("contract details", () => {
-  it("a reset clears exactly four fields — widening this must be deliberate", () => {
+  it("a reset clears exactly four fields - widening this must be deliberate", () => {
     // If this fails, someone widened the blast radius of a reset. That may be
     // correct, but it needs to be a decision, not a drive-by edit.
     expect(Object.keys(PASS_RESET_FIELDS).sort())

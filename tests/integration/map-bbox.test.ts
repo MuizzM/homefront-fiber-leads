@@ -64,7 +64,7 @@ describe("bbox validation", () => {
     }
   });
 
-  it("rejects only an absurd window (>40° per axis) — a malformed request, not a zoom level", async () => {
+  it("rejects only an absurd window (>40° per axis) - a malformed request, not a zoom level", async () => {
     const res = await req("/api/leads/map?bbox=-125,20,-66,30", fx.manager.session); // 59° lng
     expect(res.status).toBe(400);
     const res2 = await req("/api/leads/map?bbox=-81,5,-80.5,50", fx.manager.session); // 45° lat
@@ -163,7 +163,7 @@ describe("bbox window rows", () => {
     expect(body.truncated).toBe(false);
   });
 
-  it("cross-tenant bbox returns EMPTY — the tenant wall holds in window mode", async () => {
+  it("cross-tenant bbox returns EMPTY - the tenant wall holds in window mode", async () => {
     // The window covers tenant 1's pins, but the caller belongs to tenant 2.
     const body = await (await req("/api/leads/map?bbox=-80.6,35.4,-80.1,35.6", fx.foreign.session)).json();
     expect(body.pins).toHaveLength(0);

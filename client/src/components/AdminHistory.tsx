@@ -41,7 +41,7 @@ function DiffRows({ before, after }: { before: Record<string, unknown> | null; a
   const keys = Array.from(new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})]));
   if (!keys.length) return <p className="text-[12px] text-muted-foreground">No field-level values recorded.</p>;
   const show = (v: unknown) =>
-    v === undefined || v === null || v === "" ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    v === undefined || v === null || v === "" ? " - " : typeof v === "object" ? JSON.stringify(v) : String(v);
   return (
     <dl className="grid gap-1.5">
       {keys.map((k) => (
@@ -106,7 +106,7 @@ function Row({ entry }: { entry: AuditRow }) {
             )}
             <dl className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
               {entry.targetType && (
-                <div className="flex gap-1"><dt>Target</dt><dd className="font-mono text-foreground/80">{entry.targetType}#{entry.targetId ?? "—"}</dd></div>
+                <div className="flex gap-1"><dt>Target</dt><dd className="font-mono text-foreground/80">{entry.targetType}#{entry.targetId ?? " - "}</dd></div>
               )}
               <div className="flex gap-1"><dt>Tenant</dt><dd className="font-mono text-foreground/80">{entry.tenantId ?? "platform"}</dd></div>
               {entry.requestId && (
@@ -229,7 +229,7 @@ export function AdminHistory() {
       ) : feed.isError ? (
         <div className="px-4 py-8 text-center" data-testid="audit-error">
           <div className="text-[14px] font-semibold text-foreground">Couldn't load history</div>
-          <p className="mt-1 text-[13px] text-muted-foreground">The record is safe — this is a read problem. Try again.</p>
+          <p className="mt-1 text-[13px] text-muted-foreground">The record is safe - this is a read problem. Try again.</p>
           <button
             onClick={() => feed.refetch()}
             className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl border border-border bg-secondary px-4 text-[14px] font-semibold text-foreground"
@@ -244,7 +244,7 @@ export function AdminHistory() {
           title={filtered ? "No matching changes" : "No changes recorded yet"}
           description={filtered
             ? "Nothing matches these filters. Clear them to see the full record."
-            : "Privileged changes — tenants, settings, access — appear here the moment they happen."}
+            : "Privileged changes - tenants, settings, access - appear here the moment they happen."}
           action={filtered ? (
             <button
               onClick={() => { setQ(""); setAction(""); setOutcome(""); setPage(0); }}

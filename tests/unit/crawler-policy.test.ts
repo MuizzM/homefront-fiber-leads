@@ -24,7 +24,7 @@ describe("who gets refused", () => {
     }
   });
 
-  it("is case-insensitive — agents are not consistent about casing", () => {
+  it("is case-insensitive - agents are not consistent about casing", () => {
     expect(isAiCrawler("gptbot/1.0")).toBe(true);
     expect(isAiCrawler("GPTBOT/1.0")).toBe(true);
     expect(isAiCrawler("Mozilla/5.0 (compatible; CLAUDEBOT/1.0)")).toBe(true);
@@ -43,7 +43,7 @@ describe("who must NOT be refused", () => {
     }
   });
 
-  it("does not block link previews or monitors — the false positives that hurt", () => {
+  it("does not block link previews or monitors - the false positives that hurt", () => {
     // A blocklist matching loose keywords like "bot" would break the preview
     // card when a manager texts a rep a link, and silence uptime alerting.
     for (const ua of [
@@ -91,7 +91,7 @@ describe("robots.txt", () => {
 });
 
 describe("the robots header", () => {
-  it("blocks indexing, caching and excerpting — not just indexing", () => {
+  it("blocks indexing, caching and excerpting - not just indexing", () => {
     // noindex alone still permits a cached copy and a snippet in results.
     for (const d of ["noindex", "nofollow", "noarchive", "nosnippet", "noimageindex"]) {
       expect(X_ROBOTS_TAG).toContain(d);

@@ -91,7 +91,7 @@ function PhoneDemo() {
 const STEPS = [
   { icon: Share, text: <>Tap <strong>Share</strong> at the bottom of Safari</> },
   { icon: Plus, text: <>Scroll and tap <strong>Add to Home Screen</strong></> },
-  { icon: Check, text: <>Open it from the new icon — then turn on alerts</> },
+  { icon: Check, text: <>Open it from the new icon - then turn on alerts</> },
 ];
 
 export function AddToHomeScreen({ className }: { className?: string }) {

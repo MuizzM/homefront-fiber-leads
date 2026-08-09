@@ -10,7 +10,7 @@ import {
  * unknown roles fail closed. Both server middleware and UI gates read this map.
  */
 
-describe("capability matrix — hard permission rules", () => {
+describe("capability matrix - hard permission rules", () => {
   it("reps CANNOT assign/reassign leads or manage commission structures", () => {
     for (const cap of ["lead.assign", "lead.reassign", "commission.structure.manage"] as Capability[]) {
       expect(can("rep", cap)).toBe(false);

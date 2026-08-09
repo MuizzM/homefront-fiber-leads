@@ -196,7 +196,7 @@ describe("reps are fail-closed on everything above their grade", () => {
     });
   }
 
-  it("a rep reads only their own doors — a teammate's lead is a 404, not a 403", async () => {
+  it("a rep reads only their own doors - a teammate's lead is a 404, not a 403", async () => {
     expect((await req(`/api/leads/${ids.team1Lead}`, who.rep1.session)).status).toBe(200);
     expect((await req(`/api/leads/${ids.team2Lead}`, who.rep1.session)).status).toBe(404);
     // OPEN FIELD is OPT-IN and off for this tenant, so an unowned door is not
@@ -277,7 +277,7 @@ describe("team leads are bounded to their own team", () => {
     expect(storage.getTerritoryById(ids.team2Territory)!.name).toBe("Team Two area");
   });
 
-  it("a team lead cannot delete their OWN area either — delete is admin-only", async () => {
+  it("a team lead cannot delete their OWN area either - delete is admin-only", async () => {
     // The gap this closes: the route was requireTeamLead while permissions.ts
     // declared admin, so a team lead could delete an area (detaching every door
     // in it) despite the policy the client and the unit tests both assert.
