@@ -81,6 +81,12 @@ function renderPage(o: Overrides = {}) {
   return render(<QueryClientProvider client={qc}><Incentives /></QueryClientProvider>);
 }
 
+// The page is tabbed (Earn | Activity | Team | Manage) with the money hero and
+// the new-award reveal above the tabs. The ledger lives in Activity; the team
+// surface in Team. Tests open the tab their subject lives behind.
+const openTab = async (id: "earn" | "activity" | "team" | "manage") =>
+  userEvent.click(await screen.findByTestId(`tab-${id}`));
+
 beforeEach(() => {
   apiRequest.mockReset();
   toast.mockReset();
@@ -92,15 +98,19 @@ describe("Incentives — rep view", () => {
 
   it("shows the rep's own spiff feed and heat, but not the team surface", async () => {
     renderPage();
+    // Heat lives in the always-visible money hero.
+    expect(await screen.findByTestId("my-heat")).toBeTruthy();
+    await openTab("activity");
     expect(await screen.findByTestId("my-spiff-list")).toBeTruthy();
     expect(screen.getByTestId("spiff-7")).toBeTruthy();
-    expect(screen.getByTestId("my-heat")).toBeTruthy();
-    // A rep never sees the team heat / algorithm surface.
+    // A rep never sees the team heat / algorithm surface — not even its tab.
+    expect(screen.queryByTestId("tab-team")).toBeNull();
     expect(screen.queryByTestId("team-heat")).toBeNull();
   });
 
   it("labels a spiff with its reason and status", async () => {
     renderPage();
+    await openTab("activity");
     const row = await screen.findByTestId("spiff-7");
     expect(row.textContent).toContain("Hot streak");
     expect(screen.getByTestId("spiff-status-7").textContent?.toLowerCase()).toContain("earned");
@@ -108,18 +118,21 @@ describe("Incentives — rep view", () => {
 
   it("makes each award's own amount the hero, not a single flat number", async () => {
     renderPage();
+    await openTab("activity");
     expect((await screen.findByTestId("spiff-amount-7")).textContent).toBe("$45");
     expect(screen.getByTestId("spiff-amount-2").textContent).toBe("$25");
   });
 
   it("explains in plain language why each spiff fired", async () => {
     renderPage();
+    await openTab("activity");
     expect((await screen.findByTestId("spiff-7")).textContent).toContain("back-to-back days");
     expect(screen.getByTestId("spiff-2").textContent).toContain("Lucky drop");
   });
 
   it("dates each award in words", async () => {
     renderPage();
+    await openTab("activity");
     expect((await screen.findByTestId("spiff-when-7")).textContent).toBe("Today");
     expect(screen.getByTestId("spiff-when-2").textContent).toBeTruthy();
   });
@@ -143,6 +156,7 @@ describe("Incentives — rep view", () => {
         totals: { earnedCents: 12345, approvedCents: 0, paidCents: 0, count: 1 },
       },
     });
+    await openTab("activity");
     expect((await screen.findByTestId("spiff-amount-11")).textContent).toBe("$123.45");
     await waitFor(() => expect(screen.getByTestId("stat-total").textContent).toContain("$123.45"));
   });
@@ -172,23 +186,27 @@ describe("Incentives — rep view", () => {
 
     unmount();
     renderPage();
-    await screen.findByTestId("my-spiff-list");
+    // Wait for the feed to land (the hero total renders from it), then assert
+    // the reveal stayed gone.
+    await waitFor(() => expect(screen.getByTestId("stat-total").textContent).toContain("$70"));
     expect(screen.queryByTestId("spiff-reveal")).toBeNull();
   });
 
   it("does not re-reveal an award the rep has already seen", async () => {
     window.localStorage.setItem("hf.spiffs.lastSeenId.9", "7");
     renderPage();
-    await screen.findByTestId("my-spiff-list");
+    await waitFor(() => expect(screen.getByTestId("stat-total").textContent).toContain("$70"));
     expect(screen.queryByTestId("spiff-reveal")).toBeNull();
   });
 
   it("renders a loading skeleton, then an empty state that says how to earn one", async () => {
     const { unmount } = renderPage({ hang: true });
+    await openTab("activity");
     expect(screen.getByTestId("my-spiffs-loading")).toBeTruthy();
     unmount();
 
     renderPage({ mine: { ...minePayload, spiffs: [], totals: { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 } } });
+    await openTab("activity");
     const empty = await screen.findByTestId("my-spiffs-empty");
     expect(empty.textContent).toContain("No bonuses yet");
     expect(empty.textContent).toContain("$25–$50");
@@ -196,6 +214,7 @@ describe("Incentives — rep view", () => {
 
   it("renders an error state instead of a fake $0 when the feed fails", async () => {
     renderPage({ failMine: true });
+    await openTab("activity");
     expect(await screen.findByTestId("my-spiffs-error")).toBeTruthy();
     expect(screen.getByTestId("stat-total").textContent).toContain("—");
   });
@@ -204,8 +223,16 @@ describe("Incentives — rep view", () => {
 describe("Incentives — admin view", () => {
   beforeEach(() => { mockAuth.user = { id: 3, name: "Ada Admin", role: "admin", teamMemberId: undefined }; });
 
+  it("wears the open-item count on the Team tab before it is opened", async () => {
+    renderPage();
+    // Two open bonuses (one earned, one approved) → the Deel-style "action
+    // required" badge, visible from any tab.
+    expect((await screen.findByTestId("tab-team-badge")).textContent).toBe("2");
+  });
+
   it("shows the team heat leaderboard and the approve queue", async () => {
     renderPage();
+    await openTab("team");
     // Wait for the team query to resolve (the row appears once data lands).
     expect(await screen.findByTestId("heat-row-9")).toBeTruthy();
     expect(screen.getByTestId("team-heat")).toBeTruthy();
@@ -216,6 +243,7 @@ describe("Incentives — admin view", () => {
 
   it("makes pending money impossible to miss, split by status", async () => {
     renderPage();
+    await openTab("team");
     await waitFor(() => expect(screen.getByTestId("queue-total-earned").textContent).toContain("$45"));
     expect(screen.getByTestId("queue-total-approved").textContent).toContain("$30");
     expect(screen.getByTestId("queue-total-open").textContent).toContain("$75");
@@ -223,6 +251,7 @@ describe("Incentives — admin view", () => {
 
   it("shows each queued row's amount, rep, reason and status", async () => {
     renderPage();
+    await openTab("team");
     const row = await screen.findByTestId("queue-spiff-7");
     expect(within(row).getByTestId("queue-amount-7").textContent).toBe("$45");
     expect(row.textContent).toContain("Rae Rep");
@@ -235,6 +264,7 @@ describe("Incentives — admin view", () => {
   it("approves a single spiff through the per-row action", async () => {
     apiRequest.mockResolvedValue({ json: async () => ({ id: 7, status: "approved" }) });
     renderPage();
+    await openTab("team");
     await userEvent.click(await screen.findByTestId("approve-7"));
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("POST", "/api/spiffs/7/approve"));
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Bonus approved" })));
@@ -243,6 +273,7 @@ describe("Incentives — admin view", () => {
   it("bulk-approves only the EARNED rows in the selection", async () => {
     apiRequest.mockResolvedValue({ json: async () => ({ changed: [{ id: 7 }], skipped: [], totalCents: 4500 }) });
     renderPage();
+    await openTab("team");
     await screen.findByTestId("queue-select-all");
 
     // Select everything, then approve: the approved row must not be re-approved.
@@ -259,6 +290,7 @@ describe("Incentives — admin view", () => {
   it("bulk mark-paid confirms first (settling is permanent), then sends only the approved rows", async () => {
     apiRequest.mockResolvedValue({ json: async () => ({ changed: [{ id: 8 }], skipped: [], totalCents: 3000 }) });
     renderPage();
+    await openTab("team");
     await userEvent.click(await screen.findByTestId("queue-select-8"));
     const payButton = screen.getByTestId("bulk-paid");
     await waitFor(() => expect(payButton.textContent).toContain("$30"));
@@ -273,6 +305,7 @@ describe("Incentives — admin view", () => {
 
   it("is drivable from the keyboard alone", async () => {
     renderPage();
+    await openTab("team");
     const selectAll = await screen.findByTestId("queue-select-all");
     selectAll.focus();
     expect(document.activeElement).toBe(selectAll);
@@ -285,12 +318,14 @@ describe("Incentives — admin view", () => {
 
   it("disables the bulk actions when nothing applicable is selected", async () => {
     renderPage();
+    await openTab("team");
     expect((await screen.findByTestId("bulk-approve")).hasAttribute("disabled")).toBe(true);
     expect(screen.getByTestId("bulk-paid").hasAttribute("disabled")).toBe(true);
   });
 
   it("renders an all-clear empty state when the queue is drained", async () => {
     renderPage({ team: { ...teamPayload, pending: [] } });
+    await openTab("team");
     const empty = await screen.findByTestId("spiff-queue-empty");
     expect(empty.textContent).toContain("Nothing to approve");
     expect(screen.getByTestId("queue-total-open").textContent).toContain("$0");
@@ -298,10 +333,12 @@ describe("Incentives — admin view", () => {
 
   it("renders loading and error states for the team surface", async () => {
     const { unmount } = renderPage({ hang: true });
+    await openTab("team");
     expect(screen.getByTestId("team-heat-loading")).toBeTruthy();
     unmount();
 
     renderPage({ failTeam: true });
+    await openTab("team");
     expect(await screen.findByTestId("team-heat-error")).toBeTruthy();
   });
 });
