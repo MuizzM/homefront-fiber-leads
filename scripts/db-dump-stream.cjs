@@ -114,7 +114,12 @@ async function main() {
   }
 
   // Indexes/triggers/views after the data: restoring rows into indexed tables
-  // would rebuild every index per-insert instead of once here.
+  // would rebuild every index per-insert instead of once here. The marker lets
+  // a space-limited verifier restore schema+data and skip executing this DDL
+  // (a ~20 GB database restores full-fat nowhere on a 14 GiB runner disk) —
+  // it is emitted BETWEEN statements, so cutting the stream at this exact
+  // line can never split a multi-line CREATE.
+  await out("-- section:post-data-ddl");
   for (const r of master) {
     if (r.type !== "table") await out(r.sql.replace(/\s+$/, "") + ";");
   }

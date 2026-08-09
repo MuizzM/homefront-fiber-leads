@@ -129,22 +129,29 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get -yq install sqlite3 zstd >/dev/null 2>&1 || true
-          # Restore target: whichever of /mnt and $HOME has more room, with an
-          # explicit floor. The dump restores as ONE transaction, so with a
-          # rollback journal the peak cost is ~2x the DB — first run filled
-          # /mnt exactly that way ("database or disk is full" at line 43.8M).
-          # journal_mode=OFF removes the journal (throwaway DB — a failed
-          # restore is re-run, never rolled back), so peak ≈ final ≈ 20 GB.
+          # Restore target: whichever of /mnt and $HOME has more room. Standard
+          # runners top out around 14 GiB free per disk (run 31297982542
+          # measured both), so a ~20 GB full-fat restore fits NOWHERE — the
+          # verifier therefore restores schema + ALL data but cuts the stream
+          # at the dump's `-- section:post-data-ddl` marker, skipping index/
+          # trigger/view EXECUTION (~half the on-disk bulk; the DDL stays in
+          # the artifact for real restores). journal_mode=OFF (throwaway
+          # target, re-run not rolled back) keeps peak ≈ final size. Every
+          # table still loads completely and count-verifies; integrity_check
+          # still walks real btrees. The cut stream ends before the dump's own
+          # COMMIT, and an open transaction at sqlite3 exit ROLLS BACK — the
+          # appended COMMIT is what makes the load stick.
           for d in /mnt "$HOME"; do echo "  $d: $(df -BG --output=avail "$d" | tail -1 | tr -dc 0-9)G free"; done
           RESTORE_DIR="$([ "$(df -B1 --output=avail /mnt | tail -1 | tr -dc 0-9)" -ge "$(df -B1 --output=avail "$HOME" | tail -1 | tr -dc 0-9)" ] && echo /mnt || echo "$HOME")/restore"
           AVAIL_B="$(df -B1 --output=avail "$(dirname "$RESTORE_DIR")" | tail -1 | tr -dc 0-9)"
-          if [ "$AVAIL_B" -lt $(( 24 * 1073741824 )) ]; then
-            echo "need >=24 GiB free to restore-verify a ~20 GB database; best disk has $(( AVAIL_B / 1073741824 )) GiB" >&2
+          if [ "$AVAIL_B" -lt $(( 12 * 1073741824 )) ]; then
+            echo "need >=12 GiB free for the data-only restore; best disk has $(( AVAIL_B / 1073741824 )) GiB" >&2
             exit 1
           fi
           sudo mkdir -p "$RESTORE_DIR" && sudo chown "$(id -u)" "$RESTORE_DIR"
-          echo "restoring into $RESTORE_DIR"
-          time zstdcat backup/data.sql.zst | sqlite3 -cmd "PRAGMA journal_mode=OFF" -cmd "PRAGMA synchronous=OFF" "$RESTORE_DIR/restore.db"
+          echo "restoring into $RESTORE_DIR (data only — post-data DDL skipped)"
+          time { zstdcat backup/data.sql.zst | awk '/^-- section:post-data-ddl$/{exit} {print}'; echo "COMMIT;"; } \
+            | sqlite3 -cmd "PRAGMA journal_mode=OFF" -cmd "PRAGMA synchronous=OFF" "$RESTORE_DIR/restore.db"
           ln -sfn "$RESTORE_DIR/restore.db" /tmp/restore.db
           IC="$(sqlite3 /tmp/restore.db 'PRAGMA integrity_check;')"
           echo "integrity_check: $IC"
