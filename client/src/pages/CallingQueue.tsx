@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Clock3, PhoneCall, Search, ShieldAlert } from "lucide-react";
-import { CallingAvailability, CallingChrome, CallingPageSkeleton, CallingUnknownState } from "@/components/calling/CallingChrome";
+import { CallingAvailability, CallingChrome, CallingUnknownState } from "@/components/calling/CallingChrome";
 import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCallingCallbacks, type CallingCallback, type CallingCandidate } from "@/lib/callingApi";
 import { cn } from "@/lib/utils";
 
@@ -192,6 +192,15 @@ export default function CallingQueue() {
     staleTime: 15_000,
     retry: 1,
   });
+  // Every panel below fetches IN PARALLEL with the status check — the old
+  // `enabled: statusQuery.isSuccess` gates serialized two network round trips
+  // in front of every cold open of this tab (status, THEN everything else),
+  // which is exactly the "tab shows a skeleton for seconds" complaint on
+  // field connections. Status still gates what calling ACTIONS are allowed —
+  // that enforcement is server-side and per-dial — but reading the queue was
+  // never conditional on it. (The queue endpoint's sync is debounced
+  // server-side, so the parallel reads share one scan.)
+  //
   // Chip counts come from an UNFILTERED queue fetch — deriving them from the
   // stage-filtered result would zero out every other chip's count.
   const countsQuery = useQuery({
@@ -199,7 +208,6 @@ export default function CallingQueue() {
     // Fiber-only, matching the list these chips filter — counting traced doors
     // here would put a number on the chip that the list below can never reach.
     queryFn: () => getCallingQueue({ limit: 250, source: "fiber" }), // server cap — chips must not undercount
-    enabled: statusQuery.isSuccess,
     staleTime: 10_000,
     retry: 1,
   });
@@ -217,7 +225,7 @@ export default function CallingQueue() {
   const queueQuery = useQuery({
     queryKey: ["/api/v1/calling/queue", stage, "fiber"],
     queryFn: () => getCallingQueue({ stage: stage || undefined, limit: QUEUE_LIST_LIMIT, source: "fiber" }),
-    enabled: statusQuery.isSuccess && stage !== "",
+    enabled: stage !== "",
     staleTime: 10_000,
     retry: 1,
   });
@@ -253,7 +261,6 @@ export default function CallingQueue() {
   const callbacksQuery = useQuery({
     queryKey: ["/api/v1/calling/callbacks"],
     queryFn: () => getCallingCallbacks(100),
-    enabled: statusQuery.isSuccess,
     staleTime: 30_000,
     retry: 1,
   });
@@ -263,7 +270,6 @@ export default function CallingQueue() {
   const tracedQuery = useQuery({
     queryKey: ["/api/v1/calling/queue", "traced"],
     queryFn: () => getCallingQueue({ source: "traced", limit: 250 }),
-    enabled: statusQuery.isSuccess,
     staleTime: 10_000,
     retry: 1,
   });
@@ -301,11 +307,19 @@ export default function CallingQueue() {
   return (
     <CallingChrome>
       <div className="flex-1 space-y-5 px-4 pb-24 pt-4 md:px-6 md:pb-8">
-        {statusQuery.isLoading ? <CallingPageSkeleton /> : statusQuery.isError || !statusQuery.data ? (
+        {/* Layout-first: the tab frame renders immediately and each section
+            carries its own small loading state. The whole-page CallingPageSkeleton
+            gate is gone — it blanked the entire tab for the status round trip on
+            every cold open. A hard status ERROR (with nothing cached) still takes
+            over the content area: calling stays locked until compliance answers. */}
+        {statusQuery.isError && !statusQuery.data ? (
           <CallingUnknownState retry={() => void statusQuery.refetch()} />
         ) : (
           <>
-            <CallingAvailability status={statusQuery.data} />
+            {statusQuery.data ? <CallingAvailability status={statusQuery.data} /> : (
+              <div className="app-skeleton h-24 rounded-2xl bg-muted" data-testid="calling-status-loading"
+                aria-busy="true" aria-label="Checking calling status" />
+            )}
 
             <section aria-label="Calling queue metrics" className="grid grid-cols-3 divide-x divide-border overflow-hidden rounded-2xl border border-border bg-card">
               <MetricCell label="Open" value={chipCounts ? chipCounts[""] : null} />
@@ -375,7 +389,7 @@ export default function CallingQueue() {
               </div>
             </div>
 
-            {!statusQuery.data.tracedImport?.available ? (
+            {!statusQuery.data ? <QueueRowsSkeleton /> : !statusQuery.data.tracedImport?.available ? (
               <section aria-label="Traced numbers unavailable" data-testid="traced-import-unavailable"
                 className="rounded-2xl border border-dashed border-amber-500/30 bg-card p-4">
                 <h2 className="text-[13px] font-semibold text-foreground">Traced numbers are not in the queue yet</h2>

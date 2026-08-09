@@ -155,6 +155,7 @@ import {
   stepFrame,
   filteredLngLat,
 } from "@/lib/followCamera";
+import { useTabActive } from "@/lib/tabActivity";
 import {
   selectPointsInPolygon,
   pointInRing,
@@ -1016,13 +1017,56 @@ export default function MapView() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { user } = useAuth();
+  // Keep-alive: this page stays mounted (hidden) after leaving /map. While
+  // hidden, every poll below switches off — the tree stays warm for an instant
+  // return, but a screen nobody is looking at spends no radio. staleTime makes
+  // the return revalidate once, which replaces everything the pause skipped.
+  const tabActive = useTabActive();
+  // Ref mirror for rAF loops that must see activity changes without re-arming
+  // their effects (the selected-ring pulse below reads it per frame).
+  const tabActiveRef = useRef(true);
+  tabActiveRef.current = tabActive;
+  // Re-shown from display:none the GL canvas is stale: the container had zero
+  // size while hidden, mapbox's own ResizeObserver fired with 0×0, and nothing
+  // repaints when the stage flips back. One resize() against the now-laid-out
+  // container restores the render loop; rAF-then-timeout because the stage's
+  // display flip and this effect land in the same frame, before layout.
+  useEffect(() => {
+    if (!tabActive) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const raf = requestAnimationFrame(() => {
+      t = setTimeout(() => { try { mapRef.current?.resize?.(); } catch { /* map not up yet — mount effect handles it */ } }, 0);
+    });
+    return () => { cancelAnimationFrame(raf); if (t) clearTimeout(t); };
+  }, [tabActive]);
+  // GPS while hidden: a Locate-armed GeolocateControl holds a HighAccuracy
+  // watchPosition until map.remove() — which keep-alive never calls. Leaving
+  // GPS hot behind a hidden tab drains a field phone, so deactivation pauses
+  // an armed watch (trigger() from ACTIVE_LOCK/BACKGROUND stops it) and
+  // reactivation re-arms it, restoring the follow experience the rep left on.
+  // _watchState is the same private-but-stable field the follow debugger reads.
+  const geoPausedByTabRef = useRef(false);
+  useEffect(() => {
+    const geolocate = geolocateRef.current;
+    if (!geolocate) return;
+    const watching = ["ACTIVE_LOCK", "BACKGROUND"].includes((geolocate as any)._watchState);
+    if (!tabActive && watching) {
+      geoPausedByTabRef.current = true;
+      try { geolocate.trigger(); } catch { geoPausedByTabRef.current = false; }
+    } else if (tabActive && geoPausedByTabRef.current) {
+      geoPausedByTabRef.current = false;
+      try { geolocate.trigger(); } catch { /* rep can re-tap Locate */ }
+    }
+  }, [tabActive]);
   const canSubmitScan = useCan("scan.submit");
   // Owned-job isolation: background/nightly discovery jobs must not re-render
   // this 6k-line tree on every count tick — only the scan THIS operator owns
   // may. The ref mirrors scanState.jobId (assigned right after the reducer
   // below); the hook reads it per-event.
   const ownedJobIdRef = useRef<string | null>(null);
-  const discovery = useDiscoveryJobs(!!user && canSubmitScan, ownedJobIdRef);
+  // tabActive: a hidden kept stage must not hold the discovery long-poll open
+  // — the hook reconnects (and rehydrates) when the stage is shown again.
+  const discovery = useDiscoveryJobs(!!user && canSubmitScan && tabActive, ownedJobIdRef);
   // ── AREA SCAN STATE MACHINE — the field map OWNS exactly one scan (the box
   // the operator elected), identified by its jobId. "Scanning fiber" is driven
   // SOLELY by this machine, NEVER inferred from the tenant-wide discovery-job
@@ -1229,7 +1273,7 @@ export default function MapView() {
     }[]
   >({
     queryKey: ["/api/territory-requests"],
-    refetchInterval: 30000,
+    refetchInterval: tabActive ? 30000 : false,
     enabled: canManage,
   });
   const pendingRequests = territoryRequests.filter(
@@ -1824,7 +1868,7 @@ export default function MapView() {
     // DB-derived ETag makes an unchanged poll a cheap 304, so this is nearly
     // free when nothing changed. Paused while the tab is hidden (battery/data),
     // and a return to the tab pulls fresh immediately.
-    refetchInterval: 60_000,
+    refetchInterval: tabActive ? 60_000 : false,
     refetchIntervalInBackground: false,
     // Reps flip between the app and the dialer/camera constantly while knocking —
     // a refetch on every return is wasteful; the 60s poll keeps them fresh enough.
@@ -2317,7 +2361,9 @@ export default function MapView() {
   // waiting for the 60s safety poll. The stream contains no lead data; the
   // subsequent role-scoped GET remains the only source of map rows.
   useEffect(() => {
-    if (!user) return;
+    // tabActive: the ping stream exists to freshen a map someone is LOOKING at;
+    // hidden stages drop it and the re-show revalidation covers the gap.
+    if (!user || !tabActive) return;
     let stopped = false;
     let controller: AbortController | null = null;
     let reconnect: ReturnType<typeof setTimeout> | null = null;
@@ -2387,7 +2433,7 @@ export default function MapView() {
       if (reconnect) clearTimeout(reconnect);
       if (refreshTimer) clearTimeout(refreshTimer);
     };
-  }, [user?.id, qc]);
+  }, [user?.id, qc, tabActive]);
   // Dedupe to ONE pin per physical house before anything renders (pins, the
   // in-view panel, and search all derive from this). Memoized so it only re-runs
   // when the fetched pin set actually changes, not every render.
@@ -2451,7 +2497,7 @@ export default function MapView() {
     // EVERY role: the server scopes the list (reps get only areas they hold),
     // and reps deserve the same penetration/completion read the office has.
     enabled: !!user,
-    refetchInterval: 30000,
+    refetchInterval: tabActive ? 30000 : false,
   });
   // Expose globally so popup onclick handlers can access current data.
   // NOTE: these effects must stay after `team` is declared — their dependency
@@ -5798,7 +5844,9 @@ export default function MapView() {
   useEffect(() => {
     // Same gate the endpoint enforces (requireCapability("field.app.use")).
     // Opening a socket a calling-only role will be 403'd on is pure radio burn.
-    if (!user || !canUseFieldApp) return;
+    // tabActive: a hidden kept map drops the socket too — Last-Event-ID replay
+    // (or the onResync full refetch) reconciles on re-show.
+    if (!user || !canUseFieldApp || !tabActive) return;
     const handle = subscribeLeadStream({
       // Sessions here are an x-session-id HEADER, which native EventSource
       // cannot send — it would 401 forever. Read per connect so a refreshed
@@ -5835,7 +5883,7 @@ export default function MapView() {
       streamHoldsRef.current.clear();
       setLeadStream(null);
     };
-  }, [user?.id, canUseFieldApp, qc]);
+  }, [user?.id, canUseFieldApp, qc, tabActive]);
 
   // ── Do not repaint a door the rep is still saving ───────────────────────────
   // A push applied over an in-flight knock shows the rep their own tap being
@@ -6247,7 +6295,14 @@ export default function MapView() {
       // Nobody is looking: skip the paint writes entirely. Browsers usually
       // pause rAF for a hidden tab, but Android WebViews and installed PWAs do
       // not always, and each accepted frame forces a full GL repaint of the map.
+      // Same when the MAP STAGE is hidden by keep-alive (display:none never
+      // pauses rAF — the browser tab is still visible): paint-writing a
+      // hidden canvas is pure battery burn.
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+      if (!tabActiveRef.current) {
         raf = requestAnimationFrame(tick);
         return;
       }

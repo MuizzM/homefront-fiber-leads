@@ -19,6 +19,7 @@
 // beats a wrong number.
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTabActive } from "@/lib/tabActivity";
 import { cn } from "@/lib/utils";
 import { usd } from "@shared/moneyFormat";
 
@@ -33,11 +34,14 @@ export interface EarningsTodayData {
 }
 
 export function useEarningsToday(enabled = true) {
+  // Hidden kept tab (keep-alive): pause the poll; the stage re-show
+  // revalidation refreshes it the moment the rep is looking again.
+  const tabActive = useTabActive();
   return useQuery<EarningsTodayData>({
     queryKey: ["/api/me/earnings-today"],
     // Hourly ticks up while the rep is clocked in, so this cannot be static —
     // but a minute is plenty for a number measured in dollars.
-    refetchInterval: 60_000,
+    refetchInterval: tabActive ? 60_000 : false,
     enabled,
   });
 }

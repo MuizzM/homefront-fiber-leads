@@ -28,9 +28,12 @@ const RUNTIME_CACHE = "runtime-v2";
 // Bound on the runtime cache. Content-hashed names never collide, so without a
 // cap it accumulates every asset from every deploy forever; once the origin hits
 // the browser's quota Android evicts the WHOLE origin, taking the persisted
-// query cache (localStorage) with it. ~250 entries comfortably holds one full
-// build (about 120 chunks) plus the previous one.
-const RUNTIME_MAX_ENTRIES = 250;
+// query cache (localStorage) with it. Sized to hold TWO full builds with slack:
+// the build has grown to ~150 hashed assets, so the old cap of 250 was evicting
+// ~50 of the PREVIOUS build's chunks right after every deploy — exactly the
+// chunks a still-open old tab needs next, turning its next tab switch into a
+// 404 → full stale-chunk recovery reload instead of a cache hit.
+const RUNTIME_MAX_ENTRIES = 360;
 
 // The minimum needed to boot the app offline. Hashed JS/CSS are picked up at
 // runtime since their names change per build.

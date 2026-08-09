@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
+import { useTabActive } from "@/lib/tabActivity";
 import {
   Users, MapPin, Zap, TrendingUp, DollarSign, Clock,
   Activity, Target, Wifi, Calendar, AlertCircle, Radar, X,
@@ -198,20 +199,22 @@ function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => voi
 
 export default function Dashboard() {
   const { user } = useAuth();
+  // Keep-alive: hidden dashboard stops polling; staleTime revalidates on return.
+  const tabActive = useTabActive();
   const isRep = user?.role === "rep";
   const isManager = user?.role === "admin" || user?.role === "manager";
 
   const { data: stats, isLoading: statsLoading, isError: statsError, refetch: refetchStats } = useQuery<SaasStats>({
     queryKey: ["/api/stats/saas"],
     queryFn: () => apiRequest("GET", "/api/stats/saas").then(r => r.json()),
-    refetchInterval: 30000,
+    refetchInterval: tabActive ? 30000 : false,
   });
 
   const { data: activity = [], isLoading: actLoading } = useQuery<ActivityEntry[]>({
     queryKey: ["/api/activity-log"],
     queryFn: () => apiRequest("GET", "/api/activity-log?limit=20").then(r => r.json()),
     enabled: isManager,
-    refetchInterval: 15000,
+    refetchInterval: tabActive ? 15000 : false,
   });
 
   // Every render site below filters to s.date === today, so ask the server for

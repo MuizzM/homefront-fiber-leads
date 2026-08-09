@@ -7,6 +7,7 @@ import type { VariantProps } from 'class-variance-authority';
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useTabActive } from "@/lib/tabActivity"
 
 const Sheet = SheetPrimitive.Root
 
@@ -57,7 +58,14 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => (
+>(({ side = "right", className, children, ...props }, ref) => {
+  // Keep-alive: this content PORTALS to document.body, so a hidden route
+  // stage's display:none can't reach it — an open sheet would float modally
+  // over the NEXT tab. Context crosses portals, so while the owning stage is
+  // hidden the portal simply doesn't render; it comes back with the tab.
+  const tabActive = useTabActive();
+  if (!tabActive) return null;
+  return (
   <SheetPortal>
     <SheetOverlay />
     <SheetPrimitive.Content
@@ -72,7 +80,8 @@ const SheetContent = React.forwardRef<
       </SheetPrimitive.Close>
     </SheetPrimitive.Content>
   </SheetPortal>
-))
+  );
+})
 SheetContent.displayName = SheetPrimitive.Content.displayName
 
 const SheetHeader = ({

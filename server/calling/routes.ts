@@ -652,9 +652,11 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
     const parsed = queueQuerySchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ error: "Invalid queue query", details: parsed.error.flatten() });
     try {
-      // force=true: this endpoint reports `synced` to the operator — a
-      // debounced 0 here would read as "the sync brought in nothing".
-      const synced = syncFreshFiberQueue(tid, true);
+      // Debounced: within the 30s window the store reports the last REAL
+      // sync's count (never a misleading 0), so the queue page's parallel
+      // reads share one scan instead of forcing one each — this route used to
+      // re-run the full INSERT..SELECT on every read of every panel.
+      const synced = syncFreshFiberQueue(tid);
       // Skip-traced doors join the queue on the same read. Reported separately
       // rather than folded into `synced` so an operator can tell "the trace
       // brought in nothing" from "the trace cannot import at all" — the latter

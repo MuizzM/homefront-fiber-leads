@@ -155,8 +155,8 @@ function warmLeadsList(): void {
   }).catch(() => {});
 }
 
-/** True when the device/connection can afford speculative bytes. A rep on 3G or
- *  with Data Saver on gets the screen they asked for and nothing else. */
+/** True when the device/connection can afford speculative DATA bytes. A rep on
+ *  3G or with Data Saver on gets the screen they asked for and nothing else. */
 export function canPrefetch(): boolean {
   if (typeof navigator === "undefined") return false;
   if (navigator.onLine === false) return false;
@@ -165,6 +165,23 @@ export function canPrefetch(): boolean {
   }).connection;
   if (connection?.saveData) return false;
   return !["slow-2g", "2g", "3g"].includes(connection?.effectiveType ?? "");
+}
+
+/** Route CODE chunks get a laxer gate than data: a tab's chunk is a few tens of
+ *  KB, cached immutably by the SW, and each deploy rotates every hashed URL —
+ *  so the reps this gate used to exclude (field LTE reads as "3g" surprisingly
+ *  often) were exactly the ones paying a cold chunk fetch at TAP time on every
+ *  first per-build visit. 3G can afford tens of KB off the idle path; Data
+ *  Saver and 2G still mean no. Data prefetches keep the strict gate above —
+ *  data is bigger and stale by the time it's read. */
+export function canPrefetchRouteChunks(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (navigator.onLine === false) return false;
+  const connection = (navigator as Navigator & {
+    connection?: { saveData?: boolean; effectiveType?: string };
+  }).connection;
+  if (connection?.saveData) return false;
+  return !["slow-2g", "2g"].includes(connection?.effectiveType ?? "");
 }
 
 /** Warm the code chunk for a route href (hash-router "/foo" form). Safe to call

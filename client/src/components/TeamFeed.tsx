@@ -18,6 +18,7 @@
 // noise and teaches people to stop looking.
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTabActive } from "@/lib/tabActivity";
 import { apiRequest } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
@@ -54,9 +55,13 @@ const FEED_KEY = ["/api/announcements"];
  * surface that silently stops updating when a rep switches tabs.
  */
 export function useTeamFeed(enabled = true) {
+  // Hidden kept tab: no feed polling for a surface nobody can see. Consumers
+  // rendered in the shell (outside any stage) read the default `true` and are
+  // unaffected; the Today stage's copy pauses with its tab.
+  const tabActive = useTabActive();
   return useQuery<FeedPayload>({
     queryKey: FEED_KEY,
-    refetchInterval: 45_000,
+    refetchInterval: tabActive ? 45_000 : false,
     enabled,
   });
 }
@@ -249,12 +254,17 @@ export function TeamFeedHeadline({ className }: { className?: string }) {
 export function TeamFeedSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const { data, isLoading } = useTeamFeed(open);
   // One clock for the whole list, ticking while it is open — otherwise every
-  // row's "2m" is frozen at the moment the sheet mounted.
+  // row's "2m" is frozen at the moment the sheet mounted. Hidden kept tab:
+  // the tick's re-render is wasted on a display:none tree, so it pauses (ref,
+  // not dep — re-arming the interval on every visibility flip resets phase).
+  const tabActive = useTabActive();
+  const tabActiveRef = useRef(true);
+  tabActiveRef.current = tabActive;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!open) return;
     setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), 30_000);
+    const t = setInterval(() => { if (tabActiveRef.current) setNow(Date.now()); }, 30_000);
     return () => clearInterval(t);
   }, [open]);
 

@@ -7017,6 +7017,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // Stats
+  // /api/stats memo: five aggregate scans over the scoped leads per read, and
+  // the dashboard polls it every 30s from every open manager session. Keyed by
+  // (tenant, caller scope, cross-process leads data version) so any lead write
+  // busts it instantly; the 60s age cap keeps the moving 14-day "stale" window
+  // honest on a quiet database. Size-capped: scopes are per-role-visibility,
+  // not per-user, so this stays tiny in practice.
+  const statsMemo = new Map<string, { at: number; body: any }>();
   app.get("/api/stats", requireAuth, (req, res) => {
     const _su = (req as any).user;
     // Aggregated IN SQL — grouped counts plus SUM(CASE) scalars — instead of
@@ -7057,6 +7064,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       sold: 0,
     };
     if (emptyScope) return res.json(stats);
+    // Same composite version the pin ETag uses: the in-process epoch busts
+    // instantly on this process's own writes (a mutation's invalidation
+    // refetch must never get the pre-write body back), and the DB-derived
+    // version catches cross-process writers within its 1s memo.
+    const memoKey = `${tenantId ?? "all"}|${Array.isArray(scope) ? scope.join(",") : scope ?? "-"}|${_leadsEpoch}.${_leadsBustByTenant.get(tenantId ?? 0) ?? 0}.${storage.getLeadsDataVersion(tenantId)}`;
+    const memoHit = statsMemo.get(memoKey);
+    if (memoHit && Date.now() - memoHit.at < 60_000) return res.json(memoHit.body);
     // Same 14-day boundary the loop computed, and NULLIF/COALESCE mirrors the
     // `updatedAt || createdAt` fallback (empty string falls through, both
     // missing is never stale).
@@ -7114,6 +7128,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     for (const r of terrRows) {
       const territory = [r.city, r.state].filter(Boolean).join(", ");
       if (territory) stats.byTerritory[territory] = (stats.byTerritory[territory] || 0) + r.n;
+    }
+    statsMemo.set(memoKey, { at: Date.now(), body: stats });
+    if (statsMemo.size > 200) {
+      const oldest = [...statsMemo.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) statsMemo.delete(oldest[0]);
     }
     res.json(stats);
   });
@@ -8658,7 +8677,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ONE context (tenant-scoped rows, loaded once) + ONE row computation, shared
   // by the list route (every area the caller may see) and the per-area route —
   // so a rep's single-area card and a manager's overview can never disagree.
+  // Memoised for 10s per tenant: this context is rebuilt from full-tenant lead
+  // and knock projections on EVERY progress read, and the Field Map + Areas
+  // pages each poll the list route on a 30s interval — with several viewers
+  // that made this tenant-wide hydration the hottest recurring query on the
+  // box. 10s bounds staleness well inside one poll period (a knock logged
+  // between polls was already invisible until the next poll), while landing
+  // most polls on the memo. Scoping stays per-caller BELOW the memo — only the
+  // tenant-wide raw context is shared.
+  const territoryProgressCtxMemo = new Map<string, { at: number; ctx: any }>();
   function territoryProgressContext(tid: number | undefined) {
+    const key = String(tid ?? "all");
+    const hit = territoryProgressCtxMemo.get(key);
+    if (hit && Date.now() - hit.at < 10_000) return hit.ctx;
     // Narrow projections (id/latlng/status + the knock verification fields) —
     // the full getLeads/getKnocks hydration was ~520ms of this route's 596ms
     // at 20k leads + 50k knocks, for columns the math below never read.
@@ -8671,7 +8702,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     for (const k of storage.getKnocksForTerritoryProgress(tid)) {
       const arr = knocksByLead.get(k.leadId); if (arr) arr.push(k); else knocksByLead.set(k.leadId, [k]);
     }
-    return { leads, members, geoConfig, knocksByLead };
+    const ctx = { leads, members, geoConfig, knocksByLead };
+    territoryProgressCtxMemo.set(key, { at: Date.now(), ctx });
+    if (territoryProgressCtxMemo.size > 50) {
+      const oldest = [...territoryProgressCtxMemo.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) territoryProgressCtxMemo.delete(oldest[0]);
+    }
+    return ctx;
   }
 
   // Is this a WORKED outcome (door done for the pass)? Mirrors OUTCOME_META.

@@ -6,8 +6,9 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { lazyRoute } from "@/lib/staleChunk";
 import { Lock } from "lucide-react";
-import { Suspense, useDeferredValue, useEffect } from "react";
+import { Suspense, useCallback, useDeferredValue, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
+import { KeepAliveStages } from "@/components/KeepAliveStages";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
 import Layout from "@/pages/Layout";
@@ -138,6 +139,25 @@ function CapabilityGuard({ role, capability, children }: {
   return <>{children}</>;
 }
 
+// The tabs worth keeping mounted after a visit: the heavy, constantly revisited
+// surfaces where a cold remount is what users feel as the "tab switch freeze"
+// (mapbox re-init on /map, chart + KPI rebuild on the dashboard, table rebuild
+// on /leads). Detail routes and admin one-offs are deliberately absent — they
+// are cheap, parameterized (unbounded distinct locations), or rarely revisited.
+const KEEP_ALIVE_PATHS = new Set(["/today", "/map", "/leads", "/areas", "/calling", "/followups"]);
+// Stage cap. Active tab + three warm ones bounds memory (a hidden MapView keeps
+// its WebGL context alive); least-recently-used beyond that unmounts.
+const MAX_KEPT_STAGES = 4;
+// "/" renders Dashboard for office roles but is a pure <Redirect> for field and
+// calling roles — a kept hidden stage holding a Redirect would re-show as an
+// empty page (the redirect effect fires on MOUNT, and a kept stage never
+// remounts). So "/" is kept exactly for the roles that get a real page there.
+const HOME_REDIRECT_ROLES = new Set(["rep", "calling_rep", "calling_manager", "compliance_admin", "auditor"]);
+function keepAliveTab(location: string, role: string | undefined): boolean {
+  if (location === "/") return !HOME_REDIRECT_ROLES.has(role ?? "");
+  return KEEP_ALIVE_PATHS.has(location);
+}
+
 function AppRoutes() {
   const { user, isFirstRun, loading } = useAuth();
   const [location] = useHashLocation();
@@ -157,6 +177,10 @@ function AppRoutes() {
   // drives the hairline pending bar so a slow tap still visibly "took".
   const routePending = location !== deferredLocation;
   const role = user?.role;
+
+  // Keep-alive policy for the stage list — stable per role so the stages
+  // component's effect deps stay quiet.
+  const stageKeepAlive = useCallback((loc: string) => keepAliveTab(loc, role), [role]);
 
   // Warm likely destinations only after the browser is idle. Save-Data and
   // slower cellular connections never prefetch the large Mapbox chunk: the
@@ -235,10 +259,45 @@ function AppRoutes() {
         {routePending && <div className="route-pending-bar" aria-hidden="true" data-testid="route-pending" />}
         <ErrorBoundary resetKey={deferredLocation}>
         <Suspense fallback={<PageLoader />}>
-        {/* Keyed by route → each page fades/slides in for a smooth tab switch.
-            Also the single scroll container for tall pages (map pages fill it). */}
-        <div key={deferredLocation} className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto">
-        <Switch location={deferredLocation}>
+        {/* Keep-alive stages (see components/KeepAliveStages for the invariants
+            — commit-gated kept list, inline display toggling, and why it must
+            sit inside this one shared Suspense). Heavy tabs stay mounted after
+            a visit, so returning is a visibility flip, not a cold remount. */}
+        <KeepAliveStages
+          activeLocation={deferredLocation}
+          keepAlive={stageKeepAlive}
+          maxKept={MAX_KEPT_STAGES}
+          resetKey={`${user?.id ?? ""}:${role ?? ""}`}
+          className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto"
+          renderStage={(loc) => (
+            // Per-stage boundary: hidden kept stages keep rendering on state
+            // updates, so one tab's render error must stay in ITS stage — the
+            // outer boundary would swap the healthy visible tab for the error
+            // card. resetKey flips with visibility so re-showing an errored
+            // stage retries it (the closest analogue to the old remount).
+            <ErrorBoundary resetKey={`${loc}:${String(loc === deferredLocation)}`}>
+              <RouteTable location={loc} role={role} isSuperAdmin={!!user?.isSuperAdmin} />
+            </ErrorBoundary>
+          )}
+        />
+        </Suspense>
+        </ErrorBoundary>
+      </Layout>
+    </Router>
+  );
+}
+
+// The full route table, one <Switch> per mounted stage. `location` is FIXED
+// per stage (a kept stage never re-matches; the stage list above decides what
+// exists and what is visible), so this component's subtree is stable for the
+// stage's whole lifetime.
+function RouteTable({ location, role, isSuperAdmin }: {
+  location: string;
+  role: string | undefined;
+  isSuperAdmin: boolean;
+}) {
+  return (
+        <Switch location={location}>
           {/* ── All roles ── */}
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
           <Route path="/">{role === "rep" ? <Redirect to="/today" />
@@ -416,16 +475,11 @@ function AppRoutes() {
                 /api/config/app allowlist fetch — an endpoint that no longer
                 returns a list, and that 403s for every non-admin who booted
                 the app. */}
-            {user?.isSuperAdmin ? <SuperAdmin /> : <Redirect to="/" />}
+            {isSuperAdmin ? <SuperAdmin /> : <Redirect to="/" />}
           </Route>
 
           <Route component={NotFound} />
         </Switch>
-        </div>
-        </Suspense>
-        </ErrorBoundary>
-      </Layout>
-    </Router>
   );
 }
 

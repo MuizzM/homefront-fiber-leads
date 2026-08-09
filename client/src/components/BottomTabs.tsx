@@ -23,7 +23,7 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { Home, Map, DollarSign, MapPin, Menu } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { can, type Role } from "@shared/capabilities";
-import { navIntentHandlers, prefetchRoute, canPrefetch } from "@/lib/routePrefetch";
+import { navIntentHandlers, prefetchRoute, canPrefetch, canPrefetchRouteChunks } from "@/lib/routePrefetch";
 
 // Each tab is capability-gated: roles without field.app.use (e.g. calling-only
 // or audit roles) never see dead field tabs, and Pay only shows when the role
@@ -135,8 +135,17 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
   // where it is current rather than stale by the time it is read.
   const tabHrefs = visibleTabs.map(t => t.href).join(",");
   useEffect(() => {
-    if (!canPrefetch()) return;
-    const warm = () => { for (const href of tabHrefs.split(",")) prefetchRoute(href); };
+    if (!canPrefetchRouteChunks()) return;
+    // The map chunk is ~10x the size of the other tabs (284KB + the mapbox CDN
+    // lib its loader kicks) — it keeps the strict data gate; the small tab
+    // chunks warm even on 3G, where paying tens of KB idle beats paying them
+    // at tap time.
+    const warm = () => {
+      for (const href of tabHrefs.split(",")) {
+        if (href === "/map" && !canPrefetch()) continue;
+        prefetchRoute(href);
+      }
+    };
     const idle = window as Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
       cancelIdleCallback?: (id: number) => void;
