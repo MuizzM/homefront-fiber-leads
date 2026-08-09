@@ -129,14 +129,27 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get -yq install sqlite3 zstd >/dev/null 2>&1 || true
-          # /mnt is the runner's big scratch disk; the restored DB is ~19 GB
-          # and would not reliably fit on /home.
-          sudo mkdir -p /mnt/restore && sudo chown "$(id -u)" /mnt/restore
-          df -h /mnt | tail -1
-          time zstdcat backup/data.sql.zst | sqlite3 /mnt/restore/restore.db
-          IC="$(sqlite3 /mnt/restore/restore.db 'PRAGMA integrity_check;')"
+          # Restore target: whichever of /mnt and $HOME has more room, with an
+          # explicit floor. The dump restores as ONE transaction, so with a
+          # rollback journal the peak cost is ~2x the DB — first run filled
+          # /mnt exactly that way ("database or disk is full" at line 43.8M).
+          # journal_mode=OFF removes the journal (throwaway DB — a failed
+          # restore is re-run, never rolled back), so peak ≈ final ≈ 20 GB.
+          for d in /mnt "$HOME"; do echo "  $d: $(df -BG --output=avail "$d" | tail -1 | tr -dc 0-9)G free"; done
+          RESTORE_DIR="$([ "$(df -B1 --output=avail /mnt | tail -1 | tr -dc 0-9)" -ge "$(df -B1 --output=avail "$HOME" | tail -1 | tr -dc 0-9)" ] && echo /mnt || echo "$HOME")/restore"
+          AVAIL_B="$(df -B1 --output=avail "$(dirname "$RESTORE_DIR")" | tail -1 | tr -dc 0-9)"
+          if [ "$AVAIL_B" -lt $(( 24 * 1073741824 )) ]; then
+            echo "need >=24 GiB free to restore-verify a ~20 GB database; best disk has $(( AVAIL_B / 1073741824 )) GiB" >&2
+            exit 1
+          fi
+          sudo mkdir -p "$RESTORE_DIR" && sudo chown "$(id -u)" "$RESTORE_DIR"
+          echo "restoring into $RESTORE_DIR"
+          time zstdcat backup/data.sql.zst | sqlite3 -cmd "PRAGMA journal_mode=OFF" -cmd "PRAGMA synchronous=OFF" "$RESTORE_DIR/restore.db"
+          ln -sfn "$RESTORE_DIR/restore.db" /tmp/restore.db
+          IC="$(sqlite3 /tmp/restore.db 'PRAGMA integrity_check;')"
           echo "integrity_check: $IC"
           [ "$IC" = "ok" ] || { echo "integrity_check failed" >&2; exit 1; }
+          df -h /mnt "$HOME" | tail -2
 
           zstdcat backup/data.sql.zst | tail -c 65536 > /tmp/manifest.tail
           python3 - <<'PY'
@@ -146,7 +159,7 @@ jobs:
           for m in re.finditer(r'^-- rowcount "((?:[^"]|"")*)" (\d+)$', tail, re.M):
               manifest[m.group(1).replace('""', '"')] = int(m.group(2))
           assert manifest, "no rowcount manifest found in dump tail"
-          db = sqlite3.connect("/mnt/restore/restore.db")
+          db = sqlite3.connect("/tmp/restore.db")
           bad = []
           for t, expect in manifest.items():
               got = db.execute(f'SELECT COUNT(*) FROM "{t.replace(chr(34), chr(34)*2)}"').fetchone()[0]
