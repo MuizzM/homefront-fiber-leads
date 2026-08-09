@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { Edit2, Trash2, User, Users, Crown, Star, ChevronUp, Wallet, ChevronRight, DoorOpen, Handshake, PhoneCall, TrendingUp, FileSignature, UserMinus } from "lucide-react";
+import { Edit2, Trash2, User, Crown, Star, ChevronUp, Wallet, ChevronRight, FileSignature, UserMinus } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
 import { TierEditor } from "@/components/commission/TierEditor";
 import { validateTiers, type CommissionTier } from "@shared/commissionTiers";
@@ -121,8 +121,7 @@ function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v
               }`}
             >
               <div className="flex items-center gap-2.5">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${r.avatarColor}`}>
-                </div>
+                <div className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${r.avatarColor}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">{r.label}</span>
@@ -541,8 +540,7 @@ export default function Team() {
       <div>
         {/* Section header — role chip + eyebrow + count pill + hairline rule */}
         <div className="flex items-center gap-2.5 mb-2.5 px-0.5">
-          <div className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 ${ri.avatarColor}`}>
-          </div>
+          <div className={`h-2 w-2 rounded-full flex-shrink-0 ${ri.avatarColor}`} />
           <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h2>
           <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground tabular-nums">{members.length}</span>
           <div className="flex-1 h-px bg-border" />
@@ -738,27 +736,24 @@ export default function Team() {
         )}
       </div>
 
-      {/* Team totals — hairline-divided metric strip */}
+      {/* Team totals — hairline metric grid. A grid, not a scroll row: five
+          numbers a manager reads at a glance must all be on screen at once,
+          two-up on a phone and one row on a desktop. */}
       {team.length > 0 && (
-        <Card className="bg-card border-border overflow-hidden rounded-xl">
-          <div className="flex divide-x divide-border overflow-x-auto">
-            {[
-              { label: "Active Members", val: activeCount, Icon: Users },
-              { label: "Knocks", val: totalKnocks, Icon: DoorOpen },
-              { label: "Contacts", val: totalContacts, Icon: Handshake },
-              { label: "Callbacks", val: totalCallbacks, Icon: PhoneCall },
-              { label: "Sales", val: totalSales, highlight: true, Icon: TrendingUp },
-            ].map(({ label, val, highlight, }) => (
-              <div key={label} className="flex-1 min-w-[120px] px-4 py-3">
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  
-                  <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
-                </div>
-                <div className={`text-2xl font-bold tabular-nums mt-1.5 ${highlight ? "text-emerald-400" : "text-foreground"}`}>{val.toLocaleString()}</div>
-              </div>
-            ))}
-          </div>
-        </Card>
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-3 md:grid-cols-5">
+          {[
+            { label: "Active Members", val: activeCount },
+            { label: "Knocks", val: totalKnocks },
+            { label: "Contacts", val: totalContacts },
+            { label: "Callbacks", val: totalCallbacks },
+            { label: "Sales", val: totalSales, highlight: true },
+          ].map(({ label, val, highlight }) => (
+            <div key={label} className="min-w-0 bg-card px-4 py-3">
+              <span className="block truncate text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+              <div className={`text-2xl font-bold tabular-nums mt-1.5 ${highlight ? "text-emerald-400" : "text-foreground"}`}>{val.toLocaleString()}</div>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Role legend — stacks on phones so the icon + label + description of each
@@ -769,8 +764,7 @@ export default function Team() {
           {ROLES.map(r => (
             <div key={r.value} className="rounded-xl border border-border p-3.5 bg-card">
               <div className="flex items-center gap-2 mb-1.5">
-                <div className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 ${r.avatarColor}`}>
-                </div>
+                <div className={`h-2 w-2 rounded-full flex-shrink-0 ${r.avatarColor}`} />
                 <span className="text-sm font-semibold text-foreground">{r.label}</span>
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">{r.description}</p>
