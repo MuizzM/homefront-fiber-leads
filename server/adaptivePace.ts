@@ -40,6 +40,24 @@ setInterval(() => {
   lag.reset();
 }, 10_000).unref();
 
+// One perf.loop_lag line per worker per minute, from a separate histogram so
+// the 10s pacing window above keeps its own reset cycle. This is the number
+// the perf report could never show ("event-loop delay: not sampled") — the
+// direct measure of whether background work is starving HTTP on this worker.
+const lagLog = monitorEventLoopDelay({ resolution: 20 });
+lagLog.enable();
+setInterval(() => {
+  const p50 = lagLog.percentile(50) / 1e6;
+  const p95 = lagLog.percentile(95) / 1e6;
+  const max = lagLog.max / 1e6;
+  lagLog.reset();
+  console.log(JSON.stringify({
+    ts: new Date().toISOString(), level: "info", event: "perf.loop_lag",
+    pid: process.pid,
+    p50Ms: Number(p50.toFixed(1)), p95Ms: Number(p95.toFixed(1)), maxMs: Number(max.toFixed(1)),
+  }));
+}, 60_000).unref();
+
 // ── Signal 2: self health probe ─────────────────────────────────────────────
 async function probeHealth() {
   const started = Date.now();

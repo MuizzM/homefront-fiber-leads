@@ -66,7 +66,8 @@ services:
       # ILEC territory, not Kinetic — every full-city OSM harvest there (Hillsborough
       # alone pulled 37,924 addresses) was pure proxy + event-loop cost with zero
       # Kinetic yield, and the giant synchronous upserts destabilized the 1-CPU box.
-      EXPLORE_CITIES: "davidson:nc"
+      # 2026-08-09 PORTAL-FIRST STOP: was "davidson:nc".
+      EXPLORE_CITIES: ""
       # "Right away" corridor scan (user 2026-07-18): DISCOVERY-class runs over
       # EXISTING stale targets, 2 min after boot — no harvest wait. Explore above
       # still harvests the never-enumerated towns (olivia has zero targets).
@@ -198,6 +199,33 @@ services:
       #      paceMs/loopLagP95). If it doesn't, flip HOT_MARKETS/DAILY_MARKET_REFRESH
       #      back to off — that is the kill-switch, no redeploy of code needed.
       STATEWIDE_SCAN_ON_DEPLOY: "off"
+      # ── PORTAL-FIRST STOP (operator, 2026-08-09) ─────────────────────────────
+      # EVERY automatic scan/harvest/discovery PRODUCER is off. Measured on the
+      # live box: app container at ~280% CPU on producer work, event loops
+      # blocking 2–17s on trivial requests (9/20 then 2/12 health probes >1s),
+      # dashboard endpoints 3.6–7.2s, and the WAL pinned at 1.9 GB because
+      # producer read marks starve wal_checkpoint(TRUNCATE) 35×/77min. Reps
+      # could not use the portal during bursts. A responsive portal outranks
+      # proactive lead-gen — perf-report run 31294218526 is the evidence base.
+      #
+      # STILL RUNNING (deliberately): the scan-run reaper/resume CONSUMERS
+      # (execute rep-initiated on-demand scans + drain the existing queue at
+      # SCAN_GLOBAL_CONCURRENCY, currently 1), FRESH_LEAD_BOOT_BACKFILL (one-
+      # shot, chunk-yielding green→map promotion at boot), and yield-rollup
+      # maintenance (cluster primary only — it FIXES the WAL-pinning query).
+      #
+      # RE-ENABLE one producer at a time, watching /api/health p95 and
+      # perf.loop_lag for a full cycle before the next; HOT_MARKETS and
+      # FRESH_HARVEST were the heaviest and go LAST — and only after scanning
+      # moves off the HTTP workers (dedicated worker service / core pinning).
+      #
+      # The switches themselves: HOT_MARKETS + BUILD_INTEL + FRESH_HARVEST +
+      # EXPLORE_CITIES are set at their definitions below in this section;
+      # COMING_SOON_PROGRAM / COMING_SOON_WATCHLIST / DAILY_MARKET_REFRESH /
+      # NEWBUILD_RADAR / EXPANSION_ENABLED live in the 2026-07-21 full-coverage
+      # block near the bottom (YAML keeps the LAST duplicate key — flip them
+      # there, never redeclare here). KEEPWARM_SCAN is only defined here:
+      KEEPWARM_SCAN: "off"
       # HOT ZONE (20-min bursts + hourly address discovery per city).
       # NC additions (operator, 2026-07-21): the Lee-corridor pair (Broadway +
       # Sanford — live multi-gig builds), the Rowan/"Rockwell area" cluster
@@ -216,7 +244,10 @@ services:
       # distinct from the NC Cameron; the burst keys every city by (city, state).
       # lexington:nc (Davidson Co — verified_expanding, Q4-2025 + Q1-2026 build
       # releases) is distinct from lexington:sc above; both are hot.
-      HOT_MARKETS: "broadway:nc,sanford:nc,lexington:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
+      # 2026-08-09 PORTAL-FIRST STOP: was the 12-city NC list above + SC markets.
+      # The bursts hammered the exact cities reps work (Concord/Kannapolis/
+      # Salisbury/China Grove/Landis) every 20 min from inside the HTTP workers.
+      HOT_MARKETS: "off"
       # BUILD INTELLIGENCE — news + county-permit signals auto-promote cities
       # into the hot zone (TTL'd, evidence-logged). Official Windstream release
       # naming a city → immediate promotion; ≥2 independent news articles/30d →
@@ -224,15 +255,18 @@ services:
       # Free public sources (Google News RSS + optional ArcGIS county permit
       # feeds via BUILD_INTEL_PERMIT_FEEDS JSON) — zero proxy spend. This is the
       # "know where they're building before the first drop lights" feed.
-      BUILD_INTEL: "on"
+      # 2026-08-09 PORTAL-FIRST STOP: off — its only consumer (hot-market
+      # promotion) is off, so the RSS/permit polling would spin for nothing.
+      BUILD_INTEL: "off"
       # FRESH HARVEST — continuous Kinetic scanning ranked by expected yield
       # (coming-soon flips → fresh-cluster neighbors → hot-city frontier →
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
       # health, so it runs 24/7 with zero site impact. off to disable.
-      # Parametrized so operations can flip the yield engine off from the host
-      # .env (FRESH_HARVEST=off) without a code deploy — the sanctioned
-      # rollback lever if scoring cycles ever pathologize again.
-      FRESH_HARVEST: "${FRESH_HARVEST:-on}"
+      # 2026-08-09 PORTAL-FIRST STOP: pinned hard off (was "${FRESH_HARVEST:-on}",
+      # host-.env-overridable, and running in PUMP MODE — 20k budget / 5 min).
+      # The pin supersedes the .env lever on purpose: compose is the single
+      # source of truth for this state; re-enable happens here, in a commit.
+      FRESH_HARVEST: "off"
       # PUMP MODE: 2x harvest budget (8k/10min) and the keep-warm feeder tops up
       # harder so the queue never drains.
       FRESH_HARVEST_BUDGET: "20000"
@@ -357,10 +391,14 @@ services:
       # is STATEWIDE_SCAN_ON_DEPLOY (every address statewide incl. non-Kinetic
       # territory) — the documented boot-wedge risk; flip that only after the
       # live checks above pass.
-      COMING_SOON_PROGRAM: "on"
-      COMING_SOON_WATCHLIST: "on"
-      DAILY_MARKET_REFRESH: "on"
-      NEWBUILD_RADAR: "on"
+      # 2026-08-09 PORTAL-FIRST STOP (see the block above STATEWIDE_SCAN_ON_
+      # DEPLOY): all four were "on" (operator, 2026-07-21 full-coverage push).
+      # These are the canonical switch lines — YAML keeps the LAST duplicate
+      # key, so producer switches must be flipped HERE, never redeclared above.
+      COMING_SOON_PROGRAM: "off"
+      COMING_SOON_WATCHLIST: "off"
+      DAILY_MARKET_REFRESH: "off"
+      NEWBUILD_RADAR: "off"
       # CLUSTER EXPANSION — ON (operator, 2026-07-21: "if we found new builds
       # the surrounding is turned on"). Every confirmed NEW FIBER + billing-N
       # result seeds a bounded ring crawl around the drop (800m rings, <=6
@@ -370,7 +408,8 @@ services:
       # fresh-drop promotion (>=3 drops/14d -> whole city into the hot zone).
       # De-nested from STATEWIDE_SCAN_ON_DEPLOY in code, so this flag works
       # without the statewide boot sweep.
-      EXPANSION_ENABLED: "on"
+      # 2026-08-09 PORTAL-FIRST STOP: off (was "on", operator 2026-07-21).
+      EXPANSION_ENABLED: "off"
       # Proactive Decodo rotation cadence. 10 was too aggressive: under a 403
       # rolling-window storm it rotated the session hundreds of times/sec (runaway
       # CPU). 40 is the previously-proven value — 403s are a refilling throttle, so

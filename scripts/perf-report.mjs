@@ -82,6 +82,7 @@ const round = (n) => (n == null ? null : Number(n.toFixed(2)));
 export function analyze(lines) {
   const routes = new Map();
   const leadsMap = { count: 0, dbMs: [], rows: [], truncated: 0, byCache: new Map(), byFormat: new Map() };
+  const loopLag = { count: 0, p95: [], max: [] };
   const statusClasses = new Map();
   const signals = { sqliteBusy: 0, otpUnavailable: 0, walGuard: 0, projectionFailed: 0, alertFailed: 0 };
   let parsed = 0;
@@ -127,6 +128,16 @@ export function analyze(lines) {
         const f = String(rec.format ?? "?"); leadsMap.byFormat.set(f, (leadsMap.byFormat.get(f) ?? 0) + 1);
         break;
       }
+      case "perf.loop_lag": {
+        // One line per worker per minute (adaptivePace). The per-sample p95 is
+        // itself a percentile, so the report aggregates the DISTRIBUTION of
+        // per-minute p95s — "p95 of p95" reads as: in the worst minutes, how
+        // laggy was a typical worker's loop.
+        loopLag.count++;
+        if (typeof rec.p95Ms === "number") loopLag.p95.push(rec.p95Ms);
+        if (typeof rec.maxMs === "number") loopLag.max.push(rec.maxMs);
+        break;
+      }
       // Contention and wedge signals. These are the events that tell you WHY a
       // percentile moved, so they are counted even though none of them carry
       // timing of their own.
@@ -165,6 +176,8 @@ export function analyze(lines) {
 
   const dbSorted = [...leadsMap.dbMs].sort((a, z) => a - z);
   const rowsSorted = [...leadsMap.rows].sort((a, z) => a - z);
+  const lagP95Sorted = [...loopLag.p95].sort((a, z) => a - z);
+  const lagMaxSorted = [...loopLag.max].sort((a, z) => a - z);
 
   return {
     window: { from: firstTs, to: lastTs, parsedRecords: parsed, skippedLines: skipped },
@@ -177,6 +190,11 @@ export function analyze(lines) {
       truncated: leadsMap.truncated,
       byCache: Object.fromEntries(leadsMap.byCache),
       byFormat: Object.fromEntries(leadsMap.byFormat),
+    },
+    loopLag: loopLag.count === 0 ? null : {
+      samples: loopLag.count,
+      p95Ms: { p50: round(percentile(lagP95Sorted, 50)), p95: round(percentile(lagP95Sorted, 95)), max: round(lagP95Sorted.length ? lagP95Sorted[lagP95Sorted.length - 1] : null) },
+      maxMs: { p95: round(percentile(lagMaxSorted, 95)), max: round(lagMaxSorted.length ? lagMaxSorted[lagMaxSorted.length - 1] : null) },
     },
     signals,
   };
@@ -245,6 +263,14 @@ function render(report) {
     out.push("");
   }
 
+  if (report.loopLag) {
+    const l = report.loopLag;
+    out.push("── EVENT-LOOP LAG (perf.loop_lag, one line/worker/minute) ".padEnd(78, "─"));
+    out.push(`  samples ${l.samples}   per-minute p95: p50=${l.p95Ms.p50}ms p95=${l.p95Ms.p95}ms worst=${l.p95Ms.max}ms`);
+    out.push(`  per-minute max: p95=${l.maxMs.p95}ms worst=${l.maxMs.max}ms   (>200ms = HTTP visibly starved)`);
+    out.push("");
+  }
+
   out.push("── CONTENTION SIGNALS ".padEnd(78, "─"));
   const s = report.signals;
   out.push(`  SQLITE_BUSY / locked      ${s.sqliteBusy}`);
@@ -255,7 +281,12 @@ function render(report) {
   out.push("");
 
   out.push("── NOT INSTRUMENTED (absent ≠ healthy) ".padEnd(78, "─"));
-  for (const [name, why] of KNOWN_GAPS) out.push(`  ${name.padEnd(30)} ${why}`);
+  for (const [name, why] of KNOWN_GAPS) {
+    // Loop lag became a real event on 2026-08-09; the gap line only applies to
+    // windows that predate the sampler (no perf.loop_lag records observed).
+    if (name === "event-loop delay" && report.loopLag) continue;
+    out.push(`  ${name.padEnd(30)} ${why}`);
+  }
   return out.join("\n");
 }
 

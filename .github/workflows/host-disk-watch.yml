@@ -1,0 +1,96 @@
+name: Host disk watch (production)
+
+# Read-only tripwire for the disk that has already caused incidents (SQLITE_FULL
+# area reset, blocked deploy backups, the WAL death-spiral risk). Every 6 hours:
+# read free space, WAL size, and docker usage over the pinned SSH connection,
+# and FAIL the run when free space is below the threshold. The failure email
+# GitHub sends for a red scheduled run IS the alert channel — no new infra on a
+# box that has no room for any.
+#
+# Thresholds: 4 GiB WARN-fail (act soon: run host-disk.yml reclaim, prune old
+# artifacts), 2 GiB CRITICAL-fail (act now: the WAL alone can eat this in one
+# bad afternoon and SQLITE_FULL corrupts nothing but stops everything).
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_free_gib:
+        description: "Fail below this many GiB free"
+        required: false
+        default: "4"
+        type: string
+  schedule:
+    - cron: "45 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-disk-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Check free space
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read disk state over SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          MIN_FREE_GIB: ${{ inputs.min_free_gib || '4' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+          [[ "$MIN_FREE_GIB" =~ ^[0-9]+$ ]] || { echo "min_free_gib must be an integer" >&2; exit 1; }
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" '
+            set -euo pipefail
+            df -h /
+            VOL="$(docker volume inspect homefront_app-data --format "{{.Mountpoint}}" 2>/dev/null || true)"
+            if [ -n "$VOL" ]; then
+              sudo ls -la "$VOL"/data.db "$VOL"/data.db-wal 2>/dev/null | sed "s/^/  /" || true
+            fi
+            docker system df || true
+            df -B1 --output=avail / | tail -1
+          ' </dev/null > /tmp/disk-state
+          sed '$d' /tmp/disk-state
+
+          AVAIL_B="$(tail -1 /tmp/disk-state | tr -dc 0-9)"
+          AVAIL_GIB=$(( AVAIL_B / 1073741824 ))
+          echo ""
+          echo "free: ${AVAIL_GIB} GiB   threshold: ${MIN_FREE_GIB} GiB"
+          {
+            echo "## Host disk: ${AVAIL_GIB} GiB free (threshold ${MIN_FREE_GIB} GiB)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$AVAIL_B" -lt $(( 2 * 1073741824 )) ]; then
+            echo "::error::CRITICAL: under 2 GiB free on the production host — run host-disk.yml reclaim NOW"
+            exit 1
+          fi
+          if [ "$AVAIL_B" -lt $(( MIN_FREE_GIB * 1073741824 )) ]; then
+            echo "::error::Low disk on the production host — run host-disk.yml reclaim, prune backup artifacts, or grow the disk"
+            exit 1
+          fi

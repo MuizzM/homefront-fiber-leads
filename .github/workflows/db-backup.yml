@@ -1,0 +1,179 @@
+name: DB backup (off-host, verified)
+
+# The first backup this deployment has ever had, and why it looks like this:
+#
+# The box CANNOT back itself up. data.db is ~19 GB, the disk has ~6 GB free,
+# and scripts/backup.sh (on-box staging, age encryption, cron per
+# INFRASTRUCTURE.md) needs the staging space that has never existed — the
+# capacity report shows zero backups and no cron log, ever. The deploy-time
+# snapshot (with_backup) is blocked by the same arithmetic. So the copy must
+# LEAVE the machine as it is produced:
+#
+#   host: scripts/db-dump-stream.cjs (shipped per-run, run inside the app
+#         image via compose run) streams one consistent WAL-snapshot SQL dump
+#         to stdout — the box never stages a byte
+#   ssh:  carries the stream to the runner
+#   here: zstd-compress, then PROVE the backup by restoring it into a fresh
+#         SQLite db on the runner's /mnt scratch disk: integrity_check must
+#         say ok and every table's COUNT(*) must equal the dump's embedded
+#         rowcount manifest. Only a PROVEN dump is uploaded.
+#
+# An artifact only uploads after restore verification passes, so every stored
+# backup is a restore-tested backup. Artifacts are repo-private but NOT
+# encrypted (no AGE_RECIPIENT secret exists in Actions); treat repo access as
+# backup access. Retention is short and deliberate — this is a safety net,
+# not an archive. If artifact storage quota becomes a problem, the durable
+# answer is object storage (litestream/S3) with real credentials — see the
+# scan-architecture plan.
+#
+# COST ON THE BOX: the dump holds one read snapshot for its duration
+# (~5-10 min), which starves WAL checkpointing exactly that long — the WAL
+# grows during the dump and the in-app guard reclaims it after. Scheduled
+# for 07:30 UTC Sunday (03:30 ET — dead hours for reps).
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "How long to keep the uploaded backup artifact"
+        required: false
+        default: "8"
+        type: string
+  schedule:
+    - cron: "30 7 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup-production
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Dump, verify by restoring, upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stream the dump from the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+          SSH_OPTS=(-i "$HOME/.ssh/id_ed25519"
+            -o BatchMode=yes -o ConnectTimeout=15
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=80
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts")
+
+          # Ship the dumper for THIS ref, run it inside the RUNNING image (same
+          # .deployed-tag logic as import-fcc-pins.yml), stream stdout home.
+          # Every compose run gets </dev/null — see the 2026-08-09 heredoc
+          # lesson in import-fcc-pins.yml.
+          scp "${SSH_OPTS[@]}" scripts/db-dump-stream.cjs \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/hf-db-dump.cjs"
+
+          mkdir -p backup
+          ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" '
+            set -euo pipefail
+            cd /srv/homefront
+            TAG="$(cat .deployed-tag 2>/dev/null || true)"
+            if [ -z "$TAG" ]; then
+              RUNNING="$(docker ps --filter "ancestor=homefront-app" --format "{{.Image}}" | head -n1)"
+              TAG="${RUNNING##*:}"
+            fi
+            [ -n "$TAG" ] || { echo "cannot determine running image tag" >&2; exit 1; }
+            echo "dumping via image homefront-app:$TAG" >&2
+            APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+              run --rm --no-deps \
+              --volume /tmp/hf-db-dump.cjs:/tmp/hf-db-dump.cjs:ro \
+              --entrypoint node app /tmp/hf-db-dump.cjs </dev/null
+            rm -f /tmp/hf-db-dump.cjs
+          ' </dev/null | zstd -T0 -3 -o backup/data.sql.zst
+
+          ls -la backup/
+          # A truncated stream compresses fine — the sentinel is the proof the
+          # dumper reached its own end.
+          zstdcat backup/data.sql.zst | tail -c 65536 | grep -q -- "-- dump-complete" || {
+            echo "dump-complete sentinel missing — stream was cut; refusing this backup" >&2
+            exit 1
+          }
+
+      - name: Verify by restoring on the runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get -yq install sqlite3 zstd >/dev/null 2>&1 || true
+          # /mnt is the runner's big scratch disk; the restored DB is ~19 GB
+          # and would not reliably fit on /home.
+          sudo mkdir -p /mnt/restore && sudo chown "$(id -u)" /mnt/restore
+          df -h /mnt | tail -1
+          time zstdcat backup/data.sql.zst | sqlite3 /mnt/restore/restore.db
+          IC="$(sqlite3 /mnt/restore/restore.db 'PRAGMA integrity_check;')"
+          echo "integrity_check: $IC"
+          [ "$IC" = "ok" ] || { echo "integrity_check failed" >&2; exit 1; }
+
+          zstdcat backup/data.sql.zst | tail -c 65536 > /tmp/manifest.tail
+          python3 - <<'PY'
+          import re, sqlite3
+          manifest = {}
+          tail = open("/tmp/manifest.tail", encoding="utf-8", errors="replace").read()
+          for m in re.finditer(r'^-- rowcount "((?:[^"]|"")*)" (\d+)$', tail, re.M):
+              manifest[m.group(1).replace('""', '"')] = int(m.group(2))
+          assert manifest, "no rowcount manifest found in dump tail"
+          db = sqlite3.connect("/mnt/restore/restore.db")
+          bad = []
+          for t, expect in manifest.items():
+              got = db.execute(f'SELECT COUNT(*) FROM "{t.replace(chr(34), chr(34)*2)}"').fetchone()[0]
+              if got != expect:
+                  bad.append((t, expect, got))
+          rows = sum(manifest.values())
+          print(f"tables={len(manifest)} rows={rows} mismatches={len(bad)}")
+          for t, e, g in bad:
+              print(f"MISMATCH {t}: dumped {e} restored {g}")
+          if bad:
+              raise SystemExit(1)
+          open("/tmp/verify-summary", "w").write(f"{len(manifest)} tables, {rows} rows, all counts match")
+          PY
+
+      - name: Upload the proven backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_id }}
+          path: backup/data.sql.zst
+          retention-days: ${{ inputs.retention_days || 8 }}
+          if-no-files-found: error
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## Off-host backup: restore-verified ✔"
+            echo ""
+            echo "- compressed size: $(du -h backup/data.sql.zst | cut -f1)"
+            echo "- verification: $(cat /tmp/verify-summary)"
+            echo "- restore recipe: \`zstdcat data.sql.zst | sqlite3 data.db\`, then place as \$DATA_DIR/data.db"
+            echo "- unencrypted, repo-private artifact — repo access IS backup access"
+          } >> "$GITHUB_STEP_SUMMARY"
