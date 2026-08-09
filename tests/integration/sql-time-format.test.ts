@@ -41,9 +41,15 @@ describe("the mixed-format comparison bug", () => {
 
   it("isoDaysAgo agrees with chronological order on both sides of the boundary", () => {
     const iso = q(`SELECT ${isoDaysAgo(7)} AS t`).t as string;
-    const day = iso.slice(0, 10);
-    expect(q("SELECT (? >= ?) AS r", `${day}T00:30:00.000Z`, iso).r).toBe(0);   // earlier that day → out
-    expect(q("SELECT (? >= ?) AS r", `${day}T23:30:00.000Z`, iso).r).toBe(1);   // later that day  → in
+    // Probe one minute either side of the threshold ITSELF. Fixed wall-clock
+    // probes (00:30 / 23:30 on the boundary day) flipped sides whenever the
+    // suite ran inside those half-hour windows around midnight UTC - which is
+    // exactly when a late-evening US-East CI run lands.
+    const t = Date.parse(iso);
+    const justBefore = new Date(t - 60_000).toISOString();
+    const justAfter = new Date(t + 60_000).toISOString();
+    expect(q("SELECT (? >= ?) AS r", justBefore, iso).r).toBe(0);   // a minute earlier → out
+    expect(q("SELECT (? >= ?) AS r", justAfter, iso).r).toBe(1);    // a minute later  → in
   });
 
   it("emits the same shape JS toISOString() does - the two must sort together", () => {

@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { BillingOps } from "@/components/BillingOps";
 import { AdminHistory } from "@/components/AdminHistory";
-import { Building2, DollarSign, BarChart2, Edit2, Trash2, TrendingUp, ChevronDown, ChevronUp } from "lucide-react";
+import { Building2, DollarSign, BarChart2, TrendingUp, ChevronDown, ChevronUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -250,15 +250,13 @@ function TenantCard({ tenant, onEdit, onDelete }: {
               onClick={() => setExpanded(v => !v)}>
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
-              aria-label="Edit tenant"
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-primary"
               onClick={onEdit} data-testid={`btn-edit-tenant-${tenant.id}`}>
-              <Edit2 className="w-3.5 h-3.5" />
+              Edit
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-400"
-              aria-label="Cancel tenant"
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-rose-400"
               onClick={onDelete} data-testid={`btn-delete-tenant-${tenant.id}`}>
-              <Trash2 className="w-3.5 h-3.5" />
+              Cancel
             </Button>
           </div>
         </td>

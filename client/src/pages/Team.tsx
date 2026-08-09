@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { Edit2, Trash2, User, Crown, Star, ChevronUp, Wallet, ChevronRight, FileSignature, UserMinus } from "lucide-react";
+import { User, Crown, Star, ChevronUp, Wallet, ChevronRight, FileSignature, } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
 import { TierEditor } from "@/components/commission/TierEditor";
 import { validateTiers, type CommissionTier } from "@shared/commissionTiers";
@@ -677,24 +677,24 @@ export default function Team() {
                         </Button>
                       )}
                       {canEditMember(member) && (
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-secondary"
                           onClick={() => openEdit(member)} data-testid={`btn-edit-rep-${member.id}`}
                           aria-label={`Edit ${member.name}`} title={member.id === myMemberId ? "Edit your profile" : "Edit member"}>
-                          <Edit2 className="w-3.5 h-3.5" />
+                          Edit
                         </Button>
                       )}
                       {canLifecycle(member) && member.active && (
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-400 hover:bg-amber-500/10"
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-amber-400 hover:bg-amber-500/10"
                           onClick={() => setOffboardMember(member)} data-testid={`btn-offboard-rep-${member.id}`}
                           aria-label={`Offboard ${member.name}`} title="Offboard - remove access, keep records">
-                          <UserMinus className="w-3.5 h-3.5" />
+                          Offboard
                         </Button>
                       )}
                       {canHardDelete(member) && (
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
                           onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
                           aria-label={`Remove ${member.name}`} title="Delete member record">
-                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete
                         </Button>
                       )}
                     </div>
@@ -881,10 +881,10 @@ export default function Team() {
                             </Button>
                           )}
                           {canHardDelete(member) && (
-                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
                               onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
                               aria-label={`Remove ${member.name}`} title="Delete member record">
-                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete
                             </Button>
                           )}
                         </div>

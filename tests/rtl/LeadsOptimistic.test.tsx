@@ -135,7 +135,7 @@ async function submitNewLead(address: string) {
 async function confirmDeleteOf(id: number) {
   await screen.findByTestId(`card-lead-${id}`);
   const row = screen.getByTestId(`card-lead-${id}`);
-  fireEvent.click(row.querySelector('button[title="Delete"]')!);
+  fireEvent.click(row.querySelector('button[aria-label^="Delete "]')!);
   fireEvent.click(await screen.findByTestId("btn-confirm-delete"));
 }
 

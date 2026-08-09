@@ -20,7 +20,7 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Trash2, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import {
   validateLadder, ladderCeilingCents, usd,
   type MilestoneLadder, type MilestonePeriod, type MilestoneRung,
@@ -122,8 +122,8 @@ export function MilestoneLadderEditor() {
             <button type="button" aria-label={`Remove milestone ${i + 1}`}
               data-testid={`rung-remove-${i}`}
               onClick={() => setDraft(d => d && ({ ...d, rungs: d.rungs.filter((_, n) => n !== i) }))}
-              className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-secondary text-destructive", FOCUS)}>
-              <Trash2 className="h-4 w-4" aria-hidden="true" />
+              className={cn("inline-flex min-h-[44px] shrink-0 items-center rounded-xl bg-secondary px-3 text-[13px] font-semibold text-destructive", FOCUS)}>
+              Remove
             </button>
           </div>
         ))}

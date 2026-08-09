@@ -9,7 +9,7 @@ import {
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { Users, Edit2, Trash2, Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, AlertTriangle, CheckCircle2, ArrowUpRight, CircleDot } from "lucide-react";
+import { Users, Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, AlertTriangle, CheckCircle2, ArrowUpRight, CircleDot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -799,8 +799,8 @@ const LeadTableRow = memo(function LeadTableRow({
           {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
           {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
           <button onClick={() => onOpen(lead)} title="Open details" aria-label={`Open details for ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" /></button>
-          {canEdit && <button onClick={() => onEdit(lead)} title="Edit" aria-label={`Edit ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" aria-hidden="true" /></button>}
-          {canDelete && <button onClick={() => onDelete(lead.id)} title="Delete" aria-label={`Delete ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>}
+          {canEdit && <button onClick={() => onEdit(lead)} aria-label={`Edit ${lead.address}`} className="h-8 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100">Edit</button>}
+          {canDelete && <button onClick={() => onDelete(lead.id)} aria-label={`Delete ${lead.address}`} className="h-8 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100">Delete</button>}
         </div>
         )}
       </td>

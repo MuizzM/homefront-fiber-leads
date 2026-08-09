@@ -30,7 +30,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/EmptyState";
-import { Megaphone, Pause, Play, X, Loader2 } from "lucide-react";
+import { Megaphone, Loader2 } from "lucide-react";
 import {
   describeTrigger, validateCampaignInput, hour12,
   type CampaignTrigger, type CampaignStatus,
@@ -350,15 +350,14 @@ export function CampaignLauncher() {
           <button type="button" disabled={act.isPending}
             onClick={() => act.mutate({ id: c.id, verb: c.status === "paused" ? "resume" : "pause" })}
             data-testid={`campaign-toggle-${c.id}`}
-            aria-label={c.status === "paused" ? "Resume campaign" : "Pause campaign"}
-            className={cn("grid h-11 w-11 place-items-center rounded-xl bg-secondary text-foreground disabled:opacity-50", FOCUS)}>
-            {c.status === "paused" ? <Play className="h-4 w-4" aria-hidden="true" /> : <Pause className="h-4 w-4" aria-hidden="true" />}
+            className={cn("inline-flex min-h-[44px] items-center rounded-xl bg-secondary px-3 text-[13px] font-semibold text-foreground disabled:opacity-50", FOCUS)}>
+            {c.status === "paused" ? "Resume" : "Pause"}
           </button>
           <button type="button" disabled={act.isPending}
             onClick={() => act.mutate({ id: c.id, verb: "cancel" })}
-            data-testid={`campaign-cancel-${c.id}`} aria-label="Cancel campaign"
-            className={cn("grid h-11 w-11 place-items-center rounded-xl bg-secondary text-destructive disabled:opacity-50", FOCUS)}>
-            <X className="h-4 w-4" aria-hidden="true" />
+            data-testid={`campaign-cancel-${c.id}`}
+            className={cn("inline-flex min-h-[44px] items-center rounded-xl bg-secondary px-3 text-[13px] font-semibold text-destructive disabled:opacity-50", FOCUS)}>
+            End
           </button>
         </div>
       )}
