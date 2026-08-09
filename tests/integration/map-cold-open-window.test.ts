@@ -45,8 +45,9 @@ beforeAll(async () => {
   const m = storage.createTeamMember({ name: "Owner", email: "owner@coldopen.test", role: "admin", active: true, tenantId: 1 } as any);
   const u = storage.createUser({ name: "Owner", email: "owner@coldopen.test", role: "admin", active: true, tenantId: 1, teamMemberId: m.id } as any);
   session = storage.createSession(u.id).id;
-  // A viewport-mode-class org: >60k pins, dense metro core + regional fill —
-  // raw SQL in one transaction (createLead per row would dominate runtime).
+  // A viewport-mode-class org: >75k pins (MAP_VIEWPORT_MODE_THRESHOLD), dense
+  // metro core + regional fill — raw SQL in one transaction (createLead per
+  // row would dominate runtime).
   const insert = rawDb.prepare(`INSERT INTO leads
     (address, city, state, zip, lat, lng, tenant_id, lead_status, created_at, updated_at)
     VALUES (?, 'Coldopen', 'NC', '28100', ?, ?, 1, 'prospect', datetime('now'), datetime('now'))`);
@@ -54,10 +55,10 @@ beforeAll(async () => {
   const rand = () => { seedState = (seedState * 1103515245 + 12345) & 0x7fffffff; return seedState / 0x7fffffff; };
   let n = 0;
   rawDb.transaction(() => {
-    for (let i = 0; i < 45_000; i++) { // metro core ~0.3°
+    for (let i = 0; i < 55_000; i++) { // metro core ~0.3°
       insert.run(`${++n} Core St`, CENTER.lat + (rand() - 0.5) * 0.3, CENTER.lng + (rand() - 0.5) * 0.3);
     }
-    for (let i = 0; i < 16_000; i++) { // regional fill ~2°
+    for (let i = 0; i < 25_000; i++) { // regional fill ~2°
       insert.run(`${++n} Fill Rd`, CENTER.lat + (rand() - 0.5) * 2, CENTER.lng + (rand() - 0.5) * 2);
     }
   })();

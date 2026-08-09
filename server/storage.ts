@@ -278,6 +278,9 @@ export interface MapGridCell {
   lat: number;
   lng: number;
   n: number;
+  /** Confirmed-fresh leads in the cell (lead_tag = 'fresh_fiber_confirmed' —
+   *  the exact predicate the pin clusters' fresh_count sums). Omitted when 0. */
+  fresh?: number;
 }
 
 // Result of a guarded lead delete. A lead with field history (knock_log /
@@ -3678,20 +3681,27 @@ export class Storage implements IStorage {
     // reconstruct the grid pitch from coordinates. (sampleStep is a PIN-path
     // concept — the grid already IS the bounded wide-zoom answer — so it is
     // never set on a MapGridWindow.)
+    // `fresh` mirrors the pin path's cluster ring EXACTLY: the feature prop
+    // the cluster fresh_count sums is `leadTag === 'fresh_fiber_confirmed'`
+    // (leadGeoJson.ts), so the grid must count the same predicate — nothing
+    // cleverer — or the green ring would mean different things across the
+    // tier crossing. One extra conditional in the same row pass, no join.
     const rows = rawDb.prepare(`
       SELECT FLOOR(l.lat / ?) AS latBucket, FLOOR(l.lng / ?) AS lngBucket,
-             COUNT(*) AS n
+             COUNT(*) AS n,
+             SUM(CASE WHEN l.lead_tag = 'fresh_fiber_confirmed' THEN 1 ELSE 0 END) AS fresh
       FROM leads l
       WHERE ${scopePred}
       GROUP BY latBucket, lngBucket
       ORDER BY n DESC, latBucket ASC, lngBucket ASC
       LIMIT ?
-    `).all(window.cell, window.cell, ...params, Math.max(1, Math.floor(window.limit ?? 5_000))) as Array<{ latBucket: number; lngBucket: number; n: number }>;
+    `).all(window.cell, window.cell, ...params, Math.max(1, Math.floor(window.limit ?? 5_000))) as Array<{ latBucket: number; lngBucket: number; n: number; fresh: number }>;
     const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
     return rows.map((r) => ({
       lat: r6((r.latBucket + 0.5) * window.cell),
       lng: r6((r.lngBucket + 0.5) * window.cell),
       n: r.n,
+      ...(r.fresh > 0 ? { fresh: r.fresh } : {}),
     }));
   }
 

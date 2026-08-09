@@ -18,6 +18,22 @@ describe("packed map-pin wire format", () => {
     expect(unpackMapPins<typeof pins[number]>(packed)).toEqual({ pins, total: 2, truncated: false });
   });
 
+  it("ships windowCount ONLY with truncated:true — the honest-tier contract", () => {
+    // Over-cap window, nosample form: empty rows + the true count, so the
+    // client can render grid aggregates and predict when pins fit again.
+    const over = packMapPins([], { truncated: true, windowCount: 39_002, total: 0 });
+    expect(over.truncated).toBe(true);
+    expect(over.windowCount).toBe(39_002);
+    const u = unpackMapPins(over);
+    expect(u.truncated).toBe(true);
+    expect(u.windowCount).toBe(39_002);
+    // Complete windows and the full feed never carry it (additive field —
+    // old clients ignore it, byte-stable payloads stay byte-stable).
+    const complete = packMapPins([], { windowCount: 5 });
+    expect("windowCount" in complete).toBe(false);
+    expect("windowCount" in unpackMapPins(complete)).toBe(false);
+  });
+
   it("carries assignMark through pack/unpack so a pre-assignment mark shows on the pin", () => {
     const pins = [
       { id: 1, lat: 35.8, lng: -80.2, leadStatus: "prospect", address: "1 A St", city: "X", state: "NC", zip: "27292", assignMark: "priority" },

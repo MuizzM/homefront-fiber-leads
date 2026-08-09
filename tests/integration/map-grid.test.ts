@@ -3,7 +3,7 @@
 // Pins the contract the three-tier client depends on:
 //   - bbox validation mirrors the pin path (malformed → 400, world-bounds
 //     clamp) with its own 15°/axis span guard (beyond → 400)
-//   - cell=auto formula: span/12 snapped to 0.05° steps, clamped [0.05°, 5°]
+//   - cell=auto formula: span/24 snapped to 0.01° steps, clamped [0.01°, 5°]
 //   - counts are SQL-side floor buckets over the SAME mapScopeWhere scoping:
 //     sums match the raw pin window EXACTLY, cell centers sit within half a
 //     cell of every lead they aggregate
@@ -104,11 +104,11 @@ describe("grid validation", () => {
 });
 
 describe("grid cells", () => {
-  it("cell=auto is span/12 snapped to 0.05° steps", async () => {
-    const body = await (await req("/api/leads/map/grid?bbox=-84,34,-76,37", fx.manager.session)).json(); // span 8 → 0.65→0.65
-    expect(body.cell).toBe(0.65);
-    const small = await (await req("/api/leads/map/grid?bbox=-81,35,-78,36", fx.manager.session)).json(); // span 3 → 0.25
-    expect(small.cell).toBe(0.25);
+  it("cell=auto is span/24 snapped to 0.01° steps (cluster-like pitch)", async () => {
+    const body = await (await req("/api/leads/map/grid?bbox=-84,34,-76,37", fx.manager.session)).json(); // span 8 → 8/24 = 0.333 → 0.33
+    expect(body.cell).toBe(0.33);
+    const small = await (await req("/api/leads/map/grid?bbox=-81,35,-78,36", fx.manager.session)).json(); // span 3 → 0.125 → 0.13
+    expect(small.cell).toBe(0.13);
   });
 
   it("counts sum to EXACTLY the raw pin window over the same bbox", async () => {

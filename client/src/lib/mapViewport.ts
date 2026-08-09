@@ -11,9 +11,15 @@
 // map.
 
 /** Scoped pin total above which the map switches from full feed to bbox
- *  windows. 60k: the packed full feed at 60k pins is ~2-3MB and a steady-state
- *  304 poll stays cheap; past it the windowed path wins outright. */
-export const MAP_VIEWPORT_MODE_THRESHOLD = 60_000;
+ *  windows. 75k: measured Aug 2026 at 62k pins the packed feed is ~980KB on
+ *  the wire (gzip) and loads in under a second — well inside what one fetch +
+ *  client clustering handles, and the 304 poll stays cheap. The 2025 FCC
+ *  import pushed the org's default "latest" lens to ~62k, straight over the
+ *  old 60k cliff, which flipped every field map into windowed mode overnight
+ *  (sampled windows, per-pan fetches). 75k keeps the whole-org feed for that
+ *  lens with headroom; past it the windowed path now renders honest density
+ *  aggregates instead of thinned samples, so crossing is no longer a cliff. */
+export const MAP_VIEWPORT_MODE_THRESHOLD = 75_000;
 
 /** Fetch margin around the visible bounds: panning a little inside the margin
  *  needs no refetch, so ordinary door-to-door movement doesn't hit the server. */
@@ -62,24 +68,63 @@ export function bboxExceedsSpanGuard(b: ViewportBBox, guard: number = MAP_BBOX_M
   return b.maxLng - b.minLng > guard || b.maxLat - b.minLat > guard;
 }
 
+/** Evidence from the last over-cap pin window: the window's span/area and the
+ *  server's TRUE row count for it (shipped on truncated responses). Lets the
+ *  tier decision predict "this window would truncate again" and go straight
+ *  to the density grid instead of paying a fetch that comes back thinned. */
+export interface TruncationEvidence {
+  /** Area (lng-span × lat-span, deg²) of the window that truncated. */
+  area: number;
+  /** The server's true row count for that window. */
+  windowCount: number;
+}
+
+/** Safety factor on the over-cap prediction: only retry the pin path when the
+ *  scaled estimate sits comfortably under the cap, so a borderline zoom-in
+ *  doesn't ping-pong pins→grid→pins on density noise. */
+export const TRUNCATION_RETRY_FACTOR = 0.85;
+
+/** Predicted row count for `w` given evidence from a previously truncated
+ *  window, assuming uniform density (the honest first-order model — density
+ *  is NOT uniform, hence the retry factor + the server re-checking). Returns
+ *  null with no evidence. */
+export function predictWindowCount(w: ViewportBBox, evidence: TruncationEvidence | null | undefined): number | null {
+  if (!evidence || !(evidence.area > 0) || !(evidence.windowCount > 0)) return null;
+  const area = (w.maxLng - w.minLng) * (w.maxLat - w.minLat);
+  if (!(area > 0)) return null;
+  return evidence.windowCount * (area / evidence.area);
+}
+
 /** Which loading tier a viewport window uses: "pins" (bbox pin windows +
- *  mapbox clusters) at/under the 3° pin-tier boundary, "grid" (aggregated
- *  density bubbles) past it — where a pin window would come back a heavily
- *  thinned sample. The tier is a pure function of the window so the fetch
- *  path, the layer-visibility sync, and the tests all agree. NOTE: the
+ *  mapbox clusters) when a complete window is plausible, "grid" (aggregated
+ *  density bubbles with REAL counts) when it is not — either because the
+ *  window is wider than the 3° pin-tier boundary, or because evidence from
+ *  the last truncated fetch predicts this window would blow the row cap too.
+ *  A sampled window is never rendered as if it were pins: thinned "pins" are
+ *  indistinguishable from missing leads, which is exactly the failure the
+ *  grid tier exists to kill. Pure function of (window, evidence) so the fetch
+ *  path, the layer-visibility sync, and the tests all agree. NOTE: the span
  *  boundary is MAP_PIN_TIER_MAX_SPAN_DEG, NOT the 40° server ceiling. */
-export function viewportTierForWindow(w: ViewportBBox): "pins" | "grid" {
-  return bboxExceedsSpanGuard(w, MAP_PIN_TIER_MAX_SPAN_DEG) ? "grid" : "pins";
+export function viewportTierForWindow(w: ViewportBBox, evidence?: TruncationEvidence | null): "pins" | "grid" {
+  if (bboxExceedsSpanGuard(w, MAP_PIN_TIER_MAX_SPAN_DEG)) return "grid";
+  const predicted = predictWindowCount(w, evidence);
+  if (predicted != null && predicted > MAP_BBOX_ROW_CAP * TRUNCATION_RETRY_FACTOR) return "grid";
+  return "pins";
 }
 
 /** The cell pitch the server picks for ?cell=auto (mirrors gridCellForSpan
- *  in routes.ts): span/12 snapped to 0.05° steps, clamped to [0.05°, 5°] —
- *  ~12 cells across the view, so a bubble is always a tap target and the
- *  payload stays ~150 cells. The client computes the same value to key its
- *  response cache (never to override the server's choice). */
+ *  in routes.ts): span/24 snapped to 0.01° steps, clamped to [0.01°, 5°] —
+ *  ~24 cells across the view, so the density tier reads like a cluster map
+ *  (fine enough to see WHERE in a city the leads sit) while the payload
+ *  stays bounded: ~24×24 core cells + margin ≈ well under the 5k cell cap at
+ *  every span. (Was span/12 on an 0.05° lattice — at city spans that painted
+ *  a dozen 5km bubbles: honest counts, useless geometry. The divisor is the
+ *  knob that matters; the finer lattice just lets small spans use it.) The
+ *  client computes the same value to key its response cache (never to
+ *  override the server's choice). */
 export function gridCellForSpan(spanDeg: number): number {
-  const snapped = Math.round(spanDeg / 12 / 0.05) * 0.05;
-  return Math.min(5, Math.max(0.05, Number(snapped.toFixed(2))));
+  const snapped = Math.round(spanDeg / 24 / 0.01) * 0.01;
+  return Math.min(5, Math.max(0.01, Number(snapped.toFixed(2))));
 }
 
 /** Serialization headroom for the grid clamp. The fetch bbox is rounded to
@@ -119,11 +164,15 @@ export function clampToGridGuard(
 }
 
 /** One aggregated density cell from /api/leads/map/grid: lat/lng are the
- *  cell CENTER, n the scoped lead count inside it. */
+ *  cell CENTER, n the scoped lead count inside it. `fresh` counts the
+ *  confirmed-fresh leads in the cell (same predicate as the cluster ring's
+ *  fresh_count — lead_tag = 'fresh_fiber_confirmed') so the money layer stays
+ *  visible on the density tier too; absent/0 on older servers. */
 export interface MapGridCell {
   lat: number;
   lng: number;
   n: number;
+  fresh?: number;
 }
 
 export interface MapGridResponse {
@@ -170,7 +219,7 @@ export function gridCellsToGeoJson(cells: readonly MapGridCell[], cell: number):
     type: "FeatureCollection",
     features: cells.map((c) => ({
       type: "Feature",
-      properties: { n: c.n, cell },
+      properties: { n: c.n, cell, fresh: c.fresh ?? 0 },
       geometry: { type: "Point", coordinates: [c.lng, c.lat] },
     })),
   };
@@ -205,14 +254,18 @@ export function currentFetchWindow(
  *  "zoom in to load pins" notice anymore: past the pin span guard the map
  *  renders the density-grid tier, so territory is visible at EVERY zoom. The
  *  one remaining notice is the truncated-sample warning — a 25k+ pin window
- *  shows a sample, and the user must know. Dismissal resets when the
- *  condition clears (owned by the caller). */
+ *  shows a sample, and the user must know. It never shows on the grid tier:
+ *  an over-cap window now FLIPS to the grid (real counts, nothing hidden), so
+ *  warning there would cry wolf over an honest display. Dismissal resets when
+ *  the condition clears (owned by the caller). */
 export function viewportNotice(opts: {
   viewportMode: boolean;
   truncated: boolean;
   sampleDismissed: boolean;
+  tier?: "pins" | "grid";
 }): { kind: "sample"; message: string } | null {
   if (!opts.viewportMode) return null;
+  if (opts.tier === "grid") return null;
   if (opts.truncated && !opts.sampleDismissed) {
     return { kind: "sample", message: "Showing a sample — zoom in for all pins" };
   }

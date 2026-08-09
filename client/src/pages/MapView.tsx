@@ -77,7 +77,6 @@ import {
   type NoteSaveResult,
 } from "@/lib/leadNotes";
 import {
-  UNCLUSTERED_PAINT,
   PIN_DS_COLOR,
   SELECTED_RING_SPEC,
   SELECTED_RING_FILTER,
@@ -92,7 +91,6 @@ import {
   readPersistedHouseNumbers,
   persistHouseNumbers,
   isSheetDragActive,
-  FRESH_HALO_PAINT,
   decideAddModeTap,
   createRafCoalescedFlush,
   formatFilterCount,
@@ -101,6 +99,10 @@ import {
   persistMapCamera,
   readPersistedMapCamera,
   ensureDensityLayers,
+  LEADS_CLUSTER_SOURCE_SPEC,
+  clusterLayerSpecs,
+  unclusteredLayerSpecs,
+  PIN_DETAIL_MIN_ZOOM,
   DENSITY_SOURCE,
   DENSITY_CIRCLES_LAYER,
   DENSITY_LAYER_IDS,
@@ -121,6 +123,7 @@ import {
   viewportNotice,
   mergeViewportPins,
   viewportTierForWindow,
+  type TruncationEvidence,
   clampToGridGuard,
   gridCacheKey,
   gridCellForSpan,
@@ -380,26 +383,30 @@ interface FieldIconMap {
   getLayer(id: string): unknown;
   addLayer(layer: unknown): void;
   setLayoutProperty(layer: string, name: string, value: unknown): void;
+  setLayerZoomRange?(layer: string, minzoom: number, maxzoom: number): void;
+}
+
+// Circle pins across the full zoom range — the state whenever the glyph-icon
+// layer is off or unavailable.
+function showCirclePinsFullRange(map: FieldIconMap): void {
+  try {
+    map.setLayerZoomRange?.("lead-unclustered", 0, 24);
+    map.setLayoutProperty("lead-unclustered", "visibility", "visible");
+  } catch {
+    /* not ready */
+  }
 }
 
 async function addStatusIconLayer(map: FieldIconMap): Promise<void> {
   if (!newFieldMap()) {
-    try {
-      map.setLayoutProperty("lead-unclustered", "visibility", "visible");
-    } catch {
-      /* not ready */
-    }
+    showCirclePinsFullRange(map);
     return;
   }
   if (!map.getLayer(STATUS_ICON_LAYER)) {
     try {
       await registerPinImages(map);
     } catch {
-      try {
-        map.setLayoutProperty("lead-unclustered", "visibility", "visible");
-      } catch {
-        /* not ready */
-      }
+      showCirclePinsFullRange(map);
       return;
     }
     try {
@@ -408,7 +415,7 @@ async function addStatusIconLayer(map: FieldIconMap): Promise<void> {
         type: "symbol",
         source: "leads-cluster",
         filter: ["!", ["has", "point_count"]],
-        minzoom: 12,
+        minzoom: PIN_DETAIL_MIN_ZOOM,
         layout: {
           "icon-image": iconImageConcatExpression(),
           "icon-size": [
@@ -429,17 +436,22 @@ async function addStatusIconLayer(map: FieldIconMap): Promise<void> {
       });
     } catch {
       // Icon layer failed to add → keep the circle pins visible (never blank).
-      try {
-        map.setLayoutProperty("lead-unclustered", "visibility", "visible");
-      } catch {
-        /* not ready */
-      }
+      showCirclePinsFullRange(map);
       return;
     }
   }
   if (map.getLayer(STATUS_ICON_LAYER)) {
     try {
-      map.setLayoutProperty("lead-unclustered", "visibility", "none");
+      // Hand off, don't hide: circles carry z<12 (isolated leads have no
+      // cluster to represent them there), icons carry 12+. setLayerZoomRange
+      // is absent only on the minimal test doubles — they fall back to the
+      // visibility flip, which those tests assert directly.
+      if (map.setLayerZoomRange) {
+        map.setLayerZoomRange("lead-unclustered", 0, PIN_DETAIL_MIN_ZOOM);
+        map.setLayoutProperty("lead-unclustered", "visibility", "visible");
+      } else {
+        map.setLayoutProperty("lead-unclustered", "visibility", "none");
+      }
     } catch {
       /* not ready */
     }
@@ -1807,8 +1819,8 @@ export default function MapView() {
   // moment it answers (and on probe FAILURE the hint stands down — the full
   // feed is the never-an-empty-map fallback, exactly as before).
   const persistedViewportModeHint = useMemo(
-    () => (user ? readPersistedViewportMode({ tenantId: user.tenantId, userId: user.id }) : null),
-    [user?.id, user?.tenantId],
+    () => (user ? readPersistedViewportMode({ tenantId: user.tenantId, userId: user.id, view: countView }) : null),
+    [user?.id, user?.tenantId, countView],
   );
   const viewportMode = mapPinCount != null
     ? mapPinCount.total > MAP_VIEWPORT_MODE_THRESHOLD
@@ -1822,9 +1834,9 @@ export default function MapView() {
   useEffect(() => {
     if (!user || mapPinCount == null) return;
     const confirmed = mapPinCount.total > MAP_VIEWPORT_MODE_THRESHOLD;
-    writePersistedViewportMode({ tenantId: user.tenantId, userId: user.id }, confirmed);
+    writePersistedViewportMode({ tenantId: user.tenantId, userId: user.id, view: countView }, confirmed);
     if (!confirmed) pruneMapWindowSnapshots();
-  }, [mapPinCount?.total, user?.id, user?.tenantId]);
+  }, [mapPinCount?.total, user?.id, user?.tenantId, countView]);
 
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
   // Fetch ALL map pins from dedicated lean endpoint — only runs after auth is ready
@@ -2062,6 +2074,20 @@ export default function MapView() {
     }, MAP_PINS_SNAPSHOT_DEBOUNCE_MS);
   }, []);
 
+  // Evidence from the last over-cap pin window ({area, windowCount} — see
+  // TruncationEvidence). refreshViewportPins folds it into the tier decision
+  // so an over-dense window renders the density grid's REAL counts instead of
+  // a silently thinned pin sample; a complete pin window clears it. A ref by
+  // contract (#87): the fetch callbacks may write it without flipping state.
+  const truncationEvidenceRef = useRef<TruncationEvidence | null>(null);
+  // Identity of the in-flight pin fetch — a refresh that resolves to the SAME
+  // window+lens joins the in-flight request instead of abort-restarting it.
+  // Boot used to fire a burst of a dozen identical fetches (probe flip, style
+  // epoch, SSE resync, invalidation bridge all landing in one flush), each
+  // aborting its predecessor: the client got its pins a full burst later, and
+  // the server — whose query work is synchronous — paid for every corpse.
+  const inFlightPinKeyRef = useRef<string | null>(null);
+
   // INVISIBLE by contract (#87): this function never flips React state — the
   // only writes are the setQueryData cache merge and plain refs. The tier
   // state is owned by refreshViewportPins below; chip visibility DERIVES from
@@ -2072,14 +2098,20 @@ export default function MapView() {
     if (!bounds) return;
     const { view, window } = bounds;
     // Tier dispatch happens in refreshViewportPins — this callback only ever
-    // runs in the pins tier, so the window is always inside the pin-tier
-    // boundary (over-dense windows return the server's even sample).
+    // runs in the pins tier. `nosample=1` tells the server an over-cap window
+    // should come back EMPTY with its true count (we render the grid tier for
+    // it) rather than as a thinned sample the map would have to lie with.
+    const mapView = sourceFilterToMapView(filterSourceRef.current);
+    const fetchKey = `${bboxParam(window)}|${mapView ?? ""}`;
+    if (inFlightPinKeyRef.current === fetchKey && viewportAbortRef.current && !viewportAbortRef.current.signal.aborted) {
+      return; // identical request already on the wire — let it land
+    }
     viewportAbortRef.current?.abort();
     const controller = new AbortController();
     viewportAbortRef.current = controller;
+    inFlightPinKeyRef.current = fetchKey;
     const sessionId = getStoredSessionId();
-    const mapView = sourceFilterToMapView(filterSourceRef.current);
-    fetch(`/api/leads/map?format=packed&bbox=${bboxParam(window)}${mapView ? `&view=${mapView}` : ""}`, {
+    fetch(`/api/leads/map?format=packed&nosample=1&bbox=${bboxParam(window)}${mapView ? `&view=${mapView}` : ""}`, {
       headers: sessionId ? { "x-session-id": sessionId } : {},
       signal: controller.signal,
     })
@@ -2087,8 +2119,28 @@ export default function MapView() {
         if (!res.ok) throw new Error(`bbox pins ${res.status}`);
         return unpackMapPins<MapPin>(await res.json());
       })
-      .then(({ pins: fetched, truncated }) => {
+      .then(({ pins: fetched, truncated, windowCount }) => {
         if (controller.signal.aborted) return;
+        if (inFlightPinKeyRef.current === fetchKey) inFlightPinKeyRef.current = null;
+        if (truncated) {
+          // Over-cap window: the honest render is the density grid, not a
+          // sample (nosample=1 means `fetched` is empty — nothing to merge).
+          // Record the evidence and re-enter the tier decision; the flag
+          // still lands in the cache so the lasso's partial-set honesty
+          // gate (#92) knows the loaded pins under-cover this window.
+          truncationEvidenceRef.current = {
+            area: (window.maxLng - window.minLng) * (window.maxLat - window.minLat),
+            windowCount: windowCount ?? Number.MAX_SAFE_INTEGER,
+          };
+          qc.setQueryData(["/api/leads/map"], (old: any) =>
+            old?.truncated ? old : { pins: old?.pins ?? [], total: old?.pins?.length ?? 0, truncated: true });
+          refreshViewportPinsRef.current();
+          return;
+        }
+        // Complete window: any prediction evidence is stale — density changed
+        // or we zoomed in under the cap. Cleared BEFORE the merge so the next
+        // moveend re-tries pins immediately.
+        truncationEvidenceRef.current = null;
         const keep = keepRegion(view);
         // The pin window landed: any lingering density bubbles from the grid
         // tier hand off NOW (imperative layer sync — not React state).
@@ -2097,34 +2149,30 @@ export default function MapView() {
         // A COMPLETE window replacing a cold-open snapshot seed may evict
         // seeded rows the server disowned; a truncated (sampled) window must
         // never evict (mergeViewportPins' standing rule).
-        const evictWindow = !truncated && windowSeedRef.current ? window : null;
-        if (!truncated) windowSeedRef.current = null; // seed fully reconciled
+        const evictWindow = windowSeedRef.current ? window : null;
+        windowSeedRef.current = null; // seed fully reconciled
         qc.setQueryData(["/api/leads/map"], (old: any) => {
           const prev: MapPin[] = old?.pins ?? [];
           const merged = mergeViewportPins(prev, fetched, keep, evictWindow);
           // Nothing new and nothing pruned → keep the old reference so
           // structural sharing turns this into a no-op (no re-cluster) —
           // UNLESS the truncation flag moved, which the notice chip reads.
-          if (merged.added === 0 && merged.pruned === 0 && old?.pins && Boolean(old?.truncated) === truncated) return old;
+          if (merged.added === 0 && merged.pruned === 0 && old?.pins && !old?.truncated) return old;
           return {
             pins: merged.pins,
             total: merged.pins.length,
-            // LATEST fetch wins: the fetched window always covers the viewport
-            // +20% margin, so its flag is the honest answer for what's on
-            // screen (off-screen retained pins are refetched before they're
-            // panned to). An OR-merge sticks true for the whole session — the
-            // chip never clears over sparse windows, and because the flag
-            // never returns to false the dismissal reset can never fire, so
-            // one dismiss disarms the warning for every later dense window.
-            truncated,
+            // LATEST fetch wins: a complete window covering the viewport
+            // +20% margin means what's on screen is the whole truth.
+            truncated: false,
           };
         });
         // Persist this COMPLETE window (debounced, identity-scoped) so the
         // next cold open paints it instantly — see scheduleWindowSnapshotWrite.
-        if (!truncated) scheduleWindowSnapshotWrite(fetched, window);
+        scheduleWindowSnapshotWrite(fetched, window);
       })
       .catch((err: any) => {
         if (err?.name === "AbortError") return; // superseded by a newer pan
+        if (inFlightPinKeyRef.current === fetchKey) inFlightPinKeyRef.current = null;
         // A failed window fetch must never empty the map — keep what's there.
       });
   }, [qc, scheduleWindowSnapshotWrite]);
@@ -2213,24 +2261,40 @@ export default function MapView() {
 
   // The ONE entry point for "the map moved / data changed, refresh the
   // window": owns the tier state (change-only, so a steady pan flips nothing)
-  // and delegates the fetch — which stays React-state-free.
+  // and delegates the fetch — which stays React-state-free. The tier folds in
+  // the truncation evidence, so a window the server just declared over-cap
+  // goes straight to the grid (real counts) and a zoom-in only re-tries pins
+  // once the area-scaled estimate fits back under the cap.
+  //
+  // Same-tick calls COALESCE onto one microtask: boot flushes (probe flip +
+  // style epoch + SSE resync + invalidation bridge landing together) used to
+  // dispatch a dozen self-aborting fetches — one refresh serves them all, at
+  // zero added latency (microtasks run before the browser paints).
+  const refreshCoalescedRef = useRef(false);
   const refreshViewportPins = useCallback(() => {
-    if (!viewportModeRef.current) return;
-    const bounds = currentFetchWindow(mapRef.current);
-    const tier = bounds ? viewportTierForWindow(bounds.window) : viewportTierRef.current;
-    if (tier === "pins" && viewportTierRef.current !== "pins") {
-      // grid→pins crossing: density stays visible until the pin window lands.
-      pinWindowLandedRef.current = false;
-    }
-    if (tier === "grid" && viewportTierRef.current !== "grid") {
-      // pins→grid crossing: the stale pin clusters stay visible until the
-      // FIRST grid window lands (and stay on if that fetch fails).
-      gridWindowLandedRef.current = false;
-    }
-    viewportTierRef.current = tier;
-    setViewportTier((prev) => (prev === tier ? prev : tier));
-    if (tier === "grid") fetchViewportGridRef.current();
-    else fetchViewportPinsRef.current();
+    if (refreshCoalescedRef.current) return;
+    refreshCoalescedRef.current = true;
+    queueMicrotask(() => {
+      refreshCoalescedRef.current = false;
+      if (!viewportModeRef.current) return;
+      const bounds = currentFetchWindow(mapRef.current);
+      const tier = bounds
+        ? viewportTierForWindow(bounds.window, truncationEvidenceRef.current)
+        : viewportTierRef.current;
+      if (tier === "pins" && viewportTierRef.current !== "pins") {
+        // grid→pins crossing: density stays visible until the pin window lands.
+        pinWindowLandedRef.current = false;
+      }
+      if (tier === "grid" && viewportTierRef.current !== "grid") {
+        // pins→grid crossing: the stale pin clusters stay visible until the
+        // FIRST grid window lands (and stay on if that fetch fails).
+        gridWindowLandedRef.current = false;
+      }
+      viewportTierRef.current = tier;
+      setViewportTier((prev) => (prev === tier ? prev : tier));
+      if (tier === "grid") fetchViewportGridRef.current();
+      else fetchViewportPinsRef.current();
+    });
   }, []);
   const refreshViewportPinsRef = useRef(refreshViewportPins);
   refreshViewportPinsRef.current = refreshViewportPins;
@@ -2270,6 +2334,9 @@ export default function MapView() {
     if (prevFilterSourceRef.current === filterSource) return;
     prevFilterSourceRef.current = filterSource;
     gridCacheRef.current.clear();
+    // Over-cap evidence is per-lens (the "latest" density says nothing about
+    // "all") — a stale carry-over would strand the new lens on the grid tier.
+    truncationEvidenceRef.current = null;
     if (viewportModeRef.current) refreshViewportPinsRef.current();
     else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
   }, [filterSource, qc]);
@@ -2301,6 +2368,20 @@ export default function MapView() {
       try { map.off("moveend", onMoveEnd); } catch {}
     };
   }, [mapReady, styleEpoch, viewportMode]);
+
+  // Viewport-mode safety poll — the windowed twin of the full feed's 60s
+  // refetchInterval. Windowed freshness otherwise hangs ENTIRELY off the SSE
+  // streams + moveend: with a proxy that strips streaming (or a long SSE
+  // outage), a stationary map never refetched, and a lead created out-of-band
+  // stayed invisible until the user happened to pan. One window refetch a
+  // minute is small (the common window is a few hundred KB), the grid tier's
+  // 60s response cache absorbs it entirely, and hidden tabs pause it the same
+  // way the full-feed poll pauses (tabActive gate).
+  useEffect(() => {
+    if (!viewportMode || !tabActive) return;
+    const t = setInterval(() => refreshViewportPinsRef.current(), 60_000);
+    return () => clearInterval(t);
+  }, [viewportMode, tabActive]);
 
   // Persist the camera on every settled move (both modes, debounced) so the
   // next launch opens on the same territory and the first pins/grid fetch is
@@ -2970,111 +3051,13 @@ export default function MapView() {
       // one-fetch tier handoff (both visible) the pins read on top.
       ensureDensityLayers(map);
 
-      // ── Lead cluster source (GeoJSON) — shows count bubbles when zoomed out ──
-      map.addSource("leads-cluster", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-        cluster: true,
-        clusterMaxZoom: 13, // collapse clusters below zoom 13
-        clusterRadius: 50, // px radius to cluster within
-        clusterProperties: { fresh_count: ["+", ["get", "fresh"]] },
-      });
-
-      // Cluster outer glow ring (behind main circle)
-      map.addLayer({
-        id: "lead-clusters-glow",
-        type: "circle",
-        source: "leads-cluster",
-        filter: ["has", "point_count"],
-        maxzoom: 13.5,
-        paint: {
-          "circle-color": [
-            "step",
-            ["get", "point_count"],
-            "#0d9488",
-            10,
-            "#0f766e",
-            30,
-            "#115e59",
-          ],
-          "circle-radius": ["step", ["get", "point_count"], 26, 10, 33, 30, 42],
-          "circle-opacity": 0.25,
-          "circle-stroke-width": 0,
-        },
-      });
-
-      // A confirmed-fresh ring makes the money layer visible without changing
-      // the disposition color inside the cluster. The count is aggregated in
-      // the Mapbox worker, so this remains one GeoJSON source and zero DOM pins.
-      map.addLayer({
-        id: "lead-fresh-cluster-ring",
-        type: "circle",
-        source: "leads-cluster",
-        filter: [
-          "all",
-          ["has", "point_count"],
-          [">", ["get", "fresh_count"], 0],
-        ],
-        maxzoom: 13.5,
-        paint: {
-          "circle-radius": [
-            "+",
-            ["step", ["get", "point_count"], 18, 10, 24, 30, 32],
-            6,
-          ],
-          "circle-color": "rgba(0,0,0,0)",
-          "circle-stroke-width": 3,
-          "circle-stroke-color": "#22c55e",
-          "circle-opacity": 0.95,
-        },
-      });
-
-      // Cluster circles — visible only when zoomed out (zoom < 13)
-      map.addLayer({
-        id: "lead-clusters",
-        type: "circle",
-        source: "leads-cluster",
-        filter: ["has", "point_count"],
-        maxzoom: 13.5,
-        paint: {
-          // Neutral teal DENSITY ramp — clusters mean "how many," never a status.
-          // (green/red are reserved for sold/dead pins; reusing them here would
-          // make the overview contradict the pin colors at close zoom.)
-          "circle-color": [
-            "step",
-            ["get", "point_count"],
-            "#0d9488",
-            10,
-            "#0f766e",
-            30,
-            "#115e59",
-          ],
-          "circle-radius": ["step", ["get", "point_count"], 18, 10, 24, 30, 32],
-          "circle-opacity": 0.92,
-          "circle-stroke-width": 2.5,
-          "circle-stroke-color": "rgba(255,255,255,0.9)",
-        },
-      });
-
-      // Cluster count labels
-      map.addLayer({
-        id: "lead-cluster-count",
-        type: "symbol",
-        source: "leads-cluster",
-        filter: ["has", "point_count"],
-        maxzoom: 13.5,
-        layout: {
-          "text-field": "{point_count_abbreviated}",
-          "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
-          "text-size": ["step", ["get", "point_count"], 13, 10, 14, 30, 16],
-          "text-allow-overlap": true,
-        },
-        paint: {
-          "text-color": "#ffffff",
-          "text-halo-color": "rgba(0,0,0,0.3)",
-          "text-halo-width": 0.5,
-        },
-      });
+      // ── Lead cluster source (GeoJSON) — count bubbles when zoomed out ──
+      // Source + the four cluster layers come from ONE spec factory shared
+      // with the style.load re-add block (the two hand-copied versions had
+      // drifted; see clusterLayerSpecs in @/lib/mapPins for the zoom contract
+      // that fixed the [13.5,14) dead band).
+      map.addSource("leads-cluster", LEADS_CLUSTER_SOURCE_SPEC);
+      for (const spec of clusterLayerSpecs()) map.addLayer(spec);
 
       // True while any draw tool is armed — cluster zoom / popups / hover-cursor
       // must all stand down so they can't yank the map or fight the crosshair
@@ -3135,33 +3118,14 @@ export default function MapView() {
       map.on("mouseenter", DENSITY_CIRCLES_LAYER, () => hoverCursor("pointer"));
       map.on("mouseleave", DENSITY_CIRCLES_LAYER, () => hoverCursor(""));
 
-      // ── Individual lead pins (GPU circle layer) — shown when zoomed in past clusterMaxZoom ──
-      // Painted by displayState (`ds` prop): shared consts in @/lib/mapPins keep
-      // this block and the style.load re-add block from ever drifting again.
-      map.addLayer({
-        id: "lead-unclustered",
-        type: "circle",
-        source: "leads-cluster",
-        filter: ["!", ["has", "point_count"]],
-        minzoom: 12,
-        paint: UNCLUSTERED_PAINT,
-      });
-
-      map.addLayer(
-        {
-          id: "lead-fresh-confirmed-halo",
-          type: "circle",
-          source: "leads-cluster",
-          filter: [
-            "all",
-            ["!", ["has", "point_count"]],
-            ["==", ["get", "fresh"], 1],
-          ],
-          minzoom: 12,
-          paint: FRESH_HALO_PAINT,
-        },
-        "lead-unclustered",
-      );
+      // ── Individual lead pins (GPU circle layer) — every zoom, no floor ──
+      // Painted by displayState (`ds` prop): shared spec factory in
+      // @/lib/mapPins keeps this block and the style.load re-add block from
+      // ever drifting again (and carries the no-minzoom isolated-lead fix).
+      for (const spec of unclusteredLayerSpecs()) {
+        const { before, ...layer } = spec;
+        map.addLayer(layer, before);
+      }
 
       // ── Per-rep colour halos ───────────────────────────────────────────────
       // Concentric rings UNDER the pin, one per rep who works the door, so a
@@ -3927,18 +3891,27 @@ export default function MapView() {
     if (!map || !mapReady || !canManage) return;
     try {
       if (repColorMode) {
-        // AUDIT FIX: in the default icon-pin config the circle layer is hidden,
-        // so recoloring it changed NOTHING. Swap layers: icons off, circles on
-        // in rep colors (clusters stay status-colored — territory-level view).
+        // AUDIT FIX: in the default icon-pin config the circle layer hands off
+        // to icons at z12, so recoloring it alone changed NOTHING up close.
+        // Swap layers: icons off, circles on at EVERY zoom in rep colors
+        // (clusters stay status-colored — territory-level view).
         if (map.getLayer(STATUS_ICON_LAYER)) map.setLayoutProperty(STATUS_ICON_LAYER, "visibility", "none");
         if (map.getLayer("lead-unclustered")) {
+          map.setLayerZoomRange?.("lead-unclustered", 0, 24);
           map.setLayoutProperty("lead-unclustered", "visibility", "visible");
           map.setPaintProperty("lead-unclustered", "circle-color", ["get", "repColor"]);
         }
       } else {
         if (map.getLayer("lead-unclustered")) {
           map.setPaintProperty("lead-unclustered", "circle-color", PIN_DS_COLOR);
-          map.setLayoutProperty("lead-unclustered", "visibility", newFieldMap() ? "none" : (showLeads ? "visible" : "none"));
+          // The circle layer stays VISIBLE in icon mode: its zoom range hands
+          // off to icons at z12 (addStatusIconLayer), and below that it is the
+          // ONLY representation an isolated lead has — hiding it here was how
+          // solo rural doors vanished at survey zooms.
+          if (newFieldMap() && map.getLayer(STATUS_ICON_LAYER)) {
+            map.setLayerZoomRange?.("lead-unclustered", 0, PIN_DETAIL_MIN_ZOOM);
+          }
+          map.setLayoutProperty("lead-unclustered", "visibility", showLeads ? "visible" : "none");
         }
         if (map.getLayer(STATUS_ICON_LAYER)) map.setLayoutProperty(STATUS_ICON_LAYER, "visibility", newFieldMap() ? (showLeads ? "visible" : "none") : "none");
       }
@@ -4351,12 +4324,13 @@ export default function MapView() {
       STATUS_ICON_LAYER,
     ]) {
       if (!map.getLayer(id)) continue;
-      // NEW_FIELD_MAP swaps circle pins for status icons: the circle layer stays
-      // hidden and the icon layer follows the show-leads toggle. Flag off → the
-      // icon layer doesn't exist (skipped above) and this behaves exactly as today.
+      // NEW_FIELD_MAP swaps circle pins for status icons ABOVE z12 only: the
+      // circle layer keeps its 0→12 zoom range (addStatusIconLayer's handoff)
+      // and must stay VISIBLE — below z12 it is the only representation an
+      // isolated, never-clustered lead has. Flag off → the icon layer doesn't
+      // exist (skipped above) and this behaves exactly as today.
       let v = vis;
-      if (fieldMap && id === "lead-unclustered") v = "none";
-      else if (!fieldMap && id === STATUS_ICON_LAYER) v = "none";
+      if (!fieldMap && id === STATUS_ICON_LAYER) v = "none";
       try {
         map.setLayoutProperty(id, "visibility", v);
       } catch {}
@@ -4382,135 +4356,17 @@ export default function MapView() {
       // Density tier first (sits UNDER the pin clusters) — same idempotent
       // installer the init block uses, so the two can never drift.
       ensureDensityLayers(map);
-      // Re-add cluster source + layers after style swap
+      // Re-add cluster source + layers after style swap — the SAME spec
+      // factories the init block uses, so the two can never drift again (the
+      // old hand-copied duplicate had already diverged: different radius
+      // steps, opacity, and count text sizing).
       if (!map.getSource("leads-cluster")) {
-        map.addSource("leads-cluster", {
-          type: "geojson",
-          data: { type: "FeatureCollection", features: [] },
-          cluster: true,
-          clusterMaxZoom: 13,
-          clusterRadius: 50,
-          clusterProperties: { fresh_count: ["+", ["get", "fresh"]] },
-        });
-        // Cluster glow
-        map.addLayer({
-          id: "lead-clusters-glow",
-          type: "circle",
-          source: "leads-cluster",
-          filter: ["has", "point_count"],
-          maxzoom: 13.5,
-          paint: {
-            "circle-color": [
-              "step",
-              ["get", "point_count"],
-              "#0d9488",
-              10,
-              "#0f766e",
-              30,
-              "#115e59",
-            ],
-            "circle-radius": [
-              "step",
-              ["get", "point_count"],
-              26,
-              10,
-              33,
-              30,
-              42,
-            ],
-            "circle-opacity": 0.25,
-          },
-        });
-        map.addLayer({
-          id: "lead-fresh-cluster-ring",
-          type: "circle",
-          source: "leads-cluster",
-          filter: [
-            "all",
-            ["has", "point_count"],
-            [">", ["get", "fresh_count"], 0],
-          ],
-          maxzoom: 13.5,
-          paint: {
-            "circle-radius": [
-              "+",
-              ["step", ["get", "point_count"], 18, 10, 24, 30, 32],
-              6,
-            ],
-            "circle-color": "rgba(0,0,0,0)",
-            "circle-stroke-width": 3,
-            "circle-stroke-color": "#22c55e",
-            "circle-opacity": 0.95,
-          },
-        });
-        map.addLayer({
-          id: "lead-clusters",
-          type: "circle",
-          source: "leads-cluster",
-          filter: ["has", "point_count"],
-          maxzoom: 13.5,
-          paint: {
-            "circle-color": [
-              "step",
-              ["get", "point_count"],
-              "#0d9488",
-              10,
-              "#0f766e",
-              30,
-              "#115e59",
-            ],
-            "circle-radius": [
-              "step",
-              ["get", "point_count"],
-              18,
-              10,
-              24,
-              30,
-              30,
-            ],
-            "circle-opacity": 0.9,
-            "circle-stroke-width": 2.5,
-            "circle-stroke-color": "#fff",
-          },
-        });
-        map.addLayer({
-          id: "lead-cluster-count",
-          type: "symbol",
-          source: "leads-cluster",
-          filter: ["has", "point_count"],
-          maxzoom: 13.5,
-          layout: {
-            "text-field": "{point_count_abbreviated}",
-            "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
-            "text-size": 13,
-          },
-          paint: { "text-color": "#ffffff" },
-        });
-        // Unclustered individual pins — same shared paint consts as init, so the
-        // two blocks can never drift again. (Glow layer removed — see init block.)
-        map.addLayer({
-          id: "lead-unclustered",
-          type: "circle",
-          source: "leads-cluster",
-          filter: ["!", ["has", "point_count"]],
-          minzoom: 12,
-          paint: UNCLUSTERED_PAINT,
-        });
-        map.addLayer(
-          {
-            id: "lead-fresh-confirmed-halo",
-            type: "circle",
-            source: "leads-cluster",
-            filter: [
-              "all",
-              ["!", ["has", "point_count"]],
-              ["==", ["get", "fresh"], 1],
-            ],
-            minzoom: 12,
-            paint: FRESH_HALO_PAINT,
-          },
-          "lead-unclustered",
-        );
+        map.addSource("leads-cluster", LEADS_CLUSTER_SOURCE_SPEC);
+        for (const spec of clusterLayerSpecs()) map.addLayer(spec);
+        for (const spec of unclusteredLayerSpecs()) {
+          const { before, ...layer } = spec;
+          map.addLayer(layer, before);
+        }
         // Per-rep halos — identical specs to the init block (see @/lib/leadHalos).
         for (const spec of haloLayerSpecs()) {
           map.addLayer(spec, haloBeforeId((id: string) => !!map.getLayer(id)));
@@ -6929,7 +6785,17 @@ export default function MapView() {
                 {activeFilterChipLabel}
                 <span className="text-white/60 font-medium">
                   {" "}
-                  · {formatFilterCount(mapTotalLeads.length)}
+                  {/* Viewport mode holds only a WINDOW of the org's pins, so a
+                      client-side count under-reports the lens badly (the pill
+                      read "20.6k" while the lens held 62k). When the source
+                      lens is the only active filter the probe's server total
+                      is the truth; any status/rep narrowing falls back to the
+                      loaded-window count — best available client-side. */}
+                  · {formatFilterCount(
+                    viewportMode && filterStatus === "all" && filterRep === "all" && mapPinCount?.total != null
+                      ? mapPinCount.total
+                      : mapTotalLeads.length,
+                  )}
                 </span>
               </span>
               <button
@@ -6949,14 +6815,16 @@ export default function MapView() {
           )}
 
           {/* ── Viewport-mode notice — the map is under-showing pins and the
-                 user must know. The one remaining case is the server's 25k
-                 row cap (sample): wide zooms render the density grid, so no
-                 "zoom in to load pins" dead state exists anymore. ── */}
+                 user must know. Rare now: an over-cap window flips to the
+                 density grid (real counts — nothing hidden, no notice), so
+                 this only covers the transient where stale loaded pins are
+                 known-partial while still on the pins tier. ── */}
           {mapReady && (() => {
             const notice = viewportNotice({
               viewportMode,
-              truncated: viewportTier === "pins" && !!mapPinData?.truncated,
+              truncated: !!mapPinData?.truncated,
               sampleDismissed: sampleNoticeDismissed,
+              tier: viewportTier,
             });
             if (!notice) return null;
             return (

@@ -56,20 +56,26 @@ describe("viewportTierForWindow — tier selection by span", () => {
 });
 
 describe("gridCellForSpan — the ?cell=auto formula (mirrors the server)", () => {
-  it("is span/12 snapped to 0.05° steps, clamped to [0.05°, 5°]", () => {
-    expect(gridCellForSpan(3)).toBe(0.25);     // the mission's example
-    expect(gridCellForSpan(6)).toBe(0.5);
-    expect(gridCellForSpan(9)).toBe(0.75);
-    expect(gridCellForSpan(15)).toBe(1.25);
-    expect(gridCellForSpan(0.36)).toBe(0.05);  // tiny window → minimum pitch
-    expect(gridCellForSpan(60)).toBe(5);       // clamped at the max
+  it("is span/24 snapped to 0.01° steps, clamped to [0.01°, 5°]", () => {
+    expect(gridCellForSpan(3)).toBe(0.13);     // an over-cap city-region flip
+    expect(gridCellForSpan(6)).toBe(0.25);
+    expect(gridCellForSpan(9)).toBe(0.38);
+    expect(gridCellForSpan(15)).toBe(0.63);
+    expect(gridCellForSpan(0.36)).toBe(0.02);  // city window → fine pitch
+    expect(gridCellForSpan(0.1)).toBe(0.01);   // tiny window → minimum pitch
+    expect(gridCellForSpan(200)).toBe(5);      // clamped at the max
   });
 
-  it("keeps ~12 cells across the view at every zoom", () => {
-    for (const span of [3.2, 5, 8, 12, 15]) {
+  it("keeps ~24 cells across the view — cluster-like geometry, always far under the 5k cell cap", () => {
+    for (const span of [1, 3.2, 5, 8, 12, 15]) {
       const cellsAcross = span / gridCellForSpan(span);
-      expect(cellsAcross).toBeGreaterThanOrEqual(11);
-      expect(cellsAcross).toBeLessThanOrEqual(13.5);
+      // Snapping to the 0.01° lattice makes the ratio wobble around 24; the
+      // contract is "fine enough to read like clusters, bounded under the
+      // cell cap": even the worst case (~31 across, squared, plus the fetch
+      // margin) stays a fraction of MAP_GRID_CELL_CAP.
+      expect(cellsAcross).toBeGreaterThanOrEqual(18);
+      expect(cellsAcross).toBeLessThanOrEqual(31);
+      expect(cellsAcross * cellsAcross * 1.44).toBeLessThan(5_000);
     }
   });
 });
@@ -220,6 +226,18 @@ describe("gridCellsToGeoJson — what the density bubble renders", () => {
     expect(a.properties.n).toBe(1241); // drives radius/color AND the count label
     expect(a.properties.cell).toBe(0.25); // the tap-to-zoom handler's bounds
     expect(b.properties.n).toBe(7);
+  });
+
+  it("carries the per-cell fresh count (the density tier's green money ring); absent → 0", () => {
+    const gj = gridCellsToGeoJson(
+      [{ lat: 35.1, lng: -80.1, n: 40, fresh: 3 }, { lat: 35.2, lng: -80.2, n: 9 }],
+      0.1,
+    );
+    // fresh > 0 drives the DENSITY_FRESH_RING_LAYER filter — same green ring,
+    // same predicate as the pin clusters' fresh_count.
+    expect(gj.features[0].properties.fresh).toBe(3);
+    // Old servers omit the field: default 0 so the ring filter never matches.
+    expect(gj.features[1].properties.fresh).toBe(0);
   });
 
   it("an empty grid is an empty collection (never a crash on first paint)", () => {

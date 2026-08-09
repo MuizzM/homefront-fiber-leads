@@ -53,18 +53,25 @@ export interface PackedMapPins {
   // window holds more pins than were shipped, so the client knows the viewport
   // is a sample, not the whole window. Absent (undefined) on the full feed.
   truncated?: boolean;
+  // The window's TRUE row count, shipped alongside truncated:true so the
+  // client can (a) render honest aggregate counts instead of a thinned
+  // sample and (b) predict whether a zoomed-in window will fit under the cap
+  // without paying a discarded fetch. Absent on complete windows and the
+  // full feed. Additive: old clients ignore it.
+  windowCount?: number;
 }
 
-export function packMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(pins: readonly T[], opts?: { truncated?: boolean; total?: number }): PackedMapPins {
+export function packMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(pins: readonly T[], opts?: { truncated?: boolean; total?: number; windowCount?: number }): PackedMapPins {
   return {
     v: MAP_PINS_WIRE_VERSION,
     total: opts?.total ?? pins.length,
     rows: pins.map((pin) => MAP_PIN_WIRE_FIELDS.map((field) => pin[field] ?? null)),
     ...(opts?.truncated ? { truncated: true } : {}),
+    ...(opts?.truncated && opts?.windowCount != null ? { windowCount: opts.windowCount } : {}),
   };
 }
 
-export function unpackMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(payload: unknown): { pins: T[]; total: number; truncated: boolean } {
+export function unpackMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(payload: unknown): { pins: T[]; total: number; truncated: boolean; windowCount?: number } {
   if (!payload || typeof payload !== "object") throw new Error("Invalid packed map payload");
   const packed = payload as Partial<PackedMapPins>;
   if (packed.v !== MAP_PINS_WIRE_VERSION || !Array.isArray(packed.rows)) {
@@ -85,5 +92,6 @@ export function unpackMapPins<T extends Partial<Record<MapPinWireField, unknown>
     pins,
     total: typeof packed.total === "number" ? packed.total : pins.length,
     truncated: packed.truncated === true,
+    ...(typeof packed.windowCount === "number" ? { windowCount: packed.windowCount } : {}),
   };
 }

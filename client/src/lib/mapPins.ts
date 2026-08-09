@@ -154,18 +154,152 @@ export function persistMapCamera(center: [number, number], zoom: number): void {
 export const DENSITY_SOURCE = "lead-density";
 export const DENSITY_CIRCLES_LAYER = "lead-density-circles";
 export const DENSITY_COUNT_LAYER = "lead-density-count";
-export const DENSITY_LAYER_IDS = [DENSITY_CIRCLES_LAYER, DENSITY_COUNT_LAYER] as const;
+export const DENSITY_FRESH_RING_LAYER = "lead-density-fresh-ring";
+export const DENSITY_LAYER_IDS = [DENSITY_CIRCLES_LAYER, DENSITY_FRESH_RING_LAYER, DENSITY_COUNT_LAYER] as const;
 
-/** Pin-cluster layers hidden while the density tier is active (the stale
+/** Every pin-family layer hidden while the density tier is active (the stale
  *  cached pins from the last close-zoom window must not double-render over
- *  the bubbles). Unclustered pin layers are NOT listed: their minzoom 12
- *  keeps them off at grid-tier zooms anyway. */
+ *  the bubbles). The unclustered layers ARE listed now: they render at every
+ *  zoom since the isolated-lead fix (a lone door >1 cluster radius from its
+ *  neighbors never forms a cluster, and a minzoom floor made it invisible at
+ *  survey zooms), so the density tier must hide them explicitly. */
 export const GRID_TIER_HIDDEN_LAYER_IDS = [
   "lead-clusters-glow",
   "lead-fresh-cluster-ring",
   "lead-clusters",
   "lead-cluster-count",
+  "lead-unclustered",
+  "lead-fresh-confirmed-halo",
+  "lead-status-icons",
+  "lead-selected-ring",
 ] as const;
+
+// ── Cluster + unclustered layer specs — ONE factory for both install sites ──
+// The map-init block and the style.load re-add block used to carry two
+// hand-copied versions of these five layers, and they HAD drifted (different
+// radius steps, opacity, text sizes). Same cure as the density/halo specs:
+// one spec factory, imported by both.
+//
+// ZOOM CONTRACT (the "leads only appear when I zoom way in" fixes, Aug 2026):
+//   * The source clusters tiles up to clusterMaxZoom 13, which means cluster
+//     FEATURES exist for every display zoom below 14 — so the cluster layers'
+//     maxzoom must be 14, not 13.5. The old 13.5 cap left a dead half-zoom
+//     band [13.5, 14) where nearly every residential lead sat in a cluster
+//     that no layer would draw: a neighborhood at survey zoom rendered blank.
+//   * The unclustered layers have NO minzoom. A lead further than one cluster
+//     radius from its neighbors never joins a cluster, and the old minzoom 12
+//     floor made exactly those isolated/rural doors invisible at z<12 — not
+//     sampled, not clustered, just unrendered. The circle layer is one cheap
+//     GPU draw; the row cap bounds its feature count.
+export const CLUSTER_MAX_ZOOM = 13; // source: collapse clusters below this tile zoom
+export const CLUSTER_LAYER_MAX_ZOOM = CLUSTER_MAX_ZOOM + 1; // layers: clusters EXIST until display z14
+/** The zoom where per-pin detail (glyph icons, halos) becomes legible; the
+ *  plain circle layer runs at every zoom underneath. */
+export const PIN_DETAIL_MIN_ZOOM = 12;
+
+export const LEADS_CLUSTER_SOURCE_SPEC: any = {
+  type: "geojson",
+  data: { type: "FeatureCollection", features: [] },
+  cluster: true,
+  clusterMaxZoom: CLUSTER_MAX_ZOOM,
+  clusterRadius: 50, // px radius to cluster within
+  clusterProperties: { fresh_count: ["+", ["get", "fresh"]] },
+};
+
+export function clusterLayerSpecs(): any[] {
+  return [
+    {
+      // Cluster outer glow ring (behind main circle)
+      id: "lead-clusters-glow",
+      type: "circle",
+      source: "leads-cluster",
+      filter: ["has", "point_count"],
+      maxzoom: CLUSTER_LAYER_MAX_ZOOM,
+      paint: {
+        "circle-color": ["step", ["get", "point_count"], "#0d9488", 10, "#0f766e", 30, "#115e59"],
+        "circle-radius": ["step", ["get", "point_count"], 26, 10, 33, 30, 42],
+        "circle-opacity": 0.25,
+        "circle-stroke-width": 0,
+      },
+    },
+    {
+      // A confirmed-fresh ring makes the money layer visible without changing
+      // the disposition color inside the cluster. The count is aggregated in
+      // the Mapbox worker, so this remains one GeoJSON source and zero DOM pins.
+      id: "lead-fresh-cluster-ring",
+      type: "circle",
+      source: "leads-cluster",
+      filter: ["all", ["has", "point_count"], [">", ["get", "fresh_count"], 0]],
+      maxzoom: CLUSTER_LAYER_MAX_ZOOM,
+      paint: {
+        "circle-radius": ["+", ["step", ["get", "point_count"], 18, 10, 24, 30, 32], 6],
+        "circle-color": "rgba(0,0,0,0)",
+        "circle-stroke-width": 3,
+        "circle-stroke-color": "#22c55e",
+        "circle-opacity": 0.95,
+      },
+    },
+    {
+      // Cluster circles — neutral teal DENSITY ramp: clusters mean "how many,"
+      // never a status (green/red are reserved for sold/dead pins; reusing
+      // them here would contradict the pin colors at close zoom).
+      id: "lead-clusters",
+      type: "circle",
+      source: "leads-cluster",
+      filter: ["has", "point_count"],
+      maxzoom: CLUSTER_LAYER_MAX_ZOOM,
+      paint: {
+        "circle-color": ["step", ["get", "point_count"], "#0d9488", 10, "#0f766e", 30, "#115e59"],
+        "circle-radius": ["step", ["get", "point_count"], 18, 10, 24, 30, 32],
+        "circle-opacity": 0.92,
+        "circle-stroke-width": 2.5,
+        "circle-stroke-color": "rgba(255,255,255,0.9)",
+      },
+    },
+    {
+      // Cluster count labels — the REAL aggregated number.
+      id: "lead-cluster-count",
+      type: "symbol",
+      source: "leads-cluster",
+      filter: ["has", "point_count"],
+      maxzoom: CLUSTER_LAYER_MAX_ZOOM,
+      layout: {
+        "text-field": "{point_count_abbreviated}",
+        "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+        "text-size": ["step", ["get", "point_count"], 13, 10, 14, 30, 16],
+        "text-allow-overlap": true,
+      },
+      paint: {
+        "text-color": "#ffffff",
+        "text-halo-color": "rgba(0,0,0,0.3)",
+        "text-halo-width": 0.5,
+      },
+    },
+  ];
+}
+
+/** The unclustered pin circle + confirmed-fresh halo. No minzoom on either —
+ *  see the zoom contract above. The halo filter (fresh === 1) keeps its draw
+ *  set tiny at wide zoom, so painting it everywhere costs nothing visible. */
+export function unclusteredLayerSpecs(): any[] {
+  return [
+    {
+      id: "lead-unclustered",
+      type: "circle",
+      source: "leads-cluster",
+      filter: ["!", ["has", "point_count"]],
+      paint: UNCLUSTERED_PAINT,
+    },
+    {
+      id: "lead-fresh-confirmed-halo",
+      type: "circle",
+      source: "leads-cluster",
+      filter: ["all", ["!", ["has", "point_count"]], ["==", ["get", "fresh"], 1]],
+      paint: FRESH_HALO_PAINT,
+      before: "lead-unclustered",
+    },
+  ];
+}
 
 export function densityLayerSpecs(): any[] {
   return [
@@ -195,6 +329,33 @@ export function densityLayerSpecs(): any[] {
         "circle-opacity": 0.88,
         "circle-stroke-width": 2.5,
         "circle-stroke-color": "rgba(255,255,255,0.9)",
+      },
+    },
+    {
+      // Confirmed-fresh ring — the SAME green ring the pin clusters carry
+      // (cluster fresh_count ↔ the grid's per-cell fresh aggregate, identical
+      // predicate server-side), so the money layer stays visible on the
+      // density tier and the tier crossing never changes what fresh means.
+      id: DENSITY_FRESH_RING_LAYER,
+      type: "circle",
+      source: DENSITY_SOURCE,
+      filter: [">", ["get", "fresh"], 0],
+      paint: {
+        "circle-radius": [
+          "+",
+          ["interpolate", ["exponential", 0.5], ["get", "n"],
+            1, 12,
+            50, 20,
+            500, 30,
+            5000, 42,
+            50000, 54,
+          ],
+          5,
+        ],
+        "circle-color": "rgba(0,0,0,0)",
+        "circle-stroke-width": 3,
+        "circle-stroke-color": "#22c55e",
+        "circle-opacity": 0.95,
       },
     },
     {
@@ -270,7 +431,8 @@ export const SELECTED_RING_SPEC: any = {
   type: "circle",
   source: "leads-cluster",
   filter: SELECTED_RING_FILTER(null), // matches nothing until a pin is selected
-  minzoom: 12,
+  // No minzoom: the filter matches ONE pin, and a selection made at close zoom
+  // must survive zooming out (the old 12 floor made the ring vanish mid-gesture).
   paint: {
     "circle-radius": 14, // detached ring: 6px gap around the 8px pin
     // Dark neutral scrim (not the old 0.15 teal): the ring's white stroke is

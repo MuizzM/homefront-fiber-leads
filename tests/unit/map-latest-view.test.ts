@@ -28,13 +28,14 @@ describe("the count probe drives the mode decision with the FILTERED total", () 
     expect(src).toContain('queryKey: ["/api/leads/map/count", countView ?? "all"]');
   });
 
-  it("51k filtered pins take the full feed; 174k unfiltered take viewport windows", () => {
+  it("~62k filtered pins take the full feed; 184k unfiltered take viewport windows", () => {
     // The measured production shape the lens exists for: the FILTERED total
-    // lands under the threshold, so the map is ONE ETag'd feed of ~51k pins.
-    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(60_000);
-    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 51_000 })).toBe(true);
-    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 174_000 })).toBe(false);
-    expect(51_000).toBeLessThanOrEqual(MAP_VIEWPORT_MODE_THRESHOLD);
+    // (post-FCC-import ~62k) lands under the 75k threshold, so the map is ONE
+    // ETag'd feed; the unfiltered footprint stays on the windowed tiers.
+    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(75_000);
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 62_000 })).toBe(true);
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 184_000 })).toBe(false);
+    expect(62_000).toBeLessThanOrEqual(MAP_VIEWPORT_MODE_THRESHOLD);
   });
 });
 

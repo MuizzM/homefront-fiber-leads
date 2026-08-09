@@ -246,16 +246,18 @@ function block(startMarker: string, endMarker: string): string {
 describe("MapView no-waterfall wiring", () => {
   it("viewportMode uses the probe when answered, else the persisted hint (never on probe error)", () => {
     const b = block("const persistedViewportModeHint", "const viewportModeRef");
-    expect(b).toContain("readPersistedViewportMode({ tenantId: user.tenantId, userId: user.id })");
+    // The hint is per-LENS now (view rides the scope): a "latest" boot must
+    // never answer from the mode the "all" probe persisted.
+    expect(b).toContain("readPersistedViewportMode({ tenantId: user.tenantId, userId: user.id, view: countView })");
     expect(b).toContain("mapPinCount != null");
     expect(b).toContain("mapPinCount.total > MAP_VIEWPORT_MODE_THRESHOLD");
     expect(b).toContain("!countQuery.isError && (persistedViewportModeHint ?? false)");
   });
 
   it("only the probe's ANSWER is persisted, and a full-feed answer prunes the window family", () => {
-    const b = block("// Teach the NEXT cold open", "}, [mapPinCount?.total, user?.id, user?.tenantId]);");
+    const b = block("// Teach the NEXT cold open", "}, [mapPinCount?.total, user?.id, user?.tenantId, countView]);");
     expect(b).toContain("if (!user || mapPinCount == null) return;");
-    expect(b).toContain("writePersistedViewportMode({ tenantId: user.tenantId, userId: user.id }, confirmed)");
+    expect(b).toContain("writePersistedViewportMode({ tenantId: user.tenantId, userId: user.id, view: countView }, confirmed)");
     expect(b).toContain("if (!confirmed) pruneMapWindowSnapshots();");
   });
 
@@ -282,12 +284,17 @@ describe("MapView no-waterfall wiring", () => {
 
   it("a COMPLETE window fetch replaces the seed with eviction and rewrites the snapshot (debounced)", () => {
     const b = block("const fetchViewportPins = useCallback", "const fetchViewportPinsRef");
-    expect(b).toContain("const evictWindow = !truncated && windowSeedRef.current ? window : null;");
+    // The truncated (over-cap) path EARLY-RETURNS into the grid-tier flip, so
+    // everything below it runs for complete windows only — eviction, seed
+    // reconcile, and the snapshot write need no !truncated guard anymore.
+    expect(b).toContain("if (truncated) {");
+    expect(b).toContain("refreshViewportPinsRef.current();");
+    expect(b).toContain("const evictWindow = windowSeedRef.current ? window : null;");
     expect(b).toContain("mergeViewportPins(prev, fetched, keep, evictWindow)");
-    expect(b).toContain("if (!truncated) windowSeedRef.current = null;");
+    expect(b).toContain("windowSeedRef.current = null; // seed fully reconciled");
     // COMPLETE windows only feed the snapshot; the debounced write itself
     // lives OUTSIDE the fetch body (the #87 purity scan bans timers there).
-    expect(b).toContain("if (!truncated) scheduleWindowSnapshotWrite(fetched, window);");
+    expect(b).toContain("scheduleWindowSnapshotWrite(fetched, window);");
     const writer = block("const scheduleWindowSnapshotWrite = useCallback", "const fetchViewportPins = useCallback");
     expect(writer).toContain("writeMapWindowSnapshot(scope, pins, win)");
     expect(writer).toContain("MAP_PINS_SNAPSHOT_DEBOUNCE_MS");

@@ -1813,27 +1813,32 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // The grid's own span guard is 15°/axis — past that even an aggregate stops
   // being meaningful territory (continent views), and the client never asks
   // (it clamps its fetch window to the guard). Cell pitch:
-  //   auto (default): span/12 snapped to 0.05° steps, clamped to [0.05°, 5°]
-  //     — ~12 cells across the shorter screen axis, so a bubble is always a
-  //     comfortable tap target and the payload stays ~150 cells (~5KB).
-  //   explicit ?cell=<deg>: snapped to the same 0.05° lattice so every
+  //   auto (default): span/24 snapped to 0.01° steps, clamped to [0.01°, 5°]
+  //     — ~24 cells across the view, so the density tier reads like a cluster
+  //     map (WHERE in a city the leads sit, not just that they exist) while
+  //     the count stays viewport-bounded: ~24² core cells + fetch margin is
+  //     always far under the cell cap, at every span. (Was span/12 on an
+  //     0.05° lattice — at city spans, where over-cap pin windows now flip to
+  //     this tier, that painted a dozen ~5km bubbles: honest counts, useless
+  //     geometry.)
+  //   explicit ?cell=<deg>: snapped to the same 0.01° lattice so every
   //     requester agrees on cell identity (client cache keys depend on it).
   // Hard-capped at 5k cells (fetched cap+1) with a truncated flag — the
   // mirror of the pin window's 25k row cap contract.
   const MAP_GRID_MAX_SPAN_DEG = 15;
   const MAP_GRID_CELL_CAP = 5_000;
-  const MAP_GRID_CELL_STEP = 0.05;
+  const MAP_GRID_CELL_STEP = 0.01;
   function gridCellForSpan(spanDeg: number): number {
-    const snapped = Math.round(spanDeg / 12 / MAP_GRID_CELL_STEP) * MAP_GRID_CELL_STEP;
+    const snapped = Math.round(spanDeg / 24 / MAP_GRID_CELL_STEP) * MAP_GRID_CELL_STEP;
     return Math.min(5, Math.max(MAP_GRID_CELL_STEP, Number(snapped.toFixed(2))));
   }
   function parseGridCell(raw: unknown, spanDeg: number): number | { error: string } {
     if (raw == null || raw === "" || raw === "auto") return gridCellForSpan(spanDeg);
     const n = Number(raw);
     if (!Number.isFinite(n) || n <= 0 || n > 5) {
-      return { error: "cell must be 'auto' or a size in degrees (0.05–5)" };
+      return { error: "cell must be 'auto' or a size in degrees (0.01–5)" };
     }
-    // Snap to the 0.05° lattice (same rule as auto) so cell identity — and
+    // Snap to the 0.01° lattice (same rule as auto) so cell identity — and
     // therefore the client's 60s response cache keys — is requester-independent.
     return Math.min(5, Math.max(MAP_GRID_CELL_STEP, Number((Math.round(n / MAP_GRID_CELL_STEP) * MAP_GRID_CELL_STEP).toFixed(2))));
   }
@@ -1896,35 +1901,51 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (view && typeof view === "object") return res.status(400).json({ error: view.error });
     if (bbox) {
       const started = performance.now();
+      // ?nosample=1 — the honest-window contract (new clients): an over-cap
+      // window returns EMPTY pins + the true windowCount instead of a thinned
+      // sample. The client renders its density-grid tier for that window
+      // (real aggregate counts), so no lead is ever silently missing — a
+      // sampled pin map is indistinguishable from a map with fewer doors.
+      // Also skips the sampled re-query entirely: no multi-MB corpse
+      // serialized for a response the client would refuse to paint as pins.
+      const nosample = req.query.nosample === "1";
       const win = { ...bbox, tag: tag as string | undefined, view: view as MapView | undefined };
       let rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP + 1 });
       const truncated = rows.length > MAP_BBOX_ROW_CAP;
       let sampleStep = 1;
+      let windowCount: number | undefined;
       if (truncated) {
-        // Over-cap window (wide zoom). ORDER BY id LIMIT would keep the LOWEST
-        // ids — the first-scanned city — so at state zoom the "sample" would
-        // all be one town and everywhere else would look empty. Instead: one
-        // indexed COUNT over the same predicate (rare — only over-cap windows
-        // pay it), then thin deterministically and evenly with id % step. The
-        // sample is stable across pans and spread across insertion order,
-        // which correlates with geography per scan batch; see
-        // Storage.mapWindowPred for the bias tradeoff. truncated stays true so
-        // the client's "Showing a sample" chip tells the truth.
-        const windowCount = storage.getLeadsMapWindowCount(tid, repFilter, win);
-        sampleStep = Math.max(2, Math.ceil(windowCount / MAP_BBOX_ROW_CAP));
-        rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP, sampleStep });
+        // One indexed COUNT over the same predicate (rare — only over-cap
+        // windows pay it): the true row count, shipped so the client can
+        // render honest aggregate counts and predict when a zoomed-in window
+        // will fit under the cap without paying a throwaway fetch.
+        windowCount = storage.getLeadsMapWindowCount(tid, repFilter, win);
+        if (nosample) {
+          rows = [];
+        } else {
+          // Legacy clients still get the even deterministic id % step sample
+          // (ORDER BY id LIMIT would keep the LOWEST ids — the first-scanned
+          // city — so a state-zoom "sample" would all be one town). Stable
+          // across pans, spread across insertion order; see
+          // Storage.mapWindowPred for the bias tradeoff. truncated stays true
+          // so the client's "Showing a sample" chip tells the truth.
+          sampleStep = Math.max(2, Math.ceil(windowCount / MAP_BBOX_ROW_CAP));
+          rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP, sampleStep });
+        }
       }
       const pins = buildMapPins(rows);
       res.set("Cache-Control", "no-store");
       const payload = format === "packed"
-        ? packMapPins(pins, { truncated })
-        : { pins, total: pins.length, truncated };
+        ? packMapPins(pins, { truncated, windowCount })
+        : { pins, total: pins.length, truncated, ...(truncated && windowCount != null ? { windowCount } : {}) };
       structuredLog("perf.leads_map", {
         requestId: String(req.id ?? "").slice(0, 8),
         tenantId: tid ?? 0,
         scope: repFilter == null ? "all" : "scoped",
         format, cache: "bbox",
         rows: pins.length, truncated, sampleStep,
+        ...(windowCount != null ? { windowCount } : {}),
+        ...(nosample ? { nosample: true } : {}),
         dbMs: Number((performance.now() - started).toFixed(2)),
         complexity: "O(window + K_window)",
       });

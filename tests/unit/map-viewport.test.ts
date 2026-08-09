@@ -93,8 +93,13 @@ describe("mergeViewportPins", () => {
 });
 
 describe("mode threshold", () => {
-  it("is the 60k the server-side windowing was designed for", () => {
-    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(60_000);
+  it("is 75k — the whole-org feed carries the org's ~62k default lens with headroom", () => {
+    // Measured Aug 2026: 62k pins = ~980KB gzipped wire, <1s load. The 2025
+    // FCC import pushed the default lens over the old 60k cliff and flipped
+    // every field map into windowed mode overnight; 75k keeps that lens on
+    // the single-feed path, and past it the windowed tiers are honest now
+    // (over-cap windows render the density grid, never a thinned sample).
+    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(75_000);
   });
 });
 
@@ -164,6 +169,49 @@ describe("viewportNotice (F1 chip wiring)", () => {
   it("dismissal hides the chip; full-feed mode never notices", () => {
     expect(viewportNotice({ ...base, truncated: true, sampleDismissed: true })).toBeNull();
     expect(viewportNotice({ ...base, viewportMode: false, truncated: true })).toBeNull();
+  });
+  it("never warns on the grid tier — density bubbles are complete counts, not a sample", () => {
+    expect(viewportNotice({ ...base, truncated: true, tier: "grid" })).toBeNull();
+    expect(viewportNotice({ ...base, truncated: true, tier: "pins" })).not.toBeNull();
+  });
+});
+
+// ── Honest-tier flip: over-cap windows render the grid, never a sample ──────
+import { predictWindowCount, viewportTierForWindow as tierFor, MAP_BBOX_ROW_CAP, TRUNCATION_RETRY_FACTOR } from "@/lib/mapViewport";
+
+describe("truncation evidence → tier prediction", () => {
+  // A city window (0.4°×0.3°) the server declared over-cap at 40k rows.
+  const CITY = { minLng: -80.8, minLat: 35.2, maxLng: -80.4, maxLat: 35.5 };
+  const evidence = { area: 0.4 * 0.3, windowCount: 40_000 };
+
+  it("scales the observed count by area ratio (uniform-density model)", () => {
+    expect(predictWindowCount(CITY, evidence)).toBeCloseTo(40_000, 5);
+    const half = { minLng: -80.8, minLat: 35.2, maxLng: -80.6, maxLat: 35.35 }; // quarter area
+    expect(predictWindowCount(half, evidence)).toBeCloseTo(10_000, 5);
+    expect(predictWindowCount(CITY, null)).toBeNull();
+    expect(predictWindowCount(CITY, { area: 0, windowCount: 10 })).toBeNull();
+  });
+
+  it("keeps an over-cap-predicted window on the grid tier — a thinned sample is never rendered as pins", () => {
+    expect(tierFor(CITY, evidence)).toBe("grid");
+    // Without evidence the same window is pins-tier (≤3° span).
+    expect(tierFor(CITY)).toBe("pins");
+  });
+
+  it("re-tries pins only once the estimate sits comfortably under the cap (retry hysteresis)", () => {
+    // Shrink until predicted < cap × factor: a borderline zoom-in must not
+    // ping-pong pins→grid→pins on density noise.
+    const atFactor = MAP_BBOX_ROW_CAP * TRUNCATION_RETRY_FACTOR;
+    const justOver = { minLng: -80.8, minLat: 35.2, maxLng: -80.8 + 0.4 * Math.sqrt((atFactor + 500) / 40_000), maxLat: 35.2 + 0.3 * Math.sqrt((atFactor + 500) / 40_000) };
+    const justUnder = { minLng: -80.8, minLat: 35.2, maxLng: -80.8 + 0.4 * Math.sqrt((atFactor - 500) / 40_000), maxLat: 35.2 + 0.3 * Math.sqrt((atFactor - 500) / 40_000) };
+    expect(tierFor(justOver, evidence)).toBe("grid");
+    expect(tierFor(justUnder, evidence)).toBe("pins");
+  });
+
+  it("span guard still wins regardless of evidence", () => {
+    const state = { minLng: -84.5, minLat: 33.7, maxLng: -75.3, maxLat: 36.7 };
+    expect(tierFor(state, null)).toBe("grid");
+    expect(tierFor(state, { area: 100, windowCount: 1 })).toBe("grid");
   });
 });
 

@@ -17,8 +17,12 @@ describe("tier dispatch — refreshViewportPins is the ONE entry point", () => {
     src.indexOf("const refreshViewportPinsRef"),
   );
 
-  it("picks the tier from the fetch window via the shared pure function", () => {
-    expect(body).toContain("viewportTierForWindow(bounds.window)");
+  it("picks the tier from the fetch window via the shared pure function (+ truncation evidence)", () => {
+    // The evidence arg is how an over-cap window flips to the grid tier: the
+    // server's windowCount from the last truncated fetch feeds the same pure
+    // function, so the tier stays a function of (window, evidence) — never
+    // ad-hoc state inside a fetch callback.
+    expect(body).toContain("viewportTierForWindow(bounds.window, truncationEvidenceRef.current)");
   });
 
   it("grid tier fetches the grid; pins tier fetches pins — never both", () => {
@@ -49,7 +53,13 @@ describe("the grid→pins handoff has NO empty gap", () => {
     expect(land).toBeGreaterThan(-1);
     expect(fetchBody.indexOf("syncViewportTierLayers(mapRef.current)")).toBeGreaterThan(-1);
     // …BEFORE the cache merge — the handoff is a map-thread op, not a render.
-    expect(fetchBody.indexOf('qc.setQueryData(["/api/leads/map"]')).toBeGreaterThan(land);
+    // Only the COMPLETE branch lands a window; the truncated branch above it
+    // early-returns into the grid flip (its own setQueryData just raises the
+    // truncated flag for the lasso honesty gate, no pins land there).
+    const completeBranch = fetchBody.slice(land);
+    expect(completeBranch.indexOf('qc.setQueryData(["/api/leads/map"]')).toBeGreaterThan(
+      completeBranch.indexOf("syncViewportTierLayers(mapRef.current)"),
+    );
   });
 
   it("the layer sync hides stale pin clusters in the grid tier and vice versa", () => {

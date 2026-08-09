@@ -48,6 +48,10 @@ export const MAP_PINS_SNAPSHOT_DEBOUNCE_MS = 2_000;
 export interface MapPinsSnapshotScope {
   tenantId: number | null | undefined;
   userId: number | null | undefined;
+  /** Source-lens segment for the viewport-mode hint ONLY (the mode is a
+   *  per-lens fact — see mapViewportModeKey). The pin/window snapshot keys
+   *  ignore it: those persist whatever the cache held, lens included. */
+  view?: string;
 }
 
 /** Minimal Storage surface so tests can inject a plain fake. */
@@ -166,27 +170,54 @@ export function writeMapPinsSnapshot<T extends Partial<Record<MapPinWireField, u
 // early. Keyed per identity and version-swept exactly like the snapshots, so
 // one user's mode can never leak to the next login on a shared device.
 export const MAP_VIEWPORT_MODE_PREFIX = "hf.mapViewportMode.";
-/** Bump when the hint's meaning changes (e.g. a threshold semantics change). */
-export const MAP_VIEWPORT_MODE_VERSION = 1;
+/** Bump when the hint's meaning changes (e.g. a threshold semantics change).
+ *  v2: the threshold moved 60k → 75k AND the key gained a lens segment — a v1
+ *  hint could answer for the wrong lens (a "latest" boot reading the hint the
+ *  "all" probe wrote), so every v1 entry is swept rather than migrated. */
+export const MAP_VIEWPORT_MODE_VERSION = 2;
+
+/** The identity stem (note the trailing separator: "u1." can never match
+ *  "u12…"). Per-lens keys append scope.view; "all" is the no-lens entry. */
+export function mapViewportModeStem(scope: MapPinsSnapshotScope): string {
+  return `${MAP_VIEWPORT_MODE_PREFIX}v${MAP_VIEWPORT_MODE_VERSION}.t${scope.tenantId ?? 0}.u${scope.userId ?? 0}.`;
+}
 
 export function mapViewportModeKey(scope: MapPinsSnapshotScope): string {
-  return `${MAP_VIEWPORT_MODE_PREFIX}v${MAP_VIEWPORT_MODE_VERSION}.t${scope.tenantId ?? 0}.u${scope.userId ?? 0}`;
+  return `${mapViewportModeStem(scope)}${scope.view ?? "all"}`;
 }
 
-export function pruneMapViewportModes(keep?: string, storage: SnapshotStorage | null = defaultStorage()): void {
-  prunePrefix(MAP_VIEWPORT_MODE_PREFIX, keep, storage);
+/** Sweep every mode hint that is not this identity's — the keys are per-lens
+ *  now (one entry per view the identity has probed), so the keep rule is the
+ *  identity STEM, not one exact key: pruning on a "latest" read must not eat
+ *  the hint the "all" probe wrote seconds earlier. */
+export function pruneMapViewportModes(keepIdentityStem?: string, storage: SnapshotStorage | null = defaultStorage()): void {
+  if (!storage) return;
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < storage.length; i++) {
+      const k = storage.key(i);
+      if (k && k.startsWith(MAP_VIEWPORT_MODE_PREFIX) && !(keepIdentityStem && k.startsWith(keepIdentityStem))) doomed.push(k);
+    }
+    for (const k of doomed) storage.removeItem(k);
+  } catch {
+    /* storage blocked mid-iteration — nothing to prune */
+  }
 }
 
-/** The last probe-confirmed mode for this identity, or null when unknown
- *  (first launch, storage blocked, other-user/stale-version entry — those are
- *  swept as a side effect). null must be treated as "wait for the probe". */
+/** The last probe-confirmed mode for this identity AND lens, or null when
+ *  unknown (first launch, storage blocked, other-user/stale-version entry —
+ *  those are swept as a side effect). null must be treated as "wait for the
+ *  probe". Keyed per lens because the mode IS per lens: a 62k "latest" org
+ *  with a 180k "all" footprint runs full-feed on one and windows on the
+ *  other, and a hint answering for the wrong lens window-fetched orgs that
+ *  should stream one feed (and vice versa) for the probe RTT. */
 export function readPersistedViewportMode(
   scope: MapPinsSnapshotScope,
   storage: SnapshotStorage | null = defaultStorage(),
 ): boolean | null {
   if (!storage) return null;
   const key = mapViewportModeKey(scope);
-  pruneMapViewportModes(key, storage);
+  pruneMapViewportModes(mapViewportModeStem(scope), storage);
   try {
     const raw = storage.getItem(key);
     return raw === "1" ? true : raw === "0" ? false : null;
@@ -204,7 +235,7 @@ export function writePersistedViewportMode(
 ): void {
   if (!storage) return;
   const key = mapViewportModeKey(scope);
-  pruneMapViewportModes(key, storage);
+  pruneMapViewportModes(mapViewportModeStem(scope), storage);
   try {
     storage.setItem(key, viewportMode ? "1" : "0");
   } catch {
