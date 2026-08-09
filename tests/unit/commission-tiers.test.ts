@@ -68,10 +68,10 @@ describe("tier lookup is O(log t) and correct at boundaries", () => {
 });
 
 describe("tier validation", () => {
-  it("accepts the canonical 1–7 / 8–12 / 13–16 / 17+ plan", () => {
+  it("accepts the canonical 1-7 / 8-12 / 13-16 / 17+ plan", () => {
     expect(validateTiers(T).ok).toBe(true);
   });
-  it("rejects an overlap (1–7, 7–12)", () => {
+  it("rejects an overlap (1-7, 7-12)", () => {
     const bad: CommissionTier[] = [
       { position: 0, minimumSales: 1, maximumSales: 7, rateCents: 15000, label: "a" },
       { position: 1, minimumSales: 7, maximumSales: 12, rateCents: 20000, label: "b" },
@@ -80,14 +80,14 @@ describe("tier validation", () => {
     expect(v.ok).toBe(false);
     expect(v.errors.join(" ")).toMatch(/continuous/i);
   });
-  it("rejects a gap (1–7, 9–12+)", () => {
+  it("rejects a gap (1-7, 9-12+)", () => {
     const bad: CommissionTier[] = [
       { position: 0, minimumSales: 1, maximumSales: 7, rateCents: 15000, label: "a" },
       { position: 1, minimumSales: 9, maximumSales: null, rateCents: 20000, label: "b" },
     ];
     expect(validateTiers(bad).ok).toBe(false);
   });
-  it("rejects a non-final open-ended tier (1–7, 8–12, 10+)", () => {
+  it("rejects a non-final open-ended tier (1-7, 8-12, 10+)", () => {
     const bad: CommissionTier[] = [
       { position: 0, minimumSales: 1, maximumSales: 7, rateCents: 15000, label: "a" },
       { position: 1, minimumSales: 8, maximumSales: 12, rateCents: 20000, label: "b" },

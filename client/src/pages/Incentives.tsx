@@ -56,10 +56,7 @@ import { can, type Role as AppRole } from "@shared/capabilities";
 import { usd } from "@shared/moneyFormat";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Gift, Flame, TrendingUp, Award, Sparkles, CheckCheck, BadgeCheck, X,
-  AlertTriangle, Wallet, Clock, Loader2, ChevronDown, Footprints, type LucideIcon,
-} from "lucide-react";
+import { Gift, Flame, CheckCheck, BadgeCheck, X, AlertTriangle, Wallet, Loader2, ChevronDown, Footprints, type LucideIcon } from "lucide-react";
 import {
   spiffReasonLabel, spiffReasonBlurb, spiffAmountBand, spiffAmountLadder,
   spiffTriggerGuide, DEFAULT_SPIFF_CONFIG,
@@ -149,14 +146,6 @@ const STATUS_COPY: Record<string, { label: string; hint: string; className: stri
 const statusCopy = (status: string) =>
   STATUS_COPY[status] ?? { label: status, hint: "", className: "bg-secondary text-muted-foreground" };
 
-function reasonIcon(reason: string) {
-  switch (reason) {
-    case "streak": return Flame;
-    case "improvement": return TrendingUp;
-    case "milestone": return Award;
-    default: return Sparkles;
-  }
-}
 
 // Heat is the algorithm's 0..100 read on how locked-in a rep is. Warm tint the
 // higher it climbs — never a bare colored number, and readable in BOTH themes.
@@ -194,7 +183,6 @@ function writeSeen(repId: number | string, id: number): void {
 }
 
 function NewAwardReveal({ spiff, onDismiss }: { spiff: SpiffRow; onDismiss: () => void }) {
-  const Icon = reasonIcon(spiff.reason);
   return (
     <div
       data-testid="spiff-reveal"
@@ -207,9 +195,7 @@ function NewAwardReveal({ spiff, onDismiss }: { spiff: SpiffRow; onDismiss: () =
         "animate-in fade-in zoom-in-95 duration-300 motion-reduce:animate-none",
       )}
     >
-      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary">
-        <Icon className="h-6 w-6" aria-hidden="true" />
-      </span>
+      
       <div className="min-w-0 flex-1">
         <SectionLabel>New bonus</SectionLabel>
         <div className="flex flex-wrap items-baseline gap-x-2">
@@ -278,12 +264,12 @@ function MoneyHero({ data, isLoading, isError }: {
             <span className="flex flex-wrap items-center gap-1.5">
               <span data-testid="stat-pending"
                     className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
-                <Clock className="h-3 w-3" aria-hidden="true" />
+                
                 {isError ? " - " : usd(awaiting)} awaiting
               </span>
               <span data-testid="stat-paid"
                     className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
-                <Wallet className="h-3 w-3" aria-hidden="true" />
+                
                 {isError ? " - " : usd(totals?.paidCents ?? 0)} paid
               </span>
             </span>
@@ -292,7 +278,7 @@ function MoneyHero({ data, isLoading, isError }: {
 
         <div className="mt-4" data-testid="stat-heat">
           <div className="flex items-center gap-1.5">
-            <Flame className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            
             <SectionLabel>Heat</SectionLabel>
           </div>
           <div className="mt-1.5">
@@ -316,7 +302,7 @@ function EarnGuide({ band }: { band: AwardBand }) {
         <p className="text-sm text-foreground">
           Every recognition bonus is worth{" "}
           <span className="font-bold tabular-nums" data-testid="earn-band">
-            {usd(band.minCents)}–{usd(band.maxCents)}
+            {usd(band.minCents)}-{usd(band.maxCents)}
           </span>
           , drawn in {usd(band.incrementCents)} steps. The harder one is to earn, the more the draw leans to the top of the band.
         </p>
@@ -329,12 +315,9 @@ function EarnGuide({ band }: { band: AwardBand }) {
         </ul>
         <ul className="mt-3 space-y-2" data-testid="earn-triggers">
           {band.triggers.map((t) => {
-            const Icon = reasonIcon(t.reason);
             return (
               <li key={t.reason} className="flex items-start gap-2.5">
-                <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-secondary text-muted-foreground">
-                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                </span>
+                
                 <span className="min-w-0">
                   <span className="block text-[13px] font-semibold text-foreground">{t.title}</span>
                   <span className="block text-[13px] text-muted-foreground">{t.how}</span>
@@ -402,18 +385,15 @@ function ActivityTab({ band }: { band: AwardBand }) {
           description="Something went wrong reading the bonus ledger. Pull to refresh, or try again in a moment." />
       ) : !data || data.spiffs.length === 0 ? (
         <EmptyState icon={Gift} title="No bonuses yet" bordered testId="my-spiffs-empty"
-          description={`Log a sale and you're in the running for a ${usd(band.minCents)}–${usd(band.maxCents)} bonus. Some drop at random; the rest come from streaks, milestones, and beating your own average.`} />
+          description={`Log a sale and you're in the running for a ${usd(band.minCents)}-${usd(band.maxCents)} bonus. Some drop at random; the rest come from streaks, milestones, and beating your own average.`} />
       ) : (
         <ul className="space-y-2" data-testid="my-spiff-list">
           {data.spiffs.map((s) => {
-            const Icon = reasonIcon(s.reason);
             const st = statusCopy(s.status);
             return (
               <li key={s.id} data-testid={`spiff-${s.id}`}
                   className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                  <Icon className="h-5 w-5" aria-hidden="true" />
-                </div>
+                
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">
                     {/* The amount is the hero: biggest thing on the row. */}
@@ -607,7 +587,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                   >
                     {bulk.isPending
                       ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                      : <BadgeCheck className="h-4 w-4" aria-hidden="true" />}
+                      : null}
                     Approve {selectedEarned.length > 0 ? `${selectedEarned.length} · ${usd(sumCents(selectedEarned))}` : "selected"}
                   </button>
                   <button
@@ -620,7 +600,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                       FOCUS,
                     )}
                   >
-                    <CheckCheck className="h-4 w-4" aria-hidden="true" />
+                    
                     Mark paid {selectedApproved.length > 0 ? `${selectedApproved.length} · ${usd(sumCents(selectedApproved))}` : ""}
                   </button>
                 </div>
@@ -666,7 +646,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                             "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground disabled:opacity-50",
                             FOCUS,
                           )}>
-                          <BadgeCheck className="h-4 w-4" aria-hidden="true" /> Approve
+                           Approve
                         </button>
                       ) : (
                         <button type="button" disabled={busy}
@@ -676,7 +656,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                             "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl bg-secondary px-3 text-sm font-semibold text-foreground disabled:opacity-50",
                             FOCUS,
                           )}>
-                          <CheckCheck className="h-4 w-4" aria-hidden="true" /> Mark paid
+                           Mark paid
                         </button>
                       )}
                     </li>
@@ -768,7 +748,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
 // forms run to a dozen fields; a manager comes here at most weekly, and an open
 // form on every visit is how the queue ended up below the fold in the old
 // layout. The launcher stays open - launching IS the frequent task.
-function ConfigDisclosure({ icon: Icon, title, description, children, testId }: {
+function ConfigDisclosure({ title, description, children, testId }: {
   icon: LucideIcon; title: string; description: string; children: ReactNode; testId?: string;
 }) {
   return (
@@ -778,9 +758,7 @@ function ConfigDisclosure({ icon: Icon, title, description, children, testId }: 
         "transition-colors hover:bg-secondary/50",
         FOCUS,
       )}>
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-secondary text-muted-foreground">
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </span>
+        
         <span className="min-w-0 flex-1">
           <span className="block text-[13px] font-semibold text-foreground">{title}</span>
           <span className="block text-xs text-muted-foreground">{description}</span>

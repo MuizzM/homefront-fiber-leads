@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { AlertTriangle, RefreshCw, Undo2 } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 interface AreaLite { id: number; repIds: number[]; status: string }
 
@@ -81,9 +81,7 @@ export function ReclaimAllDialog({
 
       <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
         <div className="flex items-start gap-3">
-          <span className="w-10 h-10 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0">
-            <Undo2 className="w-5 h-5" aria-hidden="true" />
-          </span>
+          
           <div className="min-w-0">
             <h2 id="reclaim-all-title" className="text-[16px] font-bold text-foreground leading-tight">Reclaim every area</h2>
             <p className="text-[13px] text-muted-foreground mt-0.5">Take all assigned areas back from every rep in one action.</p>
@@ -136,7 +134,7 @@ export function ReclaimAllDialog({
         {impact.areaCount > 0 && (
           <div className="mt-4">
             <label htmlFor="reclaim-all-confirm" className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
+              
               Type <span className="font-bold text-foreground tracking-wide">RECLAIM</span> to confirm - this cannot be undone.
             </label>
             <input

@@ -160,9 +160,9 @@ describe("the achievement ladder", () => {
 
   it("shows the whole ladder, cleared rungs included", async () => {
     renderCard(<AchievementLadder />, "/api/me/achievements", achievements({ dailySales: 3 }));
-    expect((await screen.findByTestId("achievement-daily-2")).textContent).toContain("2 → $25");
-    expect(screen.getByTestId("achievement-daily-4").textContent).toContain("4 → $50");
-    expect(screen.getByTestId("achievement-career-50").textContent).toContain("50 → $50");
+    expect((await screen.findByTestId("achievement-daily-2")).textContent).toContain("2: $25");
+    expect(screen.getByTestId("achievement-daily-4").textContent).toContain("4: $50");
+    expect(screen.getByTestId("achievement-career-50").textContent).toContain("50: $50");
   });
 
   it("shows what today has already paid", async () => {

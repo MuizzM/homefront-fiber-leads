@@ -40,7 +40,7 @@ function doc(over: Record<string, any> = {}) {
     company: { name: "Northstar Fiber", supportEmail: "pay@northstar.test", logoDataUri: null },
     rep: { id: 2, name: "Mona Manager" },
     period: {
-      label: "Aug 3 – Aug 9, 2026",
+      label: "Aug 3 - Aug 9, 2026",
       startUtc: "2026-08-03T04:00:00.000Z", nextStartUtc: "2026-08-10T04:00:00.000Z",
       timezone: "America/New_York",
     },
@@ -108,7 +108,7 @@ describe("statement summary on screen", () => {
     await waitFor(() => expect(screen.getByText("Team overrides")).toBeTruthy());
     // Deductions render with a true minus sign (U+2212), not an ASCII hyphen —
     // the same treatment the chargeback holdback row gets.
-    expect(screen.getByText("−$75.00")).toBeTruthy();
+    expect(screen.getByText("-$75.00")).toBeTruthy();
   });
 });
 

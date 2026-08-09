@@ -4,12 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { usd } from "@/lib/money";
-import {
-  DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
-  FileSignature, CheckCircle2, Home, FileText, Printer,
-  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown, PiggyBank, Sparkles, Check,
-  GitBranch,
-} from "lucide-react";
+import { CheckCircle2, Printer, Clock, XCircle, RotateCcw, Loader2, Check } from "lucide-react";
 import { CommissionStatement } from "@/components/CommissionStatement";
 import { OverrideStatusPill } from "@/components/DownlineSheet";
 import { calculateRetroactiveCommission } from "@shared/commissionTiers";
@@ -136,12 +131,10 @@ export default function MyCommission() {
               data-testid="open-statement"
               className="inline-flex items-center gap-1.5 h-10 px-3 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform"
             >
-              <FileText className="w-4 h-4" /> Statement
+               Statement
             </button>
           )}
-          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-            <DollarSign className="w-5 h-5 text-primary" />
-          </div>
+          
         </div>
       </div>
 
@@ -167,7 +160,7 @@ export default function MyCommission() {
 
       {!isLoading && data?.noRepProfile && (
         <EmptyState
-          icon={<Info className="w-6 h-6 text-amber-400" />}
+          icon={null}
           title="No rep profile linked yet"
           body="Your login isn't linked to a sales profile. Ask your manager to finish your onboarding - then your weekly commission shows up here."
         />
@@ -175,7 +168,7 @@ export default function MyCommission() {
 
       {!isLoading && data?.noPlan && (
         <EmptyState
-          icon={<Target className="w-6 h-6 text-primary" />}
+          icon={null}
           title="No commission plan assigned"
           body="You don't have a commission structure assigned for this week yet. Your manager can set you up on a flat or tiered plan from the Team page."
         />
@@ -195,7 +188,7 @@ export default function MyCommission() {
       {!isLoading && data && (data.sales?.length ?? 0) > 0 && (
         <section className="rounded-xl bg-card border border-border overflow-hidden" data-testid="week-sales">
           <header className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Home className="w-4 h-4 text-muted-foreground" />
+            
             <span className="text-sm font-semibold tracking-tight text-foreground">What counts this week</span>
             <span className="ml-auto text-[11px] text-muted-foreground">every door behind your number</span>
           </header>
@@ -241,7 +234,7 @@ export default function MyCommission() {
       {history.length > 0 && (
         <section className="rounded-xl bg-card border border-border overflow-hidden">
           <header className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-muted-foreground" />
+            
             <span className="text-sm font-semibold tracking-tight text-foreground">Past weeks</span>
             {/* Count matches what's on screen — never a number larger than the list. */}
             <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
@@ -340,9 +333,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
   return (
     <div className="rounded-2xl bg-card border border-border overflow-hidden" data-testid="holdback-card">
       <header className="px-4 py-3 border-b border-border flex items-center gap-2">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-amber-500/15 text-amber-400">
-          <PiggyBank className="w-4 h-4" aria-hidden="true" />
-        </span>
+        
         <span className="text-sm font-semibold tracking-tight text-foreground">Chargeback reserve</span>
         <span className="ml-auto text-[11px] font-semibold text-amber-400 [.light_&]:text-amber-700 tabular-nums">
           {atCap ? "Fully covered" : `${current.reservePercent}% held`}
@@ -355,7 +346,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         It builds up to a maximum and then stops - nothing more is held after that.
       </p>
 
-      {/* This week's split - earned → −reserve → net paid (the alias pattern). */}
+      {/* This week's split - earned → -reserve → net paid (the alias pattern). */}
       <dl className="px-4 py-3 space-y-2 text-[13px]">
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Earned this week</dt>
@@ -363,7 +354,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         </div>
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Reserve held ({current.reservePercent}%)</dt>
-          <dd className="tabular-nums text-amber-400 [.light_&]:text-amber-700" data-testid="holdback-reserve">−{usd(current.reserveCents)}</dd>
+          <dd className="tabular-nums text-amber-400 [.light_&]:text-amber-700" data-testid="holdback-reserve">-{usd(current.reserveCents)}</dd>
         </div>
         <div className="flex items-center justify-between border-t border-border pt-2">
           <dt className="font-semibold text-foreground">Paid to you this week</dt>
@@ -403,7 +394,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
 
         {atCap ? (
           <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug font-medium text-emerald-400 [.light_&]:text-emerald-700" data-testid="reserve-at-cap">
-            <ShieldCheck className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden="true" />
+            
             You're fully covered - nothing more is being held. Your whole commission is paid to you each week.
           </p>
         ) : (
@@ -439,7 +430,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
                     </span>
                   </span>
                   <span className={`shrink-0 text-[13px] font-semibold tabular-nums ${copy.tone}`}>
-                    {e.amountCents > 0 ? "+" : "−"}{usd(Math.abs(e.amountCents))}
+                    {e.amountCents > 0 ? "+" : "-"}{usd(Math.abs(e.amountCents))}
                   </span>
                 </li>
               );
@@ -477,9 +468,7 @@ function OverrideEarningsCard() {
   return (
     <section className="rounded-xl bg-card border border-border overflow-hidden" data-testid="override-earnings-card">
       <header className="px-4 py-3 border-b border-border flex items-center gap-2">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-primary/10 text-primary">
-          <GitBranch className="w-4 h-4" aria-hidden="true" />
-        </span>
+        
         <span className="text-sm font-semibold tracking-tight text-foreground">Override earnings</span>
         <span className="ml-auto text-[11px] text-muted-foreground">from your downline's sales</span>
       </header>
@@ -533,7 +522,7 @@ function OverrideEarningsCard() {
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <span className={`text-sm font-semibold tabular-nums ${r.amountCents < 0 ? "text-rose-400" : "text-foreground"}`}>
-                  {r.amountCents < 0 ? `−${usd(Math.abs(r.amountCents))}` : usd(r.amountCents)}
+                  {r.amountCents < 0 ? `-${usd(Math.abs(r.amountCents))}` : usd(r.amountCents)}
                 </span>
                 <OverrideStatusPill status={r.status} />
               </div>
@@ -574,7 +563,7 @@ function RankChip({ rank, size = "md" }: { rank: Rank; size?: "sm" | "md" }) {
   const tint = rankTint(rank.name);
   return (
     <span className={`inline-flex items-center gap-1 whitespace-nowrap flex-shrink-0 rounded-full font-bold ${tint.chip} ${size === "md" ? "px-2.5 py-1 text-xs" : "px-2 py-0.5 text-[10px]"}`}>
-      <Medal className={size === "md" ? "w-3.5 h-3.5" : "w-3 h-3"} aria-hidden="true" />
+      
       {rank.name}
     </span>
   );
@@ -596,7 +585,7 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
           <div>
             <div className="flex items-center gap-1.5">
               <span className="text-sm font-semibold tracking-tight text-foreground">Top rank reached</span>
-              <Crown className="w-4 h-4 text-amber-400" aria-hidden="true" />
+              
             </div>
             <p className="text-[12px] text-muted-foreground">Every sale this week pays the top rate.</p>
           </div>
@@ -628,7 +617,7 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
           <RankChip rank={next} />
         </div>
         <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400/90">
-          <Clock className="w-3 h-3" aria-hidden="true" /> Close by Sunday night
+           Close by Sunday night
         </span>
       </div>
 
@@ -642,13 +631,13 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
             +{usd(p.gainAtNextCents!)}
           </span>
           <span className="inline-flex items-center gap-1 text-[12px] font-medium text-emerald-400/80">
-            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" /> more this week
+             more this week
           </span>
         </div>
         {/* current → next earnings */}
         <div className="mt-2 flex items-center gap-2 text-[13px] tabular-nums" data-testid="rank-earnings-jump">
           <span className="font-semibold text-muted-foreground">{usd(currentPayCents)}</span>
-          <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />
+          
           <span className={`font-bold ${tint.chip.split(" ").slice(1).join(" ")}`}>{usd(p.weekPayAtNextCents!)}</span>
           <span className="text-[11px] text-muted-foreground">· all {total} paid at {usd(next.rateCents)}</span>
         </div>
@@ -719,7 +708,7 @@ function RankRail({ p, className = "", secondary = false }: { p: NonNullable<Ret
               <div className="flex items-center gap-2 min-w-0">
                 <RankChip rank={r} size="sm" />
                 <span className={`truncate text-[11px] ${reached || isNext ? "text-foreground" : "text-muted-foreground"}`}>
-                  {r.minimumSales}{r.maximumSales == null ? "+" : `–${r.maximumSales}`} sales
+                  {r.minimumSales}{r.maximumSales == null ? "+" : `-${r.maximumSales}`} sales
                   {isCurrent && <span className="sr-only"> - your current rank</span>}
                 </span>
               </div>
@@ -759,13 +748,13 @@ function WeekView({ data }: { data: WeekResponse }) {
         <div className="p-5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-primary uppercase tracking-wide">
-              <Zap className="w-3.5 h-3.5" /> This week
+               This week
             </div>
             <span className={`inline-flex items-center gap-1.5 text-2xs font-bold px-2 py-0.5 rounded-full ${state.cls}`} data-testid="week-state">
               {state.icon === "lock"
-                ? <Lock className="w-2.5 h-2.5" />
+                ? null
                 : state.icon === "check"
-                  ? <CheckCircle2 className="w-2.5 h-2.5" />
+                  ? null
                   : <span className="w-1 h-1 rounded-full bg-current" />}
               {state.label}
             </span>
@@ -790,7 +779,7 @@ function WeekView({ data }: { data: WeekResponse }) {
               <span className="text-[13px] font-semibold text-foreground">You'll be paid</span>
               <span className="text-right">
                 <span className="block text-[18px] font-bold tabular-nums text-emerald-400 leading-tight" data-testid="hero-net-pay-amount">{usd(data.holdback.current.netPayableCents)}</span>
-                <span className="block text-[11px] text-muted-foreground tabular-nums">after {data.holdback.current.reservePercent}% reserve · −{usd(data.holdback.current.reserveCents)} held</span>
+                <span className="block text-[11px] text-muted-foreground tabular-nums">after {data.holdback.current.reservePercent}% reserve · -{usd(data.holdback.current.reserveCents)} held</span>
               </span>
             </div>
           )}
@@ -816,7 +805,7 @@ function WeekView({ data }: { data: WeekResponse }) {
                   <span className={a.amount_cents < 0 ? "text-rose-400 font-semibold" : "text-emerald-400 font-semibold"}>{a.amount_cents < 0 ? "Deduction" : "Bonus"}</span>
                   {" - "}{a.reason}
                 </span>
-                <span className={`tabular-nums flex-shrink-0 ${a.amount_cents < 0 ? "text-rose-400" : "text-emerald-400"}`}>{a.amount_cents > 0 ? "+" : "−"}{usd(Math.abs(a.amount_cents))}</span>
+                <span className={`tabular-nums flex-shrink-0 ${a.amount_cents < 0 ? "text-rose-400" : "text-emerald-400"}`}>{a.amount_cents > 0 ? "+" : "-"}{usd(Math.abs(a.amount_cents))}</span>
               </div>
             ))}
           </div>
@@ -826,7 +815,7 @@ function WeekView({ data }: { data: WeekResponse }) {
       {/* Why the week dropped MORE than one sale - the retroactive rule in
           reverse, said out loud. When a canceled deal pulls the count below a
           band boundary, every surviving sale reprices down too: losing the 7th
-          on a 1-6 $175 / 7+ $225 ladder is not −$225, it is −$525. Without
+          on a 1-6 $175 / 7+ $225 ladder is not -$225, it is -$525. Without
           this panel that difference is an unexplained hole in the number the
           rep saw yesterday, and the complaint lands on their manager. Computed
           with the SAME shared module the server pays from, so the panel can
@@ -846,7 +835,7 @@ function WeekView({ data }: { data: WeekResponse }) {
         return (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4" data-testid="band-drop-notice">
             <div className="flex items-center gap-2">
-              <TrendingDown className="w-4 h-4 text-amber-400 shrink-0" />
+              
               <span className="text-sm font-semibold text-foreground">Why this week dropped more than one sale</span>
             </div>
             <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
@@ -886,7 +875,7 @@ function WeekView({ data }: { data: WeekResponse }) {
 
       {isTiered && retro && retro.salesUntilNextTier == null && count > 0 && (
         <div className="rounded-xl bg-card border border-emerald-500/30 p-4 flex items-center gap-3">
-          <Trophy className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+          
           <span className="text-sm text-foreground">You're in the <strong>top tier</strong> this week - every sale pays {usd(rateCents)}.</span>
         </div>
       )}
@@ -899,7 +888,7 @@ function WeekView({ data }: { data: WeekResponse }) {
       {isTiered ? (!(tiers.length > 0 && stateKey === "OPEN") &&
         <div className="rounded-xl bg-card border border-border overflow-hidden">
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Layers className="w-4 h-4 text-muted-foreground" />
+            
             <span className="text-sm font-semibold tracking-tight text-foreground">Your tier ladder</span>
             {structure?.planName && <span className="ml-auto text-[11px] text-muted-foreground">{structure.planName}</span>}
           </div>
@@ -911,7 +900,7 @@ function WeekView({ data }: { data: WeekResponse }) {
                   <div className="flex items-center gap-2">
                     {inTier && <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
                     <span className={`text-sm ${inTier ? "text-foreground font-semibold" : "text-muted-foreground"}`}>
-                      {t.minimumSales}{t.maximumSales == null ? "+" : `–${t.maximumSales}`} sales
+                      {t.minimumSales}{t.maximumSales == null ? "+" : `-${t.maximumSales}`} sales
                     </span>
                   </div>
                   <span className={`text-sm tabular-nums ${inTier ? "text-primary font-bold" : "text-muted-foreground"}`}>
@@ -924,9 +913,7 @@ function WeekView({ data }: { data: WeekResponse }) {
         </div>
       ) : (
         <div className="rounded-xl bg-card border border-border p-5 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-            <DollarSign className="w-5 h-5 text-primary" />
-          </div>
+          
           <div>
             <div className="text-sm font-semibold tracking-tight text-foreground">Flat rate plan</div>
             <div className="text-xs text-muted-foreground">{usd(structure?.flatRateCents)} for every qualified sale.</div>
@@ -982,19 +969,19 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
   return (
     <div className="rounded-xl border border-primary/40 bg-primary/5 p-5" data-testid="accept-plan-card">
       <div className="flex items-center gap-2 mb-3">
-        <FileSignature className="w-5 h-5 text-primary" />
+        
         <span className="text-sm font-semibold tracking-tight text-foreground">Review &amp; accept your commission plan</span>
       </div>
       <p className="text-xs text-muted-foreground mb-3">
         This is how you're paid: <strong className="text-foreground">{structure.planName}</strong>.
-        Weeks run Monday–Sunday in your org's timezone. Accepting freezes these exact terms to your file.
+        Weeks run Monday-Sunday in your org's timezone. Accepting freezes these exact terms to your file.
       </p>
       {structure.structure === "TIERED" ? (
         <div className="grid grid-cols-2 gap-2 mb-4">
           {structure.tiers.map((t, i) => (
             <div key={i} className="rounded-lg bg-card border border-border px-3 py-2 flex items-center justify-between">
               <span className="text-[11px] text-muted-foreground leading-tight">
-                {t.minimumSales}{t.maximumSales == null ? "+" : `–${t.maximumSales}`} sales
+                {t.minimumSales}{t.maximumSales == null ? "+" : `-${t.maximumSales}`} sales
               </span>
               <span className="text-sm font-bold text-primary tabular-nums">{usd(t.rateCents)}<span className="text-2xs text-muted-foreground font-normal">/sale</span></span>
             </div>
@@ -1023,7 +1010,7 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
         className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         data-testid="btn-accept-plan"
       >
-        <CheckCircle2 className="w-4 h-4" />
+        
         {accept.isPending ? "Accepting…" : "I understand and accept this plan"}
       </button>
     </div>
@@ -1107,27 +1094,25 @@ function GetPaidSection() {
   return (
     <section className="space-y-3" data-testid="get-paid">
       <div className="flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <Wallet className="w-3.5 h-3.5" /> Get paid
+         Get paid
       </div>
 
       {isReady ? (
         <>
           {/* Payouts-ready confirmation — Turo "You're verified!" */}
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-center gap-3" data-testid="payouts-ready">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center flex-shrink-0">
-              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-            </div>
+            
             <div className="min-w-0">
               <div className="text-sm font-semibold tracking-tight text-foreground">Payouts ready</div>
               <div className="text-xs text-muted-foreground">Your commission goes straight to your connected bank.</div>
             </div>
-            <ShieldCheck className="w-4 h-4 text-emerald-400/70 ml-auto flex-shrink-0" aria-hidden="true" />
+            
           </div>
 
           {/* Payout history — Stripe Dashboard payments list */}
           <div className="rounded-xl bg-card border border-border overflow-hidden">
             <header className="px-4 py-3 border-b border-border flex items-center gap-2">
-              <Landmark className="w-4 h-4 text-muted-foreground" />
+              
               <span className="text-sm font-semibold tracking-tight text-foreground">Payout history</span>
               {account.history.length > 0 && (
                 <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{account.history.length}</span>
@@ -1151,9 +1136,7 @@ function GetPaidSection() {
         /* Connect card — Contra/Stripe "Add your bank to receive payouts" */
         <div className="rounded-xl bg-card border border-border p-5" data-testid="get-paid-connect">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
-              <Landmark className="w-5 h-5 text-primary" />
-            </div>
+            
             <div className="min-w-0">
               <div className="text-sm font-semibold tracking-tight text-foreground">Set up payouts</div>
               <p className="text-xs text-muted-foreground mt-0.5">Connect your bank to receive commission payouts.</p>
@@ -1167,7 +1150,7 @@ function GetPaidSection() {
           )}
           {account.onboardingStatus === "restricted" && (
             <div className="mt-4 flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400" data-testid="payout-status-note">
-              <XCircle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" /> Action needed - reconnect to finish verification.
+               Action needed - reconnect to finish verification.
             </div>
           )}
 
@@ -1180,12 +1163,12 @@ function GetPaidSection() {
           >
             {connect.isPending
               ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-              : <ArrowRight className="w-4 h-4" aria-hidden="true" />}
+              : null}
             {connect.isPending ? "Opening secure setup…" : connectLabel}
           </button>
 
           <div className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
-            <Lock className="w-3 h-3" aria-hidden="true" /> Powered by Stripe · bank details handled securely
+             Powered by Stripe · bank details handled securely
           </div>
         </div>
       )}
@@ -1194,14 +1177,10 @@ function GetPaidSection() {
 }
 
 function PayoutRow({ item }: { item: PayoutHistoryItem }) {
-  const s = PAYOUT_STATUS[item.status] ?? PAYOUT_STATUS.pending;
   const when = item.status === "paid" && item.paidAt ? item.paidAt : item.createdAt;
-  const Icon = s.Icon;
   return (
     <div className="px-4 py-3 flex items-center gap-3" data-testid="payout-history-row">
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${s.cls}`}>
-        <Icon className="w-4 h-4" />
-      </div>
+      
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-foreground tabular-nums">{usd(item.amountCents)}</div>
         <div className="text-[11px] text-muted-foreground tabular-nums truncate">

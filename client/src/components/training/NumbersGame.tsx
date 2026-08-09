@@ -9,7 +9,7 @@
 // Rates are field averages, labeled as such — the point is the shape of the
 // funnel, not false precision.
 import { useEffect, useRef, useState } from "react";
-import { DoorOpen, MessageCircle, Presentation, Handshake, Dice5 } from "lucide-react";
+import { DoorOpen, MessageCircle, Presentation, Handshake } from "lucide-react";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import {
   calculateRetroactiveCommission, DEFAULT_RETRO_TIERS, formatUsdCents, tierProgressMessage,
@@ -53,10 +53,10 @@ function useCountUp(target: number, ms = 380): number {
   return shown;
 }
 
-function FunnelStat({ icon: Icon, label, value, sub }: { icon: typeof DoorOpen; label: string; value: number; sub: string }) {
+function FunnelStat({ label, value, sub }: { icon: typeof DoorOpen; label: string; value: number; sub: string }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border border-border bg-background px-2 py-2.5 text-center">
-      <Icon className="h-4 w-4 text-primary" aria-hidden="true" />
+      
       <span className="text-base font-bold tabular-nums leading-none text-foreground">{value}</span>
       <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
       <span className="text-[10px] tabular-nums text-muted-foreground/70">{sub}</span>
@@ -93,7 +93,7 @@ export default function NumbersGame() {
   return (
     <div className="rounded-2xl border border-primary/25 bg-primary/[0.05] p-4 md:p-5" data-testid="numbers-game">
       <div className="flex items-center gap-2">
-        <Dice5 className="h-4 w-4 text-primary" aria-hidden="true" />
+        
         <SectionLabel className="text-primary">The numbers game</SectionLabel>
       </div>
       <p className="mt-1 text-sm leading-relaxed text-foreground">

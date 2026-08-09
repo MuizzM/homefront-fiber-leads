@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Lock, RotateCcw, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -114,7 +114,7 @@ export function StartNextPassDialog({
         <div className="space-y-4">
           <header className="space-y-1">
             <h2 id="next-pass-title" className="text-lg font-semibold text-foreground flex items-center gap-2">
-              <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
+              
               Start pass {preview?.nextPass ?? "…"}
               {preview?.territoryName ? <span className="font-normal text-muted-foreground">· {preview.territoryName}</span> : null}
             </h2>
@@ -157,7 +157,7 @@ export function StartNextPassDialog({
                 </div>
                 <div className="rounded-xl border border-border bg-secondary/40 p-3" data-testid="pass-frozen-tile">
                   <div className="text-2xl font-semibold tabular-nums text-foreground flex items-center gap-1.5" data-testid="pass-frozen-count">
-                    <Lock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    
                     {preview.totals.frozen}
                   </div>
                   <div className="text-xs text-muted-foreground">left alone</div>
@@ -183,7 +183,7 @@ export function StartNextPassDialog({
                 <div role="alert" data-testid="pass-callbacks-tile"
                      className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground space-y-1">
                   <div className="flex gap-2">
-                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-400" aria-hidden="true" />
+                    
                     <span>
                       {preview.callbacksAtRisk === 1
                         ? "1 door has a callback scheduled that this will clear."

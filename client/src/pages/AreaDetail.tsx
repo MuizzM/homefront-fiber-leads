@@ -18,11 +18,7 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import {
-  ArrowLeft, DoorOpen, Hand, BadgeDollarSign, CalendarClock, Map as MapIcon,
-  MapPinned, RotateCcw, Trash2, UserMinus, UserPlus, UserCog, ShieldCheck, AlertTriangle, Ban,
-  Ruler, History, Loader2, SearchX, type LucideIcon,
-} from "lucide-react";
+import { DoorOpen, Hand, BadgeDollarSign, CalendarClock, UserCog, ShieldCheck, AlertTriangle, Ban, History, Loader2, SearchX, type LucideIcon } from "lucide-react";
 
 import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
@@ -342,7 +338,7 @@ export default function AreaDetail() {
             onClick={() => { setPickedRepId(null); setAssignOpen(true); }}
             className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70", FOCUS)}
           >
-            <UserCog className="h-4 w-4" aria-hidden="true" />
+            
             {pool ? "Assign" : "Re-assign"}
           </button>
         )}
@@ -380,7 +376,7 @@ export default function AreaDetail() {
             >
               {unassignMutation.isPending
                 ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                : <UserMinus className="h-4 w-4" aria-hidden="true" />}
+                : null}
               Unassign {shortRep(area.repName)}
             </button>
           )
@@ -392,7 +388,7 @@ export default function AreaDetail() {
             onClick={() => setDeleteOpen(true)}
             className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-destructive/40 bg-destructive/5 px-3.5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/10", FOCUS)}
           >
-            <Trash2 className="h-4 w-4" aria-hidden="true" />
+            
             Delete area
           </button>
         )}
@@ -403,7 +399,7 @@ export default function AreaDetail() {
             onClick={() => setNextPassOpen(true)}
             className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70", FOCUS)}
           >
-            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            
             Start next pass
           </button>
         )}
@@ -412,7 +408,7 @@ export default function AreaDetail() {
           data-testid="area-action-open-map"
           className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/60", FOCUS)}
         >
-          <MapIcon className="h-4 w-4" aria-hidden="true" />
+          
           Open in map
         </Link>
       </div>
@@ -526,9 +522,7 @@ export default function AreaDetail() {
             <SectionLabel>{holders.length > 1 ? `Who works this area · ${holders.length} reps` : "Owner"}</SectionLabel>
             {pool ? (
               <div className="mt-2 flex items-center gap-3" data-testid="area-owner-empty">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-dashed border-border text-muted-foreground" aria-hidden="true">
-                  <UserMinus className="h-4 w-4" />
-                </span>
+                
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-foreground">Unassigned</div>
                   <div className="text-[13px] text-muted-foreground">
@@ -593,7 +587,7 @@ export default function AreaDetail() {
                             onClick={() => setConfirmRemoveId(h.id)}
                             className={cn("inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3 text-[13px] font-semibold text-foreground transition-colors hover:bg-secondary/70 disabled:opacity-50", FOCUS)}
                           >
-                            <UserMinus className="h-4 w-4" aria-hidden="true" />
+                            
                             Remove
                           </button>
                         )
@@ -631,7 +625,7 @@ export default function AreaDetail() {
                     onClick={() => setAddRepOpen(true)}
                     className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-dashed border-border px-3.5 text-[13px] font-semibold text-muted-foreground transition-colors hover:border-solid hover:bg-secondary hover:text-foreground", FOCUS)}
                   >
-                    <UserPlus className="h-4 w-4" aria-hidden="true" />
+                    
                     Add a rep
                   </button>
                 )}
@@ -800,7 +794,7 @@ export default function AreaDetail() {
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5">
-                  <Ruler className="h-3.5 w-3.5" aria-hidden="true" />
+                  
                   Average distance when marked{" "}
                   <span className="tabular-nums text-foreground">{area.avgDistanceM != null ? `${area.avgDistanceM} m` : " - "}</span>
                 </span>
@@ -827,11 +821,11 @@ export default function AreaDetail() {
           <div className="mt-3 flex flex-wrap gap-2">
             <Link href="/leads" data-testid="area-doors-leads-link"
               className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90", FOCUS)}>
-              <MapPinned className="h-4 w-4" aria-hidden="true" /> Open Leads
+               Open Leads
             </Link>
             <Link href="/map" data-testid="area-doors-map-link"
               className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70", FOCUS)}>
-              <MapIcon className="h-4 w-4" aria-hidden="true" /> Open the map
+               Open the map
             </Link>
           </div>
         </section>
@@ -871,7 +865,7 @@ export default function AreaDetail() {
           )}
           <Link href="/map" data-testid="area-map-link"
             className={cn("mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90", FOCUS)}>
-            <MapIcon className="h-4 w-4" aria-hidden="true" /> Open the Field Map
+             Open the Field Map
           </Link>
         </section>
       )}
@@ -972,14 +966,14 @@ function BackLink() {
   return (
     <Link href="/areas" data-testid="area-back-link"
       className={cn("inline-flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground", FOCUS)}>
-      <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> Areas
+       Areas
     </Link>
   );
 }
 
 /** KpiTile's grammar (rounded-2xl / border-border / bg-card / tinted icon chip /
  *  26px tabular number) plus the sub-line KpiTile has no slot for. */
-function HeadlineStat({ label, value, sub, icon: Icon, chip, tone, testId }: {
+function HeadlineStat({ label, value, sub, testId }: {
   label: string;
   value: number;
   sub: string;
@@ -990,9 +984,7 @@ function HeadlineStat({ label, value, sub, icon: Icon, chip, tone, testId }: {
 }) {
   return (
     <div className="relative min-w-0 rounded-2xl border border-border bg-card p-3.5" data-testid={testId}>
-      <span className={cn("absolute right-3.5 top-3.5 inline-flex h-7 w-7 items-center justify-center rounded-lg", chip)}>
-        <Icon className={cn("h-4 w-4", tone)} aria-hidden="true" />
-      </span>
+      
       <div className="pr-9 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1.5 text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground" data-testid={`${testId}-value`}>
         {value.toLocaleString()}
@@ -1012,13 +1004,13 @@ function MiniStat({ label, value, hint, testId }: { label: string; value: number
   );
 }
 
-function VerifyTile({ icon: Icon, label, value, className, testId }: {
+function VerifyTile({ label, value, className, testId }: {
   icon: LucideIcon; label: string; value: number; className: string; testId: string;
 }) {
   return (
     <div className={cn("rounded-xl border px-2 py-2 text-center", className)} data-testid={testId}>
       <div className="inline-flex items-center gap-1">
-        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+        
         <span className="text-sm font-bold tabular-nums">{value.toLocaleString()}</span>
       </div>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>

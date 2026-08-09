@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
-import { MapPin, Radio, Navigation, Users, Clock } from "lucide-react";
 
 interface LocationPing {
   id: number; repId: number; userId: number; lat: number; lng: number;
@@ -177,7 +176,7 @@ export default function LiveMap() {
           {/* Clocked in reps count */}
           {isManager && (
             <Badge className={activeCount > 0 ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
-              <Radio className="w-3 h-3 mr-1" /> <span className="tabular-nums">{activeCount}</span>&nbsp;active
+               <span className="tabular-nums">{activeCount}</span>&nbsp;active
             </Badge>
           )}
           {/* Rep tracking toggle */}
@@ -188,7 +187,7 @@ export default function LiveMap() {
               </Button>
             ) : (
               <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={startTracking} data-testid="button-start-tracking" disabled={!clockStatus?.clockedIn}>
-                <Navigation className="w-4 h-4 mr-2" />
+                
                 {clockStatus?.clockedIn ? "Share My Location" : "Clock In First"}
               </Button>
             )
@@ -217,7 +216,7 @@ export default function LiveMap() {
             <Card className="bg-card border-border">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Users className="w-4 h-4 text-primary" /> Reps in Field
+                   Reps in Field
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
@@ -268,7 +267,7 @@ export default function LiveMap() {
             <Card className="bg-card border-border">
               <CardContent className="p-4 space-y-3">
                 <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-primary" />
+                  
                   <span className="text-sm text-foreground font-medium">Field Status</span>
                 </div>
                 <div className="space-y-1">
@@ -277,7 +276,7 @@ export default function LiveMap() {
                   </Badge>
                   {tracking && (
                     <Badge className="bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30 ml-2">
-                      <Radio className="w-3 h-3 mr-1 animate-pulse" /> Sharing Location
+                       Sharing Location
                     </Badge>
                   )}
                 </div>
@@ -293,7 +292,7 @@ export default function LiveMap() {
           <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
-                <MapPin className="w-4 h-4 text-primary" />
+                
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Map Legend</span>
               </div>
               <div className="space-y-1.5">

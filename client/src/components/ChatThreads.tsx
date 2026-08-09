@@ -25,7 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, Loader2, LogOut, MessagesSquare, Plus, Trash2, UserMinus, Users, X } from "lucide-react";
+import { Loader2, UserMinus } from "lucide-react";
 import { repColorOf } from "@shared/repColors";
 import { agoLabel } from "@shared/teamFeed";
 import {
@@ -111,9 +111,7 @@ export function ChatThreadList({
             FOCUS,
           )}
         >
-          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
-            <MessagesSquare className="h-5 w-5" aria-hidden="true" />
-          </span>
+          
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-semibold text-foreground">The floor</span>
             <span className="block truncate text-[12px] text-muted-foreground">
@@ -171,9 +169,7 @@ export function ChatThreadList({
                   {chatInitials(title)}
                 </span>
               ) : (
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-secondary text-muted-foreground">
-                  <Users className="h-5 w-5" aria-hidden="true" />
-                </span>
+                null
               )}
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-semibold text-foreground">{title}</span>
@@ -203,7 +199,7 @@ export function ChatThreadList({
           FOCUS,
         )}
       >
-        <Plus className="h-4 w-4" aria-hidden="true" />
+        
         New message
       </button>
 
@@ -321,7 +317,7 @@ function NewThreadSheet({
               />
               {nameOverBy > 0 && (
                 <p className="mt-1 flex items-start gap-1.5 text-[13px] font-medium text-destructive" data-testid="group-name-error">
-                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  
                   {!nameCheck.ok ? nameCheck.error : `Name is over ${GROUP_NAME_MAX} characters.`}
                 </p>
               )}
@@ -359,7 +355,7 @@ function NewThreadSheet({
                     {chatInitials(r.name)}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{r.name}</span>
-                  {groupMode && on && <X className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
+                  {groupMode && on && null}
                 </button>
               );
             })}
@@ -524,7 +520,7 @@ export function GroupMembersSheet({
                       {chatInitials(r.name)}
                     </span>
                     <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{r.name}</span>
-                    <Plus className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    
                   </button>
                 ))}
               </div>
@@ -547,7 +543,7 @@ export function GroupMembersSheet({
                 FOCUS,
               )}
             >
-              <LogOut className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              
               <span className="flex-1">Leave group</span>
             </button>
             {canManage && (
@@ -561,7 +557,7 @@ export function GroupMembersSheet({
                   FOCUS,
                 )}
               >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                
                 <span className="flex-1">Disband group</span>
               </button>
             )}

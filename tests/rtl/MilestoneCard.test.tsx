@@ -22,7 +22,7 @@ function data(over: Partial<MilestoneCardData> = {}): MilestoneCardData {
   return {
     enabled: true,
     period: "week",
-    periodLabel: "Aug 3 – Aug 9, 2026",
+    periodLabel: "Aug 3 - Aug 9, 2026",
     rungs: [
       { doors: 100, rewardCents: 2_500 },
       { doors: 250, rewardCents: 5_000 },

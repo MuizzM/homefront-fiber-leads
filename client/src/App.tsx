@@ -5,7 +5,6 @@ import { queryClient, persistOptions } from "@/lib/queryClient";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { lazyRoute } from "@/lib/staleChunk";
-import { Lock } from "lucide-react";
 import { Suspense, useCallback, useDeferredValue, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
 import { KeepAliveStages } from "@/components/KeepAliveStages";
@@ -111,9 +110,7 @@ function hasRole(userRole: string | undefined, ...allowed: AppRole[]) {
 function AccessDenied() {
   return (
     <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center gap-3 p-6 text-center">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl bg-secondary text-muted-foreground">
-        <Lock className="h-6 w-6" aria-hidden="true" />
-      </div>
+      
       <h1 className="text-lg font-semibold">No access to this area</h1>
       <p className="text-sm text-muted-foreground">Your role doesn't include this workspace. Ask your manager if you need it, or head back to your queue.</p>
       <a href="/#/" className="text-sm font-semibold text-primary underline underline-offset-4">Back to home</a>

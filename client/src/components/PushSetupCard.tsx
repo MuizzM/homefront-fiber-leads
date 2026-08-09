@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { useToast } from "@/hooks/use-toast";
-import { Bell, BellRing, Loader2, SquarePlus, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { AddToHomeScreen } from "@/components/AddToHomeScreen";
 import { enablePush, pushReadiness, type PushReadiness } from "@/lib/pushNotifications";
 
@@ -95,11 +95,7 @@ export function PushSetupCard({ className }: { className?: string }) {
       </button>
 
       <div className="flex items-start gap-3 pr-8">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary">
-          {readiness.state === "needs_install"
-            ? <SquarePlus className="h-5 w-5" aria-hidden="true" />
-            : <BellRing className="h-5 w-5" aria-hidden="true" />}
-        </div>
+        
 
         <div className="min-w-0 flex-1">
           {readiness.state === "needs_install" ? (
@@ -126,7 +122,7 @@ export function PushSetupCard({ className }: { className?: string }) {
                   than no button. Say where the switch actually lives. */}
               <p className="mt-0.5 text-[13px] text-muted-foreground">
                 Your phone is blocking notifications for Homefront. Turn them back on in
-                Settings → Notifications → Homefront, and you'll hear about live bonuses again.
+                Settings &gt; Notifications &gt; Homefront, and you'll hear about live bonuses again.
               </p>
             </>
           ) : (
@@ -146,7 +142,7 @@ export function PushSetupCard({ className }: { className?: string }) {
               >
                 {busy
                   ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                  : <Bell className="h-4 w-4" aria-hidden="true" />}
+                  : null}
                 Turn on alerts
               </button>
             </>

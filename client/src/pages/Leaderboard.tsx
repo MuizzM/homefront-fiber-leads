@@ -2,7 +2,7 @@ import { FOCUS } from "@/lib/a11y";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { StatStrip, StatTile } from "@/components/ui/page-scaffold";
-import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap, RefreshCw } from "lucide-react";
+import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
@@ -61,7 +61,7 @@ export default function Leaderboard() {
     : range === "7d"  ? "the past 7 days"
     : range === "30d" ? "the past 30 days"
     : range === "1y"  ? "the past year"
-    : (since || until) ? `${since || "start"} → ${until || "now"}`
+    : (since || until) ? `${since || "start"} to ${until || "now"}`
     : "a custom range";
 
   const { data: board = [], isLoading, isError, refetch } = useQuery<LeaderboardEntry[]>({
@@ -90,7 +90,7 @@ export default function Leaderboard() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight flex items-center gap-2 text-foreground">
-            <Trophy className="w-5 h-5 text-muted-foreground" /> Sales leaderboard
+             Sales leaderboard
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Ranked by sales · <span className="text-foreground/80 font-medium">{rangeLabel}</span>
@@ -138,7 +138,7 @@ export default function Leaderboard() {
               range === "custom" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            <CalendarCheck className="w-3.5 h-3.5" /> Custom
+             Custom
           </button>
         </div>
 
@@ -150,7 +150,7 @@ export default function Leaderboard() {
               aria-label="From date" data-testid="range-since"
               className="h-8 px-2.5 rounded-lg bg-secondary border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
-            <span className="text-muted-foreground" aria-hidden="true">→</span>
+            <span className="text-muted-foreground">to</span>
             <input
               type="date" value={until} min={since || undefined}
               onChange={(e) => setUntil(e.target.value)}
@@ -205,12 +205,12 @@ export default function Leaderboard() {
       ) : isError ? (
         <Card className="bg-card border-border">
           <CardContent className="py-12 text-center" data-testid="leaderboard-error">
-            <Trophy className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
+            
             <div className="text-sm font-semibold text-foreground">Couldn't load the leaderboard</div>
             <div className="text-sm text-muted-foreground mt-1">Check your connection and try again.</div>
             <button onClick={() => refetch()}
               className={`mt-4 inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>
-              <RefreshCw className="w-4 h-4" />Retry
+              Retry
             </button>
           </CardContent>
         </Card>
@@ -303,7 +303,7 @@ function Metric({
   return (
     <div className="flex flex-col items-end min-w-[44px]">
       <div className="flex items-center gap-1 text-sm font-semibold tabular-nums text-foreground">
-        {Icon && <Icon className="w-3.5 h-3.5 text-muted-foreground" />}
+        {Icon && null}
         {val}
       </div>
       <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>

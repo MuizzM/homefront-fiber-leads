@@ -26,10 +26,7 @@ import {
 } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSustained } from "@/hooks/use-sustained";
-import {
-  Navigation, Clock, WifiOff, RefreshCw, ChevronRight, MapPin as MapPinIcon,
-  Zap, Flame, Repeat, DollarSign, Trophy, Sun, CalendarClock, SkipForward,
-} from "lucide-react";
+import { Navigation, Clock, RefreshCw, ChevronRight, MapPin as MapPinIcon, Zap, Flame, Repeat, Trophy, SkipForward } from "lucide-react";
 
 
 interface Pin extends RoutablePin {
@@ -230,7 +227,7 @@ export default function Today() {
               every other number on the screen. */}
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground" data-testid="today-greeting">
-              <Sun className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+              
               {greeting}, {firstName} · {dateLabel}
             </div>
             <EarningsToday className="mt-1.5" />
@@ -261,7 +258,7 @@ export default function Today() {
 
         {(offline || backlog || snap.deadCount > 0) && (
           <div role="status" aria-live="polite" className={`mt-3 flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px] ${offline ? "bg-muted border-border text-muted-foreground" : "bg-primary/10 border-primary/20 text-foreground"}`} data-testid="today-sync">
-            {offline ? <WifiOff className="w-4 h-4 shrink-0" aria-hidden="true" /> : <RefreshCw className="w-4 h-4 shrink-0 text-primary animate-spin" aria-hidden="true" />}
+            {offline ? null : <RefreshCw className="w-4 h-4 shrink-0 text-primary animate-spin" aria-hidden="true" />}
             <span className="flex-1">
               {offline ? "Offline - your taps are saved" : `Syncing ${snap.pendingCount} knock${snap.pendingCount === 1 ? "" : "s"}`}
               {snap.deadCount > 0 && <span className="text-red-500"> · {snap.deadCount} failed</span>}
@@ -286,7 +283,7 @@ export default function Today() {
         {clockQ.data && !clockQ.data.clockedIn && (
           <button onClick={() => clockIn.mutate()} disabled={clockIn.isPending} data-testid="today-clock-in"
             className={`mt-3 w-full flex items-center gap-3 rounded-xl bg-card border border-border px-4 py-3 text-left active:scale-[.99] transition-transform disabled:opacity-60 hover:border-primary/30 ${FOCUS}`}>
-            <span className="w-9 h-9 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0"><Clock className="w-5 h-5" aria-hidden="true" /></span>
+            
             <span className="flex-1"><span className="block text-[14px] font-semibold text-foreground">Clock in to start</span><span className="block text-[12px] text-muted-foreground">Your hours count toward payroll</span></span>
             {clockIn.isPending ? <RefreshCw className="w-4 h-4 text-muted-foreground animate-spin" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" aria-hidden="true" />}
           </button>
@@ -335,14 +332,14 @@ export default function Today() {
             On a failed fetch, say the count is unknown rather than implying zero. */}
         {followupsQ.isError && (
           <div className="mt-4 flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-[12px] text-muted-foreground" data-testid="today-followups-error">
-            <CalendarClock className="w-4 h-4 shrink-0" aria-hidden="true" />
+            
             <span className="flex-1">Couldn't check your follow-ups.</span>
             <button onClick={() => followupsQ.refetch()} className={`font-semibold text-foreground min-h-11 px-2 ${FOCUS}`}>Retry</button>
           </div>
         )}
         {followupsDue > 0 && (
           <Link href="/followups" className={`group mt-4 flex items-center gap-3 rounded-xl border border-sky-400/25 bg-sky-400/[0.08] px-4 py-3.5 active:scale-[.99] transition-transform hover:border-sky-400/40 ${FOCUS}`} data-testid="today-followups">
-            <span className="w-9 h-9 rounded-lg bg-sky-400/15 text-sky-400 flex items-center justify-center shrink-0"><CalendarClock className="w-5 h-5" aria-hidden="true" /></span>
+            
             <span className="flex-1 min-w-0">
               <span className="block text-[14px] font-semibold text-foreground">{followupsDue} follow-up{followupsDue === 1 ? "" : "s"} due</span>
               <span className="block text-[12px] text-muted-foreground">Callbacks scheduled for today or earlier</span>
@@ -355,7 +352,7 @@ export default function Today() {
         <div className="mt-6">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Your next door</h2>
-            {locState === "off" && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><MapPinIcon className="w-3 h-3" aria-hidden="true" />Location off · by priority</span>}
+            {locState === "off" && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">Location off · by priority</span>}
           </div>
           {loading ? (
             <div className="rounded-2xl border border-border bg-card p-5">
@@ -392,7 +389,7 @@ export default function Today() {
 
         {myRow && (
           <Link href="/my-commission" className={`group mt-6 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 active:scale-[.99] transition-transform hover:border-emerald-500/30 ${FOCUS}`} data-testid="today-pay">
-            <span className="w-9 h-9 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0"><DollarSign className="w-5 h-5" aria-hidden="true" /></span>
+            
             <span className="flex-1 min-w-0">
               <span className="block text-[14px] font-semibold text-foreground tabular-nums">{myRow.sales} sale{myRow.sales === 1 ? "" : "s"} · {myRow.salesToday} today</span>
               <span className="block text-[12px] text-muted-foreground">View your weekly pay statement</span>
@@ -434,9 +431,9 @@ function ReasonChips({ p }: { p: Pin }) {
   if (!rs.length) return null;
   return (
     <div className="flex flex-wrap gap-1.5 mt-2.5">
-      {rs.map((r, i) => { const Icon = r.icon; return (
+      {rs.map((r, i) => { return (
         <span key={i} className="inline-flex items-center gap-1 rounded-full bg-secondary border border-border px-2 py-1 text-[11px] font-medium text-foreground">
-          <Icon className={`w-3 h-3 ${r.tone}`} aria-hidden="true" />{r.label}
+          {r.label}
         </span>
       ); })}
     </div>
@@ -457,7 +454,7 @@ function HeroCard({ p, loc, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng | nul
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-foreground">
               <span className="w-2 h-2 rounded-full" style={{ background: STATE_COLORS[st] }} aria-hidden="true" />{STATE_LABELS[st]}
             </span>
-            {dist && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-0.5"><Navigation className="w-3 h-3" aria-hidden="true" />{dist} away</span>}
+            {dist && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-0.5">{dist} away</span>}
           </div>
           <div className="text-[21px] font-bold text-foreground leading-tight mt-1">{p.address}</div>
           <div className="text-[13px] text-muted-foreground mt-0.5">{p.city}{p.state ? `, ${p.state}` : ""}{p.zip ? ` ${p.zip}` : ""}</div>
@@ -497,10 +494,10 @@ function DoorRow({ p, n, loc, onOpen }: { p: Pin; n: number; loc: LatLng | null;
 function ErrorCard({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="rounded-2xl border border-border bg-card p-6 text-center" data-testid="today-error">
-      <div className="w-11 h-11 rounded-xl bg-red-500/15 flex items-center justify-center mx-auto"><WifiOff className="w-5 h-5 text-red-500" aria-hidden="true" /></div>
+      
       <div className="text-[15px] font-semibold text-foreground mt-3">Couldn't load your route</div>
       <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">Check your connection and try again - nothing you've logged is lost.</div>
-      <button onClick={onRetry} className={`mt-4 inline-flex items-center gap-2 h-11 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><RefreshCw className="w-4 h-4" aria-hidden="true" />Retry</button>
+      <button onClick={onRetry} className={`mt-4 inline-flex items-center gap-2 h-11 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>Retry</button>
     </div>
   );
 }
@@ -508,7 +505,7 @@ function ErrorCard({ onRetry }: { onRetry: () => void }) {
 function EmptyCard({ title, body, cta }: { title: string; body: string; cta: { to: string; label: string } }) {
   return (
     <div className="rounded-2xl border border-border bg-card p-6 text-center" data-testid="today-empty">
-      <div className="w-11 h-11 rounded-xl bg-secondary flex items-center justify-center mx-auto"><MapPinIcon className="w-5 h-5 text-muted-foreground" aria-hidden="true" /></div>
+      
       <div className="text-[15px] font-semibold text-foreground mt-3">{title}</div>
       <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">{body}</div>
       <Link href={cta.to} className={`mt-4 inline-flex items-center gap-2 h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[14px] font-semibold active:scale-95 transition-transform hover:bg-primary/90 ${FOCUS}`}>{cta.label}</Link>
@@ -519,10 +516,10 @@ function EmptyCard({ title, body, cta }: { title: string; body: string; cta: { t
 function AllDoneCard({ sales }: { sales: number }) {
   return (
     <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-6 text-center" data-testid="today-alldone">
-      <div className="w-11 h-11 rounded-xl bg-emerald-500/15 flex items-center justify-center mx-auto"><Trophy className="w-5 h-5 text-emerald-400" aria-hidden="true" /></div>
+      
       <div className="text-[15px] font-semibold text-foreground mt-3">Every door worked - nice shift</div>
       <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">{sales > 0 ? `${sales} sale${sales === 1 ? "" : "s"} logged today.` : "Your route's clear."} New leads land here as they're assigned.</div>
-      <Link href="/leaderboard" className={`mt-4 inline-flex items-center gap-2 h-11 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><Trophy className="w-4 h-4" aria-hidden="true" />See the leaderboard</Link>
+      <Link href="/leaderboard" className={`mt-4 inline-flex items-center gap-2 h-11 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>See the leaderboard</Link>
     </div>
   );
 }

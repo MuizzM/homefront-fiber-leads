@@ -37,7 +37,7 @@ const realFetch = globalThis.fetch.bind(globalThis);
 // Deliberately NOT the house ladder (1–7 @$150, 8–12 @$200, 13–16 @$250, 17+
 // @$300). Every rate differs, so a substituted default cannot pass as this one.
 const INVITED_LADDER: CommissionTier[] = [
-  { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17_500, label: "1–6 sales" },
+  { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17_500, label: "1-6 sales" },
   { position: 1, minimumSales: 7, maximumSales: null, rateCents: 26_000, label: "7+ sales" },
 ];
 
@@ -287,7 +287,7 @@ describe("the invited ladder reaches the contract and the pay engine", () => {
     // And the table.
     const rows = snapshot.sections.flatMap((s: any) => s.rows ?? []);
     expect(rows).toEqual([
-      { band: "1–6 qualified sales", rate: "$175 per sale" },
+      { band: "1-6 qualified sales", rate: "$175 per sale" },
       { band: "7+ qualified sales", rate: "$260 per sale" },
     ]);
   });
@@ -414,7 +414,7 @@ describe("the terms a reviewer APPROVES are the terms the paper states", () => {
   // Every rate differs from both the invited ladder and the house one, so
   // neither substitution can pass as the reviewer's edit.
   const EDITED_LADDER: CommissionTier[] = [
-    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 18_500, label: "1–6 sales" },
+    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 18_500, label: "1-6 sales" },
     { position: 1, minimumSales: 7, maximumSales: null, rateCents: 27_000, label: "7+ sales" },
   ];
 

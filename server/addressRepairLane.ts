@@ -125,7 +125,7 @@ export function planRepair(c: RepairCandidate, neighbours: ReturnType<typeof sca
       return {
         code: "SUFFIX_VARIANT",
         patch: { address: `${houseNum} ${theirStreet}` },
-        detail: `street spelling "${ourStreet}" → verified "${theirStreet}"`,
+        detail: `street spelling "${ourStreet}" -> verified "${theirStreet}"`,
       };
     }
   }

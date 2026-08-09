@@ -1,23 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Activity,
-  AlertTriangle,
-  Database,
-  Download,
-  FileCheck2,
-  Gauge,
-  History,
-  Loader2,
-  Map as MapIcon,
-  Radio,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  Upload,
-  Users,
-  Zap,
-} from "lucide-react";
+import { Activity, AlertTriangle, Database, Gauge, History, Loader2, Map as MapIcon, RefreshCw, ShieldCheck, Zap } from "lucide-react";
 import {
   kineticScannerApi,
   type KineticAddress,
@@ -81,9 +64,7 @@ export default function KineticScanner() {
       <div className="mx-auto max-w-7xl space-y-4">
         <header className="overflow-hidden rounded-2xl border border-border bg-card text-foreground shadow-xl">
           <div className="flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground">
-              <Radio className="h-5 w-5" />
-            </div>
+            
             <div>
               <h1 className="text-xl font-semibold tracking-tight">
                 Kinetic Evidence Scanner
@@ -109,7 +90,7 @@ export default function KineticScanner() {
             className="flex items-center overflow-x-auto border-t border-border px-2"
             aria-label="Kinetic Scanner sections"
           >
-            {tabs.map(([id, label, Icon]) => (
+            {tabs.map(([id, label]) => (
               <button
                 key={id}
                 role="tab"
@@ -117,7 +98,7 @@ export default function KineticScanner() {
                 onClick={() => setTab(id)}
                 className={`relative flex h-10 shrink-0 items-center gap-1.5 rounded-t border-b-2 px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tab === id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
               >
-                <Icon className="h-4 w-4" />
+                
                 {label}
               </button>
             ))}
@@ -171,7 +152,7 @@ function Dashboard({
     <div className="space-y-4">
       {recheck?.status === "running" && stale != null && stale > 120 && (
         <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          
           Recheck worker may have stalled. Last heartbeat was {stale} seconds
           ago.
         </div>
@@ -182,14 +163,14 @@ function Dashboard({
           ["Verified Fresh", stats?.verifiedFresh, Zap],
           ["Fresh Candidates", stats?.candidateFresh, RefreshCw],
           ["Errors This Cycle", stats?.errorsThisCycle, AlertTriangle],
-        ].map(([label, value, Icon]: any) => (
+        ].map(([label, value]: any) => (
           <button
             key={label}
             onClick={label === "Total Addresses" ? onAddresses : undefined}
             className="rounded-2xl border border-border bg-card p-4 text-left shadow-sm"
           >
             <div className="flex items-center text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-              <Icon className="mr-2 h-3.5 w-3.5 text-primary" />
+              
               {label}
             </div>
             <div className="mt-3 text-2xl font-bold tabular-nums">
@@ -206,7 +187,7 @@ function Dashboard({
       <section className="grid gap-4 lg:grid-cols-[1fr_.8fr]">
         <article className="rounded-2xl border border-border bg-card p-5 text-foreground">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-success" />
+            
             <h2 className="text-sm font-semibold">Evidence posture</h2>
             <span className="ml-auto rounded-full bg-warning/10 px-2 py-0.5 text-2xs font-semibold uppercase text-warning">
               {String(evidence?.configured?.mode ?? "offline").replaceAll(
@@ -266,9 +247,7 @@ function Worker({
   return (
     <article className="rounded-2xl border border-border bg-card p-4 text-foreground">
       <div className="flex items-center">
-        <Radio
-          className={`h-4 w-4 ${running ? "animate-pulse text-warning" : "text-success"}`}
-        />
+        
         <h2 className="ml-2 text-sm font-semibold">{title}</h2>
         <span
           className={`ml-auto rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${running ? "bg-warning/10 text-warning" : "bg-secondary text-secondary-foreground"}`}
@@ -479,7 +458,7 @@ function EvidenceCenter() {
     <div className="grid gap-4 lg:grid-cols-2">
       <section className="rounded-2xl border border-border bg-card p-4 lg:col-span-2">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-primary" />
+          
           <h2 className="text-sm font-semibold">Evidence source policy</h2>
           <span className="ml-auto rounded-full bg-secondary px-2 py-0.5 text-2xs font-semibold uppercase text-secondary-foreground">
             Active:{" "}
@@ -539,7 +518,7 @@ function EvidenceCenter() {
       </section>
       <section className="rounded-2xl border border-border bg-card p-4">
         <div className="flex items-center gap-2">
-          <Upload className="h-4 w-4 text-primary" />
+          
           <h2 className="text-sm font-semibold">Approved evidence import</h2>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
@@ -582,7 +561,7 @@ function EvidenceCenter() {
       </section>
       <section className="rounded-2xl border border-border bg-card p-4">
         <div className="flex items-center gap-2">
-          <FileCheck2 className="h-4 w-4 text-primary" />
+          
           <h2 className="text-sm font-semibold">Manual verification</h2>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
@@ -718,7 +697,7 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
     <section className="overflow-hidden rounded-2xl border border-border bg-card">
       <div className="flex flex-wrap gap-2 border-b border-border p-3">
         <label className="relative min-w-48 flex-1">
-          <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+          
           <input
             value={search}
             onChange={(e) => {
@@ -756,7 +735,7 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
           onClick={() => void kineticScannerApi.downloadExport()}
           className="h-10 rounded-xl border border-border px-3 text-xs font-semibold"
         >
-          <Download className="mr-1 inline h-3.5 w-3.5" />
+          
           Export
         </button>
       </div>
@@ -961,7 +940,7 @@ function Changes() {
             {c.address || c.kineticAddressId}
           </div>
           <div className="mt-1 font-mono text-2xs text-muted-foreground">
-            {c.previousValue ?? "unknown"} → {c.currentValue ?? "unknown"}
+            {c.previousValue ?? "unknown"} to {c.currentValue ?? "unknown"}
           </div>
         </article>
       ))}
@@ -1005,7 +984,7 @@ function Jobs() {
           </div>
           <div className="mt-3 font-mono text-sm">
             {j.workerType === "scan"
-              ? `${fmt(j.startSequentialId)} → ${fmt(j.endSequentialId)}`
+              ? `${fmt(j.startSequentialId)} to ${fmt(j.endSequentialId)}`
               : `${fmt(j.checked)} addresses rechecked`}
           </div>
           <div className="mt-2 text-2xs text-muted-foreground">
@@ -1112,7 +1091,7 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
                 onClick={() => void act("contacts")}
                 className="h-11 rounded-xl border border-border text-xs font-bold"
               >
-                <Users className="mr-1 inline h-3.5 w-3.5" />
+                
                 Refresh contacts
               </button>
               <button

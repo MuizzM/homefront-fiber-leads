@@ -1434,7 +1434,7 @@ export type CommissionStructure = "FLAT" | "TIERED";
 // + activated on first use. Idempotent — reused thereafter.
 export function getOrCreateStandardTieredVersion(tenantId: number, actorId: number | null): { planId: number; versionId: number } {
   let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'TIERED' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, STANDARD_TIERED_PLAN_NAME) as any;
-  if (!plan) plan = createPlan(tenantId, actorId, { name: STANDARD_TIERED_PLAN_NAME, type: "TIERED", tierMode: "RETROACTIVE_WEEKLY", description: "Default retroactive weekly tiers (1–7 $150, 8–12 $200, 13–16 $250, 17+ $300)." });
+  if (!plan) plan = createPlan(tenantId, actorId, { name: STANDARD_TIERED_PLAN_NAME, type: "TIERED", tierMode: "RETROACTIVE_WEEKLY", description: "Default retroactive weekly tiers (1-7 $150, 8-12 $200, 13-16 $250, 17+ $300)." });
   let version = rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ? ORDER BY version_number DESC LIMIT 1`).get(tenantId, plan.id) as any;
   if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: orgToday(tenantId), qualificationBasis: loadOrgConfig(tenantId).qualificationBasis, tiers: DEFAULT_RETRO_TIERS });
   if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
@@ -2234,7 +2234,7 @@ export function acceptCurrentPlan(tenantId: number, repId: number, actorUserId: 
   const terms = {
     structure: current.structure, planName: current.planName,
     flatRateCents: current.flatRateCents, tiers: current.tiers,
-    effectiveFrom: current.effectiveFrom, weekBasis: "Monday–Sunday, org timezone",
+    effectiveFrom: current.effectiveFrom, weekBasis: "Monday-Sunday, org timezone",
   };
   const termsJson = JSON.stringify(terms);
   const hash = crypto.createHash("sha256").update(termsJson).digest("hex");

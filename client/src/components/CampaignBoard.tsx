@@ -19,7 +19,6 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
-import { Zap, Timer, Trophy } from "lucide-react";
 import type { CampaignTrigger } from "@shared/spiffCampaign";
 
 export interface RepCampaign {
@@ -110,14 +109,7 @@ export function CampaignCard({ campaign, compact = false }: { campaign: RepCampa
     >
       <CardContent className={cn("p-4", compact && "p-3")}>
         <div className="flex items-start gap-3">
-          <div className={cn(
-            "grid h-10 w-10 shrink-0 place-items-center rounded-xl",
-            progress.met ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                         : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-          )}>
-            {progress.met ? <Trophy className="h-5 w-5" aria-hidden="true" />
-                          : <Zap className="h-5 w-5" aria-hidden="true" />}
-          </div>
+          
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
@@ -139,7 +131,7 @@ export function CampaignCard({ campaign, compact = false }: { campaign: RepCampa
             urgent && !progress.met ? "bg-amber-500/20 text-amber-700 dark:text-amber-300"
                                     : "bg-secondary text-muted-foreground",
           )} data-testid={`campaign-countdown-${campaign.id}`}>
-            <Timer className="h-3 w-3" aria-hidden="true" />
+            
             {countdown(remaining)}
           </span>
         </div>
@@ -203,7 +195,7 @@ export function CampaignBoard() {
   return (
     <section className="space-y-2" data-testid="campaign-board">
       <SectionLabel className="flex items-center gap-1.5">
-        <Zap className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+        
         Live right now
       </SectionLabel>
       {campaigns.map(c => <CampaignCard key={c.id} campaign={c} />)}

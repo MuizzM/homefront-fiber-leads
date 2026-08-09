@@ -1,11 +1,4 @@
-// ── Peek bar (level 1) ───────────────────────────────────────────────────────
-// The collapsed glance: drag handle sits above this (in the shell), then ONE
-// compact block — one-line truncated address, a single status indicator (dot +
-// label in the status color, never repeated elsewhere on the bar), the
-// last-contact/freshness cue, ONE primary action (Directions), and the close
-// affordance. Everything else lives one drag/tap up in Quick Actions.
-
-import { Navigation, X } from "lucide-react";
+import { X } from "lucide-react";
 import { relativeTime } from "./utils";
 
 export interface PeekBarProps {
@@ -42,7 +35,7 @@ export function PeekBar(props: PeekBarProps): JSX.Element {
           aria-label={`Directions to ${address}`}
           className="relative shrink-0 h-9 px-3 rounded-full bg-white/[0.07] border border-white/[0.1] inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-white active:scale-95 transition after:absolute after:-inset-1"
         >
-          <Navigation className="w-3.5 h-3.5 opacity-80" />
+          
           Directions
         </a>
         <button

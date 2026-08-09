@@ -11,7 +11,7 @@
 // ResizeObserver fires resize → moveend → bounds self-correct). Phone: a
 // right-edge slide-in glass drawer over the map.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X, List, Maximize2 } from "lucide-react";
+import { X } from "lucide-react";
 import { pinDisplayState, STATE_COLORS, STATE_LABELS } from "@shared/knock";
 import { leadKey } from "@/lib/dedupeLeads";
 
@@ -119,7 +119,7 @@ export function LeadsInViewPanel({
         style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <header className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
-          <List className="w-4 h-4 text-teal-300 shrink-0" aria-hidden="true" />
+          
           <h2 className="text-[13px] font-semibold text-white flex-1 truncate" data-testid="leads-panel-count">
             {leads.length.toLocaleString()} in view
             <span className="text-white/50 font-normal"> · {totalOnMap.toLocaleString()} total</span>
@@ -160,7 +160,7 @@ export function LeadsInViewPanel({
             <p className="text-[13px] text-white/60">No leads in this view - pan the map, or:</p>
             <button onClick={onFitAll} data-testid="leads-panel-fit-all"
               className="h-11 px-4 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] text-[13px] font-bold flex items-center gap-1.5">
-              <Maximize2 className="w-3.5 h-3.5" /> Fit to all leads
+               Fit to all leads
             </button>
           </div>
         ) : (

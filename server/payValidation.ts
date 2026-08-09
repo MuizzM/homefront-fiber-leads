@@ -59,7 +59,7 @@ export interface W9ValidatedInput {
 
 export function validateW9Input(body: any): { ok: true; value: W9ValidatedInput } | { ok: false; error: string } {
   const legalName = String(body?.legalName ?? "").trim();
-  if (legalName.length < 2 || legalName.length > 120) return { ok: false, error: "legalName must be 2–120 characters" };
+  if (legalName.length < 2 || legalName.length > 120) return { ok: false, error: "legalName must be 2-120 characters" };
   const businessNameRaw = String(body?.businessName ?? "").trim();
   const businessName = businessNameRaw ? businessNameRaw : null;
   if (businessName && businessName.length > 120) return { ok: false, error: "businessName must be ≤ 120 characters" };
@@ -68,8 +68,8 @@ export function validateW9Input(body: any): { ok: true; value: W9ValidatedInput 
   const city = String(address.city ?? "").trim();
   const state = String(address.state ?? "").trim().toUpperCase();
   const zip = String(address.zip ?? "").trim();
-  if (line1.length < 3 || line1.length > 120) return { ok: false, error: "address.line1 must be 3–120 characters" };
-  if (city.length < 2 || city.length > 60) return { ok: false, error: "address.city must be 2–60 characters" };
+  if (line1.length < 3 || line1.length > 120) return { ok: false, error: "address.line1 must be 3-120 characters" };
+  if (city.length < 2 || city.length > 60) return { ok: false, error: "address.city must be 2-60 characters" };
   if (!isValidState(state)) return { ok: false, error: "address.state must be a 2-letter US state code" };
   if (!isValidZip(zip)) return { ok: false, error: "address.zip must be 5 digits (optionally ZIP+4)" };
   const tin = String(body?.tin ?? "").replace(/\D/g, "");
@@ -96,7 +96,7 @@ export function validateW9Input(body: any): { ok: true; value: W9ValidatedInput 
   if (taxClassification === "other") {
     const desc = String(body?.otherClassification ?? "").trim();
     if (desc.length < 2 || desc.length > 60) {
-      return { ok: false, error: "otherClassification is required (2–60 characters) when taxClassification is 'other' - Form W-9 Line 3a" };
+      return { ok: false, error: "otherClassification is required (2-60 characters) when taxClassification is 'other' - Form W-9 Line 3a" };
     }
     otherClassification = desc;
   } else if (body?.otherClassification != null && String(body.otherClassification).trim() !== "") {

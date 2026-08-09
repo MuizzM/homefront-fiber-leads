@@ -4,7 +4,7 @@
 // server round-trip, and it works in a dead zone at 9 PM. Copy follows the
 // rejection-math voice: lapsed cards are data collected, never failure.
 import { useState } from "react";
-import { Moon, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { SectionLabel } from "@/components/ui/page-scaffold";
@@ -65,7 +65,7 @@ export function DebriefCard({
   return (
     <div className="rounded-2xl border border-border bg-card p-5" data-testid="debrief-card">
       <div className="flex items-center gap-2">
-        <Moon className="h-4 w-4 text-primary" aria-hidden="true" />
+        
         <SectionLabel>Shift debrief</SectionLabel>
       </div>
 

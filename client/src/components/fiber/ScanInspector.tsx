@@ -2,10 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Activity, Pause, Play, RotateCcw, Square, Copy, ChevronDown, ChevronRight,
-  Wifi, WifiOff, KeyRound, Loader2, AlertTriangle, CheckCircle2,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 
 // The pipeline the admin watches each address move through. Order matters — it
 // drives the progress rail and "blocked stage" detection.
@@ -258,14 +255,14 @@ export default function ScanInspector() {
       {/* Health + connection */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-400"}`}>
-          {connected ? <Activity className="h-3.5 w-3.5" /> : <Loader2 className="h-3.5 w-3.5 animate-spin" />} {connected ? "Live" : "Connecting…"}
+          {connected ? null : <Loader2 className="h-3.5 w-3.5 animate-spin" />} {connected ? "Live" : "Connecting…"}
         </span>
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400" : "border-red-500/30 text-red-600 dark:text-red-400"}`}>
-          {health?.decodoConnected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />} Decodo {health?.decodoConnected ? "connected" : "down"}
+          {health?.decodoConnected ? null : null} Decodo {health?.decodoConnected ? "connected" : "down"}
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground font-mono">{health?.proxySessionId ?? "decodo-s?"}</span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground">
-          <KeyRound className="h-3.5 w-3.5" /> token {health?.tokenReady ? `ready · ${health?.tokenExpiresIn ?? "?"}s` : "none"} · pool {health?.tokenPool?.ready ?? 0}/{health?.tokenPool?.size ?? 0}
+           token {health?.tokenReady ? `ready · ${health?.tokenExpiresIn ?? "?"}s` : "none"} · pool {health?.tokenPool?.ready ?? 0}/{health?.tokenPool?.size ?? 0}
         </span>
         {health?.paused && <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-400">Paused</span>}
       </div>
@@ -293,11 +290,11 @@ export default function ScanInspector() {
       {/* Controls */}
       <div className="flex flex-wrap gap-2">
         {health?.paused
-          ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-[13px] font-semibold text-[#04241f] hover:bg-emerald-400"><Play className="h-4 w-4" /> Resume</button>
-          : <button onClick={() => control("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"><Pause className="h-4 w-4" /> Pause</button>}
-        <button onClick={() => control("retry-failed")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"><RotateCcw className="h-4 w-4" /> Retry failed</button>
-        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-card px-3 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-500/10 dark:text-red-400"><Square className="h-4 w-4" /> Stop</button>
-        <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"><Copy className="h-4 w-4" /> Copy diagnostics</button>
+          ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-[13px] font-semibold text-[#04241f] hover:bg-emerald-400"> Resume</button>
+          : <button onClick={() => control("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Pause</button>}
+        <button onClick={() => control("retry-failed")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Retry failed</button>
+        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-card px-3 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-500/10 dark:text-red-400"> Stop</button>
+        <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Copy diagnostics</button>
       </div>
 
       {/* Log-viewer filters — trace one address end-to-end by correlation id */}
@@ -364,7 +361,7 @@ export default function ScanInspector() {
                 </div>
                 <div className="flex min-w-0 flex-col items-start gap-0.5">
                   <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stale ? "bg-red-500/15 text-red-400 border-red-500/30" : STAGE_TONE[r.stage] ?? "bg-muted text-muted-foreground border-border"}`}>
-                    {stale ? <AlertTriangle className="h-3 w-3" /> : r.stage === "classified" ? <CheckCircle2 className="h-3 w-3" /> : null}
+                    {stale ? null : r.stage === "classified" ? null : null}
                     {stale ? `Blocked at ${STAGE_LABEL[r.stage] ?? r.stage}` : STAGE_LABEL[r.stage] ?? r.stage}
                   </span>
                   {r.classification && <span className="pl-0.5 text-2xs text-muted-foreground">{r.classification}</span>}

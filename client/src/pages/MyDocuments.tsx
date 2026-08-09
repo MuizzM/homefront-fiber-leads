@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle, ArrowRight, CheckCircle2, Clock3, Download, FileCheck2,
-  FileSignature, FileText, Landmark, Loader2, LockKeyhole, ShieldCheck, XCircle,
-} from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { useToast } from "@/hooks/use-toast";
@@ -204,14 +201,14 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
       <DialogContent className="bg-card border-border text-foreground max-w-3xl h-[92vh] sm:h-[88vh] p-0 overflow-hidden flex flex-col">
         <DialogHeader className="px-5 pt-5 pb-3 border-b border-border flex-shrink-0">
           <DialogTitle className="text-base flex items-center gap-2 pr-8">
-            <span className="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><FileSignature className="w-4 h-4" /></span>
+            
             {snapshot?.title || "Loading agreement"}
           </DialogTitle>
           {content.data && <p className="text-2xs text-muted-foreground font-mono mt-1">Document SHA-256 {content.data.contentSha256}</p>}
         </DialogHeader>
 
         {content.isLoading && <div className="flex-1 p-5 space-y-3" role="status" aria-busy="true" aria-label="Loading agreement"><div className="h-7 bg-secondary rounded animate-pulse" /><div className="h-52 bg-secondary/60 rounded animate-pulse" /></div>}
-        {content.isError && <div className="flex-1 grid place-items-center p-6"><div className="text-center"><AlertTriangle className="w-7 h-7 text-red-400 mx-auto" /><p className="text-sm font-semibold mt-2">Couldn’t open this agreement</p><Button variant="outline" size="sm" className="mt-3" onClick={() => content.refetch()}>Try again</Button></div></div>}
+        {content.isError && <div className="flex-1 grid place-items-center p-6"><div className="text-center"><p className="text-sm font-semibold mt-2">Couldn’t open this agreement</p><Button variant="outline" size="sm" className="mt-3" onClick={() => content.refetch()}>Try again</Button></div></div>}
 
         {content.data && snapshot && (
           <>
@@ -330,7 +327,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                   className="mt-7 rounded-lg bg-teal-50 border border-teal-200 p-3 text-xs font-semibold text-teal-900 flex items-center gap-2"
                   data-testid="agreement-end-marker"
                 >
-                  <FileCheck2 className="w-4 h-4" /> You reached the end of the agreement.
+                   You reached the end of the agreement.
                 </div>
               </div>
             </div>
@@ -354,9 +351,9 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                     <Input id="typed-signature" value={typedName} onChange={event => setTypedName(event.target.value)} placeholder="Type your full legal name" className="mt-1.5 h-11 font-medium" autoComplete="off" data-testid="typed-signature" />
                   </div>
                   <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-1">
-                    <Button variant="ghost" className="text-red-400 hover:text-red-300" onClick={() => setDeclining(true)}><XCircle className="w-4 h-4 mr-1.5" /> Decline</Button>
+                    <Button variant="ghost" className="text-red-400 hover:text-red-300" onClick={() => setDeclining(true)}> Decline</Button>
                     <Button disabled={!ready || sign.isPending} onClick={() => sign.mutate()} className="h-11 bg-primary hover:bg-primary/90 text-white" data-testid="complete-signature">
-                      {sign.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LockKeyhole className="w-4 h-4 mr-2" />} Sign agreement
+                      {sign.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Sign agreement
                     </Button>
                   </div>
                 </div>
@@ -434,23 +431,21 @@ export default function MyDocuments() {
     <div className="hf-stagger p-4 sm:p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-5">
       <header>
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Rep onboarding</div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground mt-0.5 flex items-center gap-2"><FileSignature className="w-5 h-5 text-primary" /> My documents</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground mt-0.5 flex items-center gap-2"> My documents</h1>
         <p className="text-sm text-muted-foreground mt-1">Review, sign, and download your agreements with Home Front Sign.</p>
       </header>
 
       {query.isLoading && <div className="h-40 rounded-2xl bg-card border border-border animate-pulse" role="status" aria-busy="true" aria-label="Loading your documents" />}
       {query.isError && <div className="rounded-2xl bg-card border border-red-500/30 p-6 text-center"><p className="text-sm font-semibold">Couldn’t load your documents</p><Button variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>Try again</Button></div>}
-      {data?.noRepProfile && <div className="rounded-2xl bg-card border border-amber-500/30 p-5 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" /><div><p className="text-sm font-semibold">No rep profile linked</p><p className="text-xs text-muted-foreground mt-1">Ask your manager to link your login to your team profile.</p></div></div>}
-      {data && !data.noRepProfile && !data.configured && <div className="rounded-2xl bg-card border border-amber-500/30 p-4 flex items-start gap-3"><AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" /><div><p className="text-sm font-semibold">Onboarding email is temporarily unavailable</p><p className="text-xs text-muted-foreground mt-1">Existing agreements remain available to review, sign, and download. Your manager cannot issue new ones until Resend is connected.</p></div></div>}
+      {data?.noRepProfile && <div className="rounded-2xl bg-card border border-amber-500/30 p-5 flex items-start gap-3"><div><p className="text-sm font-semibold">No rep profile linked</p><p className="text-xs text-muted-foreground mt-1">Ask your manager to link your login to your team profile.</p></div></div>}
+      {data && !data.noRepProfile && !data.configured && <div className="rounded-2xl bg-card border border-amber-500/30 p-4 flex items-start gap-3"><div><p className="text-sm font-semibold">Onboarding email is temporarily unavailable</p><p className="text-xs text-muted-foreground mt-1">Existing agreements remain available to review, sign, and download. Your manager cannot issue new ones until Resend is connected.</p></div></div>}
 
       {data && !data.noRepProfile && (
         <>
           {nextDocument?.envelope && (
             <section className="rounded-2xl border border-primary/25 bg-primary/[0.07] p-4" aria-label="Next onboarding task" data-testid="next-document-task">
               <div className="flex items-start gap-3">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary">
-                  <FileSignature className="h-5 w-5" aria-hidden="true" />
-                </div>
+                
                 <div className="min-w-0 flex-1">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">Next step</div>
                   <div className="mt-0.5 text-[15px] font-semibold text-foreground">Sign {nextDocument.label}</div>
@@ -458,7 +453,7 @@ export default function MyDocuments() {
                 </div>
               </div>
               <Button className="mt-4 w-full" onClick={() => setActiveRecord(nextDocument.envelope)}>
-                Review &amp; sign <ArrowRight className="h-4 w-4" />
+                Review &amp; sign 
               </Button>
             </section>
           )}
@@ -468,9 +463,7 @@ export default function MyDocuments() {
               aria-label="All agreements signed"
               data-testid="all-signed-banner"
             >
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-500/15 text-emerald-400">
-                <CheckCircle2 className="h-5 w-5" aria-hidden="true" />
-              </div>
+              
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-foreground">Every agreement is signed - you're field-ready.</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">Your executed PDFs live below, hash-verified, whenever you need them.</p>
@@ -490,9 +483,7 @@ export default function MyDocuments() {
                 agreement; the form itself opens the real IRS PDF. */}
             <article className="render-lazy p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid="onboarding-document-w9">
               <div className="flex items-start gap-3 min-w-0 flex-1">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${taxReady ? "bg-emerald-500/10" : "bg-secondary"}`}>
-                  {taxReady ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <Landmark className="w-5 h-5 text-muted-foreground" />}
-                </div>
+                
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-sm font-semibold">IRS Form W-9 &amp; direct deposit</h2>
@@ -508,7 +499,7 @@ export default function MyDocuments() {
               <div className="flex-shrink-0 pl-[52px] sm:pl-0">
                 <Link href="/tax-and-pay" data-testid="link-tax-and-pay">
                   <Button size="sm" variant={taxReady ? "outline" : "default"} className="h-9">
-                    <Landmark className="w-3.5 h-3.5 mr-1" /> {taxReady ? "View" : "Complete"}
+                     {taxReady ? "View" : "Complete"}
                   </Button>
                 </Link>
               </div>
@@ -517,12 +508,12 @@ export default function MyDocuments() {
               const record = document.envelope;
               const actionable = record && (record.status === "sent" || record.status === "delivered");
               return <article key={document.type} className="render-lazy p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid={`onboarding-document-${document.type}`}>
-                <div className="flex items-start gap-3 min-w-0 flex-1"><div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${record?.status === "completed" ? "bg-emerald-500/10" : "bg-secondary"}`}>{record?.status === "completed" ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <FileText className="w-5 h-5 text-muted-foreground" />}</div><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-red-400 mt-1">{record.failureReason}</p>}{record?.status === "completed" && record.completedPdfSha256 && <p className="text-2xs text-muted-foreground font-mono mt-1.5 break-all" data-testid={`completed-pdf-sha-${document.type}`}><span className="font-sans font-semibold">Signed PDF SHA-256</span> {record.completedPdfSha256}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"><Clock3 className="w-3 h-3" /> Waiting for your manager</p>}</div></div>
-                <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="h-9 bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}><FileSignature className="w-3.5 h-3.5 mr-1" /> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="h-9 border-border" onClick={() => download(document)}><Download className="w-3.5 h-3.5 mr-1" /> Signed PDF</Button>}</div>
+                <div className="flex items-start gap-3 min-w-0 flex-1"><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-red-400 mt-1">{record.failureReason}</p>}{record?.status === "completed" && record.completedPdfSha256 && <p className="text-2xs text-muted-foreground font-mono mt-1.5 break-all" data-testid={`completed-pdf-sha-${document.type}`}><span className="font-sans font-semibold">Signed PDF SHA-256</span> {record.completedPdfSha256}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"> Waiting for your manager</p>}</div></div>
+                <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="h-9 bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="h-9 border-border" onClick={() => download(document)}> Signed PDF</Button>}</div>
               </article>;
             })}
           </div></section>
-          <div className="rounded-xl bg-secondary/30 border border-border px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground"><ShieldCheck className="w-4 h-4 text-primary mt-px flex-shrink-0" /> Home Front Sign binds your authenticated account and explicit consent to the exact SHA-256 document hash. Resend delivers invitations and completed copies.</div>
+          <div className="rounded-xl bg-secondary/30 border border-border px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground"> Home Front Sign binds your authenticated account and explicit consent to the exact SHA-256 document hash. Resend delivers invitations and completed copies.</div>
         </>
       )}
       <SigningDialog record={activeRecord} onClose={() => setActiveRecord(null)} />

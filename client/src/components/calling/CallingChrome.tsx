@@ -1,6 +1,5 @@
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { LockKeyhole, PhoneCall, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useCan } from "@/lib/capabilities";
 
@@ -18,13 +17,11 @@ export function CallingChrome({ children }: { children: React.ReactNode }) {
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col">
       <div className="sticky top-0 z-20 border-b border-border/80 bg-background/95 px-4 backdrop-blur-xl md:px-6">
         <div className="flex h-14 items-center gap-3">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-primary">
-            <PhoneCall className="h-[18px] w-[18px]" aria-hidden="true" />
-          </span>
+          
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold tracking-tight">Calling</div>
             <div className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-              <LockKeyhole className="h-3 w-3" aria-hidden="true" /> Manual, gated pilot
+               Manual, gated pilot
             </div>
           </div>
           <nav aria-label="Calling module" className="flex h-full items-end gap-1">
@@ -83,9 +80,7 @@ export function CallingAvailability({ status }: { status: { callable: boolean; b
   if (status.callable) {
     return (
       <div data-testid="calling-ready" className="flex items-start gap-3 rounded-2xl border border-border bg-card px-4 py-3">
-        <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-          <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-        </span>
+        
         <div className="min-w-0">
           <div className="text-[13px] font-semibold leading-5 text-foreground">Manual calling gates are ready</div>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">Every number is still re-checked when a rep requests a one-use call authorization.</p>
@@ -97,9 +92,7 @@ export function CallingAvailability({ status }: { status: { callable: boolean; b
   return (
     <section data-testid="calling-blocked" role="status" className="overflow-hidden rounded-2xl border border-border bg-card">
       <div className="flex items-start gap-3 border-b border-border px-4 py-3">
-        <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
-          <LockKeyhole className="h-4 w-4" aria-hidden="true" />
-        </span>
+        
         <div className="min-w-0 flex-1">
           <h2 className="text-[13px] font-semibold leading-5 text-foreground">Calling is locked</h2>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">No phone number can be revealed and no call can start until every authoritative server gate passes.</p>
@@ -132,9 +125,7 @@ export function CallingAvailability({ status }: { status: { callable: boolean; b
 export function CallingUnknownState({ retry }: { retry: () => void }) {
   return (
     <div data-testid="calling-status-unknown" role="alert" className="rounded-2xl border border-red-500/25 bg-card p-5 text-center">
-      <span className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-red-500/10">
-        <LockKeyhole aria-hidden="true" className="h-[18px] w-[18px] text-red-600 dark:text-red-400" />
-      </span>
+      
       <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">Calling status is unknown</h2>
       <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">The compliance service could not be verified. Calling remains locked; no number is available.</p>
       <button type="button" onClick={retry} className="mt-4 min-h-10 rounded-xl border border-border bg-card px-4 text-[13px] font-semibold transition-colors hover:bg-secondary/60">Retry status check</button>

@@ -80,7 +80,7 @@ describe("grid validation", () => {
     expect(res2.status).toBe(400);
   });
 
-  it("accepts wide spans (3°–15°) - and the pin path now answers them too, with a sample", async () => {
+  it("accepts wide spans (3°-15°) - and the pin path now answers them too, with a sample", async () => {
     const res = await req("/api/leads/map/grid?bbox=-84.5,33.5,-75.5,36.6", fx.manager.session); // NC ~9° x 3.1°
     expect(res.status).toBe(200);
     // #91 raised the pin ceiling to 40°: the pin path no longer 400s here —

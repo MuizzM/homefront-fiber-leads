@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, PhoneOff, ScanSearch, ShieldCheck } from "lucide-react";
+import { Loader2, PhoneOff } from "lucide-react";
 
 import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
@@ -137,7 +137,7 @@ export function AreaSkipTracePanel({
             >
               {active || startMutation.isPending
                 ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                : <ScanSearch className="h-4 w-4" aria-hidden="true" />}
+                : null}
               Run Tracerfy + DNC
             </button>
           )}
@@ -148,7 +148,7 @@ export function AreaSkipTracePanel({
         {confirming && (
           <div className="mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3" data-testid="skip-trace-confirm">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+              
               <div className="min-w-0 text-[13px] text-foreground">
                 This will skip trace <strong>{eligible}</strong> {eligible === 1 ? "door" : "doors"} and
                 spend provider budget. Sold and already-customer doors are excluded.
@@ -184,8 +184,8 @@ export function AreaSkipTracePanel({
               {active
                 ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground motion-reduce:animate-none" aria-hidden="true" />
                 : run.status === "completed"
-                  ? <ShieldCheck className="h-4 w-4 text-emerald-500" aria-hidden="true" />
-                  : <AlertTriangle className="h-4 w-4 text-amber-500" aria-hidden="true" />}
+                  ? null
+                  : null}
               <span className="text-[13px] font-medium text-foreground" data-testid="skip-trace-summary">
                 {active
                   ? `Running - ${run.processedLeads} of ${run.eligibleLeads} doors`

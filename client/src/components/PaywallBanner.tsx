@@ -7,7 +7,6 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
-import { AlertTriangle } from "lucide-react";
 
 interface Access {
   enabled: boolean; state: string | null; access: "full" | "paywall" | "blocked";
@@ -40,11 +39,11 @@ export function PaywallBanner() {
 
   return (
     <div className={`flex items-center gap-2 px-4 py-2 border-b text-[12.5px] font-medium ${cls}`} role="status" data-testid="paywall-banner">
-      <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
+      
       <span className="min-w-0">{msg}</span>
       {isAdmin && (
         <Link href="/billing" className="ml-auto shrink-0 underline underline-offset-2 hover:opacity-80" data-testid="paywall-cta">
-          Manage billing →
+          Manage billing
         </Link>
       )}
     </div>

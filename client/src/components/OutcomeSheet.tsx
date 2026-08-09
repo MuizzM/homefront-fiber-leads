@@ -4,7 +4,7 @@
 import { useState, useEffect } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { FIELD_OUTCOMES, pinDisplayState, STATE_COLORS, type KnockOutcome } from "@shared/knock";
-import { X, StickyNote, CheckCircle2 } from "lucide-react";
+import { X } from "lucide-react";
 import type { LogOpts } from "@/lib/useKnockLogger";
 
 const GRID = FIELD_OUTCOMES;
@@ -64,7 +64,7 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                       // by a saturated dot + border, not the (low-contrast) text color.
                       : { background: `${o.color}1f`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}99` }}
                   >
-                    {win && <CheckCircle2 className="w-4 h-4" />}
+                    {win && null}
                     {!win && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: o.color }} />}
                     {o.label}
                   </button>
@@ -79,7 +79,7 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                   className="w-full rounded-xl bg-background border border-border px-3 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none" />
               ) : (
                 <button onClick={() => setNoteOpen(true)} className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground font-medium">
-                  <StickyNote className="w-4 h-4" /> Add a note
+                   Add a note
                 </button>
               )}
             </div>

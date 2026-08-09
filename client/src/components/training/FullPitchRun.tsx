@@ -21,9 +21,7 @@
 // screen can never drift from the drill decks' vocabulary.
 
 import { useMemo, useState } from "react";
-import {
-  Check, ChevronRight, Ear, Mic, MessageCircle, RotateCcw, Target, X, Zap,
-} from "lucide-react";
+import { Check, ChevronRight, X } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
 import { SectionLabel } from "@/components/ui/page-scaffold";
@@ -190,7 +188,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
             </div>
             <div className="rounded-2xl border border-border bg-card p-4">
               <div className="flex items-center gap-2">
-                <Zap className="h-4 w-4 text-primary" aria-hidden="true" />
+                
                 <SectionLabel>Why it works</SectionLabel>
               </div>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{beat.why}</p>
@@ -240,7 +238,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
                 producing one with a stranger staring at you is the skill. */}
             <div className="rounded-2xl border border-border bg-card p-5">
               <div className="flex items-center gap-2">
-                <MessageCircle className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                
                 <SectionLabel>{objection.chip}</SectionLabel>
               </div>
               <p className="mt-2 text-xl font-bold leading-snug text-foreground">"{objection.cue}"</p>
@@ -248,7 +246,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
             {!revealed ? (
               <>
                 <div className="flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.06] p-3 text-sm text-foreground">
-                  <Ear className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                  
                   Answer out loud first. Then check the counter.
                 </div>
                 <button
@@ -283,7 +281,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
                     data-testid="pitch-run-needs-work"
                     className={cn("inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-border bg-secondary px-4 text-sm font-semibold text-foreground transition-transform active:scale-[.98]", FOCUS)}
                   >
-                    <RotateCcw className="h-4 w-4" aria-hidden="true" /> Needs work
+                     Needs work
                   </button>
                 </div>
               </>
@@ -295,7 +293,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
       {stage === doneStage && (
         <div className="space-y-4" data-testid="pitch-run-done">
           <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/[0.07] p-5 text-center">
-            <Target className="mx-auto h-8 w-8 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+            
             <h2 className="mt-2 text-xl font-bold tracking-tight text-foreground">Full run complete</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               The pitch only feels like this smooth at a door after it is boring in practice.
@@ -327,7 +325,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
               data-testid="pitch-run-again"
               className={cn("inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-transform active:scale-[.98]", FOCUS)}
             >
-              <Mic className="h-4 w-4" aria-hidden="true" /> Run it again
+               Run it again
             </button>
             <button
               type="button"

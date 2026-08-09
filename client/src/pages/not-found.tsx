@@ -1,5 +1,4 @@
 import { Link } from "wouter";
-import { Compass, ArrowLeft, Map } from "lucide-react";
 
 /**
  * 404 — the only screen a lost user ever sees, so it gets the same treatment as
@@ -12,9 +11,7 @@ export default function NotFound() {
   return (
     <div className="flex min-h-[70dvh] w-full items-center justify-center px-6 py-12">
       <div className="w-full max-w-md text-center">
-        <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl border border-border bg-secondary">
-          <Compass className="h-7 w-7 text-muted-foreground" aria-hidden />
-        </div>
+        
 
         <p className="text-2xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
           Error 404
@@ -33,7 +30,7 @@ export default function NotFound() {
             className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             data-testid="notfound-dashboard"
           >
-            <ArrowLeft className="h-4 w-4" aria-hidden />
+            
             Back to dashboard
           </Link>
           <Link
@@ -41,7 +38,7 @@ export default function NotFound() {
             className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border bg-card px-5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             data-testid="notfound-map"
           >
-            <Map className="h-4 w-4 text-primary" aria-hidden />
+            
             Open Field Map
           </Link>
         </div>

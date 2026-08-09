@@ -4,10 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Zap, Clock, Layers, MapPin, ExternalLink,
-  Hammer, Building2, AlertTriangle, Flame,
-} from "lucide-react";
+import { Zap, Clock, Layers, Hammer } from "lucide-react";
 
 // The Scan Inspector is heavy (SSE stream + live table) and admin-only, so it is
 // code-split and only mounted when the Coverage tab is opened by an admin.
@@ -80,7 +77,7 @@ export default function FiberIntelligence() {
       <div className="relative sticky top-0 z-10 -mx-4 mb-4 sm:-mx-6">
       <div role="tablist" aria-label="Fiber Intelligence sections" className="overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex gap-1">
-          {TABS.map(({ key, label, icon: Icon }) => (
+          {TABS.map(({ key, label, }) => (
             <button
               key={key}
               role="tab"
@@ -89,7 +86,7 @@ export default function FiberIntelligence() {
               data-testid={`fi-tab-${key}`}
               className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-[13px] font-semibold transition-colors ${tab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
-              <Icon className="h-4 w-4" /> {label}
+               {label}
               {tab === key && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
             </button>
           ))}
@@ -143,7 +140,7 @@ interface FiberChanges {
 }
 
 const KIND_STYLE: Record<string, { label: string; cls: string }> = {
-  copper_upgrade: { label: "Copper→Fiber", cls: "bg-orange-500/15 text-orange-400" },
+  copper_upgrade: { label: "Copper to Fiber", cls: "bg-orange-500/15 text-orange-400" },
   went_live: { label: "Went live", cls: "bg-amber-500/15 text-amber-400" },
   coming_soon: { label: "Coming soon", cls: "bg-cyan-500/15 text-cyan-400" },
   lost_fiber: { label: "Lost", cls: "bg-red-500/15 text-red-400" },
@@ -220,7 +217,7 @@ function FreshNow() {
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
                   {a.leadId != null
                     ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
-                    : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
+                    : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary">Map</Link>}
                 </div>
               ))}
             </div>
@@ -236,7 +233,7 @@ function FreshNow() {
           <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest transitions - 7 days</div>
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1"><Flame className="h-3 w-3 text-orange-400" />{changes!.copperUpgrades} copper upgrades</span>
+              <span className="inline-flex items-center gap-1">{changes!.copperUpgrades} copper upgrades</span>
               <span>· pool {copperPool?.total ?? 0}</span>
             </div>
           </div>
@@ -325,7 +322,7 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
           </div>
         ))}
       </div>
-      <Link href="/map" className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-primary hover:underline">Open the coverage map <ExternalLink className="h-3.5 w-3.5" /></Link>
+      <Link href="/map" className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-primary hover:underline">Open the coverage map </Link>
 
       {isAdmin && (
         <div className="space-y-2 pt-2">
@@ -463,7 +460,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
       {/* Manager: coverage gaps banner */}
       {isManager && gaps.length > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-700 dark:text-amber-300">
-          <div className="mb-1 flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" /> {gaps.length} source coverage gap{gaps.length > 1 ? "s" : ""}</div>
+          <div className="mb-1 flex items-center gap-1.5 font-semibold"> {gaps.length} source coverage gap{gaps.length > 1 ? "s" : ""}</div>
           {gaps.map((g) => <div key={g.source} className="text-[11px] text-amber-700/80 dark:text-amber-300/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
         </div>
       )}
@@ -482,9 +479,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
           <div className="divide-y divide-border">
             {rows.map((r) => (
               <div key={r.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`newbuild-row-${r.id}`}>
-                <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${r.actionable ? "bg-emerald-500/15 text-emerald-400" : r.monitored ? "bg-amber-500/15 text-amber-400" : "bg-primary/12 text-primary"}`}>
-                  {r.monitored ? <Building2 className="h-4 w-4" /> : <Hammer className="h-4 w-4" />}
-                </span>
+                
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] font-medium text-foreground">{r.address ?? `Addressless building${r.county ? ` · ${r.county} Co.` : ""}`}{r.city ? `, ${r.city}` : ""}</div>
                   <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
@@ -501,7 +496,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
                     : r.monitored ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs font-semibold uppercase text-amber-400">Monitoring</span>
                     : r.checkedAt ? <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold uppercase text-muted-foreground">{(r.fiberStatus ?? "checked").replace(/_/g, " ")}</span>
                     : <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-2xs font-semibold uppercase text-sky-300">Checking</span>}
-                  {r.address && <Link href="/map" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
+                  {r.address && <Link href="/map" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary">Map</Link>}
                 </div>
               </div>
             ))}

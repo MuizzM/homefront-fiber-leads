@@ -7,7 +7,6 @@
 // composer stay visible above via the quick body.
 
 import { Link } from "wouter";
-import { Phone, Building2, Trash2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { VerificationBadge, formatDistance } from "@/components/verification";
 import { isKnockOutcome, OUTCOME_META, type KnockOutcome } from "@shared/knock";
@@ -116,7 +115,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
               href={`/calling/lead/${leadId}`}
               className="h-10 px-3.5 rounded-full bg-white/[0.06] border border-white/15 text-white/70 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition"
             >
-              <Phone className="w-3.5 h-3.5" />
+              
               Open in Calling
             </Link>
           )}
@@ -134,7 +133,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                 }`}
                 title="Mark this door on behalf of the central team - no rep credit"
               >
-                <Building2 className="w-3.5 h-3.5" />
+                
                 {centralMode ? "Central: ON" : "Central mark"}
               </button>
               {centralMode ? (
@@ -249,7 +248,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
               : "bg-rose-500/10 border-rose-500/40 text-rose-300"
           }`}
         >
-          <Trash2 className="w-4 h-4" aria-hidden="true" />
+          
           {deleteArmed ? "Confirm delete?" : "Delete lead"}
         </button>
       ) : null}

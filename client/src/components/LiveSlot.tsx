@@ -15,20 +15,12 @@ import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
-import { ChevronRight, Flame, Footprints, Gift, Timer, Trophy } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import {
   resolveLiveSlot, msLeft, countdownLabel, isUrgent,
-  type LiveItem, type LiveKind,
-} from "@shared/liveSlot";
+  type LiveItem } from "@shared/liveSlot";
 import { usd } from "@shared/moneyFormat";
 
-const ICON: Record<LiveKind, typeof Flame> = {
-  challenge: Timer,
-  momentum: Flame,
-  campaign: Trophy,
-  ladder: Footprints,
-  drop: Gift,
-};
 
 /** One clock for the card, ticking only while something is actually counting
  *  down. A setInterval running against a ladder with no deadline is a wakeup a
@@ -55,7 +47,6 @@ export function LiveSlot({ items, className }: { items: LiveItem[]; className?: 
   // component exists to remove.
   if (!primary) return null;
 
-  const Icon = ICON[primary.kind] ?? Trophy;
   const left = msLeft(primary, now);
   const urgent = isUrgent(left);
   const label = countdownLabel(left);
@@ -74,9 +65,7 @@ export function LiveSlot({ items, className }: { items: LiveItem[]; className?: 
         )}
       >
         <div className="flex items-start gap-3">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
-            <Icon className="h-5 w-5" aria-hidden="true" />
-          </div>
+          
 
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-2">

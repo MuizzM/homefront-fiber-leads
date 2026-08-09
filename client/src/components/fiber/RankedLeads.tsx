@@ -12,7 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest, ApiError } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LeadCard, type CardProperty } from "@/components/LeadCard";
-import { Flame, Layers, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 
 interface RankedLead {
   id: number; address: string; city: string; state: string; zip: string | null;
@@ -67,7 +67,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
       {/* Oversized rank numeral, Netflix-top-10 style — pure background texture. */}
       <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-emerald-400/10">1</span>
       <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-[0.14em] text-emerald-600 dark:text-emerald-400">
-        <Flame className="h-3 w-3" /> Knock this door first
+         Knock this door first
       </div>
       <div className="relative flex items-center gap-3">
         <ScoreRing score={lead.score} />
@@ -86,7 +86,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
       </div>
       {lead.clusterSize > 1 && (
         <div className="relative mt-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-primary">
-          <Layers className="h-2.5 w-2.5" /> {lead.clusterSize} hot leads in this cluster
+           {lead.clusterSize} hot leads in this cluster
         </div>
       )}
     </button>
@@ -117,7 +117,7 @@ export default function RankedLeads() {
     <div className="overflow-hidden rounded-2xl border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          <Flame className="h-3.5 w-3.5 text-orange-600 dark:text-orange-400" /> Top leads - ranked
+           Top leads - ranked
         </div>
         {data && <div className="text-[11px] text-muted-foreground">{data.count} scored</div>}
       </div>
@@ -157,7 +157,7 @@ export default function RankedLeads() {
                     <span className="truncate text-[14px] font-medium text-foreground">{l.address}, {l.city}</span>
                     {l.clusterSize > 1 && (
                       <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-2xs font-semibold text-primary" title={`${l.clusterSize} ranked leads in this cluster`}>
-                        <Layers className="h-2.5 w-2.5" /> ×{l.clusterSize}
+                         ×{l.clusterSize}
                       </span>
                     )}
                   </div>

@@ -12,5 +12,5 @@ export function usd(cents: number | null | undefined): string {
 // Signed variant for adjustments: +$50 / −$325.
 export function usdSigned(cents: number | null | undefined): string {
   const c = cents ?? 0;
-  return `${c > 0 ? "+" : c < 0 ? "−" : ""}${usd(Math.abs(c))}`;
+  return `${c > 0 ? "+" : c < 0 ? "-" : ""}${usd(Math.abs(c))}`;
 }

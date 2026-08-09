@@ -1836,7 +1836,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (raw == null || raw === "" || raw === "auto") return gridCellForSpan(spanDeg);
     const n = Number(raw);
     if (!Number.isFinite(n) || n <= 0 || n > 5) {
-      return { error: "cell must be 'auto' or a size in degrees (0.01–5)" };
+      return { error: "cell must be 'auto' or a size in degrees (0.01-5)" };
     }
     // Snap to the 0.01° lattice (same rule as auto) so cell identity — and
     // therefore the client's 60s response cache keys — is requester-independent.
@@ -4107,7 +4107,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const gridSize = getRockwellGridSize();
     res.json({
       gridPoints: gridSize,
-      estimatedAddresses: `${gridSize * 2}–${gridSize * 4}`,
+      estimatedAddresses: `${gridSize * 2}-${gridSize * 4}`,
       source: "Mapbox Geocoding API",
       bbox: { minLng: -80.455, maxLng: -80.360, minLat: 35.515, maxLat: 35.582 },
     });
@@ -6020,7 +6020,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             // Bucket into range
             const lo = Math.floor(medIncome / 10000) * 10000;
             const hi = lo + 10000;
-            incomeRange = `$${(lo / 1000).toFixed(0)}k\u2013$${(hi / 1000).toFixed(0)}k`;
+            incomeRange = `$${(lo / 1000).toFixed(0)}k-$${(hi / 1000).toFixed(0)}k`;
           }
           if (!isNaN(medHome) && medHome > 0) {
             const lo = Math.floor(medHome / 25000) * 25000;
@@ -8556,7 +8556,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     const name = wantsName ? String(req.body.name).trim() : null;
     if (wantsName && (!name || name.length > 60)) {
-      return res.status(400).json({ error: "Area name must be 1–60 characters" });
+      return res.status(400).json({ error: "Area name must be 1-60 characters" });
     }
     // Same validator the create path uses, so a colour that saves on one route
     // is a colour that saves on the other.
@@ -9002,12 +9002,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const { maxDistanceM, maxAccuracyM } = (req.body ?? {}) as { maxDistanceM?: unknown; maxAccuracyM?: unknown };
     if (maxDistanceM != null) {
       const d = Number(maxDistanceM);
-      if (!Number.isFinite(d) || d < 5 || d > 5000) return res.status(400).json({ error: "maxDistanceM must be 5–5000 metres" });
+      if (!Number.isFinite(d) || d < 5 || d > 5000) return res.status(400).json({ error: "maxDistanceM must be 5-5000 metres" });
       storage.setSetting("geo.max_distance_m", String(Math.round(d)), uid, tid);
     }
     if (maxAccuracyM != null) {
       const a = Number(maxAccuracyM);
-      if (!Number.isFinite(a) || a < 5 || a > 1000) return res.status(400).json({ error: "maxAccuracyM must be 5–1000 metres" });
+      if (!Number.isFinite(a) || a < 5 || a > 1000) return res.status(400).json({ error: "maxAccuracyM must be 5-1000 metres" });
       storage.setSetting("geo.max_accuracy_m", String(Math.round(a)), uid, tid);
     }
     const next = storage.getGeoConfig(tid);
@@ -10645,7 +10645,7 @@ export function registerSaasRoutes(app: any) {
 
   // ── Tenant pay policy - install-gated commission hold knobs (admin) ────────
   // requireInstallConfirm=false restores the legacy pay flow (no hold).
-  // holdDays is clamped 0–365. An absent row behaves as the defaults
+  // holdDays is clamped 0-365. An absent row behaves as the defaults
   // (require install confirm, 90 days).
   app.get("/api/admin/pay-policy", requireAdmin, (req: Request, res: Response) => {
     const tenantId = Number((req as any).user?.tenantId);
@@ -10661,7 +10661,7 @@ export function registerSaasRoutes(app: any) {
       requireInstallConfirm: z.boolean().optional(),
       holdDays: z.number().int().min(0).max(HOLD_DAYS_MAX).optional(),
     }).strict().safeParse(req.body ?? {});
-    if (!parsed.success) return res.status(400).json({ error: `holdDays must be a whole number 0–${HOLD_DAYS_MAX}; requireInstallConfirm a boolean` });
+    if (!parsed.success) return res.status(400).json({ error: `holdDays must be a whole number 0-${HOLD_DAYS_MAX}; requireInstallConfirm a boolean` });
     const before = getTenantPayPolicy(tenantId);
     const policy = upsertTenantPayPolicy(tenantId, parsed.data);
     storage.logActivity(user.id, "pay.policy.updated", "tenant", tenantId, {
@@ -11206,7 +11206,7 @@ export function registerSaasRoutes(app: any) {
   // never touch commission/payroll. RBAC is strict and every read is tenant-
   // walled: a rep sees only their own feed, the team heat (the algorithm data) is
   // manager+, and money-state transitions (approve / paid) are admin-only + audited.
-  // The live award band, so the rep surface can say "$25–$50" (and list the
+  // The live award band, so the rep surface can say "$25-$50" (and list the
   // exact ladder) without hardcoding numbers that could drift from the engine.
   const spiffBand = () => {
     const band = spiffAmountBand(DEFAULT_SPIFF_CONFIG);

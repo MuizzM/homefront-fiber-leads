@@ -1,14 +1,4 @@
-// ── Quick Actions body (level 2) ─────────────────────────────────────────────
-// ONE unified action surface: a small icon-sized utility row (Directions, Call
-// — only with a valid phone —, Copy) above a SINGLE 2-column outcomes grid.
-// The four most likely dispositions lead (Not Home | Interested / Sold | Not
-// Interested) and the remaining outcomes follow IN THE SAME GRID (Follow-up,
-// Prospect) — fixed FIELD_OUTCOMES order, so a button never moves under the
-// finger. No More collapse, no competing action rows, no nested cards. The
-// notes composer is injected by the shell; deep content (history, assignment,
-// evidence, admin) lives one level up in Details.
-
-import { Navigation, Phone, Copy, Check, type LucideIcon } from "lucide-react";
+import { Phone, Copy, Check, type LucideIcon } from "lucide-react";
 import { OutcomeButton } from "./OutcomeButton";
 import { validPhone, MUTED, BODY_TEXT } from "./utils";
 import type { KnockOutcome, OutcomeDef } from "@shared/knock";
@@ -63,7 +53,7 @@ export function QuickBody(props: QuickBodyProps): JSX.Element {
           aria-label="Directions"
           className={primaryUtilBtn}
         >
-          <Navigation className="w-[17px] h-[17px] shrink-0" />
+          
           Directions
         </a>
         {validPhone(phone) && (

@@ -35,7 +35,7 @@ function weekPayload(over: Record<string, any> = {}) {
       adjustmentCents: 0, finalCommissionCents: 105000, tierLabel: "1-6",
       retro: { salesUntilNextTier: 1, nextTierMinimumSales: 7, nextTierRateCents: 22500, nextTierProjectedCommissionCents: 157500 },
     },
-    bounds: { localWeekLabel: "Aug 3 – Aug 9, 2026" },
+    bounds: { localWeekLabel: "Aug 3 - Aug 9, 2026" },
     structure: { structure: "TIERED", flatRateCents: null, tiers: TIERS, planName: "Custom Weekly Tiers", acceptedAt: "2026-08-01T00:00:00Z" },
     sales: [
       ...Array.from({ length: 6 }, (_, i) => ({
@@ -159,7 +159,7 @@ describe("the rank card - Bronze/Silver/Gold/Platinum on the rep's own ladder", 
   it("shows every rung of the rail with its range and rate", async () => {
     renderPage(weekPayload());
     await screen.findByTestId("rank-rail");
-    expect(screen.getByTestId("rank-rung-bronze")).toHaveTextContent("1–6 sales");
+    expect(screen.getByTestId("rank-rung-bronze")).toHaveTextContent("1-6 sales");
     expect(screen.getByTestId("rank-rung-bronze")).toHaveTextContent("$175");
     expect(screen.getByTestId("rank-rung-silver")).toHaveTextContent("7+ sales");
     expect(screen.getByTestId("rank-rung-silver")).toHaveTextContent("$225");
@@ -245,7 +245,7 @@ describe("the chargeback reserve (holdback) card", () => {
     renderPage(withHoldback());
     const card = await screen.findByTestId("holdback-card");
     expect(card).toHaveTextContent("10% held");
-    expect(screen.getByTestId("holdback-reserve")).toHaveTextContent("−$105");   // 10% of $1,050
+    expect(screen.getByTestId("holdback-reserve")).toHaveTextContent("-$105");   // 10% of $1,050
     expect(screen.getByTestId("holdback-net")).toHaveTextContent("$945");        // paid this week
     expect(screen.getByTestId("holdback-balance")).toHaveTextContent("$315");    // running reserve
     // reserve + net reconcile with the earned line (no invented cent on screen)

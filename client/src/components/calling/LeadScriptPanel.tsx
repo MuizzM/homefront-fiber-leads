@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, MessageSquareText, ShieldAlert } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { getLeadScript, type LeadScript } from "@/lib/callingApi";
 
 /**
@@ -98,7 +98,7 @@ export function LeadScriptPanel({ leadId }: { leadId: number }) {
     <section className="rounded-2xl border border-border bg-card p-4" data-testid="lead-script-panel" aria-label="Call script">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <MessageSquareText className="h-4 w-4 text-primary" aria-hidden="true" />
+          
           <h2 className="text-base font-semibold">Call script</h2>
         </div>
         {scriptQuery.data && (
@@ -121,7 +121,7 @@ export function LeadScriptPanel({ leadId }: { leadId: number }) {
       ) : scriptQuery.isError || !scriptQuery.data?.sections ? (
         <div className="space-y-3" data-testid="script-unavailable">
           <div role="alert" className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3">
-            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+            
             <div className="min-w-0">
               <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Script unavailable</div>
               <div className="mt-0.5 text-[11px] text-muted-foreground">The personalized script could not be loaded. Use the standard opener below.</div>

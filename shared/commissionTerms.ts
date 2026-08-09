@@ -104,7 +104,7 @@ export function tierRows(terms: CommissionTerms): Array<{ band: string; rate: st
   return terms.tiers.map((t) => ({
     band: t.maximumSales == null
       ? `${t.minimumSales}+ qualified sales`
-      : `${t.minimumSales}–${t.maximumSales} qualified sales`,
+      : `${t.minimumSales}-${t.maximumSales} qualified sales`,
     rate: `${formatUsdCents(t.rateCents)} per sale`,
   }));
 }

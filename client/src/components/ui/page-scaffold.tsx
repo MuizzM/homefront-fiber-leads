@@ -24,9 +24,11 @@ import { cn } from "@/lib/utils";
 
 /** Page title block: one per screen, title + optional subtitle + trailing
  *  actions. The h1 is the ONLY text at this size on a page. */
-export function PageHeader({ title, subtitle, icon: Icon, actions, className }: {
+export function PageHeader({ title, subtitle, actions, className }: {
   title: string;
   subtitle?: ReactNode;
+  /** Accepted for API compatibility; page headers are text-only — decorative
+   *  glyphs live only in the screen-switcher nav. */
   icon?: LucideIcon;
   actions?: ReactNode;
   className?: string;
@@ -35,7 +37,6 @@ export function PageHeader({ title, subtitle, icon: Icon, actions, className }: 
     <div className={cn("flex items-start justify-between gap-4", className)} data-testid="page-header">
       <div className="min-w-0">
         <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
-          {Icon && <Icon className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />}
           <span className="truncate">{title}</span>
         </h1>
         {subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}
@@ -73,9 +74,10 @@ export function StatDelta({ tone, children }: { tone: "up" | "down" | "neutral";
 /** Revolut-style stat tile: eyebrow label above a large tabular number.
  *  Label ABOVE the number, always — a rep scanning four tiles reads the
  *  labels once and the numbers forever after. */
-export function StatTile({ label, value, icon: Icon, delta, accent = false, className, testId }: {
+export function StatTile({ label, value, delta, accent = false, className, testId }: {
   label: string;
   value: ReactNode;
+  /** Accepted for API compatibility; tiles are text-only now. */
   icon?: LucideIcon;
   delta?: ReactNode;
   /** The one tile the screen is FOR (sales, pay). One per row at most. */
@@ -93,7 +95,6 @@ export function StatTile({ label, value, icon: Icon, delta, accent = false, clas
       )}
     >
       <div className="flex items-center gap-1.5">
-        {Icon && <Icon className={cn("h-3.5 w-3.5 shrink-0", accent ? "text-primary" : "text-muted-foreground")} aria-hidden="true" />}
         <span className="truncate text-[11px] font-medium text-muted-foreground">{label}</span>
       </div>
       <div className="mt-1 flex items-baseline gap-1.5">
@@ -123,7 +124,7 @@ export function StatStrip({ children, columns = 4, className }: {
 
 /** Linear-style list row: title + one-line description, control at the
  *  trailing edge, 48px minimum so it is a touch target and not just a line. */
-export function ListRow({ title, description, icon: Icon, trailing, onClick, className, testId }: {
+export function ListRow({ title, description, trailing, onClick, className, testId }: {
   title: ReactNode;
   description?: ReactNode;
   icon?: LucideIcon;
@@ -143,11 +144,6 @@ export function ListRow({ title, description, icon: Icon, trailing, onClick, cla
         className,
       )}
     >
-      {Icon && (
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-secondary text-muted-foreground">
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </span>
-      )}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold text-foreground">{title}</span>
         {description && <span className="block truncate text-xs text-muted-foreground">{description}</span>}

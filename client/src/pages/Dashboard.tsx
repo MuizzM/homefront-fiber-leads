@@ -6,11 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
 import { useTabActive } from "@/lib/tabActivity";
-import {
-  Users, MapPin, Zap, TrendingUp, DollarSign, Clock,
-  Activity, Target, Wifi, Calendar, AlertCircle, Radar, X,
-  ChevronRight, ArrowUpRight,
-} from "lucide-react";
+import { MapPin, Zap, TrendingUp, DollarSign, Clock, Activity, Target, Wifi, Calendar, AlertCircle, X, ChevronRight } from "lucide-react";
 import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
 import { KpiTile } from "@/components/KpiTile";
 
@@ -41,14 +37,6 @@ const EYEBROW = "text-[11px] font-semibold uppercase tracking-wide text-muted-fo
 
 // Map a KPI's icon tone → a matching tint for its icon chip, so the metric
 // bar reads as a coherent set rather than six loose colored glyphs.
-const METRIC_TONE_BG: Record<string, string> = {
-  "text-primary": "bg-primary/10",
-  "text-sky-400": "bg-sky-500/10",
-  "text-violet-400": "bg-violet-500/10",
-  "text-amber-400": "bg-amber-500/10",
-  "text-orange-400": "bg-orange-500/10",
-  "text-rose-400": "bg-rose-500/10",
-};
 
 // KPI metric bar — one hairline-divided grid (Cal.com / Intercom pattern)
 // instead of eight competing cards. Each cell: a tinted micro-icon chip,
@@ -63,13 +51,10 @@ function MetricStrip({ items, loading }: {
       data-testid="metric-strip"
     >
       {items.map((m, i) => {
-        const Icon = m.icon;
         return (
           <div key={i} className="bg-card px-4 py-3.5 transition-colors hover:bg-secondary/40">
             <div className="flex items-center gap-2">
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${METRIC_TONE_BG[m.tone] ?? "bg-secondary"}`}>
-                <Icon className={`h-3.5 w-3.5 ${m.tone}`} />
-              </span>
+              
               {/* Wrap, don't clip: at exactly 1280px (six columns, ~100px of
                   label box) `truncate` rendered "NEW FIBER LEA…" and "KINETIC
                   ADDRE…" — a metric whose NAME is cut off is an unlabeled
@@ -102,14 +87,6 @@ function actionLabel(action: string) {
 }
 
 // Tint the activity-feed avatar by event family so the log scans at a glance.
-function actionTone(action: string) {
-  switch (action.split(".")[0]) {
-    case "commission": return "bg-emerald-500/10 text-emerald-400";
-    case "lead": return "bg-sky-500/10 text-sky-400";
-    case "territory": return "bg-violet-500/10 text-violet-400";
-    default: return "bg-primary/10 text-primary";
-  }
-}
 
 function timeAgo(ts: string) {
   const diff = Date.now() - new Date(ts).getTime();
@@ -465,44 +442,36 @@ export default function Dashboard() {
           <h2 className={EYEBROW}>Quick actions</h2>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <a href="#/city-scan" aria-label="City Scan - find new fiber" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-                <Radar className="h-[18px] w-[18px] text-primary" />
-              </span>
+              
               <div>
                 <div className="text-sm font-semibold text-foreground">City Scan</div>
                 <div className="text-xs text-muted-foreground">Find new fiber</div>
               </div>
-              <ArrowUpRight className="absolute right-3 top-3 h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              
             </a>
             <a href="#/leads" aria-label="Leads" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-sky-500/10">
-                <MapPin className="h-[18px] w-[18px] text-sky-400" />
-              </span>
+              
               <div>
                 <div className="text-sm font-semibold text-foreground">Leads</div>
                 <div className="text-xs text-muted-foreground">{stats?.leads.unassigned ?? 0} unassigned</div>
               </div>
-              <ArrowUpRight className="absolute right-3 top-3 h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              
             </a>
             <a href="#/team" aria-label="Team" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-500/10">
-                <Users className="h-[18px] w-[18px] text-purple-400" />
-              </span>
+              
               <div>
                 <div className="text-sm font-semibold text-foreground">Team</div>
                 <div className="text-xs text-muted-foreground">{stats?.team.total ?? 0} reps</div>
               </div>
-              <ArrowUpRight className="absolute right-3 top-3 h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              
             </a>
             <a href="#/map" aria-label="Field Map" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10">
-                <Activity className="h-[18px] w-[18px] text-amber-400" />
-              </span>
+              
               <div>
                 <div className="text-sm font-semibold text-foreground">Field Map</div>
                 <div className="text-xs text-muted-foreground">{stats?.team.activeClockedIn ?? 0} active reps</div>
               </div>
-              <ArrowUpRight className="absolute right-3 top-3 h-4 w-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              
             </a>
           </div>
         </section>
@@ -531,16 +500,14 @@ export default function Dashboard() {
                 </div>
               ) : activity.length === 0 ? (
                 <div className="flex items-center gap-2 px-4 pb-4 text-sm text-muted-foreground">
-                  <Activity className="h-4 w-4" />
+                  
                   No recent activity
                 </div>
               ) : (
                 <div className="divide-y divide-border">
                   {activity.map(entry => (
                     <div key={entry.id} className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-secondary/50" data-testid={`activity-entry-${entry.id}`}>
-                      <div className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full ${actionTone(entry.action)}`}>
-                        <Activity className="h-3 w-3" />
-                      </div>
+                      
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-medium text-foreground">{entry.userName}</p>
                         <p className="text-xs text-muted-foreground">{actionLabel(entry.action)}</p>
@@ -563,7 +530,7 @@ export default function Dashboard() {
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center justify-between text-sm font-semibold text-foreground">
                 <span className="flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-primary" />
+                  
                   Today's Field Activity
                 </span>
                 {todaySessionCount > 0 && <span className="text-[11px] font-medium tabular-nums text-muted-foreground">{todaySessionCount}</span>}
@@ -584,7 +551,7 @@ export default function Dashboard() {
                 </div>
               ) : clockSessions.filter((s: any) => s.date === today).length === 0 ? (
                 <div className="flex items-center gap-2 px-4 pb-4 text-muted-foreground">
-                  <AlertCircle className="h-4 w-4" />
+                  
                   <p className="text-sm">No reps clocked in today</p>
                 </div>
               ) : (

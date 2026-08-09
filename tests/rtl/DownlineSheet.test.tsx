@@ -83,7 +83,7 @@ function renderSheet({ sheet = SHEET, tree = TREE }: { sheet?: any; tree?: any }
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <DownlineSheet weekRef="2026-08-05T12:00:00.000Z" weekLabel="Aug 3 – Aug 9, 2026" />
+      <DownlineSheet weekRef="2026-08-05T12:00:00.000Z" weekLabel="Aug 3 - Aug 9, 2026" />
     </QueryClientProvider>,
   );
 }
@@ -122,7 +122,7 @@ describe("the downline override sheet", () => {
     const row = await screen.findByTestId("override-row-3");
     expect(row.textContent).toContain("Nia Nested");
     expect(row.textContent).toContain("reversed");   // SaleChip
-    expect(row.textContent).toContain("−$25");        // clawback carries its sign
+    expect(row.textContent).toContain("-$25");        // clawback carries its sign
     expect(row.textContent).toContain("Payable");     // override ledger status
   });
 

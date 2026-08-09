@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, Check } from "lucide-react";
+import { Check } from "lucide-react";
 
 interface CapRow { capability: string; highRisk: boolean; roles: string[] }
 interface Group { domain: string; capabilities: CapRow[] }
@@ -62,7 +62,7 @@ function UserPreview({ members }: { members: TeamMember[] }) {
                   ? "bg-amber-500/15 text-amber-400"
                   : "bg-primary/10 text-primary"}`}>
                 {c.highRisk
-                  ? <AlertTriangle className="w-3 h-3" />
+                  ? null
                   : <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
                 {c.capability}
               </span>
@@ -135,7 +135,7 @@ export default function Governance() {
         </div>
         <div className="flex-1 px-4 py-3">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            <AlertTriangle className="w-3 h-3 text-amber-400" /> High-risk
+             High-risk
           </div>
           <div className="text-[18px] font-semibold tracking-tight text-amber-400 tabular-nums">{data ? highRiskCaps : " - "}</div>
         </div>
@@ -177,7 +177,7 @@ export default function Governance() {
                   <div key={cap.capability} data-testid={`gov-cap-${cap.capability}`}
                     className="flex items-center gap-2 px-3.5 py-2.5 border-b border-border last:border-0 min-w-[520px]">
                     <span className="flex-1 min-w-0 flex items-center gap-1.5">
-                      {cap.highRisk && <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                      {cap.highRisk && null}
                       <code className="text-[12.5px] text-foreground truncate">{cap.capability}</code>
                     </span>
                     {roles.map(r => {

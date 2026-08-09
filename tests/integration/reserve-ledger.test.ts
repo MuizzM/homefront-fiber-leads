@@ -155,7 +155,7 @@ describe("the ledger is the balance", () => {
     for (let i = 0; i < 2; i++) {
       const r = reserve.recordWeeklyHold({
         tenantId: T1, repId: rep1.memberId, statementId: stmtId,
-        weekStartUtc: weekStartOf(WEEKS[0]), weekLabel: "Jun 8 – Jun 14, 2026",
+        weekStartUtc: weekStartOf(WEEKS[0]), weekLabel: "Jun 8 - Jun 14, 2026",
         earnedCents: 160000, actorId: 1,
       });
       expect(r.inserted).toBe(false);                          // already held

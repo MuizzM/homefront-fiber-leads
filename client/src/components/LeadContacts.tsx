@@ -23,7 +23,6 @@
 // there is a test that fails if anyone turns them back into anchors.
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
-import { Phone, PhoneOff, User } from "lucide-react";
 import { verdictForPhone, dncExplanation, leadDisplayName, type TracedPhone } from "@shared/tracerfy";
 
 export interface LeadContactsProps {
@@ -58,10 +57,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
   return (
     <div className={cn("rounded-xl border border-border bg-card/60 p-3", className)} data-testid="lead-contacts">
       <div className="flex items-start gap-2.5">
-        <span className={cn("mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg",
-          named ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground")}>
-          <User className="h-[17px] w-[17px]" aria-hidden="true" />
-        </span>
+        
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {named ? "Ask for" : "No name on file"}
@@ -91,7 +87,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                   data-dnc="true"
                   className="flex items-center gap-2.5 rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2"
                 >
-                  <PhoneOff className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-semibold tabular-nums text-muted-foreground line-through decoration-1">
                       {label}
@@ -121,7 +117,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                     FOCUS,
                   )}
                 >
-                  <Phone className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+                  
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-semibold tabular-nums text-foreground">{label}</span>
                     {line && <span className="block truncate text-[11px] capitalize text-muted-foreground">{line}</span>}

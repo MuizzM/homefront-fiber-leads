@@ -1,7 +1,4 @@
-// One drill card: tap anywhere to flip, stage chip up top, source link on the
-// back. The whole card is the flip target (44px floor is trivially met), the
-// grade buttons — not this card — are the only saturated elements on screen.
-import { RotateCcw, BookOpen } from "lucide-react";
+
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
@@ -71,7 +68,7 @@ export function DailyDrillCard({
       {/* pr clears the sibling Full-lesson link overlaying bottom-right. */}
       <span className={cn("mt-auto flex items-center justify-between pt-4", flipped && "pr-24")}>
         <span className="inline-flex items-center gap-1.5 text-2xs text-muted-foreground">
-          <RotateCcw className="h-3 w-3" aria-hidden="true" />
+          
           {flipped ? "Tap to see prompt" : "Tap to reveal"}
         </span>
       </span>
@@ -82,7 +79,7 @@ export function DailyDrillCard({
         data-testid={`drill-card-source-${card.id}`}
         className={cn("absolute bottom-2.5 right-3 z-10 inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-2xs font-semibold text-primary", FOCUS)}
       >
-        <BookOpen className="h-3 w-3" aria-hidden="true" /> Full lesson
+         Full lesson
       </Link>
     )}
     </div>

@@ -292,7 +292,7 @@ describe("My Documents - the signing ceremony", () => {
             heading: "1. Parties and commission plan",
             paragraphs: ["Contractor is paid on a RETROACTIVE tier ladder."],
             rows: [
-              { band: "1–6 qualified sales", rate: "$175 per sale" },
+              { band: "1-6 qualified sales", rate: "$175 per sale" },
               { band: "7+ qualified sales", rate: "$260 per sale" },
             ],
           },
@@ -303,7 +303,7 @@ describe("My Documents - the signing ceremony", () => {
     renderPage();
     await openSigningDialog();
     const table = screen.getByTestId("agreement-rate-table");
-    expect(within(table).getByText("1–6 qualified sales")).toBeInTheDocument();
+    expect(within(table).getByText("1-6 qualified sales")).toBeInTheDocument();
     expect(within(table).getByText("$175 per sale")).toBeInTheDocument();
     expect(within(table).getByText("7+ qualified sales")).toBeInTheDocument();
     expect(within(table).getByText("$260 per sale")).toBeInTheDocument();

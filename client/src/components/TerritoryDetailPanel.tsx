@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus, RotateCcw, Users } from "lucide-react";
+import { Check, Pencil, X, UserMinus } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { can, type Role } from "@shared/permissions";
 import { repColorOf } from "@shared/repColors";
@@ -324,7 +324,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
               title="Area Worked = verified worked leads ÷ total leads. Only activities that pass location verification count."
             >
               Area Worked
-              <span className="cursor-help text-muted-foreground/60" aria-hidden>ⓘ</span>
+              
             </span>
             <span data-testid="area-worked-pct" className="text-2xl font-bold text-foreground tabular-nums leading-none">
               {progress.areaWorkedPct.toFixed(2)}<span className="text-sm font-semibold text-muted-foreground">%</span>
@@ -351,15 +351,15 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           {/* Verification summary — icon + text (WCAG: not colour alone) */}
           <div className="mt-3 grid grid-cols-3 gap-1.5" data-testid="verification-summary">
             <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1.5 text-center">
-              <div className="inline-flex items-center gap-1 text-emerald-400"><ShieldCheck className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.verified}</span></div>
+              <div className="inline-flex items-center gap-1 text-emerald-400"><span className="text-sm font-bold tabular-nums">{progress.verified}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Verified</div>
             </div>
             <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-center">
-              <div className="inline-flex items-center gap-1 text-amber-400"><AlertTriangle className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.needsReview}</span></div>
+              <div className="inline-flex items-center gap-1 text-amber-400"><span className="text-sm font-bold tabular-nums">{progress.needsReview}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Review</div>
             </div>
             <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-2 py-1.5 text-center">
-              <div className="inline-flex items-center gap-1 text-red-400"><Ban className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.invalid}</span></div>
+              <div className="inline-flex items-center gap-1 text-red-400"><span className="text-sm font-bold tabular-nums">{progress.invalid}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Invalid</div>
             </div>
           </div>
@@ -367,7 +367,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           {/* Distance summary */}
           <div className="mt-2.5 flex items-center justify-between text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5" title="Average distance from the lead when marked (verified activities)">
-              <Ruler className="h-3.5 w-3.5" />
+              
               Avg {progress.avgDistanceM != null ? `${progress.avgDistanceM} m` : " - "}
             </span>
             <span title="Configured maximum allowed distance for a mark to verify">Max allowed {progress.maxAllowedDistanceM} m</span>
@@ -397,7 +397,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           onClick={onViewHistory}
           className={`mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary ${FOCUS}`}
         >
-          <History className="h-3.5 w-3.5" aria-hidden="true" /> View Activity
+           View Activity
         </button>
       )}
 
@@ -411,7 +411,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           onClick={onEditAssignees}
           className={`mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary ${FOCUS}`}
         >
-          <Users className="h-3.5 w-3.5" aria-hidden="true" />
+          
           {territory.repIds.length > 1
             ? `${territory.repIds.length} reps on this area`
             : "Who works this area"}
@@ -441,7 +441,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           onClick={onStartNextPass}
           className={`mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary ${FOCUS}`}
         >
-          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+          
           Start pass {(currentPass ?? 1) + 1}
         </button>
       )}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, ArrowRight, Loader2, Mail } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 
 const API_BASE = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
 
@@ -178,7 +178,7 @@ export default function Login() {
                   Email
                 </label>
                 <div className="relative">
-                  <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  
                   <input
                     id="login-email"
                     type="email"
@@ -265,7 +265,7 @@ export default function Login() {
                 onClick={() => { setStep("email"); setCode(""); setResendIn(0); setFormError(null); }}
                 className="inline-flex w-[calc(100%+1rem)] items-center justify-center gap-1.5 min-h-11 px-2 -mx-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
-                <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Use a different email
+                 Use a different email
               </button>
             </form>
           )}

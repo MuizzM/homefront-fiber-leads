@@ -34,7 +34,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { AlertTriangle, Loader2, Send, Trash2 } from "lucide-react";
+import { Loader2, Send, Trash2 } from "lucide-react";
 import { repColorOf } from "@shared/repColors";
 import {
   chatDayLabel, chatInitials, chatTimeLabel, startsNewGroup, validateChatMessage,
@@ -539,7 +539,7 @@ export function FloorChat({
             mystery. Only for over-limit — an empty box explains itself. */}
         {overBy > 0 && (
           <p className="mt-1 flex items-start gap-1.5 text-[13px] font-medium text-destructive" data-testid="chat-error">
-            <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            
             {!check.ok ? check.error : `Message is over ${FLOOR_CHAT_MESSAGE_MAX} characters.`}
           </p>
         )}

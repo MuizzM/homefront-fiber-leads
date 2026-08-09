@@ -103,7 +103,7 @@ export function pickActiveStructure(
 export function describeStructure(s: Pick<CommissionStructure, "calcType" | "flatAmount" | "percentage" | "tiers">): string {
   switch (s.calcType) {
     case "percentage": return `${s.percentage}% of sale value`;
-    case "tiered":     return `${s.tiers.length}-tier (${s.tiers.map(t => `≥$${t.minBasis}→$${t.amount}`).join(", ")})`;
+    case "tiered":     return `${s.tiers.length}-tier (${s.tiers.map(t => `≥$${t.minBasis}: $${t.amount}`).join(", ")})`;
     case "flat":
     default:           return `$${s.flatAmount} flat per sale`;
   }

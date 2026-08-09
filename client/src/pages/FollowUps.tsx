@@ -13,10 +13,7 @@ import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { EmptyState } from "@/components/EmptyState";
 import { STATE_COLORS, pinDisplayState, todayISO } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  CalendarClock, ChevronRight, RefreshCw, WifiOff, CheckCircle2,
-  Flame, Zap, StickyNote, Clock,
-} from "lucide-react";
+import { ChevronRight, CheckCircle2 } from "lucide-react";
 
 
 interface FollowUp {
@@ -79,7 +76,7 @@ export default function FollowUps() {
       <div className="mx-auto w-full max-w-lg px-4 pt-5">
         <header>
           <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-            <CalendarClock className="w-4 h-4 text-cyan-400" /> Follow-ups
+             Follow-ups
           </div>
           <h1 className="text-[26px] font-bold tracking-tight text-foreground mt-0.5">Callbacks you owe</h1>
           {/* The one-glance read: how many owed, and whether any slipped. */}
@@ -93,7 +90,7 @@ export default function FollowUps() {
 
         {offline && (
           <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-muted px-3 py-2.5 text-[13px] text-muted-foreground">
-            <WifiOff className="w-4 h-4 shrink-0" /> Offline - showing your last synced follow-ups
+             Offline - showing your last synced follow-ups
           </div>
         )}
 
@@ -111,7 +108,7 @@ export default function FollowUps() {
             <div className="text-[14px] font-semibold text-foreground">Couldn't load your follow-ups</div>
             <div className="text-[13px] text-muted-foreground mt-1">Check your connection and try again.</div>
             <button onClick={() => q.refetch()} className={`mt-4 inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>
-              <RefreshCw className="w-4 h-4" aria-hidden="true" />Retry
+              Retry
             </button>
           </div>
         ) : groups.total === 0 ? (
@@ -201,16 +198,16 @@ function Row({ f, today, overdue, onOpen, onLog }: { f: FollowUp; today: string;
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[14px] font-semibold text-foreground truncate">{f.address}</span>
-            {hot && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-rose-400 bg-rose-500/15 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5"><Flame className="w-2.5 h-2.5" />Hot</span>}
-            {!hot && newFiber && <span className="shrink-0 text-cyan-400"><Zap className="w-3 h-3" /></span>}
+            {hot && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-rose-400 bg-rose-500/15 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5">Hot</span>}
+            {!hot && newFiber && null}
           </div>
           <div className="text-[12px] text-muted-foreground truncate flex items-center gap-1.5">
             <span className={`inline-flex items-center gap-1 ${overdue ? "text-rose-400 font-medium" : ""}`}>
-              <Clock className="w-3 h-3" />{fmtDay(f.callbackDate, today)}{time ? ` · ${time}` : ""}
+              {fmtDay(f.callbackDate, today)}{time ? ` · ${time}` : ""}
             </span>
             {f.contactName ? <span className="truncate">· {f.contactName}</span> : null}
           </div>
-          {f.notes ? <div className="text-[11.5px] text-muted-foreground/80 truncate mt-0.5 flex items-center gap-1"><StickyNote className="w-2.5 h-2.5 shrink-0" />{f.notes}</div> : null}
+          {f.notes ? <div className="text-[11.5px] text-muted-foreground/80 truncate mt-0.5 flex items-center gap-1">{f.notes}</div> : null}
         </div>
         <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
       </button>

@@ -25,7 +25,7 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Gift, Loader2, AlertTriangle } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { usd } from "@shared/moneyFormat";
 // TYPE ONLY — erased at compile, so none of shared/doorDrop reaches the bundle.
 //
@@ -163,7 +163,7 @@ export function DoorDropEditor() {
     <section className="space-y-3" data-testid="door-drop-editor">
       <div className="flex items-center justify-between gap-3">
         <SectionLabel className="flex items-center gap-1.5">
-          <Gift className="h-3.5 w-3.5" aria-hidden="true" />
+          
           Door drops
         </SectionLabel>
         <div className="flex items-center gap-2">
@@ -228,7 +228,7 @@ export function DoorDropEditor() {
             {data.exposure.currentChanceAtDoors.map(pt => (
               <span key={pt.doors} data-testid={`drop-curve-${pt.doors}`}
                 className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
-                {pt.doors} doors → {pt.pct}%
+                {pt.doors} doors: {pt.pct}%
               </span>
             ))}
           </div>
@@ -237,7 +237,7 @@ export function DoorDropEditor() {
 
       {problem && (
         <p className="flex items-start gap-1.5 text-[13px] font-medium text-destructive" data-testid="drop-error">
-          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {problem}
+           {problem}
         </p>
       )}
 

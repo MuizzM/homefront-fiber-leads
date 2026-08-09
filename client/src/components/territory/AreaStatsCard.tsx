@@ -75,7 +75,7 @@ function Info({ label, formula }: { label: string; formula: string }) {
         // full-size h-11 button would dwarf the 9px figures it annotates.
         className={`relative ml-1 flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground after:absolute after:-inset-2.5 after:content-[''] ${FOCUS}`}
       >
-        ⓘ
+        i
       </button>
       {open && (
         <span

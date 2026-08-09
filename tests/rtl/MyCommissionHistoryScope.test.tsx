@@ -25,7 +25,7 @@ import MyCommission from "../../client/src/pages/MyCommission";
 const WEEK = {
   statement: null,
   computation: null,
-  bounds: { localWeekLabel: "Aug 3 – Aug 9, 2026" },
+  bounds: { localWeekLabel: "Aug 3 - Aug 9, 2026" },
   structure: null,
   sales: [],
   adjustments: [],
@@ -57,7 +57,7 @@ beforeEach(() => apiRequest.mockReset());
 
 describe("past weeks scope + honesty", () => {
   it("requests statements narrowed to the caller's own repId", async () => {
-    renderPage([stmt(1, "Jul 27 – Aug 2")]);
+    renderPage([stmt(1, "Jul 27 - Aug 2")]);
     await waitFor(() => {
       const urls = apiRequest.mock.calls.flat().filter(a => typeof a === "string");
       expect(urls.some(u => u.includes("/api/commission/statements?repId=9"))).toBe(true);
@@ -74,7 +74,7 @@ describe("past weeks scope + honesty", () => {
   });
 
   it("shows the plain count when nothing is truncated", async () => {
-    renderPage([stmt(1, "Jul 27 – Aug 2"), stmt(2, "Jul 20 – Jul 26")]);
+    renderPage([stmt(1, "Jul 27 - Aug 2"), stmt(2, "Jul 20 - Jul 26")]);
     await waitFor(() => expect(screen.getAllByTestId(/^row-week-/).length).toBe(2));
   });
 

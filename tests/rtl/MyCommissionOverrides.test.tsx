@@ -28,7 +28,7 @@ const WEEK_PAYLOAD = {
     adjustmentCents: 0, finalCommissionCents: 45000, tierLabel: "1-6",
     retro: { salesUntilNextTier: 4, nextTierMinimumSales: 7, nextTierRateCents: 20000, nextTierProjectedCommissionCents: 140000 },
   },
-  bounds: { localWeekLabel: "Aug 3 – Aug 9, 2026" },
+  bounds: { localWeekLabel: "Aug 3 - Aug 9, 2026" },
   structure: { structure: "TIERED", flatRateCents: null, tiers: [
     { minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "1-6" },
     { minimumSales: 7, maximumSales: null, rateCents: 20000, label: "7+" },

@@ -220,7 +220,7 @@ export function setBillingState(tenantId: number, to: BillingState, actor = "sys
   // A self-transition is a no-op: don't rewrite the row or append a noise ledger
   // row (repeated same-state webhooks would otherwise spam state_change entries).
   if (row.state === to) return { ok: true, state: to };
-  if (!canTransition(row.state, to)) return { ok: false, state: row.state, reason: `illegal transition ${row.state} → ${to}` };
+  if (!canTransition(row.state, to)) return { ok: false, state: row.state, reason: `illegal transition ${row.state} -> ${to}` };
   rawDb.prepare("UPDATE tenant_billing SET state = ?, updated_at = datetime('now') WHERE tenant_id = ?").run(to, tenantId);
   appendLedger(tenantId, 0, "state_change", { actor: `${actor}:${row.state}->${to}` });
   return { ok: true, state: to };

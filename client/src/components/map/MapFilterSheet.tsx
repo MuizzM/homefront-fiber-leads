@@ -1,11 +1,4 @@
-// ── Field Map filters — the SalesRabbit-style bottom sheet, in our system ────
-// Controlled and PURE presentation: the map page owns filter state; this sheet
-// only renders it and reports taps. Status chips are the canonical pin palette
-// (STATE_COLORS/STATE_LABELS from shared/knock — the map, legend, and this
-// sheet can never disagree on a color or a word). Tapping the active chip or
-// rep row toggles back to "all", so one thumb can always get out of a filter.
-// Container/scrim grammar matches ReclaimAllDialog exactly.
-import { X, Zap } from "lucide-react";
+import { X } from "lucide-react";
 import { STATE_COLORS, STATE_LABELS } from "@shared/knock";
 import { FOCUS } from "@/lib/a11y";
 import type { LeadSourceFilter, LeadSourceOption } from "@/lib/leadSourceFilter";
@@ -177,7 +170,7 @@ export function MapFilterSheet({
                         : "border-border bg-secondary/30 text-foreground hover:bg-secondary/50"
                     } ${FOCUS}`}
                   >
-                    <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+                    
                     {opt.label}
                     {count != null && count > 0 && (
                       <span className="tabular-nums text-muted-foreground">{count}</span>

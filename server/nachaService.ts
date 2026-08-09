@@ -40,7 +40,7 @@ const FIXED_WIDTH = 94;
 const alpha = (s: string, len: number) => s.replace(/[^A-Za-z0-9 .&'-]/g, " ").toUpperCase().slice(0, len).padEnd(len, " ");
 const num = (n: number, len: number) => String(Math.trunc(Math.abs(n))).padStart(len, "0").slice(-len);
 
-/** Next banking day (Mon–Fri) on/after `from`, as YYMMDD. Federal holidays are
+/** Next banking day (Mon-Fri) on/after `from`, as YYMMDD. Federal holidays are
  * the operator's call - BofA rejects on holidays with a clear error, and the
  * file can be regenerated with a new effective date via ?fileIdModifier. */
 export function nextBankingDay(from: Date): Date {
@@ -61,7 +61,7 @@ export function buildNachaFile(params: {
 }): NachaResult {
   const { tenantId, actorId, weekReference } = params;
   const fileIdModifier = params.fileIdModifier ?? "A";
-  if (!/^[A-Z0-9]$/.test(fileIdModifier)) throw new NachaError("INVALID_FILE_ID", "fileIdModifier must be a single A–Z or 0–9 character");
+  if (!/^[A-Z0-9]$/.test(fileIdModifier)) throw new NachaError("INVALID_FILE_ID", "fileIdModifier must be a single A-Z or 0-9 character");
   const now = params.now ?? new Date();
 
   const company = getCompanyProfileSecrets(tenantId);

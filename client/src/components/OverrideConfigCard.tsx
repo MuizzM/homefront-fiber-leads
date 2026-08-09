@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { usd } from "@/lib/money";
-import { GitBranch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -86,7 +85,7 @@ export function OverrideConfigCard() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="min-w-0">
           <Label htmlFor="override-enabled" className="text-sm font-semibold flex items-center gap-1.5">
-            <GitBranch className="w-3.5 h-3.5 text-primary" /> Downline overrides
+             Downline overrides
           </Label>
           <p className="text-[12px] text-muted-foreground mt-0.5 max-w-md">
             Pays the first active team lead and manager above each seller a flat

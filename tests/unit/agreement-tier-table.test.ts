@@ -46,12 +46,12 @@ describe("the commission agreement's rate table", () => {
     const custom: CommissionTerms = {
       ...DEFAULT_COMMISSION_TERMS,
       tiers: [
-        { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17_500, label: "1–6 sales" },
+        { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17_500, label: "1-6 sales" },
         { position: 1, minimumSales: 7, maximumSales: null, rateCents: 26_000, label: "7+ sales" },
       ],
     };
     expect(allRows(custom)).toEqual([
-      { band: "1–6 qualified sales", rate: "$175 per sale" },
+      { band: "1-6 qualified sales", rate: "$175 per sale" },
       { band: "7+ qualified sales", rate: "$260 per sale" },
     ]);
   });

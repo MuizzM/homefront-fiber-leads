@@ -30,7 +30,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/EmptyState";
-import { Megaphone, Zap, Pause, Play, X, Loader2, Plus, Gauge } from "lucide-react";
+import { Megaphone, Pause, Play, X, Loader2 } from "lucide-react";
 import {
   describeTrigger, validateCampaignInput, hour12,
   type CampaignTrigger, type CampaignStatus,
@@ -286,7 +286,7 @@ function LaunchDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
               FOCUS,
             )}
           >
-            {launch.isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Zap className="h-4 w-4" aria-hidden="true" />}
+            {launch.isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
             Launch
           </button>
         </DialogFooter>
@@ -338,7 +338,7 @@ export function CampaignLauncher() {
             climbing BEFORE it turns up in payroll. */}
         <p className="mt-1 inline-flex items-center gap-1 text-[13px] font-semibold tabular-nums text-foreground"
            data-testid={`admin-campaign-cost-${c.id}`}>
-          <Gauge className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          
           {usd(c.awardedCents)} awarded
           {c.campaignCapCents > 0 && (
             <span className="font-normal text-muted-foreground"> of {usd(c.campaignCapCents)} cap</span>
@@ -369,12 +369,12 @@ export function CampaignLauncher() {
     <section className="space-y-3" data-testid="campaign-admin">
       <div className="flex items-center justify-between gap-3">
         <SectionLabel className="flex items-center gap-1.5">
-          <Megaphone className="h-3.5 w-3.5" aria-hidden="true" />
+          
           Incentive campaigns
         </SectionLabel>
         <button type="button" onClick={() => setOpen(true)} data-testid="open-launcher"
           className={cn("inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-foreground", FOCUS)}>
-          <Plus className="h-4 w-4" aria-hidden="true" /> Launch
+           Launch
         </button>
       </div>
 

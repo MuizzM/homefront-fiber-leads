@@ -279,7 +279,7 @@ export function buildLeadCard(input: {
       dnc: v.dnc,
       dncFlags: v.dncFlags,
       reasons: v.reasons,
-      badge: v.dnc ? "DNC – do not dial" : "OK to call",
+      badge: v.dnc ? "DNC - do not dial" : "OK to call",
     })),
     emails: shownEmails,
     actions: actionsForLead(allVerdicts, input.callingEngineAllows),

@@ -32,7 +32,7 @@ function weekPayload(holdback: any) {
       adjustmentCents: 0, finalCommissionCents: 105000, tierLabel: "1-6",
       retro: { salesUntilNextTier: 1, nextTierMinimumSales: 7, nextTierRateCents: 22500, nextTierProjectedCommissionCents: 157500 },
     },
-    bounds: { localWeekLabel: "Aug 3 – Aug 9, 2026" },
+    bounds: { localWeekLabel: "Aug 3 - Aug 9, 2026" },
     structure: { structure: "TIERED", flatRateCents: null, tiers: TIERS, planName: "Custom Weekly Tiers", acceptedAt: "2026-08-01T00:00:00Z" },
     sales: [], adjustments: [], holdback,
   };
@@ -47,11 +47,11 @@ const BUILDING_RESERVE = {
   repId: 9, reservePercent: 10, reserveCapCents: 250000, balanceCents: 60000,
   capRemainingCents: 190000, capProgressPercent: 24, atCap: false,
   heldToDateCents: 75000, drawnDownToDateCents: 15000, releasedToDateCents: 0,
-  latestHold: { id: 3, kind: "hold", amountCents: 10500, weekLabel: "Jul 27 – Aug 2, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-08-02T00:00:00Z" },
+  latestHold: { id: 3, kind: "hold", amountCents: 10500, weekLabel: "Jul 27 - Aug 2, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-08-02T00:00:00Z" },
   entries: [
-    { id: 3, kind: "hold", amountCents: 10500, weekLabel: "Jul 27 – Aug 2, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-08-02T00:00:00Z" },
+    { id: 3, kind: "hold", amountCents: 10500, weekLabel: "Jul 27 - Aug 2, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-08-02T00:00:00Z" },
     { id: 2, kind: "drawdown", amountCents: -15000, weekLabel: null, reason: "Chargeback - 12 Oak St cancelled", createdAt: "2026-07-20T00:00:00Z" },
-    { id: 1, kind: "hold", amountCents: 64500, weekLabel: "Jul 20 – Jul 26, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-07-26T00:00:00Z" },
+    { id: 1, kind: "hold", amountCents: 64500, weekLabel: "Jul 20 - Jul 26, 2026", reason: "Weekly chargeback reserve", createdAt: "2026-07-26T00:00:00Z" },
   ],
 };
 
@@ -95,7 +95,7 @@ describe("the rep's chargeback reserve", () => {
 
     // The percentage coming out each week, and THIS week's actual hold.
     expect(screen.getByTestId("holdback-card").textContent).toContain("10% held");
-    expect(screen.getByTestId("holdback-reserve").textContent).toBe("−$105");
+    expect(screen.getByTestId("holdback-reserve").textContent).toBe("-$105");
     expect(screen.getByTestId("holdback-net").textContent).toBe("$945");
 
     // How much further it has to go before it stops.
@@ -116,9 +116,9 @@ describe("the rep's chargeback reserve", () => {
     expect(history.textContent).toContain("Held from your pay");
     expect(history.textContent).toContain("Used for a cancellation");
     expect(history.textContent).toContain("Chargeback - 12 Oak St cancelled");
-    expect(history.textContent).toContain("Jul 27 – Aug 2, 2026");
+    expect(history.textContent).toContain("Jul 27 - Aug 2, 2026");
     // Signs are shown from the rep's point of view: a drawdown leaves the pot.
-    expect(screen.getByTestId("reserve-entry-2").textContent).toContain("−$150");
+    expect(screen.getByTestId("reserve-entry-2").textContent).toContain("-$150");
     expect(screen.getByTestId("reserve-entry-3").textContent).toContain("+$105");
   });
 
@@ -130,7 +130,7 @@ describe("the rep's chargeback reserve", () => {
     expect(screen.queryByTestId("reserve-remaining")).toBeNull();
 
     expect(screen.getByTestId("holdback-card").textContent).toContain("Fully covered");
-    expect(screen.getByTestId("holdback-reserve").textContent).toBe("−$0");
+    expect(screen.getByTestId("holdback-reserve").textContent).toBe("-$0");
     expect(screen.getByTestId("holdback-net").textContent).toBe("$1,050");
     expect(screen.getByRole("progressbar", { name: /reserve maximum/i }).getAttribute("aria-valuenow")).toBe("100");
   });
@@ -140,7 +140,7 @@ describe("the rep's chargeback reserve", () => {
     await waitFor(() => expect(screen.getByTestId("holdback-card")).toBeTruthy());
     // Falls back to the week payload's rolled balance rather than showing nothing.
     expect(screen.getByTestId("holdback-balance").textContent).toBe("$600");
-    expect(screen.getByTestId("holdback-reserve").textContent).toBe("−$105");
+    expect(screen.getByTestId("holdback-reserve").textContent).toBe("-$105");
   });
 
   it("shows no reserve card at all when the tenant runs no reserve", async () => {

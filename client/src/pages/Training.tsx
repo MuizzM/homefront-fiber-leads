@@ -8,23 +8,7 @@
 import { useLayoutEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import {
-  GraduationCap,
-  ChevronLeft,
-  ChevronRight,
-  Check,
-  CheckCircle2,
-  Circle,
-  Flame,
-  Lightbulb,
-  Target,
-  RefreshCw,
-  Users,
-  Zap,
-  Mic,
-  ArrowRight,
-  MessageSquare,
-} from "lucide-react";
+import { GraduationCap, ChevronLeft, ChevronRight, Check, Mic } from "lucide-react";
 import NumbersGame from "@/components/training/NumbersGame";
 import PsychologyDeck from "@/components/training/PsychologyDeck";
 import { apiRequest } from "@/lib/queryClient";
@@ -248,7 +232,7 @@ function LessonView({
       {/* Key takeaways */}
       <div className="rounded-xl border border-border bg-card p-4" data-testid="lesson-takeaways">
         <div className="flex items-center gap-2">
-          <Lightbulb className="h-4 w-4 text-primary" aria-hidden="true" />
+          
           <SectionLabel>Key takeaways</SectionLabel>
         </div>
         <ul className="mt-3 space-y-2">
@@ -264,7 +248,7 @@ function LessonView({
       {/* Field drill */}
       <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-4" data-testid="lesson-drill">
         <div className="flex items-center gap-2">
-          <Target className="h-4 w-4 text-primary" aria-hidden="true" />
+          
           <SectionLabel className="text-primary">Try this on your next 10 doors</SectionLabel>
         </div>
         <p className="mt-2 text-sm leading-relaxed text-foreground">{lesson.drillPrompt}</p>
@@ -287,7 +271,7 @@ function LessonView({
             isComplete ? "border border-border bg-secondary text-foreground" : "bg-primary text-primary-foreground",
           )}
         >
-          <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+          
           {isComplete ? "Save again" : "Mark lesson complete"}
         </button>
         {/* Completing used to dead-end here: the only feedback was this button
@@ -335,7 +319,7 @@ function TeamProgressTable() {
   return (
     <div data-testid="training-team-table">
       <div className="mb-1.5 flex items-center gap-2 px-1">
-        <Users className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+        
         <SectionLabel>Team progress</SectionLabel>
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
@@ -385,7 +369,7 @@ function FastStartTrack({
   return (
     <div className="rounded-2xl border border-primary/30 bg-primary/[0.06] p-4 md:p-5" data-testid="fast-start-track">
       <div className="flex items-center gap-2">
-        <Zap className="h-4 w-4 text-primary" aria-hidden="true" />
+        
         <SectionLabel className="text-primary">Get door-ready in 15 minutes</SectionLabel>
       </div>
       <p className="mt-1 text-sm leading-relaxed text-foreground">
@@ -420,7 +404,7 @@ function FastStartTrack({
                   <span className="block text-[13px] font-semibold leading-snug text-foreground">{lesson.title}</span>
                   <span className="block truncate text-xs text-muted-foreground">{step.why}</span>
                 </span>
-                <ArrowRight className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                
               </button>
             </li>
           );
@@ -605,7 +589,7 @@ export default function Training() {
                     FOCUS,
                   )}
                 >
-                  <Mic className="h-4 w-4" aria-hidden="true" /> Pitch practice
+                   Pitch practice
                 </button>
               ) : undefined
             }
@@ -639,12 +623,12 @@ export default function Training() {
                   )}
                   data-testid="training-streak"
                 >
-                  <Flame className={cn("h-4 w-4", streak > 0 ? "text-orange-500" : "text-muted-foreground/50")} aria-hidden="true" />
+                  
                   <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{streak}</span>
                   <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">day streak</span>
                 </div>
                 <div className="hidden flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex" data-testid="training-avg-quiz">
-                  <Target className="h-4 w-4 text-primary" aria-hidden="true" />
+                  
                   <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{avgQuiz != null ? `${avgQuiz}%` : " - "}</span>
                   <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">avg quiz</span>
                 </div>
@@ -657,7 +641,7 @@ export default function Training() {
                 data-testid="training-progress-retry"
                 className={cn("mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-secondary px-4 text-sm font-semibold text-foreground", FOCUS)}
               >
-                <RefreshCw className="h-4 w-4" aria-hidden="true" /> Progress didn't load. Retry
+                 Progress didn't load. Retry
               </button>
             )}
           </div>
@@ -673,9 +657,7 @@ export default function Training() {
               FOCUS,
             )}
           >
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <Mic className="h-5 w-5" aria-hidden="true" />
-            </span>
+            
             <span className="min-w-0 flex-1">
               <span className="block text-[15px] font-bold text-foreground">Run the full pitch</span>
               <span className="block text-[13px] text-muted-foreground">
@@ -717,7 +699,7 @@ export default function Training() {
                     <div className="space-y-3 border-b border-border bg-secondary/20 px-4 py-3" data-testid={`training-module-engagement-${mod.id}`}>
                       {mod.hook && (
                         <p className="flex items-start gap-2 text-[13px] font-semibold leading-snug text-foreground">
-                          <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+                          
                           <span>{mod.hook}</span>
                         </p>
                       )}
@@ -730,7 +712,7 @@ export default function Training() {
                       {mod.sayThisNotThat && (
                         <div className="rounded-lg border border-border bg-card p-3" data-testid={`training-say-this-${mod.id}`}>
                           <div className="flex items-center gap-1.5">
-                            <MessageSquare className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                            
                             <SectionLabel className="text-primary">Say this, not that</SectionLabel>
                           </div>
                           <div className="mt-2 space-y-1.5 text-xs leading-relaxed">
@@ -761,9 +743,9 @@ export default function Training() {
                           className={cn("flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-secondary/50", FOCUS)}
                         >
                           {done ? (
-                            <CheckCircle2 className="h-[18px] w-[18px] shrink-0 text-emerald-500" aria-hidden="true" />
+                            null
                           ) : (
-                            <Circle className="h-[18px] w-[18px] shrink-0 text-muted-foreground/40" aria-hidden="true" />
+                            null
                           )}
                           {/* Titles carry their meaning in the tail ("the assumptive
                               close: the full play" vs "…: the full pl…"), so they

@@ -1,8 +1,4 @@
-// ── Profile — the fourth bottom tab ───────────────────────────────────────────
-// Identity + session controls, mobile-first. Deliberately small: who am I,
-// which role, light/dark, sign out. Everything else lives in its own tab.
-
-import { ChevronRight, Clock3, FileSignature, Landmark, LogOut, Moon, Sun, Trophy } from "lucide-react";
+import { ChevronRight, Moon, Sun } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -63,9 +59,7 @@ export default function Profile() {
               className="w-full px-5 py-4 flex items-center justify-between gap-4 text-left active:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
             >
               <span className="flex items-center gap-3">
-                <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                  <FileSignature className="w-4 h-4" />
-                </span>
+                
                 <span>
                   <span className="block text-[14px] font-medium text-foreground">My documents</span>
                   <span className="block text-[12px] text-muted-foreground mt-0.5">Review and sign rep agreements</span>
@@ -79,9 +73,7 @@ export default function Profile() {
               className="w-full px-5 py-4 flex items-center justify-between gap-4 text-left border-t border-border active:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
             >
               <span className="flex items-center gap-3">
-                <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                  <Landmark className="w-4 h-4" />
-                </span>
+                
                 <span>
                   <span className="block text-[14px] font-medium text-foreground">Tax &amp; Direct Deposit</span>
                   <span className="block text-[12px] text-muted-foreground mt-0.5">File your W-9 and set where your pay lands</span>
@@ -101,7 +93,7 @@ export default function Profile() {
               href="/clock"
               className="flex min-h-[60px] items-center gap-3 px-4 py-3 active:bg-secondary/60"
             >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-sky-500/10 text-sky-400"><Clock3 className="h-4 w-4" /></span>
+              
               <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-foreground">Field hours</span><span className="block text-xs text-muted-foreground">Clock in and review sessions</span></span>
               <ChevronRight className="h-4 w-4 text-muted-foreground" />
             </Link>
@@ -109,7 +101,7 @@ export default function Profile() {
               href="/leaderboard"
               className="flex min-h-[60px] items-center gap-3 px-4 py-3 active:bg-secondary/60"
             >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500/10 text-amber-400"><Trophy className="h-4 w-4" /></span>
+              
               <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-foreground">Leaderboard</span><span className="block text-xs text-muted-foreground">See team progress and your rank</span></span>
               <ChevronRight className="h-4 w-4 text-muted-foreground" />
             </Link>
@@ -152,7 +144,7 @@ export default function Profile() {
               className="w-full px-5 py-4 flex items-center justify-between gap-4 text-[14px] font-medium text-red-400 active:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
             >
               <span>Sign out</span>
-              <LogOut className="w-4 h-4" />
+              
             </button>
           </div>
         </section>

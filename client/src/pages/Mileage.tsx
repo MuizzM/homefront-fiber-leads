@@ -25,7 +25,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
 import { formatMiles } from "@shared/mileage";
-import { MapPin, Play, Square, Plus, Check, X, Car, Download, Lock, FileDown } from "lucide-react";
+import { Check, X } from "lucide-react";
 
 interface Trip {
   id: number; repId: number; repName?: string; tripDate: string;
@@ -109,7 +109,7 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
     return (
       <Card data-testid="mileage-consent-locked">
         <CardContent className="flex items-start gap-2 py-4 text-sm">
-          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          
           <div>
             <p className="font-medium">
               {consent.gpsPolicy === "LOCKED_OFF"
@@ -154,7 +154,7 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
     <Card data-testid="mileage-consent-prompt">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <MapPin className="h-4 w-4" /> Before we use your location
+           Before we use your location
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
@@ -258,7 +258,7 @@ function GpsTracker({ openTrip }: { openTrip: Trip | null }) {
               className="w-full" variant="destructive" data-testid="mileage-end-trip"
               disabled={end.isPending} onClick={() => end.mutate()}
             >
-              <Square className="mr-2 h-4 w-4" /> End trip
+               End trip
             </Button>
           </>
         ) : (
@@ -275,7 +275,7 @@ function GpsTracker({ openTrip }: { openTrip: Trip | null }) {
               className="w-full" data-testid="mileage-start-trip"
               disabled={start.isPending || busy} onClick={() => { setBusy(true); start.mutate(undefined, { onSettled: () => setBusy(false) }); }}
             >
-              <Play className="mr-2 h-4 w-4" /> Start trip
+               Start trip
             </Button>
           </>
         )}
@@ -355,7 +355,7 @@ function ManualEntry() {
           className="w-full" data-testid="mileage-save-trip" disabled={create.isPending}
           onClick={() => create.mutate({ ...form, duplicateAck })}
         >
-          <Plus className="mr-2 h-4 w-4" /> {duplicateAck ? "Save anyway" : "Save trip"}
+           {duplicateAck ? "Save anyway" : "Save trip"}
         </Button>
       </CardContent>
     </Card>
@@ -389,7 +389,7 @@ function TripRow({ trip, showRep }: { trip: Trip; showRep?: boolean }) {
         <p className="truncate text-xs text-muted-foreground">
           {showRep && trip.repName ? `${trip.repName} · ` : ""}
           {trip.tripDate}
-          {trip.startLocation || trip.endLocation ? ` · ${trip.startLocation ?? "?"} → ${trip.endLocation ?? "?"}` : ""}
+          {trip.startLocation || trip.endLocation ? ` · ${trip.startLocation ?? "?"} to ${trip.endLocation ?? "?"}` : ""}
         </p>
         {trip.purpose && <p className="truncate text-xs text-muted-foreground">{trip.purpose}</p>}
         {trip.status === "REJECTED" && trip.rejectionReason && (
@@ -458,7 +458,7 @@ function ApprovalQueue() {
                   {t.repName} · <span className="tabular-nums">{formatMiles(t.milesHundredths)}</span>
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {t.tripDate} · {t.startLocation ?? "?"} → {t.endLocation ?? "?"}
+                  {t.tripDate} · {t.startLocation ?? "?"} to {t.endLocation ?? "?"}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">{t.purpose ?? "No purpose given"}</p>
               </div>
@@ -510,13 +510,13 @@ export default function Mileage() {
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-24" data-testid="mileage-page">
       <div className="flex items-center justify-between">
         <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <Car className="h-5 w-5" /> Mileage
+           Mileage
         </h1>
         {/* Every rep can export their OWN log; a manager's export widens to
             their branch. The server decides the rows either way. */}
         <Button variant="outline" size="sm" data-testid="mileage-export" asChild>
           <a href={canExport ? "/api/mileage/export?scope=team" : "/api/mileage/export"} download>
-            <Download className="mr-2 h-4 w-4" /> Export
+             Export
           </a>
         </Button>
       </div>
@@ -548,7 +548,7 @@ export default function Mileage() {
                   is never coming. A 1099 contractor deducts these miles
                   themselves, so the log's value IS the record — say that. */}
               <p className="flex items-start gap-2 text-xs text-muted-foreground" data-testid="mileage-money-off">
-                <FileDown className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                
                 Your organization does not reimburse mileage - this log is for your own records.
                 Export it for your tax return; as a contractor you deduct these miles yourself.
               </p>

@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
-import { Target, Trophy } from "lucide-react";
 import { usd } from "@shared/moneyFormat";
 import type { AchievementRung } from "@shared/salesAchievements";
 
@@ -51,7 +50,7 @@ function RungStrip({ rungs, at, testId }: { rungs: AchievementRung[]; at: number
               cleared ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
                       : "bg-secondary text-muted-foreground",
             )}>
-            {r.sales} → {usd(r.rewardCents)}
+            {r.sales}: {usd(r.rewardCents)}
           </span>
         );
       })}
@@ -66,7 +65,6 @@ export function AchievementLadder() {
   // Off, or the rep is on the ramp bonus instead — either way, nothing to show.
   if (!data?.enabled) return null;
 
-  const toppedOut = !data.nextDaily && !data.nextCareer;
 
   return (
     <Card className={cn(
@@ -75,13 +73,7 @@ export function AchievementLadder() {
     )} data-testid="achievement-card">
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          <div className={cn(
-            "grid h-10 w-10 shrink-0 place-items-center rounded-xl",
-            toppedOut ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-primary/15 text-primary",
-          )}>
-            {toppedOut ? <Trophy className="h-5 w-5" aria-hidden="true" />
-                       : <Target className="h-5 w-5" aria-hidden="true" />}
-          </div>
+          
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
@@ -138,7 +130,7 @@ export function AchievementSection() {
   return (
     <section className="space-y-2" data-testid="achievement-section">
       <SectionLabel className="flex items-center gap-1.5">
-        <Target className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+        
         Achievement bonuses
       </SectionLabel>
       <AchievementLadder />

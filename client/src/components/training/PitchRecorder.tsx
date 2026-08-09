@@ -8,7 +8,7 @@
 // plain message with a retry. On unmount every track is stopped and every object
 // URL revoked, so we never leave a microphone hot.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, Square, RotateCcw, Check, Trash2, AlertCircle } from "lucide-react";
+import { Check } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
 import { SectionLabel } from "@/components/ui/page-scaffold";
@@ -365,7 +365,7 @@ export default function PitchRecorder({
   return (
     <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-4" data-testid="pitch-recorder">
       <div className="flex items-center gap-2">
-        <Mic className="h-4 w-4 text-primary" aria-hidden="true" />
+        
         <SectionLabel className="text-primary">{title}</SectionLabel>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -406,7 +406,7 @@ export default function PitchRecorder({
           data-testid={error === "denied" ? "pitch-permission-denied" : "pitch-error"}
           role="alert"
         >
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          
           <span>
             {error === "denied"
               ? "Microphone access was blocked. Allow the mic in your browser's site settings, then try again."
@@ -437,7 +437,7 @@ export default function PitchRecorder({
               FOCUS,
             )}
           >
-            <Mic className="h-4 w-4" aria-hidden="true" />
+            
             {error ? "Try again" : "Record"}
           </button>
         )}
@@ -452,7 +452,7 @@ export default function PitchRecorder({
               FOCUS,
             )}
           >
-            <Square className="h-3.5 w-3.5" aria-hidden="true" /> Stop
+             Stop
           </button>
         )}
 
@@ -467,7 +467,7 @@ export default function PitchRecorder({
                 FOCUS,
               )}
             >
-              <RotateCcw className="h-4 w-4" aria-hidden="true" /> Re-record
+               Re-record
             </button>
             {!kept ? (
               <button
@@ -498,7 +498,7 @@ export default function PitchRecorder({
                 FOCUS,
               )}
             >
-              <Trash2 className="h-4 w-4" aria-hidden="true" /> Discard
+               Discard
             </button>
           </>
         )}

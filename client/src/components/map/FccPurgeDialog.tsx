@@ -10,7 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { FOCUS } from "@/lib/a11y";
-import { AlertTriangle, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 
 interface FccPurgePreview {
   total: number;      // every fcc-tagged lead in the tenant
@@ -86,9 +86,7 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
 
       <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
         <div className="flex items-start gap-3">
-          <span className="w-10 h-10 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0">
-            <Trash2 className="w-5 h-5" aria-hidden="true" />
-          </span>
+          
           <div className="min-w-0">
             <h2 id="fcc-purge-title" className="text-[16px] font-bold text-foreground leading-tight">Remove FCC imports</h2>
             <p className="text-[13px] text-muted-foreground mt-0.5">Delete FCC-imported doors no one has worked. Knocked, sold, and follow-up doors always stay.</p>
@@ -125,7 +123,7 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
         {p != null && p.removable > 0 && (
           <div className="mt-4">
             <label htmlFor="fcc-purge-confirm" className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
+              
               Type <span className="font-bold text-foreground tracking-wide">REMOVE</span> to confirm - this cannot be undone.
             </label>
             <input

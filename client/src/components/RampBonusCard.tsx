@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
-import { BookOpen, CheckCircle2, GraduationCap } from "lucide-react";
 import { usd } from "@shared/moneyFormat";
 
 export interface RampCardData {
@@ -73,13 +72,7 @@ export function RampBonusCard() {
         {data.inWindow && (
           <>
             <div className="flex items-start gap-3">
-              <div className={cn(
-                "grid h-10 w-10 shrink-0 place-items-center rounded-xl",
-                data.earnedToday ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-primary/15 text-primary",
-              )}>
-                {data.earnedToday ? <CheckCircle2 className="h-5 w-5" aria-hidden="true" />
-                                  : <BookOpen className="h-5 w-5" aria-hidden="true" />}
-              </div>
+              
 
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2">
@@ -118,12 +111,7 @@ export function RampBonusCard() {
         {c.enabled && (
           <div className={cn("rounded-xl bg-secondary/50 p-3", data.inWindow && "mt-3")} data-testid="ramp-completion">
             <div className="flex items-start gap-2.5">
-              <span className={cn(
-                "mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg",
-                c.paid ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-background text-muted-foreground",
-              )}>
-                <GraduationCap className="h-4 w-4" aria-hidden="true" />
-              </span>
+              
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-2">
                   <span className="text-[13px] font-semibold text-foreground">Finish your training</span>
@@ -165,7 +153,7 @@ export function RampBonusSection() {
   return (
     <section className="space-y-2" data-testid="ramp-section">
       <SectionLabel className="flex items-center gap-1.5">
-        <GraduationCap className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+        
         {data.inWindow ? "Your first two weeks" : "Training bonus"}
       </SectionLabel>
       <RampBonusCard />

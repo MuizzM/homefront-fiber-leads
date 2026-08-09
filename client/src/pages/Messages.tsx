@@ -38,9 +38,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  BadgeDollarSign, ChevronLeft, Loader2, Megaphone, MessagesSquare, Trash2, Trophy, Users,
-} from "lucide-react";
+import { ChevronLeft, Loader2, Megaphone, MessagesSquare, Trash2, Trophy } from "lucide-react";
 import { agoLabel, usd, type AnnouncementKind } from "@shared/teamFeed";
 import { dmDisplayName } from "@shared/floorChat";
 import type { TeamMember } from "@shared/schema";
@@ -154,7 +152,6 @@ export default function Messages() {
         aria-label="Messages sections"
       >
         {TABS.map(t => {
-          const Icon = t.icon;
           const on = tab === t.id;
           return (
             <button
@@ -170,7 +167,7 @@ export default function Messages() {
                 FOCUS,
               )}
             >
-              <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+              
               {t.label}
               {t.badge > 0 && !on && (
                 <span
@@ -217,7 +214,7 @@ export default function Messages() {
                   data-testid="chat-members"
                   className={cn("inline-flex h-10 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold text-muted-foreground hover:bg-secondary hover:text-foreground", FOCUS)}
                 >
-                  <Users className="h-4 w-4" aria-hidden="true" />
+                  
                   {activeThread.members.length}
                 </button>
               )}
@@ -483,7 +480,6 @@ function SentRow({ item, now }: { item: SentItem; now: number }) {
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const isPromo = item.kind === "promo";
-  const Icon = isPromo ? BadgeDollarSign : Megaphone;
 
   const remove = useMutation({
     mutationFn: async () => (await apiRequest("DELETE", `/api/announcements/${item.id}`)).json(),
@@ -509,14 +505,7 @@ function SentRow({ item, now }: { item: SentItem; now: number }) {
       className="flex items-start gap-3 rounded-2xl border border-border bg-card p-3"
       data-testid={`sent-item-${item.id}`}
     >
-      <div className={cn(
-        "grid h-9 w-9 shrink-0 place-items-center rounded-xl",
-        isPromo
-          ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-          : "bg-secondary text-muted-foreground",
-      )}>
-        <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
-      </div>
+      
 
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold leading-snug text-foreground">{item.headline}</p>

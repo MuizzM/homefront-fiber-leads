@@ -9,14 +9,7 @@ import {
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Users, Search, Plus, Edit2, Trash2, Phone,
-  DoorOpen, UserCheck, CalendarClock, Zap, Home, PhoneOff,
-  Wifi, WifiOff, Building2, DollarSign, Map as MapIcon, Info,
-  RefreshCw, ShieldCheck, ShieldX, User, Mail, ChevronLeft, ChevronRight,
-  X, AlertTriangle, CheckCircle2, MapPin,
-  Clock3, ArrowUpRight, Navigation, SlidersHorizontal, CircleDot
-} from "lucide-react";
+import { Users, Edit2, Trash2, Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, AlertTriangle, CheckCircle2, ArrowUpRight, CircleDot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -86,16 +79,6 @@ const STATUS_COLOR: Record<string, string> = {
   follow_up:     "bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400",
 };
 
-const OUTCOME_ICONS: Record<string, React.ElementType> = {
-  not_home:       PhoneOff,
-  // Audit fix: these two were inverted/generic — a hard "no" reads as an X,
-  // while "already a customer" is the one that gets the person-check glyph.
-  not_interested: X,
-  already_customer: UserCheck,
-  interested:     Zap,
-  callback:       CalendarClock,
-  sold:           Zap,
-};
 
 const OUTCOME_COLORS: Record<string, string> = {
   not_home:      "text-muted-foreground",
@@ -258,7 +241,7 @@ function KnockLogger({ lead, team }: {
     <DialogContent className="bg-card border-border text-foreground max-w-lg">
       <DialogHeader>
         <DialogTitle className="text-base flex items-center gap-2">
-          <DoorOpen className="w-4 h-4 text-primary" />
+          
           Door Knock - {lead.address}
         </DialogTitle>
       </DialogHeader>
@@ -318,12 +301,11 @@ function KnockLogger({ lead, team }: {
             <div className="text-xs font-medium text-muted-foreground mb-2">History ({knocks.length})</div>
             <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
               {knocks.map(k => {
-                const Icon = OUTCOME_ICONS[k.outcome] ?? DoorOpen;
                 const color = OUTCOME_COLORS[k.outcome] ?? "text-muted-foreground";
                 const repName = team.find(m => m.id === k.repId)?.name ?? `Rep #${k.repId}`;
                 return (
                   <div key={k.id} className="flex items-start gap-2 text-xs bg-secondary rounded px-2.5 py-1.5">
-                    <Icon className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${color}`} />
+                    
                     <div className="flex-1 min-w-0">
                       <span className={`font-medium ${color}`}>{OUTCOME_META[k.outcome as keyof typeof OUTCOME_META]?.label ?? k.outcome.replace(/_/g, " ")}</span>
                       <span className="text-muted-foreground ml-1">· {repName}</span>
@@ -513,11 +495,11 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
     unknown: "Unknown",
   };
 
-  const InfoRow = ({ icon: Icon, label, value, highlight }: {
+  const InfoRow = ({ label, value, highlight }: {
     icon: React.ElementType; label: string; value: React.ReactNode; highlight?: boolean;
   }) => (
     <div className="flex items-start gap-3 py-2.5">
-      <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${highlight ? "text-primary" : "text-muted-foreground"}`} />
+      
       <div className="flex-1 min-w-0">
         <div className="text-xs text-muted-foreground mb-0.5">{label}</div>
         <div className={`text-sm font-medium ${highlight ? "text-primary" : "text-foreground"}`}>{value}</div>
@@ -545,14 +527,14 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         <div className="px-5 py-4 border-b border-border grid grid-cols-2 sm:grid-cols-4 gap-2">
           {canOpenCalling && (
             <Link href={`/calling/lead/${current.id}`} onClick={onClose} className="h-9 rounded-md bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5">
-              <Phone className="w-3.5 h-3.5" /> Calling
+               Calling
             </Link>
           )}
           <a href={directions} target="_blank" rel="noreferrer" className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">
-            <Navigation className="w-3.5 h-3.5" /> Navigate
+             Navigate
           </a>
-          {canAssign && <button onClick={onAssign} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted"><UserCheck className="w-3.5 h-3.5" />{current.assignedRepId ? "Reassign" : "Assign"}</button>}
-          {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15"><CheckCircle2 className="w-3.5 h-3.5" /> Qualify</button>}
+          {canAssign && <button onClick={onAssign} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">{current.assignedRepId ? "Reassign" : "Assign"}</button>}
+          {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15"> Qualify</button>}
         </div>
 
         <div className="px-5 py-5">
@@ -571,7 +553,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         {/* Fiber Status Section */}
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            <Wifi className="w-3.5 h-3.5 text-primary" />
+            
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Fiber Status</span>
           </div>
           <div className="bg-secondary/50 rounded-lg px-3 py-1 divide-y divide-border/50">
@@ -590,7 +572,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         {/* Competition Section */}
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            <Building2 className="w-3.5 h-3.5 text-warning" />
+            
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Competition at This Address</span>
           </div>
           {isLoading ? (
@@ -603,7 +585,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             </div>
           ) : (
             <div className="bg-success/10 border border-success/20 rounded-lg px-3 py-3 flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-success" />
+              
               <span className="text-xs text-success font-medium">No competitor ISP detected at this address</span>
             </div>
           )}
@@ -614,7 +596,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         {/* Neighborhood Income Section */}
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            <DollarSign className="w-3.5 h-3.5 text-success" />
+            
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Neighborhood Data (ZIP {lead.zip})</span>
             <button onClick={() => refetch()} disabled={isFetching}
               className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
@@ -633,7 +615,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-            <MapIcon className="w-3 h-3" /> Source: US Census ACS 5-Year Estimates (ZIP-level, free)
+             Source: US Census ACS 5-Year Estimates (ZIP-level, free)
           </p>
         </div>
 
@@ -642,7 +624,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         {/* Owner / Contact Section */}
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            <User className="w-3.5 h-3.5 text-blue-400" />
+            
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Owner / Contact</span>
             {canEdit && (
               <button onClick={() => setEditContact(v => !v)}
@@ -673,11 +655,11 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-            <MapIcon className="w-3 h-3" /> Owner name: public GIS records
+             Owner name: public GIS records
           </p>
           {canOpenCalling && (
             <Link href={`/calling/lead/${lead.id}`} onClick={onClose} className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-primary/30 bg-primary/10 text-xs font-semibold text-primary">
-              <Phone className="h-3.5 w-3.5" /> Open licensed, compliance-gated Calling
+               Open licensed, compliance-gated Calling
             </Link>
           )}
         </div>
@@ -686,7 +668,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
 
         <div className="mb-5">
           <div className="flex items-center gap-2 mb-3">
-            <Clock3 className="w-3.5 h-3.5 text-primary" />
+            
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Activity history</span>
           </div>
           {historyLoading ? (
@@ -711,7 +693,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
 
         {canEdit && (
           <button onClick={onEdit} className="w-full h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">
-            <Edit2 className="w-3.5 h-3.5" /> Edit full lead record
+             Edit full lead record
           </button>
         )}
         </div>
@@ -749,7 +731,7 @@ const nextAction = (lead: Lead) => {
   return { label: "Review", tone: "text-muted-foreground" };
 };
 
-function EnterpriseKpi({ label, value, helper, icon: Icon, tone = "text-primary", warning = false }: {
+function EnterpriseKpi({ label, value, helper, warning = false }: {
   label: string;
   /** null = the fetch failed — render an honest em-dash, never a fake 0. */
   value: number | null;
@@ -762,7 +744,7 @@ function EnterpriseKpi({ label, value, helper, icon: Icon, tone = "text-primary"
     <div className={`min-w-[160px] flex-1 rounded-lg border bg-card px-4 py-3.5 ${warning ? "border-amber-500/30" : "border-border"}`}>
       <div className="flex items-center justify-between gap-3">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
-        <Icon className={`w-4 h-4 ${tone}`} />
+        
       </div>
       <div className="text-2xl font-semibold tracking-tight tabular-nums mt-2" aria-label={value == null ? `${label} unavailable` : undefined}>{value == null ? " - " : value.toLocaleString()}</div>
       <div className="text-[11px] text-muted-foreground mt-1">{helper}</div>
@@ -804,7 +786,7 @@ const LeadTableRow = memo(function LeadTableRow({
       <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
-      <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-success" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
+      <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
       <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
       <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
       <td className="px-3 py-3">
@@ -844,7 +826,7 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
-            <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground"><MapPin className="h-3.5 w-3.5 shrink-0" />{lead.city}, {lead.state} {lead.zip}</div>
+            <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground">{lead.city}, {lead.state} {lead.zip}</div>
           </div>
           {/* leadStateLabel, NOT the raw lookup: "already a customer" is stored
               as not_interested + lastOutcome, and the raw label showed those
@@ -864,9 +846,9 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
         </div>
       ) : (
       <div className="mt-3 grid grid-cols-3 gap-2">
-        <button onClick={() => onOpen(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5"><ArrowUpRight className="h-4 w-4" />Open</button>
-        {canOpenCalling ? <Link href={`/calling/lead/${lead.id}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4 text-primary" />Calling</Link> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4" />Protected</span>}
-        <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Navigation className="h-4 w-4 text-primary" />Route</a>
+        <button onClick={() => onOpen(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5">Open</button>
+        {canOpenCalling ? <Link href={`/calling/lead/${lead.id}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Calling</Link> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5">Protected</span>}
+        <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Route</a>
       </div>
       )}
     </article>
@@ -1223,8 +1205,8 @@ export default function Leads() {
           <p className="text-sm text-muted-foreground mt-1">{isRep ? "Work your assigned doors and keep every follow-up moving." : "Qualify, assign, and move every fiber opportunity forward."}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => navigate("/map")} className="h-9 border-border text-sm"><MapIcon className="w-4 h-4 mr-1.5" />Field map</Button>
-          {canAddLead && <Button onClick={openAddDialog} className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm h-9" data-testid="btn-add-lead-manual"><Plus className="w-4 h-4 mr-1.5" />Add lead</Button>}
+          <Button variant="outline" onClick={() => navigate("/map")} className="h-9 border-border text-sm">Field map</Button>
+          {canAddLead && <Button onClick={openAddDialog} className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm h-9" data-testid="btn-add-lead-manual">Add lead</Button>}
         </div>
       </div>
 
@@ -1249,17 +1231,17 @@ export default function Leads() {
             <h2 className="text-sm font-semibold">Lead pipeline</h2>
             <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">{totalLeads.toLocaleString()} records in this view</p>
           </div>
-          <div className="hidden sm:flex items-center gap-1 text-[11px] text-muted-foreground"><SlidersHorizontal className="w-3.5 h-3.5" />Filters update the table instantly</div>
+          <div className="hidden sm:flex items-center gap-1 text-[11px] text-muted-foreground">Filters update the table instantly</div>
         </div>
 
         <div className="px-4 py-3 border-b border-border bg-background/40 space-y-3">
           <div className="flex flex-col lg:flex-row gap-2.5">
             <div className="relative flex-1 min-w-[240px]">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              
               <Input value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-9" data-testid="input-search-leads" />
               {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
             </div>
-            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" />Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
+            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2">Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
             <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 lg:flex gap-2`}>
               {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
               <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
@@ -1295,9 +1277,9 @@ export default function Leads() {
             </div>
           )
         ) : isError ? (
-          <div className="py-16 px-6 text-center"><AlertTriangle className="w-7 h-7 text-rose-600 dark:text-rose-400 mx-auto" /><div className="text-sm font-semibold mt-3">Lead data could not be loaded</div><div className="text-xs text-muted-foreground mt-1">Your filters are preserved. Retry when the connection is restored.</div><Button variant="outline" size="sm" onClick={() => refetchLeads()} className="mt-4 h-8"><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry</Button></div>
+          <div className="py-16 px-6 text-center"><div className="text-sm font-semibold mt-3">Lead data could not be loaded</div><div className="text-xs text-muted-foreground mt-1">Your filters are preserved. Retry when the connection is restored.</div><Button variant="outline" size="sm" onClick={() => refetchLeads()} className="mt-4 h-8">Retry</Button></div>
         ) : filtered.length === 0 ? (
-          <div className="py-16 px-6 text-center"><div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center mx-auto"><Users className="w-5 h-5 text-primary" /></div><div className="text-sm font-semibold mt-3">{activeFilters ? "No leads match this operational view" : "No leads have been added"}</div><div className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{activeFilters ? "Clear one or more filters to broaden the pipeline." : "Add a lead or run a market scan to start building the pipeline."}</div>{activeFilters && <Button variant="outline" size="sm" onClick={clearAllFilters} className="mt-4 h-8"><X className="w-3.5 h-3.5 mr-1" />Clear filters</Button>}</div>
+          <div className="py-16 px-6 text-center"><div className="text-sm font-semibold mt-3">{activeFilters ? "No leads match this operational view" : "No leads have been added"}</div><div className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{activeFilters ? "Clear one or more filters to broaden the pipeline." : "Add a lead or run a market scan to start building the pipeline."}</div>{activeFilters && <Button variant="outline" size="sm" onClick={clearAllFilters} className="mt-4 h-8">Clear filters</Button>}</div>
         ) : isDesktop ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1050px] border-collapse text-left">
@@ -1330,7 +1312,7 @@ export default function Leads() {
           </div>
         )}
 
-        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
+        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}-{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
       </section>
 
       {/* Dialogs */}

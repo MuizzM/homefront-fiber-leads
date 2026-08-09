@@ -7,7 +7,7 @@
 // ride the trainingReviewQueue outbox, and the numbers stay honest.
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { Zap, MessageSquare, BookOpen, Flame } from "lucide-react";
+import { Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
@@ -185,7 +185,7 @@ export default function Coach() {
               </div>
               {summary.streakDays > 0 && (
                 <div className="mt-1.5 inline-flex items-center gap-1.5 text-sm-minus text-muted-foreground" data-testid="coach-streak">
-                  <Flame className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                  
                   <span className="tabular-nums">{summary.streakDays} day{summary.streakDays === 1 ? "" : "s"} in a row</span>
                 </div>
               )}
@@ -212,7 +212,7 @@ export default function Coach() {
             FOCUS,
           )}
         >
-          <MessageSquare className="h-4 w-4" aria-hidden="true" />
+          
           What to say next
         </button>
 
@@ -243,7 +243,7 @@ export default function Coach() {
               FOCUS,
             )}
           >
-            <BookOpen className="h-4 w-4" aria-hidden="true" />
+            
             Open the full course
           </button>
         </div>

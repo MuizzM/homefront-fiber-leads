@@ -8,7 +8,7 @@
 // of every screen that renders it. Coach warms it on mount, so by the time the
 // sheet opens it is already there — and it stays bundled, so offline holds.
 import { useMemo, useState } from "react";
-import { MessageSquare, ChevronLeft } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
@@ -73,7 +73,7 @@ export function WhatNextSheet({
       >
         <div className="p-4 pb-8">
           <div className="flex items-center gap-2 pr-10">
-            <MessageSquare className="h-4 w-4 text-primary" aria-hidden="true" />
+            
             <SheetTitle className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               What to say next
             </SheetTitle>

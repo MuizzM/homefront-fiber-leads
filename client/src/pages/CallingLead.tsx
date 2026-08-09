@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertOctagon, ArrowLeft, CalendarClock, Check, CheckCircle2, Clipboard, Clock3,
-  FileCheck2, KeyRound, LockKeyhole, PhoneCall, ShieldAlert, ShieldCheck, UserRound, Wifi,
-} from "lucide-react";
+import { Check, Clipboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -61,7 +58,7 @@ function TracedPhonePanel({ detail, onSwitched }: {
   return (
     <section className="rounded-2xl border border-border bg-card p-4" data-testid="traced-phone-panel">
       <div className="flex items-start gap-3">
-        <PhoneCall className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+        
         <div>
           <h2 className="text-sm font-semibold">Other numbers for this address</h2>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
@@ -181,7 +178,7 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
     if (detail.decisionError) {
       return (
         <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3" data-testid="calling-decision-error">
-          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          
           <div className="min-w-0">
             <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Decision unavailable</div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">The recorded decision couldn't be loaded ({detail.decisionError}). Retry, or run a new compliance check.</div>
@@ -198,7 +195,7 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
     return (
       <div className="space-y-3" data-testid="calling-decision">
         <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3">
-          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          
           <div className="min-w-0">
             <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Decision expired</div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">This evaluation lapsed {dateLabel(decision.expiresAt)}. Run a new compliance check before authorizing.</div>
@@ -211,7 +208,7 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
     <div className="space-y-3" data-testid="calling-decision">
       <div className={cn("flex items-start gap-3 rounded-xl border p-3",
         decision.eligible ? "border-emerald-500/25 bg-emerald-500/[0.08]" : "border-red-500/25 bg-red-500/[0.07]")}>
-        {decision.eligible ? <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" /> : <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" />}
+        {decision.eligible ? null : null}
         <div className="min-w-0">
           <div className={cn("text-sm font-semibold", decision.eligible ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatDecision("decision" in decision ? decision.decision : decision.finalStatus)}</div>
           <div className="mt-0.5 text-[11px] text-muted-foreground">Rule {decision.ruleVersion} · expires {dateLabel(decision.expiresAt)}{decision.localTime ? ` · ${decision.localTime}` : ""}</div>
@@ -227,7 +224,7 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
         <div className="divide-y divide-border/70 border-t border-border px-3">
           {decision.rules.map(rule => (
             <div key={rule.rule} className="flex min-h-10 items-center gap-2 py-2 text-xs">
-              {rule.passed ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" /> : <AlertOctagon className="h-3.5 w-3.5 shrink-0 text-red-400" />}
+              {rule.passed ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" /> : null}
               <span className="min-w-0 flex-1 truncate">{formatDecision(rule.rule)}</span>
               <span className="max-w-[42%] truncate text-2xs text-muted-foreground">{formatDecision(rule.reasonCode)}</span>
             </div>
@@ -272,7 +269,7 @@ function ConsentForm({ detail, attempt, onSaved }: {
 
   return (
     <details className="rounded-2xl border border-border bg-card">
-      <summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"><FileCheck2 className="h-4 w-4 text-primary" /> Record verified consent evidence</summary>
+      <summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Record verified consent evidence</summary>
       <form className="space-y-3 border-t border-border p-4" onSubmit={event => { event.preventDefault(); if (valid) mutation.mutate(); }}>
         <p className="text-xs leading-relaxed text-muted-foreground">This stores evidence; it does not create consent by itself. The artifact ID must already be hash-verified by a compliance administrator and retained for at least five years.</p>
         <label className="block text-xs font-semibold">Consumer identity stated on the evidence<input required value={consumerIdentity} onChange={event => setConsumerIdentity(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-normal" /></label>
@@ -305,7 +302,7 @@ function PhoneValidationForm({ detail, onSaved }: { detail: CallingLeadDetail; o
   const valid = Boolean(candidate.phoneId);
   return (
     <section className="rounded-2xl border border-border bg-card p-4">
-      <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" /><div><h2 className="text-sm font-semibold">Licensed phone validation</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Runs the contract-approved provider check for validity, line type, reachability, and reassigned-number risk. Staff cannot self-assert the result.</p></div></div>
+      <div className="flex items-start gap-3"><div><h2 className="text-sm font-semibold">Licensed phone validation</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Runs the contract-approved provider check for validity, line type, reachability, and reassigned-number risk. Staff cannot self-assert the result.</p></div></div>
       <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-[11px] text-muted-foreground">The server selects the lowest-priority-number, contract-approved provider with explicit phone-validation permission and budget.</div>
       <Button className="mt-3 w-full" variant="outline" disabled={!valid || mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? "Validating with provider…" : "Run licensed validation"}</Button>
     </section>
@@ -491,21 +488,21 @@ export default function CallingLead() {
   return (
     <CallingChrome>
       <div className="flex-1 px-4 pb-28 pt-4 md:px-6 md:pb-8">
-        <Link href="/calling" className="mb-4 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"><ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back to queue</Link>
+        <Link href="/calling" className="mb-4 inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"> Back to queue</Link>
         {statusQuery.isLoading || detailQuery.isLoading ? <CallingPageSkeleton /> : statusQuery.isError || !statusQuery.data ? (
           <CallingUnknownState retry={() => void statusQuery.refetch()} />
         ) : detailQuery.isError || !detailQuery.data || !candidate ? (
-          <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/[0.08] p-6 text-center"><LockKeyhole className="mx-auto h-6 w-6 text-red-400" /><h1 className="mt-2 text-base font-semibold text-red-400">Calling lead unavailable</h1><p className="mt-1 text-xs text-muted-foreground">No phone or calling action is available. The record may not belong to this organization or rep.</p></div>
+          <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/[0.08] p-6 text-center"><h1 className="mt-2 text-base font-semibold text-red-400">Calling lead unavailable</h1><p className="mt-1 text-xs text-muted-foreground">No phone or calling action is available. The record may not belong to this organization or rep.</p></div>
         ) : (
           <div className="space-y-4">
             <CallingAvailability status={statusQuery.data} />
             <section className="rounded-2xl border border-border bg-card p-4">
               <div className="flex items-start gap-3">
-                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Wifi className="h-5 w-5" /></span>
+                
                 <div className="min-w-0 flex-1"><div className="text-[11px] font-semibold uppercase tracking-wider text-primary">Cross-verified fresh fiber</div><h1 className="mt-1 text-lg font-semibold tracking-tight">{candidate.address}</h1><p className="text-sm text-muted-foreground">{candidate.city}, {candidate.state} {candidate.zip}</p></div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border">
-                <div className="bg-background/70 p-3"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Resident match</div><div className="mt-1 flex items-center gap-1.5 truncate text-sm"><UserRound className="h-3.5 w-3.5 text-muted-foreground" />{candidate.contactName || "Not verified"}</div></div>
+                <div className="bg-background/70 p-3"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Resident match</div><div className="mt-1 flex items-center gap-1.5 truncate text-sm">{candidate.contactName || "Not verified"}</div></div>
                 <div className="bg-background/70 p-3"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Protected phone</div><div className="mt-1 truncate font-mono text-sm">{candidate.maskedPhone || "Unavailable"}</div></div>
                 <div className="bg-background/70 p-3"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Line validation</div><div className="mt-1 truncate text-sm">{candidate.phoneValidationStatus || "Not validated"}{candidate.lineType ? ` · ${candidate.lineType}` : ""}</div></div>
                 <div className="bg-background/70 p-3"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Pipeline stage</div><div className="mt-1 truncate text-sm">{formatStage(candidate.queueStage)}</div></div>
@@ -521,7 +518,7 @@ export default function CallingLead() {
 
             {canValidatePhone && !candidate.phoneId && (
               <section className="rounded-2xl border border-border bg-card p-4">
-                <div className="flex items-start gap-3"><UserRound className="mt-0.5 h-5 w-5 shrink-0 text-primary" /><div><h2 className="text-sm font-semibold">Licensed resident enrichment</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Uses the tenant's lowest-cost approved provider only after the server rechecks fresh-fiber status, suppression, conversion, assignment, budget, cache, and permitted use.</p></div></div>
+                <div className="flex items-start gap-3"><div><h2 className="text-sm font-semibold">Licensed resident enrichment</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Uses the tenant's lowest-cost approved provider only after the server rechecks fresh-fiber status, suppression, conversion, assignment, budget, cache, and permitted use.</p></div></div>
                 <Button className="mt-3 w-full" variant="outline" disabled={enrichmentMutation.isPending} onClick={() => enrichmentMutation.mutate()}>{enrichmentMutation.isPending ? "Checking licensed provider…" : "Enrich resident contact"}</Button>
               </section>
             )}
@@ -535,12 +532,12 @@ export default function CallingLead() {
 
             {!activeAttempt && !completed && canAttemptManual && (
               <section className="rounded-2xl border border-border bg-card p-4">
-                <div className="flex items-start gap-3"><KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-primary" /><div><h2 className="text-base font-semibold">One manual call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Authorization is short-lived, bound to you and this exact lead, and can be used once. It does not dial automatically.</p></div></div>
+                <div className="flex items-start gap-3"><div><h2 className="text-base font-semibold">One manual call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Authorization is short-lived, bound to you and this exact lead, and can be used once. It does not dial automatically.</p></div></div>
                 <label className="mt-4 flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/55 p-3"><input type="checkbox" checked={humanReady} onChange={event => setHumanReady(event.target.checked)} className="mt-0.5 h-5 w-5 accent-[hsl(var(--primary))]" /><span className="text-xs leading-relaxed">I am the authorized rep, physically ready to place one manual call, and will use the approved script.</span></label>
                 {!authorization ? (
-                  <Button className="mt-3 w-full" size="lg" disabled={!eligible || !humanReady || authorizeMutation.isPending || manualFlowDisabled} onClick={() => authorizeMutation.mutate()}><LockKeyhole className="h-4 w-4" />{authorizeMutation.isPending ? "Authorizing…" : "Authorize one manual call"}</Button>
+                  <Button className="mt-3 w-full" size="lg" disabled={!eligible || !humanReady || authorizeMutation.isPending || manualFlowDisabled} onClick={() => authorizeMutation.mutate()}>{authorizeMutation.isPending ? "Authorizing…" : "Authorize one manual call"}</Button>
                 ) : (
-                  <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.08] p-3"><div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold text-emerald-600 dark:text-emerald-400">One-use authorization ready</span><span className="font-mono tabular-nums text-muted-foreground">{expiresIn}s</span></div><Button className="mt-3 w-full" size="lg" disabled={expiresIn <= 0 || startMutation.isPending} onClick={() => startMutation.mutate()}><PhoneCall className="h-4 w-4" />{startMutation.isPending ? "Re-checking gates…" : "Reveal number & start manual attempt"}</Button></div>
+                  <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.08] p-3"><div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold text-emerald-600 dark:text-emerald-400">One-use authorization ready</span><span className="font-mono tabular-nums text-muted-foreground">{expiresIn}s</span></div><Button className="mt-3 w-full" size="lg" disabled={expiresIn <= 0 || startMutation.isPending} onClick={() => startMutation.mutate()}>{startMutation.isPending ? "Re-checking gates…" : "Reveal number & start manual attempt"}</Button></div>
                 )}
                 {!eligible && <p className="mt-3 text-center text-[11px] text-muted-foreground">A current eligible compliance decision is required. The frontend cannot override a blocked decision.</p>}
               </section>
@@ -548,20 +545,20 @@ export default function CallingLead() {
 
             {!canAttemptManual && !activeAttempt && !completed && (
               <div className="rounded-2xl border border-border bg-card p-4 text-xs leading-relaxed text-muted-foreground">
-                <LockKeyhole className="mb-2 h-4 w-4" /> Read-only calling access. Starting an attempt requires the calling.attempt.manual capability.
+                 Read-only calling access. Starting an attempt requires the calling.attempt.manual capability.
               </div>
             )}
 
             {activeAttempt && (
               <>
                 <section className="rounded-2xl border border-primary/30 bg-primary/[0.06] p-4" data-testid="active-manual-attempt">
-                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-primary"><PhoneCall className="h-3.5 w-3.5" /> Manual attempt active</div>
+                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-primary"> Manual attempt active</div>
                   <div className="mt-3 flex items-center gap-2"><div className="min-w-0 flex-1 truncate font-mono text-2xl font-semibold tracking-tight">{activeAttempt.phoneNumber ?? activeAttempt.maskedPhone}</div>{activeAttempt.phoneNumber && <Button variant="outline" size="icon" aria-label="Copy phone number" disabled={copyMutation.isPending} onClick={() => copyMutation.mutate()}>{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Clipboard className="h-4 w-4" />}</Button>}</div>
                   {activeAttempt.resumed && <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">Resumed open attempt after navigation or refresh. The full number is not revealed again; record the outcome to close this attempt.</p>}
-                  <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"><LockKeyhole className="h-3 w-3" /> No auto-dial, phone link, auto-next, recording, or prerecorded voice is initiated by this app.</p>
+                  <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"> No auto-dial, phone link, auto-next, recording, or prerecorded voice is initiated by this app.</p>
                 </section>
                 <section className="rounded-2xl border border-border bg-card p-4"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Approved script · {activeAttempt.script.version}</div><h2 className="mt-1 text-base font-semibold">{activeAttempt.script.title}</h2><div className="mt-3 rounded-xl border border-border bg-background/60 p-4 text-sm leading-relaxed whitespace-pre-wrap"><div className="mb-2 font-semibold">{activeAttempt.script.sellerName} · {activeAttempt.script.companyName} · {activeAttempt.script.purpose}</div>{activeAttempt.script.body}</div></section>
-                <section className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-primary" /><h2 className="text-base font-semibold">Record outcome</h2></div><textarea value={notes} onChange={event => setNotes(event.target.value)} rows={3} placeholder="Call notes (do not enter sensitive payment data)" className="mt-3 w-full rounded-xl border border-border bg-background p-3 text-sm" />
+                <section className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center gap-2"><h2 className="text-base font-semibold">Record outcome</h2></div><textarea value={notes} onChange={event => setNotes(event.target.value)} rows={3} placeholder="Call notes (do not enter sensitive payment data)" className="mt-3 w-full rounded-xl border border-border bg-background p-3 text-sm" />
                   <div className="mt-3 grid grid-cols-2 gap-2">{DISPOSITIONS.filter(item => item.code !== "CONSENT_GRANTED" || detailQuery.data.consent.verified).map(item => {
                     const armed = armedDisposition === item.code;
                     return (
@@ -589,13 +586,13 @@ export default function CallingLead() {
                       </button>
                     );
                   })}</div>
-                  {!showCallback ? <button type="button" onClick={() => setShowCallback(true)} className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/[0.08] text-xs font-semibold text-sky-300"><CalendarClock className="h-4 w-4" /> Customer requested callback</button> : <div className="mt-2 space-y-3 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3"><label className="block text-xs font-semibold">Callback date and local time<input type="datetime-local" value={callbackAt} onChange={event => setCallbackAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3" /></label><label className="block text-xs font-semibold">Verified callback evidence artifact ID<input value={callbackEvidenceRef} onChange={event => setCallbackEvidenceRef(event.target.value)} placeholder="UUID bound to this exact call attempt" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label><p className="text-[11px] leading-relaxed text-muted-foreground">The server accepts only a retained, verified evidence artifact bound to this tenant, lead, phone, and call attempt. A free-form note cannot authorize a callback.</p><Button variant="outline" className="w-full border-sky-500/30 text-sky-300" disabled={!callbackValid || dispositionMutation.isPending} onClick={() => dispositionMutation.mutate("CALLBACK_REQUESTED")}>Save requested callback</Button></div>}
+                  {!showCallback ? <button type="button" onClick={() => setShowCallback(true)} className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/[0.08] text-xs font-semibold text-sky-300"> Customer requested callback</button> : <div className="mt-2 space-y-3 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3"><label className="block text-xs font-semibold">Callback date and local time<input type="datetime-local" value={callbackAt} onChange={event => setCallbackAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3" /></label><label className="block text-xs font-semibold">Verified callback evidence artifact ID<input value={callbackEvidenceRef} onChange={event => setCallbackEvidenceRef(event.target.value)} placeholder="UUID bound to this exact call attempt" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label><p className="text-[11px] leading-relaxed text-muted-foreground">The server accepts only a retained, verified evidence artifact bound to this tenant, lead, phone, and call attempt. A free-form note cannot authorize a callback.</p><Button variant="outline" className="w-full border-sky-500/30 text-sky-300" disabled={!callbackValid || dispositionMutation.isPending} onClick={() => dispositionMutation.mutate("CALLBACK_REQUESTED")}>Save requested callback</Button></div>}
                 </section>
                 <ConsentForm detail={detailQuery.data} attempt={activeAttempt} onSaved={() => void detailQuery.refetch()} />
               </>
             )}
 
-            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button data-testid="next-eligible-lead" disabled={nextLeadMutation.isPending} onClick={() => nextLeadMutation.mutate()}>{nextLeadMutation.isPending ? "Finding next eligible lead…" : "Next eligible lead →"}</Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
+            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button data-testid="next-eligible-lead" disabled={nextLeadMutation.isPending} onClick={() => nextLeadMutation.mutate()}>{nextLeadMutation.isPending ? "Finding next eligible lead…" : "Next eligible lead"}</Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
 
             {/* Safe-area: the sticky thumb-zone bar must clear the home
                 indicator on notched phones (same env() pattern as the map). */}
@@ -643,7 +640,7 @@ export default function CallingLead() {
             )}
 
             {candidate.phoneId && !completed && canOptOut && (
-              <section className="rounded-2xl border border-red-500/25 bg-red-500/[0.05] p-4"><div className="flex items-start gap-3"><AlertOctagon className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" /><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold text-red-600 dark:text-red-400">STOP / do not call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Use immediately for any stop request, wrong number, or consent revocation. This permanently suppresses the number for this organization.</p></div></div>
+              <section className="rounded-2xl border border-red-500/25 bg-red-500/[0.05] p-4"><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold text-red-600 dark:text-red-400">STOP / do not call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Use immediately for any stop request, wrong number, or consent revocation. This permanently suppresses the number for this organization.</p></div></div>
                 <label className="mt-3 block text-xs font-semibold">Suppression reason<select value={optOutReason} onChange={event => setOptOutReason(event.target.value as typeof optOutReason)} className="mt-1 h-11 w-full rounded-xl border border-red-500/25 bg-background px-3 font-normal"><option value="stop_request">Consumer said STOP / take me off the list</option><option value="do_not_call">Do not call request</option><option value="wrong_number">Wrong number</option><option value="wrong_party">Wrong party</option><option value="consent_revoked">Consent revoked</option></select></label>
                 <AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" className="mt-3 w-full">Record STOP and suppress now</Button></AlertDialogTrigger><AlertDialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl"><AlertDialogHeader><AlertDialogTitle>Suppress this number permanently?</AlertDialogTitle><AlertDialogDescription>This immediately adds the number to the internal DNC list, cancels callbacks, and invalidates unused call authorizations. It cannot be undone by a rep.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={optOutMutation.isPending} onClick={() => optOutMutation.mutate()} className="bg-red-600 text-white hover:bg-red-700">{optOutMutation.isPending ? "Suppressing…" : "Confirm STOP"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
               </section>
@@ -653,8 +650,8 @@ export default function CallingLead() {
               <section className="rounded-2xl border border-red-500/25 bg-card p-4"><h2 className="text-sm font-semibold">Revoke recorded consent</h2><p className="mt-1 text-xs text-muted-foreground">Records an immutable revocation and permanent internal DNC suppression in one transaction.</p><label className="mt-3 block text-xs font-semibold">Revocation evidence reference<input value={revocationEvidence} onChange={event => setRevocationEvidence(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-normal" /></label><Button variant="destructive" className="mt-3 w-full" disabled={revocationEvidence.trim().length < 3 || revokeMutation.isPending} onClick={() => revokeMutation.mutate()}>{revokeMutation.isPending ? "Revoking…" : "Revoke consent and suppress"}</Button></section>
             )}
 
-            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"><Clock3 className="h-4 w-4 text-muted-foreground" /> Immutable activity trail ({detailQuery.data.timeline.length})</summary><div className="max-h-80 divide-y divide-border overflow-y-auto border-t border-border px-4">{detailQuery.data.timeline.length ? detailQuery.data.timeline.map(event => <div key={event.id} className="py-3"><div className="flex items-baseline justify-between gap-3"><span className="text-xs font-semibold">{formatDecision(event.eventType)}</span><time className="shrink-0 text-2xs text-muted-foreground">{dateLabel(event.createdAt)}</time></div><div className="mt-1 truncate font-mono text-2xs text-muted-foreground">{event.eventSha256}</div></div>) : <p className="py-4 text-xs text-muted-foreground">No calling activity yet.</p>}</div></details></section>
-            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"><PhoneCall className="h-4 w-4 text-muted-foreground" /> Attempts and callbacks ({attempts.length + callbacks.length})</summary><div className="divide-y divide-border border-t border-border px-4">{attempts.map(attempt => <div key={attempt.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">{attempt.dispositionCode ? formatDecision(attempt.dispositionCode) : "Open manual attempt"}</span><time className="text-2xs text-muted-foreground">{dateLabel(attempt.startedAt)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">Rep #{attempt.representativeUserId} · script {attempt.scriptVersion}</div></div>)}{callbacks.map(callback => <div key={callback.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">Callback · {formatDecision(callback.status)}</span><time className="text-2xs text-muted-foreground">{dateLabelTz(callback.dueAt, callback.timeZone)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">{callback.timeZone}</div></div>)}{!attempts.length && !callbacks.length && <p className="py-4 text-xs text-muted-foreground">No attempts or callbacks yet.</p>}</div></details></section>
+            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Immutable activity trail ({detailQuery.data.timeline.length})</summary><div className="max-h-80 divide-y divide-border overflow-y-auto border-t border-border px-4">{detailQuery.data.timeline.length ? detailQuery.data.timeline.map(event => <div key={event.id} className="py-3"><div className="flex items-baseline justify-between gap-3"><span className="text-xs font-semibold">{formatDecision(event.eventType)}</span><time className="shrink-0 text-2xs text-muted-foreground">{dateLabel(event.createdAt)}</time></div><div className="mt-1 truncate font-mono text-2xs text-muted-foreground">{event.eventSha256}</div></div>) : <p className="py-4 text-xs text-muted-foreground">No calling activity yet.</p>}</div></details></section>
+            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Attempts and callbacks ({attempts.length + callbacks.length})</summary><div className="divide-y divide-border border-t border-border px-4">{attempts.map(attempt => <div key={attempt.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">{attempt.dispositionCode ? formatDecision(attempt.dispositionCode) : "Open manual attempt"}</span><time className="text-2xs text-muted-foreground">{dateLabel(attempt.startedAt)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">Rep #{attempt.representativeUserId} · script {attempt.scriptVersion}</div></div>)}{callbacks.map(callback => <div key={callback.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">Callback · {formatDecision(callback.status)}</span><time className="text-2xs text-muted-foreground">{dateLabelTz(callback.dueAt, callback.timeZone)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">{callback.timeZone}</div></div>)}{!attempts.length && !callbacks.length && <p className="py-4 text-xs text-muted-foreground">No attempts or callbacks yet.</p>}</div></details></section>
           </div>
         )}
       </div>

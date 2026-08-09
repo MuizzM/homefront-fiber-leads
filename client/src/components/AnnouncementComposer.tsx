@@ -23,7 +23,7 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { AlertTriangle, BadgeDollarSign, Loader2, Megaphone, Send } from "lucide-react";
+import { BadgeDollarSign, Loader2, Megaphone } from "lucide-react";
 import {
   validateAuthoredAnnouncement, ANNOUNCEMENT_TITLE_MAX, ANNOUNCEMENT_BODY_MAX,
   type AuthoredKind,
@@ -71,14 +71,13 @@ export function AnnouncementComposer({ className }: { className?: string }) {
   return (
     <section className={cn("space-y-3", className)} data-testid="announcement-composer">
       <SectionLabel className="flex items-center gap-1.5">
-        <Megaphone className="h-3.5 w-3.5" aria-hidden="true" />
+        
         Tell the floor
       </SectionLabel>
 
       {/* Delivery, not category — so the choice is made knowingly. */}
       <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Announcement type">
         {KINDS.map(k => {
-          const Icon = k.icon;
           const on = kind === k.id;
           return (
             <button
@@ -92,7 +91,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
               )}
             >
               <span className="flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
-                <Icon className="h-3.5 w-3.5" aria-hidden="true" />{k.label}
+                {k.label}
               </span>
               <span className="text-[11px] text-muted-foreground">{k.hint}</span>
             </button>
@@ -117,7 +116,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
           id="announcement-body" value={body} rows={2}
           maxLength={ANNOUNCEMENT_BODY_MAX + 40}
           data-testid="announcement-body"
-          placeholder={kind === "promo" ? "Every close after 5 PM pays twice." : "Any verified door can now drop a $5–$25 bonus."}
+          placeholder={kind === "promo" ? "Every close after 5 PM pays twice." : "Any verified door can now drop a $5-$25 bonus."}
           onChange={e => setBody(e.target.value)}
         />
         <CharCount value={body.length} max={ANNOUNCEMENT_BODY_MAX} />
@@ -163,7 +162,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
 
       {problem && (
         <p className="flex items-start gap-1.5 text-[13px] font-medium text-destructive" data-testid="announcement-error">
-          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {problem}
+           {problem}
         </p>
       )}
 
@@ -178,7 +177,7 @@ export function AnnouncementComposer({ className }: { className?: string }) {
       >
         {post.isPending
           ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-          : <Send className="h-4 w-4" aria-hidden="true" />}
+          : null}
         {kind === "promo" ? "Send to the floor" : "Post update"}
       </button>
     </section>

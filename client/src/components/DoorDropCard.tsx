@@ -20,7 +20,6 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
-import { Gift, Sparkles } from "lucide-react";
 import { usd } from "@shared/moneyFormat";
 
 export interface DoorDropCardData {
@@ -59,20 +58,13 @@ export function DoorDropCard({ compact = false }: { compact?: boolean }) {
     )} data-testid="door-drop-card">
       <CardContent className={cn("p-4", compact && "p-3")}>
         <div className="flex items-start gap-3">
-          <div className={cn(
-            "grid h-10 w-10 shrink-0 place-items-center rounded-xl",
-            wonToday ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                     : "bg-primary/15 text-primary",
-          )}>
-            {wonToday ? <Sparkles className="h-5 w-5" aria-hidden="true" />
-                      : <Gift className="h-5 w-5" aria-hidden="true" />}
-          </div>
+          
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
               <span className="text-[13px] font-semibold text-foreground">Door drops</span>
               <span className="text-[12px] tabular-nums text-muted-foreground">
-                {usd(data.band.minCents)}–{usd(data.band.maxCents)}
+                {usd(data.band.minCents)}-{usd(data.band.maxCents)}
               </span>
             </div>
             {/* The server's copy verbatim — it is the one place that knows how
@@ -108,7 +100,7 @@ export function DoorDropSection() {
   return (
     <section className="space-y-2" data-testid="door-drop-section">
       <SectionLabel className="flex items-center gap-1.5">
-        <Gift className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+        
         Door drops
       </SectionLabel>
       <DoorDropCard />

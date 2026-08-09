@@ -19,7 +19,7 @@ import { useCan } from "@/lib/capabilities";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Check, Copy, Gift, Users, X, AlertCircle, Settings, History, TrendingUp } from "lucide-react";
+import { Check, X, Settings } from "lucide-react";
 
 interface Requirement {
   key: string; label: string; met: boolean; current?: number; target?: number;
@@ -45,7 +45,7 @@ interface Progress {
 // the old formatter ran Math.abs and printed −$150 as "$150".
 const money = (cents: number) => {
   const abs = Math.abs(cents);
-  const sign = cents < 0 ? "−" : "";
+  const sign = cents < 0 ? "-" : "";
   return `${sign}$${Math.floor(abs / 100).toLocaleString("en-US")}${abs % 100 ? `.${String(abs % 100).padStart(2, "0")}` : ""}`;
 };
 
@@ -140,7 +140,7 @@ function MyLinkCard() {
     <Card data-testid="referral-my-link">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Gift className="h-4 w-4" /> Refer a rep
+           Refer a rep
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -148,7 +148,7 @@ function MyLinkCard() {
           // Honest rather than hopeful: showing a link and a dollar figure for a
           // programme nobody has switched on is a promise the org has not made.
           <p className="flex items-start gap-2 text-sm text-muted-foreground" data-testid="referral-program-off">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            
             The referral programme is not running right now. Your link still works for tracking,
             but no reward is being earned.
           </p>
@@ -169,7 +169,7 @@ function MyLinkCard() {
             {link.url}
           </code>
           <Button size="sm" variant="outline" onClick={copy} data-testid="referral-copy">
-            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            {copied ? <Check className="h-4 w-4" /> : null}
             <span className="ml-2">{copied ? "Copied" : "Copy"}</span>
           </Button>
         </div>
@@ -211,7 +211,7 @@ function QualificationChecklist({ referralId }: { referralId: number }) {
           <li key={r.key} className="flex items-center gap-2 text-xs">
             {r.met
               ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-              : <X className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+              : null}
             <span className={r.met ? "text-foreground" : "text-muted-foreground"}>{r.label}</span>
           </li>
         ))}
@@ -276,7 +276,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
     <Card data-testid={`referral-pipeline-${scope}`}>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Users className="h-4 w-4" /> {scope === "org" ? "All referrals" : "My referrals"}
+           {scope === "org" ? "All referrals" : "My referrals"}
           <Badge variant="secondary">{referrals.length}</Badge>
         </CardTitle>
       </CardHeader>
@@ -387,7 +387,7 @@ function MyReferralStatus() {
     <Card data-testid="my-referral-status">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Gift className="h-4 w-4" /> Your referral
+           Your referral
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -419,7 +419,7 @@ function MyReferralStatus() {
             <li key={label} className="flex items-center gap-2 text-xs">
               {met
                 ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-                : <X className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                : null}
               <span className={met ? "text-foreground" : "text-muted-foreground"}>{label}</span>
             </li>
           ))}
@@ -446,7 +446,7 @@ function LiabilityCard({ settings }: { settings: Settings }) {
     <Card data-testid="referral-liability">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <TrendingUp className="h-4 w-4" /> Programme liability
+           Programme liability
         </CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-3 gap-4 text-center">
@@ -500,7 +500,7 @@ function SettingsCard({ settings }: { settings: Settings }) {
     <Card data-testid="referral-settings">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Settings className="h-4 w-4" /> Referral settings
+           Referral settings
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -576,7 +576,7 @@ function AuditHistory({ referralId }: { referralId: number }) {
   return (
     <div className="mt-2 rounded-md border p-3" data-testid={`referral-history-${referralId}`}>
       <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        <History className="h-3.5 w-3.5" /> History
+         History
       </p>
       <ol className="space-y-1">
         {rows.map(r => (

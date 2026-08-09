@@ -2,7 +2,7 @@
 // Reusable; used on the lead card and the tap-a-house sheet. Shows a brief
 // "Copied" confirmation inline (and a toast) so the rep knows it worked.
 import { useState, useCallback } from "react";
-import { Copy, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export function CopyAddressButton({ text, label = "Copy", className = "h-11 text-[13px]" }: {
@@ -39,7 +39,7 @@ export function CopyAddressButton({ text, label = "Copy", className = "h-11 text
       aria-label={`Copy address ${text}`}
       className={`inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-secondary/40 px-3 font-medium text-foreground transition-colors hover:bg-secondary active:scale-[0.98] ${className}`}
     >
-      {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+      {copied ? <Check className="w-4 h-4 text-emerald-500" /> : null}
       {copied ? "Copied" : label}
     </button>
   );

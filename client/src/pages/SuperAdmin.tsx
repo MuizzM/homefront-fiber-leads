@@ -5,11 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { BillingOps } from "@/components/BillingOps";
 import { AdminHistory } from "@/components/AdminHistory";
-import {
-  Building2, Plus, DollarSign, Users, Zap, BarChart2,
-  Edit2, Trash2, Shield, Globe, CheckCircle,
-  TrendingUp, ChevronDown, ChevronUp, Copy
-} from "lucide-react";
+import { Building2, DollarSign, BarChart2, Edit2, Trash2, TrendingUp, ChevronDown, ChevronUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -204,10 +200,7 @@ function TenantCard({ tenant, onEdit, onDelete }: {
         {/* Tenant */}
         <td className="py-3 px-4">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center"
-              style={{ background: tenant.brandColor + "22", border: `1px solid ${tenant.brandColor}44` }}>
-              <Building2 className="w-4 h-4" style={{ color: tenant.brandColor }} />
-            </div>
+            
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-sm text-foreground tracking-tight truncate">{tenant.brandName}</span>
@@ -236,10 +229,10 @@ function TenantCard({ tenant, onEdit, onDelete }: {
         {/* Activity */}
         <td className="py-3 px-4">
           <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
-            <span className="flex items-center gap-1" title="Reps"><Users className="w-3 h-3" /> {tenant.stats.reps}</span>
-            <span className="flex items-center gap-1" title="Leads"><Zap className="w-3 h-3" /> {tenant.stats.leads}</span>
-            <span className="flex items-center gap-1 text-emerald-400" title="Sold"><CheckCircle className="w-3 h-3" /> {tenant.stats.sold}</span>
-            <span className="flex items-center gap-1" title="Territories"><Globe className="w-3 h-3" /> {tenant.stats.territories}</span>
+            <span className="flex items-center gap-1" title="Reps"> {tenant.stats.reps}</span>
+            <span className="flex items-center gap-1" title="Leads"> {tenant.stats.leads}</span>
+            <span className="flex items-center gap-1 text-emerald-400" title="Sold"> {tenant.stats.sold}</span>
+            <span className="flex items-center gap-1" title="Territories"> {tenant.stats.territories}</span>
           </div>
         </td>
 
@@ -300,11 +293,11 @@ function TenantCard({ tenant, onEdit, onDelete }: {
               <div className="flex gap-4">
                 <button onClick={() => { navigator.clipboard.writeText(tenant.slug); toast({ title: "Slug copied" }); }}
                   className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
-                  <Copy className="w-3 h-3" /> Copy slug
+                   Copy slug
                 </button>
                 <button onClick={() => { navigator.clipboard.writeText(tenant.ownerEmail); toast({ title: "Email copied" }); }}
                   className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
-                  <Copy className="w-3 h-3" /> Copy email
+                   Copy email
                 </button>
               </div>
             </div>
@@ -332,7 +325,7 @@ export default function SuperAdmin() {
     return (
       <div className="p-6 flex items-center justify-center h-64">
         <div className="text-center">
-          <Shield className="w-10 h-10 mx-auto mb-3 text-red-400" />
+          
           <p className="text-sm text-muted-foreground">Super-admin access only.</p>
         </div>
       </div>
@@ -378,21 +371,21 @@ export default function SuperAdmin() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-primary" />
+            
             <h1 className="text-xl font-semibold tracking-tight">SaaS Control Center</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">Your proprietary platform · white-label to any Kinetic market</p>
         </div>
         <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-white text-sm"
           data-testid="btn-add-tenant">
-          <Plus className="w-4 h-4 mr-1" /> Add Tenant
+           Add Tenant
         </Button>
       </div>
 
       {/* Metric strip */}
       <div className="rounded-xl border border-border bg-card">
         <div className="grid grid-cols-2 sm:grid-cols-4">
-          {metrics.map(({ label, value, icon: Icon, color }, i) => (
+          {metrics.map(({ label, value, }, i) => (
             <div key={label} className={[
               "p-4",
               i % 2 === 1 ? "border-l border-border" : "",
@@ -401,7 +394,7 @@ export default function SuperAdmin() {
             ].join(" ")}>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</span>
-                <Icon className={`w-3.5 h-3.5 ${color}`} />
+                
               </div>
               <div className="text-2xl font-semibold tracking-tight text-foreground tabular-nums">{value}</div>
             </div>
@@ -421,7 +414,7 @@ export default function SuperAdmin() {
         <Card className="bg-card border-border">
           <CardHeader className="pb-2 pt-4 px-5">
             <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-primary" /> Revenue by Tenant
+               Revenue by Tenant
             </CardTitle>
           </CardHeader>
           <CardContent className="px-5 pb-4">
@@ -431,7 +424,7 @@ export default function SuperAdmin() {
                   <span className="flex-1 min-w-0 truncate text-foreground font-medium">{t.brandName}</span>
                   <Badge className={`text-xs px-2 py-0 rounded-full border-0 ${PLAN_COLORS[t.plan] ?? ""}`}>{t.plan}</Badge>
                   <span className="text-muted-foreground tabular-nums w-16 text-right">${t.monthlyFee}/mo</span>
-                  <span className="text-primary font-medium tabular-nums w-24 text-right">→ ${t.yourCut.toFixed(0)} yours</span>
+                  <span className="text-primary font-medium tabular-nums w-24 text-right">${t.yourCut.toFixed(0)} yours</span>
                   <span className="hidden sm:inline text-muted-foreground tabular-nums w-28 text-right">{t.leads} leads · {t.sold} sold</span>
                 </div>
               ))}
@@ -461,7 +454,7 @@ export default function SuperAdmin() {
         ) : tenants.length === 0 ? (
           <Card className="bg-card border-border">
             <CardContent className="py-12 text-center">
-              <Building2 className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
+              
               <p className="text-sm text-muted-foreground">No tenants yet - add your first white-label client.</p>
             </CardContent>
           </Card>
@@ -497,7 +490,7 @@ export default function SuperAdmin() {
         <DialogContent className="bg-card border-border text-foreground max-w-xl">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
-              <Plus className="w-4 h-4 text-primary" /> New Tenant
+               New Tenant
             </DialogTitle>
           </DialogHeader>
           <TenantForm onSave={data => createMutation.mutate(data)} onCancel={() => setAddOpen(false)} saving={createMutation.isPending} />

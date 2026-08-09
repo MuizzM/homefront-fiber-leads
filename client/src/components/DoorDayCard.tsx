@@ -18,7 +18,6 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
-import { Clock, MapPin, ShieldCheck, Trophy } from "lucide-react";
 import { usd } from "@shared/moneyFormat";
 import { formatSpan } from "@shared/genuineDoors";
 
@@ -73,13 +72,7 @@ export function DoorDayCard() {
     >
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          <div className={cn(
-            "grid h-10 w-10 shrink-0 place-items-center rounded-xl",
-            data.earned ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-primary/15 text-primary",
-          )}>
-            {data.earned ? <Trophy className="h-5 w-5" aria-hidden="true" />
-                         : <MapPin className="h-5 w-5" aria-hidden="true" />}
-          </div>
+          
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
@@ -118,7 +111,7 @@ export function DoorDayCard() {
         {data.spanShort && (
           <p className="mt-2 flex items-start gap-1.5 text-[12px] font-medium text-amber-700 dark:text-amber-400"
              data-testid="door-day-span-warning">
-            <Clock className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            
             <span>
               Your {data.target} doors landed inside {formatSpan(data.spanMinutes)}. The bonus needs a full{" "}
               {formatSpan(data.minSpanMinutes)} on the doors.
@@ -129,7 +122,7 @@ export function DoorDayCard() {
         {data.needsReview && (
           <p className="mt-2 flex items-start gap-1.5 text-[12px] font-medium text-amber-700 dark:text-amber-400"
              data-testid="door-day-review">
-            <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            
             <span>Today's location data has a problem. This bonus is held until a manager reviews it.</span>
           </p>
         )}
@@ -158,7 +151,7 @@ export function DoorDayCard() {
         {/* State the rule up front. A rep told the rule knocks more doors; a rep
             who finds out at payroll feels cheated. */}
         <p className="mt-2 flex items-start gap-1.5 text-[12px] text-muted-foreground" data-testid="door-day-rule">
-          <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          
           <span>
             Each address counts once, only when GPS confirms you were there
             {data.maxPerRollingHour ? `, and at most ${data.maxPerRollingHour} an hour` : ""}. Paid on your commission statement.
@@ -176,7 +169,7 @@ export function DoorDaySection() {
   return (
     <section className="space-y-2" data-testid="door-day-section">
       <SectionLabel className="flex items-center gap-1.5">
-        <MapPin className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+        
         Full day on the doors
       </SectionLabel>
       <DoorDayCard />

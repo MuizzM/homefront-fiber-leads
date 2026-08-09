@@ -166,7 +166,7 @@ describe("the lead card", () => {
     });
     expect(card.phones).toHaveLength(1);
     expect(card.phones[0]!.number).toBe("+15551110000");
-    expect(card.phones[0]!.badge).toBe("DNC – do not dial");
+    expect(card.phones[0]!.badge).toBe("DNC - do not dial");
     expect(card.actions).toEqual(["door_knock_only"]);
   });
 

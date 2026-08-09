@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Search, X, Check } from "lucide-react";
+import { X, Check } from "lucide-react";
 import { repColorOf } from "@shared/repColors";
 import { FOCUS } from "@/lib/a11y";
 
@@ -102,7 +102,7 @@ export function RepPicker({
 
       {showSearch && (
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" aria-hidden="true" />
+          
           <input
             ref={inputRef}
             type="text"

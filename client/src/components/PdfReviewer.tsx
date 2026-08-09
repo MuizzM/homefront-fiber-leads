@@ -10,7 +10,7 @@
 // carry the session header, so we fetch then hand it a blob: URL), same pattern
 // as the door-photo / badge-photo viewers.
 import { useEffect, useState } from "react";
-import { AlertTriangle, Download, Loader2, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 
@@ -68,7 +68,7 @@ export function PdfReviewer({
         <div className="flex shrink-0 items-center gap-2">
           {downloadName && (
             <Button type="button" variant="outline" size="sm" onClick={download} disabled={!blobUrl} data-testid="pdf-reviewer-download">
-              <Download className="mr-1.5 h-4 w-4" aria-hidden="true" />Download
+              Download
             </Button>
           )}
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close" data-testid="pdf-reviewer-close">
@@ -84,7 +84,7 @@ export function PdfReviewer({
         {error && (
           <div className="grid h-full place-items-center p-6 text-center">
             <div>
-              <AlertTriangle className="mx-auto h-7 w-7 text-amber-400" aria-hidden="true" />
+              
               <p className="mt-2 text-sm font-medium text-foreground">{error}</p>
             </div>
           </div>

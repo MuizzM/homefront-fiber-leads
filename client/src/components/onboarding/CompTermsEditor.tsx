@@ -18,7 +18,7 @@
 // inheriting is visible rather than implied.
 
 import { useMemo, useState } from "react";
-import { Check, Plus, Trash2 } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import {
@@ -165,7 +165,7 @@ export function CompTermsEditor({
             data-testid="comp-tier-add"
             className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-dashed border-border px-3 text-[13px] font-semibold text-muted-foreground transition-colors hover:border-solid hover:bg-secondary hover:text-foreground", FOCUS)}
           >
-            <Plus className="h-4 w-4" aria-hidden="true" /> Add a band
+             Add a band
           </button>
         </div>
       )}

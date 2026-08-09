@@ -1,4 +1,4 @@
-import { History, Lock } from "lucide-react";
+
 
 // Past sweeps of one area, newest first.
 //
@@ -56,7 +56,7 @@ export function PassHistory({ currentPass, passes, loading, error }: PassHistory
     return (
       <div className="py-4 text-sm text-muted-foreground space-y-1">
         <div className="flex items-center gap-2 font-medium text-foreground">
-          <History className="h-4 w-4" aria-hidden="true" />
+          
           First pass in progress
         </div>
         <p>This area hasn't been swept and reset yet. Once you start pass 2, pass 1's results stay here.</p>
@@ -67,7 +67,7 @@ export function PassHistory({ currentPass, passes, loading, error }: PassHistory
   return (
     <section aria-label="Pass history" className="space-y-3">
       <header className="flex items-center gap-2 text-sm font-medium">
-        <History className="h-4 w-4" aria-hidden="true" />
+        
         Pass history
         <span className="text-muted-foreground font-normal">· now on pass {currentPass}</span>
       </header>
@@ -99,7 +99,7 @@ export function PassHistory({ currentPass, passes, loading, error }: PassHistory
               <span>{p.leadsReset} re-opened</span>
               {p.leadsFrozen > 0 && (
                 <span className="inline-flex items-center gap-1">
-                  <Lock className="h-3 w-3" aria-hidden="true" />
+                  
                   {p.leadsFrozen} left alone
                 </span>
               )}

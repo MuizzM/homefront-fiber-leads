@@ -5420,7 +5420,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "For the repeat staller",
             body: [
-              "When the stall survives the isolate, name the pattern out loud: \"Whenever I tell someone I need to think about it, I usually mean one of three things… Be honest with me; which one of those things is it for you right now?\" And when the politeness itself is the wall, flip it - permission to say no: \"If this isn't for you, I'd rather have a no right now – believe me, you won't hurt my feelings. Is that where you're leaning right now?\" A clean no beats a fake maybe every day of the week: the no frees your evening, and the honest rep who takes it gracefully gets the door back later.",
+              "When the stall survives the isolate, name the pattern out loud: \"Whenever I tell someone I need to think about it, I usually mean one of three things… Be honest with me; which one of those things is it for you right now?\" And when the politeness itself is the wall, flip it - permission to say no: \"If this isn't for you, I'd rather have a no right now - believe me, you won't hurt my feelings. Is that where you're leaning right now?\" A clean no beats a fake maybe every day of the week: the no frees your evening, and the honest rep who takes it gracefully gets the door back later.",
             ],
           },
           {
@@ -6317,7 +6317,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
           {
             heading: "The 8-Mile move",
             body: [
-              "\"Use the 8 Mile strategy – Say what they're going to say first.\" Name the objection before they do and you own it. The fiber version [ADAPTED: field-test before canonizing]: \"You're probably thinking 'another cable guy promising the world' - fair. Here's the one difference…\" The skepticism they were holding becomes the skepticism you just proved you understand, and the difference statement that follows lands on open ears.",
+              "\"Use the 8 Mile strategy - Say what they're going to say first.\" Name the objection before they do and you own it. The fiber version [ADAPTED: field-test before canonizing]: \"You're probably thinking 'another cable guy promising the world' - fair. Here's the one difference…\" The skepticism they were holding becomes the skepticism you just proved you understand, and the difference statement that follows lands on open ears.",
             ],
           },
           {
@@ -6396,7 +6396,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Objection bridges",
             body: [
               "\"Totally understand. You weren't expecting the [fiber] guy to stop by today. Let me show you what I was doing for Ms. Jones next door. If it works for you, cool. If not, that's cool too.\" \"I am glad to hear that. Honestly, your current provider has been the best option in this area for a long time. The only reason we are out here is that the infrastructure has finally changed…\", the happy-provider judo.",
-              "\"Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?\" \"If this isn't for you, I'd rather have a no right now – believe me, you won't hurt my feelings.\" \"If your spouse comes home and says they love the idea, are you 100% on board, or do you still have some reservations?\" \"Sure! Would it make sense for us to call them now?\" \"Would you mind pulling up your most recent internet bill? I find that about seven out of ten homes I visit are actually paying more than they think.\" \"I know you've already got fiber from [competitor] - what are you paying for what speed?\" \"I understand how you feel. Many of my current customers felt the same way. But what they found was…\" \"What makes you say that?\" Then silence.",
+              "\"Just so I can help, when you say think about it, is it the monthly payment, the equipment, or something else entirely?\" \"If this isn't for you, I'd rather have a no right now - believe me, you won't hurt my feelings.\" \"If your spouse comes home and says they love the idea, are you 100% on board, or do you still have some reservations?\" \"Sure! Would it make sense for us to call them now?\" \"Would you mind pulling up your most recent internet bill? I find that about seven out of ten homes I visit are actually paying more than they think.\" \"I know you've already got fiber from [competitor] - what are you paying for what speed?\" \"I understand how you feel. Many of my current customers felt the same way. But what they found was…\" \"What makes you say that?\" Then silence.",
               "The push-out and fast-sort set, one breath each, labeled by objection key: \"Totally fair. If she is home tonight, I can swing back at 7 for five minutes, and a no then is a fine answer.\" (spouse) \"Sure. Usually that means the price or the switching hassle. Which one is it for you?\" (think_about_it) \"Perfect. I only need the busy version: thirty seconds, then I am gone either way.\" (too_busy) \"Fair. Before we call it expensive, what is the bill now? Most folks on this street guess twenty low.\" (price) \"Totally fair, and most of your neighbors said the same thing right before they saw the number. Thirty seconds?\" (not_interested) \"Fine is what cable feels like at noon. Run a speed test at 7 tonight and I will swing back tomorrow for the number.\" (already_have)",
             ],
           },
@@ -6563,7 +6563,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Benchmark bands and stage diagnosis",
             body: [
               "Working bands, to be calibrated against your own team's data before you coach from them [VERIFY]: 80 to 120 doors per 8-hour shift; contact rate 30 to 50 percent, running 40 to 55 percent in the 6-to-8 p.m. window versus 20 to 30 percent late morning. The bands exist to aim coaching, not to shame.",
-              "Diagnose ONE stage, not everything: contact under 35 percent is a timing or territory problem; presentations under 60 percent of contacts is an opening problem; closes under 15 percent of presentations is a pitch or objection problem. \"70–80% of the conversion gap is caused by a single stage in the funnel\": find the stage and fix only that. And compare reps on knock-to-lead ratio, not raw sales, because territory luck inflates raw numbers: \"If a rep is knocking 100 doors with a 10% contact rate, they don't need more hustle - they need better timing.\"",
+              "Diagnose ONE stage, not everything: contact under 35 percent is a timing or territory problem; presentations under 60 percent of contacts is an opening problem; closes under 15 percent of presentations is a pitch or objection problem. \"70-80% of the conversion gap is caused by a single stage in the funnel\": find the stage and fix only that. And compare reps on knock-to-lead ratio, not raw sales, because territory luck inflates raw numbers: \"If a rep is knocking 100 doors with a 10% contact rate, they don't need more hustle - they need better timing.\"",
             ],
           },
           {
@@ -6733,7 +6733,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Aspiration and the pipeline",
             body: [
               "Keep the ceiling visible. The Golden Door winners are the proof. Jack Slezak's summer: 544 accounts, 653K in revenue, and he \"remembered names, engaged in meaningful conversations, and even got invited to neighborhood parties.\" The fiber version, Noah: records his own pitches, sends them for feedback, self-audits nightly. \"I only sold four or five, six today. Like, what am I doing wrong?\" That is what a self-coaching rep sounds like, and it is a system output, not a personality type.",
-              "The leadership pipeline is itself a retention mechanic: \"Rep → senior rep → team lead → assistant manager → manager. Each step has defined criteria and a clear next-step path.\" Reps stay where they can see a staircase. And underneath all of it: \"Talent is great, systems are better… build the system that makes B-players dangerous.\"",
+              "The leadership pipeline is itself a retention mechanic: \"Rep to senior rep to team lead → assistant manager → manager. Each step has defined criteria and a clear next-step path.\" Reps stay where they can see a staircase. And underneath all of it: \"Talent is great, systems are better… build the system that makes B-players dangerous.\"",
             ],
           },
         ],
@@ -6966,7 +6966,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
             heading: "Channel fraud and competitor FUD",
             body: [
               "Named and banned: fake call-center confirmations, pity appointments booked to hit quota, new-line-versus-upgrade gaming, fake \"free trial\" billing. These are documented telecom D2D practices, and homeowners have read the stories - being the rep who references and disavows them is differentiation, not oversharing.",
-              "Competitor FUD is the mirror violation. The anti-Google-Fiber pressure pitch in Austin (\"you don't know IF you'll get it!\") got quoted online with \"Personally, it pisses me off… Screw that.\" The rep claiming \"wireless is unlimited because it's in the air\" got laughed off the porch. The rule: \"Never talk bad about competitors – sell on value.\" Validate the incumbent, then differentiate on verifiable axes; m18's Spectrum pivots are the compliant version of the comparison.",
+              "Competitor FUD is the mirror violation. The anti-Google-Fiber pressure pitch in Austin (\"you don't know IF you'll get it!\") got quoted online with \"Personally, it pisses me off… Screw that.\" The rep claiming \"wireless is unlimited because it's in the air\" got laughed off the porch. The rule: \"Never talk bad about competitors - sell on value.\" Validate the incumbent, then differentiate on verifiable axes; m18's Spectrum pivots are the compliant version of the comparison.",
             ],
           },
           {
@@ -7029,7 +7029,7 @@ export const TRAINING_MODULES: TrainingModule[] = [
               "It confuses the pitch",
             ],
             answerIndex: 1,
-            explanation: "\"Never talk bad about competitors – sell on value.\" The documented FUD cases all end in public mockery of the rep.",
+            explanation: "\"Never talk bad about competitors - sell on value.\" The documented FUD cases all end in public mockery of the rep.",
           },
         ],
       },

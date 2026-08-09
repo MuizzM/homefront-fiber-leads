@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, X, AlertTriangle, TrendingUp } from "lucide-react";
+import { X } from "lucide-react";
 import {
   validateTiers, calculateRetroactiveCommission, formatUsdCents,
   type CommissionTier,
@@ -280,7 +280,7 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
           data-testid="tier-add"
           className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-secondary disabled:opacity-40"
         >
-          <Plus className="h-3.5 w-3.5" /> Add a band
+           Add a band
         </button>
         {/* Stripe shows the headroom before you hit it, so the disabled state is
             never a surprise. */}
@@ -292,7 +292,7 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
       {!validation.ok && (
         <div role="alert" className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs">
           <div className="flex items-center gap-1.5 font-semibold">
-            <AlertTriangle className="h-3.5 w-3.5" /> This plan can't be saved yet
+             This plan can't be saved yet
           </div>
           {validation.errors.map(e => <div key={e}>{e}</div>)}
         </div>
@@ -305,7 +305,7 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
         // retroactive rule made visible, and it is not obvious from rates alone.
         <div className="rounded-md border border-border bg-secondary/40 p-2.5 text-xs" data-testid="tier-preview">
           <div className="mb-1.5 flex items-center gap-1.5 font-semibold text-foreground">
-            <TrendingUp className="h-3.5 w-3.5 text-teal-400" /> A week's pay at each band
+             A week's pay at each band
           </div>
           <div className="space-y-1.5">
             {preview.map(p => (
@@ -317,7 +317,7 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
                   {formatUsdCents(p.low.total)}
                   {p.high.at !== p.low.at && (
                     <span className="font-normal text-muted-foreground">
-                      {" – "}{formatUsdCents(p.high.total)}
+                      {" - "}{formatUsdCents(p.high.total)}
                     </span>
                   )}
                   {p.openEnded && <span className="font-normal text-muted-foreground"> and up</span>}

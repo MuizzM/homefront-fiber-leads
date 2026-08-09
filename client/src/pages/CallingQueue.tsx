@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Clock3, PhoneCall, Search, ShieldAlert } from "lucide-react";
 import { CallingAvailability, CallingChrome, CallingUnknownState } from "@/components/calling/CallingChrome";
 import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCallingCallbacks, type CallingCallback, type CallingCandidate } from "@/lib/callingApi";
 import { cn } from "@/lib/utils";
@@ -103,8 +102,8 @@ function TracedRow({ candidate }: { candidate: CallingCandidate }) {
           ) : null}
         </div>
         {ready
-          ? <PhoneCall aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
-          : <ArrowRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5" />}
+          ? null
+          : null}
       </Link>
     </li>
   );
@@ -136,8 +135,8 @@ function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
           </p>
         </div>
         {eligible
-          ? <PhoneCall aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
-          : <ArrowRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-muted-foreground" />}
+          ? null
+          : null}
       </Link>
     </li>
   );
@@ -351,7 +350,7 @@ export default function CallingQueue() {
                               {cb.maskedPhone ? <> · <span className="font-mono text-[11px]">{cb.maskedPhone}</span></> : null}
                             </p>
                           </div>
-                          <ArrowRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5" />
+                          
                         </Link>
                       </li>
                     );
@@ -362,7 +361,7 @@ export default function CallingQueue() {
 
             <div className="space-y-2.5">
               <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                
                 <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search address or resident" aria-label="Search calling queue"
                   className="h-10 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-ring/30" />
               </div>
@@ -418,9 +417,7 @@ export default function CallingQueue() {
 
             {listQuery.isLoading ? <QueueRowsSkeleton /> : listQuery.isError ? (
               <div role="alert" className="rounded-2xl border border-red-500/25 bg-card p-5 text-center">
-                <span className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-red-500/10">
-                  <ShieldAlert aria-hidden="true" className="h-[18px] w-[18px] text-red-600 dark:text-red-400" />
-                </span>
+                
                 <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">Queue unavailable</h2>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">No lead can be opened for calling while the queue is unknown.</p>
                 <button type="button" onClick={() => void listQuery.refetch()}
@@ -438,9 +435,7 @@ export default function CallingQueue() {
               </section>
             ) : (
               <div className="rounded-2xl border border-dashed border-border p-8 text-center">
-                <span className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-secondary">
-                  <Clock3 aria-hidden="true" className="h-[18px] w-[18px] text-muted-foreground" />
-                </span>
+                
                 <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">No leads in this view</h2>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Fresh-fiber leads appear here only after the calling pipeline accepts them.</p>
               </div>

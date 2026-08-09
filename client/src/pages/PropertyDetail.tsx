@@ -26,11 +26,7 @@ import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { OUTCOME_META, STATE_COLORS, STATE_LABELS, pinDisplayState, type KnockOutcome } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan } from "@/lib/capabilities";
-import {
-  ChevronLeft, Navigation, Phone, Zap, Wifi, Building2, User as UserIcon,
-  Mail, ShieldCheck, AlertTriangle, ShieldX, StickyNote, UserPlus, RefreshCw, MapPin,
-  WifiOff, CloudUpload, Camera,
-} from "lucide-react";
+import { ChevronLeft, Zap, Wifi, Building2, User as UserIcon, Mail, AlertTriangle, StickyNote, UserPlus, RefreshCw, WifiOff, CloudUpload } from "lucide-react";
 
 interface Lead {
   id: number; address: string; city: string; state?: string | null; zip?: string | null;
@@ -95,9 +91,9 @@ function readCardVariant(): CardVariant {
 
 function VerifyBadge({ v }: { v?: string | null }) {
   // Icon carries the tone (works on light + dark); the text stays tokenized.
-  if (v === "verified") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground"><ShieldCheck className="h-3 w-3 text-emerald-500" aria-hidden="true" />Verified</span>;
-  if (v === "needs_review") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground"><AlertTriangle className="h-3 w-3 text-amber-500" aria-hidden="true" />Needs review</span>;
-  if (v === "invalid") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground"><ShieldX className="h-3 w-3 text-rose-500" aria-hidden="true" />Unverified</span>;
+  if (v === "verified") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">Verified</span>;
+  if (v === "needs_review") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">Needs review</span>;
+  if (v === "invalid") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">Unverified</span>;
   return null;
 }
 
@@ -152,7 +148,7 @@ export default function PropertyDetail() {
           <div className="rounded-xl border border-border bg-card p-6 text-center" data-testid="detail-error">
             <div className="text-[14px] font-semibold text-foreground">Couldn't open this property</div>
             <div className="mt-1 text-[13px] text-muted-foreground">It may not be assigned to you, or you're offline.</div>
-            <button onClick={() => leadQ.refetch()} className="mt-4 inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-secondary px-4 text-[13px] font-semibold text-foreground transition-colors hover:border-muted-foreground/40 hover:bg-accent"><RefreshCw className="h-4 w-4" aria-hidden="true" />Retry</button>
+            <button onClick={() => leadQ.refetch()} className="mt-4 inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-secondary px-4 text-[13px] font-semibold text-foreground transition-colors hover:border-muted-foreground/40 hover:bg-accent">Retry</button>
           </div>
         ) : (
           <>
@@ -247,7 +243,7 @@ function PillsRow({ lead, showScore = true }: { lead: Lead; showScore?: boolean 
       </span>
       {fiberShort && (
         <span className={`${pill} ${FIBER_PILL_TONE[lead.fiberStatus!]}`}>
-          <Zap className="h-3 w-3" aria-hidden="true" />{fiberShort}
+          {fiberShort}
         </span>
       )}
       {showScore && lead.leadScore != null && (
@@ -264,7 +260,7 @@ function PillsRow({ lead, showScore = true }: { lead: Lead; showScore?: boolean 
 function ProtectedCell({ className }: { className: string }) {
   return (
     <div className={`${className} cursor-not-allowed text-muted-foreground`} title="Requires calling access" aria-disabled="true">
-      <Phone className="h-4 w-4" aria-hidden="true" />Protected
+      Protected
     </div>
   );
 }
@@ -279,13 +275,13 @@ function SummaryLedger({ lead, canOpenCalling, onLog }: SummaryProps) {
       <div className="mt-0.5 text-[13px] text-muted-foreground">{cityLine(lead)}</div>
       <div className="mt-4 grid grid-cols-3 divide-x divide-border overflow-hidden rounded-lg border border-border">
         <a href={directionsUrl(lead)} target="_blank" rel="noreferrer" data-testid="detail-navigate" className={`${cell} text-foreground hover:bg-secondary active:bg-secondary`}>
-          <Navigation className="h-4 w-4 text-muted-foreground" aria-hidden="true" />Navigate
+          Navigate
         </a>
         {canOpenCalling
-          ? <Link href={`/calling/lead/${lead.id}`} data-testid="detail-open-calling" className={`${cell} text-foreground hover:bg-secondary active:bg-secondary`}><Phone className="h-4 w-4 text-muted-foreground" aria-hidden="true" />Calling</Link>
+          ? <Link href={`/calling/lead/${lead.id}`} data-testid="detail-open-calling" className={`${cell} text-foreground hover:bg-secondary active:bg-secondary`}>Calling</Link>
           : <ProtectedCell className={cell} />}
         <button type="button" onClick={onLog} data-testid="detail-log" className={`${cell} font-semibold text-primary hover:bg-primary/10 active:bg-primary/10`}>
-          <StickyNote className="h-4 w-4" aria-hidden="true" />Log
+          Log
         </button>
       </div>
     </section>
@@ -324,13 +320,13 @@ function SummarySplit({ lead, canOpenCalling, onLog }: SummaryProps) {
       </div>
       <div className="grid grid-cols-3 gap-2 border-t border-border p-3">
         <a href={directionsUrl(lead)} target="_blank" rel="noreferrer" data-testid="detail-navigate" className={`${btn} border border-border bg-secondary/50 text-foreground hover:bg-secondary`}>
-          <Navigation className="h-4 w-4 text-primary" aria-hidden="true" />Navigate
+          Navigate
         </a>
         {canOpenCalling
-          ? <Link href={`/calling/lead/${lead.id}`} data-testid="detail-open-calling" className={`${btn} border border-border bg-secondary/50 text-foreground hover:bg-secondary`}><Phone className="h-4 w-4 text-primary" aria-hidden="true" />Calling</Link>
+          ? <Link href={`/calling/lead/${lead.id}`} data-testid="detail-open-calling" className={`${btn} border border-border bg-secondary/50 text-foreground hover:bg-secondary`}>Calling</Link>
           : <ProtectedCell className={`${btn} border border-border bg-secondary/30`} />}
         <button type="button" onClick={onLog} data-testid="detail-log" className={`${btn} bg-primary font-semibold text-primary-foreground hover:bg-primary/90`}>
-          <StickyNote className="h-4 w-4" aria-hidden="true" />Log
+          Log
         </button>
       </div>
     </section>
@@ -355,13 +351,13 @@ function SummaryBanded({ lead, canOpenCalling, onLog }: SummaryProps) {
       </div>
       <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-3">
         <a href={directionsUrl(lead)} target="_blank" rel="noreferrer" data-testid="detail-navigate" className={`${btn} border border-border text-foreground hover:bg-secondary`}>
-          <Navigation className="h-4 w-4 text-muted-foreground" aria-hidden="true" />Navigate
+          Navigate
         </a>
         {canOpenCalling
-          ? <Link href={`/calling/lead/${lead.id}`} data-testid="detail-open-calling" className={`${btn} border border-border text-foreground hover:bg-secondary`}><Phone className="h-4 w-4 text-muted-foreground" aria-hidden="true" />Calling</Link>
+          ? <Link href={`/calling/lead/${lead.id}`} data-testid="detail-open-calling" className={`${btn} border border-border text-foreground hover:bg-secondary`}>Calling</Link>
           : <ProtectedCell className={`${btn} border border-border`} />}
         <button type="button" onClick={onLog} data-testid="detail-log" className={`${btn} bg-primary px-3.5 font-semibold text-primary-foreground hover:bg-primary/90`}>
-          <StickyNote className="h-4 w-4" aria-hidden="true" />Log
+          Log
         </button>
       </div>
     </section>
@@ -387,7 +383,7 @@ function AuthedImg({ photoId, alt, className, onClick }: { photoId: number; alt:
       .catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [photoId]);
-  if (failed) return <div className={`${className} bg-secondary flex items-center justify-center`}><AlertTriangle className="w-4 h-4 text-muted-foreground" aria-hidden="true" /></div>;
+  if (failed) return null;
   if (!url) return <Skeleton className={className} />;
   return <img src={url} alt={alt} className={className} onClick={onClick} loading="lazy" />;
 }
@@ -436,7 +432,7 @@ function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
           data-testid="photo-add"
           className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95 disabled:opacity-50 disabled:hover:border-border disabled:hover:text-muted-foreground"
         >
-          {uploading ? <RefreshCw className="h-5 w-5 animate-spin text-primary" aria-hidden="true" /> : <Camera className="h-5 w-5" aria-hidden="true" />}
+          {uploading ? <RefreshCw className="h-5 w-5 animate-spin text-primary" aria-hidden="true" /> : null}
           <span className="text-2xs font-semibold">{uploading ? "Uploading…" : online ? "Add" : "Offline"}</span>
         </button>
         {photos.map(p => (
@@ -492,10 +488,10 @@ function SaveState({ state, online }: { state?: string; online: boolean }) {
 
 // Ledger-style key/value row: quiet label left, value right, hairline-divided
 // by the parent. Icons stay muted (the fiber row alone carries the teal).
-function FactRow({ icon: Icon, label, value, tone }: { icon: any; label: string; value: string; tone?: string }) {
+function FactRow({ label, value, }: { icon: any; label: string; value: string; tone?: string }) {
   return (
     <div className="flex items-center gap-2.5 px-4 py-2.5">
-      <Icon className={`h-3.5 w-3.5 shrink-0 ${tone ?? "text-muted-foreground"}`} aria-hidden="true" />
+      
       <span className="shrink-0 text-[13px] text-muted-foreground">{label}</span>
       <span className="min-w-0 flex-1 truncate text-right text-[13px] font-medium tabular-nums text-foreground" title={value}>{value}</span>
     </div>
@@ -513,7 +509,7 @@ function TimelineRow({ h, last }: { h: HistoryRow; last: boolean }) {
       <span aria-hidden="true" className="absolute left-0 top-1.5 w-2.5 h-2.5 rounded-full ring-2 ring-card" style={{ background: color }} />
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[13px] font-semibold text-foreground inline-flex items-center gap-1.5">
-          {Icon && <Icon className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />}
+          {Icon && null}
           {h.type === "status_change" ? (meta?.label ?? h.status) : h.type === "assignment" ? `Assigned to ${h.assignedTo ?? "a rep"}` : "Note"}
         </span>
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{fmtTime(h.changedAt)}</span>
@@ -521,7 +517,7 @@ function TimelineRow({ h, last }: { h: HistoryRow; last: boolean }) {
       <div className="mt-0.5 flex flex-wrap items-center gap-2">
         {h.actor && <span className="text-[12px] text-muted-foreground">{h.actor}</span>}
         {h.type === "status_change" && <VerifyBadge v={h.verification} />}
-        {h.distanceM != null && <span className="inline-flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground"><MapPin className="w-3 h-3" aria-hidden="true" />{Math.round(h.distanceM)}m from door</span>}
+        {h.distanceM != null && <span className="inline-flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground">{Math.round(h.distanceM)}m from door</span>}
       </div>
       {h.type === "note" && h.notePreview && <div className="mt-1 border-l-2 border-border pl-2 text-[13px] italic text-muted-foreground">"{h.notePreview}"</div>}
     </li>

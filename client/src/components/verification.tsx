@@ -1,16 +1,4 @@
-// ── Shared UI for location-verified activity ──────────────────────────────────
-// One place for the verdict badge, distance formatting, and the distance
-// diagram, so the territory card and the History timeline read identically.
-// Status is NEVER communicated by colour alone — every badge carries an icon
-// AND a text label (WCAG 1.4.1).
-//
-// The "map preview" is a self-contained SVG schematic (lead pin, the rep's
-// recorded position, a connecting line, and the measured distance) rather than
-// a fetched map tile — deliberately, because per-activity static-map requests
-// would reintroduce the exact third-party billing/CSP risk this app guards
-// against. The real coordinates back it, and "Open on map" flies the live map.
-
-import { ShieldCheck, AlertTriangle, Ban, HelpCircle, Home, Navigation } from "lucide-react";
+import { ShieldCheck, AlertTriangle, Ban, HelpCircle } from "lucide-react";
 
 export type VStatus = "verified" | "needs_review" | "invalid" | null | undefined;
 
@@ -43,7 +31,6 @@ export function VerificationBadge({ status, title }: { status: VStatus; title?: 
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${m.bg} ${m.ring} ${m.text}`}
       data-testid={`verify-badge-${status ?? "unknown"}`}
     >
-      <m.Icon className="h-3 w-3" aria-hidden />
       {m.label}
     </span>
   );
@@ -91,13 +78,13 @@ export function DistanceDiagram({
       </svg>
       {/* Iconography for the pins (screen-reader hidden; the <title> carries meaning) */}
       <div className="mt-1 flex items-center justify-between text-2xs text-muted-foreground" aria-hidden>
-        <span className="inline-flex items-center gap-1"><Navigation className="h-3 w-3" /> Rep position</span>
+        <span className="inline-flex items-center gap-1"> Rep position</span>
         {within != null && (
           <span className={within ? "text-emerald-400" : "text-amber-400"}>
             {within ? "Within radius" : "Outside radius"}
           </span>
         )}
-        <span className="inline-flex items-center gap-1"><Home className="h-3 w-3" /> Lead</span>
+        <span className="inline-flex items-center gap-1"> Lead</span>
       </div>
     </figure>
   );

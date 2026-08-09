@@ -1,12 +1,4 @@
-// ── Viewport-mode notice chip ────────────────────────────────────────────────
-// ONE amber affordance for the one way a bbox window can still under-show
-// pins: the window hit the server's 25k row cap ("Showing a sample — zoom in
-// for all pins"). (The old over-wide-span "zoom in" condition is gone — the
-// density grid renders territory at every zoom, so no dead state exists.)
-// Dismissible — dismissal resets when the condition clears, so the next dense
-// window warns again. Pure presentation: the map page owns the condition and
-// the dismiss state.
-import { X, AlertTriangle } from "lucide-react";
+import { X } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 
 export interface MapViewportNoticeProps {
@@ -23,7 +15,7 @@ export function MapViewportNotice({ message, onDismiss, testId = "map-viewport-n
       style={{ top: "calc(env(safe-area-inset-top) + 3.25rem)" }}
       className="glass-capsule glass-opaque absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-3 pr-1 h-9 max-w-[80vw] border border-amber-400/40"
     >
-      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+      
       <span className="text-[12px] font-semibold text-amber-300 truncate whitespace-nowrap">
         {message}
       </span>

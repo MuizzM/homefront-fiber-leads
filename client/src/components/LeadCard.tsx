@@ -14,7 +14,6 @@
 //   3 "Hero-accent"       — status-tinted band behind the address, floating
 //                            action row, larger tap targets for gloved use.
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { MapPin, Zap, Plus, ArrowUpRight, Navigation } from "lucide-react";
 import { CopyAddressButton } from "@/components/CopyAddressButton";
 import { formatFullAddress } from "@/lib/reverseGeocode";
 import { leadMarkMeta } from "@shared/leadMark";
@@ -149,10 +148,9 @@ function BadgePill({ p, badge, size = "sm" }: {
   size?: "sm" | "md";
 }) {
   const dims = size === "md" ? "px-3 py-1.5 text-[12px]" : "px-2.5 py-1 text-[11px]";
-  const icon = size === "md" ? "w-3.5 h-3.5" : "w-3 h-3";
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full font-semibold uppercase tracking-wider ring-1 ${dims} ${badge.cls}`}>
-      {p.isNewFiber ? <Zap className={icon} /> : <MapPin className={icon} />}
+      {p.isNewFiber ? null : null}
       {badge.text}
     </span>
   );
@@ -196,14 +194,14 @@ function PrimaryAction({ p, canAdd, onAddLead, onOpen, className, withIcon = tru
   if (p.id) {
     return (
       <button type="button" onClick={() => onOpen?.(p.id!)} data-testid="lead-card-open" className={className}>
-        Open lead {withIcon && <ArrowUpRight className="h-4 w-4" />}
+        Open lead {withIcon && null}
       </button>
     );
   }
   if (!canAdd) return null;
   return (
     <button type="button" onClick={() => onAddLead(p)} data-testid="lead-card-add" className={className}>
-      {withIcon && <Plus className="h-4 w-4" />} Add as lead
+      {withIcon && null} Add as lead
     </button>
   );
 }
@@ -211,7 +209,7 @@ function PrimaryAction({ p, canAdd, onAddLead, onOpen, className, withIcon = tru
 function DirectionsLink({ mapsUrl, className }: { mapsUrl: string; className: string }) {
   return (
     <a href={mapsUrl} target="_blank" rel="noopener noreferrer" data-testid="lead-card-directions" className={className}>
-      <Navigation className="h-4 w-4 text-sky-600 dark:text-sky-400" /> Directions
+       Directions
     </a>
   );
 }

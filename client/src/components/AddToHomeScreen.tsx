@@ -61,9 +61,7 @@ function PhoneDemo() {
         {/* Safari-ish bottom bar with the Share glyph pulsing. */}
         <div className="absolute inset-x-0 bottom-0 flex items-center justify-around border-t border-foreground/10 bg-secondary/70 py-1.5">
           <div className="h-1.5 w-3 rounded bg-foreground/25" />
-          <div data-anim="tap" className="text-primary">
-            <Share className="h-3.5 w-3.5" />
-          </div>
+          
           <div className="h-1.5 w-3 rounded bg-foreground/25" />
         </div>
 
@@ -78,7 +76,7 @@ function PhoneDemo() {
             data-anim="row"
             className="mt-1 flex items-center gap-1 rounded px-1 py-1"
           >
-            <Plus className="h-2.5 w-2.5 text-foreground/70" />
+            
             <span className="text-[7px] font-semibold leading-none text-foreground/80">Add to Home Screen</span>
           </div>
           <div className="mt-1 h-3 rounded bg-foreground/[0.06]" />
@@ -100,14 +98,13 @@ export function AddToHomeScreen({ className }: { className?: string }) {
       <PhoneDemo />
       <ol className="flex flex-col gap-2" data-testid="a2hs-steps">
         {STEPS.map((s, i) => {
-          const Icon = s.icon;
           return (
             <li key={i} className="flex items-start gap-2.5 text-[13px] text-foreground">
               <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-primary/15 text-[11px] font-bold text-primary">
                 {i + 1}
               </span>
               <span className="flex items-center gap-1.5 leading-6">
-                <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                
                 <span>{s.text}</span>
               </span>
             </li>
@@ -125,7 +122,7 @@ export function AddToHomeScreenMini({ className }: { className?: string }) {
     <div className={cn("flex items-center gap-3", className)} data-testid="a2hs-mini">
       <PhoneDemo />
       <p className="min-w-0 flex-1 text-[13px] text-muted-foreground">
-        Tap <Share className="inline h-3.5 w-3.5 -translate-y-px" aria-hidden="true" />{" "}
+        Tap {" "}
         <strong className="text-foreground">Share</strong>, then{" "}
         <strong className="text-foreground">Add to Home Screen</strong>. Open it from the new
         icon and you'll get alerts when a bonus goes live.

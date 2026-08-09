@@ -3,7 +3,7 @@
 // device), then self-rate the take — rushed / clear / landed. Self-judged,
 // honest, instant: the practice-mirror philosophy, no new recording machinery.
 import { useState } from "react";
-import { Mic, ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import type { DrillCard } from "@shared/trainingCards";
@@ -69,7 +69,7 @@ export function PitchDrillCard({
                   FOCUS,
                 )}
               >
-                <Mic className="h-4 w-4 text-primary" aria-hidden="true" />
+                
                 <span className="flex-1 text-left">Record yourself saying it</span>
                 {recorderOpen ? (
                   <ChevronUp className="h-4 w-4 text-muted-foreground" aria-hidden="true" />

@@ -25,12 +25,7 @@
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Copy, Check, Plus, X,
-  DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone, UserCheck,
-  ShieldOff,
-  type LucideIcon,
-} from "lucide-react";
+import { Copy, Check, X, DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone, UserCheck, type LucideIcon } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
@@ -710,7 +705,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
           onClick={() => { setNoteOpen(true); requestAnimationFrame(() => noteInputRef.current?.focus()); }}
           className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
         >
-          <Plus className="w-4 h-4" /> Add note
+           Add note
         </button>
       ) : (
         <div className="relative">
@@ -944,7 +939,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 data-testid="dnk-banner"
                 className="mb-3 flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-2.5 text-[13px] font-semibold leading-snug text-rose-300"
               >
-                <ShieldOff className="h-4 w-4 shrink-0" aria-hidden="true" />
+                
                 <span>Do not knock - resident asked us not to return</span>
               </div>
             )}

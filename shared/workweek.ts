@@ -129,8 +129,8 @@ export function weekBoundsFor(instantUtc: Date | string | number, cfg: WorkweekC
 
   const endDate = addDays(startDate.y, startDate.mo, startDate.d, 6); // last local day (Sunday for Mon-start)
   const label = startDate.y === endDate.y
-    ? `${MONTHS[startDate.mo - 1]} ${startDate.d} – ${MONTHS[endDate.mo - 1]} ${endDate.d}, ${endDate.y}`
-    : `${MONTHS[startDate.mo - 1]} ${startDate.d}, ${startDate.y} – ${MONTHS[endDate.mo - 1]} ${endDate.d}, ${endDate.y}`;
+    ? `${MONTHS[startDate.mo - 1]} ${startDate.d} - ${MONTHS[endDate.mo - 1]} ${endDate.d}, ${endDate.y}`
+    : `${MONTHS[startDate.mo - 1]} ${startDate.d}, ${startDate.y} - ${MONTHS[endDate.mo - 1]} ${endDate.d}, ${endDate.y}`;
 
   return {
     weekStartUtc: new Date(weekStartMs).toISOString(),

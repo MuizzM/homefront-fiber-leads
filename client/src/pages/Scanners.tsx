@@ -52,7 +52,7 @@ export default function Scanners({
         </h1>
 
         <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
-          {TABS.map(({ id, label, hint, Icon }) => {
+          {TABS.map(({ id, label, hint, }) => {
             const active = tab === id;
             return (
               <button
@@ -67,15 +67,7 @@ export default function Scanners({
                     : "border-border bg-background hover:border-primary/40 hover:bg-secondary/40"
                 }`}
               >
-                <span
-                  className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg border ${
-                    active
-                      ? "border-primary/30 bg-primary/10 text-primary"
-                      : "border-border bg-card text-muted-foreground group-hover:text-foreground"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                </span>
+                
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center justify-between gap-2">
                     <span

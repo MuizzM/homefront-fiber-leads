@@ -4,7 +4,6 @@
 // with IP + user-agent + outcome reason.
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { ShieldCheck, ShieldAlert, RefreshCw } from "lucide-react";
 
 type Attempt = {
   id: number; email: string; kind: "request" | "verify"; success: number;
@@ -62,7 +61,7 @@ export default function LoginActivity() {
           onClick={() => { void summaryQuery.refetch(); void feedQuery.refetch(); }}
           className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold hover:bg-secondary"
         >
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+           Refresh
         </button>
       </div>
 
@@ -85,8 +84,8 @@ export default function LoginActivity() {
             {summaryQuery.data!.summary.map(row => (
               <li key={row.email} className="flex items-center gap-3 px-4 py-3">
                 {row.successes > 0
-                  ? <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-500" />
-                  : <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />}
+                  ? null
+                  : null}
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-medium text-foreground">{row.email}</div>
                   <div className="text-[11px] text-muted-foreground">

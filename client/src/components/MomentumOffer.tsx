@@ -20,7 +20,6 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
-import { Flame, Timer, TrendingUp } from "lucide-react";
 import { usd, offerCountdownLabel as offerCountdown } from "@shared/moneyFormat";
 
 export interface MomentumCardData {
@@ -88,13 +87,7 @@ export function MomentumOffer() {
       >
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
-            <div className={cn(
-              "grid h-11 w-11 shrink-0 place-items-center rounded-xl",
-              critical ? "bg-red-500/20 text-red-600 dark:text-red-400"
-                       : "bg-amber-500/20 text-amber-600 dark:text-amber-400",
-            )}>
-              <Flame className="h-6 w-6" aria-hidden="true" />
-            </div>
+            
 
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-2">
@@ -118,7 +111,7 @@ export function MomentumOffer() {
               critical ? "bg-red-500/20 text-red-700 dark:text-red-300"
                        : "bg-amber-500/20 text-amber-700 dark:text-amber-300",
             )} data-testid="momentum-countdown">
-              <Timer className="h-3.5 w-3.5" aria-hidden="true" />
+              
               {offerCountdown(data.offer.expiresAtMs, now)}
             </span>
           </div>
@@ -144,9 +137,7 @@ export function MomentumOffer() {
     <Card className="overflow-hidden rounded-2xl border border-border bg-card" data-testid="momentum-meter">
       <CardContent className="p-3">
         <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
-            <TrendingUp className="h-4 w-4" aria-hidden="true" />
-          </div>
+          
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-semibold text-foreground" data-testid="momentum-meter-headline">
               Warming up - {usd(data.nextAmountCents)} bonus if you get hot

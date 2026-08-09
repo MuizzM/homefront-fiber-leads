@@ -17,7 +17,6 @@ import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
-import { Footprints, ShieldCheck, Trophy } from "lucide-react";
 import { usd } from "@shared/moneyFormat";
 // `import type` (not `import { type … }`) so the module is erased outright
 // rather than left as a side-effect import that still ships the ladder.
@@ -62,14 +61,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
     )} data-testid="milestone-card">
       <CardContent className={cn("p-4", compact && "p-3")}>
         <div className="flex items-start gap-3">
-          <div className={cn(
-            "grid h-10 w-10 shrink-0 place-items-center rounded-xl",
-            p.toppedOut ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                        : "bg-primary/15 text-primary",
-          )}>
-            {p.toppedOut ? <Trophy className="h-5 w-5" aria-hidden="true" />
-                         : <Footprints className="h-5 w-5" aria-hidden="true" />}
-          </div>
+          
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2">
@@ -116,7 +108,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
                     ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
                     : "bg-secondary text-muted-foreground",
                 )}>
-                {r.doors} → {usd(r.rewardCents)}
+                {r.doors}: {usd(r.rewardCents)}
               </span>
             );
           })}
@@ -127,7 +119,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
             who was told up front just knocks more doors, which is the point. */}
         <p className="mt-2 flex items-start gap-1.5 text-[12px] text-muted-foreground"
            data-testid="milestone-rule">
-          <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          
           <span>Counts each address once, and only when GPS confirms you were there. Paid on your commission statement.</span>
         </p>
       </CardContent>
@@ -142,7 +134,7 @@ export function MilestoneSection() {
   return (
     <section className="space-y-2" data-testid="milestone-section">
       <SectionLabel className="flex items-center gap-1.5">
-        <Footprints className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+        
         Door bonus · {data.periodLabel}
       </SectionLabel>
       <MilestoneCard />

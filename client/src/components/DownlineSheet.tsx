@@ -4,9 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useCan } from "@/lib/capabilities";
 import { usd, usdSigned } from "@/lib/money";
-import {
-  AlertTriangle, ChevronDown, ChevronRight, Download, GitBranch, ShieldCheck, Users,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, GitBranch, Users } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import {
   OVERRIDE_STATUS_TONE, overrideStatusLabel,
@@ -157,7 +155,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
             onClick={e => { e.preventDefault(); downloadSheetCsv(weekRef, repId); }}
             className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             data-testid="export-overrides-csv">
-            <Download className="w-3.5 h-3.5" /> Export CSV
+             Export CSV
           </a>
         </div>
       </div>
@@ -214,7 +212,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
           {sheet.exceptions.length > 0 ? (
             <div className="rounded-2xl bg-card border border-amber-500/30 overflow-hidden" data-testid="override-exceptions">
               <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                
                 <span className="text-sm font-semibold text-foreground">Needs review before closeout</span>
                 <span className="ml-auto text-xs text-muted-foreground">{sheet.exceptions.length}</span>
               </div>
@@ -234,14 +232,14 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
             </div>
           ) : (
             <div className="rounded-xl bg-card border border-border px-4 py-2.5 flex items-center gap-2 text-sm text-muted-foreground" data-testid="override-exceptions-clear">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" /> Nothing needs review - every number is explainable.
+               Nothing needs review - every number is explainable.
             </div>
           )}
 
           {/* Per-member rollup — tap a row for the exact sales behind its number */}
           <div className="rounded-2xl bg-card border border-border overflow-hidden">
             <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-              <Users className="w-4 h-4 text-muted-foreground" />
+              
               <span className="text-sm font-semibold">Downline this week</span>
               {weekLabel && <span className="ml-auto text-xs text-muted-foreground">{weekLabel}</span>}
             </div>

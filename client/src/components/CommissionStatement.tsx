@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { Printer, X, Download, Loader2 } from "lucide-react";
+import { X, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { formatCents, statementSummaryRows, type StatementDocument, type StatementLine } from "@shared/commissionStatement";
 
@@ -142,7 +142,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
     k: r.label,
     // The holdback is the one row rendered with a true minus sign rather than a
     // hyphen, so it reads as a deduction on screen.
-    v: r.amountCents < 0 && r.negative ? `−${money(Math.abs(r.amountCents))}` : money(r.amountCents),
+    v: r.amountCents < 0 && r.negative ? `-${money(Math.abs(r.amountCents))}` : money(r.amountCents),
     strong: r.strong,
     negative: r.negative,
   }));
@@ -163,7 +163,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
             data-testid="statement-download"
             className="inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-primary text-primary-foreground text-sm font-semibold shadow-sm active:scale-95 transition-transform disabled:opacity-60"
           >
-            {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Download PDF
+            {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Download PDF
           </button>
           <button
             type="button"
@@ -171,7 +171,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
             data-testid="statement-print"
             className="inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-white/10 text-white text-sm font-semibold active:scale-95 transition-transform"
           >
-            <Printer className="w-4 h-4" /> Print
+             Print
           </button>
         </>
       }

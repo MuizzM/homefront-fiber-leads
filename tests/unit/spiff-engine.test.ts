@@ -160,7 +160,7 @@ describe("award amount - band, granularity and determinism", () => {
   const REASONS: SpiffReason[] = ["random", "streak", "improvement", "milestone"];
   const LADDER = spiffAmountLadder(DEFAULT_SPIFF_CONFIG);
 
-  it("the default band is $25–$50 in $5 steps", () => {
+  it("the default band is $25-$50 in $5 steps", () => {
     const band = spiffAmountBand(DEFAULT_SPIFF_CONFIG);
     expect(band).toEqual({ minCents: 2500, maxCents: 5000, incrementCents: 500, steps: 6 });
     expect(LADDER).toEqual([2500, 3000, 3500, 4000, 4500, 5000]);

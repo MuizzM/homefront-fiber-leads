@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { GraduationCap, Lock, ChevronRight, CheckCircle2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { TRAINING_GATE_LOCKED_LABELS } from "@shared/trainingGate";
 
 export interface GateStatus {
@@ -55,9 +55,7 @@ export function TrainingLock() {
     <div className="mx-auto w-full max-w-lg space-y-4 p-4 pt-8 pb-24" data-testid="training-lock">
       <Card className="overflow-hidden rounded-2xl border border-border bg-card">
         <CardContent className="p-6 text-center">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-primary/15 text-primary">
-            <GraduationCap className="h-7 w-7" aria-hidden="true" />
-          </div>
+          
 
           <h1 className="mt-4 text-xl font-bold tracking-tight text-foreground">
             Finish training to unlock the app
@@ -99,7 +97,7 @@ export function TrainingLock() {
           <ul className="mt-2 space-y-1.5" data-testid="lock-unlocks">
             {TRAINING_GATE_LOCKED_LABELS.map(label => (
               <li key={label} className="flex items-center gap-2 text-[13px] text-foreground">
-                <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                
                 {label}
               </li>
             ))}
@@ -124,9 +122,7 @@ export function TrainingGateBanner() {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-primary/30 bg-primary/[0.07] p-3"
          role="status" data-testid="training-gate-banner">
-      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary">
-        <Lock className="h-4 w-4" aria-hidden="true" />
-      </div>
+      
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold text-foreground">{p.headline}</p>
         <p className="text-[12px] text-muted-foreground tabular-nums">
@@ -144,7 +140,7 @@ export function TrainingClearedBanner() {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/[0.07] p-3"
          role="status" data-testid="training-cleared-banner">
-      <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+      
       <p className="text-[13px] font-semibold text-foreground">
         Training complete. The whole app is unlocked. Go get some doors.
       </p>

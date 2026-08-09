@@ -26,7 +26,7 @@ const door = (i: number, over: Partial<StatementSaleInput> = {}): StatementSaleI
 const base = (over: Partial<StatementDocInput> = {}): StatementDocInput => ({
   company: { name: "Home Front Solutions LLC", supportEmail: "pay@example.test" },
   rep: { id: 7, name: "Jose Q. Rodriguez" },
-  period: { label: "Jul 27 – Aug 2, 2026", startUtc: "2026-07-27T04:00:00.000Z", nextStartUtc: "2026-08-03T04:00:00.000Z", timezone: "America/New_York" },
+  period: { label: "Jul 27 - Aug 2, 2026", startUtc: "2026-07-27T04:00:00.000Z", nextStartUtc: "2026-08-03T04:00:00.000Z", timezone: "America/New_York" },
   statement: { id: 42, status: "FINALIZED", calculationVersion: 2, tierLabel: "Tier 2", rateCents: 12000, structure: "TIERED" },
   sales: [door(1), door(2), door(3)],
   money: {

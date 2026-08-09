@@ -33,7 +33,7 @@ function statement(over: Record<string, any> = {}): number {
         status, calculated_at, created_at, updated_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
-    T1, over.repId ?? REP, WEEK_START, WEEK_NEXT, "America/New_York", "Aug 3–9",
+    T1, over.repId ?? REP, WEEK_START, WEEK_NEXT, "America/New_York", "Aug 3-9",
     "QUALIFIED_AT", over.planVersion ?? 1, over.tierLabel ?? "Tier 2", over.rateCents ?? 20_000,
     over.saleCount ?? 8, over.gross ?? 160_000, over.adjustment ?? 0,
     over.final ?? over.gross ?? 160_000,

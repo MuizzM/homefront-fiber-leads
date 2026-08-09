@@ -7,10 +7,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  History, Search, RefreshCw, ChevronLeft, ChevronRight, AlertTriangle,
-  CheckCircle2, ShieldAlert, XCircle, ChevronDown, ChevronUp,
-} from "lucide-react";
+import { History, RefreshCw, ChevronLeft, ChevronRight, CheckCircle2, ShieldAlert, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 
 interface AuditRow {
   id: number; at: string; tenantId: number | null;
@@ -49,7 +46,7 @@ function DiffRows({ before, after }: { before: Record<string, unknown> | null; a
           <dt className="font-medium text-muted-foreground truncate">{k}</dt>
           <dd className="flex flex-wrap items-center gap-1.5 min-w-0">
             <span className="rounded bg-rose-500/10 px-1.5 py-0.5 text-rose-300/90 line-through break-all">{show(before?.[k])}</span>
-            <span aria-hidden="true" className="text-muted-foreground">→</span>
+            <span className="text-muted-foreground">to</span>
             <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300/90 break-all">{show(after?.[k])}</span>
           </dd>
         </div>
@@ -73,7 +70,6 @@ function Row({ entry }: { entry: AuditRow }) {
       >
         <div className="flex items-start gap-3">
           <span className={`mt-0.5 inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-medium ${meta.cls}`}>
-            <meta.Icon className="h-3 w-3" aria-hidden="true" />
             <span className="sr-only">Outcome: </span>{meta.label}
           </span>
           <div className="min-w-0 flex-1">
@@ -101,7 +97,7 @@ function Row({ entry }: { entry: AuditRow }) {
             <DiffRows before={entry.before} after={entry.after} />
             {entry.reason && (
               <p className="flex items-start gap-1.5 text-[12px] text-amber-300/90">
-                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />{entry.reason}
+                {entry.reason}
               </p>
             )}
             <dl className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -165,7 +161,7 @@ export function AdminHistory() {
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3.5">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-primary" aria-hidden="true" />
+            
             <h2 id="admin-history-heading" className="text-[15px] font-semibold tracking-tight text-foreground">History</h2>
           </div>
           <p className="mt-0.5 text-[12px] text-muted-foreground">
@@ -186,7 +182,7 @@ export function AdminHistory() {
       {/* Filters */}
       <div className="flex flex-col gap-2 border-b border-border px-4 py-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 min-w-0">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -234,7 +230,7 @@ export function AdminHistory() {
             onClick={() => feed.refetch()}
             className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl border border-border bg-secondary px-4 text-[14px] font-semibold text-foreground"
           >
-            <RefreshCw className="h-4 w-4" aria-hidden="true" />Retry
+            Retry
           </button>
         </div>
       ) : (feed.data?.rows.length ?? 0) === 0 ? (
@@ -265,7 +261,7 @@ export function AdminHistory() {
       {total > PAGE && (
         <nav className="flex items-center justify-between gap-3 border-t border-border px-4 py-3" aria-label="History pages">
           <p className="text-[12px] text-muted-foreground tabular-nums">
-            {page * PAGE + 1}–{Math.min(total, (page + 1) * PAGE)} of {total.toLocaleString()}
+            {page * PAGE + 1}-{Math.min(total, (page + 1) * PAGE)} of {total.toLocaleString()}
           </p>
           <div className="flex items-center gap-1.5">
             <button

@@ -1,4 +1,4 @@
-import { RefreshCw, TriangleAlert, WifiOff } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { useNetworkStatus } from "@/hooks/use-network-status";
@@ -58,8 +58,8 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
       data-testid="field-status"
       className={`${overlay ? "pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom)+8rem)] left-1/2 z-[45] w-[min(92vw,420px)] -translate-x-1/2 rounded-full shadow-xl [&_button]:pointer-events-auto" : "border-b"} ${tone} flex min-h-10 items-center gap-2 border px-3 py-2 text-[12px] font-medium backdrop-blur-xl`}
     >
-      {failed > 0 ? <TriangleAlert className={`h-4 w-4 shrink-0 ${overlay ? "text-red-400" : ""}`} />
-        : !online ? <WifiOff className="h-4 w-4 shrink-0" />
+      {failed > 0 ? null
+        : !online ? null
           : <RefreshCw className={`h-4 w-4 shrink-0 animate-spin ${overlay ? "text-teal-400" : ""}`} />}
       <span className="min-w-0 flex-1 truncate">
         {failed > 0

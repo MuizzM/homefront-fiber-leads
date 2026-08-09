@@ -235,7 +235,7 @@ const callingWindowSchema = z.object({
   const end = localMinute(value.endLocal);
   if (start < 8 * 60 || end > 21 * 60 || start >= end) {
     context.addIssue({ code: z.ZodIssueCode.custom,
-      message: "Calling windows may narrow but never exceed 08:00–21:00 local time" });
+      message: "Calling windows may narrow but never exceed 08:00-21:00 local time" });
   }
 });
 
@@ -1213,7 +1213,7 @@ function registerComplianceAdministration(app: Express, deps: CallingRouteDeps):
       const startMinute = localMinute(merged.allowedStartLocal);
       const endMinute = localMinute(merged.allowedEndLocal);
       if (startMinute < 8 * 60 || endMinute > 21 * 60 || startMinute >= endMinute) {
-        return res.status(400).json({ error: "Calling hours may narrow but never exceed 08:00–21:00 local time" });
+        return res.status(400).json({ error: "Calling hours may narrow but never exceed 08:00-21:00 local time" });
       }
       if (merged.maxAttempts30Days < merged.maxAttempts7Days) {
         return res.status(400).json({ error: "30-day attempt limit cannot be lower than the 7-day limit" });

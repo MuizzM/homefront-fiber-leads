@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
-import { Clock, LogIn, LogOut, Calendar, Timer, Users, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 
 interface ClockSession {
@@ -152,7 +151,7 @@ export default function ClockIn() {
                     className="w-full bg-primary hover:bg-primary/90 text-primary-foreground px-8 sm:w-auto"
                     data-testid="button-clock-in"
                   >
-                    <LogIn className="w-5 h-5 mr-2" />
+                    
                     {clockInMutation.isPending ? "Clocking in…" : "Clock in"}
                   </Button>
                 ) : (
@@ -164,7 +163,7 @@ export default function ClockIn() {
                     className="w-full border-rose-500/30 text-rose-400 hover:bg-rose-500/10 px-8 sm:w-auto"
                     data-testid="button-clock-out"
                   >
-                    <LogOut className="w-5 h-5 mr-2" />
+                    
                     {clockOutMutation.isPending ? "Clocking out…" : "Clock out"}
                   </Button>
                 )}
@@ -181,7 +180,7 @@ export default function ClockIn() {
               server still has the hours; the em-dash says "unknown", not zero. */}
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <Clock className="w-3.5 h-3.5 text-primary" aria-hidden="true" /> Today
+               Today
             </div>
             <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground" aria-label={sessionsError ? "Today's hours unavailable" : undefined}>
               {sessionsError ? " - " : formatDuration(todayMinutes)}
@@ -189,7 +188,7 @@ export default function ClockIn() {
           </div>
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <TrendingUp className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" /> This week
+               This week
             </div>
             <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground" aria-label={sessionsError ? "This week's hours unavailable" : undefined}>
               {sessionsError ? " - " : formatDuration(weekMinutes)}
@@ -197,7 +196,7 @@ export default function ClockIn() {
           </div>
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <Users className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" /> {isManager ? "Active now" : "My status"}
+               {isManager ? "Active now" : "My status"}
             </div>
             <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{isManager ? (sessionsError ? " - " : activeSessions.length) : (isOnClock ? 1 : 0)}</p>
           </div>
@@ -209,7 +208,7 @@ export default function ClockIn() {
         <Card className="bg-card border-border rounded-xl">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
-              <Timer className="w-4 h-4 text-primary" /> Currently in field
+               Currently in field
               <Badge className="bg-emerald-500/15 text-emerald-400 border-transparent rounded-full ml-1">{activeSessions.length}</Badge>
             </CardTitle>
           </CardHeader>
@@ -238,7 +237,7 @@ export default function ClockIn() {
       <Card className="bg-card border-border rounded-xl">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-primary" /> Session history
+             Session history
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
@@ -267,7 +266,7 @@ export default function ClockIn() {
                     <p className="text-sm text-foreground">{new Date(s.clockedIn).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
                     <p className="text-xs text-muted-foreground tabular-nums">
                       {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-                      {" → "}
+                      {" to "}
                       {s.clockedOut ? new Date(s.clockedOut).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : " - "}
                     </p>
                   </div>

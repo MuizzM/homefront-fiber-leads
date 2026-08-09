@@ -5,9 +5,7 @@
 // mechanic every flashcard app rides on. Whole-card <button>, aria-pressed for
 // the flipped state, so keyboard and screen-reader users get the same deck.
 import { useState } from "react";
-import {
-  Gift, Users, TrendingDown, Footprints, Dice5, Timer, Tag, Sparkles, RotateCcw,
-} from "lucide-react";
+import { Gift, Users, TrendingDown, Footprints, Dice5, Timer, Tag, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { SectionLabel } from "@/components/ui/page-scaffold";
@@ -89,7 +87,6 @@ const TIPS: readonly PsychTip[] = [
 ];
 
 function FlipCard({ tip, flipped, onFlip }: { tip: PsychTip; flipped: boolean; onFlip: () => void }) {
-  const Icon = tip.icon;
   // Faces are STACKED IN ONE GRID CELL, not absolutely positioned — the card
   // grows to whichever face is taller, so the back never needs an inner scroll
   // region a keyboard could not reach. The face turned away is aria-hidden:
@@ -110,14 +107,12 @@ function FlipCard({ tip, flipped, onFlip }: { tip: PsychTip; flipped: boolean; o
           className="hf-flip-face [grid-area:1/1] flex flex-col rounded-2xl border border-border bg-card p-4 transition-colors hover:border-primary/40"
         >
           <span className="flex items-center gap-2">
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary/12 text-primary">
-              <Icon className="h-4 w-4" aria-hidden="true" />
-            </span>
+            
             <span className="text-[13px] font-bold tracking-tight text-foreground">{tip.principle}</span>
           </span>
           <span className="mt-3 flex-1 text-sm leading-snug text-muted-foreground">{tip.hook}</span>
           <span className="mt-3 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
-            <RotateCcw className="h-3 w-3" aria-hidden="true" /> Flip for the move
+             Flip for the move
           </span>
         </span>
         {/* Back — the words, then the why */}

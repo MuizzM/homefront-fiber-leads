@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Download, ExternalLink, FileText, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { apiRequest } from "@/lib/queryClient";
 import { fetchPdfBlob, hasPdfBlob } from "@/lib/pdfBlobCache";
@@ -104,7 +104,7 @@ export function PdfReviewPane({
   return (
     <div className="flex flex-col min-h-0 flex-1" data-testid={testId}>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-secondary/40 shrink-0">
-        <FileText className="w-4 h-4 text-primary shrink-0" aria-hidden="true" />
+        
         <span className="text-xs font-semibold text-foreground truncate">{title}</span>
         <div className="ml-auto flex items-center gap-1.5">
           {/* First-class, not a fallback: on a phone that will not embed a PDF, */}
@@ -116,7 +116,7 @@ export function PdfReviewPane({
             data-testid={`${testId}-open`}
             className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-border text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
           >
-            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /> Open
+             Open
           </button>
           <button
             type="button"
@@ -125,7 +125,7 @@ export function PdfReviewPane({
             data-testid={`${testId}-download`}
             className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-border text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
           >
-            <Download className="w-3.5 h-3.5" aria-hidden="true" /> Save
+             Save
           </button>
         </div>
       </div>
@@ -144,7 +144,7 @@ export function PdfReviewPane({
         {state === "error" && (
           <div className="absolute inset-0 grid place-items-center p-6" data-testid={`${testId}-error`}>
             <div className="text-center max-w-xs">
-              <AlertTriangle className="w-7 h-7 text-amber-500 mx-auto" aria-hidden="true" />
+              
               <p className="text-sm font-semibold text-slate-800 mt-2">Couldn't load the document</p>
               <p className="text-xs text-slate-600 mt-1">
                 Nothing has been signed. Check your connection and try again, or ask your manager for a copy.
@@ -166,7 +166,7 @@ export function PdfReviewPane({
           >
             <div className="absolute inset-0 grid place-items-center p-6">
               <div className="text-center max-w-xs">
-                <FileText className="w-7 h-7 text-slate-400 mx-auto" aria-hidden="true" />
+                
                 <p className="text-sm font-semibold text-slate-800 mt-2">This browser can't display PDFs inline</p>
                 <p className="text-xs text-slate-600 mt-1">Use <strong>Open</strong> or <strong>Save</strong> above to read the full document.</p>
               </div>

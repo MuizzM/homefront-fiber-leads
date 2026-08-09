@@ -23,8 +23,7 @@ const TONES: Record<Tone, { tile: string; icon: string; ring: string }> = {
 };
 
 export function EmptyState({
-  icon: Icon,
-  title,
+    title,
   description,
   action,
   tone = "neutral",
@@ -51,9 +50,7 @@ export function EmptyState({
         bordered ? `rounded-2xl border ${t.ring} ${tone === "positive" ? "bg-emerald-500/[0.06]" : "bg-card"}` : ""
       } ${className}`}
     >
-      <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${t.tile}`} aria-hidden="true">
-        <Icon className={`h-6 w-6 ${t.icon}`} />
-      </div>
+      
       <h3 className="mt-3.5 text-[15px] font-semibold text-foreground">{title}</h3>
       {description && (
         <p className="mt-1 max-w-xs text-[13px] leading-relaxed text-muted-foreground">{description}</p>

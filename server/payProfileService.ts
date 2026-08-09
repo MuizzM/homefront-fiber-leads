@@ -33,7 +33,7 @@ export function upsertBankDetails(tenantId: number, repId: number, input: {
   const routing = String(input.routing ?? "").replace(/\D/g, "");
   const account = String(input.account ?? "").replace(/\D/g, "");
   if (!isValidAbaRouting(routing)) throw new PayError("INVALID_ROUTING", "routing must be a valid 9-digit ABA transit number (checksum failed)");
-  if (!isValidAccountNumber(account)) throw new PayError("INVALID_ACCOUNT", "account must be 4–17 digits");
+  if (!isValidAccountNumber(account)) throw new PayError("INVALID_ACCOUNT", "account must be 4-17 digits");
   if (input.accountType !== "checking" && input.accountType !== "savings") {
     throw new PayError("INVALID_ACCOUNT_TYPE", "accountType must be 'checking' or 'savings'");
   }
@@ -210,15 +210,15 @@ export function upsertCompanyProfile(tenantId: number, input: {
   legalName: string; ein: string; dfiAccount: string; dfiRouting: string; companyId: string;
 }): void {
   const legalName = String(input.legalName ?? "").trim();
-  if (legalName.length < 2 || legalName.length > 60) throw new PayError("INVALID_LEGAL_NAME", "legalName must be 2–60 characters");
+  if (legalName.length < 2 || legalName.length > 60) throw new PayError("INVALID_LEGAL_NAME", "legalName must be 2-60 characters");
   const ein = String(input.ein ?? "").replace(/\D/g, "");
   if (!isValidTin(ein)) throw new PayError("INVALID_EIN", "ein must be exactly 9 digits");
   const dfiAccount = String(input.dfiAccount ?? "").replace(/\D/g, "");
-  if (!isValidAccountNumber(dfiAccount)) throw new PayError("INVALID_DFI_ACCOUNT", "dfiAccount must be 4–17 digits");
+  if (!isValidAccountNumber(dfiAccount)) throw new PayError("INVALID_DFI_ACCOUNT", "dfiAccount must be 4-17 digits");
   const dfiRouting = String(input.dfiRouting ?? "").replace(/\D/g, "");
   if (!isValidAbaRouting(dfiRouting)) throw new PayError("INVALID_DFI_ROUTING", "dfiRouting must be a valid 9-digit ABA transit number (checksum failed)");
   const companyId = String(input.companyId ?? "").trim();
-  if (!/^[\x20-\x7E]{1,10}$/.test(companyId)) throw new PayError("INVALID_COMPANY_ID", "companyId must be 1–10 printable characters (NACHA company identification, often the EIN)");
+  if (!/^[\x20-\x7E]{1,10}$/.test(companyId)) throw new PayError("INVALID_COMPANY_ID", "companyId must be 1-10 printable characters (NACHA company identification, often the EIN)");
   const now = nowIso();
   rawDb.prepare(
     `INSERT INTO company_profile (tenant_id, legal_name, ein_enc, dfi_account_enc, dfi_routing, company_id, updated_at)

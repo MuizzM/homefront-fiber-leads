@@ -25,7 +25,7 @@
 // their doors back, so a mis-tap costs someone their working queue.
 
 import { useState } from "react";
-import { Loader2, Plus, Users, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { repColorOf } from "@shared/repColors";
 import { RepPicker } from "./RepPicker";
@@ -131,7 +131,7 @@ export function AreaAssigneeBar({
       </div>
 
       <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <Users className="h-3 w-3" />
+        
         {holders.length === 1 ? "1 rep on this area" : `${holders.length} reps on this area`}
       </div>
 
@@ -173,7 +173,7 @@ export function AreaAssigneeBar({
                 </span>
               )}
               {!isLastHolder && !arming && (
-                <X className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover:text-foreground" />
+                null
               )}
             </button>
           );
@@ -188,7 +188,7 @@ export function AreaAssigneeBar({
             onClick={() => setAdding(true)}
             className={`flex h-11 items-center gap-1.5 rounded-full border border-dashed border-border px-3.5 text-[12px] font-semibold text-muted-foreground transition-colors hover:border-solid hover:bg-secondary hover:text-foreground disabled:opacity-60 ${FOCUS}`}
           >
-            <Plus className="h-4 w-4" aria-hidden="true" />
+            
             Add rep
           </button>
         )}

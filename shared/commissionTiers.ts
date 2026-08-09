@@ -53,7 +53,7 @@ export function validateTiers(input: CommissionTier[]): TierValidation {
       else {
         const next = tiers[i + 1];
         if (next && next.minimumSales !== t.maximumSales + 1) {
-          errors.push(`Tiers ${i + 1}→${i + 2} must be continuous: expected next minimum ${t.maximumSales + 1}, got ${next.minimumSales}.`);
+          errors.push(`Tiers ${i + 1}-${i + 2} must be continuous: expected next minimum ${t.maximumSales + 1}, got ${next.minimumSales}.`);
         }
       }
     }
@@ -168,8 +168,8 @@ export function tierProgressMessage(r: RetroResult): string {
 
 // The spec's default plan (dollars → cents), for seeding / examples.
 export const DEFAULT_RETRO_TIERS: CommissionTier[] = [
-  { position: 0, minimumSales: 1,  maximumSales: 7,    rateCents: 15000, label: "1–7 sales" },
-  { position: 1, minimumSales: 8,  maximumSales: 12,   rateCents: 20000, label: "8–12 sales" },
-  { position: 2, minimumSales: 13, maximumSales: 16,   rateCents: 25000, label: "13–16 sales" },
+  { position: 0, minimumSales: 1,  maximumSales: 7,    rateCents: 15000, label: "1-7 sales" },
+  { position: 1, minimumSales: 8,  maximumSales: 12,   rateCents: 20000, label: "8-12 sales" },
+  { position: 2, minimumSales: 13, maximumSales: 16,   rateCents: 25000, label: "13-16 sales" },
   { position: 3, minimumSales: 17, maximumSales: null, rateCents: 30000, label: "17+ sales" },
 ];

@@ -78,7 +78,7 @@ describe("referral pipeline money + status labels", () => {
     renderPage([referral({ id: 8, status: "CLAWED_BACK", rewardAmountCents: -15000 })]);
     await waitFor(() => expect(screen.getAllByText("Clawed back").length).toBeGreaterThan(0));
     // The row amount for the clawback carries the minus sign.
-    expect(screen.getAllByText("−$150").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("-$150").length).toBeGreaterThan(0);
   });
 
   it("approve is two-tap: the first tap arms and fires nothing", async () => {

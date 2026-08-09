@@ -1,7 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, AlertTriangle, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 export default function TokenSetup() {
   const { toast } = useToast();
@@ -47,9 +47,9 @@ export default function TokenSetup() {
           {unknown ? (
             <RefreshCw className="w-6 h-6 text-muted-foreground flex-shrink-0 animate-spin" />
           ) : tokenOk ? (
-            <CheckCircle2 className="w-6 h-6 text-green-400 flex-shrink-0" />
+            null
           ) : (
-            <AlertTriangle className="w-6 h-6 text-red-400 flex-shrink-0" />
+            null
           )}
           <div>
             <p className="font-semibold text-foreground">

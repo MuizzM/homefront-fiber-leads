@@ -1,9 +1,4 @@
-// The Today-page entry card for the coaching engine: due count + a 2-minute
-// Start, in the same compact card idiom as MilestoneCard. Renders nothing when
-// there's nothing due (today's warmup is graded) or while the deck loads —
-// no layout shift, no fake zero. Offline it reads the persisted deck snapshot,
-// so a dead-zone morning still gets its warmup.
-import { Sun, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
@@ -25,9 +20,7 @@ export function WarmupStrip() {
         FOCUS,
       )}
     >
-      <span className="w-9 h-9 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0">
-        <Sun className="w-5 h-5" aria-hidden="true" />
-      </span>
+      
       <span className="flex-1 min-w-0">
         <span className="block text-[14px] font-semibold text-foreground tabular-nums">
           {total} card{total === 1 ? "" : "s"} before your first door

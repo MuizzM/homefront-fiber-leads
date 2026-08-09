@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, AlertTriangle, ShieldX, ScrollText, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, ShieldX } from "lucide-react";
 
 type Severity = "ok" | "info" | "warning" | "critical";
 interface HealthCard { module: string; label: string; severity: Severity; value: number; hint: string }
@@ -64,14 +64,14 @@ function FeedRow({ e }: { e: DiagEvent }) {
 }
 
 // A sectioned readout — micro-labelled header + hairline-divided feed body.
-function Feed({ icon: Icon, title, subtitle, testid, isLoading, isError, items, empty }: {
+function Feed({ title, subtitle, testid, isLoading, isError, items, empty }: {
   icon: typeof Activity; title: string; subtitle?: string; testid: string;
   isLoading: boolean; isError?: boolean; items?: DiagEvent[]; empty: string;
 }) {
   return (
     <>
       <div className="flex items-center gap-2 px-4 pt-4">
-        <Icon className="w-4 h-4 text-muted-foreground shrink-0" strokeWidth={2} />
+        
         <div className="min-w-0">
           <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h2>
           {subtitle && <p className="text-[11px] text-muted-foreground/80 leading-tight">{subtitle}</p>}
@@ -103,7 +103,7 @@ export default function Diagnostics() {
   return (
     <div className="p-4 md:p-6 pb-24 md:pb-6 max-w-5xl mx-auto space-y-5">
       <div className="flex items-center gap-2.5">
-        <Activity className="w-5 h-5 text-muted-foreground shrink-0" strokeWidth={2} />
+        
         <div>
           <h1 className="text-lg font-semibold tracking-tight text-foreground">Diagnostics</h1>
           <p className="text-[12px] text-muted-foreground tabular-nums">
@@ -124,11 +124,11 @@ export default function Diagnostics() {
         // NEVER render a healthy panel when the fetch failed - that falsely
         // reassures an admin during an actual outage.
         <div data-testid="diag-error" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-6 text-center">
-          <AlertTriangle className="w-6 h-6 text-rose-400 mx-auto" strokeWidth={2} />
+          
           <p className="mt-2 text-sm font-semibold text-rose-400">Couldn’t load diagnostics</p>
           <p className="mt-1 text-xs text-muted-foreground">The health API is unreachable - status below is unknown, not healthy.</p>
           <button onClick={() => refetch()} className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background">
-            <RefreshCw className="w-3.5 h-3.5" strokeWidth={2.5} /> Retry
+             Retry
           </button>
         </div>
       ) : (
@@ -194,7 +194,7 @@ export default function Diagnostics() {
       {/* Sensitive / suspicious actions - the governance review feed */}
       <section className="rounded-xl bg-card border border-border">
         <div className="flex items-center gap-2 px-4 pt-4">
-          <ScrollText className="w-4 h-4 text-muted-foreground shrink-0" strokeWidth={2} />
+          
           <div className="min-w-0">
             <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sensitive actions</h2>
             <p className="text-[11px] text-muted-foreground/80 leading-tight">Commission edits, lead assignments, and blocked attempts - for governance review.</p>

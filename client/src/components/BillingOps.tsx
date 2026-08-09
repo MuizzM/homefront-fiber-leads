@@ -10,7 +10,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { FOCUS } from "@/lib/a11y";
-import { CreditCard, Zap, Plus } from "lucide-react";
 
 type PlanKey = "starter" | "growth" | "professional" | "enterprise";
 type BillingState = "trial" | "active" | "past_due" | "suspended" | "canceled";
@@ -68,7 +67,7 @@ export function BillingOps() {
   return (
     <section className="rounded-xl border border-border bg-card overflow-hidden" data-testid="billing-ops">
       <div className="flex items-center gap-2 px-4 py-3.5 border-b border-border">
-        <CreditCard className="w-4 h-4 text-primary" />
+        
         <h2 className="text-[15px] font-semibold tracking-tight text-foreground">Billing &amp; credits</h2>
         <span className="text-[12px] text-muted-foreground">· lead-credit metering per tenant</span>
       </div>
@@ -104,7 +103,7 @@ export function BillingOps() {
                       onClick={() => post(t.tenantId, "/api/billing/provision", { planKey: provisionPlan[t.tenantId] ?? "starter", state: "trial" }, "Billing provisioned")}
                       className="h-8 px-3 rounded-lg bg-primary text-primary-foreground text-[12px] font-medium hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-1"
                       data-testid={`provision-btn-${t.tenantId}`}>
-                      <Zap className="w-3.5 h-3.5" /> Provision
+                       Provision
                     </button>
                   </div>
                 ) : (
@@ -205,7 +204,7 @@ export function BillingOps() {
                         onClick={() => { post(t.tenantId, "/api/billing/credits", { amount: Number(grant[t.tenantId]) }, "Credits granted"); setGrant(g => ({ ...g, [t.tenantId]: "" })); }}
                         className="h-8 px-2.5 rounded-lg border border-border text-[12px] font-medium text-foreground hover:bg-secondary disabled:opacity-40 inline-flex items-center gap-1"
                         data-testid={`grant-btn-${t.tenantId}`}>
-                        <Plus className="w-3.5 h-3.5" /> Grant
+                         Grant
                       </button>
                     </div>
                   </>

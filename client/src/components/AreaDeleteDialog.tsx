@@ -33,7 +33,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { DEFAULT_AREA_DELETE_REP_POLICY, type AreaDeleteRepPolicy } from "@shared/territory";
@@ -131,9 +131,7 @@ export function AreaDeleteDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent data-testid="area-delete-dialog">
         <AlertDialogHeader>
-          <div className="mx-auto mb-1 grid h-11 w-11 place-items-center rounded-full bg-destructive/10">
-            <Trash2 className="h-5 w-5 text-destructive" aria-hidden="true" />
-          </div>
+          
           <AlertDialogTitle className="text-center">
             Delete {target?.name ?? "this area"}?
           </AlertDialogTitle>

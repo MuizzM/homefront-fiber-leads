@@ -9,35 +9,7 @@ import {
 } from "react";
 // mapbox-gl loaded via CDN in index.html — do not bundle
 declare const mapboxgl: any;
-import {
-  Pencil,
-  X,
-  Map as MapIcon,
-  Bell,
-  Target,
-  Search,
-  LocateFixed,
-  Menu,
-  LassoSelect,
-  Radar,
-  Loader2,
-  Ellipsis,
-  CheckCircle2,
-  AlertCircle,
-  List,
-  Navigation,
-  Plus,
-  Crosshair,
-  SlidersHorizontal,
-  Users,
-  Settings2,
-  Landmark,
-  Tag,
-  Flag,
-  Palette,
-  Undo2,
-  Trash2,
-} from "lucide-react";
+import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, List, Plus, Crosshair, Users, Settings2, Landmark, Tag, Flag, Palette, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
@@ -2921,7 +2893,7 @@ export default function MapView() {
       const code = err?.code;
       const description =
         code === 1
-          ? "Location is turned off for this app. On iPhone: Settings → Privacy & Security → Location Services → turn on, then find Safari/HomeFront and set “While Using.”"
+          ? "Location is turned off for this app. On iPhone: Settings > Privacy & Security > Location Services > turn on, then find Safari/HomeFront and set “While Using.”"
           : code === 3
             ? "Getting a GPS fix timed out - step outside or try again."
             : "Couldn’t get your location. Make sure Location Services is on.";
@@ -5847,7 +5819,7 @@ export default function MapView() {
         return { ...old, pins };
       });
       try { navigator.vibrate?.(10); } catch { /* */ }
-      toast({ title: "Marked centrally", severity: "success", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
+      toast({ title: "Marked centrally", severity: "success", description: `${lead.address}: ${OUTCOME_META[outcome]?.label ?? outcome}` });
       try {
         const res = await apiRequest("POST", `/api/leads/${lead.id}/central-disposition`, { outcome });
         const updated = await res.json();
@@ -6308,7 +6280,7 @@ export default function MapView() {
         >
           <div className="glass-surface flex flex-col gap-2 border-teal-300/40 p-3" data-testid="live-test-panel">
             <div className="flex items-center gap-2">
-              <Crosshair className="h-4 w-4 text-emerald-400" />
+              
               <span className="text-[13px] font-semibold text-white">Live Test - trace one address</span>
               <button onClick={() => { setLiveTestOpen(false); setLtResult(null); }} className="ml-auto grid h-11 w-11 place-items-center rounded-full text-white/60 hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button>
             </div>
@@ -6330,7 +6302,7 @@ export default function MapView() {
                   </div>
                 ))}
                 <div className={`rounded-lg p-2 text-[11px] font-semibold ${ltResult.checked ? (ltResult.wouldSaveLead ? "bg-emerald-500/15 text-emerald-300" : "bg-sky-500/15 text-sky-300") : ltResult.pendingAuth ? "bg-amber-500/15 text-amber-300" : "bg-red-500/15 text-red-300"}`}>
-                  {ltResult.checked ? `Checked - ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : ltResult.pendingAuth ? "PENDING_AUTH - token/auth flow failed after retry. Address kept for retry, NOT a no-service verdict." : "Not checked - failed at the red stage (infra error, not a no-service verdict)."}
+                  {ltResult.checked ? `Checked - ${ltResult.classification}${ltResult.wouldSaveLead ? " (fresh lead)" : ""}` : ltResult.pendingAuth ? "PENDING_AUTH - token/auth flow failed after retry. Address kept for retry, NOT a no-service verdict." : "Not checked - failed at the red stage (infra error, not a no-service verdict)."}
                 </div>
               </div>
             ) : (
@@ -6350,7 +6322,7 @@ export default function MapView() {
             className="glass-capsule flex h-11 items-center gap-2 border-emerald-300/40 px-4 text-[13.5px] font-semibold text-white"
             data-testid="scan-map-hint"
           >
-            <Radar className="h-4 w-4 shrink-0 text-emerald-400" />
+            
             Drag a box over the houses
           </div>
           <button
@@ -6405,7 +6377,7 @@ export default function MapView() {
                 {scanning || scanSubmitting ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-emerald-400" />
                 ) : (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                  null
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-semibold leading-tight text-white">
@@ -6533,7 +6505,7 @@ export default function MapView() {
                   String(scanSummary.coverage),
                 ) && (
                   <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-300/90" data-testid="scan-coverage-gap">
-                    <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+                    
                     <span>
                       OpenStreetMap coverage looks{" "}
                       {String(scanSummary.coverage) === "sparse_source_data" || String(scanSummary.coverage) === "source_unavailable"
@@ -6568,13 +6540,13 @@ export default function MapView() {
               className="w-full flex items-center gap-2 px-3 min-h-[44px] text-[11px] font-medium text-amber-400 hover:bg-amber-500/10"
               onClick={() => setShowTerritoryRequests((v) => !v)}
             >
-              <Bell className="w-3 h-3" />
+              
               <span className="flex-1 text-left">
                 {pendingRequests.length} territory request
                 {pendingRequests.length !== 1 ? "s" : ""}
               </span>
               <span className="text-[10px] text-muted-foreground">
-                {showTerritoryRequests ? "▲" : "▼"}
+                {showTerritoryRequests ? "Hide" : "Show"}
               </span>
             </button>
             {showTerritoryRequests && (
@@ -6651,7 +6623,7 @@ export default function MapView() {
           {noToken && (
             <div className="absolute inset-0 flex items-center justify-center bg-card/95 z-10 px-6">
               <div className="text-center max-w-xs">
-                <MapIcon className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-40" />
+                
                 {mapFailureKind === "library" ? (
                   <>
                     <div className="text-sm font-medium mb-1">Map couldn't load</div>
@@ -6713,9 +6685,7 @@ export default function MapView() {
               data-testid="map-empty-state"
             >
               <div className="glass-surface pointer-events-none max-w-xs text-center p-6">
-                <div className="w-12 h-12 rounded-2xl bg-primary/15 border border-primary/25 flex items-center justify-center mx-auto mb-3">
-                  <MapIcon className="w-6 h-6 text-primary" />
-                </div>
+                
                 <p className="text-sm font-semibold text-white">
                   {isRep ? "No doors assigned yet" : "No leads on the map yet"}
                 </p>
@@ -6876,7 +6846,7 @@ export default function MapView() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
+                  
                   <input
                     ref={searchInputRef}
                     value={sidebarSearch}
@@ -6976,7 +6946,7 @@ export default function MapView() {
                           data-testid="map-search-goto"
                           className="w-full flex items-center gap-2 px-3 py-2.5 text-left border-t border-white/10 hover:bg-white/10 text-[13px] text-teal-300 disabled:opacity-60"
                         >
-                          <Target className="w-3.5 h-3.5 flex-shrink-0" />
+                          
                           {geocoding ? (
                             "Locating…"
                           ) : (
@@ -7031,7 +7001,7 @@ export default function MapView() {
               {!lassoDrawn ? (
                 /* Armed, nothing drawn yet → drawing hint */
                 <div className="glass-capsule flex items-center gap-2.5 border-teal-300/40 pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                  <Pencil className="w-4 h-4 text-teal-400 flex-shrink-0" />
+                  
                   <span className="text-[13px] font-medium text-white whitespace-nowrap">
                     Drag a loop around the area
                   </span>
@@ -7170,7 +7140,7 @@ export default function MapView() {
                         ["mark", "Mark", Flag],
                         ["area", "Area", Landmark],
                       ] as const
-                    ).map(([key, label, Icon]) => {
+                    ).map(([key, label]) => {
                       // Only "Area" works on an empty loop; the rest need lead IDs.
                       const disabled = !lassoHasLeads && key !== "area";
                       const active = lassoEffectiveAction === key;
@@ -7189,7 +7159,7 @@ export default function MapView() {
                               : "border-border text-white/80 hover:text-white hover:bg-white/[0.06]"
                           } ${FOCUS}`}
                         >
-                          <Icon className="w-5 h-5" aria-hidden="true" />
+                          
                           <span className="text-[11px] font-semibold leading-none">
                             {label}
                           </span>
@@ -7203,7 +7173,7 @@ export default function MapView() {
                       data-testid="lasso-clear"
                       className={`col-span-4 h-16 rounded-xl border border-border flex flex-col items-center justify-center gap-1 text-white/80 hover:text-white hover:bg-white/[0.06] active:scale-95 transition ${FOCUS}`}
                     >
-                      <X className="w-5 h-5" aria-hidden="true" />
+                      
                       <span className="text-[11px] font-semibold leading-none">
                         Clear
                       </span>
@@ -7791,7 +7761,7 @@ export default function MapView() {
                           {reclaimPendingMode === "return_to_pool" ? (
                             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                           ) : (
-                            <Undo2 className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+                            null
                           )}
                           <span>
                             {reclaimPendingMode === "return_to_pool" ? "Reclaiming…" : "Return leads to pool"}{" "}
@@ -7815,7 +7785,7 @@ export default function MapView() {
                           {reclaimPendingMode === "keep_leads" ? (
                             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                           ) : (
-                            <Undo2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                            null
                           )}
                           <span>
                             {reclaimPendingMode === "keep_leads" ? "Reclaiming…" : "Reclaim area only"}{" "}
@@ -8169,7 +8139,7 @@ export default function MapView() {
                   data-testid="map-filter-open"
                   className={`${RAIL_BTN} ${RAIL_BTN_IDLE}`}
                 >
-                  <SlidersHorizontal className="w-5 h-5" aria-hidden="true" />
+                  
                   {mapFilterActive && (
                     <span
                       className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-primary ring-2 ring-card"
@@ -8453,7 +8423,7 @@ export default function MapView() {
               <div className="flex items-center gap-2 pl-3.5 pr-2 py-2 min-h-11">
                 {/* No resolving spinner — the tap drops its pin instantly and
                     the geocode reconciles in the background. */}
-                <Radar className="w-4 h-4 text-orange-400 shrink-0" aria-hidden="true" />
+                
                 <span className="font-medium whitespace-nowrap">
                   Tap a house to add a lead
                 </span>
@@ -8497,10 +8467,7 @@ export default function MapView() {
               }}
               className="glass-capsule glass-opaque absolute left-3 z-20 flex items-center gap-2 px-4 text-white font-semibold text-[14px] active:scale-[0.97] transform-gpu transition-transform"
             >
-              <Navigation
-                className="w-4.5 h-4.5 text-teal-300"
-                style={{ width: 18, height: 18 }}
-              />
+              
               Next door
             </button>
           )}
@@ -8544,7 +8511,7 @@ export default function MapView() {
                       : "bg-white/10 border-white/20 text-white/70"
                   }`}
                 >
-                  <span className="inline-flex items-center gap-1.5"><Users className="w-3.5 h-3.5" aria-hidden="true" />Rep areas: {repColorMode ? "ON" : "OFF"}</span>
+                  <span className="inline-flex items-center gap-1.5">Rep areas: {repColorMode ? "ON" : "OFF"}</span>
                 </button>
               )}
               {/* Org-wide sweep — admin only. Opens the safe bulk flow (impact
@@ -8881,7 +8848,7 @@ export default function MapView() {
                               {reclaimPendingMode === "return_to_pool" ? (
                                 <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                               ) : (
-                                <Undo2 className="w-3.5 h-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+                                null
                               )}
                               <span>
                                 Return leads to pool{" "}

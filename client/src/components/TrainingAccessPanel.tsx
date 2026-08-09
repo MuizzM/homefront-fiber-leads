@@ -26,7 +26,7 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
-import { Lock, LockOpen, GraduationCap, Search, ShieldCheck, Loader2 } from "lucide-react";
+import { GraduationCap, Loader2 } from "lucide-react";
 
 interface RosterRow {
   userId: number;
@@ -97,7 +97,7 @@ export function TrainingAccessPanel() {
     <section className="space-y-3" data-testid="training-access">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionLabel className="flex items-center gap-1.5">
-          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+          
           Training access
         </SectionLabel>
         <span className="text-[13px] tabular-nums text-muted-foreground" data-testid="training-access-count">
@@ -111,7 +111,7 @@ export function TrainingAccessPanel() {
       </p>
 
       <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        
         <Input
           value={filter} onChange={e => setFilter(e.target.value)}
           placeholder="Find a rep by name or email" className="pl-9"
@@ -132,14 +132,7 @@ export function TrainingAccessPanel() {
             return (
               <li key={r.userId} data-testid={`training-row-${r.userId}`}
                   className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3">
-                <div className={cn(
-                  "grid h-9 w-9 shrink-0 place-items-center rounded-xl",
-                  r.gated ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                          : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-                )}>
-                  {r.gated ? <Lock className="h-4 w-4" aria-hidden="true" />
-                           : <LockOpen className="h-4 w-4" aria-hidden="true" />}
-                </div>
+                
 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-x-2">
@@ -187,8 +180,8 @@ export function TrainingAccessPanel() {
                       FOCUS,
                     )}>
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                          : r.trainingRequired ? <LockOpen className="h-4 w-4" aria-hidden="true" />
-                                               : <Lock className="h-4 w-4" aria-hidden="true" />}
+                          : r.trainingRequired ? null
+                                               : null}
                     {r.trainingRequired ? "Unlock" : "Lock"}
                   </button>
                 )}

@@ -23,10 +23,7 @@
 //     romanized spelling of their name).
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AlertTriangle, Banknote, CheckCircle2, Download, Eye, EyeOff, FileText,
-  Landmark, Loader2, Lock, ShieldCheck,
-} from "lucide-react";
+import { Banknote, Eye, EyeOff, FileText, Landmark, Loader2 } from "lucide-react";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 import { PdfReviewer } from "@/components/PdfReviewer";
 import { Button } from "@/components/ui/button";
@@ -257,7 +254,7 @@ function LegalCheckbox({ checked, onChange, children, testId }: {
   );
 }
 
-function CardSection({ title, description, icon: Icon, children, testId }: {
+function CardSection({ title, description, children, testId }: {
   title: string;
   description?: string;
   icon: typeof Landmark;
@@ -267,9 +264,7 @@ function CardSection({ title, description, icon: Icon, children, testId }: {
   return (
     <section className="rounded-2xl border border-border bg-card p-4 sm:p-5" data-testid={testId} aria-label={title}>
       <div className="flex items-start gap-3">
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </span>
+        
         <div className="min-w-0 flex-1">
           <h2 className="text-[15px] font-semibold text-foreground">{title}</h2>
           {description && <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</p>}
@@ -335,16 +330,16 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
   const errors = useMemo<W9Errors>(() => {
     const e: W9Errors = {};
     const name = legalName.trim();
-    if (name.length < 2 || name.length > 120) e.legalName = "Enter your full legal name as it appears on your Social Security card or IRS notice (2–120 characters).";
+    if (name.length < 2 || name.length > 120) e.legalName = "Enter your full legal name as it appears on your Social Security card or IRS notice (2-120 characters).";
     if (businessName.trim().length > 120) e.businessName = "Business name must be 120 characters or fewer.";
     if (!taxClassification) e.taxClassification = "Choose the one federal tax classification that describes you. This is required on the form.";
     if (taxClassification === "llc" && !llcTaxClass) e.llcTaxClass = "An LLC must say how the IRS taxes it - choose C, S or P.";
     if (taxClassification === "other") {
       const desc = otherClassification.trim();
-      if (desc.length < 2 || desc.length > 60) e.otherClassification = "Describe your classification in 2–60 characters.";
+      if (desc.length < 2 || desc.length > 60) e.otherClassification = "Describe your classification in 2-60 characters.";
     }
-    if (line1.trim().length < 3 || line1.trim().length > 120) e.line1 = "Enter your street address (3–120 characters).";
-    if (city.trim().length < 2 || city.trim().length > 60) e.city = "Enter your city (2–60 characters).";
+    if (line1.trim().length < 3 || line1.trim().length > 120) e.line1 = "Enter your street address (3-120 characters).";
+    if (city.trim().length < 2 || city.trim().length > 60) e.city = "Enter your city (2-60 characters).";
     if (!isValidState(state.trim().toUpperCase())) e.state = "Use the 2-letter state code, for example NC.";
     if (!isValidZip(zip.trim())) e.zip = "Enter a 5-digit ZIP code (ZIP+4 also accepted).";
     if (!isValidTin(digitsOnly(tin))) {
@@ -417,7 +412,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
     <form onSubmit={submit} noValidate className="space-y-6" data-testid="w9-form">
       {submitted && errorCount > 0 && (
         <Alert variant="destructive" data-testid="w9-validation-summary">
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          
           <AlertTitle>This form is not finished</AlertTitle>
           <AlertDescription>
             {errorCount === 1 ? "One answer still needs your attention." : `${errorCount} answers still need your attention.`} They are marked below.
@@ -427,7 +422,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
 
       {serverError && (
         <Alert variant="destructive" role="alert" data-testid="w9-server-error">
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          
           <AlertTitle>Your W-9 was not filed</AlertTitle>
           <AlertDescription>{serverError}</AlertDescription>
         </Alert>
@@ -442,7 +437,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
            anyone types a TIN. ── */}
       <div className="rounded-xl border border-border bg-secondary/30 p-4" data-testid="w9-official-form">
         <div className="flex items-start gap-3 flex-wrap">
-          <FileText className="w-4 h-4 text-primary mt-0.5 shrink-0" aria-hidden="true" />
+          
           <div className="min-w-0 flex-1">
             <h3 className="text-sm font-semibold text-foreground">Read the official IRS Form W-9</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -556,7 +551,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
             <Field
               id="w9-other-classification"
               label="Describe your classification. This is required."
-              hint="A few words, 2–60 characters - this is printed on the form's 'Other' line."
+              hint="A few words, 2-60 characters - this is printed on the form's 'Other' line."
               error={show("otherClassification")}
             >
               {aria => (
@@ -786,7 +781,7 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
           <Button type="button" variant="ghost" onClick={onCancel} data-testid="w9-cancel">Cancel</Button>
         )}
         <Button type="submit" className="h-11" disabled={mutation.isPending} data-testid="w9-submit">
-          {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <Lock className="mr-2 h-4 w-4" aria-hidden="true" />}
+          {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : null}
           File my W-9
         </Button>
       </div>
@@ -833,7 +828,7 @@ function W9Filed({ status, onRefile }: { status: W9Status; onRefile: () => void 
   return (
     <div className="space-y-4" data-testid="w9-filed">
       <div className="flex items-start gap-2 rounded-xl border border-border bg-secondary/20 px-3.5 py-3">
-        <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+        
         <p className="text-xs leading-relaxed text-foreground">
           Your Form W-9 is on file, signed {Number.isNaN(filedOn.valueOf()) ? "recently" : filedOn.toLocaleDateString()}.
         </p>
@@ -857,7 +852,7 @@ function W9Filed({ status, onRefile }: { status: W9Status; onRefile: () => void 
 
       {status.subjectToBackupWithholding && (
         <Alert data-testid="w9-backup-withholding-notice">
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          
           <AlertTitle>You certified you are subject to backup withholding</AlertTitle>
           <AlertDescription>
             24% of each payout is withheld and sent to the IRS. If the IRS has since told you the withholding is lifted, file an updated W-9 below.
@@ -870,11 +865,11 @@ function W9Filed({ status, onRefile }: { status: W9Status; onRefile: () => void 
           Something changed - file a new W-9
         </Button>
         <Button type="button" variant="outline" onClick={() => setReviewing(true)} data-testid="w9-review">
-          <FileText className="mr-2 h-4 w-4" aria-hidden="true" />
+          
           Review full W-9
         </Button>
         <Button type="button" variant="outline" onClick={download} disabled={downloading} data-testid="w9-download">
-          {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="mr-2 h-4 w-4" aria-hidden="true" />}
+          {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : null}
           Download my copy
         </Button>
       </div>
@@ -916,7 +911,7 @@ function BankForm({ onSaved, onCancel, showCancel }: {
     const e: BankErrors = {};
     if (!/^\d{9}$/.test(routing)) e.routing = "A routing number is exactly 9 digits - it is the leftmost number on the bottom of a check.";
     else if (!isValidAbaRouting(routing)) e.routing = "That routing number fails the bank checksum, so it is not a real one. Check it against your bank's app or a check.";
-    if (!isValidAccountNumber(account)) e.account = "An account number is 4–17 digits.";
+    if (!isValidAccountNumber(account)) e.account = "An account number is 4-17 digits.";
     if (!confirmAccount) e.confirmAccount = "Enter your account number a second time so we can be sure it is right.";
     else if (confirmAccount !== account) e.confirmAccount = "The two account numbers do not match.";
     if (accountType !== "checking" && accountType !== "savings") e.accountType = "Tell us whether this is a checking or a savings account.";
@@ -957,14 +952,14 @@ function BankForm({ onSaved, onCancel, showCancel }: {
     <form onSubmit={submit} noValidate className="space-y-5" data-testid="bank-form">
       {submitted && errorCount > 0 && (
         <Alert variant="destructive" data-testid="bank-validation-summary">
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          
           <AlertTitle>Check these details before saving</AlertTitle>
           <AlertDescription>This is where your pay is sent, so it has to be exactly right.</AlertDescription>
         </Alert>
       )}
       {serverError && (
         <Alert variant="destructive" role="alert" data-testid="bank-server-error">
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          
           <AlertTitle>Your bank details were not saved</AlertTitle>
           <AlertDescription>{serverError}</AlertDescription>
         </Alert>
@@ -984,7 +979,7 @@ function BankForm({ onSaved, onCancel, showCancel }: {
         )}
       </Field>
 
-      <Field id="bank-account" label="Account number" hint="4–17 digits. Hidden as you type." error={show("account")}>
+      <Field id="bank-account" label="Account number" hint="4-17 digits. Hidden as you type." error={show("account")}>
         {aria => (
           <div className="flex items-center gap-2">
             <Input
@@ -1039,7 +1034,7 @@ function BankForm({ onSaved, onCancel, showCancel }: {
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         {showCancel && <Button type="button" variant="ghost" onClick={onCancel} data-testid="bank-cancel">Cancel</Button>}
         <Button type="submit" className="h-11" disabled={mutation.isPending} data-testid="bank-submit">
-          {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <Lock className="mr-2 h-4 w-4" aria-hidden="true" />}
+          {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : null}
           Save direct deposit
         </Button>
       </div>
@@ -1052,7 +1047,7 @@ function BankSaved({ status, onReplace }: { status: BankStatus; onReplace: () =>
   return (
     <div className="space-y-4" data-testid="bank-saved">
       <div className="flex items-start gap-2 rounded-xl border border-border bg-secondary/20 px-3.5 py-3">
-        <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+        
         <p className="text-xs leading-relaxed text-foreground">
           Your pay goes to this account. We keep only the last four digits on screen - nobody in the app can read the rest back.
         </p>
@@ -1090,7 +1085,7 @@ function LoadFailed({ what, onRetry }: { what: string; onRetry: () => void }) {
   return (
     <div className="space-y-3" role="alert">
       <Alert variant="destructive">
-        <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+        
         <AlertTitle>Couldn't load {what}</AlertTitle>
         <AlertDescription>Check your connection and try again. Nothing you have filed was lost.</AlertDescription>
       </Alert>
@@ -1161,7 +1156,7 @@ export default function TaxAndPay() {
 
       {noRepProfile && (
         <Alert data-testid="no-rep-profile">
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          
           <AlertTitle>No rep profile is linked to your login</AlertTitle>
           <AlertDescription>
             Ask your manager to link your login to your team profile. Once they do, you can file your W-9 and add your direct deposit here.
@@ -1222,7 +1217,7 @@ export default function TaxAndPay() {
           </CardSection>
 
           <div className="flex items-start gap-2 rounded-xl border border-border bg-secondary/30 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
-            <ShieldCheck className="mt-px h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            
             <span>
               Your Social Security number and bank account are encrypted before they are stored and are never shown again - not to you, not to your manager. Every access to your signed W-9 document is recorded.
             </span>

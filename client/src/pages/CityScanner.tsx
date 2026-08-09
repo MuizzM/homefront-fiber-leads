@@ -5,12 +5,7 @@ import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 // Backend base — empty string in dev, proxy path after deploy (rewritten by deploy_website)
 const _API_BASE: string = ("__PORT_5000__" as string).startsWith("__") ? "" : ("__PORT_5000__" as string);
 import { useToast } from "@/hooks/use-toast";
-import {
-  Radar, Play, Square, CheckCircle, CircleX,
-  Download, RefreshCw,
-  MapPin, Search, Globe,
-  Activity, AlertCircle
-} from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -383,7 +378,7 @@ export default function CityScanner() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2">
-            <Radar className="w-5 h-5 text-primary" />
+            
             <h1 className="text-xl font-semibold tracking-tight text-foreground">City Scanner</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
@@ -426,7 +421,7 @@ export default function CityScanner() {
         <CardContent className="pt-5 pb-5">
           <div className="space-y-4">
             <div className="flex items-center gap-2">
-              <Globe className="w-4 h-4 text-primary" />
+              
               <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Step 1</span>
               <span className="text-sm font-semibold tracking-tight text-foreground">Select City</span>
             </div>
@@ -463,7 +458,7 @@ export default function CityScanner() {
                   variant="outline"
                   className="gap-2"
                 >
-                  {pullingAddresses ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                  {pullingAddresses ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
                   {pullingAddresses ? "Pulling..." : "Pull Addresses"}
                 </Button>
               </div>
@@ -472,7 +467,7 @@ export default function CityScanner() {
             {/* Overpass result */}
             {overpassResult && (
               <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/40 p-3">
-                <MapPin className="w-4 h-4 text-primary flex-shrink-0" />
+                
                 <div className="flex-1 min-w-0">
                   <span className="text-sm font-semibold tabular-nums text-foreground">{overpassResult.count.toLocaleString()} addresses</span>
                   <span className="text-xs text-muted-foreground ml-2">in {overpassResult.cityName}</span>
@@ -494,7 +489,7 @@ export default function CityScanner() {
       <Card className="bg-card border-border rounded-xl">
         <CardContent className="pt-5 pb-5">
           <div className="flex items-center gap-2 mb-4">
-            <Radar className="w-4 h-4 text-primary" />
+            
             <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Step 2</span>
             <span className="text-sm font-semibold tracking-tight text-foreground">Run Kinetic Scan</span>
           </div>
@@ -505,7 +500,7 @@ export default function CityScanner() {
                 : <p className="text-sm text-muted-foreground">Pull addresses first, or scan will use built-in Rockwell list</p>
               }
               {scanning && checkedCount > 0 && (
-                <p className="text-xs text-muted-foreground mt-1 font-mono truncate max-w-[280px]">→ {currentAddr}</p>
+                <p className="text-xs text-muted-foreground mt-1 font-mono truncate max-w-[280px]">{currentAddr}</p>
               )}
             </div>
             <div className="flex gap-2">
@@ -515,7 +510,7 @@ export default function CityScanner() {
                   onClick={runScan}
                   className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
                 >
-                  <Play className="w-4 h-4" /> Start Scan
+                   Start Scan
                 </Button>
               ) : (
                 <Button
@@ -524,7 +519,7 @@ export default function CityScanner() {
                   variant="destructive"
                   className="gap-2"
                 >
-                  <Square className="w-4 h-4" /> Stop
+                   Stop
                 </Button>
               )}
               {!scanning && poolStats && poolStats.total > 0 && (
@@ -535,7 +530,7 @@ export default function CityScanner() {
                   className="gap-2"
                   title={`Re-scan ${poolStats.total.toLocaleString()} stored addresses for availability changes - no geocoding cost`}
                 >
-                  <RefreshCw className="w-4 h-4" /> Re-scan Pool
+                   Re-scan Pool
                 </Button>
               )}
               {done && results.length > 0 && (
@@ -545,7 +540,7 @@ export default function CityScanner() {
                   variant="outline"
                   className="gap-2"
                 >
-                  <Download className="w-4 h-4" /> Export CSV
+                   Export CSV
                 </Button>
               )}
             </div>
@@ -560,7 +555,7 @@ export default function CityScanner() {
               </div>
               <Progress value={pct} className="h-2" />
               {scanning && currentAddr && (
-                <p className="text-xs text-muted-foreground font-mono truncate">⟶ {currentAddr}</p>
+                <p className="text-xs text-muted-foreground font-mono truncate">{currentAddr}</p>
               )}
             </div>
           )}
@@ -572,11 +567,11 @@ export default function CityScanner() {
         <Card className="bg-card border-border rounded-xl">
           <CardContent className="pt-4 pb-4">
             <div className="flex items-center gap-2 mb-4">
-              <Activity className={`w-4 h-4 ${scannerState.isStuck ? "text-rose-400" : "text-primary animate-pulse"}`} />
+              
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Worker State</span>
               {scannerState.isStuck ? (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/15 px-2.5 py-0.5 text-xs font-medium text-rose-400">
-                  <AlertCircle className="w-3 h-3" /> Stuck - no heartbeat {scannerState.secondsSinceHeartbeat}s
+                   Stuck - no heartbeat {scannerState.secondsSinceHeartbeat}s
                 </span>
               ) : scannerState.isRunning && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-0.5 text-xs font-medium text-primary">
@@ -676,9 +671,7 @@ export default function CityScanner() {
                 className={`render-lazy rounded-2xl border bg-card px-4 py-3.5 ${verdict === "fresh" ? "border-emerald-500/30" : verdict === "unverified" ? "border-amber-500/25" : "border-border"}`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl ring-1 ${cfg.pill}`}>
-                    {verdict === "fresh" ? <CheckCircle className="h-5 w-5" /> : verdict === "not_fresh" ? <CircleX className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
-                  </div>
+                  
                   <div className="flex-1 min-w-0">
                     <div className={`text-[13px] font-bold tracking-wide ${verdict === "fresh" ? "text-emerald-400" : verdict === "unverified" ? "text-amber-400" : "text-slate-300"}`}>{cfg.answer} · {r.verdictLabel ?? cfg.label}</div>
                     <div className="mt-0.5 truncate text-sm font-semibold text-foreground">{r.address}</div>
@@ -696,7 +689,7 @@ export default function CityScanner() {
       {done && results.length === 0 && (
         <Card className="bg-card border-border rounded-xl">
           <CardContent className="pt-10 pb-10 text-center">
-            <CheckCircle className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
+            
             <p className="text-sm text-muted-foreground">Scan complete - no addresses returned results. Try a different city or check token status.</p>
           </CardContent>
         </Card>

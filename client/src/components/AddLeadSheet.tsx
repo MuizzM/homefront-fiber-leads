@@ -15,7 +15,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { apiRequest } from "@/lib/queryClient";
 import { isLeadsListKey, upsertLeadIntoLists } from "@/lib/leadsListQuery";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Plus, MapPin, LocateFixed } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import type { CardProperty } from "@/components/LeadCard";
 
 // Server-computed reason the caller may NOT see an already-existing lead's pin
@@ -262,7 +262,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
             <div className="flex items-center gap-2">
               {/* SheetTitle (not a bare h2) wires the dialog's accessible name. */}
               <SheetTitle className="text-[19px] font-bold tracking-tight text-foreground flex items-center gap-2 flex-1">
-                <span className="grid place-items-center w-8 h-8 rounded-xl bg-primary/12 text-primary" aria-hidden="true"><Plus className="w-4 h-4" /></span>
+                
                 Add a lead
               </SheetTitle>
               {!prefilled && (
@@ -273,13 +273,13 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
                   data-testid="add-lead-use-location"
                   className="h-11 inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-3.5 text-[12.5px] font-semibold text-primary active:scale-[0.97] transition disabled:opacity-60"
                 >
-                  {locating ? <Loader2 className="w-4 h-4 animate-spin" /> : <LocateFixed className="w-4 h-4" />}
+                  {locating ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   Use my location
                 </button>
               )}
             </div>
             {initial?.lat != null && (
-              <p className="text-[12px] text-muted-foreground mt-1 flex items-center gap-1"><MapPin className="w-3 h-3" /> From the map - check the address below.</p>
+              <p className="text-[12px] text-muted-foreground mt-1 flex items-center gap-1"> From the map - check the address below.</p>
             )}
 
             <div className="mt-4 space-y-3">

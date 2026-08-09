@@ -163,7 +163,7 @@ describe("Incentives - rep view", () => {
 
   it("spells out the $25-$50 band and the ways to trigger a spiff", async () => {
     renderPage();
-    expect((await screen.findByTestId("earn-band")).textContent).toBe("$25–$50");
+    expect((await screen.findByTestId("earn-band")).textContent).toBe("$25-$50");
     const ladder = screen.getByTestId("earn-ladder");
     expect(within(ladder).getAllByRole("listitem").map((li) => li.textContent))
       .toEqual(["$25", "$30", "$35", "$40", "$45", "$50"]);
@@ -209,7 +209,7 @@ describe("Incentives - rep view", () => {
     await openTab("activity");
     const empty = await screen.findByTestId("my-spiffs-empty");
     expect(empty.textContent).toContain("No bonuses yet");
-    expect(empty.textContent).toContain("$25–$50");
+    expect(empty.textContent).toContain("$25-$50");
   });
 
   it("renders an error state instead of a fake $0 when the feed fails", async () => {

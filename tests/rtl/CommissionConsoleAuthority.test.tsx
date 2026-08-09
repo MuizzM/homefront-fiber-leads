@@ -33,7 +33,7 @@ const OVERVIEW = {
   bounds: {
     weekStartUtc: "2026-08-03T04:00:00.000Z",
     nextWeekStartUtc: "2026-08-10T04:00:00.000Z",
-    localWeekLabel: "Aug 3 – Aug 9, 2026",
+    localWeekLabel: "Aug 3 - Aug 9, 2026",
     timezone: "America/New_York",
   },
   weekEnded: false,

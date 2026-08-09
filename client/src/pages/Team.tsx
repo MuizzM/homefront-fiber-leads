@@ -4,13 +4,7 @@ import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import {
-  UserPlus, Edit2, Trash2, Phone, Mail,
-  User, CheckCircle2, Users, Crown, Star, ChevronUp,
-  Wallet, Layers, DollarSign, ChevronRight,
-  DoorOpen, Handshake, PhoneCall, TrendingUp, FileSignature,
-  UserMinus, UserCheck, ShieldAlert, KeyRound, GitBranch, Archive, PiggyBank
-} from "lucide-react";
+import { Edit2, Trash2, User, Users, Crown, Star, ChevronUp, Wallet, ChevronRight, DoorOpen, Handshake, PhoneCall, TrendingUp, FileSignature, UserMinus } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
 import { TierEditor } from "@/components/commission/TierEditor";
 import { validateTiers, type CommissionTier } from "@shared/commissionTiers";
@@ -128,13 +122,12 @@ function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v
             >
               <div className="flex items-center gap-2.5">
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${r.avatarColor}`}>
-                  <r.Icon className="w-3.5 h-3.5" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-foreground">{r.label}</span>
                     {selected && (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                      null
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground leading-tight mt-0.5">{r.description}</p>
@@ -219,13 +212,13 @@ function MemberFormUI({
       </div>
       {!selfEdit && (
         <p className="text-[11px] text-muted-foreground -mt-1.5 flex items-center gap-1.5">
-          <Mail className="w-3 h-3 flex-shrink-0" />
+          
           Members with an email can log in with a one-time code sent to that address.
         </p>
       )}
       {selfEdit && (
         <p className="text-[11px] text-muted-foreground -mt-1.5 flex items-center gap-1.5">
-          <KeyRound className="w-3 h-3 flex-shrink-0" />
+          
           Your role, status, supervisor, and login email can only be changed by someone above you.
         </p>
       )}
@@ -270,7 +263,7 @@ function MemberFormUI({
           revoke live sessions, and re-home direct reports. */}
       {isEdit && !selfEdit && (
         <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-          <ShieldAlert className="w-3 h-3 flex-shrink-0" />
+          
           To deactivate or restore this member, use Offboard / Reactivate on their row.
         </p>
       )}
@@ -549,7 +542,6 @@ export default function Team() {
         {/* Section header — role chip + eyebrow + count pill + hairline rule */}
         <div className="flex items-center gap-2.5 mb-2.5 px-0.5">
           <div className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 ${ri.avatarColor}`}>
-            <ri.Icon className="w-3 h-3" />
           </div>
           <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h2>
           <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground tabular-nums">{members.length}</span>
@@ -598,7 +590,6 @@ export default function Team() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-sm text-foreground leading-tight truncate">{member.name}</span>
                       <Badge className={`h-5 gap-1 px-1.5 rounded-full border-0 text-[11px] font-medium ${ri2.color}`}>
-                        <ri2.Icon className="w-2.5 h-2.5" />
                         {ri2.short}
                       </Badge>
                       <span className={`inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-full text-[11px] font-medium ${member.active ? "bg-emerald-500/10 text-emerald-400" : "bg-muted text-muted-foreground"}`}>
@@ -625,24 +616,24 @@ export default function Team() {
                           : undefined;
                         return recruiter ? (
                           <span className="inline-flex items-center gap-1" data-testid={`recruited-by-${member.id}`}>
-                            <UserPlus className="w-3 h-3" /> Recruited by <span className="text-foreground/80 font-medium">{recruiter.name}</span>
+                             Recruited by <span className="text-foreground/80 font-medium">{recruiter.name}</span>
                           </span>
                         ) : null;
                       })()}
                       {(directReportCountById.get(member.id) ?? 0) > 0 && (
                         <span className="inline-flex items-center gap-1" data-testid={`chip-reports-${member.id}`}>
-                          <GitBranch className="w-3 h-3" />
+                          
                           <span className="tabular-nums font-medium text-foreground/80">{directReportCountById.get(member.id)}</span> direct report{directReportCountById.get(member.id) === 1 ? "" : "s"}
                         </span>
                       )}
                       {member.phone && (
                         <span className="inline-flex items-center gap-1">
-                          <Phone className="w-3 h-3" /> {member.phone}
+                           {member.phone}
                         </span>
                       )}
                       {member.email && (
                         <span className="inline-flex items-center gap-1">
-                          <Mail className="w-3 h-3" /> {member.email}
+                           {member.email}
                           <span className="text-2xs font-medium px-1.5 py-0 rounded-full bg-primary/15 text-primary">login</span>
                         </span>
                       )}
@@ -742,7 +733,7 @@ export default function Team() {
             className="h-9 bg-primary hover:bg-primary/90 text-primary-foreground text-sm shadow-sm"
             data-testid="btn-add-rep"
           >
-            <UserPlus className="w-4 h-4 mr-1.5" /> Add Member
+             Add Member
           </Button>
         )}
       </div>
@@ -757,10 +748,10 @@ export default function Team() {
               { label: "Contacts", val: totalContacts, Icon: Handshake },
               { label: "Callbacks", val: totalCallbacks, Icon: PhoneCall },
               { label: "Sales", val: totalSales, highlight: true, Icon: TrendingUp },
-            ].map(({ label, val, highlight, Icon }) => (
+            ].map(({ label, val, highlight, }) => (
               <div key={label} className="flex-1 min-w-[120px] px-4 py-3">
                 <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${highlight ? "text-emerald-400" : ""}`} />
+                  
                   <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
                 </div>
                 <div className={`text-2xl font-bold tabular-nums mt-1.5 ${highlight ? "text-emerald-400" : "text-foreground"}`}>{val.toLocaleString()}</div>
@@ -779,7 +770,6 @@ export default function Team() {
             <div key={r.value} className="rounded-xl border border-border p-3.5 bg-card">
               <div className="flex items-center gap-2 mb-1.5">
                 <div className={`w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 ${r.avatarColor}`}>
-                  <r.Icon className="w-3 h-3" />
                 </div>
                 <span className="text-sm font-semibold text-foreground">{r.label}</span>
               </div>
@@ -828,9 +818,7 @@ export default function Team() {
       ) : team.length === 0 ? (
         <Card className="bg-card border-border rounded-xl">
           <CardContent className="py-14 text-center">
-            <div className="w-14 h-14 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4">
-              <Users className="w-6 h-6 text-muted-foreground" />
-            </div>
+            
             <div className="text-sm font-semibold text-foreground">No team members yet</div>
             <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-xs mx-auto">
               Add your first manager, team lead, or rep to start building your org chart.
@@ -840,7 +828,7 @@ export default function Team() {
                 onClick={() => { setAddForm(emptyForm()); setAddOpen(true); }}
                 className="h-9 bg-primary hover:bg-primary/90 text-primary-foreground text-sm shadow-sm"
               >
-                <UserPlus className="w-4 h-4 mr-1.5" /> Add First Member
+                 Add First Member
               </Button>
             )}
           </CardContent>
@@ -856,9 +844,7 @@ export default function Team() {
           {formerMembers.length > 0 && (
             <div>
               <div className="flex items-center gap-2.5 mb-2.5 px-0.5">
-                <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 bg-muted text-muted-foreground">
-                  <Archive className="w-3 h-3" />
-                </div>
+                
                 <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Former members</h2>
                 <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground tabular-nums">{formerMembers.length}</span>
                 <div className="flex-1 h-px bg-border" />
@@ -877,7 +863,6 @@ export default function Team() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-semibold text-sm text-muted-foreground leading-tight truncate">{member.name}</span>
                             <Badge className={`h-5 gap-1 px-1.5 rounded-full border-0 text-[11px] font-medium opacity-60 ${ri2.color}`}>
-                              <ri2.Icon className="w-2.5 h-2.5" />
                               {ri2.short}
                             </Badge>
                             <span className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-full text-[11px] font-medium bg-muted text-muted-foreground">
@@ -897,7 +882,7 @@ export default function Team() {
                               disabled={reactivateMutation.isPending && reactivateMutation.variables === member.id}
                               data-testid={`btn-reactivate-rep-${member.id}`}
                               aria-label={`Reactivate ${member.name}`} title="Restore access">
-                              <UserCheck className="w-3.5 h-3.5 mr-1.5" />
+                              
                               {reactivateMutation.isPending && reactivateMutation.variables === member.id ? "Restoring…" : "Reactivate"}
                             </Button>
                           )}
@@ -924,9 +909,7 @@ export default function Team() {
         <DialogContent className="bg-card border-border text-foreground max-w-md">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
-              <span className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center">
-                <UserMinus className="w-3.5 h-3.5" />
-              </span>
+              
               Offboard {offboardMember?.name}?
             </DialogTitle>
           </DialogHeader>
@@ -935,7 +918,7 @@ export default function Team() {
           </p>
           <div className="rounded-xl bg-secondary/40 border border-border divide-y divide-border text-sm">
             <div className="flex items-start gap-2.5 px-3 py-2.5">
-              <KeyRound className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
+              
               <div>
                 <div className="font-medium text-foreground">Login disabled &amp; signed out everywhere</div>
                 <div className="text-xs text-muted-foreground">Every live session ends now - not at their next login.</div>
@@ -943,7 +926,7 @@ export default function Team() {
             </div>
             {offboardMember && directReportsOf(offboardMember.id).length > 0 && (
               <div className="flex items-start gap-2.5 px-3 py-2.5">
-                <GitBranch className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
+                
                 <div>
                   <div className="font-medium text-foreground">
                     {directReportsOf(offboardMember.id).length} direct report{directReportsOf(offboardMember.id).length === 1 ? "" : "s"} re-homed
@@ -959,7 +942,7 @@ export default function Team() {
               </div>
             )}
             <div className="flex items-start gap-2.5 px-3 py-2.5">
-              <ShieldAlert className="w-4 h-4 mt-0.5 text-muted-foreground flex-shrink-0" />
+              
               <div>
                 <div className="font-medium text-foreground">Knocks, sales &amp; documents retained</div>
                 <div className="text-xs text-muted-foreground">History stays for commissions and audit. The action itself is logged.</div>
@@ -985,9 +968,7 @@ export default function Team() {
         <DialogContent className="bg-card border-border text-foreground max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
-              <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
-                <UserPlus className="w-4 h-4" />
-              </span>
+              
               Add Team Member
             </DialogTitle>
           </DialogHeader>
@@ -1008,9 +989,7 @@ export default function Team() {
         <DialogContent className="bg-card border-border text-foreground max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
-              <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
-                <Edit2 className="w-3.5 h-3.5" />
-              </span>
+              
               Edit Team Member
             </DialogTitle>
           </DialogHeader>
@@ -1056,9 +1035,7 @@ export default function Team() {
                 className="w-full flex items-center justify-between gap-2 rounded-xl border border-border bg-secondary/40 px-3 py-2.5 text-left transition-colors hover:bg-secondary/70"
               >
                 <span className="flex items-center gap-2 min-w-0">
-                  <span className="w-7 h-7 shrink-0 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
-                    <DollarSign className="w-3.5 h-3.5" />
-                  </span>
+                  
                   <span className="min-w-0">
                     <span className="block text-xs font-semibold">Commission</span>
                     <span className="block text-2xs text-muted-foreground truncate">
@@ -1080,9 +1057,7 @@ export default function Team() {
           {editMember && canManageOverrides && editMember.role !== "manager" && editMember.id !== myMemberId && (
             <div className="mt-1 border-t border-border pt-3" data-testid="override-rates-section">
               <div className="flex items-center gap-2 mb-2">
-                <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
-                  <DollarSign className="w-3.5 h-3.5" />
-                </span>
+                
                 <div className="min-w-0">
                   <span className="block text-xs font-semibold">Upline keep per sale</span>
                   <span className="block text-2xs text-muted-foreground">Overrides on this member's sales · blank = org default</span>
@@ -1137,9 +1112,7 @@ export default function Team() {
         <DialogContent className="bg-card border-border text-foreground max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-base flex items-center gap-2">
-              <span className="w-7 h-7 rounded-lg bg-red-500/10 text-red-400 flex items-center justify-center">
-                <Trash2 className="w-3.5 h-3.5" />
-              </span>
+              
               Remove Member?
             </DialogTitle>
           </DialogHeader>
@@ -1191,7 +1164,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
   // Editable ladder. Defaults to the operator's stated plan: 1–6 at $150, 7+ at
   // $200 — the final band open-ended so beating it still pays.
   const [tiers, setTiers] = useState<CommissionTier[]>([
-    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "1–6" },
+    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "1-6" },
     { position: 1, minimumSales: 7, maximumSales: null, rateCents: 20000, label: "7+" },
   ]);
 
@@ -1268,7 +1241,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
       // anything, so this is a request, not a decision.
       else body.tiers = tiers.map(t => ({
         minimumSales: t.minimumSales, maximumSales: t.maximumSales,
-        rateCents: t.rateCents, label: t.label || (t.maximumSales == null ? `${t.minimumSales}+` : `${t.minimumSales}–${t.maximumSales}`),
+        rateCents: t.rateCents, label: t.label || (t.maximumSales == null ? `${t.minimumSales}+` : `${t.minimumSales}-${t.maximumSales}`),
       }));
       const res = await apiRequest("POST", "/api/commission/assign-structure", body);
       return res.json();
@@ -1288,7 +1261,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
       <DialogContent className="bg-card border-border text-foreground max-w-md">
         <DialogHeader>
           <DialogTitle className="text-base flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-primary" /> Commission - {member?.name}
+             Commission - {member?.name}
           </DialogTitle>
         </DialogHeader>
 
@@ -1312,14 +1285,14 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
             aria-pressed={structure === "TIERED"}
             className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${structure === "TIERED" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
             data-testid="btn-team-structure-tiered">
-            <Layers className={`w-4 h-4 mt-0.5 ${structure === "TIERED" ? "text-primary" : "text-muted-foreground"}`} />
+            
             <span><span className="block text-xs font-semibold">Tiered</span><span className="block text-2xs text-muted-foreground leading-tight">Retroactive weekly</span></span>
           </button>
           <button type="button" onClick={() => setStructure("FLAT")}
             aria-pressed={structure === "FLAT"}
             className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${structure === "FLAT" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
             data-testid="btn-team-structure-flat">
-            <DollarSign className={`w-4 h-4 mt-0.5 ${structure === "FLAT" ? "text-primary" : "text-muted-foreground"}`} />
+            
             <span><span className="block text-xs font-semibold">Flat</span><span className="block text-2xs text-muted-foreground leading-tight">Per qualified sale</span></span>
           </button>
         </div>
@@ -1354,7 +1327,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
             to integer cents once, at submit. */}
         <div className="mt-1 rounded-2xl border border-border bg-secondary/30 p-3">
           <div className="flex items-center gap-2">
-            <PiggyBank className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />
+            
             <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Chargeback reserve</Label>
           </div>
           <p className="mt-1 text-2xs text-muted-foreground leading-snug">

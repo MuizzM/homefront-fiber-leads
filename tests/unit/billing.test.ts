@@ -81,7 +81,7 @@ describe("runtime input validators (guard untrusted route/adapter input)", () =>
 });
 
 describe("credit accounting", () => {
-  it("remaining = included + rollover + purchased − used, floored at 0", () => {
+  it("remaining = included + rollover + purchased - used, floored at 0", () => {
     expect(creditsRemaining(base({ used: 30 }))).toBe(70);
     expect(creditsRemaining(base({ rollover: 20, purchased: 5, used: 30 }))).toBe(95);
     expect(creditsRemaining(base({ used: 999 }))).toBe(0); // never negative

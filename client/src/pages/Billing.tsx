@@ -13,7 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CreditCard, Zap, Infinity as InfinityIcon, TrendingUp, AlertTriangle, CheckCircle2, Clock, ArrowUpRight, ExternalLink } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock } from "lucide-react";
 
 type PlanKey = "starter" | "growth" | "professional" | "enterprise";
 interface Plan {
@@ -133,7 +133,7 @@ export default function Billing() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            <CreditCard className="w-3.5 h-3.5" /> Billing &amp; Usage
+             Billing &amp; Usage
           </div>
           <h1 className="mt-0.5 text-[22px] font-semibold tracking-tight text-foreground">Lead credits &amp; plan</h1>
         </div>
@@ -142,7 +142,7 @@ export default function Billing() {
             {stripeOn && (
               <button onClick={openPortal} data-testid="manage-billing"
                 className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-border text-[12px] font-medium text-foreground hover:bg-secondary">
-                <ExternalLink className="w-3.5 h-3.5" /> Manage billing
+                 Manage billing
               </button>
             )}
             <span className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full text-[12px] font-medium ${STATE_META[summary.state].cls}`} data-testid="billing-state">
@@ -187,7 +187,7 @@ export default function Billing() {
             <div className="px-4 sm:px-5 py-4">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-primary" />
+                  
                   <h2 className="text-[15px] font-semibold tracking-tight text-foreground">This billing cycle</h2>
                 </div>
                 <div className="text-[13px] text-muted-foreground tabular-nums">{remainingLabel}</div>
@@ -195,7 +195,7 @@ export default function Billing() {
 
               {summary.unlimited ? (
                 <div className="mt-4 flex items-center gap-2 text-[14px] text-foreground">
-                  <InfinityIcon className="w-5 h-5 text-primary" />
+                  
                   Unlimited lead credits on {summary.planName}. {summary.creditsUsed.toLocaleString()} delivered this cycle.
                 </div>
               ) : (
@@ -216,13 +216,13 @@ export default function Billing() {
                     </span>
                     {summary.overageUsed > 0 && (
                       <span className="inline-flex items-center gap-1 text-amber-400 font-medium">
-                        <TrendingUp className="w-3.5 h-3.5" /> {summary.overageUsed.toLocaleString()} in overage
+                         {summary.overageUsed.toLocaleString()} in overage
                       </span>
                     )}
                   </div>
                   {(summary.level === "critical" || summary.level === "exhausted") && (
                     <div role="alert" className="mt-3 flex items-center gap-2 rounded-lg bg-red-500/10 text-red-400 px-3 py-2 text-[12.5px]">
-                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      
                       {summary.level === "exhausted"
                         ? (summary.overageMode === "stop"
                             ? "Credits exhausted - new lead delivery is paused until the cycle resets or you add credits."
@@ -310,7 +310,7 @@ function PlanGrid({ plans, current, stripeOn, onChoose }: { plans: Plan[]; curre
               <ul className="mt-3 space-y-1 text-[12px] text-muted-foreground flex-1">
                 {p.features.slice(0, 4).map(f => (
                   <li key={f} className="flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-primary/70 shrink-0" />
+                    
                     {f.replace(/_/g, " ")}
                   </li>
                 ))}
@@ -319,7 +319,7 @@ function PlanGrid({ plans, current, stripeOn, onChoose }: { plans: Plan[]; curre
               {canCheckout ? (
                 <button onClick={() => onChoose!(p.key)} data-testid={`choose-${p.key}`}
                   className="mt-3 inline-flex items-center justify-center gap-1 h-8 rounded-lg bg-primary text-primary-foreground text-[12.5px] font-medium hover:bg-primary/90">
-                  Choose {p.name} <ArrowUpRight className="w-3.5 h-3.5" />
+                  Choose {p.name} 
                 </button>
               ) : isEnterprise ? (
                 <a href="mailto:sales@homefrontsolutionsllc.com?subject=Enterprise%20plan"
@@ -340,9 +340,7 @@ function NotProvisioned({ plans }: { plans: Plan[] }) {
   return (
     <div className="space-y-5">
       <section className="rounded-xl bg-card border border-border px-5 py-6 text-center" data-testid="billing-not-provisioned">
-        <div className="mx-auto w-11 h-11 rounded-full bg-primary/10 flex items-center justify-center">
-          <InfinityIcon className="w-5 h-5 text-primary" />
-        </div>
+        
         <h2 className="mt-3 text-[16px] font-semibold tracking-tight text-foreground">Billing isn't set up for this workspace</h2>
         <p className="mt-1.5 text-[13px] text-muted-foreground max-w-md mx-auto">
           This org runs with unlimited internal access - lead delivery isn't metered and nothing is gated.

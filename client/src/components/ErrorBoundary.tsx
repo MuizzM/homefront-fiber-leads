@@ -1,5 +1,4 @@
 import { Component, ErrorInfo, ReactNode } from "react";
-import { AlertTriangle, Home, RefreshCw } from "lucide-react";
 
 interface Props {
   children: ReactNode;
@@ -46,9 +45,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="flex flex-1 items-center justify-center bg-background p-5" style={{ minHeight: 0 }}>
           <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 text-center shadow-sm">
-            <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-amber-500/12 text-amber-500">
-              <AlertTriangle className="h-6 w-6" aria-hidden="true" />
-            </div>
+            
             <div className="text-[18px] font-semibold tracking-tight text-foreground">This screen needs a refresh</div>
             <p className="mx-auto mt-2 max-w-xs text-[13px] leading-relaxed text-muted-foreground">
               Your saved field work is safe. Reload this screen, or return home and keep working.
@@ -65,14 +62,14 @@ export class ErrorBoundary extends Component<Props, State> {
                 onClick={() => window.location.reload()}
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
               >
-                <RefreshCw className="h-4 w-4" /> Reload screen
+                 Reload screen
               </button>
               <a
                 href="#/today"
                 onClick={() => this.setState({ error: null, incidentId: null })}
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-secondary px-4 text-sm font-semibold text-secondary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
-                <Home className="h-4 w-4" /> Go to Today
+                 Go to Today
               </a>
             </div>
           </div>

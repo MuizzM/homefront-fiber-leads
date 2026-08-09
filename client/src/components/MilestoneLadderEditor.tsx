@@ -20,7 +20,7 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Footprints, Plus, Trash2, Loader2, AlertTriangle } from "lucide-react";
+import { Trash2, Loader2 } from "lucide-react";
 import {
   validateLadder, ladderCeilingCents, usd,
   type MilestoneLadder, type MilestonePeriod, type MilestoneRung,
@@ -88,7 +88,7 @@ export function MilestoneLadderEditor() {
     <section className="space-y-3" data-testid="milestone-editor">
       <div className="flex items-center justify-between gap-3">
         <SectionLabel className="flex items-center gap-1.5">
-          <Footprints className="h-3.5 w-3.5" aria-hidden="true" />
+          
           Standing door bonus
         </SectionLabel>
         <div className="flex items-center gap-2">
@@ -132,7 +132,7 @@ export function MilestoneLadderEditor() {
       <button type="button" data-testid="rung-add"
         onClick={() => setDraft(d => d && ({ ...d, rungs: [...d.rungs, { doors: "", reward: "" }] }))}
         className={cn("inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-secondary px-3 text-sm font-semibold text-foreground", FOCUS)}>
-        <Plus className="h-4 w-4" aria-hidden="true" /> Add a milestone
+         Add a milestone
       </button>
 
       {/* The bill, before the save button. This is the number that stops a
@@ -150,7 +150,7 @@ export function MilestoneLadderEditor() {
 
       {problem && (
         <p className="flex items-center gap-1.5 text-[13px] font-medium text-destructive" data-testid="milestone-error">
-          <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> {problem}
+           {problem}
         </p>
       )}
 

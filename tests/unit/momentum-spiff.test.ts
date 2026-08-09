@@ -127,7 +127,7 @@ describe("the score rewards conversation over volume", () => {
     expect(s).toBeLessThan(DEFAULT_MOMENTUM_CONFIG.armAtScore);
   });
 
-  it("is bounded to 0–100 for absurd inputs", () => {
+  it("is bounded to 0-100 for absurd inputs", () => {
     const huge = momentumScore(hot({ doorsInWindow: 5_000, conversationsInWindow: 5_000, interestSignalsInWindow: 900, baselineDoorsPerHour: 0.01 }));
     expect(huge).toBeLessThanOrEqual(100);
     expect(momentumScore(hot({ doorsInWindow: 0, conversationsInWindow: 0, interestSignalsInWindow: 0 }))).toBeGreaterThanOrEqual(0);

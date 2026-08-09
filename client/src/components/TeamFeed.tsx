@@ -24,7 +24,6 @@ import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BadgeDollarSign, Bell, Flame, Megaphone, PartyPopper } from "lucide-react";
 import { agoLabel, type AnnouncementKind } from "@shared/teamFeed";
 
 export interface FeedItem {
@@ -83,33 +82,14 @@ export function applyLiveAnnouncement(qc: ReturnType<typeof useQueryClient>, a: 
   });
 }
 
-const KIND_ICON: Record<AnnouncementKind, typeof Flame> = {
-  sale: PartyPopper,
-  hot_streak: Flame,
-  promo: BadgeDollarSign,
-  update: Megaphone,
-};
 
-const KIND_TONE: Record<AnnouncementKind, string> = {
-  sale: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-  hot_streak: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  // A promo has money attached and a deadline behind it — amber, same language
-  // the Live Slot uses for "clock running".
-  promo: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  // An update is news. Neutral on purpose: it must not compete with the two
-  // registers that mean "act now".
-  update: "bg-secondary text-muted-foreground",
-};
 
 // Exported for the Messages hub's announcements tab — the same row the bell
 // sheet renders, so an announcement looks identical wherever it is read.
 export function FeedRow({ item, now }: { item: FeedItem; now: number }) {
-  const Icon = KIND_ICON[item.kind] ?? PartyPopper;
   return (
     <li className="flex items-start gap-3 py-3" data-testid={`feed-item-${item.id}`}>
-      <div className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-xl", KIND_TONE[item.kind])}>
-        <Icon className="h-4.5 w-4.5 h-[18px] w-[18px]" aria-hidden="true" />
-      </div>
+      
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold leading-snug text-foreground">{item.headline}</p>
         <p className="mt-0.5 text-[13px] leading-snug text-muted-foreground">{item.body}</p>
@@ -156,7 +136,7 @@ export function TeamFeedBell({ className }: { className?: string }) {
         data-testid="team-feed-bell"
         className={cn("relative grid h-10 w-10 place-items-center rounded-xl text-foreground", FOCUS, className)}
       >
-        <Bell className="h-5 w-5" aria-hidden="true" />
+        
         {unread > 0 && (
           <span
             data-testid="team-feed-unread"
@@ -217,7 +197,6 @@ export function TeamFeedHeadline({ className }: { className?: string }) {
   // returning null on tap would unmount the sheet along with the strip.
   if ((unread <= 0 || !item) && !open) return null;
 
-  const Icon = item ? (KIND_ICON[item.kind] ?? PartyPopper) : PartyPopper;
 
   return (
     <>
@@ -232,9 +211,7 @@ export function TeamFeedHeadline({ className }: { className?: string }) {
             FOCUS, className,
           )}
         >
-          <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", KIND_TONE[item.kind])}>
-            <Icon className="h-[15px] w-[15px]" aria-hidden="true" />
-          </span>
+          
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] font-semibold leading-snug text-foreground">{item.headline}</span>
             <span className="block truncate text-[12px] leading-snug text-muted-foreground">{item.body}</span>

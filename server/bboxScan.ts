@@ -57,7 +57,7 @@ export function validateScanBbox(raw: {
   if (minLng > maxLng) { [minLng, maxLng] = [maxLng, minLng]; corrected = true; }
 
   if (minLat < -90 || maxLat > 90 || minLng < -180 || maxLng > 180) {
-    return { ok: false, code: "bbox_range", message: "Coordinates out of range - latitude must be −90…90 and longitude −180…180. (Is the box lat/lng-swapped?)" };
+    return { ok: false, code: "bbox_range", message: "Coordinates out of range - latitude must be -90…90 and longitude -180…180. (Is the box lat/lng-swapped?)" };
   }
 
   // Service-area envelope (generous North America). This is what actually catches

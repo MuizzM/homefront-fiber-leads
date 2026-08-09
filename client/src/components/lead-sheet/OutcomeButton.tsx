@@ -33,7 +33,7 @@ export function OutcomeButton({ outcome: o, icon: Icon, active, flashing, onTap,
         ? { background: o.color, borderColor: o.color, color: "#ffffff", boxShadow: `0 2px 12px ${o.color}55` }
         : { background: `${o.color}14`, borderColor: `${o.color}55`, color: o.color }}
     >
-      {flashing ? <Check className="w-4 h-4" /> : Icon ? <Icon className="w-4 h-4" /> : null}
+      {flashing ? <Check className="w-4 h-4" /> : Icon ? null : null}
       {o.label}
     </button>
   );

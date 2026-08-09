@@ -32,7 +32,7 @@ function weekPayload(over: Record<string, any> = {}) {
       adjustmentCents: 0, finalCommissionCents: 105000, tierLabel: "1-6",
       retro: { salesUntilNextTier: 1, nextTierMinimumSales: 7, nextTierRateCents: 22500, nextTierProjectedCommissionCents: 157500 },
     },
-    bounds: { localWeekLabel: "Aug 3 – Aug 9, 2026" },
+    bounds: { localWeekLabel: "Aug 3 - Aug 9, 2026" },
     structure: { structure: "TIERED", flatRateCents: null, tiers: TIERS, planName: "Custom Weekly Tiers", acceptedAt: "2026-08-01T00:00:00Z" },
     sales: [],
     adjustments: [],
