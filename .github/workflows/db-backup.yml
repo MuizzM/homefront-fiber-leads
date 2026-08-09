@@ -106,10 +106,13 @@ jobs:
             fi
             [ -n "$TAG" ] || { echo "cannot determine running image tag" >&2; exit 1; }
             echo "dumping via image homefront-app:$TAG" >&2
+            # Mounted INTO /app (the image WORKDIR) so require("better-sqlite3")
+            # resolves against /app/node_modules — from /tmp it finds nothing
+            # (first run failed exactly there).
             APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
               run --rm --no-deps \
-              --volume /tmp/hf-db-dump.cjs:/tmp/hf-db-dump.cjs:ro \
-              --entrypoint node app /tmp/hf-db-dump.cjs </dev/null
+              --volume /tmp/hf-db-dump.cjs:/app/hf-db-dump.cjs:ro \
+              --entrypoint node app /app/hf-db-dump.cjs </dev/null
             rm -f /tmp/hf-db-dump.cjs
           ' </dev/null | zstd -T0 -3 -o backup/data.sql.zst
 
