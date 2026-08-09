@@ -130,8 +130,13 @@ jobs:
           # The importer ships inside the image (bundled by script/build.ts).
           # A live image from before this branch has no dist/import-fcc-pins.cjs
           # — fail with the real reason instead of a bare ENOENT.
+          #
+          # Both compose runs get </dev/null: this script IS the remote bash's
+          # stdin, and `compose run` keeps stdin open by default — without the
+          # redirect the existence check swallows the rest of the heredoc and
+          # the import below silently never runs (bash reads EOF, exits 0).
           if ! APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
-              run --rm --no-deps --entrypoint sh app -c 'test -f dist/import-fcc-pins.cjs'; then
+              run --rm --no-deps --entrypoint sh app -c 'test -f dist/import-fcc-pins.cjs' </dev/null; then
             echo "dist/import-fcc-pins.cjs is not in the running image — deploy a build containing it first (deploy.yml on this branch's commit)." >&2
             exit 1
           fi
@@ -142,7 +147,7 @@ jobs:
           # container — the app keeps serving and this cannot disturb it.
           APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
             run --rm --no-deps --entrypoint node app \
-            dist/import-fcc-pins.cjs --tenant "$TENANT" "${MODE[@]}"
+            dist/import-fcc-pins.cjs --tenant "$TENANT" "${MODE[@]}" </dev/null
           REMOTE
 
       - name: What to do next
