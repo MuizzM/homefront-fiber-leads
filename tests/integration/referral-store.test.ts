@@ -108,11 +108,11 @@ beforeEach(() => {
   R.setConfig(T1, { enabled: true }, NOW);
 });
 
-describe("the program is dark until an admin turns it on", () => {
-  it("defaults to disabled with the recommended $500 / 6-sale rule", () => {
+describe("the program runs by default; an admin can turn it off", () => {
+  it("defaults to enabled with the $500 / 6-sale rule (owner's call, 2026-08-09)", () => {
     rawDb.prepare("DELETE FROM app_settings WHERE key = 'referral.program'").run();
     const config = R.getConfig(T1);
-    expect(config.enabled).toBe(false);
+    expect(config.enabled).toBe(true);
     expect(config.rewardCents).toBe(50_000);
     expect(config.requiredApprovedSales).toBe(6);
   });

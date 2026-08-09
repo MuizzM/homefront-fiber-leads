@@ -120,7 +120,7 @@ export interface ReferralProgramConfig {
 }
 
 export const DEFAULT_REFERRAL_CONFIG: ReferralProgramConfig = {
-  enabled: false,          // dark until an admin opts in
+  enabled: true,           // live by default: $500 for 6 verified sales (owner's call, 2026-08-09)
   rewardCents: 50_000,     // $500
   requiredApprovedSales: 6,
   qualificationWindowDays: 180,

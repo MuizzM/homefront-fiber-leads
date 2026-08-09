@@ -22,13 +22,14 @@ const facts = (over: Partial<ReferralFacts> = {}): ReferralFacts => ({
 });
 
 describe("the recommended default rule", () => {
-  it("is $500 for 6 approved sales, and ships disabled", () => {
+  it("is $500 for 6 approved sales, and runs by default", () => {
     expect(DEFAULT_REFERRAL_CONFIG.rewardCents).toBe(50_000);
     expect(DEFAULT_REFERRAL_CONFIG.requiredApprovedSales).toBe(6);
     expect(DEFAULT_REFERRAL_CONFIG.requireTrainingComplete).toBe(true);
     expect(DEFAULT_REFERRAL_CONFIG.requireActiveStatus).toBe(true);
-    // Dark by default: deploying the feature creates no liability anywhere.
-    expect(DEFAULT_REFERRAL_CONFIG.enabled).toBe(false);
+    // Live by default since 2026-08-09 (owner's call): the $500-for-6 program
+    // is on unless an admin turns it off in settings.
+    expect(DEFAULT_REFERRAL_CONFIG.enabled).toBe(true);
   });
 
   it("refuses a config that would pay for a signup", () => {

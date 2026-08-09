@@ -83,7 +83,9 @@ describe("referral pipeline money + status labels", () => {
 
   it("approve is two-tap: the first tap arms and fires nothing", async () => {
     renderPage([referral()]);
-    const approve = await screen.findByTestId("referral-approve-7");
+    // The row renders in BOTH the "mine" and the org pipeline (this mock user
+    // holds every capability) - take the first; two-tap behavior is per-button.
+    const approve = (await screen.findAllByTestId("referral-approve-7"))[0];
     const callsBefore = apiRequest.mock.calls.filter(c =>
       c.some((a: any) => typeof a === "string" && a.includes("/approve"))).length;
     fireEvent.click(approve);

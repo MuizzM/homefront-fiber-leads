@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Check, X, Settings } from "lucide-react";
+import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 
 interface Requirement {
   key: string; label: string; met: boolean; current?: number; target?: number;
@@ -79,6 +80,13 @@ const STATUS_TONE: Record<string, string> = {
   CLAWED_BACK: "bg-destructive/15 text-destructive",
 };
 
+// Rows where the sales-progress bar is meaningful: the referee is hired and
+// counting, or already made it. Terminal failures explain themselves in the
+// checklist instead of wearing a frozen bar.
+const SALES_BAR_STATUSES = new Set([
+  "HIRED", "ACTIVATED", "IN_PROGRESS", "QUALIFIED", "REWARD_PENDING", "APPROVED", "PAID",
+]);
+
 interface Settings {
   enabled: boolean; rewardCents: number; requiredApprovedSales: number;
   qualificationWindowDays: number; clawbackWindowDays: number;
@@ -98,6 +106,57 @@ interface HistoryRow {
 }
 
 const get = <T,>(url: string) => apiRequest("GET", url).then(r => r.json() as Promise<T>);
+
+// ── The hero: what referring pays ───────────────────────────────────────────
+// Venmo/Setel via Mobbin: the promise as money first, the rule in one
+// sentence, and the live pipeline summarized - never a marketing panel.
+function ReferralHero() {
+  const { data: link } = useQuery<MyLink>({
+    queryKey: ["/api/referrals/my-link"],
+    queryFn: () => get<MyLink>("/api/referrals/my-link"),
+  });
+  const { data: referrals = [] } = useQuery<Referral[]>({
+    queryKey: ["/api/referrals", "mine"],
+    queryFn: () => get<Referral[]>("/api/referrals"),
+  });
+  if (!link || !link.programEnabled) return null;
+
+  const sum = (statuses: string[]) =>
+    referrals.filter(r => statuses.includes(r.status)).reduce((n, r) => n + r.rewardAmountCents, 0);
+  const paidCents = sum(["PAID"]);
+  const inReviewCents = sum(["QUALIFIED", "REWARD_PENDING", "APPROVED"]);
+  const working = referrals.filter(r => ["HIRED", "ACTIVATED", "IN_PROGRESS"].includes(r.status)).length;
+
+  return (
+    <Card className="rounded-2xl" data-testid="referral-hero">
+      <CardContent className="p-4">
+        <SectionLabel>Referral earnings</SectionLabel>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-primary"
+                data-testid="referral-earned">
+            {money(paidCents)}
+          </span>
+          <span className="flex flex-wrap items-center gap-1.5">
+            {inReviewCents > 0 && (
+              <span data-testid="referral-in-review"
+                    className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
+                {money(inReviewCents)} in review
+              </span>
+            )}
+            <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+              {money(link.rewardCents)} per hire
+            </span>
+          </span>
+        </div>
+        <p className="mt-2 text-[13px] text-muted-foreground" data-testid="referral-rule">
+          Refer a future rep. When they're hired, finish training, and close{" "}
+          {link.requiredApprovedSales} verified sales, {money(link.rewardCents)} lands in your bonus
+          ledger.{working > 0 ? ` ${working} referral${working === 1 ? "" : "s"} working toward it now.` : ""}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
 
 // ── My link ─────────────────────────────────────────────────────────────────
 
@@ -140,7 +199,7 @@ function MyLinkCard() {
     <Card data-testid="referral-my-link">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-           Refer a rep
+          Refer a rep
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -258,6 +317,13 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
     queryKey: ["/api/referrals", scope],
     queryFn: () => get<Referral[]>(`/api/referrals${scope === "org" ? "?scope=org" : ""}`),
   });
+  // The live rule (target + reward) for the always-visible progress bar on a
+  // rep's own rows. Same cache key as the link card - one request.
+  const { data: myLink } = useQuery<MyLink>({
+    queryKey: ["/api/referrals/my-link"],
+    queryFn: () => get<MyLink>("/api/referrals/my-link"),
+    enabled: scope === "mine",
+  });
 
   const decide = useMutation({
     mutationFn: ({ id, action, reason }: { id: number; action: "approve" | "reject"; reason?: string }) =>
@@ -306,13 +372,39 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
                   </span>
                   <Badge className={STATUS_TONE[r.status] ?? ""} variant="secondary">{STATUS_LABEL[r.status] ?? r.status}</Badge>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  {scope === "org" ? `Referred by ${r.referrerName} · ` : ""}
-                  {r.qualifyingSalesCount} approved sale{r.qualifyingSalesCount === 1 ? "" : "s"}
-                </p>
+                {scope === "org" ? (
+                  <p className="text-xs text-muted-foreground">
+                    Referred by {r.referrerName} · {r.qualifyingSalesCount} approved sale{r.qualifyingSalesCount === 1 ? "" : "s"}
+                  </p>
+                ) : SALES_BAR_STATUSES.has(r.status) && myLink ? (
+                  // The number a referrer actually watches: how close their
+                  // referee is to the six sales that release the reward. On the
+                  // row, always - not behind the expand.
+                  <div className="mt-1.5 flex items-center gap-2.5">
+                    <Progress
+                      value={Math.min(100, Math.round((r.qualifyingSalesCount / Math.max(1, myLink.requiredApprovedSales)) * 100))}
+                      className="h-1.5 flex-1"
+                    />
+                    <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground"
+                          data-testid={`referral-row-sales-${r.id}`}>
+                      {r.qualifyingSalesCount} of {myLink.requiredApprovedSales} sales
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {r.qualifyingSalesCount} approved sale{r.qualifyingSalesCount === 1 ? "" : "s"}
+                  </p>
+                )}
               </button>
               <div className="flex shrink-0 items-center gap-2">
-                <span className="text-sm tabular-nums">{money(r.rewardAmountCents)}</span>
+                {/* Before qualification the frozen amount is 0 - show the LIVE
+                    prospective reward on a rep's own rows so the row reads
+                    "this is worth $500", not "$0". Org rows keep the frozen
+                    figure: that is the number an approval releases. */}
+                <span className="text-sm tabular-nums">
+                  {money(scope === "mine" && r.rewardAmountCents === 0 && SALES_BAR_STATUSES.has(r.status) && myLink
+                    ? myLink.rewardCents : r.rewardAmountCents)}
+                </span>
                 {canApprove && r.status === "REWARD_PENDING" && (
                   <>
                     <Button size="sm" variant="outline" data-testid={`referral-approve-${r.id}`}
@@ -606,13 +698,20 @@ export default function Referrals() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-24" data-testid="referrals-page">
-      <h1 className="text-xl font-semibold">Referrals</h1>
+      {/* The live promise (amount + sales bar) renders in the hero from server
+          config - the subtitle stays generic so the header can never disagree
+          with settings an admin later edits. */}
+      <PageHeader
+        title="Referrals"
+        subtitle="Refer the next rep and earn the bonus when their sales verify."
+      />
 
       {/* Every rep sees their own link and pipeline first — this page is
           primarily theirs, and the admin tracker sits below it. */}
       {/* If this person was themselves referred, their own status comes first —
           it is the thing they are most likely to have opened the page for. */}
       <MyReferralStatus />
+      <ReferralHero />
       <MyLinkCard />
       <Pipeline scope="mine" />
 
