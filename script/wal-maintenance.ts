@@ -9,10 +9,18 @@
 // Caddy dropped every request in flight, and the browser reported the dead
 // connection as "Load failed". See docs/architecture/BULK_ASSIGNMENT.md.
 //
-// DELIBERATELY MINIMAL. It does NOT import server/db.ts: that module bootstraps
-// the whole schema, builds the drizzle client and claims a ~1GB page cache, none
-// of which a checkpointer needs, all of which costs RAM on an 8GB box. The only
-// contract it shares with the app is the file path and the guard mechanics.
+// The WAL guard is its FIRST duty, not its only one. Anything that blocks for
+// longer than a request budget belongs here rather than in the web server, and
+// yield-rollup maintenance qualifies twice over: a hard 5s synchronous budget
+// per 30s tick, plus one blocking CREATE INDEX per tick and a full ANALYZE
+// against an 18.8GB database. It is started here when HF_MAINTENANCE_ROLLUPS=1.
+//
+// The checkpoint path itself stays free of server/db.ts, which bootstraps the
+// whole schema, builds the drizzle client and claims a page cache none of it
+// needs. Rollups genuinely need that module graph, so it is imported LAZILY -
+// a box running with rollups off pays nothing for it. Cache is trimmed via
+// SQLITE_CACHE_KB below so the second connection cannot double the app's budget
+// on an 8GB box.
 //
 // Bundled to dist/wal-maintenance.cjs by script/build.ts, the same way
 // reset-areas and import-fcc-pins are, so it can run inside the production image
@@ -31,12 +39,48 @@ import {
 
 const WHERE = "wal-maintenance";
 
+/**
+ * Blocking maintenance the web server must not run.
+ *
+ * Imported lazily and only when asked for: this drags in server/db.ts and the
+ * storage layer, and a deployment with rollups off should not pay for that.
+ * Every cursor and readiness flag it keeps lives in SQLite, so moving it out of
+ * the server process is invisible to the scorer that reads them.
+ */
+function startDelegatedMaintenance(): boolean {
+  if (process.env.HF_MAINTENANCE_ROLLUPS !== "1") return false;
+  if (process.env.YIELD_ROLLUPS === "off") {
+    walLog("db.wal_maintenance_rollups", { where: WHERE, skipped: "YIELD_ROLLUPS=off" });
+    return false;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { startYieldRollupMaintenance } =
+      require("../server/yieldRollups") as typeof import("../server/yieldRollups");
+    const timer = startYieldRollupMaintenance();
+    // startYieldRollupMaintenance unrefs its timer so it can never hold the web
+    // server open. Here it is load-bearing: re-ref it or the process exits.
+    if (timer && typeof (timer as any).ref === "function") (timer as any).ref();
+    walLog("db.wal_maintenance_rollups", { where: WHERE, started: Boolean(timer) });
+    return Boolean(timer);
+  } catch (e: any) {
+    // Never take the checkpointer down with it - the WAL guard is the more
+    // urgent duty and must keep running.
+    walLog("db.wal_maintenance_rollups_error", { where: WHERE, error: e?.message ?? String(e) });
+    return false;
+  }
+}
+
 function main(): void {
-  if (process.env.WAL_GUARD === "off") {
+  const wantsRollups = process.env.HF_MAINTENANCE_ROLLUPS === "1" && process.env.YIELD_ROLLUPS !== "off";
+  // The kill switches below silence the CHECKPOINTER. Exiting on them while
+  // rollups are wanted would hand yield maintenance back to the web server,
+  // which is the stall this process exists to prevent.
+  if (process.env.WAL_GUARD === "off" && !wantsRollups) {
     walLog("db.wal_maintenance_exit", { where: WHERE, reason: "WAL_GUARD=off" });
     return; // nothing to do; the supervisor treats a clean exit as intentional
   }
-  if (litestreamOwnsCheckpoints()) {
+  if (litestreamOwnsCheckpoints() && !wantsRollups) {
     walLog("db.wal_maintenance_exit", { where: WHERE, reason: "litestream owns checkpointing" });
     return;
   }
@@ -64,14 +108,24 @@ function main(): void {
   const { intervalMs, truncateMb } = walGuardConfig();
   walLog("db.wal_maintenance_started", {
     where: WHERE, pid: process.pid, dbPath,
-    walMb: walFileMb(walPath), intervalMs, truncateMb,
+    walMb: walFileMb(walPath), intervalMs, truncateMb, rollups: wantsRollups,
   });
 
-  // One reclaim on the way in: the app's own bootWalCheckpoint runs before it
-  // listens, but this process may be (re)started long after that.
-  bootWalCheckpointOn(conn, walPath, WHERE);
-  // unref:false - this timer is the only thing keeping the process alive.
-  startWalGuardOn(conn, walPath, { where: WHERE, unref: false });
+  const checkpointing = process.env.WAL_GUARD !== "off" && !litestreamOwnsCheckpoints();
+  if (checkpointing) {
+    // One reclaim on the way in: the app's own bootWalCheckpoint runs before it
+    // listens, but this process may be (re)started long after that.
+    bootWalCheckpointOn(conn, walPath, WHERE);
+    // unref:false - with rollups off this timer is the only thing keeping the
+    // process alive.
+    startWalGuardOn(conn, walPath, { where: WHERE, unref: false });
+  }
+
+  // A second connection must not double the app's page-cache budget on an 8GB
+  // box. db.ts reads this at import, and the rollup import below is what pulls
+  // it in, so it has to be set FIRST.
+  if (!process.env.SQLITE_CACHE_KB) process.env.SQLITE_CACHE_KB = "65536"; // 64MB floor
+  startDelegatedMaintenance();
 
   // On-demand reclaim, asked for by the server's resource sentinel when disk or
   // WAL pressure reaches emergency. It arrives here instead of running on the

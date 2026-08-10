@@ -58,7 +58,15 @@ function spawnChild(entry: string, rapidExits: number): void {
   // stdio spelled out rather than "inherit" so the IPC channel is explicit:
   // requestWalCheckpoint() below depends on it, and a silently missing channel
   // would degrade the emergency reclaim back to blocking the web server.
-  child = fork(entry, [], { execArgv: [], stdio: ["inherit", "inherit", "inherit", "ipc"] });
+  //
+  // HF_MAINTENANCE_ROLLUPS hands the child yield-rollup maintenance as well.
+  // Set HERE rather than read from the ambient environment so there is exactly
+  // one place that decides what the web server has stopped doing itself.
+  child = fork(entry, [], {
+    execArgv: [],
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
+    env: { ...process.env, HF_MAINTENANCE_ROLLUPS: "1" },
+  });
 
   child.on("exit", (code, signal) => {
     child = null;

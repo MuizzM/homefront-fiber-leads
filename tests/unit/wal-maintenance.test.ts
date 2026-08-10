@@ -79,6 +79,22 @@ describe("WAL maintenance placement", () => {
     expect(readFileSync(got, "utf8")).toBe("emergency");
   }, 15_000);
 
+  it("hands the child yield-rollup maintenance as well", async () => {
+    // The rollup tick spends a HARD 5s synchronous budget every 30s, plus a
+    // blocking CREATE INDEX and a full ANALYZE. Measured on production
+    // 2026-08-10 as 3.8-6.4s /api/health stalls on a ~60s cadence, AFTER the
+    // WAL guard had already been moved out.
+    delete process.env.WAL_GUARD;
+    const entry = join(tmp, "wal-maintenance.cjs");
+    const envOut = join(tmp, "env.txt");
+    writeFileSync(entry, `require("node:fs").writeFileSync(${JSON.stringify(envOut)}, String(process.env.HF_MAINTENANCE_ROLLUPS));\n`);
+    process.env.WAL_MAINTENANCE_ENTRY = entry;
+
+    expect(mod.startWalMaintenance()).toBe("child");
+    await new Promise((r) => setTimeout(r, 1_200));
+    expect(readFileSync(envOut, "utf8")).toBe("1");
+  }, 15_000);
+
   it("reports no delegate when nothing is running, so the caller reclaims inline", () => {
     // Returning true here would silently disable the emergency reclaim on a box
     // that is running out of disk.

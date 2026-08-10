@@ -1643,10 +1643,20 @@ app.use((req, res, next) => {
     startWalMaintenance();
     process.once("SIGTERM", stopWalMaintenance);
     process.once("SIGINT", stopWalMaintenance);
+    // The sentinel STAYS here: its tick is two fs.statSync calls and one small
+    // upsert. Its emergency reclaim is the only blocking part and that is
+    // delegated to the maintenance child (see resourcePressure.ts).
     const { startResourceSentinel } = await import("./resourcePressure");
     startResourceSentinel();
-    const { startYieldRollupMaintenance } = await import("./yieldRollups");
-    startYieldRollupMaintenance();
+    // Yield-rollup maintenance now runs in the maintenance child too. It ticks
+    // every 30s and spends a HARD 5s budget (YIELD_ROLLUP_TICK_BUDGET_MS) in a
+    // synchronous while-loop of SQLite chunks, plus one blocking CREATE INDEX
+    // per tick and a full ANALYZE, against an 18.8GB database. Measured on
+    // production 2026-08-10: /api/health stalling 3.8-6.4s on a ~60s cadence
+    // with the WAL guard already moved out - this was the remainder.
+    //
+    // Its readiness and cursors live in SQLite (getState/setState), not in
+    // memory, so which process runs it is not observable to the scorer.
   }
 
   await registerRoutes(httpServer, app);
