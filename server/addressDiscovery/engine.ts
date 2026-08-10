@@ -558,13 +558,20 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true):
           createdBy: job.createdBy,
         });
       }
-      enqueueRunTargets(
+      // COUNT WHAT WAS ENQUEUED, not what was offered. `batch.length` counted
+      // rows that enqueueRunTargets had already deduped away, so a pass that
+      // inserted nothing still reported work - and the caller's idle backoff
+      // (1s -> 31s) reads this number to decide whether it may slow down. With
+      // a permanently non-zero `work` the reconciler stayed pinned at its 1s
+      // floor against the same jobs forever, which is the write pressure that
+      // grew the WAL from 70MB to 3.4GB in 23 minutes on 2026-08-10.
+      const enqueued = enqueueRunTargets(
         runId,
         batch.map((row, index) => ({ id: Number(row.targetId), seq: index })),
       );
       mapDiscoveryRun(job.id, runId, sequence++);
       void runScanWorker(runId, job.tenantId);
-      work += batch.length;
+      work += enqueued;
     }
     if (!finalize) {
       // Streaming pass mid-discovery: dispatched what exists so far; the phase

@@ -250,19 +250,31 @@ const _pendingElsewhere = (ids: number[], excludeRunId: string): Set<number> => 
   return found;
 };
 const ENQUEUE_DEDUP = process.env.SCAN_ENQUEUE_DEDUP !== "off";
-export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq: number }>): void {
-  if (!ranked.length) return;
+/**
+ * Returns the number of targets ACTUALLY enqueued.
+ *
+ * It used to return void, and both early returns below (nothing ranked, or
+ * everything deduped away) exited silently. The discovery reconciler counted
+ * `batch.length` as work regardless, so a pass that enqueued ZERO rows still
+ * reported progress and its 1s -> 31s idle backoff could never engage: it ran
+ * every second, forever, against the same jobs. INSERT OR IGNORE means even the
+ * post-dedup row count overstates, so this counts real `changes`.
+ */
+export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq: number }>): number {
+  if (!ranked.length) return 0;
   let rows = ranked;
   if (ENQUEUE_DEDUP) {
     const dupes = _pendingElsewhere(ranked.map((r) => r.id), runId);
     if (dupes.size) rows = ranked.filter((r) => !dupes.has(r.id));
   }
-  if (!rows.length) return;
+  if (!rows.length) return 0;
   const stmt = rawDb.prepare(`INSERT OR IGNORE INTO scan_run_targets (run_id, target_id, seq, state) VALUES (?,?,?,'queued')`);
   const tx = rawDb.transaction((batch: Array<{ id: number; seq: number }>) => {
-    for (const row of batch) stmt.run(runId, row.id, row.seq);
+    let inserted = 0;
+    for (const row of batch) inserted += stmt.run(runId, row.id, row.seq).changes;
+    return inserted;
   });
-  tx(rows);
+  return tx(rows) as number;
 }
 
 // ATOMICALLY claim the next batch of queued targets: mark them 'inflight' and

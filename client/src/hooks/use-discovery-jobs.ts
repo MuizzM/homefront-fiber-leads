@@ -204,13 +204,24 @@ export function useDiscoveryJobs(
         });
         if (!response.ok || !response.body) throw new Error(`discovery stream ${response.status}`);
         setConnected(true);
-        attempt = 0;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
         while (!stopped) {
           const chunk = await reader.read();
           if (chunk.done) break;
+          // Reset the backoff on the first DELIVERED CHUNK, not on response
+          // headers. Headers arriving proves the request was routed; it does not
+          // prove the stream works. When the stream then ends immediately (the
+          // throw below), `attempt` was already back to 0, so the delay computed
+          // 1_000 * 2**0 = 1000ms on every single cycle and the exponential
+          // backoff could never engage.
+          //
+          // Measured in production 2026-08-10: GET /api/discovery/jobs/:uuid was
+          // called 588 times in 15 minutes - one per 1.5s - totalling 199,576ms,
+          // about 23% of all server time in the window, for what is structurally
+          // a primary-key lookup.
+          attempt = 0;
           buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, "\n");
           for (;;) {
             const boundary = buffer.indexOf("\n\n");

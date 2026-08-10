@@ -137,6 +137,159 @@ export function pruneFinishedRunTargets(cutoffIso: string): number {
   return total;
 }
 
+// ── Terminal job/run retention (2026-08-10) ─────────────────────────────────
+// A page-level census of the 18.82 GB production file found that the six table
+// families pruned above are not where the bytes are. ~63% of the database is
+// job bookkeeping for work that FINISHED, spread across thirteen tables that
+// had no retention at all:
+//
+//   discovery_job_addresses + 2 idx  12.8%      fiber_job_checkpoints + idx  4.9%
+//   fiber_job_failures + idx          9.4%      scan_run_targets + 2 idx     3.1%
+//   scan_runs + 2 idx                 8.0%      fiber_worker_heartbeats+2idx 2.9%
+//   fiber_job_events + idx            6.6%      dead_letters/jobs/events/tiles 4.7%
+//   qualification_checks + 3 idx      5.7%
+//   discovery_job_runs + 2 idx        5.3%
+//
+// For scale: 21,561 leads against ~6.9M rows of this. The ratio is ~320:1.
+//
+// It collapses to TWO deletes. Every one of those tables is a child of either
+// discovery_jobs(id) or scan_runs(id) with ON DELETE CASCADE, so removing a
+// terminal parent removes its whole subtree. That is why this is three small
+// functions and not thirteen.
+//
+// BATCH SIZE IS DELIBERATELY SMALL HERE. pruneBatched's 25k is right for a leaf
+// table; for a cascading parent each deleted row drags an unbounded subtree with
+// it (one scan_run can own thousands of scan_run_targets and fiber_job_events),
+// and foreign_keys=ON makes SQLite walk every child row inside the same
+// transaction. 25k parents would hold the write lock for minutes. 500 keeps each
+// transaction short enough that a scan worker's commit waits milliseconds.
+const CASCADE_BATCH = Math.max(50, Math.min(5_000, Number(process.env.PRUNE_CASCADE_BATCH) || 500));
+const MAX_CASCADE_BATCHES = Math.max(1, Number(process.env.PRUNE_CASCADE_MAX_BATCHES) || 200);
+/** Finished scan runs, and with them every fiber_job_* / dead-letter child. */
+export const SCAN_RUNS_KEEP_DAYS = Math.max(1, Number(process.env.SCAN_RUNS_KEEP_DAYS) || 30);
+/** Finished discovery jobs, and with them addresses/checks/tiles/events. */
+export const DISCOVERY_JOBS_KEEP_DAYS = Math.max(1, Number(process.env.DISCOVERY_JOBS_KEEP_DAYS) || 30);
+/** Worker heartbeats. The only reader takes ORDER BY heartbeat_at DESC LIMIT 50
+ *  (fiberOperationsStore), so anything older than a couple of days is unread by
+ *  construction. The row is an UPSERT keyed on worker_id and every scan run mints
+ *  a new id, so this table gains a permanent row per run forever - measured at
+ *  107,100 rows in a single day. */
+export const HEARTBEAT_KEEP_DAYS = Math.max(1, Number(process.env.HEARTBEAT_KEEP_DAYS) || 3);
+
+// ── Abandoned jobs: the reason retention could not see the bloat ────────────
+// Retention above is not missing, it is BLIND. Measured on the production-shaped
+// database:
+//
+//   discovery_jobs status=running   675 jobs, oldest created 19 days ago,
+//                                   holding 1,594,105 of 1,602,526
+//                                   discovery_job_addresses rows (99.5%)
+//   scan_runs      status=running   723 runs, 549 with a heartbeat over a day
+//                                   stale, holding 791,992 of 804,229
+//                                   fiber_job_failures (98.5%), 630,106
+//                                   fiber_job_events, 491,486 scan_run_targets
+//
+// ~1,400 parents never reach a terminal state, so every retention rule - the
+// ones that already existed and the ones added above - skips their entire
+// subtree forever. Pruning only terminal rows would have freed 8,421 of those
+// 1.6M address rows and looked like it worked.
+//
+// A worker touches its run's heartbeat every 10s (scanEngine's hbTimer). A
+// heartbeat that is HOURS stale means the process that owned it is gone: killed
+// mid-batch, OOMed, or lost to a redeploy. Nothing will ever finish these.
+//
+// CANCELLED, not error, and the distinction is load-bearing. getStrandedDoneRuns
+// matches status IN ('done','error') and re-opens whatever still has claimable
+// targets; marking these 'error' would feed 723 abandoned runs straight into
+// that drain and re-open them every 60 seconds forever - the re-open livelock
+// scanEngine already documents having hit once. 'cancelled' is explicitly
+// excluded there ("those were deliberately stopped and must not resurrect"),
+// and it is terminal, so the retention above can finally collect them.
+const ABANDONED_RUN_STALE_HOURS = Math.max(1, Number(process.env.ABANDONED_RUN_STALE_HOURS) || 24);
+
+/** Runs whose worker died without ever finishing them. */
+export function cancelAbandonedScanRuns(staleHours = ABANDONED_RUN_STALE_HOURS): number {
+  try {
+    return rawDb.prepare(
+      `UPDATE scan_runs
+          SET status='cancelled',
+              error=COALESCE(error, 'abandoned: no worker heartbeat for ' || ? || 'h'),
+              completed_at=COALESCE(completed_at, datetime('now'))
+        WHERE status='running'
+          AND COALESCE(heartbeat_at, started_at) < datetime('now', ?)`,
+    ).run(staleHours, `-${staleHours} hours`).changes;
+  } catch { return 0; }
+}
+
+/** Discovery jobs abandoned mid-flight. Same rule, different clock: these have
+ *  no heartbeat column, so updated_at is the liveness signal. */
+export function cancelAbandonedDiscoveryJobs(staleHours = ABANDONED_RUN_STALE_HOURS): number {
+  try {
+    return rawDb.prepare(
+      `UPDATE discovery_jobs
+          SET status='cancelled',
+              completed_at=COALESCE(completed_at, datetime('now'))
+        WHERE status IN ('running','queued')
+          AND COALESCE(updated_at, created_at) < datetime('now', ?)`,
+    ).run(`-${staleHours} hours`).changes;
+  } catch { return 0; }
+}
+
+/**
+ * Delete terminal rows from a CASCADE parent, in small batches.
+ *
+ * `statusCol`/`terminal` gate on the parent being finished - never delete a
+ * live job's subtree out from under a running worker. `tsExpr` must be a SQL
+ * expression yielding an ISO timestamp on the parent row.
+ */
+function pruneCascadeParent(
+  table: string, idCol: string, statusCol: string, terminal: string[], tsExpr: string, cutoffIso: string,
+): number {
+  let total = 0;
+  const holes = terminal.map(() => "?").join(",");
+  for (let b = 0; b < MAX_CASCADE_BATCHES; b++) {
+    try {
+      const n = rawDb.prepare(
+        `DELETE FROM ${table} WHERE ${idCol} IN (
+           SELECT ${idCol} FROM ${table}
+            WHERE ${statusCol} IN (${holes}) AND ${tsExpr} < ?
+            LIMIT ${CASCADE_BATCH})`,
+      ).run(...terminal, cutoffIso).changes;
+      total += n;
+      if (n < CASCADE_BATCH) break;
+    } catch { break; } // busy, or the table shape differs on an older DB
+  }
+  return total;
+}
+
+export function pruneTerminalScanRuns(cutoffIso: string): number {
+  // COALESCE(completed_at, started_at): a run that errored without ever being
+  // stamped complete must still age out, or it is immortal.
+  return pruneCascadeParent(
+    "scan_runs", "id", "status", ["done", "error", "cancelled"],
+    "COALESCE(completed_at, started_at)", cutoffIso);
+}
+
+export function pruneTerminalDiscoveryJobs(cutoffIso: string): number {
+  return pruneCascadeParent(
+    "discovery_jobs", "id", "status", ["completed", "failed", "cancelled"],
+    "COALESCE(completed_at, updated_at, created_at)", cutoffIso);
+}
+
+export function pruneStaleHeartbeats(cutoffIso: string): number {
+  let total = 0;
+  for (let i = 0; i < MAX_BATCHES_PER_TABLE; i++) {
+    try {
+      const n = rawDb.prepare(
+        `DELETE FROM fiber_worker_heartbeats WHERE rowid IN (
+           SELECT rowid FROM fiber_worker_heartbeats WHERE heartbeat_at < ? LIMIT ${BATCH})`,
+      ).run(cutoffIso).changes;
+      total += n;
+      if (n < BATCH) break;
+    } catch { break; }
+  }
+  return total;
+}
+
 /**
  * Has a prune completed recently enough?
  *
