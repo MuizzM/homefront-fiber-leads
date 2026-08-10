@@ -730,7 +730,7 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
               disabled={!!blocked || move.isPending} onClick={() => move.mutate()} data-testid="btn-reserve-submit">
               {move.isPending ? "Working…" : mode === "drawdown" ? "Apply chargeback to reserve" : "Release to rep"}
             </Button>
-            {blocked && <p className="text-[11px] text-warning [.light_&]:text-amber-700" data-testid="reserve-blocked-reason">{blocked}</p>}
+            {blocked && <p className="text-[11px] text-warning" data-testid="reserve-blocked-reason">{blocked}</p>}
           </div>
         )}
 

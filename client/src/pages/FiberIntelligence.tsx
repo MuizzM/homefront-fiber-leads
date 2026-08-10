@@ -459,9 +459,9 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
 
       {/* Manager: coverage gaps banner */}
       {isManager && gaps.length > 0 && (
-        <div className="rounded-xl border border-warning/25 bg-warning/8 px-3 py-2.5 text-[12px] text-amber-700 dark:text-amber-300">
+        <div className="rounded-xl border border-warning/25 bg-warning/8 px-3 py-2.5 text-[12px] text-warning">
           <div className="mb-1 flex items-center gap-1.5 font-semibold"> {gaps.length} source coverage gap{gaps.length > 1 ? "s" : ""}</div>
-          {gaps.map((g) => <div key={g.source} className="text-[11px] text-amber-700/80 dark:text-amber-300/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
+          {gaps.map((g) => <div key={g.source} className="text-[11px] text-warning/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
         </div>
       )}
 

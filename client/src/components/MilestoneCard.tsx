@@ -79,7 +79,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
           </div>
 
           {p.earnedCents > 0 && (
-            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
+            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success"
                   data-testid="milestone-earned">
               {usd(p.earnedCents)} earned
             </span>
@@ -105,7 +105,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
                 className={cn(
                   "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
                   cleared
-                    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                    ? "bg-emerald-500/15 text-success"
                     : "bg-secondary text-muted-foreground",
                 )}>
                 {r.doors}: {usd(r.rewardCents)}

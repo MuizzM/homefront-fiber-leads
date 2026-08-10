@@ -16,10 +16,10 @@ const STAGE_FILTERS = [
 ] as const;
 
 function stageTone(stage: string): string {
-  if (stage === "ELIGIBLE_MANUAL_CALL") return "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
-  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400";
-  if (stage === "COMPLIANCE_REVIEW") return "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400";
-  if (stage === "CALLBACK_SCHEDULED") return "border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400";
+  if (stage === "ELIGIBLE_MANUAL_CALL") return "border-emerald-500/25 bg-emerald-500/10 text-success";
+  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "border-red-500/25 bg-red-500/10 text-destructive";
+  if (stage === "COMPLIANCE_REVIEW") return "border-amber-500/25 bg-amber-500/10 text-warning";
+  if (stage === "CALLBACK_SCHEDULED") return "border-sky-500/25 bg-sky-500/10 text-info";
   return "border-border bg-secondary text-muted-foreground";
 }
 
@@ -89,8 +89,8 @@ function TracedRow({ candidate }: { candidate: CallingCandidate }) {
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-[13px] font-medium leading-5 text-foreground">{candidate.address}</span>
             <span className={cn("inline-flex max-w-[55%] shrink-0 items-center rounded-full border px-2 py-px text-2xs font-medium uppercase tracking-wide",
-              ready ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400")}>
+              ready ? "border-emerald-500/25 bg-emerald-500/10 text-success"
+                : "border-red-500/25 bg-red-500/10 text-destructive")}>
               <span className="truncate">{ready ? "Ready to dial" : "Blocked"}</span>
             </span>
           </div>
@@ -100,7 +100,7 @@ function TracedRow({ candidate }: { candidate: CallingCandidate }) {
             {candidate.maskedPhone ? <> <span aria-hidden="true">·</span> <span className="font-mono text-[11px] tabular-nums">{candidate.maskedPhone}</span></> : null}
           </p>
           {!ready && candidate.tracedBadge ? (
-            <p className="mt-0.5 truncate text-[11px] leading-4 text-red-600 dark:text-red-400">{candidate.tracedBadge.label}</p>
+            <p className="mt-0.5 truncate text-[11px] leading-4 text-destructive">{candidate.tracedBadge.label}</p>
           ) : null}
         </div>
         {ready
@@ -366,7 +366,7 @@ export default function CallingQueue() {
 
             {(callbackGroups.overdue.length + callbackGroups.today.length) > 0 && (
               <section aria-label="Due callbacks" className="overflow-hidden rounded-2xl border border-sky-500/25 bg-card" data-testid="due-callbacks">
-                <div className="border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-sky-600 dark:text-sky-400">
+                <div className="border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-info">
                   Due callbacks - {callbackGroups.overdue.length} overdue · {callbackGroups.today.length} today
                 </div>
                 <ul className="divide-y divide-border/60">

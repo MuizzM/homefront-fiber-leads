@@ -33,7 +33,7 @@ export default function Profile() {
             {/* Gradient banner + overlapping avatar — a proper identity header */}
             <div className="h-16 bg-gradient-to-r from-primary/30 via-primary/12 to-transparent" aria-hidden="true" />
             <div className="px-5 pb-5 -mt-9">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-emerald-600 text-white flex items-center justify-center text-xl font-bold ring-4 ring-card shadow-lg">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-success text-white flex items-center justify-center text-xl font-bold ring-4 ring-card shadow-lg">
                 {user.name?.slice(0, 2).toUpperCase()}
               </div>
               <div className="mt-3 flex items-center gap-2 flex-wrap">
@@ -141,7 +141,7 @@ export default function Profile() {
               type="button"
               onClick={() => logout()}
               data-testid="profile-logout"
-              className="w-full px-5 py-4 flex items-center justify-between gap-4 text-[14px] font-medium text-red-400 active:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
+              className="w-full px-5 py-4 flex items-center justify-between gap-4 text-[14px] font-medium text-destructive active:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
             >
               <span>Sign out</span>
               

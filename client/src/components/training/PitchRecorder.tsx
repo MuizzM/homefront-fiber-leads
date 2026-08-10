@@ -402,7 +402,7 @@ export default function PitchRecorder({
       {/* Permission / failure message */}
       {error && (
         <div
-          className="mt-3 flex items-start gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400"
+          className="mt-3 flex items-start gap-2 rounded-lg bg-destructive/8 px-3 py-2 text-xs text-destructive"
           data-testid={error === "denied" ? "pitch-permission-denied" : "pitch-error"}
           role="alert"
         >
@@ -448,7 +448,7 @@ export default function PitchRecorder({
             onClick={stopRecording}
             data-testid="pitch-stop"
             className={cn(
-              "inline-flex min-h-11 items-center gap-2 rounded-xl bg-red-500 px-5 text-sm font-semibold text-white transition-transform active:scale-[.98]",
+              "inline-flex min-h-11 items-center gap-2 rounded-xl bg-destructive px-5 text-sm font-semibold text-white transition-transform active:scale-[.98]",
               FOCUS,
             )}
           >
@@ -482,7 +482,7 @@ export default function PitchRecorder({
                 <Check className="h-4 w-4" aria-hidden="true" /> Keep this take
               </button>
             ) : (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400" data-testid="pitch-kept">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-2.5 py-1 text-xs font-semibold text-success" data-testid="pitch-kept">
                 {/* "Take kept" only when the write actually landed — a long
                     take or a full disk keeps it for this session only, and
                     saying otherwise is a lie the rep discovers after reload. */}

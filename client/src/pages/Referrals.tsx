@@ -70,13 +70,13 @@ const STATUS_LABEL: Record<string, string> = {
 const STATUS_TONE: Record<string, string> = {
   CLICKED: "bg-muted text-muted-foreground",
   APPLIED: "bg-muted text-muted-foreground",
-  HIRED: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
-  ACTIVATED: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
-  IN_PROGRESS: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
-  QUALIFIED: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-  REWARD_PENDING: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-  APPROVED: "bg-emerald-600/20 text-emerald-800 dark:text-emerald-300",
-  PAID: "bg-emerald-600/20 text-emerald-800 dark:text-emerald-300",
+  HIRED: "bg-sky-500/15 text-info",
+  ACTIVATED: "bg-sky-500/15 text-info",
+  IN_PROGRESS: "bg-amber-500/15 text-warning",
+  QUALIFIED: "bg-emerald-500/15 text-success",
+  REWARD_PENDING: "bg-emerald-500/15 text-success",
+  APPROVED: "bg-emerald-600/20 text-success",
+  PAID: "bg-emerald-600/20 text-success",
   REJECTED: "bg-destructive/15 text-destructive",
   EXPIRED: "bg-destructive/10 text-muted-foreground",
   CLAWED_BACK: "bg-destructive/15 text-destructive",
@@ -145,7 +145,7 @@ function ReferralHero() {
                 {money(inReviewCents)} in review
               </span>
             )}
-            <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+            <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success">
               {money(link.rewardCents)} per hire
             </span>
           </span>
@@ -470,10 +470,10 @@ function MyReferralStatus() {
 
   const TONE: Record<MyStatus["rewardState"], string> = {
     none: "text-muted-foreground",
-    in_progress: "text-amber-700 dark:text-amber-400",
-    in_review: "text-sky-700 dark:text-sky-400",
-    approved: "text-emerald-700 dark:text-emerald-400",
-    paid: "text-emerald-700 dark:text-emerald-400",
+    in_progress: "text-warning",
+    in_review: "text-info",
+    approved: "text-success",
+    paid: "text-success",
     unavailable: "text-muted-foreground",
   };
 
@@ -601,7 +601,7 @@ function SettingsCard({ settings }: { settings: Settings }) {
         {/* The health warning, in the one place an admin can fix it. A silent
             OFF state is how the program stayed dark for weeks. */}
         {!settings.enabled && (
-          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-amber-700 dark:text-amber-400"
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-warning"
              data-testid="referral-disabled-warning">
             The referral program is OFF. Referrers earn nothing for qualified hires until it is
             turned on below.

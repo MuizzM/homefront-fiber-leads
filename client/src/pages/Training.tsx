@@ -80,7 +80,7 @@ function ProgressRing({ done, total, size = 44 }: { done: number; total: number;
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} className="stroke-border" />
         <circle
           cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} strokeLinecap="round"
-          className={cn("transition-[stroke-dashoffset] duration-500 ease-out", pct >= 1 ? "stroke-emerald-500" : "stroke-primary")}
+          className={cn("transition-[stroke-dashoffset] duration-500 ease-out", pct >= 1 ? "stroke-success" : "stroke-primary")}
           strokeDasharray={c} strokeDashoffset={c * (1 - pct)}
         />
       </svg>
@@ -139,16 +139,16 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
                       "flex min-h-11 w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[13px] transition-colors",
                       FOCUS,
                       !answered && "border-border bg-background hover:border-primary/40 hover:bg-secondary/50",
-                      answered && isCorrect && "border-emerald-500/50 bg-emerald-500/10 text-foreground",
-                      answered && isPicked && !isCorrect && "border-red-500/50 bg-red-500/10 text-foreground",
+                      answered && isCorrect && "border-success/50 bg-success/8 text-foreground",
+                      answered && isPicked && !isCorrect && "border-destructive/50 bg-destructive/8 text-foreground",
                       answered && !isPicked && !isCorrect && "border-border bg-background opacity-55",
                     )}
                   >
                     <span
                       className={cn(
                         "grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[10px] font-bold",
-                        answered && isCorrect ? "border-emerald-500 bg-emerald-500 text-white"
-                          : answered && isPicked ? "border-red-500 bg-red-500 text-white"
+                        answered && isCorrect ? "border-success bg-success text-white"
+                          : answered && isPicked ? "border-destructive bg-destructive text-white"
                           : "border-border text-muted-foreground",
                       )}
                       aria-hidden="true"
@@ -164,7 +164,7 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
               <div
                 className={cn(
                   "mt-3 rounded-lg px-3 py-2 text-xs leading-relaxed",
-                  picked === q.answerIndex ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-red-500/10 text-red-600 dark:text-red-400",
+                  picked === q.answerIndex ? "bg-success/8 text-success" : "bg-destructive/8 text-destructive",
                 )}
                 data-testid={`quiz-q${qi}-feedback`}
               >
@@ -210,7 +210,7 @@ function LessonView({
         <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
           <span className="tabular-nums">{lesson.minutes} min read</span>
           {isComplete && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-600 dark:text-emerald-400">
+            <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 font-semibold text-success">
               <Check className="h-3 w-3" aria-hidden="true" /> Completed{savedScore != null ? ` · ${savedScore}%` : ""}
             </span>
           )}
@@ -292,7 +292,7 @@ function LessonView({
               Next lesson <ChevronRight className="h-4 w-4" aria-hidden="true" />
             </button>
           ) : (
-            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+            <span className="text-xs font-semibold text-success">
               That was the last lesson. Curriculum done.
             </span>
           );
@@ -393,7 +393,7 @@ function FastStartTrack({
                 <span
                   className={cn(
                     "grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold tabular-nums",
-                    done ? "bg-emerald-500 text-white" : "bg-primary text-primary-foreground",
+                    done ? "bg-success text-white" : "bg-primary text-primary-foreground",
                   )}
                   aria-hidden="true"
                 >
@@ -610,7 +610,7 @@ export default function Training() {
                 </div>
                 <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
                   <div
-                    className={cn("h-full rounded-full transition-all duration-500", doneCount >= total ? "bg-emerald-500" : "bg-primary")}
+                    className={cn("h-full rounded-full transition-all duration-500", doneCount >= total ? "bg-success" : "bg-primary")}
                     style={{ width: `${total > 0 ? Math.round((doneCount / total) * 100) : 0}%` }}
                   />
                 </div>
@@ -619,7 +619,7 @@ export default function Training() {
                 <div
                   className={cn(
                     "flex flex-col items-center rounded-xl border px-3 py-2",
-                    streak > 0 ? "border-orange-500/30 bg-orange-500/10" : "border-border bg-secondary/40",
+                    streak > 0 ? "border-warning/25 bg-warning/8" : "border-border bg-secondary/40",
                   )}
                   data-testid="training-streak"
                 >
@@ -717,11 +717,11 @@ export default function Training() {
                           </div>
                           <div className="mt-2 space-y-1.5 text-xs leading-relaxed">
                             <p className="flex items-start gap-2 text-muted-foreground line-through decoration-red-500/50">
-                              <span aria-hidden="true" className="font-semibold text-red-500/80 no-underline">Not</span>
+                              <span aria-hidden="true" className="font-semibold text-destructive/80 no-underline">Not</span>
                               <span>{mod.sayThisNotThat.instead}</span>
                             </p>
                             <p className="flex items-start gap-2 text-foreground">
-                              <span aria-hidden="true" className="font-semibold text-emerald-500">Say</span>
+                              <span aria-hidden="true" className="font-semibold text-success">Say</span>
                               <span>{mod.sayThisNotThat.say}</span>
                             </p>
                           </div>

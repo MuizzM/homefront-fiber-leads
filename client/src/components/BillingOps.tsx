@@ -22,11 +22,11 @@ interface Row {
 }
 
 const STATE_CLS: Record<BillingState, string> = {
-  trial: "bg-blue-500/15 text-blue-400", active: "bg-emerald-500/15 text-emerald-400",
-  past_due: "bg-amber-500/15 text-amber-400", suspended: "bg-red-500/15 text-red-400",
+  trial: "bg-info/10 text-info", active: "bg-success/10 text-success",
+  past_due: "bg-warning/10 text-warning", suspended: "bg-destructive/10 text-destructive",
   canceled: "bg-muted text-muted-foreground",
 };
-const BAR: Record<Row["level"], string> = { ok: "bg-primary", warn: "bg-amber-500", critical: "bg-red-500", exhausted: "bg-red-500" };
+const BAR: Record<Row["level"], string> = { ok: "bg-primary", warn: "bg-warning", critical: "bg-destructive", exhausted: "bg-destructive" };
 const STATES: BillingState[] = ["trial", "active", "past_due", "suspended", "canceled"];
 
 // A staged (not yet applied) selector change. Selection alone never POSTs —
@@ -151,13 +151,13 @@ export function BillingOps() {
                             <div
                               role="alert"
                               data-testid={`confirm-strip-${t.tenantId}`}
-                              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${danger ? "border-rose-500/40 bg-rose-500/10 text-rose-300" : "border-border bg-secondary/60 text-foreground"}`}>
+                              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${danger ? "border-destructive/30 bg-destructive/8 text-destructive" : "border-border bg-secondary/60 text-foreground"}`}>
                               <span>Change {t.companyName} to {stagedLabel}?</span>
                               <button
                                 disabled={busy === t.tenantId}
                                 onClick={applyStaged}
                                 data-testid={`confirm-apply-${t.tenantId}`}
-                                className={`h-8 px-2.5 rounded-lg text-[12px] font-semibold disabled:opacity-50 ${danger ? "bg-rose-600 text-white hover:bg-rose-600/90" : "bg-primary text-primary-foreground hover:bg-primary/90"} ${FOCUS}`}>
+                                className={`h-8 px-2.5 rounded-lg text-[12px] font-semibold disabled:opacity-50 ${danger ? "bg-destructive text-white hover:bg-destructive/90" : "bg-primary text-primary-foreground hover:bg-primary/90"} ${FOCUS}`}>
                                 {busy === t.tenantId ? "Applying…" : "Confirm"}
                               </button>
                               <button

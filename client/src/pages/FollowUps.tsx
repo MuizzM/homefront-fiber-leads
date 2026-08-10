@@ -83,7 +83,7 @@ export default function FollowUps() {
           {!q.isLoading && !q.isError && groups.total > 0 && (
             <p className="text-[13px] text-muted-foreground mt-1" data-testid="followups-summary">
               <span className="font-semibold text-foreground tabular-nums">{groups.total}</span> scheduled
-              {groups.overdue.length > 0 && <> · <span className="font-semibold text-rose-400 tabular-nums">{groups.overdue.length} overdue</span></>}
+              {groups.overdue.length > 0 && <> · <span className="font-semibold text-destructive tabular-nums">{groups.overdue.length} overdue</span></>}
             </p>
           )}
         </header>
@@ -125,12 +125,12 @@ export default function FollowUps() {
         ) : (
           <div className="mt-5 space-y-5">
             {groups.overdue.length > 0 && (
-              <Section title="Overdue" tone="text-rose-400" count={groups.overdue.length}>
+              <Section title="Overdue" tone="text-destructive" count={groups.overdue.length}>
                 {groups.overdue.map(f => <Row key={f.leadId} f={f} today={today} overdue onOpen={() => navigate(`/lead/${f.leadId}`)} onLog={() => setSheet(f)} />)}
               </Section>
             )}
             {groups.today.length > 0 && (
-              <Section title="Today" tone="text-cyan-400" count={groups.today.length}>
+              <Section title="Today" tone="text-info" count={groups.today.length}>
                 {groups.today.map(f => <Row key={f.leadId} f={f} today={today} onOpen={() => navigate(`/lead/${f.leadId}`)} onLog={() => setSheet(f)} />)}
               </Section>
             )}
@@ -198,11 +198,11 @@ function Row({ f, today, overdue, onOpen, onLog }: { f: FollowUp; today: string;
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[14px] font-semibold text-foreground truncate">{f.address}</span>
-            {hot && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-rose-400 bg-rose-500/15 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5">Hot</span>}
+            {hot && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-destructive bg-destructive/10 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5">Hot</span>}
             {!hot && newFiber && null}
           </div>
           <div className="text-[12px] text-muted-foreground truncate flex items-center gap-1.5">
-            <span className={`inline-flex items-center gap-1 ${overdue ? "text-rose-400 font-medium" : ""}`}>
+            <span className={`inline-flex items-center gap-1 ${overdue ? "text-destructive font-medium" : ""}`}>
               {fmtDay(f.callbackDate, today)}{time ? ` · ${time}` : ""}
             </span>
             {f.contactName ? <span className="truncate">· {f.contactName}</span> : null}

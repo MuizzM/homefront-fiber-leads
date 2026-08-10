@@ -155,7 +155,7 @@ export default function PsychologyDeck() {
         <span
           className={cn(
             "rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
-            allExplored ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-secondary text-muted-foreground",
+            allExplored ? "bg-success/10 text-success" : "bg-secondary text-muted-foreground",
           )}
           data-testid="psych-deck-progress"
         >

@@ -140,7 +140,7 @@ const STATUS_COPY: Record<string, { label: string; hint: string; className: stri
   paid: {
     label: "Paid",
     hint: "Settled",
-    className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+    className: "bg-emerald-500/15 text-success",
   },
 };
 const statusCopy = (status: string) =>
@@ -150,9 +150,9 @@ const statusCopy = (status: string) =>
 // Heat is the algorithm's 0..100 read on how locked-in a rep is. Warm tint the
 // higher it climbs — never a bare colored number, and readable in BOTH themes.
 function heatTone(heat: number): string {
-  if (heat >= 70) return "text-orange-600 dark:text-orange-400";
-  if (heat >= 40) return "text-amber-600 dark:text-amber-400";
-  if (heat >= 15) return "text-yellow-600 dark:text-yellow-400";
+  if (heat >= 70) return "text-warning";
+  if (heat >= 40) return "text-warning";
+  if (heat >= 15) return "text-warning";
   return "text-muted-foreground";
 }
 
@@ -268,7 +268,7 @@ function MoneyHero({ data, isLoading, isError }: {
                 {isError ? " - " : usd(awaiting)} awaiting
               </span>
               <span data-testid="stat-paid"
-                    className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                    className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success">
                 
                 {isError ? " - " : usd(totals?.paidCents ?? 0)} paid
               </span>

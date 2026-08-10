@@ -190,7 +190,7 @@ export function AreaDeleteDialog({
             // The line that actually costs somebody their morning — only true
             // under "keep", where the doors stay but the grant that explained
             // them is gone from every screen.
-            <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-[12px] text-amber-700 dark:text-amber-400"
+            <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-[12px] text-warning"
                data-testid="area-delete-holder-warning">
               {held} will still have these {doorWord} with no area to explain them. Reclaim or reassign them later from the Leads table.
             </p>

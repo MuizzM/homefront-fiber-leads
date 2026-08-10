@@ -104,7 +104,7 @@ export function CallingAvailability({ status }: { status: { callable: boolean; b
             Tracing doors and building the queue still work.
           </p>
         </div>
-        <span className="mt-0.5 inline-flex shrink-0 items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium tabular-nums text-amber-600 dark:text-amber-400">
+        <span className="mt-0.5 inline-flex shrink-0 items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium tabular-nums text-warning">
           {gates.length} blocking
         </span>
       </summary>

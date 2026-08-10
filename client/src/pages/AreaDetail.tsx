@@ -506,7 +506,7 @@ export default function AreaDetail() {
 
           {/* The retrospective a manager wrote when they marked it done. */}
           {area.completionNotes && (
-            <div className="rounded-2xl border border-sky-500/30 bg-sky-500/5 p-4" data-testid="area-completion-notes">
+            <div className="rounded-2xl border border-info/25 bg-info/5 p-4" data-testid="area-completion-notes">
               <SectionLabel>Completion notes</SectionLabel>
               <p className="mt-1.5 whitespace-pre-wrap text-[13px] text-foreground">{area.completionNotes}</p>
             </div>
@@ -649,15 +649,15 @@ export default function AreaDetail() {
             />
             <HeadlineStat
               label="Knocked" value={area.knocked} sub={`${pct(area.knockCompletionRate)}% of the area covered`}
-              icon={Hand} chip="bg-sky-500/15" tone="text-sky-600 dark:text-sky-400" testId="area-stat-knocked"
+              icon={Hand} chip="bg-info/10" tone="text-info" testId="area-stat-knocked"
             />
             <HeadlineStat
               label="Sold" value={area.sold} sub={`${pct(area.penetrationRate)}% penetration`}
-              icon={BadgeDollarSign} chip="bg-emerald-500/15" tone="text-emerald-600 dark:text-emerald-400" testId="area-stat-sold"
+              icon={BadgeDollarSign} chip="bg-success/10" tone="text-success" testId="area-stat-sold"
             />
             <HeadlineStat
               label="Follow-ups" value={area.followUp} sub="Callbacks to sweep"
-              icon={CalendarClock} chip="bg-amber-500/15" tone="text-amber-600 dark:text-amber-400" testId="area-stat-followup"
+              icon={CalendarClock} chip="bg-warning/10" tone="text-warning" testId="area-stat-followup"
             />
           </div>
         </section>
@@ -738,7 +738,7 @@ export default function AreaDetail() {
                         )}
                       </span>
                       <span className={cn(CHIP, "shrink-0", a.unassignedAt == null
-                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                        ? "bg-success/10 text-success"
                         : "bg-secondary text-muted-foreground")}>
                         {a.unassignedAt == null ? "Holding" : "Ended"}
                       </span>
@@ -786,11 +786,11 @@ export default function AreaDetail() {
             <div className="rounded-2xl border border-border bg-card p-4">
               <div className="grid grid-cols-3 gap-2" data-testid="area-verification">
                 <VerifyTile icon={ShieldCheck} label="Verified" value={area.verified}
-                  className="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" testId="area-verified" />
+                  className="border-success/15 bg-success/8 text-success" testId="area-verified" />
                 <VerifyTile icon={AlertTriangle} label="Needs review" value={area.needsReview}
-                  className="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400" testId="area-needs-review" />
+                  className="border-warning/15 bg-warning/8 text-warning" testId="area-needs-review" />
                 <VerifyTile icon={Ban} label="Invalid" value={area.invalid}
-                  className="border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400" testId="area-invalid" />
+                  className="border-destructive/15 bg-destructive/8 text-destructive" testId="area-invalid" />
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5">

@@ -135,9 +135,9 @@ function readBack(rewardCents: number, trigger: CampaignTrigger, endsAtMs: numbe
 }
 
 const STATUS_CHIP: Record<CampaignStatus, string> = {
-  live: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-  scheduled: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
-  paused: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  live: "bg-emerald-500/15 text-success",
+  scheduled: "bg-sky-500/15 text-info",
+  paused: "bg-amber-500/15 text-warning",
   ended: "bg-secondary text-muted-foreground",
   cancelled: "bg-secondary text-muted-foreground",
 };

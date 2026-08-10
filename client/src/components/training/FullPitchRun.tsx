@@ -271,7 +271,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
                     type="button"
                     onClick={() => { setHadIt((h) => [...h, true]); advance(); }}
                     data-testid="pitch-run-had-it"
-                    className={cn("inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-600 transition-transform active:scale-[.98] dark:text-emerald-400", FOCUS)}
+                    className={cn("inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-success/30 bg-success/8 px-4 text-sm font-semibold text-success transition-transform active:scale-[.98] dark:text-emerald-400", FOCUS)}
                   >
                     <Check className="h-4 w-4" aria-hidden="true" /> Had it
                   </button>
@@ -292,7 +292,7 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
 
       {stage === doneStage && (
         <div className="space-y-4" data-testid="pitch-run-done">
-          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/[0.07] p-5 text-center">
+          <div className="rounded-2xl border border-success/25 bg-success/[0.07] p-5 text-center">
             
             <h2 className="mt-2 text-xl font-bold tracking-tight text-foreground">Full run complete</h2>
             <p className="mt-1 text-sm text-muted-foreground">

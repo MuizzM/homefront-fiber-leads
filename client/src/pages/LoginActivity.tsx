@@ -12,13 +12,13 @@ type Attempt = {
 type SummaryRow = { email: string; attempts: number; successes: number; failures: number; last_at: string };
 
 const REASON_LABEL: Record<string, { label: string; tone: string }> = {
-  success: { label: "Logged in", tone: "text-emerald-500" },
-  code_sent: { label: "Code sent", tone: "text-sky-500" },
-  code_created_mail_failed: { label: "Code created (email delayed)", tone: "text-amber-500" },
-  bad_code: { label: "Wrong code", tone: "text-red-500" },
-  unknown_email: { label: "Unknown email", tone: "text-red-500" },
-  account_inactive: { label: "Inactive account", tone: "text-red-500" },
-  rate_limited: { label: "Rate limited", tone: "text-amber-500" },
+  success: { label: "Logged in", tone: "text-success" },
+  code_sent: { label: "Code sent", tone: "text-info" },
+  code_created_mail_failed: { label: "Code created (email delayed)", tone: "text-warning" },
+  bad_code: { label: "Wrong code", tone: "text-destructive" },
+  unknown_email: { label: "Unknown email", tone: "text-destructive" },
+  account_inactive: { label: "Inactive account", tone: "text-destructive" },
+  rate_limited: { label: "Rate limited", tone: "text-warning" },
 };
 
 function reasonLabel(reason: string | null) {
@@ -66,7 +66,7 @@ export default function LoginActivity() {
       </div>
 
       {failed ? (
-        <div className="rounded-2xl border border-red-500/25 bg-red-500/[0.06] p-4 text-sm text-red-400">
+        <div className="rounded-2xl border border-destructive/15 bg-destructive/[0.06] p-4 text-sm text-destructive">
           Couldn't load the audit trail. <button type="button" className="underline" onClick={() => { void summaryQuery.refetch(); void feedQuery.refetch(); }}>Retry</button>
         </div>
       ) : null}

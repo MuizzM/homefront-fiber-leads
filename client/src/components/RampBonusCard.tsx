@@ -90,7 +90,7 @@ export function RampBonusCard() {
 
               <span className={cn(
                 "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
-                data.earnedToday ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                data.earnedToday ? "bg-emerald-500/15 text-success"
                                  : "bg-secondary text-muted-foreground",
               )} data-testid="ramp-reward">
                 {data.earnedToday ? `${usd(data.rewardCents)} earned` : `${usd(data.rewardCents)}/day`}

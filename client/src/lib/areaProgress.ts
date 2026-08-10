@@ -135,14 +135,19 @@ export interface AreaStatusMeta {
   blurb: string;
 }
 
-// Tints are the house semantics: emerald = someone is walking it, slate = nobody
-// is, sky = finished, amber = pulled back and waiting for a decision. The
-// `-600 dark:-400` pairing is the app's existing rule for tinted text so both
-// themes stay legible (a bare -400 washes out on the light surface).
+// One meaning per status, in the app's semantic tokens - the same language
+// KpiTile's tones speak: primary = a rep is walking it, info = shared ground,
+// success = finished, warning = pulled back and waiting for a decision,
+// neutral = nobody holds it.
+//
+// These were raw `-600 dark:-400` pairs. That rule existed because a bare -400
+// washes out on a light surface, but the light half was failing too: emerald-600
+// measured 3.28:1 on the Areas cards, under WCAG AA. The tokens are tuned for
+// both grounds, so the pair collapses to one class.
 const ASSIGNED: AreaStatusMeta = {
   label: "Assigned",
-  chip: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-  hero: "border-emerald-500/30 from-emerald-500/10 to-transparent",
+  chip: "bg-primary/10 text-primary",
+  hero: "border-primary/25 from-primary/10 to-transparent",
   blurb: "A rep holds this area and their doors are live in the field app.",
 };
 
@@ -151,37 +156,37 @@ const AREA_STATUS_META: Record<string, AreaStatusMeta> = {
   assigned: ASSIGNED,
   shared: {
     label: "Shared",
-    chip: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
-    hero: "border-blue-500/30 from-blue-500/10 to-transparent",
+    chip: "bg-info/10 text-info",
+    hero: "border-info/25 from-info/10 to-transparent",
     blurb: "More than one rep works this ground; every holder sees its doors.",
   },
   completed: {
     label: "Completed",
-    chip: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
-    hero: "border-sky-500/30 from-sky-500/10 to-transparent",
+    chip: "bg-success/10 text-success",
+    hero: "border-success/25 from-success/10 to-transparent",
     blurb: "Marked done. Start another pass to put it back in rotation.",
   },
   reclaimed: {
     label: "Reclaimed",
-    chip: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-    hero: "border-amber-500/30 from-amber-500/10 to-transparent",
+    chip: "bg-warning/10 text-warning",
+    hero: "border-warning/25 from-warning/10 to-transparent",
     blurb: "Pulled back from its last rep and waiting to be handed out again.",
   },
   unassigned: {
     label: "Unassigned",
-    chip: "bg-slate-500/15 text-slate-600 dark:text-slate-300",
+    chip: "bg-secondary text-muted-foreground",
     hero: "border-border from-muted/40 to-transparent",
     blurb: "Nobody holds this area - it sits in the pool until you assign it.",
   },
   archived: {
     label: "Archived",
-    chip: "bg-slate-500/15 text-slate-600 dark:text-slate-400",
+    chip: "bg-secondary text-muted-foreground",
     hero: "border-border from-muted/40 to-transparent",
     blurb: "Retired from rotation. Its history is kept, but nobody knocks it.",
   },
   draft: {
     label: "Draft",
-    chip: "bg-slate-500/15 text-slate-600 dark:text-slate-400",
+    chip: "bg-secondary text-muted-foreground",
     hero: "border-border from-muted/40 to-transparent",
     blurb: "Drawn but not yet in play.",
   },

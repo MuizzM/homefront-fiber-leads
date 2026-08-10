@@ -166,7 +166,7 @@ export function MapFilterSheet({
                     data-testid={`map-filter-source-${opt.key}`}
                     className={`min-h-11 inline-flex items-center gap-1.5 rounded-full px-3.5 text-[12px] font-semibold border transition active:scale-95 ${
                       selected
-                        ? "border-amber-400/60 bg-amber-400/15 text-amber-600 dark:text-amber-300"
+                        ? "border-amber-400/60 bg-amber-400/15 text-warning"
                         : "border-border bg-secondary/30 text-foreground hover:bg-secondary/50"
                     } ${FOCUS}`}
                   >
@@ -204,7 +204,7 @@ export function MapFilterSheet({
         {/* Density-tier honesty: which lenses are NOT reflected in the
             zoomed-out count bubbles. Only rendered while it applies. */}
         {zoomedOutNote && (
-          <p className="mt-4 text-center text-[12px] leading-snug text-amber-600 dark:text-amber-300" data-testid="map-filter-zoom-hint">
+          <p className="mt-4 text-center text-[12px] leading-snug text-warning" data-testid="map-filter-zoom-hint">
             {zoomedOutNote}
           </p>
         )}

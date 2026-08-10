@@ -337,7 +337,7 @@ interface BoardEntry {
 }
 
 /** Gold, silver, bronze — same trio the full leaderboard wears. */
-const PODIUM_TONE = ["text-yellow-400", "text-slate-300", "text-amber-600"];
+const PODIUM_TONE = ["text-warning", "text-slate-300", "text-warning"];
 
 function BoardPanel() {
   const { user } = useAuth();
@@ -410,7 +410,7 @@ function BoardPanel() {
                   {entry.rep.name.charAt(0).toUpperCase()}
                 </span>
                 <span className="max-w-full truncate text-xs font-semibold text-foreground">{entry.rep.name}</span>
-                <span className="text-lg font-bold leading-none tabular-nums text-emerald-400">{entry.sales}</span>
+                <span className="text-lg font-bold leading-none tabular-nums text-success">{entry.sales}</span>
                 <span className="text-[10px] uppercase tracking-wide text-muted-foreground">sales</span>
               </div>
             ))}
@@ -420,7 +420,7 @@ function BoardPanel() {
             <div key={entry.rep.id} className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-b-0" data-testid={`board-row-${entry.rep.id}`}>
               <span className="w-5 text-center text-sm font-bold tabular-nums text-muted-foreground">{i + 4}</span>
               <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{entry.rep.name}</span>
-              <span className="text-sm font-bold tabular-nums text-emerald-400">{entry.sales}</span>
+              <span className="text-sm font-bold tabular-nums text-success">{entry.sales}</span>
             </div>
           ))}
         </div>
@@ -435,7 +435,7 @@ function BoardPanel() {
           <span className="min-w-0 flex-1 text-[13px] font-semibold text-foreground">
             You're #{myIdx + 1} of {board.length}
           </span>
-          <span className="text-lg font-bold tabular-nums text-emerald-400">{me.sales}</span>
+          <span className="text-lg font-bold tabular-nums text-success">{me.sales}</span>
         </div>
       )}
     </section>

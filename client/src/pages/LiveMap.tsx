@@ -175,7 +175,7 @@ export default function LiveMap() {
         <div className="flex items-center gap-2">
           {/* Clocked in reps count */}
           {isManager && (
-            <Badge className={activeCount > 0 ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
+            <Badge className={activeCount > 0 ? "bg-emerald-500/15 text-success border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
                <span className="tabular-nums">{activeCount}</span>&nbsp;active
             </Badge>
           )}
@@ -271,11 +271,11 @@ export default function LiveMap() {
                   <span className="text-sm text-foreground font-medium">Field Status</span>
                 </div>
                 <div className="space-y-1">
-                  <Badge className={clockStatus?.clockedIn ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
+                  <Badge className={clockStatus?.clockedIn ? "bg-emerald-500/15 text-success border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
                     {clockStatus?.clockedIn ? "Clocked In" : "Clocked Out"}
                   </Badge>
                   {tracking && (
-                    <Badge className="bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30 ml-2">
+                    <Badge className="bg-sky-500/15 text-info border-sky-500/30 ml-2">
                        Sharing Location
                     </Badge>
                   )}

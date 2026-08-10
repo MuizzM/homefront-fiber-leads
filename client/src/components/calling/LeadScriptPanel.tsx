@@ -123,7 +123,7 @@ export function LeadScriptPanel({ leadId }: { leadId: number }) {
           <div role="alert" className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3">
             
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Script unavailable</div>
+              <div className="text-sm font-semibold text-warning">Script unavailable</div>
               <div className="mt-0.5 text-[11px] text-muted-foreground">The personalized script could not be loaded. Use the standard opener below.</div>
             </div>
           </div>

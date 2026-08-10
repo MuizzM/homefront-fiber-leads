@@ -47,7 +47,7 @@ function RungStrip({ rungs, at, testId }: { rungs: AchievementRung[]; at: number
           <span key={r.sales} data-testid={`${testId}-${r.sales}`}
             className={cn(
               "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
-              cleared ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+              cleared ? "bg-emerald-500/15 text-success"
                       : "bg-secondary text-muted-foreground",
             )}>
             {r.sales}: {usd(r.rewardCents)}
@@ -92,7 +92,7 @@ export function AchievementLadder() {
           </div>
 
           {data.earnedTodayCents > 0 && (
-            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
+            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success"
                   data-testid="achievement-earned">
               {usd(data.earnedTodayCents)} today
             </span>

@@ -66,7 +66,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
     >
       {/* Oversized rank numeral, Netflix-top-10 style — pure background texture. */}
       <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-emerald-400/10">1</span>
-      <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-[0.14em] text-emerald-600 dark:text-emerald-400">
+      <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-[0.14em] text-success">
          Knock this door first
       </div>
       <div className="relative flex items-center gap-3">

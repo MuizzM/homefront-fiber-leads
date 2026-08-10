@@ -41,10 +41,10 @@ interface LatLng { lat: number; lng: number }
 function reasons(p: Pin): { label: string; icon: any; tone: string }[] {
   const out: { label: string; icon: any; tone: string }[] = [];
   if (p.isNewFiber || p.fiberStatus === "new_fiber") out.push({ label: "New fiber", icon: Zap, tone: "text-primary" });
-  if (p.leadTag === "hot_lead") out.push({ label: "Hot lead", icon: Flame, tone: "text-red-500" });
-  if (p.lastOutcome === "callback" || p.leadStatus === "follow_up") out.push({ label: "Callback due", icon: Repeat, tone: "text-sky-400" });
-  if (p.competitorName && p.inCompetitorArea) out.push({ label: `Switch from ${p.competitorName}`, icon: MapPinIcon, tone: "text-amber-500" });
-  if (!out.length && (p.leadScore ?? 0) >= 80) out.push({ label: "High-priority", icon: Trophy, tone: "text-amber-500" });
+  if (p.leadTag === "hot_lead") out.push({ label: "Hot lead", icon: Flame, tone: "text-destructive" });
+  if (p.lastOutcome === "callback" || p.leadStatus === "follow_up") out.push({ label: "Callback due", icon: Repeat, tone: "text-info" });
+  if (p.competitorName && p.inCompetitorArea) out.push({ label: `Switch from ${p.competitorName}`, icon: MapPinIcon, tone: "text-warning" });
+  if (!out.length && (p.leadScore ?? 0) >= 80) out.push({ label: "High-priority", icon: Trophy, tone: "text-warning" });
   return out.slice(0, 2);
 }
 const directionsUrl = (p: Pin) => {
@@ -244,13 +244,13 @@ export default function Today() {
               disabled={clockOut.isPending}
               data-testid="today-clock-out"
               aria-label={confirmOut ? "Tap again to clock out" : "On the clock - tap to clock out"}
-              className={`shrink-0 mt-1 inline-flex items-center gap-1.5 rounded-full border min-h-11 px-3.5 text-[12px] font-semibold active:scale-95 transition disabled:opacity-60 ${FOCUS} ${confirmOut ? "bg-red-500/15 text-red-500 border-red-500/30" : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"}`}
+              className={`shrink-0 mt-1 inline-flex items-center gap-1.5 rounded-full border min-h-11 px-3.5 text-[12px] font-semibold active:scale-95 transition disabled:opacity-60 ${FOCUS} ${confirmOut ? "bg-destructive/10 text-destructive border-destructive/25" : "bg-success/10 text-success border-success/15"}`}
             >
               {clockOut.isPending
                 ? <><RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />Clocking out…</>
                 : confirmOut
                   ? <><Clock className="w-3 h-3" aria-hidden="true" />Tap to clock out</>
-                  : <><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true" />On the clock</>}
+                  : <><span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" aria-hidden="true" />On the clock</>}
             </button>
           )}
           </div>
@@ -261,7 +261,7 @@ export default function Today() {
             {offline ? null : <RefreshCw className="w-4 h-4 shrink-0 text-primary animate-spin" aria-hidden="true" />}
             <span className="flex-1">
               {offline ? "Offline - your taps are saved" : `Syncing ${snap.pendingCount} knock${snap.pendingCount === 1 ? "" : "s"}`}
-              {snap.deadCount > 0 && <span className="text-red-500"> · {snap.deadCount} failed</span>}
+              {snap.deadCount > 0 && <span className="text-destructive"> · {snap.deadCount} failed</span>}
             </span>
           </div>
         )}
@@ -292,8 +292,8 @@ export default function Today() {
         <div className="mt-4 rounded-xl border border-border bg-card overflow-hidden">
           <div className="grid grid-cols-3">
             <Stat label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)} tone="text-foreground" accent="bg-primary" error={boardQ.isError} />
-            <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-emerald-400" accent="bg-emerald-500" border error={boardQ.isError} />
-            <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" accent="bg-sky-400" border error={pinsQ.isError} />
+            <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-success" accent="bg-success" border error={boardQ.isError} />
+            <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" accent="bg-info" border error={pinsQ.isError} />
           </div>
           {!loading && routeTotal > 0 && (
             <div className="border-t border-border px-3.5 py-3">
@@ -338,13 +338,13 @@ export default function Today() {
           </div>
         )}
         {followupsDue > 0 && (
-          <Link href="/followups" className={`group mt-4 flex items-center gap-3 rounded-xl border border-sky-400/25 bg-sky-400/[0.08] px-4 py-3.5 active:scale-[.99] transition-transform hover:border-sky-400/40 ${FOCUS}`} data-testid="today-followups">
+          <Link href="/followups" className={`group mt-4 flex items-center gap-3 rounded-xl border border-info/15 bg-info/[0.08] px-4 py-3.5 active:scale-[.99] transition-transform hover:border-info/30 ${FOCUS}`} data-testid="today-followups">
             
             <span className="flex-1 min-w-0">
               <span className="block text-[14px] font-semibold text-foreground">{followupsDue} follow-up{followupsDue === 1 ? "" : "s"} due</span>
               <span className="block text-[12px] text-muted-foreground">Callbacks scheduled for today or earlier</span>
             </span>
-            <span className="shrink-0 inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full bg-sky-400/15 text-sky-400 text-[12px] font-bold tabular-nums">{followupsDue}</span>
+            <span className="shrink-0 inline-flex items-center justify-center h-6 min-w-6 px-1.5 rounded-full bg-info/10 text-info text-[12px] font-bold tabular-nums">{followupsDue}</span>
             <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
           </Link>
         )}
@@ -388,7 +388,7 @@ export default function Today() {
         )}
 
         {myRow && (
-          <Link href="/my-commission" className={`group mt-6 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 active:scale-[.99] transition-transform hover:border-emerald-500/30 ${FOCUS}`} data-testid="today-pay">
+          <Link href="/my-commission" className={`group mt-6 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 active:scale-[.99] transition-transform hover:border-success/25 ${FOCUS}`} data-testid="today-pay">
             
             <span className="flex-1 min-w-0">
               <span className="block text-[14px] font-semibold text-foreground tabular-nums">{myRow.sales} sale{myRow.sales === 1 ? "" : "s"} · {myRow.salesToday} today</span>
@@ -515,7 +515,7 @@ function EmptyCard({ title, body, cta }: { title: string; body: string; cta: { t
 
 function AllDoneCard({ sales }: { sales: number }) {
   return (
-    <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-6 text-center" data-testid="today-alldone">
+    <div className="rounded-2xl border border-success/15 bg-success/[0.06] p-6 text-center" data-testid="today-alldone">
       
       <div className="text-[15px] font-semibold text-foreground mt-3">Every door worked - nice shift</div>
       <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">{sales > 0 ? `${sales} sale${sales === 1 ? "" : "s"} logged today.` : "Your route's clear."} New leads land here as they're assigned.</div>

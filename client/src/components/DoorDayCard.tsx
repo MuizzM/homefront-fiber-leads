@@ -90,7 +90,7 @@ export function DoorDayCard() {
 
           <span className={cn(
             "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
-            data.earned ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+            data.earned ? "bg-emerald-500/15 text-success"
                         : "bg-secondary text-muted-foreground",
           )} data-testid="door-day-reward">
             {data.earned ? `${usd(data.rewardCents)} earned` : usd(data.rewardCents)}
@@ -109,7 +109,7 @@ export function DoorDayCard() {
         {/* The clock, shown whenever the doors are there but the day is not —
             otherwise "60 of 60" with no payout is indistinguishable from a bug. */}
         {data.spanShort && (
-          <p className="mt-2 flex items-start gap-1.5 text-[12px] font-medium text-amber-700 dark:text-amber-400"
+          <p className="mt-2 flex items-start gap-1.5 text-[12px] font-medium text-warning"
              data-testid="door-day-span-warning">
             
             <span>
@@ -120,7 +120,7 @@ export function DoorDayCard() {
         )}
 
         {data.needsReview && (
-          <p className="mt-2 flex items-start gap-1.5 text-[12px] font-medium text-amber-700 dark:text-amber-400"
+          <p className="mt-2 flex items-start gap-1.5 text-[12px] font-medium text-warning"
              data-testid="door-day-review">
             
             <span>Today's location data has a problem. This bonus is held until a manager reviews it.</span>

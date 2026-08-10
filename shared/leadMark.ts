@@ -39,7 +39,7 @@ export const LEAD_MARK_META: Record<LeadMark, LeadMarkMeta> = {
     label: "Priority",
     short: "Priority",
     description: "Assign this lead first - high intent or time-sensitive.",
-    chip: "bg-amber-500/15 text-amber-500",
+    chip: "bg-warning/10 text-warning",
     ring: "#f59e0b",
   },
   hold: {

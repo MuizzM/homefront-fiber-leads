@@ -80,7 +80,9 @@ describe("BillingOps - staged plan/state changes", () => {
     renderOps();
     fireEvent.change(await screen.findByTestId("state-sel-1"), { target: { value: "canceled" } });
     const confirm = screen.getByTestId("confirm-apply-1");
-    expect(confirm.className).toMatch(/rose/);
+    // `destructive` IS the meaning this documents. It used to be spelled
+    // `rose`, a raw palette step chosen against the old dark default.
+    expect(confirm.className).toMatch(/destructive/);
     fireEvent.click(confirm);
     await waitFor(() =>
       expect(apiRequest).toHaveBeenCalledWith("POST", "/api/billing/state", { tenantId: 1, state: "canceled" }),
@@ -91,7 +93,7 @@ describe("BillingOps - staged plan/state changes", () => {
     renderOps();
     fireEvent.change(await screen.findByTestId("state-sel-1"), { target: { value: "past_due" } });
     expect(screen.getByTestId("confirm-strip-1")).toHaveTextContent("Change Acme Fiber to past due?");
-    expect(screen.getByTestId("confirm-apply-1").className).not.toMatch(/rose/);
+    expect(screen.getByTestId("confirm-apply-1").className).not.toMatch(/destructive/);
   });
 
   it("the selects and the credits input carry tenant-named aria-labels (audit finding)", async () => {

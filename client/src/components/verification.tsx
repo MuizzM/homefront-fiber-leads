@@ -5,9 +5,9 @@ export type VStatus = "verified" | "needs_review" | "invalid" | null | undefined
 interface VMeta { label: string; Icon: typeof ShieldCheck; text: string; bg: string; ring: string; dot: string; }
 
 export const V_META: Record<"verified" | "needs_review" | "invalid" | "unknown", VMeta> = {
-  verified:     { label: "Verified",     Icon: ShieldCheck,   text: "text-emerald-400", bg: "bg-emerald-500/12", ring: "border-emerald-500/40", dot: "#10b981" },
-  needs_review: { label: "Needs Review", Icon: AlertTriangle, text: "text-amber-400",   bg: "bg-amber-500/12",   ring: "border-amber-500/40",   dot: "#f59e0b" },
-  invalid:      { label: "Invalid",      Icon: Ban,           text: "text-red-400",     bg: "bg-red-500/12",     ring: "border-red-500/40",     dot: "#ef4444" },
+  verified:     { label: "Verified",     Icon: ShieldCheck,   text: "text-success", bg: "bg-success/12", ring: "border-success/30", dot: "#10b981" },
+  needs_review: { label: "Needs Review", Icon: AlertTriangle, text: "text-warning",   bg: "bg-warning/12",   ring: "border-warning/30",   dot: "#f59e0b" },
+  invalid:      { label: "Invalid",      Icon: Ban,           text: "text-destructive",     bg: "bg-destructive/12",     ring: "border-destructive/30",     dot: "#ef4444" },
   unknown:      { label: "Unverified",   Icon: HelpCircle,    text: "text-slate-400",   bg: "bg-slate-500/12",   ring: "border-slate-500/40",   dot: "#94a3b8" },
 };
 
@@ -80,7 +80,7 @@ export function DistanceDiagram({
       <div className="mt-1 flex items-center justify-between text-2xs text-muted-foreground" aria-hidden>
         <span className="inline-flex items-center gap-1"> Rep position</span>
         {within != null && (
-          <span className={within ? "text-emerald-400" : "text-amber-400"}>
+          <span className={within ? "text-success" : "text-warning"}>
             {within ? "Within radius" : "Outside radius"}
           </span>
         )}

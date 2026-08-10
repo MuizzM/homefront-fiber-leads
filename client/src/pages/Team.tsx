@@ -717,11 +717,11 @@ export default function Team() {
           <h1 className="mt-0.5 text-xl font-bold tracking-tight text-foreground">Team management</h1>
           <p className="text-sm text-muted-foreground mt-1">
             <span className="tabular-nums font-medium text-foreground">{activeCount}</span> active member{activeCount !== 1 ? "s" : ""}
-            <span className="mx-1.5 text-border">·</span>
+            <span className="mx-1.5 text-muted-foreground">·</span>
             <span className="tabular-nums">{managers.length}</span> manager{managers.length !== 1 ? "s" : ""}
-            <span className="mx-1.5 text-border">·</span>
+            <span className="mx-1.5 text-muted-foreground">·</span>
             <span className="tabular-nums">{leads.length}</span> team lead{leads.length !== 1 ? "s" : ""}
-            <span className="mx-1.5 text-border">·</span>
+            <span className="mx-1.5 text-muted-foreground">·</span>
             <span className="tabular-nums">{reps.length}</span> rep{reps.length !== 1 ? "s" : ""}
           </p>
         </div>

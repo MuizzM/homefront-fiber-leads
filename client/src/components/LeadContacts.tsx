@@ -97,7 +97,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                     </span>
                   </span>
                   <span
-                    className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400"
+                    className="shrink-0 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warning"
                     data-testid="lead-phone-badge"
                   >
                     Door only
@@ -113,7 +113,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                   data-testid={`lead-phone-${v.number}`}
                   data-dnc="false"
                   className={cn(
-                    "flex items-center gap-2.5 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.08] px-2.5 py-2 transition-transform active:scale-[.99] hover:border-emerald-500/45",
+                    "flex items-center gap-2.5 rounded-lg border border-success/15 bg-success/[0.08] px-2.5 py-2 transition-transform active:scale-[.99] hover:border-success/45",
                     FOCUS,
                   )}
                 >
@@ -123,7 +123,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                     {line && <span className="block truncate text-[11px] capitalize text-muted-foreground">{line}</span>}
                   </span>
                   <span
-                    className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600 dark:text-emerald-400"
+                    className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-success"
                     data-testid="lead-phone-badge"
                   >
                     OK to call

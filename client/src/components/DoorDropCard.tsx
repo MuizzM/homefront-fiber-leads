@@ -75,7 +75,7 @@ export function DoorDropCard({ compact = false }: { compact?: boolean }) {
           </div>
 
           {wonToday && (
-            <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700 dark:text-amber-400"
+            <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-warning"
                   data-testid="door-drop-earned">
               {usd(data.earnedTodayCents)} today
             </span>

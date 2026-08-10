@@ -71,30 +71,30 @@ function speedLabel(mbps?: number | null): string | null {
 // gradient (≈8-10% tint fading to transparent).
 type Badge = { text: string; short: string; cls: string; tone: string; band: string };
 function statusBadge(p: CardProperty): Badge {
-  const emerald = { tone: "text-emerald-600 dark:text-emerald-400", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 ring-emerald-500/30", band: "from-emerald-500/10" };
+  const emerald = { tone: "text-success", cls: "bg-success/8 text-success ring-success/25", band: "from-success/8" };
   if (p.leadTag === "fresh_fiber_confirmed")
     return { text: "Confirmed fresh fiber", short: "Fresh fiber", ...emerald };
   if (p.isNewFiber && p.billingStatus === "N")
     return { text: "New-fiber lead", short: "New lead", ...emerald };
   if (p.isNewFiber)
-    return { text: "New fiber here", short: "New fiber", tone: "text-teal-600 dark:text-teal-400", cls: "bg-teal-500/10 text-teal-600 dark:text-teal-400 ring-teal-500/30", band: "from-teal-500/10" };
+    return { text: "New fiber here", short: "New fiber", tone: "text-success", cls: "bg-success/8 text-success ring-success/25", band: "from-success/8" };
   if (p.leadTag === "coming_soon")
-    return { text: "Fiber coming soon", short: "Coming soon", tone: "text-amber-600 dark:text-amber-400", cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-amber-500/30", band: "from-amber-500/10" };
+    return { text: "Fiber coming soon", short: "Coming soon", tone: "text-warning", cls: "bg-warning/8 text-warning ring-warning/25", band: "from-warning/8" };
   if (p.competitorName)
-    return { text: `Competitor: ${p.competitorName}`, short: "Competitor", tone: "text-orange-600 dark:text-orange-400", cls: "bg-orange-500/10 text-orange-600 dark:text-orange-400 ring-orange-500/30", band: "from-orange-500/10" };
+    return { text: `Competitor: ${p.competitorName}`, short: "Competitor", tone: "text-warning", cls: "bg-warning/8 text-warning ring-warning/25", band: "from-warning/8" };
   if (p.fiberStatus === "copper" || p.fiberStatus === "no_service")
     return { text: "No fiber yet", short: "No fiber", tone: "text-foreground", cls: "bg-muted text-muted-foreground ring-border", band: "from-muted/40" };
   if (p.source === "tap")
-    return { text: "Tapped location", short: "Tapped", tone: "text-sky-600 dark:text-sky-400", cls: "bg-sky-500/10 text-sky-600 dark:text-sky-400 ring-sky-500/30", band: "from-sky-500/10" };
+    return { text: "Tapped location", short: "Tapped", tone: "text-info", cls: "bg-info/8 text-info ring-info/25", band: "from-info/8" };
   return { text: p.fiberStatus || "Unknown", short: p.fiberStatus || "Unknown", tone: "text-foreground", cls: "bg-muted text-muted-foreground ring-border", band: "from-muted/40" };
 }
 
 // Accent text tones — the same -600/dark:-400 pairing as the badge, so a value
 // highlighted in the facts list stays readable on white and on ink.
 const TONE = {
-  emerald: "text-emerald-600 dark:text-emerald-400",
-  sky: "text-sky-600 dark:text-sky-400",
-  orange: "text-orange-600 dark:text-orange-400",
+  emerald: "text-success",
+  sky: "text-info",
+  orange: "text-warning",
 } as const;
 
 // The labeled "Details" rows — only facts that are actually present.

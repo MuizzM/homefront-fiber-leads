@@ -95,7 +95,7 @@ export function MomentumOffer() {
                       data-testid="momentum-amount">
                   {usd(data.offer.amountCents)}
                 </span>
-                <span className="text-[13px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                <span className="text-[13px] font-bold uppercase tracking-wide text-warning">
                   You're hot
                 </span>
               </div>
@@ -108,8 +108,8 @@ export function MomentumOffer() {
 
             <span className={cn(
               "inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-bold tabular-nums",
-              critical ? "bg-red-500/20 text-red-700 dark:text-red-300"
-                       : "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+              critical ? "bg-red-500/20 text-destructive"
+                       : "bg-amber-500/20 text-warning",
             )} data-testid="momentum-countdown">
               
               {offerCountdown(data.offer.expiresAtMs, now)}

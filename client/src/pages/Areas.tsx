@@ -147,12 +147,12 @@ export default function Areas() {
                     data-testid="areas-rollup-knocked">
                 {roll.knocked.toLocaleString()} knocked
               </span>
-              <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
+              <span className="inline-flex items-center rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success"
                     data-testid="areas-rollup-sold">
                 {roll.sold.toLocaleString()} sold
               </span>
               {roll.unassigned > 0 && (
-                <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700 dark:text-amber-400"
+                <span className="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-warning"
                       data-testid="areas-rollup-unassigned">
                   {roll.unassigned} unassigned
                 </span>

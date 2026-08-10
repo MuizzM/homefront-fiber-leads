@@ -116,7 +116,7 @@ const STAGES: Record<PipelineStage, { label: string; tone: string; dot: string; 
   under_review: { label: "Needs review", tone: "bg-warning/8 text-warning border-warning/12", dot: "bg-warning", next: "Review and approve" },
   approved: { label: "Approved", tone: "bg-info/8 text-info border-info/12", dot: "bg-info", next: "Send access and documents" },
   login_code_sent: { label: "Login sent", tone: "bg-info/8 text-info border-info/12", dot: "bg-info", next: "Confirm agreements" },
-  agreements_issued: { label: "Awaiting signatures", tone: "bg-violet-500/10 text-violet-400 border-violet-500/20", dot: "bg-violet-400", next: "Waiting for signatures" },
+  agreements_issued: { label: "Awaiting signatures", tone: "bg-violet-500/10 text-violet-700 border-violet-500/20", dot: "bg-violet-400", next: "Waiting for signatures" },
   partially_signed: { label: "Partially signed", tone: "bg-warning/8 text-warning border-warning/12", dot: "bg-warning", next: "Complete remaining agreements" },
   fully_signed: { label: "Fully signed", tone: "bg-success/8 text-success border-success/12", dot: "bg-success", next: "Finalizing activation" },
   active: { label: "Active rep", tone: "bg-success/8 text-success border-success/12", dot: "bg-success", next: "Onboarding complete" },

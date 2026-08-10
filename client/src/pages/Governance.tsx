@@ -59,7 +59,7 @@ function UserPreview({ members }: { members: TeamMember[] }) {
             {data.groups.flatMap(g => g.capabilities).filter(c => c.granted).map(c => (
               <span key={c.capability}
                 className={`inline-flex items-center gap-1 h-6 px-2.5 rounded-full text-[11px] font-medium ${c.highRisk
-                  ? "bg-amber-500/15 text-amber-400"
+                  ? "bg-warning/10 text-warning"
                   : "bg-primary/10 text-primary"}`}>
                 {c.highRisk
                   ? null
@@ -113,7 +113,7 @@ export default function Governance() {
           because a fetch failed - that is the exact false reassurance the
           Diagnostics page was built to avoid. */}
       {isError && (
-        <div role="alert" className="rounded-xl bg-card border border-rose-500/30 p-5 text-center">
+        <div role="alert" className="rounded-xl bg-card border border-destructive/25 p-5 text-center">
           <div className="text-sm font-semibold text-foreground">Couldn't load the capability map</div>
           <div className="mt-1 text-sm text-muted-foreground">The numbers and matrix below are unknown, not zero.</div>
           <button onClick={() => refetch()}
@@ -137,7 +137,7 @@ export default function Governance() {
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
              High-risk
           </div>
-          <div className="text-[18px] font-semibold tracking-tight text-amber-400 tabular-nums">{data ? highRiskCaps : " - "}</div>
+          <div className="text-[18px] font-semibold tracking-tight text-warning tabular-nums">{data ? highRiskCaps : " - "}</div>
         </div>
       </div>
 
@@ -193,7 +193,7 @@ export default function Governance() {
                             role="img"
                             aria-label={granted ? `${ROLE_LABEL[r] ?? r}: granted${cap.highRisk ? " (high-risk)" : ""}` : `${ROLE_LABEL[r] ?? r}: not granted`}
                             className={`w-4 h-4 rounded-full inline-flex items-center justify-center ${granted
-                              ? (cap.highRisk ? "bg-amber-400" : "bg-primary")
+                              ? (cap.highRisk ? "bg-warning" : "bg-primary")
                               : "bg-muted border border-border"}`}
                             title={granted ? `${ROLE_LABEL[r] ?? r} has ${cap.capability}` : "not granted"}
                           >

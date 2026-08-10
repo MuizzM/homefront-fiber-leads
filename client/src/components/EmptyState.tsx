@@ -15,10 +15,10 @@ type Tone = "neutral" | "positive" | "primary";
 
 const TONES: Record<Tone, { tile: string; icon: string; ring: string }> = {
   neutral: { tile: "bg-muted", icon: "text-muted-foreground", ring: "border-border" },
-  // The light-mode override matters: text-emerald-400 on the light card is
+  // The light-mode override matters: text-success on the light card is
   // ~2:1 — decorative here (aria-hidden tile), but the shared primitive should
   // model the correct both-themes pattern it asks pages to follow.
-  positive: { tile: "bg-emerald-500/15", icon: "text-emerald-400 [.light_&]:text-emerald-700", ring: "border-emerald-500/25" },
+  positive: { tile: "bg-success/10", icon: "text-success", ring: "border-success/15" },
   primary: { tile: "bg-primary/10", icon: "text-primary", ring: "border-border" },
 };
 
@@ -47,7 +47,7 @@ export function EmptyState({
       role="status"
       data-testid={testId}
       className={`flex flex-col items-center justify-center px-6 py-12 text-center ${
-        bordered ? `rounded-2xl border ${t.ring} ${tone === "positive" ? "bg-emerald-500/[0.06]" : "bg-card"}` : ""
+        bordered ? `rounded-2xl border ${t.ring} ${tone === "positive" ? "bg-success/[0.06]" : "bg-card"}` : ""
       } ${className}`}
     >
       

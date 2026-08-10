@@ -197,13 +197,13 @@
     --input:        214 20% 89%;
     --ring:         211 68% 26%;
 
-    --success:      161 94% 24%;
-    --warning:      32 95% 36%;
+    --success:      161 94% 22%;
+    --warning:      32 95% 30%;
     /* Progress and in-flight state. Deliberately a brighter, more cyan blue
        than --primary (211 68% 26%): primary is structure, info is a signal,
        and at a 3px rail the two must not read as the same colour. 4.9:1 on
        white, so it is also safe as text. */
-    --info:         202 83% 38%;
+    --info:         202 83% 32%;
     /* Lighter than the dark theme's scrim and tinted with the brand navy
        rather than pure black: at 68% a light UI goes to near-black behind the
        dialog, which reads as a different app rather than a layer above this
@@ -233,13 +233,13 @@
     --border:       214 20% 89%;
     --input:        214 20% 89%;
     --ring:         211 68% 26%;
-    --success:      161 94% 24%;
-    --warning:      32 95% 36%;
+    --success:      161 94% 22%;
+    --warning:      32 95% 30%;
     /* Progress and in-flight state. Deliberately a brighter, more cyan blue
        than --primary (211 68% 26%): primary is structure, info is a signal,
        and at a 3px rail the two must not read as the same colour. 4.9:1 on
        white, so it is also safe as text. */
-    --info:         202 83% 38%;
+    --info:         202 83% 32%;
     /* Lighter than the dark theme's scrim and tinted with the brand navy
        rather than pure black: at 68% a light UI goes to near-black behind the
        dialog, which reads as a different app rather than a layer above this

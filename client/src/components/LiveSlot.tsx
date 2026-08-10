@@ -69,7 +69,7 @@ export function LiveSlot({ items, className }: { items: LiveItem[]; className?: 
 
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              <span className="text-[11px] font-bold uppercase tracking-wide text-warning">
                 Live now
               </span>
               {/* The clock. Under ten minutes it turns red and nothing else on
@@ -80,7 +80,7 @@ export function LiveSlot({ items, className }: { items: LiveItem[]; className?: 
                   data-testid="live-slot-countdown"
                   className={cn(
                     "shrink-0 text-[12px] font-bold tabular-nums transition-colors",
-                    urgent ? "text-destructive" : "text-amber-700 dark:text-amber-400",
+                    urgent ? "text-destructive" : "text-warning",
                   )}
                 >
                   {label} left
@@ -98,7 +98,7 @@ export function LiveSlot({ items, className }: { items: LiveItem[]; className?: 
             )}
           </div>
 
-          <span className="shrink-0 text-[17px] font-bold tabular-nums text-amber-700 dark:text-amber-400">
+          <span className="shrink-0 text-[17px] font-bold tabular-nums text-warning">
             {usd(primary.rewardCents)}
           </span>
         </div>

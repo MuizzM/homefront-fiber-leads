@@ -28,9 +28,9 @@ type LeaderboardEntry = {
 
 
 const RANK_COLORS = [
-  "text-yellow-400",   // 1st
-  "text-slate-300",    // 2nd
-  "text-amber-600",    // 3rd
+  "text-gold-text",        // 1st - the brand gold, in its AA-safe text form
+  "text-foreground",       // 2nd
+  "text-muted-foreground", // 3rd
 ];
 
 function conversionRate(contacts: number, sales: number) {
@@ -183,7 +183,7 @@ export default function Leaderboard() {
             <div className="text-xs text-muted-foreground">#{myIdx + 1} of {board.length} · {me.knocks} knocks · {conversionRate(me.contacts, me.sales)} conv.</div>
           </div>
           <div className="text-right flex-shrink-0">
-            <div className="text-xl font-bold tabular-nums text-emerald-400 leading-none">{me.sales}</div>
+            <div className="text-xl font-bold tabular-nums text-success leading-none">{me.sales}</div>
             <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-1">Sales</div>
           </div>
         </div>
@@ -249,7 +249,7 @@ export default function Leaderboard() {
                   isMe
                     ? "bg-primary/15 text-primary"
                     : isManager
-                      ? "bg-amber-500/15 text-amber-400"
+                      ? "bg-gold-soft text-gold-text"
                       : "bg-secondary text-foreground"
                 }`}>
                   {entry.rep.name.charAt(0).toUpperCase()}
@@ -274,14 +274,14 @@ export default function Leaderboard() {
 
                 {/* Primary metric - sales, big + tabular */}
                 <div className="text-right flex-shrink-0 min-w-[52px] pl-2 sm:pl-4">
-                  <div className="text-xl font-bold tabular-nums text-emerald-400 leading-none">{entry.sales}</div>
+                  <div className="text-xl font-bold tabular-nums text-success leading-none">{entry.sales}</div>
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-1">Sales</div>
                 </div>
 
                 {/* Sales share - thin hairline accent along the bottom edge */}
                 {totals.sales > 0 && (
                   <div
-                    className="absolute bottom-0 left-0 h-0.5 bg-emerald-400/40"
+                    className="absolute bottom-0 left-0 h-0.5 bg-success/30"
                     style={{ width: `${teamPct}%` }}
                     aria-hidden="true"
                   />

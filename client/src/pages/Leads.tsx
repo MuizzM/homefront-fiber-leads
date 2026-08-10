@@ -82,9 +82,9 @@ const STATUS_COLOR: Record<string, string> = {
 
 const OUTCOME_COLORS: Record<string, string> = {
   not_home:      "text-muted-foreground",
-  not_interested:"text-red-600 dark:text-red-400",
+  not_interested:"text-destructive",
   interested:    "text-violet-600 dark:text-violet-400",
-  callback:      "text-amber-600 dark:text-amber-400",
+  callback:      "text-warning",
   sold:          "text-success",
 };
 
@@ -309,7 +309,7 @@ function KnockLogger({ lead, team }: {
                     <div className="flex-1 min-w-0">
                       <span className={`font-medium ${color}`}>{OUTCOME_META[k.outcome as keyof typeof OUTCOME_META]?.label ?? k.outcome.replace(/_/g, " ")}</span>
                       <span className="text-muted-foreground ml-1">· {repName}</span>
-                      {k.callbackDate && <span className="text-amber-600 dark:text-amber-400 ml-1">Callback {k.callbackDate}</span>}
+                      {k.callbackDate && <span className="text-warning ml-1">Callback {k.callbackDate}</span>}
                       {k.notes && <div className="text-muted-foreground italic truncate">{k.notes}</div>}
                     </div>
                     <span className="text-muted-foreground flex-shrink-0">
@@ -719,7 +719,7 @@ const leadSource = (lead: Lead) => lead.dfAddressId ? "Fiber scan" : lead.assign
 const nextAction = (lead: Lead) => {
   if (!lead.assignedRepId) return { label: "Assign owner", tone: "text-warning" };
   if (lead.leadStatus === "prospect") return { label: "First contact", tone: "text-primary" };
-  if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-orange-600 dark:text-orange-400" };
+  if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-warning" };
   if (lead.leadStatus === "interested") return { label: "Close sale", tone: "text-success" };
   if (lead.leadStatus === "sold") return { label: "Complete", tone: "text-muted-foreground" };
   // Closed doors ("not interested" and its "already a customer" disambiguation)
@@ -787,7 +787,7 @@ const LeadTableRow = memo(function LeadTableRow({
       <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
       <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
-      <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
+      <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-destructive" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
       <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
       <td className="px-3 py-3">
         {saving ? (
@@ -1213,7 +1213,7 @@ export default function Leads() {
       {isRep && (
         <div className="grid grid-cols-3 gap-2 md:hidden" data-testid="rep-leads-summary">
           <div className="rounded-xl border border-border bg-card p-3"><div className="text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Assigned</div></div>
-          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-orange-600 dark:text-orange-400">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
+          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-warning">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
           <div className="rounded-xl border border-violet-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Interested</div></div>
         </div>
       )}
@@ -1222,7 +1222,7 @@ export default function Leads() {
         <EnterpriseKpi label="Qualified" value={statsError ? null : leadStats?.qualified ?? 0} helper="Interested or sold" icon={CheckCircle2} tone="text-success" />
         <EnterpriseKpi label="Assigned" value={statsError ? null : leadStats?.assigned ?? 0} helper="Owned by a field rep" icon={UserCheck} tone="text-violet-600 dark:text-violet-400" />
         <EnterpriseKpi label="Unassigned" value={statsError ? null : leadStats?.unassigned ?? 0} helper="Requires an owner" icon={CircleDot} tone="text-warning" warning={!statsError && (leadStats?.unassigned ?? 0) > 0} />
-        <EnterpriseKpi label="Stale" value={statsError ? null : leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-rose-600 dark:text-rose-400" warning={!statsError && (leadStats?.stale ?? 0) > 0} />
+        <EnterpriseKpi label="Stale" value={statsError ? null : leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-destructive" warning={!statsError && (leadStats?.stale ?? 0) > 0} />
       </div>
 
       <section className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">

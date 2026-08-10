@@ -34,7 +34,7 @@ export function PaywallBanner() {
 
   const cls = tone === "red"
     ? "bg-red-500/12 text-red-500 border-red-500/25"
-    : "bg-amber-500/12 text-amber-600 dark:text-amber-500 border-amber-500/25";
+    : "bg-amber-500/12 text-warning border-amber-500/25";
   const isAdmin = user?.role === "admin";
 
   return (

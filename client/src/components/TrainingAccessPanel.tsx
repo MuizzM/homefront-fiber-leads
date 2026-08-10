@@ -142,7 +142,7 @@ export function TrainingAccessPanel() {
                   {/* State in words, not a bare switch — this decides whether a
                       person can work today. */}
                   <p className={cn("text-[13px] font-medium",
-                    r.gated ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}
+                    r.gated ? "text-warning" : "text-muted-foreground")}
                      data-testid={`training-state-${r.userId}`}>
                     {r.gated
                       ? `Locked to training · ${r.completed} of ${r.required}`
@@ -176,7 +176,7 @@ export function TrainingAccessPanel() {
                       "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-semibold disabled:opacity-50",
                       r.trainingRequired
                         ? "bg-secondary text-foreground"
-                        : "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+                        : "bg-amber-500/15 text-warning",
                       FOCUS,
                     )}>
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

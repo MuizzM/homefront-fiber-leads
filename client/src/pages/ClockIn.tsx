@@ -161,7 +161,7 @@ export default function ClockIn() {
                     variant="outline"
                     onClick={() => clockOutMutation.mutate()}
                     disabled={clockOutMutation.isPending}
-                    className="w-full border-rose-500/30 text-rose-400 hover:bg-rose-500/10 px-8 sm:w-auto"
+                    className="w-full border-destructive/25 text-destructive hover:bg-destructive/8 px-8 sm:w-auto"
                     data-testid="button-clock-out"
                   >
                     
@@ -210,7 +210,7 @@ export default function ClockIn() {
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
                Currently in field
-              <Badge className="bg-emerald-500/15 text-emerald-400 border-transparent rounded-full ml-1">{activeSessions.length}</Badge>
+              <Badge className="bg-success/10 text-success border-transparent rounded-full ml-1">{activeSessions.length}</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -218,14 +218,14 @@ export default function ClockIn() {
               {activeSessions.map(s => (
                 <div key={s.id} className="px-5 py-3.5 flex items-center justify-between" data-testid={`active-session-${s.id}`}>
                   <div className="flex items-center gap-3">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
                     <div>
                       <p className="text-sm text-foreground font-medium">{s.repName ?? `Rep #${s.repId}`}</p>
                       <p className="text-xs text-muted-foreground">Since {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</p>
                     </div>
                   </div>
-                  <Badge className="bg-emerald-500/15 text-emerald-400 border-transparent rounded-full text-xs flex items-center gap-1.5">
-                    <span className="w-1 h-1 rounded-full bg-emerald-400" /> Active
+                  <Badge className="bg-success/10 text-success border-transparent rounded-full text-xs flex items-center gap-1.5">
+                    <span className="w-1 h-1 rounded-full bg-success" /> Active
                   </Badge>
                 </div>
               ))}

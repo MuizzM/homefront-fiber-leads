@@ -64,10 +64,10 @@ const money = (cents: number) => {
 
 const STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-muted text-muted-foreground",
-  SUBMITTED: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
-  APPROVED: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+  SUBMITTED: "bg-amber-500/15 text-warning",
+  APPROVED: "bg-emerald-500/15 text-success",
   REJECTED: "bg-destructive/15 text-destructive",
-  PAID: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
+  PAID: "bg-sky-500/15 text-info",
 };
 
 // Human labels for the raw DB enum — a rep was reading "SUBMITTED" in caps next
@@ -252,7 +252,7 @@ function GpsTracker({ openTrip }: { openTrip: Trip | null }) {
         {running ? (
           <>
             <div className="rounded-md bg-emerald-500/10 p-3 text-sm">
-              <p className="font-medium text-emerald-700 dark:text-emerald-400">Trip running</p>
+              <p className="font-medium text-success">Trip running</p>
               <p className="text-muted-foreground">
                 Started {openTrip.startedAt ? new Date(openTrip.startedAt).toLocaleTimeString() : " - "}
                 {openTrip.purpose ? ` · ${openTrip.purpose}` : ""}
@@ -658,7 +658,7 @@ export default function Mileage() {
                 </span>
                 {summary.reimbursementEnabled && (
                   <>
-                    <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
+                    <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success"
                           data-testid="mileage-approved">
                       {money(summary.approvedCents)} approved
                     </span>
