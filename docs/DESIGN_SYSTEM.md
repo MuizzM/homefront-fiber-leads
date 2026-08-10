@@ -31,7 +31,7 @@ there are two gold tokens, not one.
 | Class | Use |
 | --- | --- |
 | `bg-gold` + `text-gold-foreground` | a gold surface (6.6:1) |
-| `text-gold-text` | gold **as text** on a light ground (4.6:1, AA) |
+| `text-gold-text` | gold **as text** (5.3:1 on white, 5.0:1 on `gold-soft`) |
 | `bg-gold-soft` | the tint for chips and rails |
 
 Money headline figures use `text-gold-text` (Incentives, Referrals, Mileage).
@@ -46,14 +46,20 @@ for the meaning, never the raw palette.
 | Token | Light | Contrast on white | Meaning |
 | --- | --- | --- | --- |
 | `--primary` | `211 68% 26%` | 10.4:1 | structure, nav, in-play |
-| `--success` | `161 94% 24%` | 5.6:1 | a win |
-| `--warning` | `32 95% 36%` | 4.5:1 | work owed |
+| `--success` | `161 94% 22%` | 6.1:1 | a win |
+| `--warning` | `32 95% 30%` | 6.1:1 | work owed |
 | `--destructive` | `0 72% 44%` | 6.0:1 | failure, loss |
-| `--info` | `202 83% 38%` | 4.9:1 | progress, in flight |
+| `--info` | `202 83% 32%` | 6.4:1 | progress, in flight |
 | `--overlay` | `hsl(212 40% 12% / 0.45)` | n/a | the modal scrim |
 
 `--info` is deliberately a brighter, more cyan blue than `--primary`: primary is
 structure, info is a signal, and at a 3px rail the two must not read alike.
+
+The contrast column is against white, but these are chip colours as often as
+text: `bg-warning/10 text-warning` puts the token on a 10% wash of ITSELF.
+Tuned to white alone they had no margin - warning was 4.51:1 on white and
+3.97:1 on its own chip. Every value above now clears AA on white, on a /10
+tint and on a /15 tint. Same trap, same fix, for `--accent-gold-text`.
 
 `--overlay` carries **its own alpha**, so `bg-overlay` is the entire scrim and no
 call site picks an opacity. That is not a style preference — the same modal
@@ -107,17 +113,30 @@ win wherever it sits, so re-ordering the stylesheet can never silently undo it.
 white they land near 1.9:1 and fail AA badly. Prefer the semantic token; it is
 correct in both themes and needs no `dark:` twin.
 
-A `text-emerald-600 dark:text-emerald-400` pair is already correct — leave it.
-What is wrong is an unpaired `-300`/`-400` step, and a `[.light_&]:` override
-sitting on top of a semantic base (the token already handles both grounds, so
-the override only shadows it).
+An unpaired `-300`/`-400` step is the obvious case. Two less obvious ones:
 
-This migration is **not finished**. At the time of writing roughly 300 unpaired
-call sites remain, concentrated in `CommissionConsole`, `Applications`, `Team`,
-`MapView` and the scanner tabs. Before converting a file, check it for a dark
-surface of its own (`bg-slate-900`, `bg-black`, map chrome): the semantic tokens
-are tuned for the light default and a chip on a dark panel needs hand review,
-not a blanket replacement.
+- **A `-600 dark:-400` pair is not automatically safe.** `emerald-600` measures
+  3.28:1 and `amber-700` 4.47:1. That rule was written to stop a bare `-400`
+  washing out on light; it never checked that the light half cleared AA.
+  Collapse the pair onto the token, which is correct on both grounds and needs
+  no `dark:` twin.
+- **A `[.light_&]:` override on a semantic base is dead weight.** The token
+  already handles light, so the override only shadows it with the raw step it
+  was meant to replace.
+
+This migration is **not finished**. 83 unpaired call sites remain, more than
+half of them in `MapView` (27) and the two orphaned scanner tabs (`USAScanner`
+15, `CityScanner` 12); the rest is a long tail of one or two per file. MapView
+is excluded deliberately: it carries its own dark map chrome, and the semantic
+tokens are tuned for the light default, so a chip on a dark panel needs hand
+review rather than a blanket replacement. Check any file for `bg-slate-900`,
+`bg-black` or map chrome before converting it.
+
+Also check `.ts` files, not just `.tsx`. Every grep in the first pass of this
+migration used `--include='*.tsx'`, which hid `client/src/lib/areaProgress.ts`
+and `shared/leadMark.ts` - and areaProgress is where the Areas status chips
+actually live, so `Areas.tsx` kept coming back clean while the screen kept
+measuring 3.28:1.
 
 ## Verifying, rather than assuming
 
@@ -126,7 +145,7 @@ The check that matters walks the visible DOM, resolves each text node's real
 composited background through its ancestors, and applies the WCAG threshold for
 that font size and weight.
 
-Two gotchas when measuring this app specifically:
+Four gotchas when measuring this app specifically:
 
 - **Keep-alive stages.** Several route stages stay mounted at once, so
   `document.querySelector('h1')` can return a hidden screen's heading. Filter on
@@ -135,6 +154,13 @@ Two gotchas when measuring this app specifically:
   stale layout: the capture showed the canvas clipped to 330px inside a 375px
   viewport while every JS measurement correctly read 375. Reload after a resize,
   and trust measurement over the picture.
+- **Gradients read as transparent.** An element with a `background-image`
+  reports `backgroundColor: transparent`, so walking up for a background sails
+  past it to the page white - which scored the white label on the navy-to-green
+  Profile avatar as white-on-white, 1.0:1. Skip gradient-backed nodes rather
+  than reporting them.
+- **Empty screens hide their colours.** `/fiber` swept clean until it had data,
+  then showed 53 failures at once. A route with no rows has proved nothing.
 
 ## Type and hit areas
 
