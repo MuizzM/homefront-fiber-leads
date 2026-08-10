@@ -26,7 +26,7 @@ export function UpdatePrompt() {
       <button
         type="button"
         onClick={applyUpdate}
-        className="h-8 px-3.5 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
+        className="h-8 px-3.5 rounded-full bg-primary text-primary-foreground text-[12px] font-semibold active:scale-95 transition"
       >
         Update
       </button>

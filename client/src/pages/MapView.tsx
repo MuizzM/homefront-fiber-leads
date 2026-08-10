@@ -8436,7 +8436,7 @@ export default function MapView() {
               }}
               // Ring brightens while follow is actually engaged (mirrors the
               // imperative `following` flag), so the FAB reads as ON/OFF truthfully.
-              className={`absolute right-3 z-20 rounded-full ring-inset flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform bg-primary text-white hover:bg-primary/90 ${followEngaged ? "ring-2 ring-white/80" : "ring-1 ring-white/[0.18]"}`}
+              className={`absolute right-3 z-20 rounded-full ring-inset flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform bg-primary text-primary-foreground hover:bg-primary/90 ${followEngaged ? "ring-2 ring-white/80" : "ring-1 ring-white/[0.18]"}`}
             >
               <LocateFixed className="w-6 h-6" />
             </button>

@@ -534,7 +534,7 @@ export default function CommissionConsole() {
                   instead of buttons that 403 after a confirm dialog. */}
               {canPay ? (
                 <>
-                  <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
+                  <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-primary-foreground text-xs"
                     disabled={openCount === 0 || transition.isPending}
                     onClick={() => setConfirmAction("FINALIZE")} data-testid="btn-finalize-week">
                      Finalize week
@@ -599,7 +599,7 @@ export default function CommissionConsole() {
           )}
           <DialogFooter>
             <Button variant="outline" className="border-border" onClick={() => setConfirmAction(null)}>Cancel</Button>
-            <Button className="bg-primary hover:bg-primary/90 text-white" disabled={transition.isPending}
+            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={transition.isPending}
               onClick={() => confirmAction && transition.mutate(confirmAction)} data-testid="btn-confirm-closeout">
               {transition.isPending ? "Working…" : confirmAction === "FINALIZE" ? `Lock ${openCount} statement${openCount === 1 ? "" : "s"}` : "Mark paid"}
             </Button>
@@ -906,7 +906,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
                 <Input value={adjReason} onChange={e => setAdjReason(e.target.value)} placeholder="e.g. Customer cancelled install - clawback per policy"
                   className="bg-card border-border h-8 text-sm mt-1" data-testid="input-adj-reason" />
               </div>
-              <Button size="sm" className="h-7 text-xs bg-primary hover:bg-primary/90 text-white w-full"
+              <Button size="sm" className="h-7 text-xs bg-primary hover:bg-primary/90 text-primary-foreground w-full"
                 disabled={!adjAmount || !adjReason.trim() || createAdj.isPending}
                 onClick={() => createAdj.mutate()} data-testid="btn-file-adjustment">
                 File pending adjustment
@@ -1292,7 +1292,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
               {payableCount > 0 && <div className="text-2xs mt-0.5">Estimated Stripe fee for this run: {usd(estimatedCost.payoutRunFeeCents)}*</div>}
             </div>
             {canPay && (
-              <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
+              <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-primary-foreground text-xs"
                 disabled={payableCount === 0 || pay.isPending || insufficientBalance}
                 onClick={() => setConfirmOpen(true)}
                 aria-label={`Pay ${payableCount} reps, ${usd(payableCents)} total`}
@@ -1335,7 +1335,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
           </div>
           <DialogFooter>
             <Button variant="outline" className="border-border" onClick={() => setConfirmOpen(false)} disabled={pay.isPending}>Cancel</Button>
-            <Button className="bg-primary hover:bg-primary/90 text-white" disabled={pay.isPending || payableCount === 0 || insufficientBalance || !canPay}
+            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={pay.isPending || payableCount === 0 || insufficientBalance || !canPay}
               onClick={() => pay.mutate()} data-testid="pay-confirm">
               {pay.isPending
                 ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Paying…</>

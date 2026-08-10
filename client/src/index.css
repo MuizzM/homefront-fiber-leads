@@ -71,8 +71,8 @@
     --accent:       216 15% 15%;      /* NEUTRAL hover surface (was teal) */
     --accent-foreground: 210 16% 96%;
 
-    --destructive:  0 72% 55%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive:  0 80% 68%;
+    --destructive-foreground: 0 60% 10%;
 
     --border:       216 15% 16%;      /* hairline */
     --input:        216 15% 16%;
@@ -88,6 +88,12 @@
        part of the decision, and leaving it to call sites is exactly how one
        effect ended up spelled six ways (black/40 through black/90). */
     --overlay:      hsl(212 45% 4% / 0.68);
+
+    /* Gold on an ink ground. --accent-gold/-hover/-fg stay shared (they are
+       fills, and dark ink on gold reads the same on either theme); these two
+       are the ones that face the background and so must flip with it. */
+    --accent-gold-text:   38 92% 68%;   /* gold AS text on the dark card */
+    --accent-gold-soft:   38 60% 14%;   /* the tint, as a deep warm ink */
 
   }
 

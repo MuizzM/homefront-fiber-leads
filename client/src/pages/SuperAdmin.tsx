@@ -177,7 +177,7 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
       <div className="flex gap-2 pt-2">
         <Button variant="outline" onClick={onCancel} className="border-border flex-1">Cancel</Button>
         <Button onClick={() => onSave(form)} disabled={saving || !form.companyName || !form.ownerEmail || !form.brandName}
-          className="bg-primary hover:bg-primary/90 text-white flex-1">
+          className="bg-primary hover:bg-primary/90 text-primary-foreground flex-1">
           {saving ? "Saving..." : initial ? "Save Changes" : "Create Tenant"}
         </Button>
       </div>
@@ -374,7 +374,7 @@ export default function SuperAdmin() {
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">Your proprietary platform · white-label to any Kinetic market</p>
         </div>
-        <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-white text-sm"
+        <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm"
           data-testid="btn-add-tenant">
            Add Tenant
         </Button>

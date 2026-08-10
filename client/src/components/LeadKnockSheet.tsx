@@ -725,7 +725,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               data-testid="note-add-btn"
               // Fires before blur (pointerdown) so this never double-commits.
               onPointerDown={(e) => { e.preventDefault(); commitNote(note); }}
-              className="absolute right-2 bottom-2 h-11 px-4 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
+              className="absolute right-2 bottom-2 h-11 px-4 rounded-full bg-primary text-primary-foreground text-[12px] font-semibold active:scale-95 transition"
             >
               Add
             </button>

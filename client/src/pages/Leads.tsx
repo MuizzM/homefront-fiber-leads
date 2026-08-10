@@ -173,7 +173,7 @@ function LeadForm({ initial, onSave, onCancel, saving }: {
         {/* While the POST is in flight the button says so and stays disabled —
             the form (and everything typed into it) survives a failed save. */}
         <Button onClick={() => onSave(form)} disabled={saving || !form.address || !form.city || !form.zip}
-          className="bg-primary hover:bg-primary/90 text-white flex-1" data-testid="btn-save-lead-form">
+          className="bg-primary hover:bg-primary/90 text-primary-foreground flex-1" data-testid="btn-save-lead-form">
           {saving ? (<><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Saving lead…</>) : "Save Lead"}
         </Button>
       </div>
@@ -370,7 +370,7 @@ function AssignRepModal({ lead, team, onClose }: {
       <DialogFooter className="mt-2">
         <Button variant="outline" onClick={onClose} className="border-border">Cancel</Button>
         <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending}
-          className="bg-primary hover:bg-primary/90 text-white" data-testid="btn-confirm-assign">
+          className="bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="btn-confirm-assign">
           {assignMutation.isPending ? "Assigning..." : "Assign"}
         </Button>
       </DialogFooter>
@@ -642,7 +642,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
                   placeholder="owner@example.com" className="bg-secondary border-input text-sm h-8 mt-1" />
               </div>
               <Button size="sm" onClick={() => saveContact.mutate()} disabled={saveContact.isPending}
-                className="bg-primary hover:bg-primary/90 text-white text-xs h-7 w-full">
+                className="bg-primary hover:bg-primary/90 text-primary-foreground text-xs h-7 w-full">
                 Save Contact Info
               </Button>
             </div>

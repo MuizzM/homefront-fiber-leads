@@ -352,7 +352,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                   </div>
                   <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-1">
                     <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeclining(true)}> Decline</Button>
-                    <Button disabled={!ready || sign.isPending} onClick={() => sign.mutate()} className="h-11 bg-primary hover:bg-primary/90 text-white" data-testid="complete-signature">
+                    <Button disabled={!ready || sign.isPending} onClick={() => sign.mutate()} className="h-11 bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="complete-signature">
                       {sign.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Sign agreement
                     </Button>
                   </div>
