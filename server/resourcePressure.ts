@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { rawDb, forceWalTruncate } from "./db";
+import { requestWalCheckpoint } from "./walMaintenance";
 import { structuredLog } from "./structuredLog";
 
 // ── Resource-pressure sentinel ───────────────────────────────────────────────
@@ -161,7 +162,18 @@ export function startResourceSentinel(): NodeJS.Timeout | null {
       }
       // Emergency recovery: reclaim the WAL NOW — the whole point is to act
       // while SQLite still has the disk to complete a checkpoint.
-      if (level === "emergency") forceWalTruncate("emergency");
+      //
+      // DELEGATED first. `emergency` latches while walMb > emergencyWalMb, so
+      // this fires on EVERY tick (30s by default), and the checkpoint is
+      // synchronous: run inline in a single-process deployment it blocks the web
+      // server for as long as the reclaim takes, exactly the way the 120s guard
+      // did before it was moved out. Measured on production 2026-08-10 after the
+      // guard moved: /api/health still stalling 5-9s on a ~60s cadence, which
+      // was this. Inline stays as the fallback, because on a box actually about
+      // to run out of disk a blocking checkpoint beats no checkpoint.
+      if (level === "emergency" && !requestWalCheckpoint("emergency")) {
+        forceWalTruncate("emergency");
+      }
       prev = level;
     } catch (e: any) {
       // A silent sampler is how the last guard failure hid — log every error.

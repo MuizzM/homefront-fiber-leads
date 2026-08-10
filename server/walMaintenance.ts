@@ -55,7 +55,10 @@ function spawnChild(entry: string, rapidExits: number): void {
   // (two processes cannot bind the same one, and the child would die at boot).
   // stdio inherited so its structured logs land in the same docker json-file
   // ring perf-report.yml reads.
-  child = fork(entry, [], { execArgv: [], stdio: "inherit" });
+  // stdio spelled out rather than "inherit" so the IPC channel is explicit:
+  // requestWalCheckpoint() below depends on it, and a silently missing channel
+  // would degrade the emergency reclaim back to blocking the web server.
+  child = fork(entry, [], { execArgv: [], stdio: ["inherit", "inherit", "inherit", "ipc"] });
 
   child.on("exit", (code, signal) => {
     child = null;
@@ -116,6 +119,30 @@ export function startWalMaintenance(): WalMaintenanceMode {
     warning: "checkpoints will block this process; expected in dev only",
   });
   return "in-process";
+}
+
+/**
+ * Ask the maintenance process to reclaim the WAL RIGHT NOW.
+ *
+ * The resource sentinel's emergency path used to call forceWalTruncate()
+ * directly. In a single-process deployment that is the identical defect this
+ * module exists to fix, just on a 30s timer instead of a 120s one: emergency
+ * fires while walMb > PRESSURE_EMERGENCY_WAL_MB (4096 by default), so it can
+ * block the web server on EVERY tick for as long as the checkpoint takes.
+ *
+ * Delegating keeps the urgency and drops the blocking. Returns false when there
+ * is no child to delegate to, and only then should the caller reclaim inline -
+ * on a box genuinely about to run out of disk, a blocking checkpoint is still
+ * better than no checkpoint.
+ */
+export function requestWalCheckpoint(reason: string): boolean {
+  if (!child || child.killed || !child.connected) return false;
+  try {
+    child.send({ type: "checkpoint", reason });
+    return true;
+  } catch {
+    return false; // channel closed between the check and the send
+  }
 }
 
 /** Forward shutdown to the child so a deploy cutover does not leave it orphaned

@@ -21,6 +21,7 @@ import Database from "better-sqlite3";
 import path from "node:path";
 import {
   bootWalCheckpointOn,
+  forceWalTruncateOn,
   litestreamOwnsCheckpoints,
   startWalGuardOn,
   walFileMb,
@@ -71,6 +72,28 @@ function main(): void {
   bootWalCheckpointOn(conn, walPath, WHERE);
   // unref:false - this timer is the only thing keeping the process alive.
   startWalGuardOn(conn, walPath, { where: WHERE, unref: false });
+
+  // On-demand reclaim, asked for by the server's resource sentinel when disk or
+  // WAL pressure reaches emergency. It arrives here instead of running on the
+  // web server's loop, which is the whole point of this process.
+  //
+  // `busy` matters: emergency ticks every 30s and a checkpoint against a
+  // multi-GB WAL can outlast that, so without it the requests would queue and
+  // each one would re-block behind the last.
+  let busy = false;
+  process.on("message", (msg: any) => {
+    if (!msg || msg.type !== "checkpoint") return;
+    if (busy) {
+      walLog("db.wal_maintenance_skipped", { where: WHERE, reason: msg.reason, why: "checkpoint already running" });
+      return;
+    }
+    busy = true;
+    try {
+      forceWalTruncateOn(conn, walPath, String(msg.reason ?? "requested"), WHERE);
+    } finally {
+      busy = false;
+    }
+  });
 
   const shutdown = (signal: string) => {
     walLog("db.wal_maintenance_stopping", { where: WHERE, signal });

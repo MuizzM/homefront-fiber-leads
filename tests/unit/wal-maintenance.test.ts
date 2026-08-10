@@ -10,7 +10,7 @@
 // hand the periodic guard to a process that serves nothing.
 // See docs/architecture/BULK_ASSIGNMENT.md.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,6 +53,37 @@ describe("WAL maintenance placement", () => {
     await new Promise((r) => setTimeout(r, 1_500));
     expect(existsSync(marker)).toBe(true);
   }, 15_000);
+
+  it("delegates an emergency reclaim to the child instead of blocking the server", async () => {
+    // The resource sentinel latches on `emergency` while the WAL is over the
+    // threshold, so this fires every 30s. Run inline it blocks the web server
+    // for the length of the checkpoint - the same defect as the 120s guard.
+    delete process.env.WAL_GUARD;
+    const entry = join(tmp, "wal-maintenance.cjs");
+    const got = join(tmp, "got.txt");
+    writeFileSync(entry, `
+      process.on("message", (m) => {
+        if (m && m.type === "checkpoint") {
+          require("node:fs").writeFileSync(${JSON.stringify(got)}, String(m.reason));
+        }
+      });
+    `);
+    process.env.WAL_MAINTENANCE_ENTRY = entry;
+
+    expect(mod.startWalMaintenance()).toBe("child");
+    await new Promise((r) => setTimeout(r, 800)); // let the child come up
+    expect(mod.requestWalCheckpoint("emergency")).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 800));
+    expect(existsSync(got)).toBe(true);
+    expect(readFileSync(got, "utf8")).toBe("emergency");
+  }, 15_000);
+
+  it("reports no delegate when nothing is running, so the caller reclaims inline", () => {
+    // Returning true here would silently disable the emergency reclaim on a box
+    // that is running out of disk.
+    expect(mod.requestWalCheckpoint("emergency")).toBe(false);
+  });
 
   it("falls back in-process only when no bundled entry can be found", () => {
     delete process.env.WAL_GUARD;
