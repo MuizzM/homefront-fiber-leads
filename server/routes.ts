@@ -125,6 +125,9 @@ import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
 import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
 import { registerMileageRoutes } from "./mileageRoutes";
+import { registerLiveOpsRoutes, notifyLiveOpsChanged } from "./liveOpsRoutes";
+import { ingestFix, getLiveStates, clearLiveStateForRep } from "./liveOpsStore";
+import { liveOpsScope } from "./liveOpsScope";
 import { registerReferralRoutes } from "./referralRoutes";
 import { pathAllowedWhileGated } from "@shared/trainingGate";
 import {
@@ -1349,6 +1352,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // MONEY stays behind mileage.reimbursement_enabled (off for every org until an
   // operator turns it on) — see the note in server/mileageStore.ts.
   registerMileageRoutes(app, { requireAuth, requireCapability });
+  registerLiveOpsRoutes(app, { requireAuth, requireCapability });
   // Rep-referral program. Ships DARK (referral.program.enabled = false), so the
   // link and pipeline render but no attribution is accepted and no reward is
   // ever created until an admin turns it on.
@@ -10510,30 +10514,61 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 export function registerSaasRoutes(app: any) {
   // ── GPS Location Pings ──────────────────────────────────────────────────────
   // POST /api/location-pings - rep sends their GPS position
+  // Legacy ingest, kept so older clients keep working. It now delegates to the
+  // SAME gated path as /api/live-ops/ping instead of writing directly.
+  //
+  // What it used to do: take any lat/lng from anyone holding field.app.use and
+  // insert it. No check that the rep was on shift, that the org had switched
+  // collection on, or that the rep had ever been shown a disclosure - only the
+  // client's button was disabled when clocked out, which is not a control.
+  //
+  // Two other fixes fall out of the rewrite. `!lat || !lng` rejected a genuine
+  // coordinate of exactly 0. And a non-rep role could pass `repId` in the body
+  // to file a position ON BEHALF of another rep, which is a movement record
+  // attributed to someone who never reported it; a ping may now only ever be
+  // about the caller.
   app.post("/api/location-pings", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
-    const { lat, lng, accuracy, repId } = req.body;
-    if (!lat || !lng) return res.status(400).json({ error: "lat/lng required" });
-    const resolvedRepId = user.role === "rep" ? user.teamMemberId : (repId ?? user.teamMemberId);
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return res.status(400).json({ error: "lat/lng required" });
+    }
+    const resolvedRepId = user.teamMemberId;
     if (!resolvedRepId) return res.status(400).json({ error: "No rep ID" });
     if (!repInCallerTenant(user, resolvedRepId)) return res.status(404).json({ error: "Rep not found" });
-    if (!repInVisibilityScope(user, resolvedRepId)) return res.status(403).json({ error: "Forbidden" });
-    const ping = storage.createLocationPing({ repId: resolvedRepId, userId: user.id, lat, lng, accuracy });
-    res.json(ping);
+    const result = ingestFix({
+      repId: resolvedRepId, userId: user.id, tenantId: user.tenantId ?? null,
+      lat, lng,
+      accuracyM: req.body?.accuracy == null ? null : Number(req.body.accuracy),
+      capturedAt: req.body?.capturedAt ?? null,
+      source: "ping",
+    });
+    res.json(result);
   });
 
   // GET /api/location-pings/latest - latest ping per rep (admin/manager view)
   // Tenant-scoped: an org only ever sees its OWN reps' live locations.
-  app.get("/api/location-pings/latest", requireManager, (req: Request, res: Response) => {
+  // Was requireManager with NO downline filter, which handed any manager the
+  // live position of every rep in the org - including branches they have
+  // nothing to do with. Now capability-gated and scoped to the caller's branch,
+  // and it no longer returns a position the freshness rules say we should not
+  // present as current.
+  app.get("/api/location-pings/latest", requireCapability("field.location.read.team"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const tid = user.tenantId ?? undefined; // super_admin (null) sees all
-    const pings = storage.getLatestPingPerRep(tid);
-    const members = storage.getTeamMembers(tid);
-    const result = pings.map(p => ({
-      ...p,
-      repName: members.find(m => m.id === p.repId)?.name ?? "Unknown",
-    }));
-    res.json(result);
+    const members = storage.getTeamMembers(tid) as any[];
+    const scope = liveOpsScope(user, members.map((m: any) => ({
+      id: Number(m.id), role: String(m.role ?? "rep"),
+      reportsToId: m.reportsToId == null ? null : Number(m.reportsToId),
+      active: m.active !== false && Number(m.active ?? 1) !== 0,
+    })));
+    const states = getLiveStates(user.tenantId ?? null, scope);
+    res.json(states.map((s) => ({
+      repId: s.repId, repName: s.repName,
+      lat: s.lat, lng: s.lng, accuracy: s.accuracyM,
+      pingAt: s.capturedAt, freshness: s.freshness, status: s.status,
+    })));
   });
 
   // GET /api/location-pings/:repId - history for a specific rep
@@ -10579,6 +10614,14 @@ export function registerSaasRoutes(app: any) {
     const active = storage.getActiveClockSession(repId);
     if (!active) return res.status(400).json({ error: "Not clocked in" });
     const session = storage.clockOut(active.id);
+    // Tracking stops WITH the shift, on the server, not merely because the
+    // client stopped asking. Dropping the live row rather than flagging it
+    // means nothing downstream can render an off-shift rep at their last known
+    // position - there is no position left to render. History keeps whatever
+    // was lawfully recorded during the shift and ages out on the retention
+    // window.
+    clearLiveStateForRep(repId);
+    notifyLiveOpsChanged(user.tenantId);
     storage.logActivity(user.id, "rep.clocked_out", "clock_session", session?.id, { repId, durationMinutes: session?.durationMinutes }, req.ip);
     res.json(session);
   });

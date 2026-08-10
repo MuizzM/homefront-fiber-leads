@@ -269,7 +269,13 @@ describe("field rep scope", () => {
       body: JSON.stringify({ repId: otherRepId, lat: 35.821, lng: -80.251, accuracy: 6 }),
     });
     expect(createResponse.status).toBe(200);
-    expect(await createResponse.json()).toMatchObject({ repId: fieldRepId });
+    // The route no longer echoes a written row: it reports whether the fix was
+    // STORED and why not. The rule this test guards is unchanged and now
+    // stronger - a ping is only ever about the caller, so the `repId` passed in
+    // the body above is ignored by everyone, not just by reps. (Here it is not
+    // stored at all: this fixture's org has location collection switched off,
+    // which is the shipped default.)
+    expect(await createResponse.json()).toMatchObject({ stored: false, reason: expect.any(String) });
 
     const ownResponse = await request(`/api/location-pings/${fieldRepId}`, fieldRepSession);
     expect(ownResponse.status).toBe(200);

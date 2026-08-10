@@ -6,6 +6,7 @@ import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
 import { ensureAdminAuditSchema } from "./adminAudit";
 import { runKineticBuildMigrations as ensureKineticBuildSchema } from "./kineticBuildMigrations";
 import { runAcademyMigrations as ensureAcademySchema } from "./academyMigrations";
+import { runLiveOpsMigrations as ensureLiveOpsSchema } from "./liveOpsMigrations";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -2937,6 +2938,17 @@ export function runMigrations() {
   try {
     ensureAcademySchema();
   } catch (e: any) { console.warn("[migration] academy schema:", e?.message); }
+
+  // Live field operations: rep live state, per-org tracking policy, per-rep
+  // consent, presence, and the additive columns location_pings should always
+  // have carried. Non-fatal on the same terms as the two above - collection
+  // ships OFF, so a failure here means the dashboard shows an empty board
+  // rather than the boot failing. It must never mean location is collected
+  // without the tables that record permission to collect it: every write path
+  // checks policy and consent first and fails closed when they are unreadable.
+  try {
+    ensureLiveOpsSchema();
+  } catch (e: any) { console.warn("[migration] live ops schema:", e?.message); }
 }
 
 /**

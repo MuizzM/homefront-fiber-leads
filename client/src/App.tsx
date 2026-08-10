@@ -53,6 +53,7 @@ const CommissionConsole = lazyRoute(() => import("@/pages/CommissionConsole"));
 const MyDocuments = lazyRoute(() => import("@/pages/MyDocuments"));
 const TaxAndPay = lazyRoute(() => import("@/pages/TaxAndPay"));
 const LiveMap = lazyRoute(() => import("@/pages/LiveMap"));
+const LiveOps = lazyRoute(() => import("@/pages/LiveOps"));
 const ClockIn = lazyRoute(() => import("@/pages/ClockIn"));
 const Profile = lazyRoute(() => import("@/pages/Profile"));
 const Diagnostics = lazyRoute(() => import("@/pages/Diagnostics"));
@@ -441,6 +442,16 @@ function RouteTable({ location, role, isSuperAdmin }: {
               <Scanners />
             </Guard>
           </Route>
+          {/* Live operations. Capability-gated rather than role-gated: a team
+              lead is a supervisor of their own people and belongs here, and
+              liveOpsScope is what decides whose positions they actually see. */}
+          <Route path="/live-ops">
+            <CapabilityGuard role={role} capability="field.location.read.team">
+              <LiveOps />
+            </CapabilityGuard>
+          </Route>
+          {/* Superseded by /live-ops. Kept registered so existing links and
+              bookmarks resolve rather than 404. */}
           <Route path="/live-map">
             <Guard role={role} allowed={["admin", "manager"]}>
               <LiveMap />

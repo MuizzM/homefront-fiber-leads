@@ -121,7 +121,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/commission-console", label: "Commissions & Pay", icon: Banknote, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Rep Onboarding", icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
-  { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
+  { href: "/live-ops",     label: "Live Operations", icon: Radio,       show: r => can(r, "field.location.read.team"),  group: "Manage" },
   // ── Governance (Phase 2) ──────────────────────────────────────────────────
   // admin + manager only: /api/auth/login-attempts is behind requireManager,
   // which does not admit team_lead, so a team lead tapping this landed on a

@@ -71,6 +71,14 @@ const SNAPSHOTS_KEEP_DAYS = Math.max(7, Number(process.env.SNAPSHOTS_KEEP_DAYS) 
 // does not sit in the file for a month.
 export const SCAN_RUN_TARGETS_KEEP_DAYS = Math.max(1, Number(process.env.SCAN_RUN_TARGETS_KEEP_DAYS) || 14);
 const OUTBOX_KEEP_DAYS = Math.max(7, Number(process.env.OUTBOX_KEEP_DAYS) || 30);
+/**
+ * Ceiling on how long ANY org may keep precise location, whatever their own
+ * policy says. Per-tenant retention is configurable (field_location_policy),
+ * but it is configurable *below* this line, not above it - a misconfigured or
+ * maliciously-widened tenant setting cannot turn a 7-day window into forever.
+ */
+const LOCATION_PINGS_MAX_KEEP_DAYS = Math.max(1, Number(process.env.LOCATION_PINGS_KEEP_DAYS) || 7);
+
 const BATCH = 25_000;
 const MAX_BATCHES_PER_TABLE = 40; // ≤1M rows per night per table; remainder next night
 
@@ -384,6 +392,65 @@ export function isPruneDue(minHoursSince = 20): boolean {
   }
 }
 
+
+/**
+ * Precise rep locations, aged out per tenant.
+ *
+ * Unlike every other table here, the window is not one global constant: an org
+ * sets its own retention and the system caps it. So this prunes tenant by
+ * tenant rather than with a single cutoff, and sweeps orphaned rows (no tenant,
+ * from before location_pings had the column) on the tightest window of all.
+ *
+ * This is a HARD delete, not an anonymisation. A movement trail with the name
+ * stripped off is still a movement trail - the route itself identifies the
+ * person who walked it.
+ */
+export function pruneLocationPings(now = Date.now()): number {
+  let total = 0;
+  const cutoffFor = (days: number) =>
+    Math.floor((now - Math.min(days, LOCATION_PINGS_MAX_KEEP_DAYS) * 86_400_000) / 1000);
+
+  try {
+    const tenants = rawDb.prepare(
+      `SELECT DISTINCT tenant_id AS tenantId FROM location_pings WHERE tenant_id IS NOT NULL`,
+    ).all() as any[];
+
+    for (const { tenantId } of tenants) {
+      let days = LOCATION_PINGS_MAX_KEEP_DAYS;
+      try {
+        const row = rawDb.prepare(
+          `SELECT retention_days AS d FROM field_location_policy WHERE tenant_id = ?`,
+        ).get(tenantId) as any;
+        if (row?.d != null) days = Math.max(1, Number(row.d));
+      } catch { /* no policy row - the ceiling applies */ }
+
+      const cutoff = cutoffFor(days);
+      for (let i = 0; i < MAX_BATCHES_PER_TABLE; i++) {
+        try {
+          const n = rawDb.prepare(
+            `DELETE FROM location_pings WHERE rowid IN (
+               SELECT rowid FROM location_pings
+                WHERE tenant_id = ?
+                  AND CAST(strftime('%s', COALESCE(captured_at, ping_at)) AS INTEGER) < ?
+                LIMIT ${BATCH})`,
+          ).run(tenantId, cutoff).changes;
+          total += n;
+          if (n < BATCH) break;
+        } catch { break; } // busy — next night
+      }
+    }
+
+    // Rows written before the tenant column existed. Nobody's policy covers
+    // them, so they get the tightest window rather than an indefinite stay.
+    total += pruneBatched(
+      "location_pings",
+      "CASE WHEN tenant_id IS NULL THEN CAST(strftime('%s', COALESCE(captured_at, ping_at)) AS INTEGER) * 1000 ELSE 9e18 END",
+      now - LOCATION_PINGS_MAX_KEEP_DAYS * 86_400_000,
+    );
+  } catch { /* table may not exist yet */ }
+  return total;
+}
+
 export function runDbPrune(): void {
   const now = Date.now();
   const out: Record<string, number> = {};
@@ -404,6 +471,7 @@ export function runDbPrune(): void {
       "CASE WHEN status IN ('sent','failed') THEN CAST(strftime('%s', COALESCE(sent_at, created_at)) AS INTEGER) * 1000 ELSE 9e18 END",
       now - OUTBOX_KEEP_DAYS * 86_400_000);
   } catch { /* */ }
+  try { out.location_pings = pruneLocationPings(now); } catch { /* */ }
   try { rawDb.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* */ }
   try { rawDb.pragma("incremental_vacuum(2000)"); } catch { /* */ }
   recordPruneRun(out);

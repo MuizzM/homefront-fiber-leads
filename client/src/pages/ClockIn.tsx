@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/ui/page-scaffold";
+import { TrackingIndicator } from "@/components/liveops/TrackingIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { useEffect, useState } from "react";
@@ -104,6 +105,11 @@ export default function ClockIn() {
         title="Field hours"
         subtitle={`Clock in/out tracker · ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`}
       />
+
+      {/* Location sharing sits on the SHIFT screen deliberately: this is where
+          a rep starts and ends the only window in which they can be tracked,
+          so it is where the disclosure and the running indicator belong. */}
+      <TrackingIndicator />
 
       {/* Current status */}
       <Card className="bg-card border-border rounded-xl">

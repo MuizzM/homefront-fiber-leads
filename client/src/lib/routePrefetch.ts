@@ -51,6 +51,7 @@ const PREFIX_CHUNKS: Record<string, Thunk> = {
   "/commission-console": () => import("@/pages/CommissionConsole"),
   "/applications": () => import("@/pages/Applications"),
   "/live-map": () => import("@/pages/LiveMap"),
+  "/live-ops": () => import("@/pages/LiveOps"),
   "/calling": () => import("@/pages/CallingQueue"),
   "/calling/lead/": () => import("@/pages/CallingLead"),
   "/profile": () => import("@/pages/Profile"),

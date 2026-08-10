@@ -15,6 +15,14 @@ export type Capability =
   // Field application boundary. Calling/compliance-only identities never
   // inherit legacy map, knock, GPS, clock, roster, or field-pay access.
   | "field.app.use"
+  // Live field location. Split from field.app.use because seeing WHERE a
+  // colleague is standing is a different power from using the field app, and
+  // must be grantable without it. `.team` is scoped by liveOpsScope (a
+  // manager's own branch, a team lead's subtree); `.org` is the unrestricted
+  // read; `.export` is separate again because pulling a rep's movement history
+  // out of the system is the act a compliance reviewer will ask about.
+  | "field.location.read.self" | "field.location.read.team"
+  | "field.location.read.org" | "field.location.export"
   // Leads
   | "lead.read.assigned" | "lead.read.all"
   | "lead.assign" | "lead.reassign"
@@ -86,6 +94,13 @@ export type Capability =
 // OWN commissions + scorecard. No assignment authority, no structure config.
 const REP: readonly Capability[] = [
   "field.app.use",
+  // A rep reads their OWN tracking state - whether they are being tracked, under
+  // which policy, and why not when they are not. That is the transparency half
+  // of "default on". Deliberately NOT .read.team: a rep has no business calling
+  // a roster-wide board endpoint at all, even one that would scope them to a
+  // single row. Least privilege is the door being locked, not the room beyond
+  // it being empty.
+  "field.location.read.self",
   "lead.read.assigned", "lead.disposition.update", "lead.note.write",
   "commission.read.self", "dashboard.read.self",
   "onboarding.documents.read.self",
@@ -116,6 +131,7 @@ const TEAM_LEAD: readonly Capability[] = [
   "lead.read.all", "lead.assign", "lead.reassign",
   "commission.read.team", "commission.read.downline", "commission.structure.manage",
   "dashboard.read.team", "audit.read.team",
+  "field.location.read.team",
   // Scanning starts here. These sets are unions of the tier below, not supersets
   // of REP — TEAM_LEAD spreads REP and MANAGER spreads TEAM_LEAD — so removing
   // scan.submit from REP took it off every role at once; granting it back here
@@ -145,6 +161,7 @@ const TEAM_LEAD: readonly Capability[] = [
 const MANAGER: readonly Capability[] = [
   ...TEAM_LEAD,
   "commission.read.all", "dashboard.read.org", "audit.read.org",
+  "field.location.read.team",
   "onboarding.documents.manage",
   // The second half of scanning: a manager inherits scan.submit from TEAM_LEAD
   // and adds scan.manage, which unredacts provider diagnostics and widens the
@@ -179,6 +196,11 @@ const MANAGER: readonly Capability[] = [
 const ADMIN: readonly Capability[] = [
   ...MANAGER, "settings.manage.org", "payouts.pay",
   "referral.approve", "referral.settings.manage", "mileage.settings.manage",
+  // Unrestricted location read, and the separate right to pull a movement
+  // history out of the system. Deliberately admin-only: a supervisor needs to
+  // find their team right now, which .team gives them; nobody needs to export
+  // another person's route to answer that question.
+  "field.location.read.org", "field.location.export",
 ];
 
 const CALLING_REP: readonly Capability[] = [
@@ -303,6 +325,10 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "onboarding.documents.read.self": "onboarding",
   "onboarding.documents.manage": "onboarding",
   "dashboard.read.self": "dashboard",
+  "field.location.read.self": "field",
+  "field.location.read.team": "field",
+  "field.location.read.org": "field",
+  "field.location.export": "field",
   "dashboard.read.team": "dashboard",
   "dashboard.read.org": "dashboard",
   "audit.read.team": "audit",
@@ -324,6 +350,11 @@ export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capabilit
   "scan.manage",
   "calling.attempt.manual", "calling.manage", "calling.policy.manage", "calling.providers.manage", "calling.dnc.manage",
   "audit.read.org", "settings.manage.org", "payouts.pay",
+  // Employee location. Reading where a colleague is standing, and especially
+  // exporting where they have BEEN, is the most personally sensitive read in
+  // the product - it is about a person's body, not their work product. Flagged
+  // so the governance matrix shows it beside the money capabilities.
+  "field.location.read.team", "field.location.read.org", "field.location.export",
   // Org-wide money visibility across every earning type, including
   // reimbursements and referral bonuses.
   "earnings.read.org",
