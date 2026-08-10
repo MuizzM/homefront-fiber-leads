@@ -7881,7 +7881,7 @@ export default function MapView() {
                 data-testid="share-dialog-scrim"
                 disabled={shareMutation.isPending}
                 onClick={() => setShareTerritoryId(null)}
-                className="absolute inset-0 bg-black/50"
+                className="absolute inset-0 bg-overlay"
               />
               <div className="relative w-full sm:max-w-md max-h-[85vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-background border p-4 space-y-3">
                 <h2 className="text-base font-semibold">Who works this area</h2>

@@ -31,6 +31,19 @@ export default {
           foreground: "hsl(var(--primary-foreground) / <alpha-value>)",
           border: "var(--primary-border)",
         },
+        /* The Homefront gold, from the logo. Emphasis, active state and the one
+           call to action that matters - never a large background.
+             bg-gold + text-gold-foreground   a gold surface (6.6:1)
+             text-gold-text                   gold AS text on white (4.6:1, AA)
+             bg-gold-soft                     the tint for chips and rails
+           `gold` itself is 2.6:1 on white and must not carry text. */
+        gold: {
+          DEFAULT: "hsl(var(--accent-gold) / <alpha-value>)",
+          hover: "hsl(var(--accent-gold-hover) / <alpha-value>)",
+          foreground: "hsl(var(--accent-gold-fg) / <alpha-value>)",
+          text: "hsl(var(--accent-gold-text) / <alpha-value>)",
+          soft: "hsl(var(--accent-gold-soft) / <alpha-value>)",
+        },
         secondary: {
           DEFAULT: "hsl(var(--secondary) / <alpha-value>)",
           foreground: "hsl(var(--secondary-foreground) / <alpha-value>)",
@@ -56,6 +69,10 @@ export default {
         // both themes stay AA (tokens defined in index.css :root/.light).
         success: "hsl(var(--success) / <alpha-value>)",
         warning: "hsl(var(--warning) / <alpha-value>)",
+        info: "hsl(var(--info) / <alpha-value>)",
+        // No <alpha-value>: --overlay already carries its own alpha, so `bg-overlay`
+        // is the whole scrim and no call site needs to pick an opacity.
+        overlay: "var(--overlay)",
         chart: {
           "1": "hsl(var(--chart-1) / <alpha-value>)",
           "2": "hsl(var(--chart-2) / <alpha-value>)",
@@ -63,22 +80,15 @@ export default {
           "4": "hsl(var(--chart-4) / <alpha-value>)",
           "5": "hsl(var(--chart-5) / <alpha-value>)",
         },
-        sidebar: {
-          ring: "hsl(var(--sidebar-ring) / <alpha-value>)",
-          DEFAULT: "hsl(var(--sidebar) / <alpha-value>)",
-          foreground: "hsl(var(--sidebar-foreground) / <alpha-value>)",
-          border: "hsl(var(--sidebar-border) / <alpha-value>)",
-        },
-        "sidebar-primary": {
-          DEFAULT: "hsl(var(--sidebar-primary) / <alpha-value>)",
-          foreground: "hsl(var(--sidebar-primary-foreground) / <alpha-value>)",
-          border: "var(--sidebar-primary-border)",
-        },
-        "sidebar-accent": {
-          DEFAULT: "hsl(var(--sidebar-accent) / <alpha-value>)",
-          foreground: "hsl(var(--sidebar-accent-foreground) / <alpha-value>)",
-          border: "var(--sidebar-accent-border)"
-        },
+        // NOTE: a `sidebar` palette used to live here (sidebar, -primary and
+        // -accent, 10 tokens). It came from the shadcn scaffold, none of its
+        // tokens were ever defined in index.css, and it had ZERO call sites -
+        // this is a bottom-tab mobile app with no sidebar to style. Left in
+        // place it was a trap: the first `bg-sidebar` would have resolved to
+        // `hsl( / 1)` and the first `border-sidebar-primary` to `currentColor`,
+        // which is the same undefined-token bug that once put ink hairlines on
+        // every Card. tests/unit/light-theme-token-coverage.test.ts now fails
+        // the build if a Tailwind colour maps to a token no theme defines.
         // NOTE: a second, conflicting `status` palette used to live here
         // (online/away/busy/offline as raw rgb()). It had ZERO call sites and
         // its greens/ambers/reds did not match the canonical field-status

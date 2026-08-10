@@ -26,7 +26,10 @@
 }
 
 @layer base {
-  :root {
+  /* ── Homefront Solutions, dark ─────────────────────────────────────────────
+     An OPTIONAL setting now, not the default. Scoped to `.dark` (the class
+     hooks/use-theme toggles) so the light tokens below can be the base. */
+  .dark {
     /* HomeFront Fiber palette — deep navy + teal */
     /* Navy:  #0F2A44  →  HSL 210 53% 16%  */
     /* Teal:  #3EA394  →  HSL 172 44% 44%  */
@@ -44,10 +47,11 @@
     --popover:      216 20% 10%;
     --popover-foreground: 210 16% 96%;
 
-    --primary:      172 44% 46%;      /* HomeFront Fiber teal #3EA394 — kept */
-    /* Dark teal-ink ON the teal (was pure white = 2.85:1, failed WCAG AA).
-       Matches the Sold-button #04120d ink; ~6:1 on the teal = AA pass. */
-    --primary-foreground: 172 65% 8%;
+    /* Lifted well off the logo navy: a 26%-lightness blue is unreadable on an
+       ink ground, so dark takes the same hue at display brightness. 7.1:1 on
+       the card surface. */
+    --primary:      209 78% 62%;
+    --primary-foreground: 212 60% 10%;
 
     --secondary:    216 15% 14%;      /* elevated / secondary surface */
     --secondary-foreground: 210 14% 82%;
@@ -70,7 +74,25 @@
        mode); these are the single source both themes read. */
     --success:      160 84% 42%;
     --warning:      38 92% 55%;
+    --info:         202 80% 62%;
+    /* Modal scrim. Complete colour including alpha on purpose: the opacity is
+       part of the decision, and leaving it to call sites is exactly how one
+       effect ended up spelled six ways (black/40 through black/90). */
+    --overlay:      hsl(212 45% 4% / 0.68);
 
+  }
+
+
+  /* ── Foundation, shared by both themes ─────────────────────────────────────
+     These are NOT colour choices. They are the structural primitives - the
+     component border tokens (which resolve through var(--border) and so follow
+     whichever theme is active), the chart ramp, the radius, the type scale and
+     the hit-area floor.
+     They live here rather than inside a theme block because scoping them to
+     one theme silently breaks the other: the border tokens in particular fall
+     back to `currentColor` when undefined, which paints a hard ink border on
+     every Card instead of a hairline. */
+  :root {
     /* Surface-border tokens the Tailwind config maps (card.border etc.). They
        were referenced but never defined, so border-color fell back to
        currentColor — near-white 1px borders on every Card instead of the
@@ -88,11 +110,16 @@
 
     /* Chart series ramp (ui/chart.tsx reads --chart-N; previously undefined →
        invisible series). Teal-anchored, colorblind-spaced. */
-    --chart-1: 172 44% 46%;
-    --chart-2: 210 60% 60%;
-    --chart-3: 38 92% 55%;
-    --chart-4: 280 45% 62%;
-    --chart-5: 0 65% 60%;
+    /* Chart ramp, re-hued onto the logo. Blue leads because it is the brand's
+       structural colour; gold takes second so the two most-read series are the
+       two marks people already associate with Homefront. The logo's muted teal
+       is third. Mid lightness on every stop so the same ramp reads on the white
+       default ground and on the dark setting without a second set. */
+    --chart-1: 211 68% 42%;
+    --chart-2:  33 78% 50%;
+    --chart-3: 180 29% 40%;
+    --chart-4: 262 42% 55%;
+    --chart-5: 349 58% 50%;
 
     /* Scrollbar thumb — intentionally NOT re-declared under `.light`; it reads
        as a neutral steel on both grounds and always has. */
@@ -122,33 +149,106 @@
     --tap-target-min: 44px;
   }
 
-  /* Light theme tokens — same brand hues on light surfaces (WCAG AA). Applied
-     when a `.light` class is set on <html>; the app defaults to dark. */
-  .light {
-    /* Exa/Notion clean neutral — warm off-white ground, hairline borders,
-       neutral hover, teal darkened for AA on white. */
-    --background:   48 12% 98%;
-    --foreground:   220 16% 12%;
+  /* ── Homefront Solutions, light ────────────────────────────────────────────
+     THE DEFAULT APPEARANCE. Dark remains a user setting (hooks/use-theme).
+
+     Every hue below is sampled from the logo rather than invented:
+       deep navy  #0c243c  hsl(210 67% 14%)   structure, nav, links, selection
+       warm gold  #e8a048  hsl(33 78% 60%)    emphasis and premium detail only
+     Neutrals are warmed a few degrees toward the gold so white surfaces sit
+     with the mark instead of going cold-blue against it.
+
+     Gold is deliberately NOT a surface colour. It carries active state,
+     premium accents and the one call to action that matters on a screen; blue
+     carries everything structural. That split is what keeps the product calm
+     rather than decorated. */
+  :root {
+    --background:   40 24% 98%;       /* warm paper, not cold grey */
+    --foreground:   212 40% 12%;      /* navy-ink text, never pure black */
     --card:         0 0% 100%;
-    --card-foreground: 220 16% 12%;
+    --card-foreground: 212 40% 12%;
     --popover:      0 0% 100%;
-    --popover-foreground: 220 16% 12%;
-    --primary:      172 62% 32%;      /* darker teal for AA on white */
+    --popover-foreground: 212 40% 12%;
+
+    /* Interactive blue: lifted off the logo navy so it reads as a control on
+       white. 8.6:1 against the card - AA for body text, AAA for large. */
+    --primary:      211 68% 26%;
     --primary-foreground: 0 0% 100%;
-    --secondary:    220 14% 95%;
-    --secondary-foreground: 220 14% 28%;
-    --muted:        220 14% 96%;
-    --muted-foreground: 220 8% 42%;
-    --accent:       220 14% 95%;      /* neutral hover (was teal) */
-    --accent-foreground: 220 16% 12%;
-    --destructive:  0 72% 48%;
+
+    --secondary:    214 22% 95%;
+    --secondary-foreground: 212 28% 26%;
+    --muted:        214 22% 96%;
+    --muted-foreground: 213 14% 42%;
+    --accent:       214 22% 95%;      /* neutral hover; gold is never a hover */
+    --accent-foreground: 212 40% 12%;
+
+    --destructive:  0 72% 44%;
     --destructive-foreground: 0 0% 100%;
-    --border:       220 13% 91%;
-    --input:        220 13% 91%;
-    --ring:         172 62% 32%;
-    /* Status hues darkened for AA on white surfaces. */
-    --success:      161 94% 26%;
-    --warning:      32 95% 38%;
+    --border:       214 20% 89%;
+    --input:        214 20% 89%;
+    --ring:         211 68% 26%;
+
+    --success:      161 94% 24%;
+    --warning:      32 95% 36%;
+    /* Progress and in-flight state. Deliberately a brighter, more cyan blue
+       than --primary (211 68% 26%): primary is structure, info is a signal,
+       and at a 3px rail the two must not read as the same colour. 4.9:1 on
+       white, so it is also safe as text. */
+    --info:         202 83% 38%;
+    /* Lighter than the dark theme's scrim and tinted with the brand navy
+       rather than pure black: at 68% a light UI goes to near-black behind the
+       dialog, which reads as a different app rather than a layer above this
+       one. */
+    --overlay:      hsl(212 40% 12% / 0.45);
+  }
+
+  /* Explicit light class, so a saved "light" preference and the default land
+     on exactly the same tokens. */
+  .light {
+    --background:   40 24% 98%;
+    --foreground:   212 40% 12%;
+    --card:         0 0% 100%;
+    --card-foreground: 212 40% 12%;
+    --popover:      0 0% 100%;
+    --popover-foreground: 212 40% 12%;
+    --primary:      211 68% 26%;
+    --primary-foreground: 0 0% 100%;
+    --secondary:    214 22% 95%;
+    --secondary-foreground: 212 28% 26%;
+    --muted:        214 22% 96%;
+    --muted-foreground: 213 14% 42%;
+    --accent:       214 22% 95%;
+    --accent-foreground: 212 40% 12%;
+    --destructive:  0 72% 44%;
+    --destructive-foreground: 0 0% 100%;
+    --border:       214 20% 89%;
+    --input:        214 20% 89%;
+    --ring:         211 68% 26%;
+    --success:      161 94% 24%;
+    --warning:      32 95% 36%;
+    /* Progress and in-flight state. Deliberately a brighter, more cyan blue
+       than --primary (211 68% 26%): primary is structure, info is a signal,
+       and at a 3px rail the two must not read as the same colour. 4.9:1 on
+       white, so it is also safe as text. */
+    --info:         202 83% 38%;
+    /* Lighter than the dark theme's scrim and tinted with the brand navy
+       rather than pure black: at 68% a light UI goes to near-black behind the
+       dialog, which reads as a different app rather than a layer above this
+       one. */
+    --overlay:      hsl(212 40% 12% / 0.45);
+  }
+
+  /* ── Brand accent ──────────────────────────────────────────────────────────
+     One gold, one ink to sit on it. Exposed as tokens so emphasis is applied
+     from the system rather than hand-mixed per component. */
+  :root, .light, .dark {
+    --accent-gold:        33 78% 52%;   /* FILL only - 2.6:1 on white, so it
+                                           must never carry text on a light
+                                           surface. Use --accent-gold-text. */
+    --accent-gold-hover:  33 78% 46%;
+    --accent-gold-fg:     30 60% 10%;   /* ink ON the gold - 6.6:1 */
+    --accent-gold-text:   33 78% 37%;   /* gold AS text on white - 4.6:1, AA */
+    --accent-gold-soft:   38 90% 96%;   /* tint for chips and rails */
   }
 
   * {

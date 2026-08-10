@@ -879,7 +879,7 @@ export default function AreaDetail() {
             type="button" aria-label="Close" data-testid="area-assign-scrim"
             disabled={assignMutation.isPending}
             onClick={() => setAssignOpen(false)}
-            className="absolute inset-0 bg-black/50"
+            className="absolute inset-0 bg-overlay"
           />
           <div className="relative max-h-[85vh] w-full space-y-3 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 text-foreground sm:max-w-md sm:rounded-2xl">
             <h2 className="text-base font-semibold">{pool ? "Assign this area" : "Hand this area to another rep"}</h2>

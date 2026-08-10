@@ -257,7 +257,7 @@ function MoneyHero({ data, isLoading, isError }: {
           <Skeleton className="mt-1 h-9 w-32" data-testid="hero-loading" />
         ) : (
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-primary"
+            <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-gold-text"
                   data-testid="stat-total">
               {isError ? " - " : usd(runningTotal)}
             </span>

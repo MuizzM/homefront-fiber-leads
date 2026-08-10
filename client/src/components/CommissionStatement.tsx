@@ -37,7 +37,7 @@ const shortDate = (iso: string, tz: string) => {
 
 function Shell({ children, onClose, actions }: { children: React.ReactNode; onClose: () => void; actions?: React.ReactNode }) {
   return (
-    <div className="stmt-overlay fixed inset-0 z-[200] overflow-y-auto bg-black/60 backdrop-blur-sm px-3 py-6 sm:py-10">
+    <div className="stmt-overlay fixed inset-0 z-[200] overflow-y-auto bg-overlay backdrop-blur-sm px-3 py-6 sm:py-10">
       <div className="stmt-toolbar no-print mx-auto mb-4 flex max-w-[760px] items-center justify-end gap-2">
         {actions}
         <button

@@ -6,9 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
 import { useTabActive } from "@/lib/tabActivity";
-import { MapPin, Zap, TrendingUp, DollarSign, Clock, Activity, Target, Wifi, Calendar, AlertCircle, X, ChevronRight } from "lucide-react";
+import { X, ChevronRight } from "lucide-react";
 import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
-import { KpiTile } from "@/components/KpiTile";
+import { KpiTile, type KpiTone } from "@/components/KpiTile";
 
 // Only the fields the tiles below actually render — the endpoint stopped
 // computing the rest (leads.total/sold, knocks.total, fieldHours) because
@@ -42,7 +42,11 @@ const EYEBROW = "text-[11px] font-semibold uppercase tracking-wide text-muted-fo
 // instead of eight competing cards. Each cell: a tinted micro-icon chip,
 // eyebrow label, big tabular number, sub. Responsive 2→3→6 columns.
 function MetricStrip({ items, loading }: {
-  items: { label: string; value: string | number; sub?: string; icon: any; tone: string }[];
+  // No `icon`/`tone`: the strip renders a label, a number and a sub-line. Both
+  // props were left behind when the icons came out, so the six colours the call
+  // site was passing (sky/violet/amber/orange/rose -400) reached no element -
+  // dead weight that still had to be read and kept plausible on every edit.
+  items: { label: string; value: string | number; sub?: string }[];
   loading?: boolean;
 }) {
   return (
@@ -113,7 +117,7 @@ interface RepActivity {
 }
 
 // Dashboard field tiles use the shared KPI card (fixed width for the thumb-scroll row).
-function FieldTile(props: { label: string; value: number | string; tone: string; icon: any; chip: string; accent: string; loading?: boolean }) {
+function FieldTile(props: { label: string; value: number | string; tone?: KpiTone; loading?: boolean }) {
   // Fixed width inside the phone rail; full-width cell once the row becomes a grid.
   return <KpiTile {...props} className="w-[132px] md:w-auto" />;
 }
@@ -127,7 +131,7 @@ function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => voi
   });
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center" role="dialog" aria-label="Rep activity">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute inset-0 bg-overlay" onClick={onClose} />
       <div className="relative flex max-h-[75dvh] w-full flex-col rounded-t-[20px] border border-border bg-card md:max-w-md md:rounded-2xl"
         data-testid="rep-activity-card">
         <div className="flex shrink-0 items-center justify-between border-b border-border px-5 pb-3 pt-4">
@@ -254,16 +258,16 @@ export default function Dashboard() {
         {stats && !isRep && (
           <Badge
             className={stats.team.activeClockedIn > 0
-              ? "shrink-0 gap-1.5 border-emerald-500/25 bg-emerald-500/15 text-emerald-400"
+              ? "shrink-0 gap-1.5 border-success/25 bg-success/10 text-success"
               : "shrink-0 border-border bg-secondary text-muted-foreground"}
             data-testid="badge-clocked-in"
           >
-            {stats.team.activeClockedIn > 0 && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />}
+            {stats.team.activeClockedIn > 0 && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-success" />}
             {stats.team.activeClockedIn} rep{stats.team.activeClockedIn !== 1 ? "s" : ""} in field
           </Badge>
         )}
         {stats && isRep && (
-          <Badge className="shrink-0 border-teal-500/30 bg-teal-500/20 text-teal-400">
+          <Badge className="shrink-0 border-primary/25 bg-primary/10 text-primary">
             {stats.knocks.todaySales > 0 ? `${stats.knocks.todaySales} sale${stats.knocks.todaySales !== 1 ? "s" : ""} today` : `${stats.knocks.today} door${stats.knocks.today !== 1 ? "s" : ""} today`}
           </Badge>
         )}
@@ -277,11 +281,11 @@ export default function Dashboard() {
             figure the day is scored by. */}
         <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5"
           data-testid="field-tiles">
-          <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? " - "} loading={statsLoading && !stats} tone="text-amber-400" icon={AlertCircle} chip="bg-amber-500/15" accent="bg-amber-500" />
-          <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
-          <FieldTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="text-sky-400" icon={Activity} chip="bg-sky-500/15" accent="bg-sky-500" />
-          <FieldTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
-          <FieldTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
+          <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? " - "} loading={statsLoading && !stats} tone="neutral" />
+          <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="primary" />
+          <FieldTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="info" />
+          <FieldTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="success" />
+          <FieldTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="warning" />
         </div>
       </section>
 
@@ -419,18 +423,12 @@ export default function Dashboard() {
         <MetricStrip
           loading={statsLoading}
           items={[
-            { label: "New fiber leads", icon: Zap, tone: "text-primary",
-              value: stats?.leads.newFiber ?? " - ", sub: `${stats?.leads.unassigned ?? 0} unassigned` },
-            { label: "Knocks today", icon: Target, tone: "text-sky-400",
-              value: stats?.knocks.today ?? " - ", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
-            { label: "Week sales", icon: TrendingUp, tone: "text-violet-400",
-              value: stats?.knocks.weekSales ?? " - ", sub: "last 7 days" },
-            { label: "Pending payout", icon: DollarSign, tone: "text-amber-400",
-              value: stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : " - ", sub: `$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid` },
-            { label: "Kinetic addresses", icon: Wifi, tone: "text-orange-400",
-              value: stats?.kinetic.total ?? " - ", sub: `${stats?.kinetic.live ?? 0} live` },
-            { label: "Field hours", icon: Clock, tone: "text-rose-400",
-              value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : " - ", sub: "clocked today" },
+            { label: "New fiber leads", value: stats?.leads.newFiber ?? " - ", sub: `${stats?.leads.unassigned ?? 0} unassigned` },
+            { label: "Knocks today", value: stats?.knocks.today ?? " - ", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
+            { label: "Week sales", value: stats?.knocks.weekSales ?? " - ", sub: "last 7 days" },
+            { label: "Pending payout", value: stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : " - ", sub: `$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid` },
+            { label: "Kinetic addresses", value: stats?.kinetic.total ?? " - ", sub: `${stats?.kinetic.live ?? 0} live` },
+            { label: "Field hours", value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : " - ", sub: "clocked today" },
           ]}
         />
         )}

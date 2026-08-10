@@ -101,7 +101,7 @@ export function LeadsInViewPanel({
   return (
     <>
       {/* Phone scrim — blur-free (full-viewport blur over WebGL is banned). */}
-      <div className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={onClose} aria-hidden="true" />
+      <div className="fixed inset-0 z-30 bg-overlay lg:hidden" onClick={onClose} aria-hidden="true" />
       <aside
         ref={asideRef as any}
         role="complementary"

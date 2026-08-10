@@ -104,7 +104,7 @@ export function StartNextPassDialog({
         onClick={onCancel}
         disabled={busy}
         data-testid="next-pass-scrim"
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 bg-overlay"
       />
 
       <div

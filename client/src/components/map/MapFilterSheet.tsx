@@ -85,7 +85,7 @@ export function MapFilterSheet({
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="map-filter-title" data-testid="map-filter-sheet">
       {/* Scrim */}
-      <button aria-label="Close" onClick={onClose} className={`absolute inset-0 bg-black/60 ${FOCUS}`} data-testid="map-filter-scrim" />
+      <button aria-label="Close" onClick={onClose} className={`absolute inset-0 bg-overlay ${FOCUS}`} data-testid="map-filter-scrim" />
 
       <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
         {/* Header */}

@@ -110,7 +110,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
   return (
     // Scrim is blur-FREE: a full-viewport backdrop-filter over the WebGL map
     // is the single most expensive composite a phone GPU can be asked for.
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose} data-testid="activity-drawer">
+    <div className="fixed inset-0 z-50 flex justify-end bg-overlay" onClick={onClose} data-testid="activity-drawer">
       <div
         className="flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-2xl animate-in slide-in-from-right duration-200"
         onClick={e => e.stopPropagation()}

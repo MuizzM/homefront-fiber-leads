@@ -82,7 +82,7 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="fcc-purge-title" data-testid="fcc-purge-dialog">
       {/* Scrim — a real close control, locked while committing. */}
-      <button type="button" aria-label="Close" onClick={close} disabled={purge.isPending} className="absolute inset-0 bg-black/60" data-testid="fcc-purge-scrim" />
+      <button type="button" aria-label="Close" onClick={close} disabled={purge.isPending} className="absolute inset-0 bg-overlay" data-testid="fcc-purge-scrim" />
 
       <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
         <div className="flex items-start gap-3">

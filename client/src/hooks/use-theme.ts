@@ -10,8 +10,14 @@ function apply(theme: Theme) {
 }
 
 /**
- * App theme with localStorage persistence. Dark is the brand default; the
- * toggle flips the `.light` class on <html>, which swaps the CSS token set.
+ * App theme with localStorage persistence.
+ *
+ * LIGHT is the default appearance. Dark stays a first-class user setting - a
+ * saved preference always wins, and anyone already on dark keeps it - but the
+ * product's resting state is the light Homefront palette.
+ *
+ * The class is applied to <html> and swaps the CSS token set: light tokens are
+ * the base (:root), dark overrides under `.dark`.
  */
 export function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
@@ -19,7 +25,7 @@ export function useTheme() {
       const saved = localStorage.getItem(KEY);
       if (saved === "light" || saved === "dark") return saved;
     }
-    return "dark";
+    return "light";
   });
 
   useEffect(() => {

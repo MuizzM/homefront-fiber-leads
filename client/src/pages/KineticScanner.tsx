@@ -1027,7 +1027,7 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   };
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60"
+      className="fixed inset-0 z-50 bg-overlay"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}

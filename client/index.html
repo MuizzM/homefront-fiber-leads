@@ -31,12 +31,15 @@
       window.__HFS_BUILD__ = "__SW_BUILD__";
     </script>
     <script>
-      // Apply saved theme before paint to avoid a flash (dark is the default).
+      // Apply the saved theme before paint so there is no flash. LIGHT is the
+      // default; only an explicit saved "dark" goes dark. Getting this wrong is
+      // a full-screen colour flash on every cold load, so it must agree with
+      // hooks/use-theme exactly.
       (function () {
         try {
           var t = localStorage.getItem('hfs-theme');
-          document.documentElement.classList.add(t === 'light' ? 'light' : 'dark');
-        } catch (e) { document.documentElement.classList.add('dark'); }
+          document.documentElement.classList.add(t === 'dark' ? 'dark' : 'light');
+        } catch (e) { document.documentElement.classList.add('light'); }
       })();
     </script>
     <!-- Fonts are self-hosted (@fontsource-variable/geist, bundled by Vite) — no

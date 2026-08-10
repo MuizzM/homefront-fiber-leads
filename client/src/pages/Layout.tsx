@@ -430,7 +430,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Mobile overlay */}
       {mobileOpen && (
-        <div className="fixed inset-0 z-40 bg-black/55 backdrop-blur-[2px] md:hidden animate-in fade-in duration-200 motion-reduce:duration-0" onClick={() => setMobileOpen(false)} />
+        <div className="fixed inset-0 z-40 bg-overlay backdrop-blur-[2px] md:hidden animate-in fade-in duration-200 motion-reduce:duration-0" onClick={() => setMobileOpen(false)} />
       )}
 
       {/* Main content */}
@@ -479,7 +479,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           entry point, so it must not be gated behind !onCalling. */}
       {moreOpen && !onMap && (
         <div className="fixed inset-0 z-[60] md:hidden" role="presentation">
-          <button type="button" aria-label="Close more menu" className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={closeMore} />
+          <button type="button" aria-label="Close more menu" className="absolute inset-0 bg-overlay backdrop-blur-[2px]" onClick={closeMore} />
           <div
             id="mobile-more-sheet"
             ref={moreSheetRef}

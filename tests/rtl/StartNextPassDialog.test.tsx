@@ -169,7 +169,10 @@ describe("StartNextPassDialog", () => {
     const { onCancel } = setup();
     await screen.findByText("7");
     const scrim = screen.getByTestId("next-pass-scrim");
-    expect(scrim.className).toMatch(/bg-black\/60/);
+    // The shared scrim token, not a hand-picked black. See
+    // tests/unit/overlay-consistency.test.ts for why the opacity lives in the
+    // token rather than here.
+    expect(scrim.className).toMatch(/\bbg-overlay\b/);
     await userEvent.setup().click(scrim);
     expect(onCancel).toHaveBeenCalledOnce();
   });

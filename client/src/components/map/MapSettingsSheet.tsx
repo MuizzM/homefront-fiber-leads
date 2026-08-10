@@ -45,7 +45,7 @@ export function MapSettingsSheet({ open, onClose, basemap, toggles }: MapSetting
       <button
         aria-label="Close"
         onClick={onClose}
-        className={`absolute inset-0 bg-black/60 ${FOCUS}`}
+        className={`absolute inset-0 bg-overlay ${FOCUS}`}
         data-testid="map-settings-scrim"
       />
 

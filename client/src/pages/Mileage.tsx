@@ -641,7 +641,7 @@ export default function Mileage() {
               {summary.reimbursementEnabled ? "Reimbursable" : "Deductible mileage"}
             </p>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-primary"
+              <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-gold-text"
                     data-testid="mileage-period-total">
                 {summary.reimbursementEnabled
                   ? money(summary.approvedCents + summary.pendingEstimateCents)
