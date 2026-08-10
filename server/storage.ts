@@ -5,7 +5,6 @@ import { streetKeyOf, addressIdentityIssues } from "@shared/addressKey";
 import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
 import { ensureAdminAuditSchema } from "./adminAudit";
 import { runKineticBuildMigrations as ensureKineticBuildSchema } from "./kineticBuildMigrations";
-import { runAcademyMigrations as ensureAcademySchema } from "./academyMigrations";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -2929,14 +2928,6 @@ export function runMigrations() {
     ensureKineticBuildSchema();
   } catch (e: any) { console.warn("[migration] kinetic build schema:", e?.message); }
 
-  // Fiber Sales Academy: path activity progress, resume state, role-play
-  // records, assignments and the market offer catalog. Own module for the same
-  // reason as the kinetic schema above - one self-contained transaction - and
-  // non-fatal for the same reason: every Academy read treats a missing table as
-  // an empty result, so a failure here degrades the tab rather than the boot.
-  try {
-    ensureAcademySchema();
-  } catch (e: any) { console.warn("[migration] academy schema:", e?.message); }
 }
 
 /**
