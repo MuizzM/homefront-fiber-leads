@@ -70,13 +70,13 @@ beforeEach(() => apiRequest.mockReset());
 describe("referral pipeline money + status labels", () => {
   it("renders human status labels, not raw enums", async () => {
     renderPage([referral()]);
-    await waitFor(() => expect(screen.getAllByText("Reward pending").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("Pending approval").length).toBeGreaterThan(0));
     expect(screen.queryByText("REWARD_PENDING")).toBeNull();
   });
 
   it("keeps the sign on negative amounts", async () => {
     renderPage([referral({ id: 8, status: "CLAWED_BACK", rewardAmountCents: -15000 })]);
-    await waitFor(() => expect(screen.getAllByText("Clawed back").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("Reversed").length).toBeGreaterThan(0));
     // The row amount for the clawback carries the minus sign.
     expect(screen.getAllByText("-$150").length).toBeGreaterThan(0);
   });

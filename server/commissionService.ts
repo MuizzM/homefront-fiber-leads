@@ -7,6 +7,7 @@
 
 import crypto from "crypto";
 import { rawDb } from "./db";
+import { emit as emitDomainEvent } from "./domainEventStore";
 import { storage, bumpTenantConfigVersion } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
 import { uplineSlotsOf } from "@shared/teamHierarchy";
@@ -849,6 +850,45 @@ function assertWeekOpenForQualify(
 // now, at the single write site, so no present or future caller can bypass them.
 // recordFieldSaleFromKnock still pre-empts each guard with its own (softer,
 // never-fail-a-knock) handling, so it never trips these throws.
+// ── Sale lifecycle events (the spec's SALE_APPROVED / SALE_CANCELLED) ────────
+// Emitted at the WRITE SITE, on the status TRANSITION - the same doctrine as
+// the override/statement reconciliation above, and for the same reason: both
+// doors (upsertSale and transitionSale) must produce them or a sale booked
+// through one door pays incentives and referrals while the other stays silent.
+// This is what feeds the incentive subscriber, whose SALE_APPROVED handler
+// recounts referral qualification ("6 verified sales" is defined ONCE, in the
+// referral store, against this same commission ledger).
+//
+// SALE_APPROVED is deliberately non-repeatable (one per sale, ever): a
+// reverse-then-requalify emits no second event, which is fine - any later sale
+// by the same rep recounts from the full ledger, and the boot-time referral
+// recount sweeps whatever a quiet stretch missed.
+function emitSaleLifecycleEvents(
+  tenantId: number, prevStatus: string | null, sale: any, actorId: number | null, now: string,
+): void {
+  if (!sale) return;
+  try {
+    if (sale.status === "QUALIFIED" && prevStatus !== "QUALIFIED") {
+      emitDomainEvent({
+        tenantId, type: "SALE_APPROVED", subjectType: "sale", subjectId: sale.id,
+        subjectRepId: sale.rep_id, actorUserId: actorId ?? null,
+        occurredAt: now, payload: { externalId: sale.external_id },
+      }, now);
+    } else if (prevStatus === "QUALIFIED" && sale.status !== "QUALIFIED") {
+      emitDomainEvent({
+        tenantId, type: "SALE_CANCELLED", subjectType: "sale", subjectId: sale.id,
+        subjectRepId: sale.rep_id, actorUserId: actorId ?? null,
+        occurredAt: now, payload: { externalId: sale.external_id, from: prevStatus, to: sale.status },
+      }, now);
+    }
+  } catch (e) {
+    // The money write already committed; a bus fault must surface in logs, not
+    // unwind a booked sale. The referral boot recount is the safety net.
+    storage.logActivity(actorId, "commission_sale.event_emit_failed", "commission_sale", sale.id,
+      { message: String((e as Error)?.message ?? e), status: sale.status, prevStatus }, undefined);
+  }
+}
+
 export function upsertSale(tenantId: number, actorId: number | null, input: {
   repId: number; externalId: string; status?: string; soldAt: string;
   qualifiedAt?: string | null; installedAt?: string | null; activatedAt?: string | null; leadId?: number | null;
@@ -996,6 +1036,7 @@ export function upsertSale(tenantId: number, actorId: number | null, input: {
   ).run(tenantId, input.repId, input.externalId, status, soldAt, qualifiedAt, installedAt, activatedAt, input.leadId ?? null, basis, now, now);
   const sale = rawDb.prepare(`SELECT * FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, input.externalId) as any;
   storage.logActivity(actorId, "commission_sale.upserted", "commission_sale", sale?.id, { externalId: input.externalId, repId: input.repId, status }, undefined);
+  emitSaleLifecycleEvents(tenantId, existing?.status ?? null, sale, actorId, now);
   // Side effects belong at the WRITE SITE, for the same reason the guards do.
   // Leaving them to callers meant `POST /api/commission/sales` — the one door
   // this function's own comment calls the safe write site — booked a QUALIFIED
@@ -1121,6 +1162,7 @@ export function transitionSale(tenantId: number, actorId: number | null, externa
   }
   storage.logActivity(actorId, "commission_sale.transitioned", "commission_sale", sale.id, { externalId, action, reason: opts?.reason ?? null }, undefined);
   const updated = rawDb.prepare(`SELECT * FROM commission_sales WHERE id = ?`).get(sale.id) as any;
+  emitSaleLifecycleEvents(tenantId, sale.status, updated, actorId, now);
 
   // QUALIFY opens earn pairs; REVERSE/DISQUALIFY/CANCEL closes them (a claw
   // against a settled week becomes an EXCEPTION — the locked statement is never

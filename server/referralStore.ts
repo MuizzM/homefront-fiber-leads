@@ -16,10 +16,11 @@
 //   * `rep_applications` — the applicant lifecycle (pending → approved →
 //     user_id → activated_at) the referral funnel rides on.
 //
-// ── THE PROGRAM SHIPS DARK ──────────────────────────────────────────────────
-// `enabled` defaults false for every org. Links can be minted and clicks
-// tracked, but `rejectAttribution` refuses while the program is off and no
-// reward is ever created, so deploying this costs nobody anything.
+// ── THE PROGRAM RUNS BY DEFAULT (owner's call, 2026-08-09) ──────────────────
+// `enabled` defaults true: $500 for 6 verified sales. A one-shot migration
+// below also repairs any environment whose SAVED settings row predates the
+// flip (a row written while the program shipped dark silently overrode the
+// new default). An admin can still turn it off; that choice then sticks.
 
 import { randomBytes, createHash } from "node:crypto";
 import { rawDb } from "./db";
@@ -203,6 +204,187 @@ export function ensureOneReferralPerApplicationIndex(): { installed: boolean; co
 }
 
 ensureReferralSchema();
+
+// ── The program goes live everywhere, exactly once ──────────────────────────
+// The 2026-08-09 default flip (enabled: true) only reached tenants with NO
+// saved settings row - getConfig merges a saved row over the defaults, so a
+// row written back when the program shipped dark kept it silently OFF in any
+// environment where settings had ever been saved. This one-shot migration
+// makes the saved state agree with the policy: enabled, $500, 6 sales.
+//
+// One-shot by MARKER, not by value: after it has run once, an admin who
+// deliberately turns the program off stays off - re-running the migration on
+// every boot would override a human decision forever.
+const MIGRATION_KEY = "referral.program.migration.2026-08-live";
+
+/** Write an explicit settings row when none exists, so persisted state and
+ *  code defaults can never disagree silently. Idempotent. */
+export function ensureReferralConfigRow(tenantId: number, nowIso: string): boolean {
+  const info = rawDb.prepare(
+    `INSERT INTO app_settings (tenant_id, key, value, updated_at)
+     SELECT ?, ?, ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE tenant_id = ? AND key = ?)`,
+  ).run(tenantId, CONFIG_SETTING, JSON.stringify({ ...DEFAULT_REFERRAL_CONFIG }), nowIso, tenantId, CONFIG_SETTING);
+  return info.changes > 0;
+}
+
+/** Every tenant id this database knows about, from every table that carries
+ *  one - a tenants table may or may not exist depending on schema age. */
+function allTenantIds(): number[] {
+  const ids = new Set<number>([1]);
+  try { for (const r of rawDb.prepare("SELECT id AS id FROM tenants").all() as any[]) ids.add(Number(r.id)); } catch { /* no tenants table */ }
+  try { for (const r of rawDb.prepare("SELECT DISTINCT tenant_id AS id FROM team_members").all() as any[]) ids.add(Number(r.id)); } catch { /* pre-migration */ }
+  try { for (const r of rawDb.prepare("SELECT DISTINCT tenant_id AS id FROM app_settings").all() as any[]) ids.add(Number(r.id)); } catch { /* pre-migration */ }
+  return [...ids].filter(n => Number.isFinite(n) && n > 0);
+}
+
+export interface ReferralMigrationRecord {
+  tenantId: number;
+  action: "enabled" | "already-live" | "row-created";
+  before: Partial<ReferralProgramConfig> | null;
+  after: ReferralProgramConfig;
+  at: string;
+}
+
+/** One-shot, idempotent, per tenant. Only the three policy fields are forced
+ *  (enabled / rewardCents / requiredApprovedSales); windows and toggles an
+ *  admin tuned are preserved. The marker row doubles as the audit record:
+ *  who (this migration), when, and the old/new values. */
+export function migrateReferralProgramLive(nowIso: string): ReferralMigrationRecord[] {
+  const applied: ReferralMigrationRecord[] = [];
+  for (const tenantId of allTenantIds()) {
+    const done = rawDb.prepare(
+      `SELECT value FROM app_settings WHERE tenant_id = ? AND key = ? LIMIT 1`,
+    ).get(tenantId, MIGRATION_KEY) as { value: string } | undefined;
+    if (done?.value) continue;
+
+    const tx = rawDb.transaction(() => {
+      const row = rawDb.prepare(
+        `SELECT value FROM app_settings WHERE tenant_id = ? AND key = ? LIMIT 1`,
+      ).get(tenantId, CONFIG_SETTING) as { value: string } | undefined;
+
+      let before: Partial<ReferralProgramConfig> | null = null;
+      if (row?.value) { try { before = JSON.parse(row.value); } catch { before = null; } }
+
+      let action: ReferralMigrationRecord["action"];
+      let after: ReferralProgramConfig;
+      if (!row?.value) {
+        after = { ...DEFAULT_REFERRAL_CONFIG };
+        action = "row-created";
+      } else {
+        after = { ...DEFAULT_REFERRAL_CONFIG, ...(before ?? {}), enabled: true, rewardCents: 50_000, requiredApprovedSales: 6 };
+        action = before && before.enabled === true && before.rewardCents === 50_000 && before.requiredApprovedSales === 6
+          ? "already-live" : "enabled";
+      }
+
+      rawDb.prepare(
+        `INSERT INTO app_settings (tenant_id, key, value, updated_at) VALUES (?,?,?,?)
+         ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(tenantId, CONFIG_SETTING, JSON.stringify(after), nowIso);
+
+      const record: ReferralMigrationRecord = { tenantId, action, before, after, at: nowIso };
+      rawDb.prepare(
+        `INSERT INTO app_settings (tenant_id, key, value, updated_at) VALUES (?,?,?,?)
+         ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(tenantId, MIGRATION_KEY, JSON.stringify({ actor: "migration:referral-program-live", ...record }), nowIso);
+      applied.push(record);
+    });
+    tx.immediate();
+  }
+  return applied;
+}
+
+/** Health read for the startup log and the admin endpoint: is the program
+ *  running here, and if not, was that a human's decision after the migration
+ *  (fine) or an unexpected dark state (warn loudly)? */
+export function referralProgramHealth(tenantId: number): {
+  enabled: boolean; rewardCents: number; requiredApprovedSales: number;
+  explicitRow: boolean; migratedAt: string | null; warning: string | null;
+} {
+  const config = getConfig(tenantId);
+  const row = rawDb.prepare(
+    `SELECT value FROM app_settings WHERE tenant_id = ? AND key = ? LIMIT 1`,
+  ).get(tenantId, CONFIG_SETTING) as { value: string } | undefined;
+  const marker = rawDb.prepare(
+    `SELECT value FROM app_settings WHERE tenant_id = ? AND key = ? LIMIT 1`,
+  ).get(tenantId, MIGRATION_KEY) as { value: string } | undefined;
+  let migratedAt: string | null = null;
+  if (marker?.value) { try { migratedAt = JSON.parse(marker.value).at ?? null; } catch { /* keep null */ } }
+  return {
+    enabled: config.enabled,
+    rewardCents: config.rewardCents,
+    requiredApprovedSales: config.requiredApprovedSales,
+    explicitRow: !!row?.value,
+    migratedAt,
+    warning: config.enabled ? null
+      : "Referral program is DISABLED for this tenant - referrers earn nothing for qualified hires. If this is unintended, turn it on in Referrals > Settings.",
+  };
+}
+
+// Run at startup (module load). A failure here must be LOUD but must not take
+// the app down with it - the program state is wrong, not the database.
+try {
+  const records = migrateReferralProgramLive(new Date().toISOString());
+  for (const r of records) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(), level: "info", event: "referral.program.migrated",
+      tenantId: r.tenantId, action: r.action, before: r.before, after: r.after,
+    }));
+  }
+  for (const tenantId of allTenantIds()) {
+    const health = referralProgramHealth(tenantId);
+    if (health.warning) {
+      console.warn(JSON.stringify({
+        ts: new Date().toISOString(), level: "warn", event: "referral.program.disabled",
+        tenantId, warning: health.warning,
+      }));
+    }
+  }
+} catch (e) {
+  console.error(JSON.stringify({
+    ts: new Date().toISOString(), level: "error", event: "referral.program.migration_failed",
+    message: String((e as Error)?.message ?? e),
+  }));
+}
+
+/** Boot-time catch-up: recount every open referral once. Sales that reached
+ *  QUALIFIED before the SALE_APPROVED emission existed produced no event, so
+ *  a referee already past the bar would otherwise sit un-qualified until
+ *  their NEXT sale. Idempotent - recheckQualification is a pure recount with
+ *  transition guards. */
+export function recountOpenReferrals(nowIso: string): number {
+  let rechecked = 0;
+  const open = rawDb.prepare(
+    `SELECT tenant_id AS tenantId, id FROM referrals
+      WHERE status IN ('HIRED','ACTIVATED','IN_PROGRESS') AND deleted_at IS NULL`,
+  ).all() as Array<{ tenantId: number; id: number }>;
+  for (const r of open) {
+    try {
+      recheckQualification({ tenantId: r.tenantId, referralId: r.id, nowIso });
+      rechecked += 1;
+    } catch (e) {
+      console.error(JSON.stringify({
+        ts: nowIso, level: "error", event: "referral.boot_recount_failed",
+        referralId: r.id, message: String((e as Error)?.message ?? e),
+      }));
+    }
+  }
+  return rechecked;
+}
+
+try {
+  const rechecked = recountOpenReferrals(new Date().toISOString());
+  if (rechecked > 0) {
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(), level: "info", event: "referral.boot_recount", rechecked,
+    }));
+  }
+} catch (e) {
+  console.error(JSON.stringify({
+    ts: new Date().toISOString(), level: "error", event: "referral.boot_recount_failed",
+    message: String((e as Error)?.message ?? e),
+  }));
+}
 
 // ── Config ──────────────────────────────────────────────────────────────────
 

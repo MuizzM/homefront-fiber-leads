@@ -777,6 +777,32 @@ app.use((req, res, next) => {
   const callingAuditTimer = setInterval(verifyCallingAuditChain, 6 * 60 * 60 * 1_000);
   callingAuditTimer.unref();
 
+  // ── The incentive/referral event drain ─────────────────────────────────────
+  // commissionService now emits SALE_APPROVED / SALE_CANCELLED at the sale
+  // write sites; this loop is the consumer that turns them into campaign
+  // awards and referral-qualification recounts ("6 verified sales -> $500").
+  // Without it the queue only ever drained inside tests - events accumulated
+  // and nothing downstream fired. Cheap when idle: one indexed cursor read.
+  const { drain: drainIncentiveEvents } = await import("./incentiveSubscriber");
+  const drainIncentives = () => {
+    try {
+      const result = drainIncentiveEvents(new Date().toISOString());
+      if (result.processed > 0) {
+        structuredLog("incentives.drained", {
+          processed: result.processed, awarded: result.awarded, reversed: result.reversed,
+          failed: result.failed.length, deferred: result.deferred.length,
+        });
+      }
+    } catch (error) {
+      structuredLog("incentives.drain_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  if (!IS_CLUSTER_WORKER) drainIncentives();
+  const incentiveDrainTimer = setInterval(drainIncentives, 30_000);
+  incentiveDrainTimer.unref();
+
   // Route modules import stores that prepare statements for migrated tables.
   // Load them only after migrations so a brand-new deployment can boot from an
   // empty data directory instead of failing during module evaluation.

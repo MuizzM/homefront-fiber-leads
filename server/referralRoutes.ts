@@ -294,6 +294,13 @@ export function registerReferralRoutes(app: Express, deps: Deps) {
   });
 
   // ── Settings ──────────────────────────────────────────────────────────────
+  // The program-state health read: lets an admin (or a monitor) see at a
+  // glance that the $500-for-6 program is actually running here, with the
+  // migration audit timestamp. Warns explicitly when it is off.
+  app.get("/api/referrals/health", requireCapability("referral.read.org"), (req, res) => {
+    res.json(store.referralProgramHealth(tid(req)));
+  });
+
   app.get("/api/referrals/settings", requireCapability("referral.read.org"), (req, res) => {
     res.json({ ...store.getConfig(tid(req)), liability: store.orgReferralLiability(tid(req)) });
   });

@@ -53,20 +53,22 @@ const money = (cents: number) => {
 // Human labels for the raw DB enum — users were reading "REWARD_PENDING" and
 // "CLAWED_BACK" verbatim, underscores included.
 const STATUS_LABEL: Record<string, string> = {
+  CLICKED: "Invited",
   APPLIED: "Applied",
   HIRED: "Hired",
   ACTIVATED: "Activated",
   IN_PROGRESS: "In progress",
   QUALIFIED: "Qualified",
-  REWARD_PENDING: "Reward pending",
+  REWARD_PENDING: "Pending approval",
   APPROVED: "Approved",
   PAID: "Paid",
   REJECTED: "Rejected",
   EXPIRED: "Expired",
-  CLAWED_BACK: "Clawed back",
+  CLAWED_BACK: "Reversed",
 };
 
 const STATUS_TONE: Record<string, string> = {
+  CLICKED: "bg-muted text-muted-foreground",
   APPLIED: "bg-muted text-muted-foreground",
   HIRED: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
   ACTIVATED: "bg-sky-500/15 text-sky-700 dark:text-sky-400",
@@ -596,6 +598,15 @@ function SettingsCard({ settings }: { settings: Settings }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* The health warning, in the one place an admin can fix it. A silent
+            OFF state is how the program stayed dark for weeks. */}
+        {!settings.enabled && (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-amber-700 dark:text-amber-400"
+             data-testid="referral-disabled-warning">
+            The referral program is OFF. Referrers earn nothing for qualified hires until it is
+            turned on below.
+          </p>
+        )}
         <div className="flex items-center justify-between rounded-md border p-3">
           <div className="pr-4">
             <Label htmlFor="ref-enabled" className="text-sm font-medium">Programme running</Label>

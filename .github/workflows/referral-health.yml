@@ -1,0 +1,95 @@
+name: Referral program health (production)
+
+# READ-ONLY inspection of the live referral-program state: the saved settings
+# row, the program-live migration's audit marker, and the funnel/ledger counts.
+# Exists so "the program is enabled in production" is a fact read off the live
+# database, never an inference from code defaults.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: referral-health
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    name: Read live referral state
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Connect and read
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+          set -euo pipefail
+          cd /srv/homefront
+          echo "deployed tag: $(cat .deployed-tag 2>/dev/null || echo none)"
+          APP="$(docker compose -f docker-compose.production.yml ps -q app 2>/dev/null | head -n1 || true)"
+          [ -n "$APP" ] || APP="$(docker ps --format '{{.ID}} {{.Image}}' | awk '/homefront-app:/{print $1; exit}' || true)"
+          if [ -z "$APP" ]; then echo "app container not found" >&2; exit 1; fi
+          docker exec "$APP" node -e "
+            const D = require('better-sqlite3');
+            const db = new D(process.env.DATA_DIR + '/data.db', { readonly: true });
+            const one = (sql, ...a) => db.prepare(sql).get(...a);
+            const rows = (sql, ...a) => db.prepare(sql).all(...a);
+            const hr = () => console.log('──────────────────────────────────────');
+
+            hr(); console.log('REFERRAL PROGRAM SETTINGS (saved rows, verbatim)');
+            const settings = rows(\"SELECT tenant_id, key, value, updated_at FROM app_settings WHERE key LIKE 'referral.program%' ORDER BY tenant_id, key\");
+            if (settings.length === 0) console.log('  (no saved rows - code defaults apply: enabled, \$500, 6 sales)');
+            for (const s of settings) console.log('  tenant ' + s.tenant_id + '  ' + s.key + '  @ ' + s.updated_at + '\n    ' + s.value);
+
+            hr(); console.log('EFFECTIVE STATE PER TENANT (saved row merged over live defaults)');
+            const DEFAULTS = { enabled: true, rewardCents: 50000, requiredApprovedSales: 6 };
+            const tenants = new Set([1]);
+            try { for (const r of rows('SELECT DISTINCT tenant_id AS id FROM team_members')) tenants.add(r.id); } catch {}
+            for (const t of tenants) {
+              const row = one(\"SELECT value FROM app_settings WHERE tenant_id = ? AND key = 'referral.program'\", t);
+              let cfg = { ...DEFAULTS };
+              if (row && row.value) { try { cfg = { ...DEFAULTS, ...JSON.parse(row.value) }; } catch {} }
+              const verdict = cfg.enabled ? 'LIVE' : 'DISABLED  <-- WARNING';
+              console.log('  tenant ' + t + ': ' + verdict + '  reward \$' + (cfg.rewardCents / 100) + '  threshold ' + cfg.requiredApprovedSales + ' sales');
+            }
+
+            hr(); console.log('FUNNEL + LEDGER');
+            for (const r of rows('SELECT status, COUNT(*) AS n FROM referrals GROUP BY status ORDER BY n DESC')) {
+              console.log('  referrals ' + r.status + ': ' + r.n);
+            }
+            const bonus = one(\"SELECT COUNT(*) AS n, COALESCE(SUM(gross_cents),0) AS cents FROM earnings_ledger WHERE earning_type = 'REFERRAL_BONUS'\");
+            console.log('  REFERRAL_BONUS ledger rows: ' + bonus.n + '  total \$' + (bonus.cents / 100));
+            const links = one('SELECT COUNT(*) AS n FROM referral_links WHERE active = 1');
+            console.log('  active referral links: ' + links.n);
+          "
+          REMOTE

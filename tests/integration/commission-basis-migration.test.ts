@@ -162,6 +162,13 @@ describe("production-like end to end", () => {
     expect(stmtFor(rep.memberId).final_commission_cents).toBe(lockedRep.final_commission_cents);
 
     // 4. POISON EVENT — the queue stops, visibly, without skipping.
+    // Drain the GENUINE sale events first. commissionService now emits
+    // SALE_APPROVED/SALE_CANCELLED at its write sites, so the qualification and
+    // reversal above left real events in this queue; without this the fault
+    // below would halt on one of THOSE (correctly - the queue never skips) and
+    // the synthetic poison event would never be reached. Drained here, before
+    // the campaign exists, so nothing is awarded for them.
+    S.drain(ts);
     S.createCampaign({
       tenantId: T, name: "E2E spiff", incentiveType: "PRODUCT_SPIFF", amountBasis: "FLAT",
       rewardCents: 5000, startsAtMs: Date.parse(ts) - 86_400_000, endsAtMs: Date.parse(ts) + 86_400_000,
