@@ -11,8 +11,8 @@
 //
 // MOTION (iOS Liquid Glass, Mobbin refs: Tide Guide / ElevenLabs / Tubi):
 // the in-glass active pill is ONE element that GLIDES between destinations
-// (spring-feel translate, slight overshoot), the tapped label does a quick
-// scale pop, and the whole bar rises+fades in once per app
+// (spring-feel translate, slight overshoot), the tapped icon does a quick
+// scale pop, labels crossfade, and the whole bar rises+fades in once per app
 // session. All motion is CSS/rAF-free compositor work — GPU transforms only,
 // no layout animation, no dependencies — and collapses to instant state
 // changes under prefers-reduced-motion (global reduced-motion block + an
@@ -20,6 +20,7 @@
 
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
+import { Home, Map, DollarSign, MapPin, Menu } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { can, type Role } from "@shared/capabilities";
 import { navIntentHandlers, prefetchRoute, canPrefetch, canPrefetchRouteChunks } from "@/lib/routePrefetch";
@@ -27,25 +28,31 @@ import { navIntentHandlers, prefetchRoute, canPrefetch, canPrefetchRouteChunks }
 // Each tab is capability-gated: roles without field.app.use (e.g. calling-only
 // or audit roles) never see dead field tabs, and Pay only shows when the role
 // can read its own commission.
-// Text-only destinations - the glyph budget lives in the More menu alone, so
-// each tab is its word, marked active by the sliding pill behind it.
+// Icon + label per destination, the shipped five-tab pattern (Mobbin:
+// DoorDash / Opendoor / Turo / GoHenry). The ACTIVE destination wears the
+// brand tint on both its icon and its label - those apps all colour the active
+// tab rather than merely darkening it, and on a phone held at arm's length in
+// sunlight a tint reads faster than a weight change.
 const TABS = [
-  { href: "/today", label: "Today", cap: "field.app.use" },
-  { href: "/leads", label: "Leads", cap: "field.app.use" },
-  { href: "/map", label: "Map", cap: "field.app.use" },
-  { href: "/my-commission", label: "Pay", cap: "commission.read.self" },
+  { href: "/today", label: "Today", icon: Home, cap: "field.app.use" },
+  { href: "/leads", label: "Leads", icon: MapPin, cap: "field.app.use" },
+  { href: "/map", label: "Map", icon: Map, primary: true, cap: "field.app.use" },
+  { href: "/my-commission", label: "Pay", icon: DollarSign, cap: "commission.read.self" },
 ] as const;
 
 // Tailwind needs static class names — one entry per possible cell count
 // (visible tabs + the always-present More button).
 const GRID_COLS = ["grid-cols-1", "grid-cols-2", "grid-cols-3", "grid-cols-4", "grid-cols-5"] as const;
 
-// The sliding pill SIZES ITSELF to the active label capsule (plus a little
-// breathing room) - text labels vary in width, so a fixed lozenge would crowd
-// "Today" and swim around "Pay". Positioning stays MEASURED, not derived from
-// slot math: each tab's label capsule is a data-pill-anchor ref.
-const PILL_PAD_X = 10;
-const PILL_PAD_Y = 6;
+// The sliding lozenge's fixed footprint. It is a touch LARGER than the h-7 w-11
+// icon capsule (56x40 vs 44x28) so the active icon floats centered on a soft
+// frosted squircle with breathing room — the iOS-26 / Instagram look.
+// Positioning is MEASURED, not derived from slot math: each tab's icon capsule
+// is a data-pill-anchor ref, and the pill centers on the active anchor's rect
+// relative to the bar. That stays exact at every viewport width regardless of
+// grid padding, safe-area insets, or how many capability-gated tabs render.
+const PILL_W = 56;
+const PILL_H = 40;
 
 // The entrance animation (rise + fade) runs ONCE per app session. BottomTabs
 // unmounts on the full-bleed map and calling routes, so a mount-scoped flag
@@ -87,14 +94,10 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
     if (!anchor) { pill.style.opacity = "0"; return; }
     const barBox = bar.getBoundingClientRect();
     const box = anchor.getBoundingClientRect();
-    const w = box.width + PILL_PAD_X * 2;
-    const h = box.height + PILL_PAD_Y * 2;
-    const x = box.left - barBox.left + (box.width - w) / 2;
-    const y = box.top - barBox.top + (box.height - h) / 2;
+    const x = box.left - barBox.left + (box.width - PILL_W) / 2;
+    const y = box.top - barBox.top + (box.height - PILL_H) / 2;
     pill.style.transitionDuration = animate ? "" : "0s";
     pill.style.opacity = "1";
-    pill.style.width = `${w}px`;
-    pill.style.height = `${h}px`;
     pill.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   }, [activeIndex]);
 
@@ -167,12 +170,13 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
       className={`liquid-bar ${entering ? "liquid-bar-enter " : ""}md:hidden fixed inset-x-3 z-30`}
       style={{ bottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
     >
-      <div ref={barRef} className={`relative grid ${GRID_COLS[visibleTabs.length]} h-[56px] px-1.5`}>
+      <div ref={barRef} className={`relative grid ${GRID_COLS[visibleTabs.length]} h-[62px] px-1.5`}>
       {/* THE in-glass active pill — one element, moved by GPU transform only.
           First in DOM so the relative-positioned tab content paints above it. */}
       <span ref={pillRef} data-testid="tab-active-pill" aria-hidden="true" className="liquid-active-pill" />
-      {visibleTabs.map(({ href, label }, index) => {
+      {visibleTabs.map(({ href, label, icon: Icon, ...tab }, index) => {
         const active = isActive(href);
+        const primary = "primary" in tab && tab.primary;
         return (
           <Link
             key={href}
@@ -180,12 +184,17 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
             data-testid={`tab-${label.toLowerCase()}`}
             aria-current={active ? "page" : undefined}
             {...navIntentHandlers(href)}
-            className="relative flex items-center justify-center active:scale-[.94] transition-transform"
+            className={`relative flex flex-col items-center justify-center gap-0.5 active:scale-[.94] transition-transform ${primary ? "-mt-2.5" : ""}`}
           >
             <span
               ref={el => { anchorRefs.current[index] = el; }}
               data-pill-anchor
-              className={`${popped === href ? "tab-icon-pop " : ""}grid h-7 place-items-center rounded-full px-1 text-[13px] font-semibold transition-colors ${active ? "text-foreground" : "text-muted-foreground"}`}>
+              className={`${popped === href ? "tab-icon-pop " : ""}${primary
+                ? `grid h-11 w-11 place-items-center rounded-full border-4 border-card shadow-lg transition-colors ${active ? "bg-primary text-primary-foreground" : "bg-foreground text-background"}`
+                : `grid h-7 w-11 place-items-center rounded-full transition-colors ${active ? "text-primary" : "text-muted-foreground"}`}`}>
+              <Icon className={primary ? "w-5 h-5" : "w-[19px] h-[19px]"} strokeWidth={active ? 2.4 : 2} />
+            </span>
+            <span className={`text-2xs font-semibold transition-colors ${active ? "text-primary" : "text-muted-foreground"}`}>
               {label}
             </span>
           </Link>
@@ -199,18 +208,19 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
         aria-expanded={moreOpen}
         aria-controls="mobile-more-sheet"
         onClick={() => onMore ? onMore() : window.dispatchEvent(new CustomEvent("hfs:open-menu"))}
-        className="relative flex items-center justify-center active:scale-[.94] transition-transform"
+        className="relative flex flex-col items-center justify-center gap-0.5 active:scale-[.94] transition-transform"
       >
-        <span className={`relative grid h-7 place-items-center rounded-full px-1 text-[13px] font-semibold transition-colors ${moreOpen ? "text-foreground" : "text-muted-foreground"}`}>
-          More
+        <span className={`relative grid h-7 w-11 place-items-center rounded-2xl transition-colors ${moreOpen ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}>
+          <Menu className="w-[19px] h-[19px]" />
           {moreDot && (
             <span
               data-testid="tab-more-dot"
               aria-hidden="true"
-              className="absolute -right-1.5 top-0 h-2 w-2 rounded-full bg-red-500 ring-2 ring-[hsl(var(--card))]"
+              className="absolute right-1.5 top-0 h-2 w-2 rounded-full bg-red-500 ring-2 ring-[hsl(var(--card))]"
             />
           )}
         </span>
+        <span className={`text-2xs font-semibold transition-colors ${moreOpen ? "text-primary" : "text-muted-foreground"}`}>More</span>
       </button>
       </div>
     </nav>

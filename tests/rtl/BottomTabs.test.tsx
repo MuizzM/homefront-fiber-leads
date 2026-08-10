@@ -114,17 +114,14 @@ describe("liquid motion: the sliding active pill", () => {
     const anchors = mockGeometry(nav);
     go("#/leads");
 
-    // Tab change: transition restored (CSS spring takes over) and the pill
-    // SIZES ITSELF to the measured 44x28 label capsule plus its 10/6 padding,
-    // so its translate sits the padded pill centered on the capsule: capsule
-    // left offset 73.2+14.6 minus the 10px x-pad -> x 77.8, top 16 minus the
-    // 6px y-pad -> y 10.
+    // Tab change: transition restored (CSS spring takes over) and the pill's
+    // translate CENTERS the 56x40 lozenge on the MEASURED 44x28 leads capsule
+    // relative to the bar — capsule left offset 73.2+14.6, minus the (56-44)/2
+    // and (40-28)/2 the larger lozenge overhangs → x 81.8, y 10.
     expect(pill.style.transitionDuration).toBe("");
     const [x, y] = pill.style.transform.match(/-?[\d.]+/g)!.map(Number).slice(1);
-    expect(x).toBeCloseTo(73.2 + (73.2 - 44) / 2 - 10, 5);
-    expect(y).toBe(16 - 6);
-    expect(pill.style.width).toBe(`${44 + 20}px`);
-    expect(pill.style.height).toBe(`${28 + 12}px`);
+    expect(x).toBeCloseTo(73.2 + (73.2 - 44) / 2 - (56 - 44) / 2, 5);
+    expect(y).toBe(16 + (28 - 40) / 2);
     expect(navigator.vibrate).toHaveBeenCalledWith(8);
     expect(anchors[1].className).toContain("tab-icon-pop"); // incoming icon pops
     expect(anchors[0].className).not.toContain("tab-icon-pop"); // outgoing fades via transition-colors
