@@ -870,10 +870,19 @@ export function recheckQualification(p: {
 
   if (result.qualified && !referral.qualifiedAt && canReferralTransition(referral.status, "QUALIFIED")) {
     const tx = rawDb.transaction(() => {
+      // Stamp the amount from the config in force AT QUALIFICATION, alongside
+      // the snapshot that freezes the rest of the rule. The row's amount was
+      // previously frozen at ATTRIBUTION, so a referral that applied before a
+      // reward change (or before the program-live migration set $500) would
+      // have been approved at the stale figure - and a row whose amount was
+      // never set would have paid $0. The snapshot and the money now agree by
+      // construction, and a config change AFTER this point still cannot
+      // re-price it.
       rawDb.prepare(
-        `UPDATE referrals SET status = 'QUALIFIED', qualified_at = ?, config_snapshot = ?, updated_at = ?
+        `UPDATE referrals SET status = 'QUALIFIED', qualified_at = ?, config_snapshot = ?,
+                reward_amount_cents = ?, updated_at = ?
           WHERE tenant_id = ? AND id = ? AND qualified_at IS NULL`,
-      ).run(p.nowIso, JSON.stringify(config), p.nowIso, p.tenantId, p.referralId);
+      ).run(p.nowIso, JSON.stringify(config), config.rewardCents, p.nowIso, p.tenantId, p.referralId);
       recordEvent({
         tenantId: p.tenantId, referralId: p.referralId, type: "QUALIFIED",
         metadata: { salesCount: count, rewardCents: config.rewardCents }, nowIso: p.nowIso,

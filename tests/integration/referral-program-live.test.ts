@@ -239,6 +239,25 @@ describe("exactly one $500, however the sixth sale arrives", () => {
     expect(rows()).toEqual({ n: 1, cents: 50_000 });
   });
 
+  it("stamps the reward from the config in force at QUALIFICATION, not at application", () => {
+    // A referral that applied under an older/absent rule must be paid the rule
+    // it actually qualified under - and must never approve at $0.
+    R.migrateReferralProgramLive(NOW);
+    const referralId = walkToPending();
+    rawDb.prepare("UPDATE referrals SET reward_amount_cents = 0 WHERE id = ?").run(referralId);
+
+    salesFor(REFERRED_REP, 6);
+    R.recheckQualification({ tenantId: T1, referralId, nowIso: NOW });
+    expect(R.getReferral(T1, referralId)!.rewardAmountCents).toBe(50_000);
+
+    R.approveReward({ tenantId: T1, referralId, actorUserId: ADMIN_USER, nowIso: LATER });
+    const row = rawDb.prepare(
+      `SELECT COUNT(*) AS n, COALESCE(SUM(gross_cents),0) AS cents FROM earnings_ledger
+        WHERE source_type = 'referral' AND source_id = ? AND earning_type = 'REFERRAL_BONUS'`,
+    ).get(referralId) as { n: number; cents: number };
+    expect(row).toEqual({ n: 1, cents: 50_000 });
+  });
+
   it("a cancelled sale inside the window un-qualifies the pending reward", () => {
     R.migrateReferralProgramLive(NOW);
     const referralId = walkToPending();
