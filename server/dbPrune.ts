@@ -165,10 +165,22 @@ export function pruneFinishedRunTargets(cutoffIso: string): number {
 // transaction short enough that a scan worker's commit waits milliseconds.
 const CASCADE_BATCH = Math.max(50, Math.min(5_000, Number(process.env.PRUNE_CASCADE_BATCH) || 500));
 const MAX_CASCADE_BATCHES = Math.max(1, Number(process.env.PRUNE_CASCADE_MAX_BATCHES) || 200);
-/** Finished scan runs, and with them every fiber_job_* / dead-letter child. */
-export const SCAN_RUNS_KEEP_DAYS = Math.max(1, Number(process.env.SCAN_RUNS_KEEP_DAYS) || 30);
+/** Finished scan runs, and with them every fiber_job_* / dead-letter child.
+ *
+ *  SEVEN days, not thirty, and the reason is the churn rate. Measured on the
+ *  production-shaped database: of 547,491 'done' runs, 511,051 were under a
+ *  week old - roughly 73,000 runs created per DAY. A 30-day window against that
+ *  rate is not retention, it is a no-op: the rehearsal deleted 1 row. A run
+ *  whose targets are already pruned at 14 days is bookkeeping, and a week is
+ *  well past anyone reopening it.
+ *
+ *  This is a ceiling, not a target. The churn itself was the accounting bug in
+ *  addressDiscovery/engine.ts (a pass that enqueued nothing still reported work,
+ *  so the reconciler never went idle); with that fixed the table should stop
+ *  growing at this rate and the window stops mattering. */
+export const SCAN_RUNS_KEEP_DAYS = Math.max(1, Number(process.env.SCAN_RUNS_KEEP_DAYS) || 7);
 /** Finished discovery jobs, and with them addresses/checks/tiles/events. */
-export const DISCOVERY_JOBS_KEEP_DAYS = Math.max(1, Number(process.env.DISCOVERY_JOBS_KEEP_DAYS) || 30);
+export const DISCOVERY_JOBS_KEEP_DAYS = Math.max(1, Number(process.env.DISCOVERY_JOBS_KEEP_DAYS) || 7);
 /** Worker heartbeats. The only reader takes ORDER BY heartbeat_at DESC LIMIT 50
  *  (fiberOperationsStore), so anything older than a couple of days is unread by
  *  construction. The row is an UPSERT keyed on worker_id and every scan run mints
@@ -206,6 +218,16 @@ export const HEARTBEAT_KEEP_DAYS = Math.max(1, Number(process.env.HEARTBEAT_KEEP
 // and it is terminal, so the retention above can finally collect them.
 const ABANDONED_RUN_STALE_HOURS = Math.max(1, Number(process.env.ABANDONED_RUN_STALE_HOURS) || 24);
 
+// STAMP completed_at WITH WHEN IT DIED, NOT WHEN WE NOTICED.
+//
+// The obvious `completed_at = datetime('now')` is wrong and silently defeats the
+// whole point: retention ages off completed_at, so stamping today would reset a
+// run that actually stopped 19 days ago and hide it for another full retention
+// window. Caught in rehearsal - the terminalizers converted 546 runs and 604
+// jobs and the prune that followed deleted exactly zero.
+//
+// The last heartbeat IS the time of death, so that is what goes in.
+
 /** Runs whose worker died without ever finishing them. */
 export function cancelAbandonedScanRuns(staleHours = ABANDONED_RUN_STALE_HOURS): number {
   try {
@@ -213,7 +235,7 @@ export function cancelAbandonedScanRuns(staleHours = ABANDONED_RUN_STALE_HOURS):
       `UPDATE scan_runs
           SET status='cancelled',
               error=COALESCE(error, 'abandoned: no worker heartbeat for ' || ? || 'h'),
-              completed_at=COALESCE(completed_at, datetime('now'))
+              completed_at=COALESCE(completed_at, heartbeat_at, started_at, datetime('now'))
         WHERE status='running'
           AND COALESCE(heartbeat_at, started_at) < datetime('now', ?)`,
     ).run(staleHours, `-${staleHours} hours`).changes;
@@ -227,7 +249,7 @@ export function cancelAbandonedDiscoveryJobs(staleHours = ABANDONED_RUN_STALE_HO
     return rawDb.prepare(
       `UPDATE discovery_jobs
           SET status='cancelled',
-              completed_at=COALESCE(completed_at, datetime('now'))
+              completed_at=COALESCE(completed_at, updated_at, created_at, datetime('now'))
         WHERE status IN ('running','queued')
           AND COALESCE(updated_at, created_at) < datetime('now', ?)`,
     ).run(`-${staleHours} hours`).changes;
@@ -261,7 +283,49 @@ function pruneCascadeParent(
   return total;
 }
 
+/**
+ * WITHOUT THESE, DELETING A scan_run IS A FULL TABLE SCAN. Four times.
+ *
+ * With foreign_keys=ON, SQLite enforces each ON DELETE CASCADE by looking up the
+ * child rows for the parent being removed. That lookup needs an index whose
+ * LEADING column is the foreign key. These four have indexes, but every one of
+ * them leads with tenant_id or job_id:
+ *
+ *   fiber_job_events     idx(tenant_id, run_id, sequence)      816,782 rows
+ *   fiber_job_failures   idx(tenant_id, run_id, created_at)    807,001 rows
+ *   fiber_dead_letters   idx(tenant_id, resolved_at, created)  186,017 rows
+ *   discovery_job_runs   pk(job_id, run_id) + idx(job_id, seq) 541,738 rows
+ *
+ * So each parent row deleted scans ~2.35M child rows. A 500-parent batch is
+ * 1.2 BILLION row visits. The first rehearsal ran past ten minutes on a 2.85GB
+ * copy before being killed - on the 18.8GB production file it would hold the
+ * write lock for hours.
+ *
+ * Built HERE rather than in storage.ts's boot index list on purpose: that list
+ * is executed by all four processes during the deploy health gate, and building
+ * an index over 800k rows there is exactly the kind of blocking work that times
+ * the gate out. The prune already runs in a non-serving role, once, off the
+ * request path. IF NOT EXISTS makes it a no-op on every subsequent run.
+ *
+ * scan_runs' OTHER children are already covered: fiber_job_checkpoints is keyed
+ * `run_id TEXT PRIMARY KEY`, and scan_run_targets has idx_srt_run_state(run_id,
+ * state, seq). The discovery_jobs side needs nothing - every one of its children
+ * indexes job_id first.
+ */
+export function ensureCascadeIndexes(): void {
+  for (const ddl of [
+    `CREATE INDEX IF NOT EXISTS idx_fiber_events_run_fk ON fiber_job_events(run_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_failures_run_fk ON fiber_job_failures(run_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_dead_letters_run_fk ON fiber_dead_letters(run_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_job_runs_run_fk ON discovery_job_runs(run_id)`,
+  ]) {
+    try { rawDb.exec(ddl); } catch { /* older DB without the table — nothing to index */ }
+  }
+}
+
 export function pruneTerminalScanRuns(cutoffIso: string): number {
+  // Non-negotiable: without the FK indexes each cascade is four full scans.
+  ensureCascadeIndexes();
   // COALESCE(completed_at, started_at): a run that errored without ever being
   // stamped complete must still age out, or it is immortal.
   return pruneCascadeParent(
