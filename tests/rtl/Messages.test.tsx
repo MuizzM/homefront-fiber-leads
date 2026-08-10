@@ -461,3 +461,47 @@ describe("Messages hub - the board", () => {
     expect(await screen.findByTestId("board-full-link")).toHaveAttribute("href", "/leaderboard");
   });
 });
+
+// ── The inbox, as an inbox ───────────────────────────────────────────────────
+// Shipped conversation lists (Depop, eBay, Clubhouse, WeChat via Mobbin) agree
+// on two things this list was missing: every row carries the same leading
+// avatar so the column scans, and an unread row LOOKS unread rather than
+// relying on a pill at the far edge.
+describe("the conversation list reads like an inbox", () => {
+  it("gives every row a leading avatar - group and floor included, not just DMs", async () => {
+    renderPage();
+    await screen.findByTestId(`thread-${dmThread.id}`);
+    for (const id of ["thread-floor", `thread-${dmThread.id}`, `thread-${groupThread.id}`]) {
+      const row = screen.getByTestId(id);
+      // The 40px leading element every row shares.
+      expect(row.querySelector(".h-10.w-10")).not.toBeNull();
+    }
+  });
+
+  it("weights an unread conversation heavier than a read one", async () => {
+    renderPage();
+    await screen.findByTestId(`thread-${dmThread.id}`);
+    // dmThread has unread 2, groupThread has 0.
+    // The row shows the partner's name as the title AND inside the preview
+    // ("Rae R.: got a sec?") - the title is the first of the two.
+    const unreadTitle = within(screen.getByTestId(`thread-${dmThread.id}`)).getAllByText(/Rae R\./)[0];
+    const readTitle = within(screen.getByTestId(`thread-${groupThread.id}`)).getByText("Lexington crew");
+    expect(unreadTitle.className).toContain("font-bold");
+    expect(readTitle.className).toContain("font-semibold");
+    expect(readTitle.className).not.toContain("font-bold");
+  });
+
+  it("filters to unread and back, and never strands an empty filtered inbox", async () => {
+    renderPage();
+    await screen.findByTestId(`thread-${dmThread.id}`);
+    await userEvent.click(await screen.findByTestId("threads-filter-unread"));
+
+    // The read group drops out; the unread DM and the unread floor stay.
+    await waitFor(() => expect(screen.queryByTestId(`thread-${groupThread.id}`)).toBeNull());
+    expect(screen.getByTestId(`thread-${dmThread.id}`)).toBeInTheDocument();
+    expect(screen.getByTestId("thread-floor")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("threads-filter-all"));
+    await waitFor(() => expect(screen.getByTestId(`thread-${groupThread.id}`)).toBeInTheDocument());
+  });
+});

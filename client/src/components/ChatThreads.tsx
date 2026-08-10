@@ -85,8 +85,12 @@ export function ChatThreadList({
   const { data: threadsData, isLoading, isError } = useChatThreads();
   const { data: roster } = useRoster();
   const [composing, setComposing] = useState(false);
+  // All / Unread, the shipped inbox filter (Depop, eBay via Mobbin). Shown
+  // only once there is something to filter - a two-chip control above three
+  // conversations is furniture, not a feature.
+  const [onlyUnread, setOnlyUnread] = useState(false);
 
-  const threads = threadsData?.threads ?? [];
+  const allThreads = threadsData?.threads ?? [];
   const floorLast = floorQ.data?.items?.length
     ? floorQ.data.items[floorQ.data.items.length - 1]
     : null;
@@ -98,10 +102,35 @@ export function ChatThreadList({
     return () => clearInterval(t);
   }, []);
 
+  const floorUnread = floorQ.data?.unread ?? 0;
+  const unreadCount = allThreads.filter(t => t.unread > 0).length + (floorUnread > 0 ? 1 : 0);
+  const threads = onlyUnread ? allThreads.filter(t => t.unread > 0) : allThreads;
+  const showFloor = !onlyUnread || floorUnread > 0;
+  // Leaving the filter on after everything is read would show an empty inbox
+  // that looks like lost messages.
+  useEffect(() => { if (onlyUnread && unreadCount === 0) setOnlyUnread(false); }, [onlyUnread, unreadCount]);
+
   return (
     <section className="space-y-3" data-testid="chat-thread-list">
+      {(unreadCount > 0 || onlyUnread) && allThreads.length + 1 >= 3 && (
+        <div className="flex items-center gap-1.5" role="group" aria-label="Filter conversations">
+          {[{ on: false, label: "All" }, { on: true, label: `Unread ${unreadCount}` }].map(chip => (
+            <button key={chip.label} type="button" onClick={() => setOnlyUnread(chip.on)}
+              aria-pressed={onlyUnread === chip.on}
+              data-testid={chip.on ? "threads-filter-unread" : "threads-filter-all"}
+              className={cn(
+                "inline-flex h-8 items-center rounded-full px-3 text-xs font-semibold transition-colors",
+                onlyUnread === chip.on ? "bg-foreground text-background" : "bg-secondary text-muted-foreground hover:text-foreground",
+                FOCUS,
+              )}>
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         {/* The floor, pinned. Everything else earns its spot by activity. */}
+        {showFloor && (
         <button
           type="button"
           onClick={() => onOpen({ t: "floor" })}
@@ -111,10 +140,15 @@ export function ChatThreadList({
             FOCUS,
           )}
         >
-          
+          <span aria-hidden="true"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/12 text-[11px] font-bold text-primary">
+            ALL
+          </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-semibold text-foreground">The floor</span>
-            <span className="block truncate text-[12px] text-muted-foreground">
+            <span className={cn("block text-[13px] text-foreground",
+              (floorQ.data?.unread ?? 0) > 0 ? "font-bold" : "font-semibold")}>The floor</span>
+            <span className={cn("block truncate text-[12px]",
+              (floorQ.data?.unread ?? 0) > 0 ? "font-medium text-foreground/80" : "text-muted-foreground")}>
               {floorLast
                 ? `${floorLast.authorUserId === myUserId ? "You" : floorLast.authorName}: ${floorLast.body}`
                 : "Everyone on the floor, one room."}
@@ -125,8 +159,9 @@ export function ChatThreadList({
               {agoLabel(floorLast.createdAtMs, now)}
             </span>
           )}
-          <UnreadPill n={floorQ.data?.unread ?? 0} testId="thread-floor-unread" />
+          <UnreadPill n={floorUnread} testId="thread-floor-unread" />
         </button>
+        )}
 
         {isLoading && <Skeleton className="m-3 h-16 rounded-xl" data-testid="threads-loading" />}
 
@@ -160,20 +195,23 @@ export function ChatThreadList({
                 FOCUS,
               )}
             >
-              {isDm ? (
-                <span
-                  aria-hidden="true"
-                  className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[11px] font-bold"
-                  style={{ backgroundColor: `${hue}26`, color: hue }}
-                >
-                  {chatInitials(title)}
-                </span>
-              ) : (
-                null
-              )}
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "grid h-10 w-10 shrink-0 place-items-center text-[11px] font-bold",
+                  // A group is a square-ish squircle, a person is a circle -
+                  // the shape carries the kind so the row needs no icon.
+                  isDm ? "rounded-full" : "rounded-xl bg-secondary",
+                )}
+                style={isDm ? { backgroundColor: `${hue}26`, color: hue } : undefined}
+              >
+                <span className={cn(!isDm && "text-muted-foreground")}>{chatInitials(title)}</span>
+              </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-semibold text-foreground">{title}</span>
-                <span className="block truncate text-[12px] text-muted-foreground">
+                <span className={cn("block truncate text-[13px] text-foreground",
+                  t.unread > 0 ? "font-bold" : "font-semibold")}>{title}</span>
+                <span className={cn("block truncate text-[12px]",
+                  t.unread > 0 ? "font-medium text-foreground/80" : "text-muted-foreground")}>
                   {t.lastMessage
                     ? `${t.lastMessage.authorUserId === myUserId ? "You" : t.lastMessage.authorName}: ${t.lastMessage.body}`
                     : isDm ? "Say hello." : `${t.members.length} people`}
