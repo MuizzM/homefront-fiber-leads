@@ -379,7 +379,7 @@ export default function CityScanner() {
         <div>
           <div className="flex items-center gap-2">
             
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">City Scanner</h1>
+            <h1 className="text-xl font-bold tracking-tight text-foreground">City Scanner</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
             Scan every address and get one sales answer: confirmed fresh, not fresh, or recheck. Only independently confirmed leads are saved.

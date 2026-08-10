@@ -370,7 +370,7 @@ export default function SuperAdmin() {
         <div>
           <div className="flex items-center gap-2">
             
-            <h1 className="text-xl font-semibold tracking-tight">SaaS Control Center</h1>
+            <h1 className="text-xl font-bold tracking-tight">SaaS Control Center</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">Your proprietary platform · white-label to any Kinetic market</p>
         </div>

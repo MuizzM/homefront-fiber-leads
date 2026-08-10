@@ -18,7 +18,7 @@ export default function Profile() {
       <div className="max-w-lg mx-auto space-y-8">
         {/* Page title */}
         <header className="pt-2">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">Settings</h1>
           <p className="text-[13px] text-muted-foreground mt-1">
             Manage your account and preferences.
           </p>

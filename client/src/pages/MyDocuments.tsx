@@ -431,7 +431,7 @@ export default function MyDocuments() {
     <div className="hf-stagger p-4 sm:p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-5">
       <header>
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Rep onboarding</div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground mt-0.5 flex items-center gap-2"> My documents</h1>
+        <h1 className="text-xl font-bold tracking-tight text-foreground mt-0.5 flex items-center gap-2"> My documents</h1>
         <p className="text-sm text-muted-foreground mt-1">Review, sign, and download your agreements with Home Front Sign.</p>
       </header>
 

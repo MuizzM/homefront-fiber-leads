@@ -1201,7 +1201,7 @@ export default function Leads() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary mb-1.5">{isRep ? "Field pipeline" : "Sales operations"}</div>
-          <h1 className="text-2xl font-semibold tracking-tight">{isRep ? "My leads" : "Leads command center"}</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">{isRep ? "My leads" : "Leads command center"}</h1>
           <p className="text-sm text-muted-foreground mt-1">{isRep ? "Work your assigned doors and keep every follow-up moving." : "Qualify, assign, and move every fiber opportunity forward."}</p>
         </div>
         <div className="flex items-center gap-2">

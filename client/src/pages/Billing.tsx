@@ -135,7 +135,7 @@ export default function Billing() {
           <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
              Billing &amp; Usage
           </div>
-          <h1 className="mt-0.5 text-[22px] font-semibold tracking-tight text-foreground">Lead credits &amp; plan</h1>
+          <h1 className="mt-0.5 text-xl font-bold tracking-tight text-foreground">Lead credits &amp; plan</h1>
         </div>
         {enabled && summary?.state && (
           <div className="flex items-center gap-2">

@@ -105,7 +105,7 @@ export default function Governance() {
     <div className="p-4 md:p-6 pb-24 md:pb-6 max-w-5xl mx-auto space-y-6">
       <div>
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Capability governance</div>
-        <h1 className="text-lg font-semibold tracking-tight text-foreground">Permissions</h1>
+        <h1 className="text-xl font-bold tracking-tight text-foreground">Permissions</h1>
         <p className="text-[13px] text-muted-foreground">What each role can do - read straight from the map the middleware enforces.</p>
       </div>
 

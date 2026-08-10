@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { PageHeader } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
 import { formatMiles } from "@shared/mileage";
@@ -602,21 +603,21 @@ export default function Mileage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-24" data-testid="mileage-page">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-           Mileage
-        </h1>
-        {/* Every rep can export their OWN log; a manager's export widens to
-            their branch. The server decides the rows either way. */}
-        {/* The export carries the SELECTED period, so "Year" then "Export"
-            is the whole tax-time workflow rather than a full-history dump you
-            then have to filter in a spreadsheet. */}
-        <Button variant="outline" size="sm" data-testid="mileage-export" asChild>
-          <a href={`/api/mileage/export${qs(range)}${canExport ? `${qs(range) ? "&" : "?"}scope=team` : ""}`} download>
-            Export
-          </a>
-        </Button>
-      </div>
+      {/* Every rep can export their OWN log; a manager's export widens to
+          their branch. The server decides the rows either way. The export
+          carries the SELECTED period, so "Year" then "Export" is the whole
+          tax-time workflow rather than a full-history dump you then filter in
+          a spreadsheet. */}
+      <PageHeader
+        title="Mileage"
+        actions={
+          <Button variant="outline" size="sm" data-testid="mileage-export" asChild>
+            <a href={`/api/mileage/export${qs(range)}${canExport ? `${qs(range) ? "&" : "?"}scope=team` : ""}`} download>
+              Export
+            </a>
+          </Button>
+        }
+      />
 
       {/* Period first: every number under it answers "for which books?".
           Expensify/Revolut put the money and its rate together; a log whose

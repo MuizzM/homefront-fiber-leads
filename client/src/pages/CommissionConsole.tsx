@@ -171,7 +171,7 @@ export default function CommissionConsole() {
       {/* Header + week nav */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight flex items-center gap-2">
+          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2">
              Commissions &amp; Pay
           </h1>
           <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium mt-1">

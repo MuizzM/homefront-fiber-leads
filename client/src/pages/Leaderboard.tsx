@@ -89,7 +89,7 @@ export default function Leaderboard() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2 text-foreground">
+          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
              Sales leaderboard
           </h1>
           <p className="text-sm text-muted-foreground mt-1">

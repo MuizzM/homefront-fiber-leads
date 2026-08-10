@@ -28,14 +28,17 @@ describe("the count probe drives the mode decision with the FILTERED total", () 
     expect(src).toContain('queryKey: ["/api/leads/map/count", countView ?? "all"]');
   });
 
-  it("~62k filtered pins take the full feed; 184k unfiltered take viewport windows", () => {
-    // The measured production shape the lens exists for: the FILTERED total
-    // (post-FCC-import ~62k) lands under the 75k threshold, so the map is ONE
-    // ETag'd feed; the unfiltered footprint stays on the windowed tiers.
-    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(75_000);
-    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 62_000 })).toBe(true);
+  it("the lens still shrinks the scope; both totals now take windows", () => {
+    // The lens's PURPOSE is unchanged - filtering shrinks the scope the map
+    // must answer for - but the mode decision moved. Production 2026-08-10
+    // measured the ~62k filtered scope (69,059 actual) taking the uncapped
+    // full-feed path at 32,698ms per request, so the threshold is now tied to
+    // the per-window cap (25k) and both of these take windows.
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 62_000 })).toBe(false);
     expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 184_000 })).toBe(false);
-    expect(62_000).toBeLessThanOrEqual(MAP_VIEWPORT_MODE_THRESHOLD);
+    // A genuinely small scope - one rep's territory - still gets the single feed.
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 4_000 })).toBe(true);
+    expect(62_000).toBeGreaterThan(MAP_VIEWPORT_MODE_THRESHOLD);
   });
 });
 

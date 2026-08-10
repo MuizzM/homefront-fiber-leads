@@ -78,7 +78,7 @@ export default function FollowUps() {
           <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
              Follow-ups
           </div>
-          <h1 className="text-[26px] font-bold tracking-tight text-foreground mt-0.5">Callbacks you owe</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground mt-0.5">Callbacks you owe</h1>
           {/* The one-glance read: how many owed, and whether any slipped. */}
           {!q.isLoading && !q.isError && groups.total > 0 && (
             <p className="text-[13px] text-muted-foreground mt-1" data-testid="followups-summary">

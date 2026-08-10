@@ -53,7 +53,7 @@ export default function LoginActivity() {
     <div className="mx-auto max-w-3xl space-y-5 px-4 py-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Login activity</h1>
+          <h1 className="text-xl font-bold tracking-tight">Login activity</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">Who tried to sign in, from where, and how it went - your organization only.</p>
         </div>
         <button

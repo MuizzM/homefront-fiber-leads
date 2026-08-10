@@ -3,12 +3,14 @@
 import { describe, expect, it } from "vitest";
 import {
   MAP_VIEWPORT_MODE_THRESHOLD,
+  MAP_BBOX_ROW_CAP,
   VIEWPORT_FETCH_MARGIN,
   expandBBox,
   keepRegion,
   inBBox,
   bboxParam,
   mergeViewportPins,
+  fullFeedEnabled,
 } from "@/lib/mapViewport";
 
 const VIEW = { minLng: -80.6, minLat: 35.4, maxLng: -80.2, maxLat: 35.6 }; // 0.4° x 0.2°
@@ -93,13 +95,26 @@ describe("mergeViewportPins", () => {
 });
 
 describe("mode threshold", () => {
-  it("is 75k - the whole-org feed carries the org's ~62k default lens with headroom", () => {
-    // Measured Aug 2026: 62k pins = ~980KB gzipped wire, <1s load. The 2025
-    // FCC import pushed the default lens over the old 60k cliff and flipped
-    // every field map into windowed mode overnight; 75k keeps that lens on
-    // the single-feed path, and past it the windowed tiers are honest now
-    // (over-cap windows render the density grid, never a thinned sample).
-    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(75_000);
+  it("is one window's worth of pins - never more than the bbox path would cap", () => {
+    // WAS 75k, on an Aug 2026 measurement of "62k pins = ~980KB gzipped, <1s
+    // load". Production 2026-08-10 (perf-report.yml) measured what that
+    // actually costs now:
+    //     GET /api/leads/map  rows=69059  truncated=0  dbMs=2130  TOTAL=32698ms
+    // 69,059 sat just under 75k, so every field map took the FULL FEED path,
+    // which has NO row cap - 30.5s of that request was spent outside SQLite
+    // building and packing ~69k pin objects synchronously on an HTTP worker.
+    // The same report shows per-minute event-loop lag maxima of 62-97s.
+    //
+    // The threshold is now tied to the per-window cap: if a scope holds more
+    // pins than one window may return, it takes windows.
+    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(MAP_BBOX_ROW_CAP);
+    expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(25_000);
+  });
+
+  it("routes the measured 69k production scope to windows, not the full feed", () => {
+    // The regression this exists to prevent: a scope that fits under the
+    // threshold takes an uncapped full feed and blocks a worker for ~30s.
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 69_059 })).toBe(false);
   });
 });
 

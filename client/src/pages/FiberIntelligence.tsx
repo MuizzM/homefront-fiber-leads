@@ -70,7 +70,7 @@ export default function FiberIntelligence() {
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-4 pb-6 pt-4 sm:px-6">
       <header className="mb-3">
-        <h1 className="text-[22px] font-bold tracking-tight text-foreground">Fiber Intelligence</h1>
+        <h1 className="text-xl font-bold tracking-tight text-foreground">Fiber Intelligence</h1>
         <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC - one workspace.</p>
       </header>
 

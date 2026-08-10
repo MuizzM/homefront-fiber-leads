@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { useEffect, useState } from "react";
@@ -99,10 +100,10 @@ export default function ClockIn() {
 
   return (
     <div className="w-full max-w-4xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-8">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">Field hours</h1>
-        <p className="text-sm text-muted-foreground">Clock in/out tracker · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
-      </div>
+      <PageHeader
+        title="Field hours"
+        subtitle={`Clock in/out tracker · ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`}
+      />
 
       {/* Current status */}
       <Card className="bg-card border-border rounded-xl">

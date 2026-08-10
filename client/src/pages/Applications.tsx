@@ -579,7 +579,7 @@ export default function Applications() {
       <header className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">Recruiting operations</div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Rep onboarding</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">Rep onboarding</h1>
           <p className="mt-1 text-sm text-muted-foreground">Invite, review, issue agreements, and activate every rep from one queue.</p>
         </div>
         <button onClick={() => pipeline.refetch()} className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-xl border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground" data-testid="refresh-onboarding"><RefreshCw className={`h-4 w-4 ${pipeline.isFetching ? "animate-spin" : ""}`} />Refresh</button>

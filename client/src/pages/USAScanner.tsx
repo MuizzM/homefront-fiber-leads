@@ -280,7 +280,7 @@ export default function USAScanner() {
         <div className="flex items-start gap-3">
           
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">
+            <h1 className="text-xl font-bold tracking-tight text-foreground">
               USA Fiber Intelligence
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">

@@ -118,7 +118,7 @@ export default function MyCommission() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">My commission</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">My commission</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {data?.bounds?.localWeekLabel ? `Week of ${data.bounds.localWeekLabel}` : "This week's earnings"}
           </p>

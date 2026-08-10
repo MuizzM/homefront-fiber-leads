@@ -243,7 +243,7 @@ export default function Dashboard() {
       {/* Header — time-aware, personalized greeting */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-[22px] font-bold tracking-tight text-foreground">
+          <h1 className="text-xl font-bold tracking-tight text-foreground">
             {(() => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; })()}, {user?.name?.split(" ")[0] ?? "there"}
           </h1>
           <p className="mt-0.5 text-sm text-muted-foreground">

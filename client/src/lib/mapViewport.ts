@@ -11,15 +11,30 @@
 // map.
 
 /** Scoped pin total above which the map switches from full feed to bbox
- *  windows. 75k: measured Aug 2026 at 62k pins the packed feed is ~980KB on
- *  the wire (gzip) and loads in under a second — well inside what one fetch +
- *  client clustering handles, and the 304 poll stays cheap. The 2025 FCC
- *  import pushed the org's default "latest" lens to ~62k, straight over the
- *  old 60k cliff, which flipped every field map into windowed mode overnight
- *  (sampled windows, per-pan fetches). 75k keeps the whole-org feed for that
- *  lens with headroom; past it the windowed path now renders honest density
- *  aggregates instead of thinned samples, so crossing is no longer a cliff. */
-export const MAP_VIEWPORT_MODE_THRESHOLD = 75_000;
+ *  windows.
+ *
+ *  WAS 75k, on this reasoning: "measured Aug 2026 at 62k pins the packed feed
+ *  is ~980KB on the wire (gzip) and loads in under a second". That measurement
+ *  was taken on a healthy box and no longer describes production.
+ *
+ *  Measured in production 2026-08-10 (perf-report.yml, 14:13-14:28 window):
+ *      GET /api/leads/map   rows=69059  truncated=0  cache=miss
+ *                           dbMs=2130   TOTAL=32698ms
+ *  69,059 sat just under the 75k threshold, so every field map took the FULL
+ *  FEED path - which has no row cap at all (the bbox path caps at
+ *  MAP_BBOX_ROW_CAP). One such request materialises ~69k rows, builds ~69k pin
+ *  objects and packs them synchronously on an HTTP worker: 30.5s of the 32.7s
+ *  was spent outside SQLite. The same report shows per-minute event-loop lag
+ *  maxima of 62-97s, which a 30s synchronous serialize fully accounts for.
+ *  The host is I/O-saturated (PSI io full avg60=42.7%) against an 18.8GB
+ *  database, so the old "under a second" assumption cannot hold.
+ *
+ *  Aligned to MAP_BBOX_ROW_CAP: above one window's worth of pins, take
+ *  windows. The 2026 concern about crossing this line (sampled windows, per-pan
+ *  fetches) was resolved when the windowed path started rendering honest
+ *  density aggregates instead of thinned samples - crossing is no longer a
+ *  cliff, which is what makes lowering it safe now. */
+export const MAP_VIEWPORT_MODE_THRESHOLD = 25_000;
 
 /** Fetch margin around the visible bounds: panning a little inside the margin
  *  needs no refetch, so ordinary door-to-door movement doesn't hit the server. */

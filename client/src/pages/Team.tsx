@@ -714,7 +714,7 @@ export default function Team() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Organization</div>
-          <h1 className="text-xl font-bold text-foreground mt-0.5">Team management</h1>
+          <h1 className="mt-0.5 text-xl font-bold tracking-tight text-foreground">Team management</h1>
           <p className="text-sm text-muted-foreground mt-1">
             <span className="tabular-nums font-medium text-foreground">{activeCount}</span> active member{activeCount !== 1 ? "s" : ""}
             <span className="mx-1.5 text-border">·</span>

@@ -105,7 +105,7 @@ export default function Diagnostics() {
       <div className="flex items-center gap-2.5">
         
         <div>
-          <h1 className="text-lg font-semibold tracking-tight text-foreground">Diagnostics</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">Diagnostics</h1>
           <p className="text-[12px] text-muted-foreground tabular-nums">
             Operations health · last {data?.windowHours ?? 24}h · {data?.totalEvents ?? 0} events
           </p>
