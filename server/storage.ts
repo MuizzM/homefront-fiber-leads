@@ -4,6 +4,8 @@ import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION
 import { streetKeyOf, addressIdentityIssues } from "@shared/addressKey";
 import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
 import { ensureAdminAuditSchema } from "./adminAudit";
+import { runKineticBuildMigrations as ensureKineticBuildSchema } from "./kineticBuildMigrations";
+import { runAcademyMigrations as ensureAcademySchema } from "./academyMigrations";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -248,9 +250,13 @@ export interface LeadStatsRow {
  *  map renders the newly-lit + field-verified + organic + manual-add pins
  *  (NULL tags included); the footprint stays one tap away via the unfiltered
  *  view. */
-export type MapView = "latest";
+export type MapView = "latest" | "kinetic_2026";
 /** The one tag the "latest" view excludes. */
 export const MAP_LATEST_VIEW_EXCLUDED_TAG = "fcc_fiber_d25";
+/** The tag promoted Kinetic 2026 builds carry (server/kineticBuildStore.ts).
+ *  Named here as well so the lens predicate and the promoter cannot drift -
+ *  the same belt-and-braces the LATEST_VIEW_EXCLUDED_TAG pair uses. */
+export const MAP_KINETIC_2026_TAG = "kinetic_build_2026";
 
 export interface MapPinWindow {
   minLat: number;
@@ -2913,6 +2919,24 @@ export function runMigrations() {
   try {
     ensureAdminAuditSchema();
   } catch (e: any) { console.warn("[migration] admin audit schema:", e?.message); }
+
+  // Kinetic 2026 builds: FCC vintage import staging + the per-address verdict
+  // table. Lives in its own module (server/kineticBuildMigrations.ts) because
+  // it is one self-contained transaction, the same way the calling schema is.
+  // A failure here must not take the boot down — the feature is flagged off by
+  // default and every read path treats a missing table as an empty layer.
+  try {
+    ensureKineticBuildSchema();
+  } catch (e: any) { console.warn("[migration] kinetic build schema:", e?.message); }
+
+  // Fiber Sales Academy: path activity progress, resume state, role-play
+  // records, assignments and the market offer catalog. Own module for the same
+  // reason as the kinetic schema above - one self-contained transaction - and
+  // non-fatal for the same reason: every Academy read treats a missing table as
+  // an empty result, so a failure here degrades the tab rather than the boot.
+  try {
+    ensureAcademySchema();
+  } catch (e: any) { console.warn("[migration] academy schema:", e?.message); }
 }
 
 /**
@@ -3591,6 +3615,14 @@ export class Storage implements IStorage {
       // silently drop every untagged lead (three-valued logic).
       clauses.push("(l.lead_tag IS NULL OR l.lead_tag <> ?)");
       params.push(MAP_LATEST_VIEW_EXCLUDED_TAG);
+    }
+    if (view === "kinetic_2026") {
+      // "Kinetic 2026 builds": ONLY the doors an authorized qualification
+      // confirmed, and that the FCC baseline proves were unserved before 2026.
+      // A positive tag match, not an exclusion, so a new tag family added
+      // later cannot leak into this lens by default.
+      clauses.push("l.lead_tag = ?");
+      params.push(MAP_KINETIC_2026_TAG);
     }
     if (Array.isArray(assignedRep)) {
       // ONE rule, shared with the per-request access check in routes.ts — see

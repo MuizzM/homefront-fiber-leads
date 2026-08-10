@@ -162,7 +162,9 @@ import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
 import { registerComingSoonRoutes } from "./comingSoonWatchlist";
 import { registerLeadRankingRoutes } from "./leadRanking";
 import { registerKineticScannerRoutes } from "./kineticScannerRoutes";
+import { registerKineticBuildRoutes } from "./kineticBuildRoutes";
 import { registerTrainingEngineRoutes, payRampBonus } from "./trainingEngine";
+import { registerAcademyRoutes } from "./academyRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -1325,6 +1327,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Coming-Soon watchlist (rep-facing) + ranked fresh leads — same injected-auth pattern.
   registerComingSoonRoutes(app, { requireAuth, requireManager });
   registerLeadRankingRoutes(app, { requireAuth, visibilityScope: leadVisibilityScope });
+  // Kinetic 2026 builds: FCC vintage import + the field-map layer. The whole
+  // surface 404s unless KINETIC_2026_BUILDS is enabled, so registering it is
+  // safe on every deployment.
+  registerKineticBuildRoutes(app, { requireAuth, requireCapability });
 
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
@@ -1350,6 +1356,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // CE-1 drill engine — due deck, review capture, coach summary. Lives under
   // /api/training, so the training gate's allowlist already covers it.
   registerTrainingEngineRoutes(app, { requireAuth });
+  // Fiber Sales Academy — guided path, role-play coaching, pitch lab and the
+  // market offer catalog. Also under /api/training, for the same gate reason:
+  // a new hire who has not cleared training must be able to reach the thing
+  // that clears it.
+  registerAcademyRoutes(app, { requireAuth, requireCapability });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
@@ -1828,7 +1839,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   function parseMapView(raw: unknown): MapView | undefined | { error: string } {
     if (raw == null || raw === "" || raw === "all") return undefined;
     if (raw === "latest") return "latest";
-    return { error: "view must be 'latest' (or 'all')" };
+    if (raw === "kinetic_2026") return "kinetic_2026";
+    return { error: "view must be 'latest' or 'kinetic_2026' (or 'all')" };
   }
 
   // ── Density grid — the wide-zoom aggregate tier ───────────────────────────

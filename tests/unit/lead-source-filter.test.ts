@@ -49,9 +49,21 @@ describe("source option predicates", () => {
     expect(LEADS.every((l) => leadMatchesSource(l, "all"))).toBe(true);
   });
 
-  it("offers Latest fiber FIRST, then the three documented options", () => {
-    expect(LEAD_SOURCE_OPTIONS.map((o) => o.key)).toEqual(["latest", "fcc_fresh", "fcc_fiber", "field_verified"]);
-    expect(LEAD_SOURCE_OPTIONS.map((o) => o.label)).toEqual(["Latest fiber", "FCC fresh (2025)", "FCC fiber", "Field-verified"]);
+  it("offers Latest fiber FIRST, then Kinetic 2026, then the FCC options", () => {
+    // Order is the product decision: the default lens, then the highest-intent
+    // set (doors an authorized qualification CONFIRMED), then the FCC filings
+    // that still need verifying at the door.
+    expect(LEAD_SOURCE_OPTIONS.map((o) => o.key)).toEqual(["latest", "kinetic_2026", "fcc_fresh", "fcc_fiber", "field_verified"]);
+    expect(LEAD_SOURCE_OPTIONS.map((o) => o.label)).toEqual(["Latest fiber", "Kinetic 2026 builds", "FCC fresh (2025)", "FCC fiber", "Field-verified"]);
+  });
+
+  it("kinetic_2026 matches only the confirmed-build tag", () => {
+    const confirmed = { id: 9, leadTag: "kinetic_build_2026", freshConfirmedAt: null, leadStatus: "prospect", lat: 35.5, lng: -80.4, address: "9 A St" };
+    expect(leadMatchesSource(confirmed, "kinetic_2026")).toBe(true);
+    expect(LEADS.some((l) => leadMatchesSource(l, "kinetic_2026"))).toBe(false);
+    // It rides the default lens too - a confirmed build must never be hidden
+    // by the lens the map opens on.
+    expect(leadMatchesSource(confirmed, "latest")).toBe(true);
   });
 
   it("latest + fcc_fiber partition the map: every pin is in exactly one of them", () => {
