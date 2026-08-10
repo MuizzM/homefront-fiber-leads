@@ -37,25 +37,76 @@ const Ctx = createContext<AuthCtx>({
   login: () => {}, logout: async () => {},
 });
 
-// Session persistence (SEC-B): sessionStorage ONLY. The token used to live in
-// localStorage (survives indefinitely on a shared device — any later same-
-// origin script could lift it) with a window-name mirror (leaks the token to
-// any navigated-away page and to cross-tab snooping). Both are gone. The
-// token now lives for the browser session: it survives a hard refresh and a
-// home-screen PWA relaunch on modern mobile (the standalone context keeps its
-// session storage), and it dies with the app — which is the point.
+// Session persistence: localStorage with an EXPLICIT client-side deadline.
+//
+// This used to be sessionStorage-only (SEC-B), which killed the token when the
+// tab closed. That threw away the server's own design: sessions renew on a
+// sliding window (storage.touchSession) and are only capped by an absolute
+// ceiling from login, precisely so an app in daily use never expires under a
+// rep mid-shift. A field rep on a phone does not "close the app" - iOS evicts
+// backgrounded tabs and standalone PWAs from memory routinely, and every one of
+// those evictions was a forced re-login against a session the server still
+// considered perfectly valid.
+//
+// The original worry was real though, so it is answered rather than dropped:
+// what made localStorage risky was a token sitting there INDEFINITELY on a
+// shared device. So the token is stored with a deadline, the deadline is
+// refreshed while the app is in use (mirroring the server's sliding renewal),
+// and a token past its deadline is deleted on read and never sent. Logout
+// still clears it outright. The lifetime is bounded on both sides now instead
+// of being unbounded on the server and one tab-close on the client.
 const SID_KEY = "hfs.sid";
+const SID_DEADLINE_KEY = "hfs.sid.until";
+// Kept a little under the server's 7-day default TTL so the client gives up
+// first and shows a clean sign-in rather than firing a request it knows is
+// dead. SESSION_TTL_HOURS can lengthen the server side; this floor stays safe
+// because every authenticated request pushes the real deadline out again.
+const CLIENT_SESSION_MS = 6 * 24 * 60 * 60 * 1000;
+
 function readPersistedSession(): string | null {
   try {
-    const ss = window.sessionStorage?.getItem(SID_KEY);
-    if (typeof ss === "string" && ss) return ss;
+    const sid = window.localStorage?.getItem(SID_KEY);
+    if (typeof sid !== "string" || !sid) {
+      // A session minted by an older build lived in sessionStorage. Adopt it
+      // once so upgrading does not sign everyone out.
+      const legacy = window.sessionStorage?.getItem(SID_KEY);
+      if (typeof legacy === "string" && legacy) {
+        writePersistedSession(legacy);
+        try { window.sessionStorage?.removeItem(SID_KEY); } catch { /* ignore */ }
+        return legacy;
+      }
+      return null;
+    }
+    const until = Number(window.localStorage?.getItem(SID_DEADLINE_KEY) ?? 0);
+    if (Number.isFinite(until) && until > 0 && Date.now() > until) {
+      writePersistedSession(null);
+      return null;
+    }
+    return sid;
   } catch { /* storage blocked */ }
   return null;
 }
+
 function writePersistedSession(sid: string | null) {
   try {
-    if (sid) window.sessionStorage?.setItem(SID_KEY, sid);
-    else window.sessionStorage?.removeItem(SID_KEY);
+    if (sid) {
+      window.localStorage?.setItem(SID_KEY, sid);
+      window.localStorage?.setItem(SID_DEADLINE_KEY, String(Date.now() + CLIENT_SESSION_MS));
+    } else {
+      window.localStorage?.removeItem(SID_KEY);
+      window.localStorage?.removeItem(SID_DEADLINE_KEY);
+      window.sessionStorage?.removeItem(SID_KEY);
+    }
+  } catch { /* storage blocked */ }
+}
+
+/** Push the client deadline out while the app is in use, mirroring the
+ *  server's sliding renewal. Cheap: two localStorage writes, no network. */
+function touchPersistedSession() {
+  try {
+    if (window.localStorage?.getItem(SID_KEY)) {
+      window.localStorage?.setItem(SID_DEADLINE_KEY, String(Date.now() + CLIENT_SESSION_MS));
+    }
   } catch { /* storage blocked */ }
 }
 
@@ -92,6 +143,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     checkStatus(_memSession);
   }, []);
+
+  // Keep the client deadline moving while the app is actually being used, so a
+  // rep who opens it daily is never signed out - the mirror of the server's
+  // sliding renewal. Refreshed on mount, whenever the tab comes back to the
+  // foreground, and hourly; all three are local writes, never a request.
+  useEffect(() => {
+    if (!sid) return;
+    touchPersistedSession();
+    const onVisible = () => { if (document.visibilityState === "visible") touchPersistedSession(); };
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = window.setInterval(touchPersistedSession, 60 * 60 * 1000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(timer);
+    };
+  }, [sid]);
 
   // Global session-expiry recovery. A 401 is NOT by itself proof the session
   // died: a deploy restart mid-request, a momentary DB lock, a proxy hiccup, or

@@ -90,18 +90,25 @@ export function CallingAvailability({ status }: { status: { callable: boolean; b
   }
   const gates = status.blockers.length ? status.blockers : ["calling_prerequisites_incomplete"];
   return (
-    <section data-testid="calling-blocked" role="status" className="overflow-hidden rounded-2xl border border-border bg-card">
-      <div className="flex items-start gap-3 border-b border-border px-4 py-3">
-        
+    // COLLAPSED by default. What is blocked is DIALING - building the queue,
+    // skip tracing a door and reading the list all still work, and burying
+    // those behind a seventeen-item wall of gate codes made the whole tab look
+    // dead when most of it is not. The detail is one tap away for whoever is
+    // actually working through the checklist.
+    <details data-testid="calling-blocked" className="group overflow-hidden rounded-2xl border border-border bg-card">
+      <summary className="flex cursor-pointer list-none items-start gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold leading-5 text-foreground">Calling is locked</h2>
-          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">No phone number can be revealed and no call can start until every authoritative server gate passes.</p>
+          <h2 className="text-[13px] font-semibold leading-5 text-foreground">Dialing is locked</h2>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            No number can be revealed and no call can start until every server gate passes.
+            Tracing doors and building the queue still work.
+          </p>
         </div>
         <span className="mt-0.5 inline-flex shrink-0 items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium tabular-nums text-amber-600 dark:text-amber-400">
           {gates.length} blocking
         </span>
-      </div>
-      <div className="px-4 pb-2 pt-3">
+      </summary>
+      <div className="border-t border-border px-4 pb-2 pt-3">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Server gates</h3>
         <ul className="mt-1 divide-y divide-border/60">
           {gates.map(code => {
@@ -118,7 +125,7 @@ export function CallingAvailability({ status }: { status: { callable: boolean; b
           })}
         </ul>
       </div>
-    </section>
+    </details>
   );
 }
 

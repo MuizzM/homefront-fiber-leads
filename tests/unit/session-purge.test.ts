@@ -60,12 +60,22 @@ describe("session token storage (SEC-B)", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("auth.tsx persists the session via sessionStorage, not localStorage", () => {
+  // The token now PERSISTS (localStorage) so a rep whose phone evicted the tab
+  // is not signed out of a session the server still considers valid - the
+  // server renews on a sliding window precisely so that never happens. What
+  // made persistence risky before was a token living there indefinitely, so
+  // the replacement invariant is: it is never written without a deadline, the
+  // deadline is enforced on read, and logout clears both keys.
+  it("auth.tsx persists the session with an enforced deadline, never unbounded", () => {
     const auth = fs.readFileSync(path.join(clientSrc, "lib/auth.tsx"), "utf8");
-    expect(auth).toContain('sessionStorage?.setItem(SID_KEY');
-    expect(auth).toContain('sessionStorage?.getItem(SID_KEY');
-    expect(auth).not.toContain('localStorage?.setItem(SID_KEY');
-    expect(auth).not.toContain('localStorage?.getItem(SID_KEY');
+    // Written with a deadline, always as a pair.
+    expect(auth).toContain("localStorage?.setItem(SID_KEY");
+    expect(auth).toContain("localStorage?.setItem(SID_DEADLINE_KEY");
+    // Enforced on read: a token past its deadline is dropped, not returned.
+    expect(auth).toMatch(/Date\.now\(\) > until[\s\S]{0,120}writePersistedSession\(null\)/);
+    // Cleared on the way out - both keys, plus the legacy sessionStorage one.
+    expect(auth).toContain("localStorage?.removeItem(SID_KEY)");
+    expect(auth).toContain("localStorage?.removeItem(SID_DEADLINE_KEY)");
   });
 
   it("logout and 401 purge paths call the session-scoped sweep", () => {
