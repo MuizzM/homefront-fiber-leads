@@ -11,8 +11,12 @@ let rawDb: any, scoreDueTargets: any, runYieldCycle: any, getWeights: any, reset
 
 // A recent-but-conclusive scan timestamp (~1 day ago) — not stale, so a
 // negative here is due ONLY via the flip-proximity override, never the 30d rule.
-const DAY_AGO = "2026-07-20 00:00:00";
-const FIVE_DAYS_AGO = "2026-07-16 00:00:00";
+// Computed, not literal: pinned dates rot - a "~1 day ago" written as July 20
+// crosses the 30d staleness rule on August 19 and flips every assertion built
+// on "recent". Same SQL text shape the engine's datetime('now') comparisons use.
+const sqlAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+const DAY_AGO = sqlAgo(1);
+const FIVE_DAYS_AGO = sqlAgo(5);
 
 beforeAll(async () => {
   ({ rawDb } = await import("../../server/db"));

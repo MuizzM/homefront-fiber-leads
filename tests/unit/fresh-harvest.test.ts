@@ -26,6 +26,11 @@ beforeAll(async () => {
     );
   `);
   const insT = rawDb.prepare("INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,last_scanned_at,last_fiber_status) VALUES (?,1,?,?,?,?,?,?,?,?)");
+  // Scan ages are RELATIVE to now, matching how the engine reads them
+  // (datetime('now') windows). Literal dates rot: "2026-07-11" was written as
+  // "10 days stale" and aged across Tier D's 30-day line on 2026-08-10,
+  // flipping a tier assertion a month after the ink dried.
+  const sqlDaysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
   const insL = rawDb.prepare("INSERT INTO leads (tenant_id,address,city,state,lat,lng,lead_tag,created_at) VALUES (1,?,?,?,?,?,'fresh_fiber_confirmed',datetime('now'))");
   // Fresh lead in Hotville cell (35.00,-79.00), street "fiber st"
   insL.run("1 Fiber St","hotville","nc",35.001,-79.001);
@@ -36,14 +41,14 @@ beforeAll(async () => {
   // Target 12: never scanned, cold city → below C
   insT.run(12,"12 Cold Ave","coldtown","nc","27501",34.0,-80.0,null,null);
   // Target 13: stale no_service → Tier D
-  insT.run(13,"13 Old St","coldtown","nc","27501",34.1,-80.1,"2026-06-01 00:00:00","no_service");
+  insT.run(13,"13 Old St","coldtown","nc","27501",34.1,-80.1,sqlDaysAgo(70),"no_service");
   // Target 14: never scanned, hotville far cell (coming-soon rechecks are the
   // watchlist engine's job now, not a harvest tier) → Tier C only
   insT.run(14,"14 Watch Dr","hotville","nc","27501",35.01,-79.01,null,null);
   // Target 15: never scanned, PRIORITY city (davidson) → Tier C0
   insT.run(15,"15 Davidson Rd","davidson","nc","28035",35.49,-80.84,null,null);
   // Target 16: COPPER in hotville, 10 days stale → Tier D1 (copper-flip watch)
-  insT.run(16,"16 Copper Ct","hotville","nc","27501",35.01,-79.02,"2026-07-05 00:00:00","copper");
+  insT.run(16,"16 Copper Ct","hotville","nc","27501",35.01,-79.02,sqlDaysAgo(10),"copper");
   // Target 17: never scanned, SAME STREET as the fresh lead but far cell → Tier B2 only
   insT.run(17,"17 Fiber St","hotville","nc","27501",35.6,-79.6,null,null);
   // Target 18: street matches via canonical key only ("Street"→"St", unit stripped)
@@ -60,15 +65,15 @@ beforeAll(async () => {
   insT.run(20,"20 Topaz Trl","gemtown","nc","27502",36.201,-78.201,null,null);  // P1: never-scanned probe, proven cell
   insT.run(21,"21 Topaz Trl","gemtown","nc","27502",36.101,-78.101,null,null);  // N1: never-scanned probe, noisy cell
   insL.run("30 Quartz Way","gemtown","nc",36.102,-78.102);                       // noisy cell: 1 hit
-  insT.run(30,"30 Quartz Way","gemtown","nc","27502",36.102,-78.102,"2026-07-10 00:00:00","new_fiber"); // noisy cell: 1 scan
+  insT.run(30,"30 Quartz Way","gemtown","nc","27502",36.102,-78.102,sqlDaysAgo(11),"new_fiber"); // noisy cell: 1 scan
   for (let i = 0; i < 8; i++)                                                    // proven cell: 8 hits
     insL.run(`${40+i} Quartz Way`,"gemtown","nc",36.202,-78.202);
   for (let i = 0; i < 20; i++)                                                   // proven cell: 20 scans
-    insT.run(40+i,`${40+i} Quartz Way`,"gemtown","nc","27502",36.202,-78.202,"2026-07-10 00:00:00","new_fiber");
+    insT.run(40+i,`${40+i} Quartz Way`,"gemtown","nc","27502",36.202,-78.202,sqlDaysAgo(11),"new_fiber");
   // Scanned mass elsewhere pulls the tenant-wide prior rate down (~3%), the
   // regime where smoothing must prefer evidence over small-sample luck.
   for (let i = 0; i < 300; i++)
-    insT.run(1000+i,`${i} Filler Rd`,"coldtown","nc","27501",34.5,-80.5,"2026-07-10 00:00:00","new_fiber");
+    insT.run(1000+i,`${i} Filler Rd`,"coldtown","nc","27501",34.5,-80.5,sqlDaysAgo(11),"new_fiber");
 
   // ── Expansion markets (Tier E) + footprint ──
   // boomtown: officially announced build (verified_expanding) with no fresh
@@ -84,7 +89,7 @@ beforeAll(async () => {
   rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible,kinetic_status) VALUES ('NC','boomtown',1,'verified_expanding')").run();
   rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible,kinetic_status) VALUES ('NC','coldtown',1,'verified_served')").run();
   insT.run(300,"300 Boom Blvd","boomtown","nc","28001",35.35,-80.2,null,null);                          // Tier E1: never scanned
-  insT.run(301,"301 Boom Blvd","boomtown","nc","28001",35.35,-80.21,"2026-07-11 00:00:00","no_service"); // Tier E2: 10d stale negative
+  insT.run(301,"301 Boom Blvd","boomtown","nc","28001",35.35,-80.21,sqlDaysAgo(10),"no_service"); // Tier E2: 10d stale negative
   process.env.PRIORITY_CITIES = "davidson:nc";
 });
 
@@ -189,7 +194,7 @@ describe("footprint gate (Tier D)", () => {
     // A stale no_service in a real footprint city (Salisbury) alongside the
     // existing stale negative in the non-footprint coldtown (id 13).
     rawDb.prepare("INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,last_scanned_at,last_fiber_status) VALUES (?,1,?,?,?,?,?,?,?,?)")
-      .run(200,"200 Salisbury Rd","salisbury","nc","28144",35.67,-80.47,"2026-06-15 00:00:00","no_service");
+      .run(200,"200 Salisbury Rd","salisbury","nc","28144",35.67,-80.47,new Date(Date.now() - 45 * 86_400_000).toISOString().slice(0, 19).replace("T", " "),"no_service");
     // Empty the footprint so the fail-open behavior is observable from scratch.
     rawDb.exec("DELETE FROM state_fiber_markets");
   });

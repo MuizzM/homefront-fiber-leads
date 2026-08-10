@@ -11,6 +11,9 @@ import fs from "node:fs";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hf-momentum-"));
 vi.mock("../../server/scanService", () => ({ startTargetRun: vi.fn(() => ({ runId: "run_test", queued: 0, budget: 0 })) }));
 
+// Computed "recently scanned" stamp - a literal date here crosses the 30d
+// staleness rule as the calendar moves and the not-due filler becomes due.
+const RECENT_SCAN = new Date(Date.now() - 86_400_000).toISOString().slice(0, 19).replace("T", " ");
 let rawDb: any, scoreDueTargets: any, resetFootprint: any;
 
 beforeAll(async () => {
@@ -67,7 +70,7 @@ beforeAll(async () => {
   // Base-rate filler far away so p0 is realistic (not dominated by our drops);
   // scanned + not-due, so it never enters the result set.
   for (let i = 0; i < 100; i++)
-    rawDb.prepare("INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,last_scanned_at,last_fiber_status) VALUES (?,1,?,'filltown','nc','27501',?,?,'2026-07-20 00:00:00','new_fiber')")
+    rawDb.prepare("INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,last_scanned_at,last_fiber_status) VALUES (?,1,?,'filltown','nc','27501',?,?,'" + RECENT_SCAN + "','new_fiber')")
       .run(1000 + i, `${i} Fill Rd`, 34.0 + i * 0.001, -81.0);
 
   rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible,kinetic_status) VALUES ('NC','buildtown',1,'verified_served')").run();

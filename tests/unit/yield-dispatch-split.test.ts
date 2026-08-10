@@ -16,7 +16,9 @@ vi.mock("../../server/scanService", () => ({ startTargetRun: (...a: any[]) => (s
 
 let rawDb: any, runYieldCycle: any, resetFootprint: any;
 
-const FIVE_DAYS_AGO = "2026-07-16 00:00:00";
+// Computed, not literal - see yield-engine.test.ts: pinned "days ago" rot
+// across the engine's staleness windows as real time passes.
+const FIVE_DAYS_AGO = new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
 
 beforeAll(async () => {
   ({ rawDb } = await import("../../server/db"));
