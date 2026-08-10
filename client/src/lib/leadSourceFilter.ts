@@ -12,12 +12,7 @@
 // (count probe, full feed, bbox windows, density grid); the pin predicate
 // below keeps the already-loaded set honest between refetches.
 
-export type LeadSourceFilter = "latest" | "all" | "kinetic_2026" | "fcc_fresh" | "fcc_fiber" | "field_verified";
-
-/** Tag carried by doors an authorized Kinetic qualification confirmed AND the
- *  FCC baseline proves were unserved before 2026. Mirrors
- *  MAP_KINETIC_2026_TAG server-side so the lens and the promoter agree. */
-export const KINETIC_2026_TAG = "kinetic_build_2026";
+export type LeadSourceFilter = "latest" | "all" | "fcc_fresh" | "fcc_fiber" | "field_verified";
 
 // v2: the key bump is what makes "latest" the default ONCE for everyone —
 // a persisted v1 choice is left behind (and cleaned up on the next write),
@@ -50,14 +45,6 @@ export const LEAD_SOURCE_OPTIONS: readonly LeadSourceOption[] = [
     key: "latest",
     label: "Latest fiber",
     matches: (l) => l.leadTag !== LATEST_VIEW_EXCLUDED_TAG,
-  },
-  {
-    // The 2026 build layer. Sits directly after the default lens because it is
-    // the highest-intent set on the map: every door here was confirmed
-    // serviceable by an authorized qualification, not merely filed with the FCC.
-    key: "kinetic_2026",
-    label: "Kinetic 2026 builds",
-    matches: (l) => l.leadTag === KINETIC_2026_TAG,
   },
   {
     key: "fcc_fresh",
@@ -108,7 +95,7 @@ export function countLeadsBySource(
 export function readPersistedFilterSource(): LeadSourceFilter {
   try {
     const v = localStorage.getItem(FILTER_SOURCE_LS_KEY);
-    if (v === "latest" || v === "all" || v === "kinetic_2026" || v === "fcc_fresh" || v === "fcc_fiber" || v === "field_verified") return v;
+    if (v === "latest" || v === "all" || v === "fcc_fresh" || v === "fcc_fiber" || v === "field_verified") return v;
     return "latest"; // no v2 choice yet (a v1 choice is deliberately left behind)
   } catch {
     return "latest"; // storage blocked (private mode) — session-only filter
