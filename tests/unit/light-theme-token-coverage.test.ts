@@ -59,7 +59,24 @@ const selects = (selector: string, cls: string) =>
     unit => unit === cls || unit.startsWith(`${cls}.`) || unit.endsWith(cls),
   ));
 
-const lightTokens = declaredIn(s => s.includes(":root") || selects(s, ".light"));
+/**
+ * Does any ONE selector in this list apply when `.dark` is absent?
+ *
+ * Judged per comma-separated part, which matters in both directions. The dark
+ * palette is written `:root.dark` (it needs the specificity to outrank the
+ * light `:root` further down the file), so a substring test for ":root" would
+ * count it as a light scope and this file would quietly stop guarding anything.
+ * Meanwhile the shared block really is `:root, .light, .dark`, and its `:root`
+ * part genuinely does define light tokens.
+ */
+const appliesToLight = (selector: string) =>
+  selector.split(",").some(part => {
+    const units = part.trim().split(/\s+/);
+    if (units.some(unit => unit === ".dark" || unit.endsWith(".dark"))) return false;
+    return part.includes(":root") || units.some(unit => unit === ".light" || unit.endsWith(".light"));
+  });
+
+const lightTokens = declaredIn(appliesToLight);
 const darkTokens = declaredIn(s => selects(s, ".dark"));
 
 /** Tokens read from a source, ignoring any named only inside a comment. */

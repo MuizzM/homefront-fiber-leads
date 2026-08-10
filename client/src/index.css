@@ -27,9 +27,18 @@
 
 @layer base {
   /* ── Homefront Solutions, dark ─────────────────────────────────────────────
-     An OPTIONAL setting now, not the default. Scoped to `.dark` (the class
-     hooks/use-theme toggles) so the light tokens below can be the base. */
-  .dark {
+     An OPTIONAL setting now, not the default. Scoped to the `.dark` class that
+     hooks/use-theme toggles, so the light tokens below can be the base.
+
+     `:root.dark`, not `.dark`, and the extra `:root` is load-bearing. A bare
+     `.dark` and the `:root` that carries the light palette have IDENTICAL
+     specificity (0,1,0), so the winner is decided by source order alone - and
+     the light block is further down this file. Written as `.dark`, selecting
+     the dark theme changed the class on <html> and nothing else: measured in
+     the browser with .dark applied, --background still resolved to the light
+     40 24% 98%. Qualifying with :root (0,2,0) makes dark win wherever it sits
+     in the file, so re-ordering the stylesheet can never silently undo it. */
+  :root.dark {
     /* HomeFront Fiber palette — deep navy + teal */
     /* Navy:  #0F2A44  →  HSL 210 53% 16%  */
     /* Teal:  #3EA394  →  HSL 172 44% 44%  */

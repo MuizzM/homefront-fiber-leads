@@ -142,39 +142,38 @@ const NAV_ITEMS: NavItem[] = [
 
 // ── Role badge for sidebar footer ─────────────────────────────────────────────
 function RoleBadge({ role }: { role: string }) {
-  const map: Record<string, { label: string; color: string; Icon: React.ElementType }> = {
-    admin: { label: "Admin", color: "text-orange-400", Icon: ShieldCheck },
-    manager: { label: "Manager", color: "text-amber-400", Icon: Crown },
-    team_lead: { label: "Team Lead", color: "text-purple-400", Icon: Star },
-    rep: { label: "Sales Rep", color: "text-blue-400", Icon: UserIcon },
-    calling_rep: { label: "Calling Rep", color: "text-emerald-400", Icon: PhoneCall },
-    calling_manager: { label: "Calling Manager", color: "text-teal-400", Icon: PhoneCall },
-    compliance_admin: { label: "Compliance Admin", color: "text-amber-400", Icon: ShieldCheck },
-    auditor: { label: "Auditor", color: "text-sky-400", Icon: Activity },
+  // One treatment for every role. Each entry used to carry its own hue (admin
+  // orange, manager amber, team_lead purple, ...) and all eight failed AA on
+  // the light default. Colour was never doing work here anyway: only the
+  // signed-in user's own badge is ever rendered, the label says the role in
+  // words, and the icon already differentiates.
+  const map: Record<string, { label: string; Icon: React.ElementType }> = {
+    admin: { label: "Admin", Icon: ShieldCheck },
+    manager: { label: "Manager", Icon: Crown },
+    team_lead: { label: "Team Lead", Icon: Star },
+    rep: { label: "Sales Rep", Icon: UserIcon },
+    calling_rep: { label: "Calling Rep", Icon: PhoneCall },
+    calling_manager: { label: "Calling Manager", Icon: PhoneCall },
+    compliance_admin: { label: "Compliance Admin", Icon: ShieldCheck },
+    auditor: { label: "Auditor", Icon: Activity },
   };
-  const { label, color, Icon } = map[role] ?? map.rep;
+  const { label, Icon } = map[role] ?? map.rep;
   return (
-    <div className={`flex items-center gap-1 text-xs ${color}`}>
+    <div className="flex items-center gap-1 text-xs text-muted-foreground">
       <Icon className="w-3 h-3" />
       {label}
     </div>
   );
 }
 
-// ── Avatar color per role ─────────────────────────────────────────────────────
-function avatarBg(role: string) {
-  const map: Record<string, string> = {
-    admin: "bg-orange-500",
-    manager: "bg-amber-500",
-    team_lead: "bg-purple-500",
-    rep: "bg-blue-500",
-    calling_rep: "bg-emerald-600",
-    calling_manager: "bg-teal-600",
-    compliance_admin: "bg-amber-600",
-    auditor: "bg-sky-600",
-  };
-  return map[role] ?? "bg-blue-500";
-}
+// ── Avatar ────────────────────────────────────────────────────────────────────
+// The brand navy, one colour for everyone. This used to map role to a hue
+// (admin orange, manager amber, team_lead purple, ...), but all three call
+// sites render the CURRENT user's own avatar - nobody needs a colour to tell
+// them their own role, and no other person's avatar is ever drawn with it. All
+// it bought was a saturated orange circle as the loudest thing on the screen,
+// carrying white text at 2.8:1.
+const AVATAR = "bg-primary text-primary-foreground";
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -396,7 +395,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               data-testid="link-profile"
               className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg -mx-1 -my-0.5 px-1 py-0.5 hover:bg-secondary transition-colors"
             >
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0 ${avatarBg(role)}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${AVATAR}`}>
                 {user?.name?.slice(0, 2).toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
@@ -455,7 +454,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <button type="button" aria-label="Open account menu" aria-expanded={moreOpen} aria-controls="mobile-more-sheet"
             onClick={() => { setMobileOpen(false); setMoreOpen(true); }}
-            className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white ring-2 ring-border ${avatarBg(role)}`}>
+            className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold ring-2 ring-border ${AVATAR}`}>
             {user?.name?.slice(0, 2).toUpperCase()}
           </button>
         </header>
@@ -492,7 +491,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <div className="sticky top-0 z-10 bg-card/80 px-4 pb-3 pt-2">
               <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-muted-foreground/25" aria-hidden="true" />
               <div className="flex items-center gap-3">
-                <div className={`grid h-11 w-11 place-items-center rounded-full text-sm font-bold text-white ${avatarBg(role)}`}>{user?.name?.slice(0, 2).toUpperCase()}</div>
+                <div className={`grid h-11 w-11 place-items-center rounded-full text-sm font-bold ${AVATAR}`}>{user?.name?.slice(0, 2).toUpperCase()}</div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15px] font-semibold text-foreground">{user?.name}</div>
                   <div className="truncate text-[12px] text-muted-foreground">{orgName} · {role.replace("_", " ")}</div>

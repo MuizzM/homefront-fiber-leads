@@ -53,10 +53,10 @@ interface WeekResponse {
 // A rep must never wonder whether a number is projected, being reviewed, locked,
 // or already paid. This badge is ALWAYS present on the week strip.
 const WEEK_STATE: Record<string, { label: string; cls: string; icon: "lock" | "check" | null }> = {
-  OPEN: { label: "Projected · still live", cls: "bg-amber-500/15 text-amber-400", icon: null },
-  REVIEW: { label: "Under review", cls: "bg-sky-500/15 text-sky-400", icon: null },
+  OPEN: { label: "Projected · still live", cls: "bg-warning/10 text-warning", icon: null },
+  REVIEW: { label: "Under review", cls: "bg-info/10 text-info", icon: null },
   FINALIZED: { label: "Finalized", cls: "bg-primary/15 text-primary", icon: "lock" },
-  PAID: { label: "Paid", cls: "bg-emerald-500/15 text-emerald-400", icon: "check" },
+  PAID: { label: "Paid", cls: "bg-success/10 text-success", icon: "check" },
 };
 
 // ── Get paid (Stripe Connect payouts) ────────────────────────────────────────
@@ -83,10 +83,10 @@ interface PayoutAccount {
 // failed → red, reversed → muted. Same tint idiom as the rest of the file, and
 // the tinted square also skins the row's leading status-icon tile.
 const PAYOUT_STATUS: Record<PayoutStatus, { label: string; cls: string; Icon: React.ComponentType<{ className?: string }> }> = {
-  paid: { label: "Paid", cls: "bg-emerald-500/15 text-emerald-400", Icon: CheckCircle2 },
-  processing: { label: "Processing", cls: "bg-amber-500/15 text-amber-400", Icon: Clock },
-  pending: { label: "Pending", cls: "bg-amber-500/15 text-amber-400", Icon: Clock },
-  failed: { label: "Failed", cls: "bg-red-500/15 text-red-400", Icon: XCircle },
+  paid: { label: "Paid", cls: "bg-success/10 text-success", Icon: CheckCircle2 },
+  processing: { label: "Processing", cls: "bg-warning/10 text-warning", Icon: Clock },
+  pending: { label: "Pending", cls: "bg-warning/10 text-warning", Icon: Clock },
+  failed: { label: "Failed", cls: "bg-destructive/10 text-destructive", Icon: XCircle },
   reversed: { label: "Reversed", cls: "bg-muted text-muted-foreground", Icon: RotateCcw },
 };
 
@@ -148,7 +148,7 @@ export default function MyCommission() {
       )}
 
       {isError && (
-        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" data-testid="commission-error">
+        <div className="rounded-xl bg-card border border-destructive/25 p-6 text-center" data-testid="commission-error">
           <div className="text-sm font-semibold text-foreground">Couldn't load your commission</div>
           <div className="text-sm text-muted-foreground mt-1">Check your connection and try again - your money data is safe.</div>
           <button onClick={() => refetch()}
@@ -303,9 +303,9 @@ export interface ReserveSummaryResponse {
 
 // Plain-language labels — a rep should never have to decode "drawdown".
 const ENTRY_COPY: Record<ReserveEntry["kind"], { label: string; tone: string }> = {
-  hold:     { label: "Held from your pay",      tone: "text-amber-400 [.light_&]:text-amber-700" },
-  drawdown: { label: "Used for a cancellation", tone: "text-rose-400 [.light_&]:text-rose-700" },
-  release:  { label: "Released back to you",    tone: "text-emerald-400 [.light_&]:text-emerald-700" },
+  hold:     { label: "Held from your pay",      tone: "text-warning" },
+  drawdown: { label: "Used for a cancellation", tone: "text-destructive" },
+  release:  { label: "Released back to you",    tone: "text-success" },
 };
 
 function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdback"]> }) {
@@ -335,7 +335,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
       <header className="px-4 py-3 border-b border-border flex items-center gap-2">
         
         <span className="text-sm font-semibold tracking-tight text-foreground">Chargeback reserve</span>
-        <span className="ml-auto text-[11px] font-semibold text-amber-400 [.light_&]:text-amber-700 tabular-nums">
+        <span className="ml-auto text-[11px] font-semibold text-warning tabular-nums">
           {atCap ? "Fully covered" : `${current.reservePercent}% held`}
         </span>
       </header>
@@ -354,11 +354,11 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         </div>
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Reserve held ({current.reservePercent}%)</dt>
-          <dd className="tabular-nums text-amber-400 [.light_&]:text-amber-700" data-testid="holdback-reserve">-{usd(current.reserveCents)}</dd>
+          <dd className="tabular-nums text-warning" data-testid="holdback-reserve">-{usd(current.reserveCents)}</dd>
         </div>
         <div className="flex items-center justify-between border-t border-border pt-2">
           <dt className="font-semibold text-foreground">Paid to you this week</dt>
-          <dd className="tabular-nums font-bold text-emerald-400 [.light_&]:text-emerald-700" data-testid="holdback-net">{usd(current.netPayableCents)}</dd>
+          <dd className="tabular-nums font-bold text-success" data-testid="holdback-net">{usd(current.netPayableCents)}</dd>
         </div>
       </dl>
 
@@ -381,7 +381,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
               aria-label="Progress toward your reserve maximum"
             >
               <div
-                className={atCap ? "h-full rounded-full bg-emerald-500" : "h-full rounded-full bg-amber-500"}
+                className={atCap ? "h-full rounded-full bg-success" : "h-full rounded-full bg-warning"}
                 style={{ width: `${Math.min(100, Math.max(0, progress ?? 0))}%` }}
               />
             </div>
@@ -393,7 +393,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         )}
 
         {atCap ? (
-          <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug font-medium text-emerald-400 [.light_&]:text-emerald-700" data-testid="reserve-at-cap">
+          <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug font-medium text-success" data-testid="reserve-at-cap">
             
             You're fully covered - nothing more is being held. Your whole commission is paid to you each week.
           </p>
@@ -521,7 +521,7 @@ function OverrideEarningsCard() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <span className={`text-sm font-semibold tabular-nums ${r.amountCents < 0 ? "text-rose-400" : "text-foreground"}`}>
+                <span className={`text-sm font-semibold tabular-nums ${r.amountCents < 0 ? "text-destructive" : "text-foreground"}`}>
                   {r.amountCents < 0 ? `-${usd(Math.abs(r.amountCents))}` : usd(r.amountCents)}
                 </span>
                 <OverrideStatusPill status={r.status} />
@@ -551,10 +551,10 @@ function OverrideEarningsCard() {
 // slate-300 on white is 1.26:1, invisible. Bars darken in light mode too so
 // the fill stays visible against the light track.
 const RANK_TINTS: Record<string, { chip: string; bar: string }> = {
-  Bronze:   { chip: "bg-amber-600/20 text-amber-500 [.light_&]:text-amber-700",   bar: "bg-amber-500 [.light_&]:bg-amber-600" },
+  Bronze:   { chip: "bg-warning/12 text-warning",   bar: "bg-warning [.light_&]:bg-warning" },
   Silver:   { chip: "bg-slate-400/20 text-slate-300 [.light_&]:text-slate-600",   bar: "bg-slate-300 [.light_&]:bg-slate-500" },
-  Gold:     { chip: "bg-yellow-500/20 text-yellow-400 [.light_&]:text-yellow-700", bar: "bg-yellow-400 [.light_&]:bg-yellow-500" },
-  Platinum: { chip: "bg-cyan-400/20 text-cyan-300 [.light_&]:text-cyan-700",     bar: "bg-cyan-300 [.light_&]:bg-cyan-600" },
+  Gold:     { chip: "bg-warning/12 text-warning", bar: "bg-warning [.light_&]:bg-warning" },
+  Platinum: { chip: "bg-info/12 text-info",     bar: "bg-info [.light_&]:bg-info" },
 };
 const rankTint = (name: string) =>
   RANK_TINTS[name] ?? { chip: "bg-violet-400/20 text-violet-300 [.light_&]:text-violet-700", bar: "bg-violet-300 [.light_&]:bg-violet-600" }; // Diamond+
@@ -616,7 +616,7 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
               chip that repeated {next.name} rendered "Bronze Bronze". */}
           <RankChip rank={next} />
         </div>
-        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400/90">
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-warning/90">
            Close by Sunday night
         </span>
       </div>
@@ -627,10 +627,10 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
           {p.salesToNext} more sale{p.salesToNext === 1 ? "" : "s"} unlock{p.salesToNext === 1 ? "s" : ""}
         </p>
         <div className="mt-0.5 flex items-baseline gap-2">
-          <span className="text-[34px] font-bold tracking-tight text-emerald-400 tabular-nums leading-none" data-testid="rank-hero-gain">
+          <span className="text-[34px] font-bold tracking-tight text-success tabular-nums leading-none" data-testid="rank-hero-gain">
             +{usd(p.gainAtNextCents!)}
           </span>
-          <span className="inline-flex items-center gap-1 text-[12px] font-medium text-emerald-400/80">
+          <span className="inline-flex items-center gap-1 text-[12px] font-medium text-success/80">
              more this week
           </span>
         </div>
@@ -775,10 +775,10 @@ function WeekView({ data }: { data: WeekResponse }) {
               buried in the reserve card - whenever a holdback is configured.
               (Gusto/Stripe payout grammar: gross above, take-home called out.) */}
           {data.holdback?.current && data.holdback.current.reservePercent > 0 && (
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.08] px-3.5 py-2.5" data-testid="hero-net-pay">
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-success/15 bg-success/[0.08] px-3.5 py-2.5" data-testid="hero-net-pay">
               <span className="text-[13px] font-semibold text-foreground">You'll be paid</span>
               <span className="text-right">
-                <span className="block text-[18px] font-bold tabular-nums text-emerald-400 leading-tight" data-testid="hero-net-pay-amount">{usd(data.holdback.current.netPayableCents)}</span>
+                <span className="block text-[18px] font-bold tabular-nums text-success leading-tight" data-testid="hero-net-pay-amount">{usd(data.holdback.current.netPayableCents)}</span>
                 <span className="block text-[11px] text-muted-foreground tabular-nums">after {data.holdback.current.reservePercent}% reserve · -{usd(data.holdback.current.reserveCents)} held</span>
               </span>
             </div>
@@ -802,10 +802,10 @@ function WeekView({ data }: { data: WeekResponse }) {
             {data.adjustments!.map(a => (
               <div key={a.id} className="flex items-start justify-between text-xs gap-3">
                 <span className="text-muted-foreground min-w-0">
-                  <span className={a.amount_cents < 0 ? "text-rose-400 font-semibold" : "text-emerald-400 font-semibold"}>{a.amount_cents < 0 ? "Deduction" : "Bonus"}</span>
+                  <span className={a.amount_cents < 0 ? "text-destructive font-semibold" : "text-success font-semibold"}>{a.amount_cents < 0 ? "Deduction" : "Bonus"}</span>
                   {" - "}{a.reason}
                 </span>
-                <span className={`tabular-nums flex-shrink-0 ${a.amount_cents < 0 ? "text-rose-400" : "text-emerald-400"}`}>{a.amount_cents > 0 ? "+" : "-"}{usd(Math.abs(a.amount_cents))}</span>
+                <span className={`tabular-nums flex-shrink-0 ${a.amount_cents < 0 ? "text-destructive" : "text-success"}`}>{a.amount_cents > 0 ? "+" : "-"}{usd(Math.abs(a.amount_cents))}</span>
               </div>
             ))}
           </div>
@@ -833,7 +833,7 @@ function WeekView({ data }: { data: WeekResponse }) {
         if (wouldBe.rateCents <= rateCents) return null;  // no band was lost
         const dropCents = wouldBe.grossCommissionCents - grossCents;
         return (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4" data-testid="band-drop-notice">
+          <div className="rounded-xl border border-warning/25 bg-warning/[0.06] p-4" data-testid="band-drop-notice">
             <div className="flex items-center gap-2">
               
               <span className="text-sm font-semibold text-foreground">Why this week dropped more than one sale</span>
@@ -874,7 +874,7 @@ function WeekView({ data }: { data: WeekResponse }) {
       {isTiered && tiers.length > 0 && stateKey === "OPEN" && <RankCard tiers={tiers} count={count} />}
 
       {isTiered && retro && retro.salesUntilNextTier == null && count > 0 && (
-        <div className="rounded-xl bg-card border border-emerald-500/30 p-4 flex items-center gap-3">
+        <div className="rounded-xl bg-card border border-success/25 p-4 flex items-center gap-3">
           
           <span className="text-sm text-foreground">You're in the <strong>top tier</strong> this week - every sale pays {usd(rateCents)}.</span>
         </div>
@@ -935,10 +935,10 @@ function MetricCell({ label, value, accent }: { label: string; value: string; ac
 
 function SaleChip({ status }: { status: string }) {
   const map: Record<string, [string, string]> = {
-    QUALIFIED: ["counts", "bg-emerald-500/15 text-emerald-400"],
-    PENDING: ["pending", "bg-amber-500/15 text-amber-400"],
-    REVERSED: ["reversed", "bg-rose-500/15 text-rose-400"],
-    DISQUALIFIED: ["disqualified", "bg-rose-500/15 text-rose-400"],
+    QUALIFIED: ["counts", "bg-success/10 text-success"],
+    PENDING: ["pending", "bg-warning/10 text-warning"],
+    REVERSED: ["reversed", "bg-destructive/10 text-destructive"],
+    DISQUALIFIED: ["disqualified", "bg-destructive/10 text-destructive"],
     CANCELLED: ["cancelled", "bg-muted text-muted-foreground"],
   };
   const [label, cls] = map[status] ?? [status.toLowerCase(), "bg-muted text-muted-foreground"];
@@ -1021,10 +1021,10 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
-    OPEN: "bg-amber-500/15 text-amber-400",
-    REVIEW: "bg-sky-500/15 text-sky-400",
+    OPEN: "bg-warning/10 text-warning",
+    REVIEW: "bg-info/10 text-info",
     FINALIZED: "bg-primary/15 text-primary",
-    PAID: "bg-emerald-500/15 text-emerald-400",
+    PAID: "bg-success/10 text-success",
   };
   return (
     <span className={`inline-flex items-center gap-1 text-2xs font-semibold px-1.5 py-0.5 rounded-full ${map[status] || "bg-muted text-muted-foreground"}`}>
@@ -1100,7 +1100,7 @@ function GetPaidSection() {
       {isReady ? (
         <>
           {/* Payouts-ready confirmation — Turo "You're verified!" */}
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-center gap-3" data-testid="payouts-ready">
+          <div className="rounded-xl border border-success/25 bg-success/8 p-4 flex items-center gap-3" data-testid="payouts-ready">
             
             <div className="min-w-0">
               <div className="text-sm font-semibold tracking-tight text-foreground">Payouts ready</div>
@@ -1144,12 +1144,12 @@ function GetPaidSection() {
           </div>
 
           {account.onboardingStatus === "pending" && (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-400" data-testid="payout-status-note">
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-warning/8 border border-warning/12 px-3 py-2 text-xs text-warning" data-testid="payout-status-note">
               <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" aria-hidden="true" /> Verifying your details…
             </div>
           )}
           {account.onboardingStatus === "restricted" && (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400" data-testid="payout-status-note">
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-destructive/8 border border-destructive/12 px-3 py-2 text-xs text-destructive" data-testid="payout-status-note">
                Action needed - reconnect to finish verification.
             </div>
           )}

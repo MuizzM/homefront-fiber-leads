@@ -333,7 +333,10 @@ export default function Dashboard() {
                   <div className="text-[11px] text-muted-foreground">{row.knocksToday} dispositions today</div>
                 </div>
                 <div className="shrink-0 text-right">
-                  <div className="text-[15px] font-bold tabular-nums text-emerald-400">{row.salesToday}</div>
+                  {/* Green is for a win, so a rep on nothing yet does not get
+                      a celebratory zero - and emerald-400 was 1.9:1 on the
+                      light card besides. */}
+                  <div className={`text-[15px] font-bold tabular-nums ${row.salesToday > 0 ? "text-success" : "text-muted-foreground"}`}>{row.salesToday}</div>
                   <div className="text-2xs text-muted-foreground">sold today</div>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
