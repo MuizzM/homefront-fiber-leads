@@ -65,20 +65,42 @@ crash**, and no GitHub workflow was touching the box. The two worst stalls were 
 > SCAN_WORKERS=0**.
 
 In cluster mode that is right: the primary serves no traffic. With `SCAN_WORKERS=0` there
-is no primary, and that "single process" **is the web server**. Since the 2026-08-09
-portal-first stop put production into single-process mode, the guard has been running a
-synchronous, up-to-30-second checkpoint directly on the loop that answers every request.
+is no primary, and that "single process" **is the web server**.
 
-Anything in flight during that window is dropped by Caddy (`health_timeout 3s`,
+> ### CORRECTION (2026-08-10, later the same day)
+>
+> **This section's premise about production is wrong, and the fix built on it is dead code
+> in production.** `docker-compose.production.yml:127` sets `SCAN_WORKERS: "auto"`, so
+> production runs CLUSTER mode and the `SCAN_WORKERS === 0` branch never executes there.
+> The relocation described below is correct for single-process and dev, and inert in prod.
+> `startWalMaintenance()` has exactly one call site, inside that branch, so
+> `requestWalCheckpoint()` can only ever return `false` on the production box.
+>
+> Two further corrections established by measurement:
+>
+> - **The stall does not reach HTTP through lock contention.** `/api/health` is a pure
+>   read, and a TRUNCATE checkpoint does not block readers. Measured: a read-only worker
+>   probed through a 15.2 s TRUNCATE at p99 1.45 ms, and production reported
+>   `SQLITE_BUSY / locked = 0` across the whole observation window.
+> - **`reusePort: true` at `server/index.ts:1726` is silently ignored on Node 20**
+>   (`Dockerfile` pins `node:20-bookworm-slim`), so the cluster PRIMARY owns the listening
+>   socket and round-robins every connection. A blocked primary therefore stalls the whole
+>   fleet, while a blocked worker stalls only its share. The two are indistinguishable to a
+>   sequential prober and trivially separated by a burst-concurrent one.
+>
+> The real production causes measured on 2026-08-10 are recorded separately: an uncapped
+> map full feed (69,059 rows, 32,698 ms) and an 18.8 GB database that is ~99.7 % scan
+> telemetry on an I/O-saturated box (PSI io full avg60 = 42.7 %).
+
+Anything in flight during a stall window is dropped by Caddy (`health_timeout 3s`,
 `max_fails 3`, `fail_duration 5s`), the browser's fetch rejects, and Safari calls it
 `Load failed`.
 
-### Why it tracked with door count
+### Why it appeared to track with door count
 
-It does not cause the stall, but it multiplies exposure. `bulk-assign` chunks at 500, so a
-1500-door lasso takes the SQLite write lock three times instead of once - three chances to
-collide with a checkpoint holding it, against a production `busy_timeout` of 120 s. Small
-lassos land in the gaps. Big ones do not.
+It does not. A 1500-door lasso is three chunked transactions instead of one, so it has more
+chances to land in an unrelated stall window - but the stalls are not caused by the
+assignment, and `bulk-assign` itself was measured at 75 ms for 1500 doors.
 
 ### The second signal in that data
 

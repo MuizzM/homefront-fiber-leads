@@ -1085,9 +1085,34 @@ export function resumeCriticalRuns(): void {
 // whose worker died WITHOUT a process restart (an unhandled rejection, an OOM'd
 // batch) is picked back up within a minute instead of hanging 'running' forever.
 let _reaper: ReturnType<typeof setInterval> | null = null;
+/** A reaper tick above this is worth a log line: it is time the worker's request
+ *  loop spent not serving requests. */
+const REAPER_SLOW_TICK_MS = Math.max(50, Number(process.env.SCAN_REAPER_SLOW_MS) || 250);
 export function startScanReaper(intervalMs = 60_000): void {
   if (_reaper) return;
-  _reaper = setInterval(() => resumeInterruptedRuns(), intervalMs);
+  // INSTRUMENTATION (2026-08-10): this tick runs in EVERY cluster worker
+  // (server/index.ts, "RUN CONSUMERS + REAPER — run in EVERY worker"), and
+  // workers 1..N-1 DO serve HTTP - worker 0 does not, because controlSkipsHttp
+  // (server/index.ts:1716) gives the control role a dedicated loop when
+  // SCAN_WORKERS > 1. So this is charged to a request loop in every serving
+  // worker. resumeInterruptedRuns() is synchronous better-sqlite3, and its
+  // getStrandedDoneRuns() probe was measured at 0.6-6.9s against a 2.85GB
+  // database with production pragmas.
+  //
+  // Without this line a slow tick is invisible: it produces no request log and
+  // no error. It cannot even be inferred from http.request, because that
+  // timer starts at Express middleware entry - i.e. AFTER the loop resumes, so
+  // a 15s stall is logged as a 3ms request.
+  _reaper = setInterval(() => {
+    const startedAt = Date.now();
+    resumeInterruptedRuns();
+    const ms = Date.now() - startedAt;
+    if (ms >= REAPER_SLOW_TICK_MS) {
+      structuredLog("scan.reaper.slow_tick", {
+        ms, pid: process.pid, role: process.env.HF_ROLE ?? null,
+      }, "warn");
+    }
+  }, intervalMs);
   if (typeof (_reaper as any).unref === "function") (_reaper as any).unref();
   startFleetHeartbeat(); // C4 — started with the reaper so index.ts needs no new wiring
 }
@@ -1104,17 +1129,32 @@ export function emitFleetHeartbeat(): void {
   try {
     const pace = adaptivePaceStats();
     const breaker = circuitBreakerSnapshot();
+    // INSTRUMENTATION (2026-08-10): "one cheap COUNT each" is not true at scale -
+    // countClaimableQueued has no usable index for its next_attempt_at OR clause
+    // and plans as a full SCAN of scan_run_targets (verified with EXPLAIN QUERY
+    // PLAN); measured 84-228ms on a 2.85GB database.
+    //
+    // This runs in the CONTROL worker, which since aae365f does NOT serve HTTP
+    // when SCAN_WORKERS > 1 (controlSkipsHttp, server/index.ts:1716) - so the
+    // cost lands on a dedicated producer loop, not a request loop. countsMs is
+    // here to keep that claim honest if the role ever changes.
+    const countsStartedAt = Date.now();
+    const claimableQueued = countClaimableQueued();
+    const activeRunCount = countActiveRuns();
+    const openDeadLetters = countOpenDeadLetters();
+    const countsMs = Date.now() - countsStartedAt;
     structuredLog("scan.fleet.heartbeat", {
       paceMs: pace.paceMs,
       loopLagP95: pace.loopLagP95,
       healthMs: pace.healthMs,
-      claimableQueued: countClaimableQueued(),
-      activeRuns: countActiveRuns(),
+      countsMs,
+      claimableQueued,
+      activeRuns: activeRunCount,
       activeWorkers: activeRuns.size,
       breakerOpen: breaker.open,
       breakerStep: breaker.step,
       breakerScale: breaker.scale,
-      openDeadLetters: countOpenDeadLetters(),
+      openDeadLetters,
     });
   } catch { /* heartbeat is best-effort — never wedge the control worker */ }
 }
