@@ -62,6 +62,30 @@ export default function Areas() {
 
   const total = data?.length ?? 0;
 
+  // ── The portfolio, above the grid ─────────────────────────────────────────
+  // Every card already answers "how far through is THIS area". Nothing
+  // answered "how far through are we", which is the question a manager opens
+  // this screen with - and the one they were doing in their head across a
+  // dozen cards. Stake's Manage screen (via Mobbin) is the shape: the total
+  // first, its composition underneath.
+  //
+  // Computed from the ROWS ON SCREEN rather than every area that exists, so
+  // the total always agrees with the cards below it. A rollup that quietly
+  // ignored the filter would print a number you cannot count.
+  const roll = useMemo(() => {
+    let doors = 0, knocked = 0, sold = 0, unassigned = 0;
+    for (const row of rows) {
+      doors += Number(row.total) || 0;
+      knocked += Number(row.knocked) || 0;
+      sold += Number(row.sold) || 0;
+      if (isPoolArea(row)) unassigned += 1;
+    }
+    // Clamped for the same reason the card bar is: repeat passes can push the
+    // count past the available base, and a 109% bar reads as a bug.
+    const covered = doors > 0 ? Math.min(100, Math.round((knocked / doors) * 100)) : 0;
+    return { doors, knocked, sold, unassigned, covered, remaining: Math.max(0, doors - knocked) };
+  }, [rows]);
+
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-4 pt-5 pb-24 md:p-6" data-testid="areas-page">
       <PageHeader
@@ -108,6 +132,53 @@ export default function Areas() {
           ))}
         </select>
       </div>
+
+      {!isLoading && !isError && rows.length > 0 && (
+        <section className="rounded-2xl border border-border bg-card p-4" data-testid="areas-rollup">
+          <SectionLabel>{status === "all" && !query.trim() ? "All areas" : "Matching areas"}</SectionLabel>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-primary"
+                  data-testid="areas-rollup-doors">
+              {roll.doors.toLocaleString()}
+            </span>
+            <span className="text-[13px] font-medium text-muted-foreground">doors</span>
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground"
+                    data-testid="areas-rollup-knocked">
+                {roll.knocked.toLocaleString()} knocked
+              </span>
+              <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
+                    data-testid="areas-rollup-sold">
+                {roll.sold.toLocaleString()} sold
+              </span>
+              {roll.unassigned > 0 && (
+                <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700 dark:text-amber-400"
+                      data-testid="areas-rollup-unassigned">
+                  {roll.unassigned} unassigned
+                </span>
+              )}
+            </span>
+          </div>
+
+          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-secondary"
+               role="progressbar" aria-valuenow={roll.covered} aria-valuemin={0} aria-valuemax={100}
+               aria-label={`${roll.covered}% of available doors knocked across these areas`}>
+            <div className="h-full rounded-full bg-primary transition-[width] duration-500"
+                 style={{ width: `${roll.covered}%` }} />
+          </div>
+          {/* "of ALL doors" on purpose. A card's bar is measured against
+              AVAILABLE doors (the server's knockCompletionRate, which excludes
+              some), so a bare "67%" here next to a card reading "83%" is two
+              similar-looking percentages with different denominators - the
+              second number nobody trusts. Naming the basis, and printing the
+              counts that produced it, makes the two readable together. */}
+          <p className="mt-1.5 text-[11px] text-muted-foreground" data-testid="areas-rollup-coverage">
+            {roll.covered >= 100
+              ? `All ${roll.doors.toLocaleString()} doors knocked`
+              : `${roll.knocked.toLocaleString()} of ${roll.doors.toLocaleString()} doors knocked (${roll.covered}%) · ${roll.remaining.toLocaleString()} left`}
+          </p>
+        </section>
+      )}
 
       {isLoading ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="areas-loading">

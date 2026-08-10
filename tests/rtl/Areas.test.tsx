@@ -156,3 +156,46 @@ describe("Areas index - who works each area", () => {
     expect(await screen.findByTestId("area-card-4-rep")).toHaveTextContent("Bo Rivera");
   });
 });
+
+// ── The portfolio rollup ─────────────────────────────────────────────────────
+// Each card answers "how far through is this area". The rollup answers "how
+// far through are we", which is the question the screen is opened with - and
+// it has to agree with the cards underneath it, filter and all, or it is just
+// a second number to distrust.
+describe("the rollup above the grid", () => {
+  it("totals the doors, knocks and sales of the areas on screen", async () => {
+    renderPage(rows);
+    const rollup = await screen.findByTestId("areas-rollup");
+    // 200 + 200 + 200 doors, 40 + 0 + 190 knocked, 12 + 0 + 31 sold.
+    expect(within(rollup).getByTestId("areas-rollup-doors")).toHaveTextContent("600");
+    expect(within(rollup).getByTestId("areas-rollup-knocked")).toHaveTextContent("230");
+    expect(within(rollup).getByTestId("areas-rollup-sold")).toHaveTextContent("43");
+    // 230 of 600 = 38%, with 370 still to knock. The basis is NAMED, because
+    // a card's own bar is measured against AVAILABLE doors, not all of them.
+    const coverage = within(rollup).getByTestId("areas-rollup-coverage");
+    expect(coverage).toHaveTextContent("230 of 600 doors knocked");
+    expect(coverage).toHaveTextContent("38%");
+    expect(coverage).toHaveTextContent("370 left");
+  });
+
+  it("re-totals to match a filtered grid rather than quietly reporting everything", async () => {
+    renderPage(rows);
+    await screen.findByTestId("areas-rollup");
+    await userEvent.type(screen.getByTestId("areas-search"), "Birch");
+
+    const rollup = await screen.findByTestId("areas-rollup");
+    // Only Birch Hollow survives: 200 doors, 190 knocked, 31 sold.
+    expect(within(rollup).getByTestId("areas-rollup-doors")).toHaveTextContent("200");
+    expect(within(rollup).getByTestId("areas-rollup-sold")).toHaveTextContent("31");
+  });
+
+  it("never draws a bar past full, however many repeat passes a area has had", async () => {
+    // Repeat passes can push knocked above the available base; a 109% bar
+    // reads as a bug, so the rollup clamps exactly as the card bar does.
+    renderPage([row({ id: 9, name: "Overworked", total: 100, knocked: 140, sold: 5 })]);
+    const rollup = await screen.findByTestId("areas-rollup");
+    expect(within(rollup).getByTestId("areas-rollup-coverage")).toHaveTextContent("All 100 doors knocked");
+    const bar = within(rollup).getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "100");
+  });
+});
