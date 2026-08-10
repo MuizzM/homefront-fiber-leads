@@ -219,11 +219,25 @@
    its own fixed canvas composition. */
 @keyframes app-route-enter {
   from { opacity: 0.55; transform: translate3d(0, 5px, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
+  /* `none`, not translate3d(0,0,0): ANY transform on this element makes it the
+     containing block for its position:fixed descendants. Ending on an identity
+     transform still counts, which is what silently re-anchored every modal,
+     sheet and overlay in the app to the scrolling route stage instead of the
+     viewport - so they drifted with the page instead of covering it. */
+  to { opacity: 1; transform: none; }
 }
 .app-route-stage {
-  animation: app-route-enter 180ms cubic-bezier(.2,.8,.2,1) both;
+  /* No `both`. The backwards fill applied the from-state to stages whose
+     animation had not started (a kept tab re-shown by a display flip never
+     re-runs it), leaving the page parked 5px low and permanently transformed.
+     With no fill mode the element rests on its base style: no transform, so
+     fixed children get the viewport back the moment the 180ms is over. */
+  animation: app-route-enter 180ms cubic-bezier(.2,.8,.2,1);
   transform-origin: 50% 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-route-stage { animation: none; }
 }
 
 @media (min-width: 768px) {
