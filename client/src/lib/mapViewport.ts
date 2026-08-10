@@ -213,26 +213,16 @@ export function gridCacheKey(b: ViewportBBox, cell: number, tag?: string, view?:
 export function sourceFilterToGridTag(source: string): string | undefined {
   if (source === "fcc_fresh") return "fcc_fresh";
   if (source === "fcc_fiber") return "fcc_fiber";
-  // "kinetic_2026" deliberately returns undefined: it has a server VIEW
-  // (below), which the grid already composes, so also sending it as a tag
-  // would apply the same predicate twice and cost a second index lookup.
   return undefined;
 }
 
 /** The source lens as the server-side ?view= param (the content lens every
- *  map endpoint composes into the shared scope predicate). Two lenses have a
- *  server view - "latest" (drops the established-footprint import) and
- *  "kinetic_2026" (keeps only confirmed 2026 builds) - and for both the count
- *  probe, full feed, bbox windows and density grid all apply it. Every other
- *  lens stays a client-side pin predicate and returns undefined, keeping those
- *  URLs byte-stable. */
-export function sourceFilterToMapView(source: string): "latest" | "kinetic_2026" | undefined {
-  if (source === "latest") return "latest";
-  // The 2026 lens is a SERVER view for the same reason "latest" is: it has to
-  // narrow the count probe and the density grid too, or a rep zoomed out sees
-  // aggregate counts for every door on the map while the chip says 2026.
-  if (source === "kinetic_2026") return "kinetic_2026";
-  return undefined;
+ *  map endpoint composes into the shared scope predicate). Only "latest" has
+ *  a server view: the count probe, full feed, bbox windows, and the density
+ *  grid all drop the established-footprint import; every other lens stays a
+ *  client-side pin predicate and returns undefined (byte-stable URLs). */
+export function sourceFilterToMapView(source: string): "latest" | undefined {
+  return source === "latest" ? "latest" : undefined;
 }
 
 /** Grid cells → GeoJSON points for the density layers. `n` and `cell` ride
