@@ -97,9 +97,20 @@ beforeAll(async () => {
   mainLeadId = insertLead({ address: "100 Maple Grove Ln", city: "Lexington", leadTag: "fresh_fiber_confirmed" });
   rawDb.prepare(`UPDATE leads SET source_scan_target_id=999001,fresh_confirmed_at=?,fresh_confidence='cross_verified'
     WHERE id=?`).run(new Date().toISOString(), mainLeadId);
-  insertLead({ address: "240 Oak Street", city: "Lexington", leadTag: "fresh_fiber_confirmed" });
-  insertLead({ address: "17 Birchwood Dr", city: "Lexington", leadTag: "fresh_fiber_confirmed" });
-  insertLead({ address: "8 Cedar Run", city: "Lexington", leadTag: "fresh_fiber_confirmed" });
+  // Oak Street is the most-recently confirmed neighbor, and the assertions
+  // below name it. Say so with timestamps instead of leaving all three on the
+  // same "now": datetime() compares to whole seconds, so same-second rows tie
+  // and the winner used to be whatever SQLite returned first - which held
+  // under a single file and flipped to Birchwood Dr under a full-suite run.
+  // Birchwood and Cedar stay inside the 21-day window so momentum is still 4.
+  const oakId = insertLead({ address: "240 Oak Street", city: "Lexington", leadTag: "fresh_fiber_confirmed" });
+  const birchwoodId = insertLead({ address: "17 Birchwood Dr", city: "Lexington", leadTag: "fresh_fiber_confirmed" });
+  const cedarId = insertLead({ address: "8 Cedar Run", city: "Lexington", leadTag: "fresh_fiber_confirmed" });
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+  const setConfirmed = rawDb.prepare(`UPDATE leads SET fresh_confirmed_at=? WHERE id=?`);
+  setConfirmed.run(new Date().toISOString(), oakId);
+  setConfirmed.run(daysAgo(5), birchwoodId);
+  setConfirmed.run(daysAgo(7), cedarId);
   insertLead({ address: "9 Ancient Rd", city: "Lexington", leadTag: "fresh_fiber_confirmed",
     createdAt: new Date(Date.now() - 30 * 86_400_000).toISOString() });
   // A suppressed (DNC) lead, still in the queue (in Denton so it does not

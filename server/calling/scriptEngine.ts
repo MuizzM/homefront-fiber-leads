@@ -183,9 +183,15 @@ export function buildScriptContext(input: {
       AND datetime(coalesce(fresh_confirmed_at,created_at)) >= datetime('now','-21 days')`)
     .get(tenantId, lead.city) as { n: number };
   // Most-RECENTLY confirmed other fresh lead in the city - no proximity claim.
+  // `id DESC` is load-bearing, not decoration: datetime() truncates to whole
+  // seconds, so every lead confirmed in the same second ties, and with no
+  // tiebreak SQLite is free to return any of them. That is a script the rep
+  // reads aloud - the same lead could name a different street on two identical
+  // calls, and the 6h cache would then freeze whichever one won. Among rows
+  // confirmed in the same second, the later-inserted row is the more recent.
   const nearest = rawDb.prepare(`SELECT address FROM leads
     WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND lower(city)=lower(?) AND id<>?
-    ORDER BY datetime(coalesce(fresh_confirmed_at,created_at)) DESC LIMIT 1`)
+    ORDER BY datetime(coalesce(fresh_confirmed_at,created_at)) DESC, id DESC LIMIT 1`)
     .get(tenantId, lead.city, lead.id) as { address: string } | undefined;
 
   return {
