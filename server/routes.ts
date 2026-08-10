@@ -72,7 +72,7 @@ import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenantRead, sameTenantWrite } from "./tenantGuard";
 import { canActOnMember, canHireRole, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank, branchOwnerOf } from "@shared/teamHierarchy";
 import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, areaGrantedRepIds, parseAreaDeleteRepPolicy, parseAssigneeIds, MAX_ACTIVE_AREAS_PER_REP, MAX_AREA_ASSIGNEES, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
-import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
+import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, pinDisplayState, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
   calcCommission, pickActiveStructure, describeStructure,
@@ -1230,11 +1230,40 @@ const AREA_SCAN_CONCURRENCY = Number(process.env.AREA_SCAN_CONCURRENCY ?? 25); /
 // runs synchronous SQLite work on the one event-loop thread, so this caps how
 // long one request can monopolize it. A real lasso selection is well under this.
 const MAX_BULK_LEADS = 500;
-// Bulk ASSIGN is set-based + chunked (two statements per 500-lead chunk, with
-// an event-loop yield between chunks), so it is not bound by the per-row cost
-// that caps the other bulk routes. A rep can be handed a whole neighbourhood
-// in one lasso. Still bounded — the payload itself must stay sane.
-const MAX_BULK_ASSIGN_LEADS = Math.max(500, Number(process.env.MAX_BULK_ASSIGN_LEADS) || 25_000);
+// Bulk ASSIGN is set-based + chunked (two statements per chunk, with an
+// event-loop yield between chunks), so it is not bound by the per-row cost that
+// caps the other bulk routes.
+//
+// THIS CAP IS THE BODY LIMIT, not a work limit. The global API JSON parser
+// accepts 64 KB (server/index.ts) and a production lead id costs ~8 bytes on the
+// wire, so a request larger than this dies at the PARSER - before the route, and
+// therefore before the friendly BULK_TOO_LARGE message. The old default of
+// 25,000 was unreachable by roughly 3x and turned into an unexplained network
+// failure in the browser. 6,000 ids is ~48 KB, which leaves headroom for the
+// envelope and for ids that grow another digit.
+//
+// Callers with more doors than this do not need a bigger body: they should send
+// the RING to /api/leads/assign-selection, whose payload does not grow with the
+// door count at all.
+const MAX_BULK_ASSIGN_LEADS = Math.max(500, Number(process.env.MAX_BULK_ASSIGN_LEADS) || 6_000);
+// Doors written per transaction. Bounds two separate things: how long the write
+// lock is held (a checkpoint collision can stall at most one chunk) and how long
+// the event loop goes unyielded. Far below SQLite's 32,766 bound variables.
+const ASSIGN_CHUNK = Math.max(100, Math.min(5_000, Number(process.env.ASSIGN_CHUNK) || 1_000));
+// Runaway guard on a resolved selection. Not a payload limit - assign-selection
+// ships a ring, so the request is a couple of KB either way.
+const MAX_ASSIGN_SELECTION = Math.max(1_000, Number(process.env.MAX_ASSIGN_SELECTION) || 250_000);
+// Bbox candidates examined before the exact ring test. Exceeding it REFUSES the
+// request rather than truncating: a dropped bbox row is a door inside the ring
+// that silently never got assigned.
+const MAX_ASSIGN_BBOX_CANDIDATES = Math.max(10_000, Number(process.env.MAX_ASSIGN_BBOX_CANDIDATES) || 400_000);
+// A freehand stroke is already validated and simplified client-side; this only
+// stops a hand-written caller from posting a ring that costs more to test than
+// the doors it encloses.
+const MAX_ASSIGN_RING_POINTS = 10_000;
+// Manual deselects are small by nature. Bounded so assign-selection can never
+// quietly become the id-shipping path this route exists to replace.
+const MAX_ASSIGN_EXCLUDES = 5_000;
 async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateAddresses>) {
   const job = scanJobs.get(jobId);
   if (!job) return;
@@ -5799,27 +5828,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // ── Bulk assign leads to a rep (lasso selection) ────────────────────────────
-  // POST /api/leads/bulk-assign  { leadIds: number[], repId: number | null }
-  app.post("/api/leads/bulk-assign", requireCapability("lead.assign"), async (req, res) => {
-    const { leadIds, repId } = req.body as { leadIds: number[]; repId: number | null };
-    if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
-    // WHOLE-TERRITORY ASSIGNMENT. The old per-id loop ran ~3 synchronous
-    // statements per lead (SELECT + UPDATE + INSERT) on the one event-loop
-    // thread, so it had to be capped at 500 or a big lasso stalled the portal
-    // for every user. This path is SET-BASED instead: two statements per chunk
-    // regardless of chunk size, so 10,000 leads costs ~40 statements rather
-    // than 30,000. Chunks yield the event loop between them, so the portal
-    // stays responsive while a whole neighbourhood is handed to a rep.
-    if (leadIds.length > MAX_BULK_ASSIGN_LEADS) {
-      return res.status(400).json({ error: `Too many leads - select at most ${MAX_BULK_ASSIGN_LEADS.toLocaleString()} at a time`, code: "BULK_TOO_LARGE" });
-    }
-    const user = (req as any).user;
-    const tid = user?.tenantId ?? undefined;
-    if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
-    // Tenant: the target rep must belong to the caller's org (the scope check
-    // alone passes for admin/manager, whose scope is org-wide) — a foreign
-    // member id must never receive this tenant's doors.
-    if (repId != null && !repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
+  // ── The one assignment writer ───────────────────────────────────────────────
+  // WHOLE-TERRITORY ASSIGNMENT. The original per-id loop ran ~3 synchronous
+  // statements per lead (SELECT + UPDATE + INSERT) on the one event-loop thread,
+  // so it had to be capped at 500 or a big lasso stalled the portal for every
+  // user. This path is SET-BASED instead: two statements per chunk regardless of
+  // chunk size, so 150,000 doors cost ~300 statements rather than 450,000.
+  //
+  // Shared by /api/leads/bulk-assign (the caller supplies exact ids) and
+  // /api/leads/assign-selection (the server resolves them from a ring) so the
+  // authority predicates, the audit trail, the live-event bound and the
+  // event-loop yielding can never drift between the two.
+  async function applyAssignment(
+    candidateIds: number[],
+    repId: number | null,
+    user: any,
+    tid: number | undefined,
+  ): Promise<{ updated: number; skipped: number; repName: string | null }> {
     const assignedAt = repId ? new Date().toISOString() : null;
     const assignedBy = repId ? (user?.name ?? null) : null;
     const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
@@ -5831,19 +5856,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       ? "1=1"
       : `(assigned_rep_id IS NULL${(scope as number[]).length ? ` OR assigned_rep_id IN (${(scope as number[]).map((n) => Number(n) | 0).join(",")})` : ""})`;
     const tenantSql = tid == null ? "1=1" : `tenant_id = ${Number(tid) | 0}`;
-    const ids = [...new Set(leadIds.map((v) => Number(v)).filter(Number.isInteger))];
+    const ids = [...new Set(candidateIds.map((v) => Number(v)).filter(Number.isInteger))];
     const eventDetail = JSON.stringify({ assignedTo: repName, assignedBy });
-    const CHUNK = 500;
     let updated = 0;
     // Carried across chunks so the bulk-event bound applies to the REQUEST, not
-    // to each 500-lead chunk of it.
+    // to each chunk of it.
     let emitted = 0;
 
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const chunk = ids.slice(i, i + CHUNK);
+    for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
+      const chunk = ids.slice(i, i + ASSIGN_CHUNK);
       const placeholders = chunk.map(() => "?").join(",");
-      // One transaction per chunk: a stall can never exceed one chunk, and a
-      // failure leaves whole chunks applied rather than a half-written row.
+      // One transaction per chunk: a stall can never exceed one chunk, the write
+      // lock is RELEASED between chunks rather than held across the whole
+      // assignment, and a failure leaves whole chunks applied rather than a
+      // half-written row.
       const applyChunk = rawDb.transaction(() => {
         // Assignment events first — they must see the PRE-update rows, and
         // only for leads this caller is actually allowed to move.
@@ -5875,15 +5901,192 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + changed.length);
       // Yield so /api/health, the Field Map, and every other request keep
       // flowing while a large territory assignment completes.
-      if (i + CHUNK < ids.length) await new Promise((resolve) => setImmediate(resolve));
+      if (i + ASSIGN_CHUNK < ids.length) await new Promise((resolve) => setImmediate(resolve));
     }
-    const skipped = ids.length - updated;
+    if (updated > 0) bustMapCache(tid);
+    return { updated, skipped: ids.length - updated, repName };
+  }
+
+  // POST /api/leads/bulk-assign  { leadIds: number[], repId: number | null }
+  // EXACT-ID assignment. Kept for callers that genuinely hold a list; the lasso
+  // sends its ring to /api/leads/assign-selection instead, because an id list is
+  // bounded by the 64 KB body limit and a ring is not.
+  app.post("/api/leads/bulk-assign", requireCapability("lead.assign"), async (req, res) => {
+    const { leadIds, repId } = req.body as { leadIds: number[]; repId: number | null };
+    if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
+    if (leadIds.length > MAX_BULK_ASSIGN_LEADS) {
+      return res.status(400).json({
+        error: `Too many leads - send at most ${MAX_BULK_ASSIGN_LEADS.toLocaleString()} ids, or assign the drawn area instead`,
+        code: "BULK_TOO_LARGE",
+      });
+    }
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    // Tenant: the target rep must belong to the caller's org (the scope check
+    // alone passes for admin/manager, whose scope is org-wide) — a foreign
+    // member id must never receive this tenant's doors.
+    if (repId != null && !repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
+
+    const { updated, skipped, repName } = await applyAssignment(leadIds, repId ?? null, user, tid);
     if (updated > 0) {
-      bustMapCache(tid);
       storage.logActivity(user?.id ?? null, "lead.bulk_assign", "lead", undefined,
-        { repId, repName, requested: ids.length, updated, skipped }, req.ip);
+        { repId, repName, requested: leadIds.length, updated, skipped }, req.ip);
     }
     res.json({ updated, skipped, repId });
+  });
+
+  // POST /api/leads/assign-selection
+  //   { repId, polygon, includeStates?, excludeLeadIds?, view? }
+  //
+  // WHOLE-SELECTION ASSIGNMENT, described rather than enumerated.
+  //
+  // bulk-assign ships the door set as an array of ids, which put two ceilings on
+  // the lasso that nobody could see from the UI:
+  //   1. The global API body limit is 64 KB and a production lead id costs ~8
+  //      bytes on the wire, so the request died at the body parser somewhere
+  //      around 8,000 ids - well short of the 25,000 the route advertises, and
+  //      BEFORE the friendly BULK_TOO_LARGE message could ever run.
+  //   2. The lasso can only select pins the CLIENT holds, and past the viewport
+  //      threshold the map ships an even sample (truncated:true). Assign then
+  //      silently skipped every unsampled door inside the loop.
+  //
+  // Sending the RING instead fixes both. The body is O(ring points) - a couple
+  // of KB whether the ring holds 1,500 doors or 150,000 - and the server
+  // resolves the doors itself, so unsampled ones are included.
+  //
+  // Parity with what the manager actually saw is structural, not maintained by
+  // hand: the candidate rows come from storage.getLeadsForMap (the same scoped
+  // SQL + knock join the map reads), through buildMapPins (the same projection,
+  // including the 6dp rounding the client tested its ring against), and the
+  // refinement uses pinDisplayState from shared/knock.ts - the very function the
+  // lasso chips are built from. The only rule layered on top is authority:
+  // canReassignLead, because a caller can SEE more ground than they may move.
+  //
+  // The converse also holds and is deliberate: a caller may be ALLOWED to move
+  // ground their map does not show them. With open-field off, an unassigned,
+  // un-territoried door is invisible to a team_lead (repVisibilitySql), even
+  // though canReassignLead would let them claim it. Visibility is the tighter
+  // rule and it wins - the id-based path behaved the same way for the same
+  // reason, since the client could only ever enumerate pins it was shown.
+  app.post("/api/leads/assign-selection", requireCapability("lead.assign"), async (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const body = (req.body ?? {}) as {
+      repId?: number | null;
+      polygon?: [number, number][];
+      includeStates?: string[];
+      excludeLeadIds?: number[];
+      view?: MapView;
+    };
+
+    const polygon = body.polygon;
+    if (!Array.isArray(polygon) || polygon.length < 3) {
+      return res.status(400).json({ error: "polygon needs at least 3 points" });
+    }
+    if (polygon.length > MAX_ASSIGN_RING_POINTS) {
+      return res.status(400).json({ error: `That outline is too detailed - at most ${MAX_ASSIGN_RING_POINTS.toLocaleString()} points`, code: "RING_TOO_COMPLEX" });
+    }
+    for (const p of polygon) {
+      if (!Array.isArray(p) || p.length < 2 || !Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1]))) {
+        return res.status(400).json({ error: "polygon points must be [lng, lat] numbers" });
+      }
+    }
+
+    // repId null RETURNS the selection to the pool - same contract as bulk-assign.
+    const repId = body.repId == null ? null : Number(body.repId);
+    if (repId != null && (!Number.isInteger(repId) || repId <= 0)) {
+      return res.status(400).json({ error: "repId must be a positive integer" });
+    }
+    if (repId != null && !repInVisibilityScope(user, repId)) {
+      return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    }
+    if (repId != null && !repInCallerTenant(user, repId)) {
+      return res.status(404).json({ error: "Rep not found" });
+    }
+
+    // Manual deselects. Small by nature (a manager un-picking a handful of
+    // doors), and bounded so this can never become the id-shipping path again.
+    const excludes = new Set<number>();
+    if (body.excludeLeadIds != null) {
+      if (!Array.isArray(body.excludeLeadIds)) {
+        return res.status(400).json({ error: "excludeLeadIds must be an array" });
+      }
+      if (body.excludeLeadIds.length > MAX_ASSIGN_EXCLUDES) {
+        return res.status(400).json({ error: `At most ${MAX_ASSIGN_EXCLUDES.toLocaleString()} manual deselects`, code: "TOO_MANY_EXCLUDES" });
+      }
+      for (const raw of body.excludeLeadIds) {
+        const n = Number(raw);
+        if (Number.isInteger(n)) excludes.add(n);
+      }
+    }
+    // Absent/empty = every display state. An explicit list is the lasso's
+    // status refinement, expressed the same way the chips express it.
+    const includeStates = Array.isArray(body.includeStates) && body.includeStates.length
+      ? new Set(body.includeStates.map((s) => String(s)))
+      : null;
+
+    // ── Resolve the selection ────────────────────────────────────────────────
+    // Bbox first (indexed), exact ring test on the survivors only - the same
+    // two-step assign-area uses.
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    for (const p of polygon) {
+      const lng = Number(p[0]), lat = Number(p[1]);
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+    const pad = BOUNDARY_EPSILON_DEG;
+    const scope = leadVisibilityScope(user);
+    const repScope = Array.isArray(scope) ? scope : (scope != null ? [scope] : undefined);
+    const resolveStarted = performance.now();
+    // limit is a REFUSAL threshold, never a silent truncation: the LIMIT applies
+    // to the bbox, and quietly dropping bbox rows would drop doors that sit
+    // inside the ring. One extra row is requested purely to detect the overflow.
+    const rows = storage.getLeadsForMap(tid, repScope, {
+      minLat: minLat - pad, maxLat: maxLat + pad,
+      minLng: minLng - pad, maxLng: maxLng + pad,
+      view: body.view,
+      limit: MAX_ASSIGN_BBOX_CANDIDATES + 1,
+    });
+    if (rows.length > MAX_ASSIGN_BBOX_CANDIDATES) {
+      return res.status(400).json({
+        error: "That area covers too much ground to assign in one action - draw a tighter outline",
+        code: "AREA_TOO_LARGE",
+      });
+    }
+
+    const pins = buildMapPins(rows);
+    const ids: number[] = [];
+    for (const pin of pins) {
+      if (excludes.has(pin.id)) continue;
+      if (!polygonCovers(pin.lat, pin.lng, polygon)) continue;
+      if (includeStates && !includeStates.has(pinDisplayState(pin))) continue;
+      // Authority, not visibility: a team_lead may claim unassigned ground or
+      // move their own team's doors, never another team's booked doors.
+      if (!canReassignLead(user, pin)) continue;
+      ids.push(pin.id);
+    }
+    const resolveMs = Math.round(performance.now() - resolveStarted);
+
+    if (ids.length > MAX_ASSIGN_SELECTION) {
+      return res.status(400).json({
+        error: `That selection holds ${ids.length.toLocaleString()} doors - at most ${MAX_ASSIGN_SELECTION.toLocaleString()} at a time`,
+        code: "SELECTION_TOO_LARGE",
+        total: ids.length,
+      });
+    }
+    if (!ids.length) {
+      return res.json({ assigned: 0, updated: 0, skipped: 0, total: 0, repId, resolveMs });
+    }
+
+    const { updated, skipped } = await applyAssignment(ids, repId, user, tid);
+    storage.logActivity(user?.id ?? null, "lead.assign_selection", "lead", undefined,
+      { repId, ringPoints: polygon.length, resolved: ids.length, updated, skipped, resolveMs }, req.ip);
+    // assigned mirrors updated so the field name matches assign-area's response;
+    // updated/skipped match bulk-assign's. One payload serves both callers.
+    res.json({ assigned: updated, updated, skipped, total: ids.length, repId, resolveMs });
   });
 
   // POST /api/leads/bulk-status  { leadIds: number[], outcome: KnockOutcome }

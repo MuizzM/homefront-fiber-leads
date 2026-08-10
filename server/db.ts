@@ -1,14 +1,18 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@shared/schema";
-import fs from "fs";
 import path from "path";
 import { resolveScanWorkerCount } from "./scanWorkers";
+import {
+  bootWalCheckpointOn,
+  forceWalTruncateOn,
+  startWalGuardOn,
+} from "./walGuard";
 
 // DATA_DIR lets the SQLite file live on a persistent volume (set DATA_DIR=/data
 // on the host and mount your volume there). Defaults to the working directory.
 const dataDir = process.env.DATA_DIR || process.cwd();
-const dbPath = path.join(dataDir, "data.db");
+export const dbPath = path.join(dataDir, "data.db");
 const sqlite = new Database(dbPath);
 sqlite.pragma("journal_mode = WAL");
 // Enforce the durable discovery/qualification graph in local SQLite just as
@@ -97,76 +101,33 @@ export const rawDb = sqlite; // Raw better-sqlite3 instance for prepared stateme
 // busy_timeout waiting for readers to drain. Run the guard in the CLUSTER
 // PRIMARY (its event loop is a near-idle supervisor — blocking it stalls no
 // HTTP or scan work) or in the single process when SCAN_WORKERS=0.
-const walPath = `${dbPath}-wal`;
+export const walPath = `${dbPath}-wal`;
 
-function walFileMb(): number {
-  try {
-    return Math.round(fs.statSync(walPath).size / 1_048_576);
-  } catch {
-    return 0; // no WAL file → nothing to reclaim
-  }
-}
-
-function walLog(event: string, fields: Record<string, unknown>): void {
-  const level = event.endsWith("_error") ? "error" : "info";
-  console.log(JSON.stringify({ ts: new Date().toISOString(), level, event, ...fields }));
-}
-
-// One blocking TRUNCATE attempt with before/after evidence. Returns the MB
-// still in the WAL afterwards. Never throws. The wait is bounded to 30s (not
-// the connection's full busy_timeout, 120s in prod): the guard retries every
-// tick anyway, and the cluster primary must stay responsive to worker exits.
+// The guard's mechanics live in walGuard.ts, parameterised by connection, so a
+// process that serves NO HTTP can run them against its own handle. These three
+// wrappers keep db.ts's original API for the callers that legitimately run the
+// guard in-process: the cluster PRIMARY (a near-idle supervisor) and the
+// resource-pressure sentinel's emergency reclaim.
+//
+// A single-process deployment must NOT call startWalGuard() directly - see
+// walMaintenance.ts. The checkpoint blocks for up to MAX_CHECKPOINT_WAIT_MS and
+// that process is the web server.
 export function forceWalTruncate(reason: string): number {
-  const beforeMb = walFileMb();
-  const prevTimeout = Number(sqlite.pragma("busy_timeout", { simple: true }) ?? 0) || 15000;
-  try {
-    sqlite.pragma(`busy_timeout = ${Math.min(prevTimeout, 30000)}`);
-    const res = sqlite.pragma("wal_checkpoint(TRUNCATE)");
-    const afterMb = walFileMb();
-    walLog("db.wal_guard", { reason, beforeMb, afterMb, result: JSON.stringify(res) });
-    return afterMb;
-  } catch (e: any) {
-    walLog("db.wal_guard_error", { reason, beforeMb, error: e?.message ?? String(e) });
-    return beforeMb;
-  } finally {
-    try { sqlite.pragma(`busy_timeout = ${prevTimeout}`); } catch { /* connection closed */ }
-  }
+  return forceWalTruncateOn(sqlite, walPath, reason, walGuardWhere());
 }
 
-// When Litestream is enabled it OWNS checkpointing: it holds a long-lived read
-// lock specifically so no other connection can checkpoint/reset the WAL out
-// from under its replication position, and it runs its own checkpoints. Our
-// guard must stand down or it would just spin busy against that lock.
-const litestreamOwnsCheckpoints = Boolean(process.env.LITESTREAM_BUCKET);
-
-// Boot-time reclaim. Call where there is NO connection contention yet (cluster
-// primary before forking workers; single-process before listen): with no other
-// readers the TRUNCATE always wins and the WAL starts at 0 bytes.
 export function bootWalCheckpoint(): void {
-  if (litestreamOwnsCheckpoints) {
-    walLog("db.wal_guard", { reason: "boot", skipped: "litestream owns checkpointing" });
-    return;
-  }
-  if (walFileMb() < 16) return; // nothing worth logging
-  forceWalTruncate("boot");
+  bootWalCheckpointOn(sqlite, walPath, walGuardWhere());
 }
 
-// Periodic guard. Small WALs are left to wal_autocheckpoint+journal_size_limit;
-// past the threshold we force TRUNCATE every tick until the file shrinks.
 export function startWalGuard(): NodeJS.Timeout | null {
-  if (process.env.WAL_GUARD === "off") return null;
-  if (litestreamOwnsCheckpoints) {
-    walLog("db.wal_guard", { reason: "start", skipped: "litestream owns checkpointing" });
-    return null;
-  }
-  const intervalMs = Math.max(30_000, Number(process.env.WAL_CHECKPOINT_MS ?? 120_000) || 120_000);
-  const truncateMb = Math.max(64, Number(process.env.WAL_TRUNCATE_MB ?? 512) || 512);
-  const timer = setInterval(() => {
-    if (walFileMb() <= truncateMb) return;
-    forceWalTruncate("interval");
-  }, intervalMs);
-  if (typeof (timer as any).unref === "function") (timer as any).unref();
-  return timer;
+  return startWalGuardOn(sqlite, walPath, { where: walGuardWhere() });
+}
+
+/** Attribution for every guard log line: which process actually blocked. */
+function walGuardWhere(): string {
+  if (process.env.HF_ROLE) return `worker:${process.env.HF_ROLE}`;
+  return resolveScanWorkerCount() > 0 ? "cluster-primary" : "in-process";
 }
 
 sqlite.exec(`

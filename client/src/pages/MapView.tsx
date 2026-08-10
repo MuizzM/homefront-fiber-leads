@@ -12,7 +12,7 @@ declare const mapboxgl: any;
 import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, List, Plus, Crosshair, Users, Settings2, Landmark, Tag, Flag, Palette, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
+import { apiRequest, apiRequestIdempotent, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useSustained } from "@/hooks/use-sustained";
 import { LeadCard, type CardProperty } from "@/components/LeadCard";
@@ -1329,19 +1329,38 @@ export default function MapView() {
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
-  // Lasso "Change Ownership" — reassign the REFINED selection (exact lead ids, so
-  // status-refinement is honored) to a rep, without creating a saved territory.
+  // Lasso "Change Ownership" — reassign the REFINED selection to a rep, without
+  // creating a saved territory.
+  //
+  // Sends the RING, not the ids. Shipping ids capped the lasso twice over: the
+  // 64 KB API body limit stopped it around 8,000 doors (as an unexplained
+  // network failure, because the parser rejects before the route runs), and the
+  // client can only enumerate pins it HOLDS — so past the sampling threshold
+  // Assign silently skipped every unsampled door inside the loop. The server
+  // resolves the ring itself with the same scoped query, projection and
+  // pinDisplayState the map is drawn from. See docs/architecture/BULK_ASSIGNMENT.md.
   const bulkAssignMutation = useMutation({
     mutationFn: async ({
-      leadIds,
+      polygon,
       repId,
+      includeStates,
     }: {
-      leadIds: number[];
+      polygon: [number, number][];
       repId: number;
+      /** Enabled display states, or undefined when nothing was refined out.
+       *  Undefined must mean "every state" rather than "the states my sample
+       *  happened to contain", or refining nothing would still drop the doors
+       *  the client never received. */
+      includeStates?: PinDisplayState[];
     }) => {
-      const res = await apiRequest("POST", "/api/leads/bulk-assign", {
-        leadIds,
+      // Idempotent by construction (same rep, same end state), so a connection
+      // that dies mid-flight is retried rather than shown to the user.
+      const res = await apiRequestIdempotent("POST", "/api/leads/assign-selection", {
+        polygon,
         repId,
+        ...(includeStates ? { includeStates } : {}),
+        // The lens the pins were drawn under, so the server scopes identically.
+        ...(sourceFilterToMapView(filterSource) ? { view: sourceFilterToMapView(filterSource) } : {}),
       });
       return res.json();
     },
@@ -1415,6 +1434,17 @@ export default function MapView() {
   const lassoSummary = useMemo(
     () => summarizeByDisplayState(lassoSelected),
     [lassoSelected],
+  );
+  // The refinement, expressed so the SERVER can apply it to doors this client
+  // never received. Derived from the canonical state list minus what was toggled
+  // off — NOT from the states present in the selection, which would silently
+  // exclude every unsampled door in a state the sample happened to miss.
+  // Undefined when nothing was refined out, which the server reads as "all".
+  const lassoEnabledStates = useMemo<PinDisplayState[] | undefined>(
+    () => (lassoDisabled.size
+      ? (Object.keys(STATE_COLORS) as PinDisplayState[]).filter((ds) => !lassoDisabled.has(ds))
+      : undefined),
+    [lassoDisabled],
   );
   const lassoActive = useMemo(
     () => lassoSelected.filter((l) => !lassoDisabled.has(pinDisplayState(l))),
@@ -7055,11 +7085,14 @@ export default function MapView() {
 
                   {/* Sampled-window honesty: past the viewport threshold a
                       wide zoom ships an even SAMPLE of the window's pins
-                      (truncated:true), and the lasso can only select pins the
-                      client holds — so Assign/Status/Mark would silently skip
-                      every unsampled door inside the loop. Saving an AREA is
-                      unaffected (the polygon is evaluated server-side), so the
-                      warning names the id-based actions, not the panel. */}
+                      (truncated:true), and the lasso can only ENUMERATE pins the
+                      client holds — so any id-based action silently skips every
+                      unsampled door inside the loop.
+                      Assign no longer belongs in that list: it posts the RING to
+                      /api/leads/assign-selection and the server resolves the
+                      doors itself, exactly as saving an Area does. Status and
+                      Mark are still id-based, so the warning names them and the
+                      count beside it still reads low for every action. */}
                   {sampledPins && lassoHasLeads && (
                     <span
                       className="text-[12px] text-amber-300/90 leading-tight"
@@ -7067,8 +7100,9 @@ export default function MapView() {
                       data-testid="lasso-sample-warning"
                     >
                       The map is showing a sample of this area&apos;s pins -
-                      Assign, Status and Mark apply only to the doors loaded.
-                      Zoom in to load every door, or save the loop as an Area.
+                      Status and Mark apply only to the doors loaded. Assign
+                      covers every door inside the loop. Zoom in to load them
+                      all, or save the loop as an Area.
                     </span>
                   )}
                   {!lassoHasLeads ? (
@@ -7210,13 +7244,15 @@ export default function MapView() {
                         <Button
                           disabled={
                             !lassoRepId ||
+                            !lassoDrawn ||
                             !lassoActiveIds.length ||
                             bulkAssignMutation.isPending
                           }
                           onClick={() =>
                             bulkAssignMutation.mutate({
-                              leadIds: lassoActiveIds,
+                              polygon: lassoPoints,
                               repId: Number(lassoRepId),
+                              includeStates: lassoEnabledStates,
                             })
                           }
                           type="button"

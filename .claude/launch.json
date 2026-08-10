@@ -19,6 +19,16 @@
       "autoPort": true
     },
     {
+      "name": "homefront-repro",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5070 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/53108cde-4c0a-4c33-98e7-0f3d3164279a/scratchpad/repro-data SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5070,
+      "autoPort": false
+    },
+    {
       "name": "homefront-verify",
       "runtimeExecutable": "sh",
       "runtimeArgs": [
@@ -27,6 +37,16 @@
       ],
       "port": 5060,
       "autoPort": true
+    },
+    {
+      "name": "hfs-marketing-site",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Applications/home-front-solutions && npm run dev -- --port 5177 --strictPort"
+      ],
+      "port": 5177,
+      "autoPort": false
     }
   ]
 }

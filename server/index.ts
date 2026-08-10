@@ -1628,9 +1628,21 @@ app.use((req, res, next) => {
   // WAL and never escalated while the file grew to 12GB and filled the disk
   // (2026-07-23). The shared db.ts guard stats the -wal FILE instead.
   if (SCAN_WORKERS === 0) {
-    const { bootWalCheckpoint, startWalGuard } = await import("./db");
+    const { bootWalCheckpoint } = await import("./db");
+    // Boot reclaim stays in-process: it runs BEFORE listen(), when nothing is
+    // served and no other connection exists, so it blocks for free and always
+    // wins the lock. It is the cheapest reclaim available.
     bootWalCheckpoint();
-    startWalGuard();
+    // The PERIODIC guard does not. `wal_checkpoint(TRUNCATE)` is synchronous and
+    // waits up to 30s for readers; running it here blocked THIS event loop -
+    // the web server's - for up to 26s every 120s in production, and Caddy
+    // dropped every request caught in the window ("Load failed" in the browser).
+    // It now runs in a dedicated child that serves nothing.
+    // See docs/architecture/BULK_ASSIGNMENT.md.
+    const { startWalMaintenance, stopWalMaintenance } = await import("./walMaintenance");
+    startWalMaintenance();
+    process.once("SIGTERM", stopWalMaintenance);
+    process.once("SIGINT", stopWalMaintenance);
     const { startResourceSentinel } = await import("./resourcePressure");
     startResourceSentinel();
     const { startYieldRollupMaintenance } = await import("./yieldRollups");

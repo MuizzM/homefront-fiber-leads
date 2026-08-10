@@ -8,7 +8,7 @@
 // lead again. A completed mutation therefore busts the share map — without
 // aborting the underlying requests, whose original callers still get bodies.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiRequest, apiUpload } from "../../client/src/lib/queryClient";
+import { apiRequest, apiUpload, NetworkError } from "../../client/src/lib/queryClient";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -75,8 +75,15 @@ describe("apiRequest GET share vs mutations", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     void apiRequest("GET", "/api/bust-on-failed-mutation").catch(() => { /* never settles */ });
-    await expect(apiRequest("POST", "/api/bust-on-failed-mutation/mutate", { a: 1 }))
-      .rejects.toThrow("network down");
+    // A dead fetch is raised as NetworkError, not the platform's own TypeError:
+    // Safari's message for it is the literal string "Load failed", and mutations
+    // put e.message straight into a toast. The original is kept on `cause`.
+    // See docs/architecture/BULK_ASSIGNMENT.md.
+    const failure = await apiRequest("POST", "/api/bust-on-failed-mutation/mutate", { a: 1 })
+      .then(() => null, (e) => e);
+    expect(failure).toBeInstanceOf(NetworkError);
+    expect(failure.message).not.toMatch(/network down/);
+    expect((failure.cause as Error)?.message).toBe("network down");
     const fresh = await apiRequest("GET", "/api/bust-on-failed-mutation");
 
     expect(fetchMock).toHaveBeenCalledTimes(3);

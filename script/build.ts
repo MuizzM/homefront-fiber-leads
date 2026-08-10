@@ -65,7 +65,10 @@ async function buildAll() {
   // real /data volume, with no toolchain on the host and no SSH key in anyone's
   // hands (see .github/workflows/reset-areas.yml).
   console.log("building maintenance scripts...");
-  for (const entry of ["reset-areas", "import-fcc-pins"]) {
+  // wal-maintenance is not an operator script - it is a long-lived sidecar the
+  // server forks at boot (server/walMaintenance.ts). It is built here for the
+  // same reason: dist/ is all that ships, so the entry must exist there.
+  for (const entry of ["reset-areas", "import-fcc-pins", "wal-maintenance"]) {
     await esbuild({
       entryPoints: [`script/${entry}.ts`],
       platform: "node",

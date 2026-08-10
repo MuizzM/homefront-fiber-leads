@@ -78,6 +78,32 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+/**
+ * A fetch that never got a response at all.
+ *
+ * `fetch` rejects with a bare TypeError whose message is pure platform detail -
+ * Safari says "Load failed", Chrome "Failed to fetch", Firefox "NetworkError
+ * when attempting to fetch resource". Mutations surface `e.message` in a toast,
+ * so a manager assigning doors during a server stall was shown the words
+ * "Load failed" and nothing else. See docs/architecture/BULK_ASSIGNMENT.md.
+ *
+ * This is a DIFFERENT failure from an error response: the server made no
+ * decision, so the write's fate is genuinely unknown and the request may be
+ * safely retried when the caller knows the operation is idempotent.
+ */
+export class NetworkError extends Error {
+  readonly cause?: unknown;
+  constructor(cause?: unknown) {
+    super(
+      typeof navigator !== "undefined" && navigator.onLine === false
+        ? "You are offline - reconnect and try again."
+        : "Lost connection to the server before it answered. Nothing may have been saved - try again.",
+    );
+    this.name = "NetworkError";
+    this.cause = cause;
+  }
+}
+
 /** Safe GET retry policy for flaky field connections; mutations remain one-shot. */
 export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
   if (failureCount >= 2) return false;
@@ -144,14 +170,21 @@ export async function apiRequest(
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${url}`, {
-      method,
-      headers: authHeaders(
-        data ? { "Content-Type": "application/json" } : {},
-        isMutation, // attach CSRF token on all state-changing requests
-      ),
-      body: data ? JSON.stringify(data) : undefined,
-    });
+    try {
+      res = await fetch(`${API_BASE}${url}`, {
+        method,
+        headers: authHeaders(
+          data ? { "Content-Type": "application/json" } : {},
+          isMutation, // attach CSRF token on all state-changing requests
+        ),
+        body: data ? JSON.stringify(data) : undefined,
+      });
+    } catch (e) {
+      // The request died at the network layer - no status, no body. Raise a
+      // typed error with a human sentence instead of letting the platform's
+      // "Load failed" / "Failed to fetch" reach a toast.
+      throw new NetworkError(e);
+    }
   } finally {
     // Even a network-failed mutation may have reached the server — the write's
     // fate is unknown, so pre-mutation GET bodies stay unjoinable either way.
@@ -161,6 +194,40 @@ export async function apiRequest(
   notifyIfSessionExpired(res.status);
   await throwIfResNotOk(res);
   return res;
+}
+
+/**
+ * apiRequest for writes whose repetition is a no-op, so a dead connection can be
+ * retried instead of shown to the user.
+ *
+ * Assignment qualifies: setting `assigned_rep_id` to the same rep twice reaches
+ * the same end state. When the server is stalled its window is seconds, not
+ * minutes, so the backoff deliberately straddles it - the retry is what turns a
+ * visible failure into a slow success.
+ *
+ * ONLY NetworkError is retried. An error RESPONSE is a decision the server made
+ * and repeating it just asks the same question twice.
+ */
+export async function apiRequestIdempotent(
+  method: string,
+  url: string,
+  data?: unknown,
+  attempts = 3,
+): Promise<Response> {
+  const backoffMs = [2_000, 6_000];
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await apiRequest(method, url, data);
+    } catch (e) {
+      if (!(e instanceof NetworkError)) throw e;
+      lastError = e;
+      if (attempt < attempts - 1) {
+        await new Promise((r) => setTimeout(r, backoffMs[Math.min(attempt, backoffMs.length - 1)]));
+      }
+    }
+  }
+  throw lastError;
 }
 
 // Multipart upload — same session + CSRF headers and 401→re-auth path as
