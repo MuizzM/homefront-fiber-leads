@@ -26,10 +26,10 @@ import type { TeamMember } from "@shared/schema";
 // Same tint idiom as the console's StatusChip, keyed by the SHARED tone map so
 // this sheet and the rep's own card can never disagree about what a status means.
 const OVERRIDE_TONE_CLS: Record<(typeof OVERRIDE_STATUS_TONE)[OverrideLedgerStatus], string> = {
-  positive: "bg-emerald-500/15 text-emerald-400",
+  positive: "bg-success/10 text-success",
   muted: "bg-muted text-muted-foreground",
-  warning: "bg-amber-500/15 text-amber-400",
-  critical: "bg-rose-500/15 text-rose-400",
+  warning: "bg-warning/10 text-warning",
+  critical: "bg-destructive/10 text-destructive",
 };
 
 export function OverrideStatusPill({ status }: { status: OverrideLedgerStatus }) {
@@ -44,10 +44,10 @@ export function OverrideStatusPill({ status }: { status: OverrideLedgerStatus })
 // override row's ledger status beside it.
 function SaleChip({ status }: { status: string }) {
   const map: Record<string, [string, string]> = {
-    QUALIFIED: ["counts", "bg-emerald-500/15 text-emerald-400"],
-    PENDING: ["pending", "bg-amber-500/15 text-amber-400"],
-    REVERSED: ["reversed", "bg-rose-500/15 text-rose-400"],
-    DISQUALIFIED: ["disqualified", "bg-rose-500/15 text-rose-400"],
+    QUALIFIED: ["counts", "bg-success/10 text-success"],
+    PENDING: ["pending", "bg-warning/10 text-warning"],
+    REVERSED: ["reversed", "bg-destructive/10 text-destructive"],
+    DISQUALIFIED: ["disqualified", "bg-destructive/10 text-destructive"],
     CANCELLED: ["cancelled", "bg-muted text-muted-foreground"],
   };
   const [label, cls] = map[status] ?? [status.toLowerCase(), "bg-muted text-muted-foreground"];
@@ -171,7 +171,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
       ) : isLoading ? (
         <div className="h-48 rounded-2xl bg-card border border-border animate-pulse" data-testid="downline-loading" />
       ) : isError || !sheet ? (
-        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" data-testid="downline-error">
+        <div className="rounded-xl bg-card border border-destructive/25 p-6 text-center" data-testid="downline-error">
           <div className="text-sm font-semibold text-foreground">Couldn't load the downline sheet</div>
           <div className="text-sm text-muted-foreground mt-1">Check your connection and try again - the override ledger is safe.</div>
           <button onClick={() => refetch()}
@@ -195,7 +195,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
             <div className="grid grid-cols-3 divide-x divide-border">
               <div className="px-4 py-3" data-testid="tile-override-payable">
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Payable</div>
-                <div className="mt-0.5 text-lg font-semibold tabular-nums text-emerald-400">{usd(sheet.totals.payableCents)}</div>
+                <div className="mt-0.5 text-lg font-semibold tabular-nums text-success">{usd(sheet.totals.payableCents)}</div>
               </div>
               <div className="px-4 py-3" data-testid="tile-override-held">
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground">On hold</div>
@@ -210,8 +210,8 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
 
           {/* Needs review — same panel grammar as the week overview's exceptions */}
           {sheet.exceptions.length > 0 ? (
-            <div className="rounded-2xl bg-card border border-amber-500/30 overflow-hidden" data-testid="override-exceptions">
-              <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-2">
+            <div className="rounded-2xl bg-card border border-warning/25 overflow-hidden" data-testid="override-exceptions">
+              <div className="px-4 py-2.5 bg-warning/8 border-b border-warning/12 flex items-center gap-2">
                 
                 <span className="text-sm font-semibold text-foreground">Needs review before closeout</span>
                 <span className="ml-auto text-xs text-muted-foreground">{sheet.exceptions.length}</span>
@@ -219,7 +219,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
               <div className="divide-y divide-border">
                 {sheet.exceptions.map((ex, i) => (
                   <div key={i} className="px-4 py-2.5 flex items-start gap-3 text-sm">
-                    <span className="text-2xs font-bold uppercase tracking-wide text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
+                    <span className="text-2xs font-bold uppercase tracking-wide text-warning bg-warning/8 border border-warning/25 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
                       {ex.type.replace(/_/g, " ").toLowerCase()}
                     </span>
                     <span className="text-muted-foreground">
@@ -299,12 +299,12 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
                                 <div className="mt-1 flex items-center gap-1.5">
                                   {r.saleStatus && <SaleChip status={r.saleStatus} />}
                                   {r.entryType === "CLAWBACK" && (
-                                    <span className="text-2xs font-bold uppercase text-rose-400">clawback</span>
+                                    <span className="text-2xs font-bold uppercase text-destructive">clawback</span>
                                   )}
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 flex-shrink-0">
-                                <span className={`tabular-nums font-semibold ${r.amountCents < 0 ? "text-rose-400" : "text-foreground"}`}>
+                                <span className={`tabular-nums font-semibold ${r.amountCents < 0 ? "text-destructive" : "text-foreground"}`}>
                                   {r.amountCents < 0 ? usdSigned(r.amountCents) : usd(r.amountCents)}
                                 </span>
                                 <OverrideStatusPill status={r.status} />

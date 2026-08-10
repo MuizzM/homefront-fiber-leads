@@ -34,8 +34,8 @@ type Revenue = {
 };
 
 const PLAN_COLORS: Record<string, string> = {
-  trial: "bg-amber-500/15 text-amber-400",
-  starter: "bg-blue-500/15 text-blue-400",
+  trial: "bg-warning/10 text-warning",
+  starter: "bg-info/10 text-info",
   pro: "bg-primary/15 text-primary",
   enterprise: "bg-purple-500/15 text-purple-400",
 };
@@ -220,8 +220,8 @@ function TenantCard({ tenant, onEdit, onDelete }: {
 
         {/* Status */}
         <td className="py-3 px-4">
-          <span className={`inline-flex items-center gap-1.5 text-xs rounded-full px-2 py-0.5 ${active ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-400" : "bg-rose-400"}`} />
+          <span className={`inline-flex items-center gap-1.5 text-xs rounded-full px-2 py-0.5 ${active ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${active ? "bg-success" : "bg-destructive"}`} />
             {tenant.status}
           </span>
         </td>
@@ -231,7 +231,7 @@ function TenantCard({ tenant, onEdit, onDelete }: {
           <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
             <span className="flex items-center gap-1" title="Reps"> {tenant.stats.reps}</span>
             <span className="flex items-center gap-1" title="Leads"> {tenant.stats.leads}</span>
-            <span className="flex items-center gap-1 text-emerald-400" title="Sold"> {tenant.stats.sold}</span>
+            <span className="flex items-center gap-1 text-success" title="Sold"> {tenant.stats.sold}</span>
             <span className="flex items-center gap-1" title="Territories"> {tenant.stats.territories}</span>
           </div>
         </td>
@@ -254,7 +254,7 @@ function TenantCard({ tenant, onEdit, onDelete }: {
               onClick={onEdit} data-testid={`btn-edit-tenant-${tenant.id}`}>
               Edit
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-rose-400"
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive"
               onClick={onDelete} data-testid={`btn-delete-tenant-${tenant.id}`}>
               Cancel
             </Button>
@@ -358,9 +358,9 @@ export default function SuperAdmin() {
   // their MRR is zero.
   const metrics = [
     { label: "Active Tenants", value: revenue ? revenue.tenantCount : " - ", icon: Building2, color: "text-muted-foreground" },
-    { label: "Total MRR", value: revenue ? `$${revenue.totalMrr.toFixed(0)}` : " - ", icon: TrendingUp, color: "text-emerald-400" },
+    { label: "Total MRR", value: revenue ? `$${revenue.totalMrr.toFixed(0)}` : " - ", icon: TrendingUp, color: "text-success" },
     { label: "Your MRR Cut", value: revenue ? `$${revenue.yourMrr.toFixed(0)}` : " - ", icon: DollarSign, color: "text-primary" },
-    { label: "Total Leads", value: tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-sky-400" },
+    { label: "Total Leads", value: tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-info" },
   ];
 
   return (

@@ -89,10 +89,10 @@ export interface TerritoryDetailPanelProps {
 }
 
 const STATUS_STYLE: Record<string, string> = {
-  active:     "bg-emerald-500/15 text-emerald-400",
-  shared:     "bg-blue-500/15 text-blue-400",
+  active:     "bg-success/10 text-success",
+  shared:     "bg-info/10 text-info",
   completed:  "bg-slate-500/15 text-slate-300",
-  reclaimed:  "bg-amber-500/15 text-amber-400",
+  reclaimed:  "bg-warning/10 text-warning",
   unassigned: "bg-zinc-500/15 text-zinc-400",
   archived:   "bg-zinc-700/20 text-zinc-500",
   draft:      "bg-slate-500/15 text-slate-400",
@@ -176,13 +176,13 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
                 onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
                 maxLength={60}
                 data-testid="territory-name-input"
-                className="h-9 min-w-0 flex-1 rounded-md bg-secondary text-foreground text-sm font-semibold px-2 border border-border focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                className="h-9 min-w-0 flex-1 rounded-md bg-secondary text-foreground text-sm font-semibold px-2 border border-border focus:outline-none focus:ring-2 focus:ring-success/60"
                 placeholder="Area name"
               />
               {/* 36px visual, 44px effective target via the ::after halo. */}
               <button type="button" data-testid="territory-name-save" onClick={saveName} title="Save name"
                 aria-label="Save name"
-                className={`relative w-9 h-9 rounded-md flex items-center justify-center text-emerald-400 hover:bg-emerald-500/15 transition-colors flex-shrink-0 after:absolute after:-inset-1 after:content-[''] ${FOCUS}`}>
+                className={`relative w-9 h-9 rounded-md flex items-center justify-center text-success hover:bg-success/10 transition-colors flex-shrink-0 after:absolute after:-inset-1 after:content-[''] ${FOCUS}`}>
                 <Check className="w-4 h-4" aria-hidden="true" />
               </button>
               <button type="button" data-testid="territory-name-cancel" onClick={() => setEditingName(false)} title="Cancel"
@@ -235,7 +235,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
                   key={id}
                   data-testid="rep-chip"
                   className={`inline-flex items-center gap-1.5 text-[11px] font-medium pl-2 ${canUnassign ? "pr-0.5" : "pr-2"} py-0.5 rounded-full ${
-                    confirming ? "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/40" : "bg-secondary text-foreground"
+                    confirming ? "bg-destructive/10 text-destructive ring-1 ring-destructive/30" : "bg-secondary text-foreground"
                   } ${busy ? "opacity-60" : ""}`}
                 >
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: repHue(id) }} />
@@ -248,7 +248,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
                         data-testid={`confirm-unassign-${id}`}
                         disabled={busy}
                         onClick={() => { setConfirmRemoveId(null); onUnassignRep?.(id); }}
-                        className="relative inline-flex h-6 w-6 items-center justify-center rounded-full bg-rose-500/25 text-rose-200 hover:bg-rose-500/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
+                        className="relative inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive/15 text-rose-200 hover:bg-destructive/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
                       >
                         <Check className="w-3 h-3" aria-hidden="true" />
                       </button>
@@ -270,7 +270,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
                       data-testid={`unassign-rep-${id}`}
                       disabled={busy}
                       onClick={() => setConfirmRemoveId(id)}
-                      className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-rose-500/20 hover:text-rose-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
+                      className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/12 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
                     >
                       <UserMinus className="w-3 h-3" aria-hidden="true" />
                     </button>
@@ -340,7 +340,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
             aria-label={`Area worked ${progress.areaWorkedPct.toFixed(2)} percent`}
           >
             <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
+              className="h-full rounded-full bg-success transition-[width] duration-500"
               style={{ width: `${Math.min(100, Math.max(progress.areaWorkedPct, progress.areaWorkedPct > 0 ? 2 : 0))}%` }}
             />
           </div>
@@ -350,16 +350,16 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
 
           {/* Verification summary — icon + text (WCAG: not colour alone) */}
           <div className="mt-3 grid grid-cols-3 gap-1.5" data-testid="verification-summary">
-            <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1.5 text-center">
-              <div className="inline-flex items-center gap-1 text-emerald-400"><span className="text-sm font-bold tabular-nums">{progress.verified}</span></div>
+            <div className="rounded-lg border border-success/15 bg-success/8 px-2 py-1.5 text-center">
+              <div className="inline-flex items-center gap-1 text-success"><span className="text-sm font-bold tabular-nums">{progress.verified}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Verified</div>
             </div>
-            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-center">
-              <div className="inline-flex items-center gap-1 text-amber-400"><span className="text-sm font-bold tabular-nums">{progress.needsReview}</span></div>
+            <div className="rounded-lg border border-warning/15 bg-warning/8 px-2 py-1.5 text-center">
+              <div className="inline-flex items-center gap-1 text-warning"><span className="text-sm font-bold tabular-nums">{progress.needsReview}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Review</div>
             </div>
-            <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-2 py-1.5 text-center">
-              <div className="inline-flex items-center gap-1 text-red-400"><span className="text-sm font-bold tabular-nums">{progress.invalid}</span></div>
+            <div className="rounded-lg border border-destructive/15 bg-destructive/8 px-2 py-1.5 text-center">
+              <div className="inline-flex items-center gap-1 text-destructive"><span className="text-sm font-bold tabular-nums">{progress.invalid}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Invalid</div>
             </div>
           </div>
@@ -466,8 +466,8 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
             aria-haspopup="menu"
             className={`flex-1 h-11 rounded-lg text-xs font-semibold transition-colors ${
               reclaimOpen
-                ? "bg-amber-500/30 text-amber-300 ring-1 ring-amber-400/50"
-                : "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
+                ? "bg-warning/25 text-warning ring-1 ring-warning/50"
+                : "bg-warning/10 text-warning hover:bg-warning/15"
             } ${FOCUS}`}
           >
             Reclaim
@@ -492,8 +492,8 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
               aria-live="polite"
               className={`flex-1 h-11 rounded-lg text-xs font-semibold transition-colors disabled:opacity-60 ${
                 completeConfirming
-                  ? "bg-emerald-500/30 text-emerald-300 ring-1 ring-emerald-400/50"
-                  : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
+                  ? "bg-success/25 text-success ring-1 ring-success/50"
+                  : "bg-success/10 text-success hover:bg-success/15"
               } ${FOCUS}`}
             >
               {completing ? "Completing…" : completeConfirming ? "Sure? Tap again" : "Complete"}

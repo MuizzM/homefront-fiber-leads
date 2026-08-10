@@ -32,14 +32,14 @@ interface Summary {
 interface LedgerEvent { id: number; delta: number; reason: string; leadId: number | null; overage: number; balanceAfter: number | null; actor: string | null; at: string }
 
 const STATE_META: Record<NonNullable<Summary["state"]>, { label: string; cls: string; Icon: React.ElementType }> = {
-  trial:     { label: "Trial",     cls: "bg-blue-500/15 text-blue-400",    Icon: Clock },
-  active:    { label: "Active",    cls: "bg-emerald-500/15 text-emerald-400", Icon: CheckCircle2 },
-  past_due:  { label: "Past due",  cls: "bg-amber-500/15 text-amber-400",  Icon: AlertTriangle },
-  suspended: { label: "Suspended", cls: "bg-red-500/15 text-red-400",      Icon: AlertTriangle },
+  trial:     { label: "Trial",     cls: "bg-info/10 text-info",    Icon: Clock },
+  active:    { label: "Active",    cls: "bg-success/10 text-success", Icon: CheckCircle2 },
+  past_due:  { label: "Past due",  cls: "bg-warning/10 text-warning",  Icon: AlertTriangle },
+  suspended: { label: "Suspended", cls: "bg-destructive/10 text-destructive",      Icon: AlertTriangle },
   canceled:  { label: "Canceled",  cls: "bg-muted text-muted-foreground",  Icon: AlertTriangle },
 };
 const LEVEL_BAR: Record<Summary["level"], string> = {
-  ok: "bg-primary", warn: "bg-amber-500", critical: "bg-red-500", exhausted: "bg-red-500",
+  ok: "bg-primary", warn: "bg-warning", critical: "bg-destructive", exhausted: "bg-destructive",
 };
 const REASON_LABEL: Record<string, string> = {
   lead_delivered: "Lead delivered", grant: "Credits granted", purchase: "Credits purchased",
@@ -162,7 +162,7 @@ export default function Billing() {
         // A failed fetch is NOT "billing isn't set up". Rendering NotProvisioned
         // here told admins "nothing is metered" during a network blip — the most
         // load-bearing false statement this page could make.
-        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" role="alert" data-testid="billing-error">
+        <div className="rounded-xl bg-card border border-destructive/25 p-6 text-center" role="alert" data-testid="billing-error">
           <div className="text-sm font-semibold text-foreground">Couldn't load billing</div>
           <div className="mt-1 text-sm text-muted-foreground">Your plan and credits are unchanged - this is a connection problem, not a billing state.</div>
           <button onClick={() => refetch()}
@@ -215,13 +215,13 @@ export default function Billing() {
                       A credit is consumed only when a qualified opportunity is delivered.
                     </span>
                     {summary.overageUsed > 0 && (
-                      <span className="inline-flex items-center gap-1 text-amber-400 font-medium">
+                      <span className="inline-flex items-center gap-1 text-warning font-medium">
                          {summary.overageUsed.toLocaleString()} in overage
                       </span>
                     )}
                   </div>
                   {(summary.level === "critical" || summary.level === "exhausted") && (
-                    <div role="alert" className="mt-3 flex items-center gap-2 rounded-lg bg-red-500/10 text-red-400 px-3 py-2 text-[12.5px]">
+                    <div role="alert" className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/8 text-destructive px-3 py-2 text-[12.5px]">
                       
                       {summary.level === "exhausted"
                         ? (summary.overageMode === "stop"
@@ -262,9 +262,9 @@ export default function Billing() {
                         <td className="px-3 py-2.5 text-foreground">
                           {REASON_LABEL[e.reason] ?? e.reason}
                           {e.leadId != null && <span className="text-muted-foreground"> · #{e.leadId}</span>}
-                          {!!e.overage && <span className="ml-1.5 inline-flex items-center h-4 px-1.5 rounded bg-amber-500/15 text-amber-400 text-2xs font-medium">overage</span>}
+                          {!!e.overage && <span className="ml-1.5 inline-flex items-center h-4 px-1.5 rounded bg-warning/10 text-warning text-2xs font-medium">overage</span>}
                         </td>
-                        <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${e.delta < 0 ? "text-foreground" : e.delta > 0 ? "text-emerald-400" : "text-muted-foreground"}`}>
+                        <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${e.delta < 0 ? "text-foreground" : e.delta > 0 ? "text-success" : "text-muted-foreground"}`}>
                           {e.delta > 0 ? `+${e.delta}` : e.delta}
                         </td>
                         <td className="px-4 sm:px-5 py-2.5 text-right tabular-nums text-muted-foreground">{e.balanceAfter ?? " - "}</td>

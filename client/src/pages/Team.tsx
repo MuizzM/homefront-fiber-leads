@@ -29,8 +29,8 @@ export const ROLES = [
     label: "Sales Rep",
     short: "Rep",
     description: "Knocks doors, logs contacts, views own leads & territory only",
-    color: "bg-blue-500/15 text-blue-400",
-    avatarColor: "bg-blue-500/20 text-blue-400",
+    color: "bg-info/10 text-info",
+    avatarColor: "bg-info/12 text-info",
     Icon: User,
   },
   {
@@ -47,8 +47,8 @@ export const ROLES = [
     label: "Manager",
     short: "Manager",
     description: "Full visibility of all reps, leads & territories; can assign territories",
-    color: "bg-amber-500/15 text-amber-400",
-    avatarColor: "bg-amber-500/20 text-amber-400",
+    color: "bg-warning/10 text-warning",
+    avatarColor: "bg-warning/12 text-warning",
     Icon: Crown,
   },
 ] as const;
@@ -590,8 +590,8 @@ export default function Team() {
                       <Badge className={`h-5 gap-1 px-1.5 rounded-full border-0 text-[11px] font-medium ${ri2.color}`}>
                         {ri2.short}
                       </Badge>
-                      <span className={`inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-full text-[11px] font-medium ${member.active ? "bg-emerald-500/10 text-emerald-400" : "bg-muted text-muted-foreground"}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${member.active ? "bg-emerald-500" : "bg-muted-foreground/50"}`} />
+                      <span className={`inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-full text-[11px] font-medium ${member.active ? "bg-success/8 text-success" : "bg-muted text-muted-foreground"}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${member.active ? "bg-success" : "bg-muted-foreground/50"}`} />
                         {member.active ? "Active" : "Inactive"}
                       </span>
                     </div>
@@ -641,7 +641,7 @@ export default function Team() {
                     <div className="flex md:hidden items-center gap-4 mt-2.5">
                       {metrics.map(({ label, val, highlight }) => (
                         <div key={label} className="flex items-baseline gap-1">
-                          <span className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-emerald-400" : "text-foreground"}`}>{val.toLocaleString()}</span>
+                          <span className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-success" : "text-foreground"}`}>{val.toLocaleString()}</span>
                           <span className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</span>
                         </div>
                       ))}
@@ -652,7 +652,7 @@ export default function Team() {
                   <div className="hidden md:flex items-center gap-5 flex-shrink-0">
                     {metrics.map(({ label, val, highlight }) => (
                       <div key={label} className="w-14 text-right">
-                        <div className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-emerald-400" : val > 0 ? "text-foreground" : "text-muted-foreground/50"}`}>{val.toLocaleString()}</div>
+                        <div className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-success" : val > 0 ? "text-foreground" : "text-muted-foreground/50"}`}>{val.toLocaleString()}</div>
                       </div>
                     ))}
                   </div>
@@ -684,14 +684,14 @@ export default function Team() {
                         </Button>
                       )}
                       {canLifecycle(member) && member.active && (
-                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-amber-400 hover:bg-amber-500/10"
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-warning hover:bg-warning/8"
                           onClick={() => setOffboardMember(member)} data-testid={`btn-offboard-rep-${member.id}`}
                           aria-label={`Offboard ${member.name}`} title="Offboard - remove access, keep records">
                           Offboard
                         </Button>
                       )}
                       {canHardDelete(member) && (
-                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive hover:bg-destructive/8"
                           onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
                           aria-label={`Remove ${member.name}`} title="Delete member record">
                           Delete
@@ -750,7 +750,7 @@ export default function Team() {
           ].map(({ label, val, highlight }) => (
             <div key={label} className="min-w-0 bg-card px-4 py-3">
               <span className="block truncate text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-              <div className={`text-2xl font-bold tabular-nums mt-1.5 ${highlight ? "text-emerald-400" : "text-foreground"}`}>{val.toLocaleString()}</div>
+              <div className={`text-2xl font-bold tabular-nums mt-1.5 ${highlight ? "text-success" : "text-foreground"}`}>{val.toLocaleString()}</div>
             </div>
           ))}
         </div>
@@ -802,9 +802,9 @@ export default function Team() {
           ))}
         </div>
       ) : isError && !isLoading ? (
-        <Card className="bg-card border-red-500/25 rounded-xl">
+        <Card className="bg-card border-destructive/15 rounded-xl">
           <CardContent className="py-14 text-center">
-            <div className="text-sm font-semibold text-red-400">Couldn't load the team</div>
+            <div className="text-sm font-semibold text-destructive">Couldn't load the team</div>
             <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-xs mx-auto">This is a fetch problem, not an empty roster.</p>
             <button type="button" onClick={() => void refetchTeam()} className="h-9 rounded-lg border border-border px-4 text-xs font-semibold hover:bg-secondary">Retry</button>
           </CardContent>
@@ -871,7 +871,7 @@ export default function Team() {
                         <div className="flex items-center justify-end gap-1 flex-shrink-0">
                           {canLifecycle(member) && (
                             <Button variant="outline" size="sm"
-                              className="h-8 border-border text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                              className="h-8 border-border text-success hover:text-success hover:bg-success/8"
                               onClick={() => reactivateMutation.mutate(member.id)}
                               disabled={reactivateMutation.isPending && reactivateMutation.variables === member.id}
                               data-testid={`btn-reactivate-rep-${member.id}`}
@@ -881,7 +881,7 @@ export default function Team() {
                             </Button>
                           )}
                           {canHardDelete(member) && (
-                            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive hover:bg-destructive/8"
                               onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
                               aria-label={`Remove ${member.name}`} title="Delete member record">
                               Delete
@@ -948,7 +948,7 @@ export default function Team() {
             <Button
               onClick={() => offboardMember && offboardMutation.mutate(offboardMember.id)}
               disabled={offboardMutation.isPending}
-              className="h-9 bg-amber-600 hover:bg-amber-600/90 text-white"
+              className="h-9 bg-warning hover:bg-warning/90 text-white"
               data-testid="btn-confirm-offboard"
             >
               {offboardMutation.isPending ? "Offboarding…" : "Offboard Member"}
@@ -1269,7 +1269,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
           ) : curStruct === "TIERED" ? (
             <span className="text-foreground font-semibold">Tiered - {current.planName || "weekly ladder"}</span>
           ) : (
-            <span className="text-amber-400 font-medium">No plan assigned yet</span>
+            <span className="text-warning font-medium">No plan assigned yet</span>
           )}
         </div>
 
@@ -1366,7 +1366,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
           </Button>
         </DialogFooter>
         {blockedReason && (
-          <p className="text-[11px] text-amber-400 text-right -mt-1" data-testid="commission-blocked-reason">
+          <p className="text-[11px] text-warning text-right -mt-1" data-testid="commission-blocked-reason">
             {blockedReason}
           </p>
         )}

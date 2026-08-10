@@ -44,18 +44,18 @@ interface Counters {
 }
 
 const STAGE_TONE: Record<string, string> = {
-  classified: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  saving: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20",
-  searching: "bg-sky-500/15 text-sky-400 border-sky-500/30",
-  parsing: "bg-sky-500/10 text-sky-300 border-sky-500/20",
+  classified: "bg-success/10 text-success border-success/25",
+  saving: "bg-success/8 text-success border-success/12",
+  searching: "bg-info/10 text-info border-info/25",
+  parsing: "bg-info/8 text-info border-info/12",
   minting: "bg-violet-500/15 text-violet-300 border-violet-500/30",
   token_ready: "bg-violet-500/10 text-violet-300 border-violet-500/20",
   queued: "bg-muted text-muted-foreground border-border",
   discovered: "bg-muted text-muted-foreground border-border",
-  retry: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  blocked: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  bad_request: "bg-orange-500/15 text-orange-400 border-orange-500/30",
-  error: "bg-red-500/15 text-red-400 border-red-500/30",
+  retry: "bg-warning/10 text-warning border-warning/25",
+  blocked: "bg-warning/10 text-warning border-warning/25",
+  bad_request: "bg-warning/10 text-warning border-warning/25",
+  error: "bg-destructive/10 text-destructive border-destructive/25",
 };
 
 function rel(ts: number): string {
@@ -254,28 +254,28 @@ export default function ScanInspector() {
     <div className="space-y-4" data-testid="scan-inspector">
       {/* Health + connection */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-400"}`}>
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-success/25 bg-success/8 text-success" : "border-warning/25 bg-warning/8 text-warning"}`}>
           {connected ? null : <Loader2 className="h-3.5 w-3.5 animate-spin" />} {connected ? "Live" : "Connecting…"}
         </span>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400" : "border-red-500/30 text-red-600 dark:text-red-400"}`}>
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-success/25 text-success" : "border-destructive/25 text-destructive"}`}>
           {health?.decodoConnected ? null : null} Decodo {health?.decodoConnected ? "connected" : "down"}
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground font-mono">{health?.proxySessionId ?? "decodo-s?"}</span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground">
            token {health?.tokenReady ? `ready · ${health?.tokenExpiresIn ?? "?"}s` : "none"} · pool {health?.tokenPool?.ready ?? 0}/{health?.tokenPool?.size ?? 0}
         </span>
-        {health?.paused && <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-amber-400">Paused</span>}
+        {health?.paused && <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/25 bg-warning/8 px-2.5 py-1 text-warning">Paused</span>}
       </div>
 
       {/* Accounting counters — found = checked + queued + checking + retrying + unresolved */}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
         {([
           ["Found", liveCounters.found, "text-foreground"],
-          ["Checked", liveCounters.checked, "text-emerald-600 dark:text-emerald-400"],
+          ["Checked", liveCounters.checked, "text-success"],
           ["Queued", liveCounters.queued, "text-muted-foreground"],
-          ["Checking", liveCounters.checking, "text-sky-600 dark:text-sky-400"],
-          ["Retrying", liveCounters.retrying, "text-amber-600 dark:text-amber-400"],
-          ["Unresolved", liveCounters.unresolved, "text-orange-600 dark:text-orange-400"],
+          ["Checking", liveCounters.checking, "text-info"],
+          ["Retrying", liveCounters.retrying, "text-warning"],
+          ["Unresolved", liveCounters.unresolved, "text-warning"],
         ] as const).map(([label, val, tone]) => (
           <div key={label} className="rounded-xl border border-border bg-card px-3 py-2.5">
             <div className={`text-[22px] font-bold leading-none tabular-nums ${tone}`}>{val}</div>
@@ -290,10 +290,10 @@ export default function ScanInspector() {
       {/* Controls */}
       <div className="flex flex-wrap gap-2">
         {health?.paused
-          ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-[13px] font-semibold text-[#04241f] hover:bg-emerald-400"> Resume</button>
+          ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-success px-3 py-2 text-[13px] font-semibold text-[#04241f] hover:bg-success"> Resume</button>
           : <button onClick={() => control("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Pause</button>}
         <button onClick={() => control("retry-failed")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Retry failed</button>
-        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-card px-3 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-500/10 dark:text-red-400"> Stop</button>
+        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-card px-3 py-2 text-[13px] font-semibold text-destructive hover:bg-destructive/8"> Stop</button>
         <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Copy diagnostics</button>
       </div>
 
@@ -360,7 +360,7 @@ export default function ScanInspector() {
                   <div className="truncate pl-5 text-[11px] text-muted-foreground">{[r.city, r.state, r.zip].filter(Boolean).join(" ")} · {r.source}{r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</div>
                 </div>
                 <div className="flex min-w-0 flex-col items-start gap-0.5">
-                  <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stale ? "bg-red-500/15 text-red-400 border-red-500/30" : STAGE_TONE[r.stage] ?? "bg-muted text-muted-foreground border-border"}`}>
+                  <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stale ? "bg-destructive/10 text-destructive border-destructive/25" : STAGE_TONE[r.stage] ?? "bg-muted text-muted-foreground border-border"}`}>
                     {stale ? null : r.stage === "classified" ? null : null}
                     {stale ? `Blocked at ${STAGE_LABEL[r.stage] ?? r.stage}` : STAGE_LABEL[r.stage] ?? r.stage}
                   </span>
@@ -370,7 +370,7 @@ export default function ScanInspector() {
                 <div className="text-right text-[11px] tabular-nums text-muted-foreground">{rel(r.updatedAt)}</div>
               </button>
               {stale && r.retryReason && (
-                <div className="px-4 pb-2 pl-9 text-[11px] text-red-600 dark:text-red-400">{r.retryReason}</div>
+                <div className="px-4 pb-2 pl-9 text-[11px] text-destructive">{r.retryReason}</div>
               )}
               {isOpen && (
                 <div className="border-t border-border/60 bg-background/40 px-4 py-3 pl-9">

@@ -130,7 +130,7 @@ describe("Applications - two-step reject", { retry: 2 }, () => {
     expect(rejectButton()).toHaveTextContent("Reject");
     fireEvent.click(rejectButton());
     expect(rejectButton()).toHaveTextContent("Confirm reject");
-    expect(rejectButton().className).toMatch(/rose/);
+    expect(rejectButton().className).toMatch(/destructive/);
     expect(apiRequest).not.toHaveBeenCalledWith("PATCH", expect.anything(), expect.anything());
   });
 

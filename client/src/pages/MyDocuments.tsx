@@ -56,13 +56,13 @@ interface SigningContent {
 }
 
 const STATUS: Record<OnboardingDocumentStatus, { label: string; className: string }> = {
-  creating: { label: "Preparing", className: "bg-sky-500/15 text-sky-400" },
-  sent: { label: "Ready to sign", className: "bg-amber-500/15 text-amber-400" },
+  creating: { label: "Preparing", className: "bg-info/10 text-info" },
+  sent: { label: "Ready to sign", className: "bg-warning/10 text-warning" },
   delivered: { label: "Opened", className: "bg-purple-500/15 text-purple-400" },
-  completed: { label: "Signed", className: "bg-emerald-500/15 text-emerald-400" },
-  declined: { label: "Declined", className: "bg-red-500/15 text-red-400" },
+  completed: { label: "Signed", className: "bg-success/10 text-success" },
+  declined: { label: "Declined", className: "bg-destructive/10 text-destructive" },
   voided: { label: "Voided", className: "bg-muted text-muted-foreground" },
-  failed: { label: "Needs attention", className: "bg-red-500/15 text-red-400" },
+  failed: { label: "Needs attention", className: "bg-destructive/10 text-destructive" },
 };
 
 function StatusPill({ status }: { status: OnboardingDocumentStatus }) {
@@ -333,7 +333,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
             </div>
 
             <div className="border-t border-border bg-card px-4 sm:px-6 py-4 max-h-[46vh] overflow-y-auto flex-shrink-0" data-testid="signature-panel">
-              {!readToEnd && <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-300 mb-3">Scroll through the complete agreement before signing, or use “Skip to the end”.</div>}
+              {!readToEnd && <div className="rounded-lg bg-warning/8 border border-warning/25 px-3 py-2 text-xs text-warning mb-3">Scroll through the complete agreement before signing, or use “Skip to the end”.</div>}
               {!declining ? (
                 <div className="space-y-2.5 max-w-2xl mx-auto">
                   <LegalCheckbox checked={consent} onChange={setConsent} testId="esign-consent">I consent to receive and sign this agreement electronically, understand I may request a free paper copy, and confirm I can access this electronic record.</LegalCheckbox>
@@ -351,7 +351,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                     <Input id="typed-signature" value={typedName} onChange={event => setTypedName(event.target.value)} placeholder="Type your full legal name" className="mt-1.5 h-11 font-medium" autoComplete="off" data-testid="typed-signature" />
                   </div>
                   <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-1">
-                    <Button variant="ghost" className="text-red-400 hover:text-red-300" onClick={() => setDeclining(true)}> Decline</Button>
+                    <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeclining(true)}> Decline</Button>
                     <Button disabled={!ready || sign.isPending} onClick={() => sign.mutate()} className="h-11 bg-primary hover:bg-primary/90 text-white" data-testid="complete-signature">
                       {sign.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Sign agreement
                     </Button>
@@ -436,9 +436,9 @@ export default function MyDocuments() {
       </header>
 
       {query.isLoading && <div className="h-40 rounded-2xl bg-card border border-border animate-pulse" role="status" aria-busy="true" aria-label="Loading your documents" />}
-      {query.isError && <div className="rounded-2xl bg-card border border-red-500/30 p-6 text-center"><p className="text-sm font-semibold">Couldn’t load your documents</p><Button variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>Try again</Button></div>}
-      {data?.noRepProfile && <div className="rounded-2xl bg-card border border-amber-500/30 p-5 flex items-start gap-3"><div><p className="text-sm font-semibold">No rep profile linked</p><p className="text-xs text-muted-foreground mt-1">Ask your manager to link your login to your team profile.</p></div></div>}
-      {data && !data.noRepProfile && !data.configured && <div className="rounded-2xl bg-card border border-amber-500/30 p-4 flex items-start gap-3"><div><p className="text-sm font-semibold">Onboarding email is temporarily unavailable</p><p className="text-xs text-muted-foreground mt-1">Existing agreements remain available to review, sign, and download. Your manager cannot issue new ones until Resend is connected.</p></div></div>}
+      {query.isError && <div className="rounded-2xl bg-card border border-destructive/25 p-6 text-center"><p className="text-sm font-semibold">Couldn’t load your documents</p><Button variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>Try again</Button></div>}
+      {data?.noRepProfile && <div className="rounded-2xl bg-card border border-warning/25 p-5 flex items-start gap-3"><div><p className="text-sm font-semibold">No rep profile linked</p><p className="text-xs text-muted-foreground mt-1">Ask your manager to link your login to your team profile.</p></div></div>}
+      {data && !data.noRepProfile && !data.configured && <div className="rounded-2xl bg-card border border-warning/25 p-4 flex items-start gap-3"><div><p className="text-sm font-semibold">Onboarding email is temporarily unavailable</p><p className="text-xs text-muted-foreground mt-1">Existing agreements remain available to review, sign, and download. Your manager cannot issue new ones until Resend is connected.</p></div></div>}
 
       {data && !data.noRepProfile && (
         <>
@@ -459,7 +459,7 @@ export default function MyDocuments() {
           )}
           {percentage === 100 && (
             <section
-              className="hf-shine relative overflow-hidden rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-center gap-3"
+              className="hf-shine relative overflow-hidden rounded-2xl border border-success/25 bg-success/8 p-4 flex items-center gap-3"
               aria-label="All agreements signed"
               data-testid="all-signed-banner"
             >
@@ -471,8 +471,8 @@ export default function MyDocuments() {
             </section>
           )}
           <section className="rounded-2xl bg-card border border-border p-4" aria-label="Onboarding progress">
-            <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${percentage === 100 ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
-            <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${percentage === 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${percentage}%` }} /></div>
+            <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${percentage === 100 ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
+            <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${percentage === 100 ? "bg-success" : "bg-primary"}`} style={{ width: `${percentage}%` }} /></div>
           </section>
           <section className="rounded-2xl bg-card border border-border overflow-hidden"><div className="divide-y divide-border">
             {/* The W-9 is onboarding paperwork the company requires before it can
@@ -487,7 +487,7 @@ export default function MyDocuments() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-sm font-semibold">IRS Form W-9 &amp; direct deposit</h2>
-                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${taxReady ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`} data-testid="w9-packet-status">
+                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${taxReady ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`} data-testid="w9-packet-status">
                       {taxReady ? "On file" : w9Filed ? "Bank details needed" : "Not filed"}
                     </span>
                   </div>
@@ -508,7 +508,7 @@ export default function MyDocuments() {
               const record = document.envelope;
               const actionable = record && (record.status === "sent" || record.status === "delivered");
               return <article key={document.type} className="render-lazy p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid={`onboarding-document-${document.type}`}>
-                <div className="flex items-start gap-3 min-w-0 flex-1"><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-red-400 mt-1">{record.failureReason}</p>}{record?.status === "completed" && record.completedPdfSha256 && <p className="text-2xs text-muted-foreground font-mono mt-1.5 break-all" data-testid={`completed-pdf-sha-${document.type}`}><span className="font-sans font-semibold">Signed PDF SHA-256</span> {record.completedPdfSha256}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"> Waiting for your manager</p>}</div></div>
+                <div className="flex items-start gap-3 min-w-0 flex-1"><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-destructive mt-1">{record.failureReason}</p>}{record?.status === "completed" && record.completedPdfSha256 && <p className="text-2xs text-muted-foreground font-mono mt-1.5 break-all" data-testid={`completed-pdf-sha-${document.type}`}><span className="font-sans font-semibold">Signed PDF SHA-256</span> {record.completedPdfSha256}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"> Waiting for your manager</p>}</div></div>
                 <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="h-9 bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="h-9 border-border" onClick={() => download(document)}> Signed PDF</Button>}</div>
               </article>;
             })}

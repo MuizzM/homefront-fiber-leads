@@ -29,10 +29,10 @@ function ageLabel(ms: number | null): string {
 
 // Semantic tokens only — teal stays reserved for the primary action + live signal.
 const SEV: Record<Severity, { dot: string; text: string; pill: string; label: string }> = {
-  ok:       { dot: "bg-emerald-400", text: "text-emerald-400", pill: "bg-emerald-500/15 text-emerald-400", label: "Healthy" },
-  info:     { dot: "bg-sky-400",     text: "text-sky-400",     pill: "bg-sky-500/15 text-sky-400",         label: "Stable" },
-  warning:  { dot: "bg-amber-400",   text: "text-amber-400",   pill: "bg-amber-500/15 text-amber-400",     label: "Degraded" },
-  critical: { dot: "bg-rose-400",    text: "text-rose-400",    pill: "bg-rose-500/15 text-rose-400",       label: "Critical" },
+  ok:       { dot: "bg-success", text: "text-success", pill: "bg-success/10 text-success", label: "Healthy" },
+  info:     { dot: "bg-info",     text: "text-info",     pill: "bg-info/10 text-info",         label: "Stable" },
+  warning:  { dot: "bg-warning",   text: "text-warning",   pill: "bg-warning/10 text-warning",     label: "Degraded" },
+  critical: { dot: "bg-destructive",    text: "text-destructive",    pill: "bg-destructive/10 text-destructive",       label: "Critical" },
 };
 
 function scoreTone(n: number): Severity {
@@ -123,9 +123,9 @@ export default function Diagnostics() {
       ) : isError ? (
         // NEVER render a healthy panel when the fetch failed - that falsely
         // reassures an admin during an actual outage.
-        <div data-testid="diag-error" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-6 text-center">
+        <div data-testid="diag-error" className="rounded-xl border border-destructive/30 bg-destructive/8 p-6 text-center">
           
-          <p className="mt-2 text-sm font-semibold text-rose-400">Couldn’t load diagnostics</p>
+          <p className="mt-2 text-sm font-semibold text-destructive">Couldn’t load diagnostics</p>
           <p className="mt-1 text-xs text-muted-foreground">The health API is unreachable - status below is unknown, not healthy.</p>
           <button onClick={() => refetch()} className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background">
              Retry
@@ -152,8 +152,8 @@ export default function Diagnostics() {
             </div>
             <div className="bg-card p-4 flex flex-col gap-1.5">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Last event</span>
-              <span className={`text-[15px] font-semibold leading-tight tabular-nums ${data?.readModelStale ? "text-amber-400" : "text-foreground"}`}>{ageLabel(data?.readModelAgeMs ?? null)}</span>
-              {data?.readModelStale && <span className="text-[11px] text-amber-400">stream looks quiet</span>}
+              <span className={`text-[15px] font-semibold leading-tight tabular-nums ${data?.readModelStale ? "text-warning" : "text-foreground"}`}>{ageLabel(data?.readModelAgeMs ?? null)}</span>
+              {data?.readModelStale && <span className="text-[11px] text-warning">stream looks quiet</span>}
             </div>
           </div>
 
@@ -213,7 +213,7 @@ export default function Diagnostics() {
       {data && (
         <div data-testid="diag-footer" className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground pt-1 tabular-nums">
           <span>App v{data.appVersion ?? " - "}</span>
-          <span className={data.readModelStale ? "text-amber-400" : ""}>
+          <span className={data.readModelStale ? "text-warning" : ""}>
             Last event {ageLabel(data.readModelAgeMs)}{data.readModelStale ? " · stream looks quiet" : ""}
           </span>
           <span className="inline-flex items-center gap-1.5">

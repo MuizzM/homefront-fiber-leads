@@ -73,10 +73,10 @@ function TracedPhonePanel({ detail, onSwitched }: {
             className={cn("flex items-center gap-3 rounded-xl border p-3",
               option.active ? "border-primary/40 bg-primary/[0.06]" : "border-border bg-background/50")}
             data-testid={`traced-phone-${option.id}`}>
-            <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", option.ready ? "bg-emerald-500" : "bg-red-500")} />
+            <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", option.ready ? "bg-success" : "bg-destructive")} />
             <div className="min-w-0 flex-1">
               <div className="truncate font-mono text-sm">{option.masked}</div>
-              <div className={cn("mt-0.5 truncate text-[11px]", option.ready ? "text-muted-foreground" : "text-red-500")}>
+              <div className={cn("mt-0.5 truncate text-[11px]", option.ready ? "text-muted-foreground" : "text-destructive")}>
                 {option.lineType} · {option.label}
               </div>
             </div>
@@ -102,14 +102,14 @@ const DISPOSITIONS: Array<{ code: DispositionCode; label: string; tone?: string 
   { code: "LEFT_NO_MESSAGE", label: "Left no message" },
   { code: "BUSY", label: "Busy" },
   { code: "INTERESTED", label: "Interested", tone: "border-violet-500/35 bg-violet-500/10 text-violet-300" },
-  { code: "APPOINTMENT_SCHEDULED", label: "Appointment", tone: "border-emerald-500/35 bg-emerald-500/10 text-emerald-300" },
-  { code: "SALE_STARTED", label: "Sale started", tone: "border-emerald-500/35 bg-emerald-500/10 text-emerald-300" },
-  { code: "SALE_COMPLETED", label: "Sale complete", tone: "border-emerald-500/35 bg-emerald-500/10 text-emerald-300" },
-  { code: "NOT_INTERESTED", label: "Not interested", tone: "border-red-500/25 bg-red-500/[0.07] text-red-300" },
-  { code: "DO_NOT_CALL", label: "Do not call", tone: "border-red-500/45 bg-red-500/15 text-red-300" },
-  { code: "WRONG_NUMBER", label: "Wrong number", tone: "border-red-500/35 bg-red-500/10 text-red-300" },
-  { code: "WRONG_PARTY", label: "Wrong party", tone: "border-red-500/35 bg-red-500/10 text-red-300" },
-  { code: "CONSENT_REVOKED", label: "Consent revoked", tone: "border-red-500/45 bg-red-500/15 text-red-300" },
+  { code: "APPOINTMENT_SCHEDULED", label: "Appointment", tone: "border-success/35 bg-success/8 text-success" },
+  { code: "SALE_STARTED", label: "Sale started", tone: "border-success/35 bg-success/8 text-success" },
+  { code: "SALE_COMPLETED", label: "Sale complete", tone: "border-success/35 bg-success/8 text-success" },
+  { code: "NOT_INTERESTED", label: "Not interested", tone: "border-destructive/15 bg-destructive/[0.07] text-destructive" },
+  { code: "DO_NOT_CALL", label: "Do not call", tone: "border-destructive/45 bg-destructive/10 text-destructive" },
+  { code: "WRONG_NUMBER", label: "Wrong number", tone: "border-destructive/35 bg-destructive/8 text-destructive" },
+  { code: "WRONG_PARTY", label: "Wrong party", tone: "border-destructive/35 bg-destructive/8 text-destructive" },
+  { code: "CONSENT_REVOKED", label: "Consent revoked", tone: "border-destructive/45 bg-destructive/10 text-destructive" },
   { code: "CONSENT_GRANTED", label: "Consent evidence captured" },
   { code: "DISCONNECTED", label: "Disconnected" },
   { code: "PROPERTY_OWNER_NOT_RESIDENT", label: "Owner not resident" },
@@ -177,10 +177,10 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
     // couldn't tell something broke. Distinct unavailable state.
     if (detail.decisionError) {
       return (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3" data-testid="calling-decision-error">
+        <div className="flex items-start gap-3 rounded-xl border border-warning/15 bg-warning/[0.08] p-3" data-testid="calling-decision-error">
           
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Decision unavailable</div>
+            <div className="text-sm font-semibold text-warning">Decision unavailable</div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">The recorded decision couldn't be loaded ({detail.decisionError}). Retry, or run a new compliance check.</div>
           </div>
         </div>
@@ -194,10 +194,10 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
   if (expired) {
     return (
       <div className="space-y-3" data-testid="calling-decision">
-        <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3">
+        <div className="flex items-start gap-3 rounded-xl border border-warning/15 bg-warning/[0.08] p-3">
           
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Decision expired</div>
+            <div className="text-sm font-semibold text-warning">Decision expired</div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">This evaluation lapsed {dateLabel(decision.expiresAt)}. Run a new compliance check before authorizing.</div>
           </div>
         </div>
@@ -207,16 +207,16 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
   return (
     <div className="space-y-3" data-testid="calling-decision">
       <div className={cn("flex items-start gap-3 rounded-xl border p-3",
-        decision.eligible ? "border-emerald-500/25 bg-emerald-500/[0.08]" : "border-red-500/25 bg-red-500/[0.07]")}>
+        decision.eligible ? "border-success/15 bg-success/[0.08]" : "border-destructive/15 bg-destructive/[0.07]")}>
         {decision.eligible ? null : null}
         <div className="min-w-0">
-          <div className={cn("text-sm font-semibold", decision.eligible ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{formatDecision("decision" in decision ? decision.decision : decision.finalStatus)}</div>
+          <div className={cn("text-sm font-semibold", decision.eligible ? "text-success" : "text-destructive")}>{formatDecision("decision" in decision ? decision.decision : decision.finalStatus)}</div>
           <div className="mt-0.5 text-[11px] text-muted-foreground">Rule {decision.ruleVersion} · expires {dateLabel(decision.expiresAt)}{decision.localTime ? ` · ${decision.localTime}` : ""}</div>
         </div>
       </div>
       {!decision.eligible && decision.reasonCodes.length > 0 && (
         <ul className="space-y-1.5">
-          {decision.reasonCodes.map(reason => <li key={reason} className="flex items-start gap-2 text-xs"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-400" />{formatDecision(reason)}</li>)}
+          {decision.reasonCodes.map(reason => <li key={reason} className="flex items-start gap-2 text-xs"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />{formatDecision(reason)}</li>)}
         </ul>
       )}
       <details className="group rounded-xl border border-border bg-background/40">
@@ -224,7 +224,7 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
         <div className="divide-y divide-border/70 border-t border-border px-3">
           {decision.rules.map(rule => (
             <div key={rule.rule} className="flex min-h-10 items-center gap-2 py-2 text-xs">
-              {rule.passed ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" /> : null}
+              {rule.passed ? <Check className="h-3.5 w-3.5 shrink-0 text-success" /> : null}
               <span className="min-w-0 flex-1 truncate">{formatDecision(rule.rule)}</span>
               <span className="max-w-[42%] truncate text-2xs text-muted-foreground">{formatDecision(rule.reasonCode)}</span>
             </div>
@@ -481,7 +481,7 @@ export default function CallingLead() {
         {statusQuery.isLoading || detailQuery.isLoading ? <CallingPageSkeleton /> : statusQuery.isError || !statusQuery.data ? (
           <CallingUnknownState retry={() => void statusQuery.refetch()} />
         ) : detailQuery.isError || !detailQuery.data || !candidate ? (
-          <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/[0.08] p-6 text-center"><h1 className="mt-2 text-base font-semibold text-red-400">Calling lead unavailable</h1><p className="mt-1 text-xs text-muted-foreground">No phone or calling action is available. The record may not belong to this organization or rep.</p></div>
+          <div role="alert" className="rounded-2xl border border-destructive/25 bg-destructive/[0.08] p-6 text-center"><h1 className="mt-2 text-base font-semibold text-destructive">Calling lead unavailable</h1><p className="mt-1 text-xs text-muted-foreground">No phone or calling action is available. The record may not belong to this organization or rep.</p></div>
         ) : (
           <div className="space-y-4">
             <CallingAvailability status={statusQuery.data} />
@@ -531,7 +531,7 @@ export default function CallingLead() {
                 {!authorization ? (
                   <Button className="mt-3 w-full" size="lg" disabled={!eligible || !humanReady || authorizeMutation.isPending || manualFlowDisabled} onClick={() => authorizeMutation.mutate()}>{authorizeMutation.isPending ? "Authorizing…" : "Authorize one manual call"}</Button>
                 ) : (
-                  <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.08] p-3"><div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold text-emerald-600 dark:text-emerald-400">One-use authorization ready</span><span className="font-mono tabular-nums text-muted-foreground">{expiresIn}s</span></div><Button className="mt-3 w-full" size="lg" disabled={expiresIn <= 0 || startMutation.isPending} onClick={() => startMutation.mutate()}>{startMutation.isPending ? "Re-checking gates…" : "Reveal number & start manual attempt"}</Button></div>
+                  <div className="mt-3 rounded-xl border border-success/15 bg-success/[0.08] p-3"><div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold text-success">One-use authorization ready</span><span className="font-mono tabular-nums text-muted-foreground">{expiresIn}s</span></div><Button className="mt-3 w-full" size="lg" disabled={expiresIn <= 0 || startMutation.isPending} onClick={() => startMutation.mutate()}>{startMutation.isPending ? "Re-checking gates…" : "Reveal number & start manual attempt"}</Button></div>
                 )}
                 {!eligible && <p className="mt-3 text-center text-[11px] text-muted-foreground">A current eligible compliance decision is required. The frontend cannot override a blocked decision.</p>}
               </section>
@@ -547,8 +547,8 @@ export default function CallingLead() {
               <>
                 <section className="rounded-2xl border border-primary/30 bg-primary/[0.06] p-4" data-testid="active-manual-attempt">
                   <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-primary"> Manual attempt active</div>
-                  <div className="mt-3 flex items-center gap-2"><div className="min-w-0 flex-1 truncate font-mono text-2xl font-semibold tracking-tight">{activeAttempt.phoneNumber ?? activeAttempt.maskedPhone}</div>{activeAttempt.phoneNumber && <Button variant="outline" size="icon" aria-label="Copy phone number" disabled={copyMutation.isPending} onClick={() => copyMutation.mutate()}>{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Clipboard className="h-4 w-4" />}</Button>}</div>
-                  {activeAttempt.resumed && <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">Resumed open attempt after navigation or refresh. The full number is not revealed again; record the outcome to close this attempt.</p>}
+                  <div className="mt-3 flex items-center gap-2"><div className="min-w-0 flex-1 truncate font-mono text-2xl font-semibold tracking-tight">{activeAttempt.phoneNumber ?? activeAttempt.maskedPhone}</div>{activeAttempt.phoneNumber && <Button variant="outline" size="icon" aria-label="Copy phone number" disabled={copyMutation.isPending} onClick={() => copyMutation.mutate()}>{copied ? <Check className="h-4 w-4 text-success" /> : <Clipboard className="h-4 w-4" />}</Button>}</div>
+                  {activeAttempt.resumed && <p className="mt-2 text-[11px] text-warning">Resumed open attempt after navigation or refresh. The full number is not revealed again; record the outcome to close this attempt.</p>}
                   <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"> No auto-dial, phone link, auto-next, recording, or prerecorded voice is initiated by this app.</p>
                 </section>
                 <section className="rounded-2xl border border-border bg-card p-4"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Approved script · {activeAttempt.script.version}</div><h2 className="mt-1 text-base font-semibold">{activeAttempt.script.title}</h2><div className="mt-3 rounded-xl border border-border bg-background/60 p-4 text-sm leading-relaxed whitespace-pre-wrap"><div className="mb-2 font-semibold">{activeAttempt.script.sellerName} · {activeAttempt.script.companyName} · {activeAttempt.script.purpose}</div>{activeAttempt.script.body}</div></section>
@@ -573,20 +573,20 @@ export default function CallingLead() {
                         className={cn(
                           "min-h-11 rounded-xl border border-border bg-background px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-50",
                           item.tone,
-                          armed && "border-red-500 bg-red-500/25 text-red-100 ring-1 ring-red-400",
+                          armed && "border-destructive bg-destructive/15 text-red-100 ring-1 ring-destructive",
                         )}
                       >
                         {armed ? `Confirm: ${item.label}?` : item.label}
                       </button>
                     );
                   })}</div>
-                  {!showCallback ? <button type="button" onClick={() => setShowCallback(true)} className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/[0.08] text-xs font-semibold text-sky-300"> Customer requested callback</button> : <div className="mt-2 space-y-3 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3"><label className="block text-xs font-semibold">Callback date and local time<input type="datetime-local" value={callbackAt} onChange={event => setCallbackAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3" /></label><label className="block text-xs font-semibold">Verified callback evidence artifact ID<input value={callbackEvidenceRef} onChange={event => setCallbackEvidenceRef(event.target.value)} placeholder="UUID bound to this exact call attempt" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label><p className="text-[11px] leading-relaxed text-muted-foreground">The server accepts only a retained, verified evidence artifact bound to this tenant, lead, phone, and call attempt. A free-form note cannot authorize a callback.</p><Button variant="outline" className="w-full border-sky-500/30 text-sky-300" disabled={!callbackValid || dispositionMutation.isPending} onClick={() => dispositionMutation.mutate("CALLBACK_REQUESTED")}>Save requested callback</Button></div>}
+                  {!showCallback ? <button type="button" onClick={() => setShowCallback(true)} className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-info/25 bg-info/[0.08] text-xs font-semibold text-info"> Customer requested callback</button> : <div className="mt-2 space-y-3 rounded-xl border border-info/15 bg-info/[0.06] p-3"><label className="block text-xs font-semibold">Callback date and local time<input type="datetime-local" value={callbackAt} onChange={event => setCallbackAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3" /></label><label className="block text-xs font-semibold">Verified callback evidence artifact ID<input value={callbackEvidenceRef} onChange={event => setCallbackEvidenceRef(event.target.value)} placeholder="UUID bound to this exact call attempt" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label><p className="text-[11px] leading-relaxed text-muted-foreground">The server accepts only a retained, verified evidence artifact bound to this tenant, lead, phone, and call attempt. A free-form note cannot authorize a callback.</p><Button variant="outline" className="w-full border-info/25 text-info" disabled={!callbackValid || dispositionMutation.isPending} onClick={() => dispositionMutation.mutate("CALLBACK_REQUESTED")}>Save requested callback</Button></div>}
                 </section>
                 <ConsentForm detail={detailQuery.data} attempt={activeAttempt} onSaved={() => void detailQuery.refetch()} />
               </>
             )}
 
-            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button data-testid="next-eligible-lead" disabled={nextLeadMutation.isPending} onClick={() => nextLeadMutation.mutate()}>{nextLeadMutation.isPending ? "Finding next eligible lead…" : "Next eligible lead"}</Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
+            {completed && <section className="rounded-2xl border border-success/15 bg-success/[0.08] p-5 text-center"><h2 className="mt-2 text-base font-semibold text-success">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button data-testid="next-eligible-lead" disabled={nextLeadMutation.isPending} onClick={() => nextLeadMutation.mutate()}>{nextLeadMutation.isPending ? "Finding next eligible lead…" : "Next eligible lead"}</Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
 
             {/* Safe-area: the sticky thumb-zone bar must clear the home
                 indicator on notched phones (same env() pattern as the map). */}
@@ -622,7 +622,7 @@ export default function CallingLead() {
                         }}
                         className={cn(
                           "min-h-12 rounded-xl border border-border bg-background px-2 text-[12px] font-semibold transition-colors hover:bg-secondary active:scale-95 disabled:opacity-50",
-                          armed && "border-emerald-500 bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400",
+                          armed && "border-success bg-success/15 text-emerald-100 ring-1 ring-success",
                         )}
                       >
                         {armed ? "Confirm sale?" : item.label}
@@ -634,14 +634,14 @@ export default function CallingLead() {
             )}
 
             {candidate.phoneId && !completed && canOptOut && (
-              <section className="rounded-2xl border border-red-500/25 bg-red-500/[0.05] p-4"><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold text-red-600 dark:text-red-400">STOP / do not call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Use immediately for any stop request, wrong number, or consent revocation. This permanently suppresses the number for this organization.</p></div></div>
-                <label className="mt-3 block text-xs font-semibold">Suppression reason<select value={optOutReason} onChange={event => setOptOutReason(event.target.value as typeof optOutReason)} className="mt-1 h-11 w-full rounded-xl border border-red-500/25 bg-background px-3 font-normal"><option value="stop_request">Consumer said STOP / take me off the list</option><option value="do_not_call">Do not call request</option><option value="wrong_number">Wrong number</option><option value="wrong_party">Wrong party</option><option value="consent_revoked">Consent revoked</option></select></label>
-                <AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" className="mt-3 w-full">Record STOP and suppress now</Button></AlertDialogTrigger><AlertDialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl"><AlertDialogHeader><AlertDialogTitle>Suppress this number permanently?</AlertDialogTitle><AlertDialogDescription>This immediately adds the number to the internal DNC list, cancels callbacks, and invalidates unused call authorizations. It cannot be undone by a rep.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={optOutMutation.isPending} onClick={() => optOutMutation.mutate()} className="bg-red-600 text-white hover:bg-red-700">{optOutMutation.isPending ? "Suppressing…" : "Confirm STOP"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+              <section className="rounded-2xl border border-destructive/15 bg-destructive/[0.05] p-4"><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold text-destructive">STOP / do not call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Use immediately for any stop request, wrong number, or consent revocation. This permanently suppresses the number for this organization.</p></div></div>
+                <label className="mt-3 block text-xs font-semibold">Suppression reason<select value={optOutReason} onChange={event => setOptOutReason(event.target.value as typeof optOutReason)} className="mt-1 h-11 w-full rounded-xl border border-destructive/15 bg-background px-3 font-normal"><option value="stop_request">Consumer said STOP / take me off the list</option><option value="do_not_call">Do not call request</option><option value="wrong_number">Wrong number</option><option value="wrong_party">Wrong party</option><option value="consent_revoked">Consent revoked</option></select></label>
+                <AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" className="mt-3 w-full">Record STOP and suppress now</Button></AlertDialogTrigger><AlertDialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl"><AlertDialogHeader><AlertDialogTitle>Suppress this number permanently?</AlertDialogTitle><AlertDialogDescription>This immediately adds the number to the internal DNC list, cancels callbacks, and invalidates unused call authorizations. It cannot be undone by a rep.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={optOutMutation.isPending} onClick={() => optOutMutation.mutate()} className="bg-destructive text-white hover:bg-red-700">{optOutMutation.isPending ? "Suppressing…" : "Confirm STOP"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
               </section>
             )}
 
             {detailQuery.data.consent.id && detailQuery.data.consent.verified && !detailQuery.data.consent.revoked && !completed && canOptOut && (
-              <section className="rounded-2xl border border-red-500/25 bg-card p-4"><h2 className="text-sm font-semibold">Revoke recorded consent</h2><p className="mt-1 text-xs text-muted-foreground">Records an immutable revocation and permanent internal DNC suppression in one transaction.</p><label className="mt-3 block text-xs font-semibold">Revocation evidence reference<input value={revocationEvidence} onChange={event => setRevocationEvidence(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-normal" /></label><Button variant="destructive" className="mt-3 w-full" disabled={revocationEvidence.trim().length < 3 || revokeMutation.isPending} onClick={() => revokeMutation.mutate()}>{revokeMutation.isPending ? "Revoking…" : "Revoke consent and suppress"}</Button></section>
+              <section className="rounded-2xl border border-destructive/15 bg-card p-4"><h2 className="text-sm font-semibold">Revoke recorded consent</h2><p className="mt-1 text-xs text-muted-foreground">Records an immutable revocation and permanent internal DNC suppression in one transaction.</p><label className="mt-3 block text-xs font-semibold">Revocation evidence reference<input value={revocationEvidence} onChange={event => setRevocationEvidence(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-normal" /></label><Button variant="destructive" className="mt-3 w-full" disabled={revocationEvidence.trim().length < 3 || revokeMutation.isPending} onClick={() => revokeMutation.mutate()}>{revokeMutation.isPending ? "Revoking…" : "Revoke consent and suppress"}</Button></section>
             )}
 
             <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Immutable activity trail ({detailQuery.data.timeline.length})</summary><div className="max-h-80 divide-y divide-border overflow-y-auto border-t border-border px-4">{detailQuery.data.timeline.length ? detailQuery.data.timeline.map(event => <div key={event.id} className="py-3"><div className="flex items-baseline justify-between gap-3"><span className="text-xs font-semibold">{formatDecision(event.eventType)}</span><time className="shrink-0 text-2xs text-muted-foreground">{dateLabel(event.createdAt)}</time></div><div className="mt-1 truncate font-mono text-2xs text-muted-foreground">{event.eventSha256}</div></div>) : <p className="py-4 text-xs text-muted-foreground">No calling activity yet.</p>}</div></details></section>

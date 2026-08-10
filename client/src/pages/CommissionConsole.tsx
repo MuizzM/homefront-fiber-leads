@@ -47,18 +47,18 @@ interface Overview {
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 
 const STATUS_STYLE: Record<string, string> = {
-  OPEN: "bg-amber-500/15 text-amber-400",
-  REVIEW: "bg-sky-500/15 text-sky-400",
+  OPEN: "bg-warning/10 text-warning",
+  REVIEW: "bg-info/10 text-info",
   FINALIZED: "bg-primary/15 text-primary",
-  PAID: "bg-emerald-500/15 text-emerald-400",
-  NO_PLAN: "bg-rose-500/15 text-rose-400",
+  PAID: "bg-success/10 text-success",
+  NO_PLAN: "bg-destructive/10 text-destructive",
 };
 const STATUS_DOT: Record<string, string> = {
-  OPEN: "bg-amber-400",
-  REVIEW: "bg-sky-400",
+  OPEN: "bg-warning",
+  REVIEW: "bg-info",
   FINALIZED: "bg-primary",
-  PAID: "bg-emerald-400",
-  NO_PLAN: "bg-rose-400",
+  PAID: "bg-success",
+  NO_PLAN: "bg-destructive",
 };
 
 function StatusChip({ status }: { status: string }) {
@@ -243,7 +243,7 @@ export default function CommissionConsole() {
       </div>
 
       {isError && (
-        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" role="alert">
+        <div className="rounded-xl bg-card border border-destructive/25 p-6 text-center" role="alert">
           <div className="text-sm font-semibold text-foreground">Couldn't load the week</div>
           <div className="text-sm text-muted-foreground mt-1">Check your connection - nothing about the week's money has changed.</div>
           <Button variant="outline" size="sm" className="mt-3 h-9 border-border" onClick={() => refetchWeek()} data-testid="week-retry">
@@ -273,7 +273,7 @@ export default function CommissionConsole() {
               </div>
               <div className="flex-1 p-4" data-testid="tile-projected">
                 <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" /> Still projected
+                  <span className="w-1.5 h-1.5 rounded-full bg-warning" /> Still projected
                 </div>
                 <div className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{usd(ov.totals.projectedPayrollCents)}</div>
                 <div className="text-[11px] text-muted-foreground mt-1">{openCount > 0 ? `${openCount} open week${openCount === 1 ? "" : "s"}` : "All settled"}</div>
@@ -287,14 +287,14 @@ export default function CommissionConsole() {
               </div>
               <div className="flex-1 p-4" data-testid="tile-paid">
                 <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground font-medium">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Paid
+                  <span className="w-1.5 h-1.5 rounded-full bg-success" /> Paid
                 </div>
                 <div className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{usd(ov.totals.paidPayrollCents)}</div>
                 <div className="text-[11px] text-muted-foreground mt-1">{ov.totals.paidPayrollCents > 0 ? "Money moved" : "Awaiting payout"}</div>
               </div>
             </div>
             {ov.totals.exposureCents > 0 && (
-              <div className="border-t border-border px-4 py-2.5 flex items-start gap-1.5 text-[11px] text-amber-400 bg-amber-500/[0.06]">
+              <div className="border-t border-border px-4 py-2.5 flex items-start gap-1.5 text-[11px] text-warning bg-warning/[0.06]">
                 
                 <span>Could rise <strong className="tabular-nums">+{usd(ov.totals.exposureCents)}</strong> if {nearTier.length} rep{nearTier.length === 1 ? "" : "s"} hit{nearTier.length === 1 ? "s" : ""} the next tier by Sunday</span>
               </div>
@@ -303,8 +303,8 @@ export default function CommissionConsole() {
 
           {/* Needs review — actionable, never decorative */}
           {ov.exceptions.length > 0 ? (
-            <div className="rounded-2xl bg-card border border-amber-500/30 overflow-hidden" data-testid="exceptions-panel">
-              <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-2">
+            <div className="rounded-2xl bg-card border border-warning/25 overflow-hidden" data-testid="exceptions-panel">
+              <div className="px-4 py-2.5 bg-warning/8 border-b border-warning/12 flex items-center gap-2">
                 
                 <span className="text-sm font-semibold text-foreground">Needs review before closeout</span>
                 <span className="ml-auto text-xs text-muted-foreground">{ov.exceptions.length}</span>
@@ -312,7 +312,7 @@ export default function CommissionConsole() {
               <div className="divide-y divide-border">
                 {ov.exceptions.map((ex, i) => (
                   <div key={i} className="px-4 py-2.5 flex items-start gap-3 text-sm">
-                    <span className="text-2xs font-bold uppercase tracking-wide text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
+                    <span className="text-2xs font-bold uppercase tracking-wide text-warning bg-warning/8 border border-warning/25 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
                       {ex.type.replace(/_/g, " ").toLowerCase()}
                     </span>
                     <span className="text-muted-foreground">
@@ -438,10 +438,10 @@ export default function CommissionConsole() {
                     </div>
                     <div className="flex items-center gap-2 mt-1.5">
                       {r.structure && !r.planAccepted && (
-                        <span className="text-2xs font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5">plan not accepted</span>
+                        <span className="text-2xs font-bold uppercase text-warning bg-warning/8 border border-warning/25 rounded px-1.5 py-0.5">plan not accepted</span>
                       )}
                       {r.status === "OPEN" && r.salesUntilNextTier != null && (r.marginalJumpCents ?? 0) > 0 && (
-                        <span className={`text-[11px] ${r.salesUntilNextTier <= 2 ? "text-amber-400 font-semibold" : "text-muted-foreground"}`}>
+                        <span className={`text-[11px] ${r.salesUntilNextTier <= 2 ? "text-warning font-semibold" : "text-muted-foreground"}`}>
                           {r.salesUntilNextTier} to next tier: +{usd(r.marginalJumpCents!)}
                         </span>
                       )}
@@ -473,7 +473,7 @@ export default function CommissionConsole() {
                           <div className="font-medium text-foreground flex items-center gap-1.5">
                             {r.repName}
                             {r.structure && !r.planAccepted && (
-                              <span className="text-2xs font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-0.5">plan not accepted</span>
+                              <span className="text-2xs font-bold uppercase text-warning bg-warning/8 border border-warning/25 rounded px-1 py-0.5">plan not accepted</span>
                             )}
                           </div>
                           <div className="text-2xs text-muted-foreground flex items-center gap-1">
@@ -496,7 +496,7 @@ export default function CommissionConsole() {
                         </td>
                         <td className="px-2 py-2.5">
                           {r.status === "OPEN" && r.salesUntilNextTier != null && r.marginalJumpCents != null && r.marginalJumpCents > 0 ? (
-                            <span className={`text-xs ${r.salesUntilNextTier <= 2 ? "text-amber-400 font-semibold" : "text-muted-foreground"}`}>
+                            <span className={`text-xs ${r.salesUntilNextTier <= 2 ? "text-warning font-semibold" : "text-muted-foreground"}`}>
                               {r.salesUntilNextTier} to go: <span className="tabular-nums">+{usd(r.marginalJumpCents)}</span>
                             </span>
                           ) : <span className="text-xs text-muted-foreground">-</span>}
@@ -539,7 +539,7 @@ export default function CommissionConsole() {
                     onClick={() => setConfirmAction("FINALIZE")} data-testid="btn-finalize-week">
                      Finalize week
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 text-xs"
+                  <Button size="sm" variant="outline" className="h-8 border-success/30 text-success hover:bg-success/8 text-xs"
                     disabled={finalizedCount === 0 || transition.isPending}
                     onClick={() => setConfirmAction("MARK_PAID")} data-testid="btn-mark-paid">
                      Mark paid
@@ -580,13 +580,13 @@ export default function CommissionConsole() {
             <div className="text-sm text-muted-foreground space-y-2">
               <p><strong className="text-foreground">{openCount}</strong> open statement{openCount === 1 ? "" : "s"} ({usd(ov?.totals.projectedPayrollCents ?? 0)}) will be recalculated one final time and locked. Locked numbers never change silently - later corrections happen as audited adjustments.</p>
               {!ov?.weekEnded && (
-                <p className="text-amber-400 flex items-start gap-1.5">
+                <p className="text-warning flex items-start gap-1.5">
                   
                   This week is still live (ends Sunday night, org time). Finalizing early locks out any sales closed after this moment.
                 </p>
               )}
               {ov && ov.exceptions.length > 0 && (
-                <p className="text-amber-400 flex items-start gap-1.5">
+                <p className="text-warning flex items-start gap-1.5">
                   
                   {ov.exceptions.length} item{ov.exceptions.length === 1 ? "" : "s"} still need review.
                 </p>
@@ -730,7 +730,7 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
               disabled={!!blocked || move.isPending} onClick={() => move.mutate()} data-testid="btn-reserve-submit">
               {move.isPending ? "Working…" : mode === "drawdown" ? "Apply chargeback to reserve" : "Release to rep"}
             </Button>
-            {blocked && <p className="text-[11px] text-amber-400 [.light_&]:text-amber-700" data-testid="reserve-blocked-reason">{blocked}</p>}
+            {blocked && <p className="text-[11px] text-warning [.light_&]:text-amber-700" data-testid="reserve-blocked-reason">{blocked}</p>}
           </div>
         )}
 
@@ -806,7 +806,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
   const adjustments: any[] = detail?.adjustments ?? [];
 
   const saleStatusStyle: Record<string, string> = {
-    QUALIFIED: "text-emerald-400", PENDING: "text-amber-400", REVERSED: "text-red-400 line-through", DISQUALIFIED: "text-red-400", CANCELLED: "text-muted-foreground",
+    QUALIFIED: "text-success", PENDING: "text-warning", REVERSED: "text-destructive line-through", DISQUALIFIED: "text-destructive", CANCELLED: "text-muted-foreground",
   };
 
   return (
@@ -921,14 +921,14 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
                 <div key={a.id} className="px-3 py-2 bg-card text-sm">
                   <div className="flex items-center justify-between">
                     <span className="tabular-nums font-semibold">{usdSigned(a.amount_cents)}</span>
-                    <span className={`text-2xs font-bold uppercase ${a.status === "APPROVED" ? "text-emerald-400" : a.status === "REJECTED" ? "text-red-400" : "text-amber-400"}`}>{a.status.toLowerCase()}</span>
+                    <span className={`text-2xs font-bold uppercase ${a.status === "APPROVED" ? "text-success" : a.status === "REJECTED" ? "text-destructive" : "text-warning"}`}>{a.status.toLowerCase()}</span>
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">{a.reason}</div>
                   {/* Deciding an adjustment moves money — payouts.pay only, same
                       as the server gate. Managers (read.all) file; admins decide. */}
                   {canDecideAdj && a.status === "PENDING" && (
                     <div className="flex gap-1.5 mt-1.5">
-                      <Button size="sm" variant="outline" className="h-6 text-2xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
+                      <Button size="sm" variant="outline" className="h-6 text-2xs border-success/30 text-success hover:bg-success/8"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "APPROVE" })} data-testid={`btn-approve-adj-${a.id}`}>Approve</Button>
                       <Button size="sm" variant="ghost" className="h-6 text-2xs text-muted-foreground"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "REJECT" })}>Reject</Button>
@@ -1019,7 +1019,7 @@ function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean })
             // A fetch failure is not a configuration fact - say so, and offer
             // the retry. (This card used to render "not configured" on a blip.)
             <div className="mt-2 text-sm">
-              <span className="font-semibold text-amber-400">Couldn't load the balance.</span>{" "}
+              <span className="font-semibold text-warning">Couldn't load the balance.</span>{" "}
               <button type="button" className="text-primary hover:underline font-semibold" onClick={() => balance.refetch()} data-testid="balance-retry">Retry</button>
             </div>
           ) : balance.data?.configured ? (
@@ -1028,7 +1028,7 @@ function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean })
               <div className="text-[11px] text-muted-foreground mt-1">{usd(balance.data.pendingCents)} pending</div>
             </>
           ) : (
-            <div className="mt-2 text-sm font-semibold text-amber-400">Stripe Connect not configured</div>
+            <div className="mt-2 text-sm font-semibold text-warning">Stripe Connect not configured</div>
           )}
         </div>
         <div className="rounded-2xl bg-card border border-border p-4">
@@ -1042,7 +1042,7 @@ function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean })
         </div>
       </div>
 
-      <div className="rounded-xl border border-sky-500/25 bg-sky-500/[0.06] px-4 py-3 flex items-start gap-2.5 text-xs text-muted-foreground">
+      <div className="rounded-xl border border-info/15 bg-info/[0.06] px-4 py-3 flex items-start gap-2.5 text-xs text-muted-foreground">
         
         <div>
           <strong className="text-foreground">Fund Stripe before submitting.</strong> Connect transfers use the available Stripe platform balance, not a same-day pull from your bank.
@@ -1092,11 +1092,11 @@ function PayoutHistory() {
                 <div className="text-[11px] text-muted-foreground">
                   {new Date(row.paidAt ?? row.createdAt).toLocaleString()} · statement #{row.statementId ?? " - "}
                 </div>
-                {row.failureReason && <div className="text-[11px] text-red-400 mt-0.5 truncate">{row.failureReason}</div>}
+                {row.failureReason && <div className="text-[11px] text-destructive mt-0.5 truncate">{row.failureReason}</div>}
               </div>
               <div className="text-right flex-shrink-0">
                 <div className="text-sm font-semibold tabular-nums text-foreground">{usd(row.amountCents)}</div>
-                <div className={`text-2xs font-semibold uppercase ${row.status === "paid" ? "text-emerald-400" : row.status === "failed" ? "text-red-400" : "text-amber-400"}`}>{row.status}</div>
+                <div className={`text-2xs font-semibold uppercase ${row.status === "paid" ? "text-success" : row.status === "failed" ? "text-destructive" : "text-warning"}`}>{row.status}</div>
               </div>
             </div>
           ))}
@@ -1113,17 +1113,17 @@ function PayoutHistory() {
 function PayStatusCell({ r }: { r: PayoutRow }) {
   const base = "inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap";
   if (r.payoutStatus === "paid")
-    return <span className={`${base} bg-emerald-500/15 text-emerald-400`}> Paid</span>;
+    return <span className={`${base} bg-success/10 text-success`}> Paid</span>;
   if (r.payoutStatus === "processing")
-    return <span className={`${base} bg-sky-500/15 text-sky-400`}><Loader2 className="w-3 h-3 animate-spin" /> Processing</span>;
+    return <span className={`${base} bg-info/10 text-info`}><Loader2 className="w-3 h-3 animate-spin" /> Processing</span>;
   if (r.payoutStatus === "failed")
-    return <span className={`${base} bg-red-500/15 text-red-400`}> Failed</span>;
+    return <span className={`${base} bg-destructive/10 text-destructive`}> Failed</span>;
   if (r.payoutStatus === "reversed")
-    return <span className={`${base} bg-amber-500/15 text-amber-400`}> Reversed</span>;
+    return <span className={`${base} bg-warning/10 text-warning`}> Reversed</span>;
   if (r.eligible)
-    return <span className={`${base} bg-emerald-500/10 text-emerald-400`}> Ready</span>;
+    return <span className={`${base} bg-success/8 text-success`}> Ready</span>;
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] text-amber-400" title={r.blockReason ?? undefined}>
+    <span className="inline-flex items-center gap-1 text-[11px] text-warning" title={r.blockReason ?? undefined}>
        {r.blockLabel ?? "Not eligible"}
     </span>
   );
@@ -1193,7 +1193,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
           <div className="text-sm font-semibold text-foreground">Send commission via Stripe Connect</div>
         </div>
         {stripeEnabled && payableCount > 0 && (
-          <span className="ml-auto text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 rounded-full px-2 py-0.5 whitespace-nowrap">
+          <span className="ml-auto text-[11px] font-semibold text-success bg-success/8 rounded-full px-2 py-0.5 whitespace-nowrap">
             {payableCount} ready
           </span>
         )}
@@ -1254,7 +1254,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
           )}
 
           {canPay && insufficientBalance && (
-            <div className="border-t border-red-500/25 px-4 py-3 flex items-start gap-2 text-xs text-red-400 bg-red-500/[0.06]" data-testid="payout-insufficient-balance">
+            <div className="border-t border-destructive/15 px-4 py-3 flex items-start gap-2 text-xs text-destructive bg-destructive/[0.06]" data-testid="payout-insufficient-balance">
               
               {balanceUnknown
                 ? <>The Stripe balance couldn't be checked, so submitting is paused. Retry the balance above before paying this batch.</>
@@ -1275,8 +1275,8 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
                     <span className="flex items-center gap-2 flex-shrink-0">
                       {res.reason && <span className="text-[11px] text-muted-foreground">{res.reason}</span>}
                       {res.amountCents != null && <span className="tabular-nums text-muted-foreground">{usd(res.amountCents)}</span>}
-                      {res.paid && <span className="text-[11px] font-semibold text-emerald-400 inline-flex items-center gap-1"> Paid</span>}
-                      {res.failed && <span className="text-[11px] font-semibold text-red-400 inline-flex items-center gap-1"> Failed</span>}
+                      {res.paid && <span className="text-[11px] font-semibold text-success inline-flex items-center gap-1"> Paid</span>}
+                      {res.failed && <span className="text-[11px] font-semibold text-destructive inline-flex items-center gap-1"> Failed</span>}
                       {res.skipped && <span className="text-[11px] font-semibold text-muted-foreground">Skipped</span>}
                     </span>
                   </div>
@@ -1329,7 +1329,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              This sends each eligible rep their commission to their connected Stripe account for bank payout. It moves real money and can't be undone from here. Only reps marked <span className="text-emerald-400 font-medium">Ready</span> are paid; blocked reps are skipped.
+              This sends each eligible rep their commission to their connected Stripe account for bank payout. It moves real money and can't be undone from here. Only reps marked <span className="text-success font-medium">Ready</span> are paid; blocked reps are skipped.
             </p>
             <p className="text-2xs text-muted-foreground">*Estimate uses Stripe's published standard US Connect rate: 0.25% + 25¢ per payout. Active accounts may add $2 per paid rep each month; confirm your account's contracted pricing.</p>
           </div>

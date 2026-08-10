@@ -702,8 +702,10 @@ describe("<LeadKnockSheet /> - do-not-knock banner", () => {
     const banner = screen.getByTestId("dnk-banner");
     expect(banner).toHaveAttribute("role", "alert");
     expect(banner).toHaveTextContent("Do not knock - resident asked us not to return");
-    // Rose treatment — this must read as a hard stop, not a status chip.
-    expect(banner.className).toMatch(/rose/);
+    // Must read as a hard stop, not a status chip. `destructive` IS that
+    // meaning; it used to be spelled `rose`, a raw palette step chosen against
+    // the old dark default that landed near 2:1 on the light one.
+    expect(banner.className).toMatch(/\bborder-destructive|bg-destructive|text-destructive\b/);
   });
 
   it("no banner when the flag is absent, falsy, or null (server rollout in flight)", () => {

@@ -658,9 +658,9 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const contactPhones = detailForLead?.phones ?? renderedLead.phones;
   const contactOwnerName = detailForLead?.ownerName ?? renderedLead.ownerName;
   const statusBadge: { text: string; className: string } | null = needsReview
-    ? { text: "Needs review", className: "border-amber-400/35 bg-amber-400/10 text-amber-300" }
+    ? { text: "Needs review", className: "border-warning/35 bg-warning/8 text-warning" }
     : freshFiber
-      ? { text: "Fresh fiber", className: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300" }
+      ? { text: "Fresh fiber", className: "border-success/35 bg-success/8 text-success" }
       : null;
 
   const offscreen = closing || !entered;
@@ -859,7 +859,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     onClick={copyAddress}
                     className="relative shrink-0 mt-[2px] h-7 w-7 flex items-center justify-center rounded-md text-white/45 hover:text-white active:scale-90 transition after:absolute after:-inset-2"
                   >
-                    {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-[15px] h-[15px]" />}
+                    {copiedAddr ? <Check className="w-4 h-4 text-success" /> : <Copy className="w-[15px] h-[15px]" />}
                   </button>
                 </div>
                 {(() => {
@@ -873,7 +873,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                       {[city, [state, zip5].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
                     </div>
                   ) : (
-                    <div data-testid="knock-address-review" className="text-[12px] truncate mt-0.5 font-semibold text-amber-400">
+                    <div data-testid="knock-address-review" className="text-[12px] truncate mt-0.5 font-semibold text-warning">
                       Address needs review{city || state ? ` · ${[city, state].filter(Boolean).join(", ")}` : ""}
                     </div>
                   );
@@ -898,7 +898,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 {fccReported && (
                   <span
                     data-testid="fcc-fiber-chip"
-                    className="mt-1 inline-flex w-fit items-center rounded-full border border-amber-400/35 bg-amber-400/10 px-2 py-px text-2xs font-bold uppercase tracking-wide text-amber-300"
+                    className="mt-1 inline-flex w-fit items-center rounded-full border border-warning/35 bg-warning/8 px-2 py-px text-2xs font-bold uppercase tracking-wide text-warning"
                   >
                     FCC-reported fiber - verify at door
                   </span>
@@ -937,7 +937,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               <div
                 role="alert"
                 data-testid="dnk-banner"
-                className="mb-3 flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-2.5 text-[13px] font-semibold leading-snug text-rose-300"
+                className="mb-3 flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-[13px] font-semibold leading-snug text-destructive"
               >
                 
                 <span>Do not knock - resident asked us not to return</span>

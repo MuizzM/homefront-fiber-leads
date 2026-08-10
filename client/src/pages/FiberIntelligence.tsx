@@ -140,10 +140,10 @@ interface FiberChanges {
 }
 
 const KIND_STYLE: Record<string, { label: string; cls: string }> = {
-  copper_upgrade: { label: "Copper to Fiber", cls: "bg-orange-500/15 text-orange-400" },
-  went_live: { label: "Went live", cls: "bg-amber-500/15 text-amber-400" },
-  coming_soon: { label: "Coming soon", cls: "bg-cyan-500/15 text-cyan-400" },
-  lost_fiber: { label: "Lost", cls: "bg-red-500/15 text-red-400" },
+  copper_upgrade: { label: "Copper to Fiber", cls: "bg-warning/10 text-warning" },
+  went_live: { label: "Went live", cls: "bg-warning/10 text-warning" },
+  coming_soon: { label: "Coming soon", cls: "bg-info/10 text-info" },
+  lost_fiber: { label: "Lost", cls: "bg-destructive/10 text-destructive" },
 };
 
 function FreshNow() {
@@ -172,8 +172,8 @@ function FreshNow() {
       <div className="flex items-center gap-2">
         <div className="grid flex-1 grid-cols-3 gap-2">
           <StatTile label="New now" value={data?.count ?? 0} tone="text-primary" />
-          <StatTile label="Cross-verified" value={data?.confirmed ?? 0} tone="text-emerald-600 dark:text-emerald-400" />
-          <StatTile label="Ready to assign" value={data?.readyToAssign ?? 0} tone="text-sky-600 dark:text-sky-400" />
+          <StatTile label="Cross-verified" value={data?.confirmed ?? 0} tone="text-success" />
+          <StatTile label="Ready to assign" value={data?.readyToAssign ?? 0} tone="text-info" />
         </div>
         <div className="flex shrink-0 flex-col gap-1" role="group" aria-label="Detection window">
           {([24, 168] as const).map((h) => (
@@ -193,8 +193,8 @@ function FreshNow() {
       </Suspense>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
         {isError
-          ? <span className="inline-flex items-center gap-1 text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost - showing last loaded data</span>
-          : <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · last {hours === 24 ? "24h" : "7 days"}</span>}
+          ? <span className="inline-flex items-center gap-1 text-warning"><span className="h-1.5 w-1.5 rounded-full bg-warning" /> Connection lost - showing last loaded data</span>
+          : <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" /> Live · last {hours === 24 ? "24h" : "7 days"}</span>}
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         {isLoading && !data ? (
@@ -208,13 +208,13 @@ function FreshNow() {
             <div className="divide-y divide-border">
               {data!.addresses.slice(0, 40).map((a) => (
                 <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`fresh-row-${a.id}`}>
-                  <span className={`h-2 w-2 shrink-0 animate-pulse rounded-full ${a.carrier === "frontier" ? "bg-red-500" : "bg-orange-400"}`} />
+                  <span className={`h-2 w-2 shrink-0 animate-pulse rounded-full ${a.carrier === "frontier" ? "bg-destructive" : "bg-warning"}`} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
                     <div className="text-[11px] text-muted-foreground">Detected {fmtTime(a.firstSeenLiveAt)}</div>
                   </div>
-                  {a.carrier === "frontier" && <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-red-400">Frontier</span>}
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
+                  {a.carrier === "frontier" && <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-destructive">Frontier</span>}
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
                   {a.leadId != null
                     ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
                     : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary">Map</Link>}
@@ -240,7 +240,7 @@ function FreshNow() {
           <div className="divide-y divide-border">
             {changes!.rows.slice(0, 30).map((c) => (
               <div key={c.id} className="flex min-w-0 items-center gap-3 px-4 py-2.5 hover:bg-secondary/40" data-testid={`change-row-${c.id}`}>
-                <span className={`h-2 w-2 shrink-0 rounded-full ${c.kind === "copper_upgrade" ? "bg-orange-400" : c.kind === "went_live" ? "bg-amber-400" : "bg-cyan-400"}`} />
+                <span className={`h-2 w-2 shrink-0 rounded-full ${c.kind === "copper_upgrade" ? "bg-warning" : c.kind === "went_live" ? "bg-warning" : "bg-info"}`} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] font-medium text-foreground">{c.address}, {c.city}, {c.state}</div>
                   <div className="text-[11px] text-muted-foreground">{fmtTime(c.at)}</div>
@@ -277,9 +277,9 @@ function ComingSoon() {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
-        <StatTile label="Watching" value={watching} tone="text-cyan-600 dark:text-cyan-400" />
-        <StatTile label="Promoted" value={program?.promoted ?? 0} tone="text-emerald-600 dark:text-emerald-400" />
-        <StatTile label="Due now" value={program?.dueNow ?? 0} tone="text-amber-600 dark:text-amber-400" />
+        <StatTile label="Watching" value={watching} tone="text-info" />
+        <StatTile label="Promoted" value={program?.promoted ?? 0} tone="text-success" />
+        <StatTile label="Due now" value={program?.dueNow ?? 0} tone="text-warning" />
       </div>
       <p className="px-1 text-[12px] text-muted-foreground">The built-in Coming Soon worker re-checks every watched address on an opportunity-weighted cadence (hottest first) and promotes it into <span className="font-medium text-foreground">Fresh Now</span> with a green assignable pin the moment fiber becomes orderable.</p>
       <ComingSoonWatchlist />
@@ -318,7 +318,7 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
               <div className="truncate text-[13px] font-medium text-foreground">{s.currentCity ? `Scanning ${s.currentCity}` : s.status}</div>
               <div className="text-[11px] text-muted-foreground">{s.citiesCompleted}/{s.citiesTotal} cities · {s.checked} checked · {s.freshLeads} fresh</div>
             </div>
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${s.status === "running" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{s.status}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${s.status === "running" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>{s.status}</span>
           </div>
         ))}
       </div>
@@ -400,10 +400,10 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
         {[
           ["New builds", data?.counts.total ?? 0, "text-foreground"],
-          ["Addressed", data?.counts.addressed ?? 0, "text-sky-600 dark:text-sky-400"],
-          ["Monitored", data?.counts.monitored ?? 0, "text-amber-600 dark:text-amber-400"],
+          ["Addressed", data?.counts.addressed ?? 0, "text-info"],
+          ["Monitored", data?.counts.monitored ?? 0, "text-warning"],
           ["Checked", data?.counts.checked ?? 0, "text-violet-500 dark:text-violet-300"],
-          ["Leads", data?.counts.leads ?? 0, "text-emerald-600 dark:text-emerald-400"],
+          ["Leads", data?.counts.leads ?? 0, "text-success"],
           ["Clusters", data?.counts.clusters ?? 0, "text-primary"],
         ].map(([l, v, t]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
@@ -416,8 +416,8 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
         {isError
-          ? <span className="inline-flex items-center gap-1 text-[11px] text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost - showing last loaded data</span>
-          : <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live</span>}
+          ? <span className="inline-flex items-center gap-1 text-[11px] text-warning"><span className="h-1.5 w-1.5 rounded-full bg-warning" /> Connection lost - showing last loaded data</span>
+          : <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" /> Live</span>}
         <div className="ml-auto flex gap-1">
           {(["all", "NC", "SC"] as const).map((s) => (
             <button key={s} onClick={() => setState(s)} className={`rounded-lg px-2.5 py-1 font-semibold ${state === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s === "all" ? "All" : s}</button>
@@ -436,20 +436,20 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
 
       {/* Manager: live lead-triggered cluster expansions */}
       {isManager && (exp.data?.expansions?.length ?? 0) > 0 && (
-        <div className="rounded-2xl border border-emerald-500/25 bg-card">
+        <div className="rounded-2xl border border-success/15 bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Lead cluster expansions</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-success">Lead cluster expansions</div>
             <div className="text-[11px] text-muted-foreground">{exp.data!.summary.active} active · {exp.data!.summary.freshFound} new leads · {exp.data!.summary.addressesChecked} checked</div>
           </div>
           {exp.data!.expansions.slice(0, 6).map((e) => (
             <div key={e.id} className="border-b border-border/60 px-4 py-2.5 last:border-0" data-testid={`expansion-${e.id}`}>
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-success" />
                 <span className="truncate text-[13px] font-medium text-foreground">{String(e.origin.address).split(",")[0]}, {e.origin.city}</span>
-                <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${e.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{e.status}</span>
+                <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${e.status === "active" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>{e.status}</span>
               </div>
               <div className="pl-4 text-[11px] text-muted-foreground">
-                radius {(e.radiusM / 1000).toFixed(1)}km · ring {e.ring} · {e.addressesChecked} checked · <span className="font-medium text-emerald-600 dark:text-emerald-400">{e.newLeads.length} new green leads</span>{e.emptyStreak > 0 ? ` · ${e.emptyStreak} empty ring${e.emptyStreak > 1 ? "s" : ""}` : ""}
+                radius {(e.radiusM / 1000).toFixed(1)}km · ring {e.ring} · {e.addressesChecked} checked · <span className="font-medium text-success">{e.newLeads.length} new green leads</span>{e.emptyStreak > 0 ? ` · ${e.emptyStreak} empty ring${e.emptyStreak > 1 ? "s" : ""}` : ""}
               </div>
             </div>
           ))}
@@ -459,7 +459,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
 
       {/* Manager: coverage gaps banner */}
       {isManager && gaps.length > 0 && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-700 dark:text-amber-300">
+        <div className="rounded-xl border border-warning/25 bg-warning/8 px-3 py-2.5 text-[12px] text-amber-700 dark:text-amber-300">
           <div className="mb-1 flex items-center gap-1.5 font-semibold"> {gaps.length} source coverage gap{gaps.length > 1 ? "s" : ""}</div>
           {gaps.map((g) => <div key={g.source} className="text-[11px] text-amber-700/80 dark:text-amber-300/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
         </div>
@@ -491,11 +491,11 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
                 </div>
                 {/* status */}
                 <div className="flex shrink-0 items-center gap-2">
-                  {r.leadId ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-2xs font-bold uppercase text-emerald-400">Lead</span>
-                    : r.actionable ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-2xs font-bold uppercase text-emerald-400">Fresh fiber</span>
-                    : r.monitored ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs font-semibold uppercase text-amber-400">Monitoring</span>
+                  {r.leadId ? <span className="rounded-full bg-success/10 px-2 py-0.5 text-2xs font-bold uppercase text-success">Lead</span>
+                    : r.actionable ? <span className="rounded-full bg-success/10 px-2 py-0.5 text-2xs font-bold uppercase text-success">Fresh fiber</span>
+                    : r.monitored ? <span className="rounded-full bg-warning/10 px-2 py-0.5 text-2xs font-semibold uppercase text-warning">Monitoring</span>
                     : r.checkedAt ? <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold uppercase text-muted-foreground">{(r.fiberStatus ?? "checked").replace(/_/g, " ")}</span>
-                    : <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-2xs font-semibold uppercase text-sky-300">Checking</span>}
+                    : <span className="rounded-full bg-info/8 px-2 py-0.5 text-2xs font-semibold uppercase text-info">Checking</span>}
                   {r.address && <Link href="/map" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary">Map</Link>}
                 </div>
               </div>

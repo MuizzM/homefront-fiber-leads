@@ -22,9 +22,9 @@ interface Facets { actions: string[]; actors: Array<{ id: number; name: string }
 const PAGE = 25;
 
 const OUTCOME_META: Record<string, { cls: string; Icon: typeof CheckCircle2; label: string }> = {
-  success: { cls: "bg-emerald-500/15 text-emerald-400", Icon: CheckCircle2, label: "Success" },
-  failure: { cls: "bg-rose-500/15 text-rose-400", Icon: XCircle, label: "Failed" },
-  denied: { cls: "bg-amber-500/15 text-amber-400", Icon: ShieldAlert, label: "Denied" },
+  success: { cls: "bg-success/10 text-success", Icon: CheckCircle2, label: "Success" },
+  failure: { cls: "bg-destructive/10 text-destructive", Icon: XCircle, label: "Failed" },
+  denied: { cls: "bg-warning/10 text-warning", Icon: ShieldAlert, label: "Denied" },
 };
 
 function fmtWhen(iso: string): string {
@@ -45,9 +45,9 @@ function DiffRows({ before, after }: { before: Record<string, unknown> | null; a
         <div key={k} className="grid grid-cols-[minmax(7rem,auto)_1fr] gap-x-3 gap-y-0.5 text-[12px]">
           <dt className="font-medium text-muted-foreground truncate">{k}</dt>
           <dd className="flex flex-wrap items-center gap-1.5 min-w-0">
-            <span className="rounded bg-rose-500/10 px-1.5 py-0.5 text-rose-300/90 line-through break-all">{show(before?.[k])}</span>
+            <span className="rounded bg-destructive/8 px-1.5 py-0.5 text-destructive/90 line-through break-all">{show(before?.[k])}</span>
             <span className="text-muted-foreground">to</span>
-            <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300/90 break-all">{show(after?.[k])}</span>
+            <span className="rounded bg-success/8 px-1.5 py-0.5 text-success/90 break-all">{show(after?.[k])}</span>
           </dd>
         </div>
       ))}
@@ -96,7 +96,7 @@ function Row({ entry }: { entry: AuditRow }) {
           <div className="space-y-2.5 sm:pl-[4.5rem]">
             <DiffRows before={entry.before} after={entry.after} />
             {entry.reason && (
-              <p className="flex items-start gap-1.5 text-[12px] text-amber-300/90">
+              <p className="flex items-start gap-1.5 text-[12px] text-warning/90">
                 {entry.reason}
               </p>
             )}
