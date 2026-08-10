@@ -164,8 +164,8 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
           <li>Nothing is recorded when no trip is running, and never in the background unless you turn that on below.</li>
           <li>You can turn this off at any time, and you can always log trips by hand instead.</li>
         </ul>
-        <div className="flex items-center justify-between rounded-md border p-3">
-          <div className="pr-4">
+        <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+          <div className="min-w-0">
             <Label htmlFor="bg-optin" className="text-sm font-medium">Keep measuring in the background</Label>
             <p className="text-xs text-muted-foreground">
               Optional. Only applies during an open trip, so you can put your phone away while you drive.
@@ -173,7 +173,10 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
           </div>
           <Switch id="bg-optin" checked={background} onCheckedChange={setBackground} data-testid="mileage-background-optin" />
         </div>
-        <div className="flex gap-2">
+        {/* Stacked on a phone. Side by side these two labels never fit: their
+            combined min-content was 426px, which pushed the ENTIRE page wider
+            than a 375px viewport and carried the export button off-screen. */}
+        <div className="flex flex-col gap-2 sm:flex-row">
           <Button
             data-testid="mileage-consent-accept"
             onClick={() => accept.mutate({ accepted: true, backgroundOptIn: background })}
@@ -286,10 +289,20 @@ function GpsTracker({ openTrip }: { openTrip: Trip | null }) {
 
 // ── Manual entry ────────────────────────────────────────────────────────────
 
-function ManualEntry() {
+function ManualEntry({ rate }: { rate: Summary["currentRate"] }) {
   const { toast } = useToast();
   const [form, setForm] = useState({ tripDate: new Date().toISOString().slice(0, 10), startLocation: "", endLocation: "", miles: "", purpose: "" });
+  const [roundTrip, setRoundTrip] = useState(false);
   const [duplicateAck, setDuplicateAck] = useState(false);
+
+  // What actually gets logged. A round trip is two legs of the number typed,
+  // and the record stores the REAL distance driven - the toggle is a
+  // convenience for entry, never a different kind of trip.
+  const oneWay = Number(form.miles);
+  const loggedMiles = Number.isFinite(oneWay) && oneWay > 0 ? (roundTrip ? oneWay * 2 : oneWay) : 0;
+  // Priced from the live rate, in the same integer arithmetic the server uses:
+  // milli-cents per mile x hundredths of a mile, divided down once at the end.
+  const previewCents = rate ? Math.round((loggedMiles * 100 * rate.rateMilliCentsPerMile) / 100_000) : null;
 
   const create = useMutation({
     mutationFn: (body: any) => apiRequest("POST", "/api/mileage/trips", body).then(async r => {
@@ -300,6 +313,7 @@ function ManualEntry() {
     onSuccess: () => {
       invalidateMileage();
       setForm({ tripDate: new Date().toISOString().slice(0, 10), startLocation: "", endLocation: "", miles: "", purpose: "" });
+      setRoundTrip(false);
       setDuplicateAck(false);
       toast({ title: "Trip saved as a draft" });
     },
@@ -331,10 +345,16 @@ function ManualEntry() {
               onChange={e => setForm(f => ({ ...f, tripDate: e.target.value }))} />
           </div>
           <div>
-            <Label htmlFor="m-miles" className="text-xs">Miles</Label>
+            <Label htmlFor="m-miles" className="text-xs">{roundTrip ? "Miles each way" : "Miles"}</Label>
             <Input id="m-miles" inputMode="decimal" data-testid="mileage-miles" placeholder="12.3"
               value={form.miles} onChange={e => setForm(f => ({ ...f, miles: e.target.value }))} />
           </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
+          <Label htmlFor="m-round" className="text-xs font-medium">Round trip</Label>
+          <Switch id="m-round" checked={roundTrip} data-testid="mileage-round-trip"
+            onCheckedChange={setRoundTrip} />
         </div>
         <div>
           <Label htmlFor="m-from" className="text-xs">From</Label>
@@ -351,11 +371,27 @@ function ManualEntry() {
           <Input id="m-purpose" data-testid="mileage-manual-purpose" placeholder="Door knocking - Oakwood"
             value={form.purpose} onChange={e => setForm(f => ({ ...f, purpose: e.target.value }))} />
         </div>
+        {/* The arithmetic, before it is committed - a rep should never have to
+            take the reimbursement on faith, and a bookkeeper reading the log
+            later should see the same three numbers. */}
+        {loggedMiles > 0 && (
+          <div className="flex items-baseline justify-between rounded-xl bg-secondary/50 px-3 py-2"
+               data-testid="mileage-preview">
+            <span className="text-xs text-muted-foreground">
+              {loggedMiles.toFixed(2)} mi{roundTrip ? " (round trip)" : ""}
+              {rate ? ` x ${rate.label}` : ""}
+            </span>
+            <span className="text-sm font-semibold tabular-nums text-foreground">
+              {previewCents != null ? money(previewCents) : "Logged for your records"}
+            </span>
+          </div>
+        )}
+
         <Button
-          className="w-full" data-testid="mileage-save-trip" disabled={create.isPending}
-          onClick={() => create.mutate({ ...form, duplicateAck })}
+          className="w-full" data-testid="mileage-save-trip" disabled={create.isPending || loggedMiles <= 0}
+          onClick={() => create.mutate({ ...form, miles: String(loggedMiles), duplicateAck })}
         >
-           {duplicateAck ? "Save anyway" : "Save trip"}
+          {duplicateAck ? "Save anyway" : "Save trip"}
         </Button>
       </CardContent>
     </Card>
@@ -487,6 +523,62 @@ function ApprovalQueue() {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
+// ── Bookkeeping periods ─────────────────────────────────────────────────────
+// A mileage log is read at tax time, and tax time is periodic: a month for
+// the books, a quarter for estimated payments, a year for the return. The
+// server already filters on from/to, so the period is the one control that
+// makes every total on this page answer a real question.
+type PeriodKey = "month" | "quarter" | "year" | "all";
+const PERIODS: Array<{ key: PeriodKey; label: string }> = [
+  { key: "month", label: "This month" },
+  { key: "quarter", label: "Quarter" },
+  { key: "year", label: "Year" },
+  { key: "all", label: "All" },
+];
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+function periodRange(key: PeriodKey): { from?: string; to?: string } {
+  const now = new Date();
+  if (key === "all") return {};
+  if (key === "month") return { from: iso(new Date(now.getFullYear(), now.getMonth(), 1)), to: iso(now) };
+  if (key === "quarter") {
+    return { from: iso(new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1)), to: iso(now) };
+  }
+  return { from: iso(new Date(now.getFullYear(), 0, 1)), to: iso(now) };
+}
+const qs = (r: { from?: string; to?: string }) => {
+  const parts = [r.from && `from=${r.from}`, r.to && `to=${r.to}`].filter(Boolean);
+  return parts.length ? `?${parts.join("&")}` : "";
+};
+
+/** The log, grouped the way books are kept: by calendar month, newest first,
+ *  each month carrying its own mileage and money subtotal. A flat reverse-
+ *  chronological list is fine to scroll and useless to reconcile - nobody
+ *  files a return for "the last 40 trips". */
+function groupTripsByMonth(trips: Trip[]): Array<{
+  key: string; label: string; trips: Trip[]; milesHundredths: number; cents: number;
+}> {
+  const buckets = new Map<string, { key: string; label: string; trips: Trip[]; milesHundredths: number; cents: number }>();
+  for (const trip of trips) {
+    const key = (trip.tripDate ?? "").slice(0, 7) || "unknown";
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      const parsed = Date.parse(`${key}-01T00:00:00Z`);
+      bucket = {
+        key,
+        label: Number.isFinite(parsed)
+          ? new Date(parsed).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
+          : "Undated",
+        trips: [], milesHundredths: 0, cents: 0,
+      };
+      buckets.set(key, bucket);
+    }
+    bucket.trips.push(trip);
+    bucket.milesHundredths += trip.milesHundredths + trip.adjustmentMilesHundredths;
+    bucket.cents += (trip.reimbursementCents ?? 0) + trip.adjustmentCents;
+  }
+  return [...buckets.values()].sort((a, b) => (a.key < b.key ? 1 : -1));
+}
+
 export default function Mileage() {
   const canApprove = useCan("mileage.approve");
   const canExport = useCan("mileage.read.team");
@@ -499,42 +591,83 @@ export default function Mileage() {
     queryKey: ["/api/mileage/trips"],
     queryFn: () => get<Trip[]>("/api/mileage/trips"),
   });
+  const [period, setPeriod] = useState<PeriodKey>("month");
+  const range = periodRange(period);
   const { data: summary } = useQuery<Summary>({
-    queryKey: ["/api/mileage/summary"],
-    queryFn: () => get<Summary>("/api/mileage/summary"),
+    queryKey: ["/api/mileage/summary", period],
+    queryFn: () => get<Summary>(`/api/mileage/summary${qs(range)}`),
   });
 
   const openTrip = trips.find(t => t.startedAt && !t.endedAt) ?? null;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-24" data-testid="mileage-page">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="flex items-center gap-2 text-xl font-semibold">
            Mileage
         </h1>
         {/* Every rep can export their OWN log; a manager's export widens to
             their branch. The server decides the rows either way. */}
+        {/* The export carries the SELECTED period, so "Year" then "Export"
+            is the whole tax-time workflow rather than a full-history dump you
+            then have to filter in a spreadsheet. */}
         <Button variant="outline" size="sm" data-testid="mileage-export" asChild>
-          <a href={canExport ? "/api/mileage/export?scope=team" : "/api/mileage/export"} download>
-             Export
+          <a href={`/api/mileage/export${qs(range)}${canExport ? `${qs(range) ? "&" : "?"}scope=team` : ""}`} download>
+            Export
           </a>
         </Button>
       </div>
 
+      {/* Period first: every number under it answers "for which books?".
+          Expensify/Revolut put the money and its rate together; a log whose
+          total floats free of the period and the rate is not bookkeeping. */}
+      <div className="inline-flex w-full rounded-xl border border-border bg-card p-1" role="tablist"
+           aria-label="Mileage period">
+        {PERIODS.map(p => (
+          <button key={p.key} type="button" role="tab" aria-selected={period === p.key}
+            onClick={() => setPeriod(p.key)} data-testid={`mileage-period-${p.key}`}
+            className={`h-9 min-w-0 flex-1 truncate rounded-lg px-1.5 text-xs font-semibold transition-colors ${
+              period === p.key ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+
       {summary && (
         <Card data-testid="mileage-summary">
-          <CardContent className="grid grid-cols-3 gap-4 py-4 text-center">
-            <div>
-              <p className="text-xs text-muted-foreground">Miles</p>
-              <p className="text-lg font-semibold tabular-nums" data-testid="mileage-total-miles">{summary.totalMiles}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Approved</p>
-              <p className="text-lg font-semibold tabular-nums" data-testid="mileage-approved">{money(summary.approvedCents)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Awaiting review</p>
-              <p className="text-lg font-semibold tabular-nums" data-testid="mileage-pending">{money(summary.pendingEstimateCents)}</p>
+          <CardContent className="p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {summary.reimbursementEnabled ? "Reimbursable" : "Deductible mileage"}
+            </p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <span className="text-3xl font-bold tabular-nums leading-none tracking-tight text-primary"
+                    data-testid="mileage-period-total">
+                {summary.reimbursementEnabled
+                  ? money(summary.approvedCents + summary.pendingEstimateCents)
+                  : summary.totalMiles}
+              </span>
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground"
+                      data-testid="mileage-total-miles">
+                  {summary.totalMiles}
+                </span>
+                <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground"
+                      data-testid="mileage-trip-count">
+                  {summary.tripCount} trip{summary.tripCount === 1 ? "" : "s"}
+                </span>
+                {summary.reimbursementEnabled && (
+                  <>
+                    <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
+                          data-testid="mileage-approved">
+                      {money(summary.approvedCents)} approved
+                    </span>
+                    <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground"
+                          data-testid="mileage-pending">
+                      {money(summary.pendingEstimateCents)} awaiting
+                    </span>
+                  </>
+                )}
+              </span>
             </div>
           </CardContent>
           {!summary.reimbursementEnabled && (
@@ -578,7 +711,7 @@ export default function Mileage() {
       )}
       {consent && <LocationDisclosure consent={consent} />}
       {consent?.mayStartGpsTrip && <GpsTracker openTrip={openTrip} />}
-      <ManualEntry />
+      <ManualEntry rate={summary?.currentRate ?? null} />
 
       <Card data-testid="mileage-log">
         <CardHeader className="pb-3"><CardTitle className="text-base">My mileage log</CardTitle></CardHeader>
@@ -593,7 +726,21 @@ export default function Mileage() {
                 </div>
             : trips.length === 0
               ? <p className="py-6 text-center text-sm text-muted-foreground">No trips logged yet.</p>
-              : trips.map(t => <TripRow key={t.id} trip={t} />)}
+              : groupTripsByMonth(trips).map(month => (
+                  <section key={month.key} data-testid={`mileage-month-${month.key}`}>
+                    <div className="flex items-baseline justify-between gap-3 border-b border-border py-2">
+                      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {month.label}
+                      </h3>
+                      <span className="text-[11px] font-semibold tabular-nums text-muted-foreground"
+                            data-testid={`mileage-month-total-${month.key}`}>
+                        {(month.milesHundredths / 100).toFixed(2)} mi
+                        {month.cents > 0 ? ` · ${money(month.cents)}` : ""}
+                      </span>
+                    </div>
+                    {month.trips.map(t => <TripRow key={t.id} trip={t} />)}
+                  </section>
+                ))}
         </CardContent>
       </Card>
     </div>
