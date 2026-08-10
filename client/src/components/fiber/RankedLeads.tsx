@@ -25,14 +25,14 @@ interface RankedLead {
 interface RankedResponse { count: number; limit: number; generatedAt: string; leads: RankedLead[] }
 
 function scoreTone(score: number): string {
-  if (score >= 50) return "bg-emerald-500/15 text-emerald-400";
-  if (score >= 25) return "bg-sky-500/15 text-sky-300";
+  if (score >= 50) return "bg-success/10 text-success";
+  if (score >= 25) return "bg-info/10 text-info";
   return "bg-muted text-muted-foreground";
 }
 // Top-3 leaderboard tint (Digg-style podium, using the app's own palette).
 function rankTone(i: number): string {
   if (i === 1) return "bg-primary/15 text-primary";
-  if (i === 2) return "bg-sky-500/15 text-sky-300";
+  if (i === 2) return "bg-info/10 text-info";
   return "bg-secondary text-muted-foreground";
 }
 
@@ -46,7 +46,7 @@ function ScoreRing({ score }: { score: number }) {
         <circle cx="24" cy="24" r={R} fill="none" strokeWidth="4" className="stroke-secondary" />
         <circle
           cx="24" cy="24" r={R} fill="none" strokeWidth="4" strokeLinecap="round"
-          className="stroke-emerald-600 dark:stroke-emerald-400"
+          className="stroke-success dark:stroke-emerald-400"
           strokeDasharray={`${C * pct} ${C}`}
         />
       </svg>
@@ -62,10 +62,10 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
       type="button"
       onClick={onOpen}
       data-testid="ranked-hero"
-      className="relative block w-full overflow-hidden border-b border-border bg-gradient-to-br from-emerald-500/10 via-card to-card px-4 pb-3.5 pt-3 text-left hover:from-emerald-500/15"
+      className="relative block w-full overflow-hidden border-b border-border bg-gradient-to-br from-success/8 via-card to-card px-4 pb-3.5 pt-3 text-left hover:from-success/10"
     >
       {/* Oversized rank numeral, Netflix-top-10 style — pure background texture. */}
-      <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-emerald-400/10">1</span>
+      <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-success/8">1</span>
       <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-[0.14em] text-success">
          Knock this door first
       </div>
@@ -77,7 +77,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
           {lead.reasons.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {lead.reasons.slice(0, 3).map((r) => (
-                <span key={r} className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-2xs font-medium text-emerald-300">{r}</span>
+                <span key={r} className="rounded-full bg-success/8 px-1.5 py-0.5 text-2xs font-medium text-success">{r}</span>
               ))}
             </div>
           )}

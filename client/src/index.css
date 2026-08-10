@@ -256,7 +256,7 @@
                                            surface. Use --accent-gold-text. */
     --accent-gold-hover:  33 78% 46%;
     --accent-gold-fg:     30 60% 10%;   /* ink ON the gold - 6.6:1 */
-    --accent-gold-text:   33 78% 37%;   /* gold AS text on white - 4.6:1, AA */
+    --accent-gold-text:   33 78% 34%;   /* gold AS text: 5.3:1 on white, 5.0:1 on --accent-gold-soft */
     --accent-gold-soft:   38 90% 96%;   /* tint for chips and rails */
   }
 

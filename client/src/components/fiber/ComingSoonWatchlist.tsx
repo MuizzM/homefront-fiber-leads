@@ -18,8 +18,8 @@ export interface WatchlistItem {
 
 const URGENCY_ORDER: Record<WatchlistItem["urgency"], number> = { hot: 0, soon: 1, watch: 2 };
 const URGENCY_CHIP: Record<WatchlistItem["urgency"], string> = {
-  hot: "bg-orange-500/15 text-orange-400",
-  soon: "bg-amber-500/15 text-amber-400",
+  hot: "bg-warning/10 text-warning",
+  soon: "bg-warning/10 text-warning",
   watch: "bg-muted text-muted-foreground",
 };
 
@@ -32,8 +32,8 @@ function parseMs(value: string | null): number | null {
 // "in 12d" / "due now" countdown for dated rows — days until estimated completion.
 function countdown(ms: number): { label: string; tone: string } {
   const days = Math.ceil((ms - Date.now()) / 86_400_000);
-  if (days <= 0) return { label: "due now", tone: "bg-orange-500/15 text-orange-400" };
-  if (days <= 14) return { label: `in ${days}d`, tone: "bg-amber-500/15 text-amber-400" };
+  if (days <= 0) return { label: "due now", tone: "bg-warning/10 text-warning" };
+  if (days <= 14) return { label: `in ${days}d`, tone: "bg-warning/10 text-warning" };
   return { label: `in ${days}d`, tone: "bg-secondary text-muted-foreground" };
 }
 
@@ -46,8 +46,8 @@ function DateBlock({ ms, urgency }: { ms: number | null; urgency: WatchlistItem[
   }
   const d = new Date(ms);
   return (
-    <span className={`flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg leading-none ${urgency === "hot" ? "bg-orange-500/15" : "bg-secondary"}`}>
-      <span className={`text-[8.5px] font-bold uppercase tracking-wide ${urgency === "hot" ? "text-orange-400" : "text-muted-foreground"}`}>
+    <span className={`flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg leading-none ${urgency === "hot" ? "bg-warning/10" : "bg-secondary"}`}>
+      <span className={`text-[8.5px] font-bold uppercase tracking-wide ${urgency === "hot" ? "text-warning" : "text-muted-foreground"}`}>
         {d.toLocaleDateString("en-US", { month: "short" })}
       </span>
       <span className="text-[15px] font-bold tabular-nums text-foreground">{d.getDate()}</span>

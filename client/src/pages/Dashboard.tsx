@@ -382,7 +382,7 @@ export default function Dashboard() {
               No current fiber flips detected in the last 24 hours - the monitor is watching the address pool.
             </div>
           ) : (
-            <div className="divide-y divide-border overflow-hidden rounded-2xl border border-orange-500/25 bg-card">
+            <div className="divide-y divide-border overflow-hidden rounded-2xl border border-warning/15 bg-card">
               {newFiber.addresses.slice(0, 5).map(a => (
                 <a
                   key={a.id}
@@ -390,7 +390,7 @@ export default function Dashboard() {
                   className="group flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-secondary/60 active:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   data-testid={`new-fiber-row-${a.id}`}
                 >
-                  <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-orange-400" />
+                  <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-warning" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
                     <div className="text-[11px] text-muted-foreground">
@@ -398,7 +398,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <span className={`h-[20px] shrink-0 rounded-full px-2 text-2xs font-bold uppercase leading-[20px] tracking-wide ${a.confidence === "cross_verified"
-                    ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>
+                    ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
                     {a.confidence === "cross_verified" ? "Cross-verified" : "Provisional"}
                   </span>
                   <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
@@ -572,8 +572,8 @@ export default function Dashboard() {
                             {Math.floor((s.durationMinutes ?? 0) / 60)}h {(s.durationMinutes ?? 0) % 60}m
                           </Badge>
                         ) : (
-                          <Badge className="border-emerald-500/30 bg-emerald-500/20 text-xs text-emerald-400">
-                            <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                          <Badge className="border-success/25 bg-success/12 text-xs text-success">
+                            <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
                             Active
                           </Badge>
                         )}

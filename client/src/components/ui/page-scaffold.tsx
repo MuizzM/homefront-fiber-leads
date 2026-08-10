@@ -90,7 +90,14 @@ export function StatTile({ label, value, delta, accent = false, className, testI
       data-testid={testId}
       className={cn(
         "min-w-0 bg-card p-3",
-        accent && "bg-primary/[0.07]",
+        // Opaque, not `bg-primary/[0.07]`. Both set background-color, so the
+        // translucent one REPLACES bg-card rather than compositing over it -
+        // and StatStrip is a `gap-px` grid over a `bg-border` track, so what
+        // showed through was the border grey. That darkened the cell enough to
+        // drag muted-foreground labels to 3.8:1, under AA, on the one tile the
+        // screen is FOR. --secondary is the same cool near-white the tint was
+        // reaching for, without the see-through.
+        accent && "bg-secondary",
         className,
       )}
     >
