@@ -1,3 +1,7 @@
+// Payload retention outlived the generic provider framework it was written
+// for: contact_enrichments still holds encrypted payloads fetched before the
+// switch to Tracerfy, and the contracts they came under oblige us to delete
+// them on schedule. The adapter is gone; the deletion obligation is not.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +14,7 @@ let tenantId = 0;
 let otherTenantId = 0;
 let leadId = 0;
 let otherLeadId = 0;
-let providers: typeof import("../../server/calling/providers");
+let providers: typeof import("../../server/calling/providerRetention");
 
 function insertProvider(input: {
   id: string;
@@ -62,7 +66,7 @@ beforeAll(async () => {
     (address,city,state,zip,fiber_status,lead_status,tenant_id,created_at,updated_at)
     VALUES ('2 Retention St','Lexington','NC','27292','available','prospect',?,?,?)`)
     .run(otherTenantId, NOW.toISOString(), NOW.toISOString()).lastInsertRowid);
-  providers = await import("../../server/calling/providers");
+  providers = await import("../../server/calling/providerRetention");
 });
 
 afterAll(() => {
@@ -115,48 +119,5 @@ describe("calling provider payload retention", () => {
     expect(providers.purgeExpiredProviderPayloads({ batchSize: 10, now: NOW }))
       .toEqual({ purged: 1, hasMore: false });
     expect(rawDb.prepare("SELECT COUNT(*) AS n FROM contact_enrichments").get()).toEqual({ n: 5 });
-  });
-});
-
-describe("calling provider validation cache", () => {
-  it("reuses only the latest evidence from the exact currently approved provider", () => {
-    insertProvider({ id: "validation-a", tenantId, name: "Validation A", retentionDays: 30 });
-    insertProvider({ id: "validation-b", tenantId, name: "Validation B", retentionDays: 30 });
-    const phoneId = Number(rawDb.prepare(`INSERT INTO phone_numbers
-      (tenant_id,phone_hash,encrypted_e164,masked_display,line_type,validation_status,reassigned_risk,
-       last_verified_at,verification_expires_at)
-      VALUES (?,'phone-hash-retention','encrypted-phone','(•••) •••-1212','landline','VALID',0,?,?)`)
-      .run(tenantId, NOW.toISOString(), "2099-01-01T00:00:00.000Z").lastInsertRowid);
-    const insertValidation = rawDb.prepare(`INSERT INTO phone_validations
-      (id,tenant_id,phone_id,provider_config_id,status,line_type,reachable,reassigned_risk,
-       evidence_ref,checked_at,expires_at)
-      VALUES (?,?,?,?,'VALID','landline',1,0,?,?,?)`);
-    insertValidation.run("validation-b-old", tenantId, phoneId, "validation-b", "evidence-b-old",
-      "2026-07-13T00:00:00.000Z", "2099-01-01T00:00:00.000Z");
-    insertValidation.run("validation-a-latest", tenantId, phoneId, "validation-a", "evidence-a",
-      "2026-07-14T00:00:00.000Z", "2099-01-01T00:00:00.000Z");
-
-    expect(providers.findReusableApprovedPhoneValidation({ tenantId, phoneId, providerConfigId: "validation-a" }))
-      .toMatchObject({ id: "validation-a-latest" });
-    expect(providers.findReusableApprovedPhoneValidation({ tenantId, phoneId, providerConfigId: "validation-b" }))
-      .toBeNull();
-
-    rawDb.prepare("UPDATE contact_enrichment_providers SET enabled=0 WHERE tenant_id=? AND id='validation-a'")
-      .run(tenantId);
-    expect(providers.findReusableApprovedPhoneValidation({ tenantId, phoneId, providerConfigId: "validation-a" }))
-      .toBeNull();
-    // The older B result does not become reusable merely because newer A was revoked.
-    expect(providers.findReusableApprovedPhoneValidation({ tenantId, phoneId, providerConfigId: "validation-b" }))
-      .toBeNull();
-
-    insertValidation.run("validation-b-new", tenantId, phoneId, "validation-b", "evidence-b-new",
-      "2026-07-15T00:00:00.000Z", "2099-01-01T00:00:00.000Z");
-    expect(providers.findReusableApprovedPhoneValidation({ tenantId, phoneId, providerConfigId: "validation-b" }))
-      .toMatchObject({ id: "validation-b-new" });
-
-    rawDb.prepare(`UPDATE contact_enrichment_providers SET permitted_use_approved=0,contract_status='revoked'
-      WHERE tenant_id=? AND id='validation-b'`).run(tenantId);
-    expect(providers.findReusableApprovedPhoneValidation({ tenantId, phoneId, providerConfigId: "validation-b" }))
-      .toBeNull();
   });
 });

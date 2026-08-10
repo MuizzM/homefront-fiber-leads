@@ -721,7 +721,7 @@ app.use((req, res, next) => {
   // Provider contracts can require prompt deletion of cached payloads even
   // when no representative opens Calling. Run a bounded global cleanup at
   // startup and hourly; durable usage/cost/audit metadata is preserved.
-  const { purgeExpiredProviderPayloads } = await import("./calling/providers");
+  const { purgeExpiredProviderPayloads } = await import("./calling/providerRetention");
   const purgeCallingProviderPayloads = () => {
     try {
       let result = { purged: 0, hasMore: true };

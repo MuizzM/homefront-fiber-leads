@@ -1,10 +1,9 @@
-import crypto from "node:crypto";
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import type { Capability } from "@shared/capabilities";
 import { rawDb } from "./db";
 import { getDefaultTenantId, storage } from "./storage";
-import { enrichCallingLead } from "./calling/providers";
+import { traceLeadNow } from "./calling/leadTracing";
 import {
   getKineticEvidenceGateway,
   kineticEvidenceModes,
@@ -599,12 +598,13 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
             `UPDATE kinetic_addresses SET contact_enrichment_status='running' WHERE tenant_id=? AND id=?`,
           )
           .run(tid, id.data);
-        const result = await enrichCallingLead({
+        // Tracerfy is the one contact source now: the generic multi-provider
+        // enrichment path this used to call is gone, and a converted address
+        // gets its numbers the same way every other door does.
+        const result = await traceLeadNow({
           tenantId: tid,
           leadId,
-          actorUserId: actor(req) ?? 0,
-          idempotencyKey: `kinetic:${id.data}:${new Date().toISOString().slice(0, 10)}`,
-          correlationId: String((req as any).id ?? crypto.randomUUID()),
+          actorUserId: actor(req) ?? null,
         });
         rawDb
           .prepare(
@@ -614,8 +614,8 @@ export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
         res.json({
           ok: true,
           leadId,
-          enrichmentId: result.enrichmentId,
-          matchCount: result.matchCount,
+          phonesFound: result.phonesFound,
+          dialable: result.dialable,
         });
       } catch (error) {
         rawDb

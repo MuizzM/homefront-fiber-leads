@@ -547,15 +547,41 @@ export function saveConsent(leadId: number, input: ConsentEvidence): Promise<{ i
   return json<{ consentId: string }>(apiRequest("POST", `${ROOT}/leads/${leadId}/consent`, input)).then(value => ({ id: value.consentId }));
 }
 
-export function validateCallingPhone(leadId: number, input: {
-  providerConfigId?: string;
-  idempotencyKey: string;
-}): Promise<unknown> {
-  return json(apiRequest("POST", `${ROOT}/leads/${leadId}/validate-phone`, input));
+/** What a trace of one door returned. `dialable` is false when every number
+ *  came back on a registry - a real outcome, not a failure. */
+export interface LeadTraceResult {
+  leadId: number;
+  phonesFound: number;
+  dialable: boolean;
+  ownerName: string | null;
+  queuedForCalling: boolean;
 }
 
-export function enrichCallingLead(leadId: number): Promise<unknown> {
-  return json(apiRequest("POST", `${ROOT}/leads/${leadId}/enrich`, { idempotencyKey: newIdempotencyKey() }));
+/** Skip-trace ONE door through Tracerfy, inline. */
+export function traceCallingLead(leadId: number): Promise<LeadTraceResult> {
+  return json<LeadTraceResult>(apiRequest("POST", `${ROOT}/leads/${leadId}/trace`));
+}
+
+export interface QueueTraceRun {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  requestedLeads: number;
+  processedLeads: number;
+  failedLeads: number;
+  totalPhones: number;
+  dialablePhones: number;
+  errorCode: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** Trace a chosen set of doors as a background run. */
+export function startQueueTrace(leadIds: number[]): Promise<{ run: QueueTraceRun; limit: number }> {
+  return json<{ run: QueueTraceRun; limit: number }>(apiRequest("POST", `${ROOT}/trace-runs`, { leadIds }));
+}
+
+export function getLatestQueueTraceRun(): Promise<{ run: QueueTraceRun | null; limit: number }> {
+  return json<{ run: QueueTraceRun | null; limit: number }>(apiRequest("GET", `${ROOT}/trace-runs/latest`));
 }
 
 /** Move this door onto another traced number. Any unused call authorization is
@@ -626,10 +652,6 @@ export async function importSignedDncDataset(
   );
   onProgress?.({ phase: "complete", uploadedChunks: chunks.length, totalChunks: chunks.length, stagedUnique: finalized.recordCount });
   return finalized;
-}
-
-export function getProviderMetrics(): Promise<ProviderCostMetric[]> {
-  return json<{ providers: ProviderCostMetric[] }>(apiRequest("GET", `${ROOT}/compliance/provider-usage`)).then(value => value.providers);
 }
 
 export function getCallingAudit(): Promise<CallingAuditEvent[]> {

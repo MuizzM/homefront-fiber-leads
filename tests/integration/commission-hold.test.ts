@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { weekBoundsFor } from "@shared/workweek";
 
 let server: Server;
 let baseUrl: string;
@@ -58,7 +59,16 @@ function makeLead(tenantId: number, assignedRepId: number) {
 }
 
 let tsSeq = 0;
-const nextTs = () => new Date(Date.now() - 3_600_000 + tsSeq++ * 1_000).toISOString();
+// Sale timestamps must land inside the CURRENT pay week. The workweek starts
+// Monday 00:00 America/New_York, so a blanket "an hour ago" falls into LAST
+// week for the first hour of every Monday - the statement under test then
+// counts zero sales and four assertions here fail for exactly that hour.
+// Clamped to just after the week boundary so the intent ("slightly in the
+// past") survives without straddling it.
+const weekStartMs = () => Date.parse(weekBoundsFor(new Date()).weekStartUtc);
+const nextTs = () => new Date(
+  Math.max(Date.now() - 3_600_000, weekStartMs() + 60_000) + tsSeq++ * 1_000,
+).toISOString();
 
 let knockSeq = 0;
 async function knock(leadId: number, session: string, outcome: string) {

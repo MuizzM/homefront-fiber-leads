@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { CallingAvailability, CallingChrome, CallingUnknownState } from "@/components/calling/CallingChrome";
-import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCallingCallbacks, type CallingCallback, type CallingCandidate } from "@/lib/callingApi";
+import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCallingCallbacks, startQueueTrace, getLatestQueueTraceRun, type CallingCallback, type CallingCandidate } from "@/lib/callingApi";
 import { cn } from "@/lib/utils";
+import { useCan } from "@/lib/capabilities";
+import { useToast } from "@/hooks/use-toast";
 
 const STAGE_FILTERS = [
   { value: "", label: "All" },
@@ -125,7 +127,7 @@ function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
           </div>
           <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
             {candidate.city}, {candidate.state} {candidate.zip}
-            {" "}<span aria-hidden="true">·</span> {candidate.contactName ?? "Not enriched"}
+            {" "}<span aria-hidden="true">·</span> {candidate.contactName ?? (candidate.maskedPhone ? "Name unknown" : "Not traced")}
             {candidate.maskedPhone ? <> <span aria-hidden="true">·</span> <span className="font-mono text-[11px] tabular-nums">{candidate.maskedPhone}</span></> : null}
             {candidate.lastDecisionStatus ? (
               Number.isFinite(Date.parse(candidate.lastDecisionExpiresAt ?? "")) && Date.parse(candidate.lastDecisionExpiresAt ?? "") <= Date.now()
@@ -286,6 +288,42 @@ export default function CallingQueue() {
     [tracedLeads],
   );
 
+  // ── Bulk tracing ──────────────────────────────────────────────────────────
+  // Tracing spends provider budget, so it rides lead.skip_trace.request - the
+  // same permission as an area trace - not a calling.* capability. A rep who
+  // may dial is not automatically someone who may spend.
+  const canTrace = useCan("lead.skip_trace.request");
+  const { toast } = useToast();
+  const traceRunQuery = useQuery({
+    queryKey: ["calling", "trace-run"],
+    queryFn: getLatestQueueTraceRun,
+    enabled: canTrace,
+    // Only while a run is live: a finished run's row never changes again.
+    refetchInterval: (query) => {
+      const status = query.state.data?.run?.status;
+      return status === "queued" || status === "running" ? 4_000 : false;
+    },
+  });
+  const activeRun = traceRunQuery.data?.run
+    && ["queued", "running"].includes(traceRunQuery.data.run.status)
+    ? traceRunQuery.data.run : null;
+  const traceLimit = traceRunQuery.data?.limit ?? 100;
+  const traceMutation = useMutation({
+    mutationFn: (leadIds: number[]) => startQueueTrace(leadIds),
+    onSuccess: (result) => {
+      void traceRunQuery.refetch();
+      toast({ title: `Tracing ${result.run.requestedLeads} door${result.run.requestedLeads === 1 ? "" : "s"}`,
+        description: "This runs in the background. Numbers appear as they come back." });
+    },
+    onError: (error: Error) => toast({ title: "Couldn't start the trace", description: error.message, variant: "destructive" }),
+  });
+
+  // A door with no number is the only thing worth tracing.
+  const untraced = useMemo(
+    () => (listQuery.data ?? []).filter(candidate => !candidate.maskedPhone),
+    [listQuery.data],
+  );
+
   const callbackGroups = useMemo(() => {
     const rows = callbacksQuery.data ?? [];
     const now = Date.now();
@@ -412,6 +450,36 @@ export default function CallingQueue() {
                   Scrubbed against the federal and state registries. Opening a lead still runs the full compliance check
                   before any number can be dialled.
                 </p>
+              </section>
+            ) : null}
+
+            {canTrace && untraced.length > 0 ? (
+              <section aria-label="Skip trace" data-testid="bulk-trace"
+                className="overflow-hidden rounded-2xl border border-border bg-card">
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div className="min-w-0">
+                    <h2 className="text-[13px] font-semibold text-foreground">
+                      {untraced.length} door{untraced.length === 1 ? "" : "s"} without a number
+                    </h2>
+                    <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                      {activeRun
+                        ? `Tracing - ${activeRun.processedLeads} of ${activeRun.requestedLeads} done, ${activeRun.dialablePhones} dialable so far.`
+                        : `Run a Tracerfy trace over the first ${Math.min(untraced.length, traceLimit)}. Numbers are scrubbed on arrival; the compliance check still gates every dial.`}
+                    </p>
+                  </div>
+                  <button type="button" data-testid="bulk-trace-start"
+                    disabled={!!activeRun || traceMutation.isPending}
+                    onClick={() => traceMutation.mutate(untraced.slice(0, traceLimit).map(c => c.leadId))}
+                    className="inline-flex min-h-9 shrink-0 items-center rounded-xl bg-primary px-3 text-[13px] font-semibold text-primary-foreground transition-colors disabled:opacity-50">
+                    {activeRun ? "Tracing…" : traceMutation.isPending ? "Starting…" : "Trace these doors"}
+                  </button>
+                </div>
+                {activeRun ? (
+                  <div className="h-1 w-full bg-secondary" aria-hidden="true">
+                    <div className="h-full bg-primary transition-[width] duration-500"
+                      style={{ width: `${Math.round((activeRun.processedLeads / Math.max(1, activeRun.requestedLeads)) * 100)}%` }} />
+                  </div>
+                ) : null}
               </section>
             ) : null}
 

@@ -5,13 +5,11 @@ import { can, type Capability, type Role } from "@shared/capabilities";
 import { CALLING_DECISIONS } from "@shared/calling";
 import { rawDb } from "../db";
 import { callingEnvironment, sha256, verifyConsentArtifactManifest } from "./crypto";
-import { enrichCallingLead, validateCallingLeadPhone } from "./providers";
 import { baseTemplatePreview, generateScriptForLead } from "./scriptEngine";
 import {
   createConsentRecord,
   evaluateLeadCompliance,
   issueCallAuthorization,
-  providerCostMetrics,
   recordCallDisposition,
   revokeConsent,
   startManualAttempt,
@@ -53,9 +51,13 @@ import {
   selectTracedPhone,
   syncTracedPhoneQueue,
   tracedBadgesForLeads,
+  TRACERFY_PROVIDER_NAME,
   tracedPhoneOptions,
   tracerfyProvider,
 } from "./tracedPhones";
+import {
+  traceLeadNow, startQueueTrace, getQueueTraceRun, latestQueueTraceRun, queueTraceMaxLeads,
+} from "./leadTracing";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
@@ -99,11 +101,6 @@ const validationSchema = z.object({
   reassignedRisk: z.boolean(),
   evidenceRef: z.string().trim().min(3).max(500),
   validDays: z.number().int().min(1).max(31).default(30),
-}).strict();
-
-const enrichmentSchema = z.object({
-  providerConfigId: uuidSchema.optional(),
-  idempotencyKey: idempotencySchema.optional(),
 }).strict();
 
 const authorizeSchema = z.object({
@@ -324,39 +321,6 @@ const sellerAuthorizationSchema = z.object({
   }
 });
 
-const providerBaseSchema = z.object({
-  providerName: z.string().trim().min(1).max(200),
-  adapterType: z.enum(["manual_import_v1", "generic_http_v1"]),
-  enabled: z.boolean().default(false),
-  priority: z.number().int().min(0).max(10_000).default(100),
-  contractStatus: z.enum(["unapproved", "pending", "approved", "expired", "revoked"]).default("unapproved"),
-  permittedUseApproved: z.boolean().default(false),
-  permittedUses: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
-  contractReference: z.string().trim().max(1_000).nullable().optional(),
-  contractEvidenceSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
-  queryCostMicros: z.number().int().min(0).max(1_000_000_000).default(0),
-  cacheTtlSeconds: z.number().int().min(0).max(31_536_000).default(0),
-  retentionDays: z.number().int().min(0).max(1_825).default(0),
-  deletionObligations: z.string().trim().max(2_000).nullable().optional(),
-  rateLimitPerMinute: z.number().int().min(1).max(10_000).default(1),
-  secretEnvName: z.string().trim().regex(/^[A-Z][A-Z0-9_]{2,99}$/).nullable().optional(),
-  baseUrl: z.string().url().max(1_000).nullable().optional(),
-  dailyBudgetMicros: z.number().int().min(0).max(100_000_000_000).default(0),
-  monthlyBudgetMicros: z.number().int().min(0).max(1_000_000_000_000).default(0),
-}).strict();
-
-const providerSchema = providerBaseSchema.superRefine((value, context) => {
-  if (value.adapterType === "generic_http_v1" && (!value.baseUrl || !value.secretEnvName)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "HTTP providers require a base URL and secret env name" });
-  }
-  if (value.enabled && (value.contractStatus !== "approved" || !value.permittedUseApproved || !value.contractReference)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Enabled providers require approved contract and permitted use evidence" });
-  }
-});
-
-const providerPatchSchema = providerBaseSchema.partial().strict()
-  .refine((value) => Object.keys(value).length > 0, "At least one field is required");
-
 const dncImportSchema = z.object({
   sourceType: z.enum(["national", "state"]),
   state: z.string().trim().regex(/^[A-Za-z]{2}$/).transform((value) => value.toUpperCase()).nullable().optional(),
@@ -545,36 +509,6 @@ function fail(res: Response, error: unknown): Response {
   return res.status(status).json(body);
 }
 
-function providerPublic(row: any): Record<string, unknown> {
-  let permittedUses: unknown[] = [];
-  try { permittedUses = JSON.parse(row.permittedUsesJson ?? "[]"); } catch { permittedUses = []; }
-  return {
-    id: row.id,
-    providerName: row.providerName,
-    adapterType: row.adapterType,
-    enabled: Number(row.enabled) === 1,
-    priority: row.priority,
-    contractStatus: row.contractStatus,
-    permittedUseApproved: Number(row.permittedUseApproved) === 1,
-    permittedUses,
-    contractReference: row.contractReference,
-    contractEvidenceSha256: row.contractEvidenceSha256,
-    queryCostMicros: row.queryCostMicros,
-    cacheTtlSeconds: row.cacheTtlSeconds,
-    retentionDays: row.retentionDays,
-    deletionObligations: row.deletionObligations,
-    rateLimitPerMinute: row.rateLimitPerMinute,
-    secretEnvName: row.secretEnvName,
-    secretConfigured: Boolean(row.secretEnvName && process.env[row.secretEnvName]),
-    baseUrl: row.baseUrl,
-    dailyBudgetMicros: row.dailyBudgetMicros,
-    monthlyBudgetMicros: row.monthlyBudgetMicros,
-    circuitOpenUntil: row.circuitOpenUntil,
-    lastHealthAt: row.lastHealthAt,
-    lastHealthStatus: row.lastHealthStatus,
-  };
-}
-
 export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): void {
   const cap = deps.requireCapability;
 
@@ -728,6 +662,54 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
       } catch (error) { fail(res, error); }
     });
 
+  // ── Tracing from the calling workspace ────────────────────────────────────
+  // lead.skip_trace.request, NOT a calling.* capability: tracing spends metered
+  // provider budget, and it is the same permission and the same money as
+  // starting an area skip trace. A caller who may dial is not automatically
+  // someone who may spend.
+  app.post("/api/v1/calling/leads/:leadId/trace", cap("lead.skip_trace.request"), async (req, res) => {
+    const tid = requireTenant(req, res); const leadId = parseLeadId(req, res); if (!tid || !leadId) return;
+    try {
+      const outcome = await traceLeadNow({ tenantId: tid, leadId, actorUserId: userId(req) });
+      appendCallingAudit({ tenantId: tid, correlationId: correlationId(req),
+        eventType: "calling.lead_traced", entityType: "lead", entityId: String(leadId),
+        actorUserId: userId(req), metadata: { leadId, phonesFound: outcome.phonesFound,
+          dialable: outcome.dialable, queuedForCalling: outcome.queuedForCalling } });
+      const candidate = getCallingCandidate(tid, leadId);
+      res.json({ ...outcome, lead: candidate ? publicCandidate(candidate) : null,
+        tracedPhones: tracedPhoneOptions(tid, leadId, Date.now()) });
+    } catch (error) { fail(res, error); }
+  });
+
+  app.post("/api/v1/calling/trace-runs", cap("lead.skip_trace.request"), (req, res) => {
+    const tid = requireTenant(req, res); if (!tid) return;
+    const body = parseBody(z.object({ leadIds: z.array(idSchema).min(1).max(queueTraceMaxLeads()) }).strict(), req, res);
+    if (!body) return;
+    try {
+      const run = startQueueTrace({ tenantId: tid, leadIds: body.leadIds, actorUserId: userId(req) });
+      appendCallingAudit({ tenantId: tid, correlationId: correlationId(req),
+        eventType: "calling.trace_run_started", entityType: "trace_run", entityId: run.id,
+        actorUserId: userId(req), metadata: { runId: run.id, requestedLeads: run.requestedLeads } });
+      res.status(202).json({ run, limit: queueTraceMaxLeads() });
+    } catch (error) { fail(res, error); }
+  });
+
+  app.get("/api/v1/calling/trace-runs/latest", cap("lead.skip_trace.read"), (req, res) => {
+    const tid = requireTenant(req, res); if (!tid) return;
+    try { res.json({ run: latestQueueTraceRun(tid), limit: queueTraceMaxLeads() }); }
+    catch (error) { fail(res, error); }
+  });
+
+  app.get("/api/v1/calling/trace-runs/:runId", cap("lead.skip_trace.read"), (req, res) => {
+    const tid = requireTenant(req, res); if (!tid) return;
+    const runId = String(param(req, "runId") ?? "");
+    try {
+      const run = getQueueTraceRun(tid, runId);
+      if (!run) return res.status(404).json({ error: "Trace run not found" });
+      res.json({ run, limit: queueTraceMaxLeads() });
+    } catch (error) { fail(res, error); }
+  });
+
   app.patch("/api/v1/calling/leads/:leadId/assignment", cap("calling.manage"), (req, res) => {
     const tid = requireTenant(req, res); const leadId = parseLeadId(req, res); if (!tid || !leadId) return;
     const body = parseBody(z.object({ assignedUserId: idSchema.nullable() }).strict(), req, res); if (!body) return;
@@ -756,39 +738,6 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
     } catch (error) { fail(res, error); }
   });
 
-  app.post("/api/v1/calling/leads/:leadId/enrich", cap("calling.enrichment.request"), async (req, res) => {
-    const tid = requireTenant(req, res); const leadId = parseLeadId(req, res); if (!tid || !leadId) return;
-    const body = parseBody(enrichmentSchema, req, res); if (!body) return;
-    try {
-      const idempotencyKey = body.idempotencyKey ?? String(req.headers["idempotency-key"] ?? "");
-      const parsedKey = idempotencySchema.safeParse(idempotencyKey);
-      if (!parsedKey.success) return res.status(400).json({ error: "An idempotency key of at least 8 characters is required" });
-      const result = await enrichCallingLead({ tenantId: tid, leadId, providerConfigId: body.providerConfigId,
-        actorUserId: userId(req), idempotencyKey: parsedKey.data, correlationId: correlationId(req) });
-      res.status(result.replayed ? 200 : 201).json({ ...result, candidate: result.candidate ? publicCandidate(result.candidate) : null });
-    } catch (error) { fail(res, error); }
-  });
-
-  app.post("/api/v1/calling/leads/:leadId/validate-phone", cap("calling.enrichment.request"), async (req, res) => {
-    const tid = requireTenant(req, res); const leadId = parseLeadId(req, res); if (!tid || !leadId) return;
-    const body = parseBody(z.object({
-      providerConfigId: uuidSchema.optional(),
-      idempotencyKey: idempotencySchema.optional(),
-    }).strict(), req, res); if (!body) return;
-    try {
-      if (!scopedCandidate(req, res, tid, leadId)) return;
-      const idempotencyKey = body.idempotencyKey ?? String(req.headers["idempotency-key"] ?? "");
-      const parsedKey = idempotencySchema.safeParse(idempotencyKey);
-      if (!parsedKey.success) return res.status(400).json({ error: "An idempotency key of at least 8 characters is required" });
-      const result = await validateCallingLeadPhone({ tenantId: tid, leadId,
-        providerConfigId: body.providerConfigId, actorUserId: userId(req),
-        idempotencyKey: parsedKey.data, correlationId: correlationId(req) });
-      res.status(result.replayed ? 200 : 201).json({ ...result, candidate: publicCandidate(result.candidate) });
-    } catch (error) { fail(res, error); }
-  });
-
-  // Manual evidence entry is deliberately manager-only. Calling reps cannot
-  // assert line type, reachability, or reassignment status themselves.
   app.post("/api/v1/calling/leads/:leadId/phones/:phoneId/validation", cap("calling.policy.manage"), (req, res) => {
     const tid = requireTenant(req, res); const leadId = parseLeadId(req, res);
     const phoneId = idSchema.safeParse(param(req, "phoneId")); if (!tid || !leadId) return;
@@ -1355,99 +1304,53 @@ function registerComplianceAdministration(app: Express, deps: CallingRouteDeps):
     } catch (error) { fail(res, error); }
   });
 
-  app.get("/api/v1/calling/compliance/providers", cap("calling.providers.manage"), (req, res) => {
+  // ── Tracerfy contract control ─────────────────────────────────────────────
+  // What replaced the multi-provider registry. Tracerfy is the only contact
+  // source now, and it self-seeds its own row (see tracedPhones.ts), so there
+  // is nothing to create or choose between - but an operator still needs the
+  // KILL SWITCH: revoking the contract stops traced doors entering the queue
+  // and invalidates every unused call authorization, exactly as the old PATCH
+  // did. That invalidation is the reason this endpoint exists rather than
+  // leaving the column to SQL.
+  app.get("/api/v1/calling/compliance/trace-provider", cap("calling.providers.manage"), (req, res) => {
     const tid = requireTenant(req, res); if (!tid) return;
-    const rows = rawDb.prepare(`SELECT id,provider_name AS providerName,adapter_type AS adapterType,enabled,priority,
-      contract_status AS contractStatus,permitted_use_approved AS permittedUseApproved,
-      permitted_uses_json AS permittedUsesJson,contract_reference AS contractReference,
-      contract_evidence_sha256 AS contractEvidenceSha256,query_cost_micros AS queryCostMicros,
-      cache_ttl_seconds AS cacheTtlSeconds,retention_days AS retentionDays,deletion_obligations AS deletionObligations,
-      rate_limit_per_minute AS rateLimitPerMinute,secret_env_name AS secretEnvName,base_url AS baseUrl,
-      daily_budget_micros AS dailyBudgetMicros,monthly_budget_micros AS monthlyBudgetMicros,
-      circuit_open_until AS circuitOpenUntil,last_health_at AS lastHealthAt,last_health_status AS lastHealthStatus
-      FROM contact_enrichment_providers WHERE tenant_id=? ORDER BY priority,provider_name`).all(tid) as any[];
-    res.json({ providers: rows.map(providerPublic) });
-  });
-
-  app.post("/api/v1/calling/compliance/providers", cap("calling.providers.manage"), (req, res) => {
-    const tid = requireTenant(req, res); if (!tid) return;
-    const body = parseBody(providerSchema, req, res); if (!body) return;
     try {
-      const id = crypto.randomUUID();
-      rawDb.prepare(`INSERT INTO contact_enrichment_providers
-        (id,tenant_id,provider_name,adapter_type,enabled,priority,contract_status,permitted_use_approved,
-         permitted_uses_json,contract_reference,contract_evidence_sha256,query_cost_micros,cache_ttl_seconds,
-         retention_days,deletion_obligations,rate_limit_per_minute,secret_env_name,base_url,daily_budget_micros,monthly_budget_micros)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, tid, body.providerName, body.adapterType,
-          body.enabled ? 1 : 0, body.priority, body.contractStatus, body.permittedUseApproved ? 1 : 0,
-          JSON.stringify(body.permittedUses), body.contractReference ?? null, body.contractEvidenceSha256 ?? null,
-          body.queryCostMicros, body.cacheTtlSeconds, body.retentionDays, body.deletionObligations ?? null,
-          body.rateLimitPerMinute, body.secretEnvName ?? null, body.baseUrl ?? null, body.dailyBudgetMicros, body.monthlyBudgetMicros);
-      appendCallingAudit({ tenantId: tid, correlationId: correlationId(req), eventType: "provider.configuration_created",
-        entityType: "provider_config", entityId: id, actorUserId: userId(req), metadata: {
-          providerName: body.providerName, adapterType: body.adapterType, enabled: body.enabled,
-          contractStatus: body.contractStatus, permittedUseApproved: body.permittedUseApproved,
-          contractReference: body.contractReference, contractEvidenceSha256: body.contractEvidenceSha256,
-        } });
-      res.status(201).json({ id });
+      const provider = tracerfyProvider(tid);
+      res.json({ provider: {
+        name: TRACERFY_PROVIDER_NAME,
+        contractStatus: provider.contractStatus,
+        usable: provider.usable,
+        usableForValidation: provider.usableForValidation,
+      } });
     } catch (error) { fail(res, error); }
   });
 
-  app.patch("/api/v1/calling/compliance/providers/:providerId", cap("calling.providers.manage"), (req, res) => {
+  app.patch("/api/v1/calling/compliance/trace-provider", cap("calling.providers.manage"), (req, res) => {
     const tid = requireTenant(req, res); if (!tid) return;
-    const providerId = uuidSchema.safeParse(param(req, "providerId"));
-    if (!providerId.success) return res.status(400).json({ error: "Invalid provider id" });
-    const body = parseBody(providerPatchSchema, req, res); if (!body) return;
+    const body = parseBody(z.object({
+      contractStatus: z.enum(["approved", "revoked", "expired"]),
+    }).strict(), req, res);
+    if (!body) return;
     try {
-      const existing = rawDb.prepare(`SELECT provider_name AS providerName,adapter_type AS adapterType,enabled,priority,
-        contract_status AS contractStatus,permitted_use_approved AS permittedUseApproved,
-        permitted_uses_json AS permittedUsesJson,contract_reference AS contractReference,
-        contract_evidence_sha256 AS contractEvidenceSha256,query_cost_micros AS queryCostMicros,
-        cache_ttl_seconds AS cacheTtlSeconds,retention_days AS retentionDays,deletion_obligations AS deletionObligations,
-        rate_limit_per_minute AS rateLimitPerMinute,secret_env_name AS secretEnvName,base_url AS baseUrl,
-        daily_budget_micros AS dailyBudgetMicros,monthly_budget_micros AS monthlyBudgetMicros
-        FROM contact_enrichment_providers WHERE tenant_id=? AND id=?`).get(tid, providerId.data) as any;
-      if (!existing) return res.status(404).json({ error: "Provider configuration not found" });
-      let permittedUses: string[] = [];
-      try { permittedUses = JSON.parse(existing.permittedUsesJson); } catch { permittedUses = []; }
-      const merged = providerSchema.parse({
-        providerName: body.providerName ?? existing.providerName,
-        adapterType: body.adapterType ?? existing.adapterType,
-        enabled: body.enabled ?? Number(existing.enabled) === 1,
-        priority: body.priority ?? existing.priority,
-        contractStatus: body.contractStatus ?? existing.contractStatus,
-        permittedUseApproved: body.permittedUseApproved ?? Number(existing.permittedUseApproved) === 1,
-        permittedUses: body.permittedUses ?? permittedUses,
-        contractReference: body.contractReference === undefined ? existing.contractReference : body.contractReference,
-        contractEvidenceSha256: body.contractEvidenceSha256 === undefined ? existing.contractEvidenceSha256 : body.contractEvidenceSha256,
-        queryCostMicros: body.queryCostMicros ?? existing.queryCostMicros,
-        cacheTtlSeconds: body.cacheTtlSeconds ?? existing.cacheTtlSeconds,
-        retentionDays: body.retentionDays ?? existing.retentionDays,
-        deletionObligations: body.deletionObligations === undefined ? existing.deletionObligations : body.deletionObligations,
-        rateLimitPerMinute: body.rateLimitPerMinute ?? existing.rateLimitPerMinute,
-        secretEnvName: body.secretEnvName === undefined ? existing.secretEnvName : body.secretEnvName,
-        baseUrl: body.baseUrl === undefined ? existing.baseUrl : body.baseUrl,
-        dailyBudgetMicros: body.dailyBudgetMicros ?? existing.dailyBudgetMicros,
-        monthlyBudgetMicros: body.monthlyBudgetMicros ?? existing.monthlyBudgetMicros,
-      });
-      rawDb.prepare(`UPDATE contact_enrichment_providers SET provider_name=?,adapter_type=?,enabled=?,priority=?,
-        contract_status=?,permitted_use_approved=?,permitted_uses_json=?,contract_reference=?,contract_evidence_sha256=?,
-        query_cost_micros=?,cache_ttl_seconds=?,retention_days=?,deletion_obligations=?,rate_limit_per_minute=?,
-        secret_env_name=?,base_url=?,daily_budget_micros=?,monthly_budget_micros=?,updated_at=datetime('now')
-        WHERE tenant_id=? AND id=?`).run(merged.providerName, merged.adapterType, merged.enabled ? 1 : 0, merged.priority,
-          merged.contractStatus, merged.permittedUseApproved ? 1 : 0, JSON.stringify(merged.permittedUses),
-          merged.contractReference ?? null, merged.contractEvidenceSha256 ?? null, merged.queryCostMicros,
-          merged.cacheTtlSeconds, merged.retentionDays, merged.deletionObligations ?? null, merged.rateLimitPerMinute,
-          merged.secretEnvName ?? null, merged.baseUrl ?? null, merged.dailyBudgetMicros, merged.monthlyBudgetMicros,
-          tid, providerId.data);
+      const provider = tracerfyProvider(tid);
+      rawDb.prepare(`UPDATE contact_enrichment_providers
+        SET contract_status=?, enabled=?, updated_at=datetime('now')
+        WHERE tenant_id=? AND id=?`)
+        .run(body.contractStatus, body.contractStatus === "approved" ? 1 : 0, tid, provider.id);
+      // Revoking a contract must not leave a rep holding a live authorization
+      // that was granted under it.
       rawDb.prepare(`UPDATE call_authorizations SET invalidated_at=datetime('now'),invalidation_reason='PROVIDER_CHANGED'
         WHERE tenant_id=? AND used_at IS NULL AND invalidated_at IS NULL`).run(tid);
-      appendCallingAudit({ tenantId: tid, correlationId: correlationId(req), eventType: "provider.configuration_updated",
-        entityType: "provider_config", entityId: providerId.data, actorUserId: userId(req),
-        metadata: { changedFields: Object.keys(body), enabled: merged.enabled, contractStatus: merged.contractStatus,
-          permittedUseApproved: merged.permittedUseApproved } });
-      res.json({ provider: providerPublic({ id: providerId.data, ...merged, permittedUsesJson: JSON.stringify(merged.permittedUses),
-        enabled: merged.enabled ? 1 : 0, permittedUseApproved: merged.permittedUseApproved ? 1 : 0 }) });
+      appendCallingAudit({ tenantId: tid, correlationId: correlationId(req),
+        eventType: "provider.configuration_updated", entityType: "provider_config", entityId: provider.id,
+        actorUserId: userId(req), metadata: { providerName: TRACERFY_PROVIDER_NAME, contractStatus: body.contractStatus } });
+      const after = tracerfyProvider(tid);
+      res.json({ provider: {
+        name: TRACERFY_PROVIDER_NAME,
+        contractStatus: after.contractStatus,
+        usable: after.usable,
+        usableForValidation: after.usableForValidation,
+      } });
     } catch (error) { fail(res, error); }
   });
 
@@ -1594,11 +1497,6 @@ function registerComplianceAdministration(app: Express, deps: CallingRouteDeps):
       }).immediate();
       res.json({ dncId: dncId.data, active: true, suppressionRemainsPermanent: true });
     } catch (error) { fail(res, error); }
-  });
-
-  app.get("/api/v1/calling/compliance/provider-usage", cap("calling.providers.manage"), (req, res) => {
-    const tid = requireTenant(req, res); if (!tid) return;
-    try { res.json({ providers: providerCostMetrics(tid) }); } catch (error) { fail(res, error); }
   });
 
   app.get("/api/v1/calling/compliance/audit", cap("calling.compliance.read"), (req, res) => {

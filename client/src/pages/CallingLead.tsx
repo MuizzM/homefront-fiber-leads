@@ -10,10 +10,10 @@ import {
 import { CallingAvailability, CallingChrome, CallingPageSkeleton, CallingUnknownState } from "@/components/calling/CallingChrome";
 import { LeadScriptPanel } from "@/components/calling/LeadScriptPanel";
 import {
-  addInternalOptOut, auditPhoneCopy, authorizeManualCall, enrichCallingLead, evaluateCallingLead, formatDecision, formatStage,
+  addInternalOptOut, auditPhoneCopy, authorizeManualCall, traceCallingLead, evaluateCallingLead, formatDecision, formatStage,
   getCallingLead, getCallingQueue, getCallingStatus, newIdempotencyKey, revokeCallingConsent, saveConsent, saveDisposition,
   selectTracedPhone, startManualCall,
-  validateCallingPhone, type CallingLeadDetail, type CallingStatus, type ConsentEvidence, type DispositionCode,
+  type CallingLeadDetail, type CallingStatus, type ConsentEvidence, type DispositionCode,
 } from "@/lib/callingApi";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -289,33 +289,13 @@ function ConsentForm({ detail, attempt, onSaved }: {
   );
 }
 
-function PhoneValidationForm({ detail, onSaved }: { detail: CallingLeadDetail; onSaved: () => void }) {
-  const { toast } = useToast();
-  const candidate = detail.candidate;
-  const mutation = useMutation({
-    mutationFn: () => validateCallingPhone(candidate.leadId, {
-      idempotencyKey: newIdempotencyKey(),
-    }),
-    onSuccess: () => { toast({ title: "Licensed validation complete", description: "A new compliance check is still required before any authorization." }); onSaved(); },
-    onError: (error: Error) => toast({ title: "Phone validation failed", description: error.message, variant: "destructive" }),
-  });
-  const valid = Boolean(candidate.phoneId);
-  return (
-    <section className="rounded-2xl border border-border bg-card p-4">
-      <div className="flex items-start gap-3"><div><h2 className="text-sm font-semibold">Licensed phone validation</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Runs the contract-approved provider check for validity, line type, reachability, and reassigned-number risk. Staff cannot self-assert the result.</p></div></div>
-      <div className="mt-3 rounded-xl border border-border bg-background/60 p-3 text-[11px] text-muted-foreground">The server selects the lowest-priority-number, contract-approved provider with explicit phone-validation permission and budget.</div>
-      <Button className="mt-3 w-full" variant="outline" disabled={!valid || mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? "Validating with provider…" : "Run licensed validation"}</Button>
-    </section>
-  );
-}
-
 export default function CallingLead() {
   const params = useParams<{ id: string }>();
   const leadId = Number(params.id);
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const canValidatePhone = useCan("calling.enrichment.request");
+  const canTrace = useCan("lead.skip_trace.request");
   const canAttemptManual = useCan("calling.attempt.manual");
   const canOptOut = useCan("calling.opt_out.write");
   const [evaluation, setEvaluation] = useState<Awaited<ReturnType<typeof evaluateCallingLead>> | null>(null);
@@ -453,9 +433,18 @@ export default function CallingLead() {
       navigate("/calling");
     },
   });
-  const enrichmentMutation = useMutation({ mutationFn: () => enrichCallingLead(leadId),
-    onSuccess: () => { setEvaluation(null); void detailQuery.refetch(); toast({ title: "Licensed enrichment complete", description: "Any match remains blocked until identity, validation, DNC, and policy checks pass." }); },
-    onError: (error: Error) => toast({ title: "Enrichment failed", description: error.message, variant: "destructive" }) });
+  const traceMutation = useMutation({ mutationFn: () => traceCallingLead(leadId),
+    onSuccess: (result) => {
+      setEvaluation(null);
+      void detailQuery.refetch();
+      toast({
+        title: result.phonesFound > 0 ? `Found ${result.phonesFound} number${result.phonesFound === 1 ? "" : "s"}` : "No numbers found",
+        description: result.phonesFound === 0 ? "Tracerfy had nothing for this address."
+          : result.dialable ? "Scrubbed and imported. The compliance check still decides whether it can be dialled."
+            : "Every number came back on a do-not-call registry, so none of them are dialable.",
+      });
+    },
+    onError: (error: Error) => toast({ title: "Trace failed", description: error.message, variant: "destructive" }) });
   const copyMutation = useMutation({ mutationFn: async () => {
     if (!activeAttempt?.phoneNumber) throw new Error("The full number is not re-exposed after a page refresh");
     await auditPhoneCopy(activeAttempt.attemptId);
@@ -516,10 +505,17 @@ export default function CallingLead() {
 
             <LeadScriptPanel leadId={leadId} />
 
-            {canValidatePhone && !candidate.phoneId && (
-              <section className="rounded-2xl border border-border bg-card p-4">
-                <div className="flex items-start gap-3"><div><h2 className="text-sm font-semibold">Licensed resident enrichment</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Uses the tenant's lowest-cost approved provider only after the server rechecks fresh-fiber status, suppression, conversion, assignment, budget, cache, and permitted use.</p></div></div>
-                <Button className="mt-3 w-full" variant="outline" disabled={enrichmentMutation.isPending} onClick={() => enrichmentMutation.mutate()}>{enrichmentMutation.isPending ? "Checking licensed provider…" : "Enrich resident contact"}</Button>
+            {canTrace && !candidate.phoneId && (
+              <section className="rounded-2xl border border-border bg-card p-4" data-testid="trace-lead-card">
+                <h2 className="text-sm font-semibold">No number on this door yet</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Run a Tracerfy skip trace for this address. Anything it finds is scrubbed against the
+                  registries and still has to pass the compliance check below before it can be dialled.
+                </p>
+                <Button className="mt-3 w-full" variant="outline" data-testid="trace-lead-button"
+                  disabled={traceMutation.isPending} onClick={() => traceMutation.mutate()}>
+                  {traceMutation.isPending ? "Tracing…" : "Trace this door"}
+                </Button>
               </section>
             )}
 
@@ -527,8 +523,6 @@ export default function CallingLead() {
               <div className="mb-3 flex items-center justify-between gap-3"><div><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Authoritative decision</div><h2 className="mt-0.5 text-base font-semibold">Compliance gate</h2></div><Button variant="outline" size="sm" disabled={evaluateMutation.isPending || manualFlowDisabled || Boolean(activeAttempt)} onClick={() => evaluateMutation.mutate()}>{evaluateMutation.isPending ? "Checking…" : "Run check"}</Button></div>
               <DecisionPanel detail={detailQuery.data} evaluation={evaluation} />
             </section>
-
-            {canValidatePhone && candidate.phoneId && <PhoneValidationForm detail={detailQuery.data} onSaved={() => { setEvaluation(null); void detailQuery.refetch(); }} />}
 
             {!activeAttempt && !completed && canAttemptManual && (
               <section className="rounded-2xl border border-border bg-card p-4">
