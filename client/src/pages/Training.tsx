@@ -1,16 +1,29 @@
-// Training — the D2D psychology & pitch curriculum, rendered from the shared
-// content file. Progress is server-backed (training_progress) and optimistic:
-// tapping "Mark complete" updates the rings instantly, then reconciles.
+// Training — the Fiber Sales Academy.
 //
-// Page grammar follows the house style: PageHeader + eyebrow SectionLabels,
-// StatStrip-style hero numbers (tabular-nums), Linear-style lesson rows, and
-// tokens only (bg-card / border-border / rounded-xl / FOCUS).
-import { useLayoutEffect, useMemo, useState } from "react";
+// Six sections behind one tab strip: the guided Path, free Practice, the Pitch
+// Lab, the Objection dojo, the field Reference library, and the module Library
+// that was here before. Supervisors get a seventh.
+//
+// WHAT DID NOT CHANGE
+//   The lesson curriculum in shared/trainingContent.ts, and the
+//   training_progress rows it writes. A lesson opened from a path activity is
+//   the SAME lesson reader writing the SAME row, so the training gate, the
+//   ramp bonus and the manager rollup all keep working untouched. The Academy
+//   is a layer on top, not a replacement.
+//
+// PROGRESSIVE DISCLOSURE
+//   The tab opens on the Path, which opens on one card: continue where you
+//   stopped. Everything else is one tap away and nothing is more than two. The
+//   heavy pieces (role-play engine, personas, scorer) are lazy, so a rep who
+//   only reads a reference card never downloads them.
+//
+// Page grammar follows the house style: PageHeader, eyebrow SectionLabels,
+// tabular numbers, tokens only, 44px touch targets, FOCUS on every raw
+// interactive. No decorative glyphs in copy.
+import { Suspense, lazy, useLayoutEffect, useMemo, useState } from "react";
+import { Check } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { GraduationCap, ChevronLeft, ChevronRight, Check, Mic } from "lucide-react";
-import NumbersGame from "@/components/training/NumbersGame";
-import PsychologyDeck from "@/components/training/PsychologyDeck";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { FOCUS } from "@/lib/a11y";
@@ -19,18 +32,38 @@ import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 import { TrainingGateBanner, TrainingClearedBanner } from "@/components/TrainingLock";
 import { TrainingAccessPanel } from "@/components/TrainingAccessPanel";
 import PitchRecorder, { isPitchRecorderSupported } from "@/components/training/PitchRecorder";
+import NumbersGame from "@/components/training/NumbersGame";
+import PsychologyDeck from "@/components/training/PsychologyDeck";
 import FullPitchRun from "@/components/training/FullPitchRun";
 import {
-  TRAINING_MODULES,
-  TRAINING_LESSONS,
-  TOTAL_TRAINING_LESSONS,
-  TRAINING_FAST_START,
-  getFastStartLessons,
-  getTrainingLesson,
-  getTrainingModuleForLesson,
-  type TrainingLesson,
-  type TrainingModule,
+  Chip, ErrorPanel, Panel, PanelSkeleton, PrimaryButton, QuietButton, Ring, SectionTabs,
+} from "@/components/academy/primitives";
+import PathView from "@/components/academy/PathView";
+import PitchLab from "@/components/academy/PitchLab";
+import ObjectionDojo from "@/components/academy/ObjectionDojo";
+import ReferenceLibrary from "@/components/academy/ReferenceLibrary";
+import { useAcademyOffers, useAcademyProgress, useCompleteActivity } from "@/lib/useAcademy";
+import { ACADEMY_OBJECTIONS } from "@shared/academyObjections";
+import { TOTAL_PATH_MINUTES } from "@shared/academyPath";
+import { openAssignments } from "@shared/academyProgress";
+import type { PersonaId } from "@shared/academyPersonas";
+import {
+  TRAINING_MODULES, TRAINING_LESSONS, TOTAL_TRAINING_LESSONS,
+  getTrainingLesson, getTrainingModuleForLesson,
+  type TrainingLesson, type TrainingModule,
 } from "@shared/trainingContent";
+
+// Lazy: the role-play engine, the ten personas and the eleven-dimension scorer
+// are the heaviest thing in this tab and most visits never open them.
+const RolePlayCoach = lazy(() => import("@/components/academy/RolePlayCoach"));
+const SupervisorPanel = lazy(() => import("@/components/academy/SupervisorPanel"));
+
+type ProgressRow = { lessonId: string; completedAt: string; quizScore: number | null };
+type ProgressPayload = { totalLessons: number; completed: ProgressRow[] };
+
+const PROGRESS_KEY = ["/api/training/progress"];
+
+type SectionId = "path" | "practice" | "pitch" | "objections" | "reference" | "library" | "team";
 
 /** The lesson after this one in curriculum order, or undefined at the end. */
 function nextTrainingLesson(lessonId: string): TrainingLesson | undefined {
@@ -38,17 +71,10 @@ function nextTrainingLesson(lessonId: string): TrainingLesson | undefined {
   return i >= 0 ? TRAINING_LESSONS[i + 1] : undefined;
 }
 
-type ProgressRow = { lessonId: string; completedAt: string; quizScore: number | null };
-type ProgressPayload = { totalLessons: number; completed: ProgressRow[] };
-type SummaryRow = { userId: number; name: string; role: string; completedCount: number; avgQuizScore: number | null; lastCompletedAt: string | null };
-type SummaryPayload = { totalLessons: number; reps: SummaryRow[] };
-
-const PROGRESS_KEY = ["/api/training/progress"];
-
 // ── Day streak — computed, not stored ─────────────────────────────────────────
 // Consecutive local days with at least one lesson completed, ending today or
-// yesterday (yesterday keeps the flame alive until tonight — the Duolingo rule,
-// because a streak that dies while you sleep teaches resentment, not habit).
+// yesterday (yesterday keeps the flame alive until tonight, because a streak
+// that dies while you sleep teaches resentment, not habit).
 function dayStreak(rows: ProgressRow[], now = new Date()): number {
   const days = new Set<string>();
   for (const row of rows) {
@@ -68,32 +94,8 @@ function dayStreak(rows: ProgressRow[], now = new Date()): number {
   return streak;
 }
 
-// ── Progress ring — SVG, tokens only, number in tabular-nums ─────────────────
-function ProgressRing({ done, total, size = 44 }: { done: number; total: number; size?: number }) {
-  const stroke = 3.5;
-  const r = (size - stroke) / 2;
-  const c = 2 * Math.PI * r;
-  const pct = total > 0 ? done / total : 0;
-  return (
-    <div className="relative shrink-0" style={{ width: size, height: size }} aria-hidden="true">
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} className="stroke-border" />
-        <circle
-          cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={stroke} strokeLinecap="round"
-          className={cn("transition-[stroke-dashoffset] duration-500 ease-out", pct >= 1 ? "stroke-success" : "stroke-primary")}
-          strokeDasharray={c} strokeDashoffset={c * (1 - pct)}
-        />
-      </svg>
-      <span className="absolute inset-0 grid place-items-center text-[11px] font-bold tabular-nums text-foreground">
-        {done}/{total}
-      </span>
-    </div>
-  );
-}
-
 // ── Quiz — instant feedback per question, score handed up on completion ───────
 function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (score: number | null) => void }) {
-  // answers[i] = chosen option index, or undefined
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const answeredCount = Object.keys(answers).length;
   const correctCount = lesson.quiz.reduce((acc, q, i) => acc + (answers[i] === q.answerIndex ? 1 : 0), 0);
@@ -101,7 +103,7 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
   const score = allAnswered ? Math.round((correctCount / lesson.quiz.length) * 100) : null;
 
   function choose(qi: number, oi: number) {
-    if (answers[qi] !== undefined) return; // locked after first pick — instant feedback, no retries
+    if (answers[qi] !== undefined) return; // locked after first pick
     const next = { ...answers, [qi]: oi };
     setAnswers(next);
     if (Object.keys(next).length === lesson.quiz.length) {
@@ -164,11 +166,13 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
               <div
                 className={cn(
                   "mt-3 rounded-lg px-3 py-2 text-xs leading-relaxed",
-                  picked === q.answerIndex ? "bg-success/8 text-success" : "bg-destructive/8 text-destructive",
+                  picked === q.answerIndex ? "bg-success/8" : "bg-destructive/8",
                 )}
                 data-testid={`quiz-q${qi}-feedback`}
               >
-                <span className="font-semibold">{picked === q.answerIndex ? "Correct. " : "Not quite. "}</span>
+                <span className={cn("font-semibold", picked === q.answerIndex ? "text-success" : "text-destructive")}>
+                  {picked === q.answerIndex ? "Correct. " : "Not quite. "}
+                </span>
                 <span className="text-muted-foreground">{q.explanation}</span>
               </div>
             )}
@@ -199,9 +203,9 @@ function LessonView({
         type="button"
         onClick={onBack}
         data-testid="lesson-back"
-        className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 -ml-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground", FOCUS)}
+        className={cn("-ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground", FOCUS)}
       >
-        <ChevronLeft className="h-4 w-4" aria-hidden="true" /> All modules
+        <span aria-hidden="true">&lsaquo;</span> Back
       </button>
 
       <div>
@@ -210,14 +214,11 @@ function LessonView({
         <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
           <span className="tabular-nums">{lesson.minutes} min read</span>
           {isComplete && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 font-semibold text-success">
-              <Check className="h-3 w-3" aria-hidden="true" /> Completed{savedScore != null ? ` · ${savedScore}%` : ""}
-            </span>
+            <Chip tone="good">Completed{savedScore != null ? ` · ${savedScore}%` : ""}</Chip>
           )}
         </div>
       </div>
 
-      {/* Readable body */}
       <div className="space-y-5">
         {lesson.sections.map((s, i) => (
           <section key={i}>
@@ -229,72 +230,44 @@ function LessonView({
         ))}
       </div>
 
-      {/* Key takeaways */}
       <div className="rounded-xl border border-border bg-card p-4" data-testid="lesson-takeaways">
-        <div className="flex items-center gap-2">
-          
-          <SectionLabel>Key takeaways</SectionLabel>
-        </div>
+        <SectionLabel>Key takeaways</SectionLabel>
         <ul className="mt-3 space-y-2">
           {lesson.keyTakeaways.map((t, i) => (
             <li key={i} className="flex items-start gap-2.5 text-sm text-foreground">
-              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+              <Check aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
               <span className="leading-snug">{t}</span>
             </li>
           ))}
         </ul>
       </div>
 
-      {/* Field drill */}
       <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-4" data-testid="lesson-drill">
-        <div className="flex items-center gap-2">
-          
-          <SectionLabel className="text-primary">Try this on your next 10 doors</SectionLabel>
-        </div>
+        <SectionLabel className="text-primary">Try this on your next 10 doors</SectionLabel>
         <p className="mt-2 text-sm leading-relaxed text-foreground">{lesson.drillPrompt}</p>
       </div>
 
-      {/* Pitch practice — only on lessons that carry a spoken-pitch drill */}
       {lesson.pitchDrill && <PitchRecorder prompt={lesson.pitchDrill} persistKey={lesson.id} />}
 
       <LessonQuiz lesson={lesson} onScore={setQuizScore} />
 
       <div className="flex flex-wrap items-center gap-3 pb-6">
-        <button
-          type="button"
+        <PrimaryButton
           disabled={saving}
           onClick={() => onComplete(quizScore)}
-          data-testid="lesson-mark-complete"
-          className={cn(
-            "inline-flex min-h-11 items-center gap-2 rounded-xl px-5 text-sm font-semibold transition-transform active:scale-[.98] disabled:opacity-60",
-            FOCUS,
-            isComplete ? "border border-border bg-secondary text-foreground" : "bg-primary text-primary-foreground",
-          )}
+          testId="lesson-mark-complete"
+          className={isComplete ? "border border-border bg-secondary text-foreground" : undefined}
         >
-          
           {isComplete ? "Save again" : "Mark lesson complete"}
-        </button>
-        {/* Completing used to dead-end here: the only feedback was this button
-            relabeling. Momentum is the whole game in a 113-lesson curriculum,
-            so once complete, the primary action becomes the NEXT lesson. */}
+        </PrimaryButton>
         {isComplete && (() => {
           const next = nextTrainingLesson(lesson.id);
           return next ? (
-            <button
-              type="button"
-              onClick={() => onOpenLesson(next.id)}
-              data-testid="lesson-next"
-              className={cn(
-                "inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground transition-transform active:scale-[.98]",
-                FOCUS,
-              )}
-            >
-              Next lesson <ChevronRight className="h-4 w-4" aria-hidden="true" />
-            </button>
+            <PrimaryButton onClick={() => onOpenLesson(next.id)} testId="lesson-next">
+              Next lesson <span aria-hidden="true">&rsaquo;</span>
+            </PrimaryButton>
           ) : (
-            <span className="text-xs font-semibold text-success">
-              That was the last lesson. Curriculum done.
-            </span>
+            <span className="text-xs font-semibold text-success">That was the last lesson. Curriculum done.</span>
           );
         })()}
         {quizScore == null && !isComplete && (
@@ -305,180 +278,41 @@ function LessonView({
   );
 }
 
-// ── Manager rollup table ──────────────────────────────────────────────────────
-function TeamProgressTable() {
-  const { data, isLoading, isError } = useQuery<SummaryPayload>({
-    queryKey: ["/api/training/summary"],
-    queryFn: async () => (await apiRequest("GET", "/api/training/summary")).json(),
-    staleTime: 60_000,
-  });
-  if (isLoading || isError) return null;
-  const reps = data?.reps ?? [];
-  const total = data?.totalLessons ?? TOTAL_TRAINING_LESSONS;
-  if (!reps.length) return null;
-  return (
-    <div data-testid="training-team-table">
-      <div className="mb-1.5 flex items-center gap-2 px-1">
-        
-        <SectionLabel>Team progress</SectionLabel>
-      </div>
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <th className="px-4 py-2.5 font-semibold">Rep</th>
-                <th className="px-4 py-2.5 text-right font-semibold">Lessons</th>
-                <th className="px-4 py-2.5 text-right font-semibold">Avg quiz</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {reps.map((r) => (
-                <tr key={r.userId} data-testid={`training-team-row-${r.userId}`}>
-                  <td className="px-4 py-2.5">
-                    <div className="font-medium text-foreground">{r.name}</div>
-                    <div className="text-xs capitalize text-muted-foreground">{r.role.replace("_", " ")}</div>
-                  </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-foreground">
-                    {r.completedCount}<span className="text-muted-foreground"> / {total}</span>
-                  </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
-                    {r.avgQuizScore != null ? `${r.avgQuizScore}%` : " - "}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Fast-start track ──────────────────────────────────────────────────────────
-// The "get door-ready in 15 minutes" curated path, surfaced at the top for reps
-// who have barely started. Pure references into the existing lessons.
-function FastStartTrack({
-  completedById, onOpen,
-}: {
-  completedById: Map<string, ProgressRow>;
-  onOpen: (lessonId: string) => void;
-}) {
-  const steps = getFastStartLessons();
-  if (!steps.length) return null;
-  return (
-    <div className="rounded-2xl border border-primary/30 bg-primary/[0.06] p-4 md:p-5" data-testid="fast-start-track">
-      <div className="flex items-center gap-2">
-        
-        <SectionLabel className="text-primary">Get door-ready in 15 minutes</SectionLabel>
-      </div>
-      <p className="mt-1 text-sm leading-relaxed text-foreground">
-        New here? Start with these five. They are the highest-leverage lessons on the whole board - enough to knock your
-        first block with a real pitch instead of winging it.
-      </p>
-      <ol className="mt-3 space-y-1.5">
-        {steps.map(({ step, lesson }, i) => {
-          const done = completedById.has(lesson.id);
-          return (
-            <li key={lesson.id}>
-              <button
-                type="button"
-                onClick={() => onOpen(lesson.id)}
-                data-testid={`fast-start-step-${lesson.id}`}
-                className={cn(
-                  "flex w-full items-center gap-3 rounded-xl border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-secondary/50",
-                  FOCUS,
-                )}
-              >
-                <span
-                  className={cn(
-                    "grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold tabular-nums",
-                    done ? "bg-success text-white" : "bg-primary text-primary-foreground",
-                  )}
-                  aria-hidden="true"
-                >
-                  {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
-                </span>
-                <span className="min-w-0 flex-1">
-                  {/* Wrap, don't truncate: the differentiating words are at the end. */}
-                  <span className="block text-[13px] font-semibold leading-snug text-foreground">{lesson.title}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{step.why}</span>
-                </span>
-                
-              </button>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
-  );
-}
-
-// ── Standalone pitch practice ─────────────────────────────────────────────────
-// The headline feature reachable from the header: rehearse the two pitches every
-// rep needs cold, without hunting for the right lesson first.
-const STANDALONE_PITCH_LESSON_IDS = ["m3-pitch-skeleton", "m9-ten-second-pitch"] as const;
-
-function PitchPracticeView({ onBack }: { onBack: () => void }) {
-  const lessons = STANDALONE_PITCH_LESSON_IDS
-    .map((id) => getTrainingLesson(id))
-    .filter((l): l is TrainingLesson => !!l && !!l.pitchDrill);
-  return (
-    <div className="space-y-5" data-testid="pitch-practice-view">
-      <button
-        type="button"
-        onClick={onBack}
-        data-testid="pitch-practice-back"
-        className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 -ml-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground", FOCUS)}
-      >
-        <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Back to training
-      </button>
-      <PageHeader
-        icon={Mic}
-        title="Pitch practice"
-        subtitle="Record your pitch, hear it back, and tighten it before you hit the doors."
-      />
-      <div className="space-y-4">
-        {lessons.map((lesson) => (
-          <div key={lesson.id}>
-            <SectionLabel className="mb-1.5 px-1">{lesson.title}</SectionLabel>
-            <PitchRecorder prompt={lesson.pitchDrill!} persistKey={`standalone-${lesson.id}`} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function Training() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [openLessonId, setOpenLessonId] = useState<string | null>(null);
-  const [showPitchPractice, setShowPitchPractice] = useState(false);
-  const [showFullRun, setShowFullRun] = useState(false);
 
-  // The list ⇄ lesson swap happens inside ONE route, so the app's scroll
-  // container (App.tsx keys it by location) never resets. Without this a rep
-  // opening a module-10 lesson from thousands of px down the list lands in the
-  // middle of the quiz, not at the title. Layout effect so the reset paints
-  // with the new view, not a frame after it.
-  useLayoutEffect(() => {
-    document.querySelector(".app-route-stage")?.scrollTo({ top: 0 });
-  }, [openLessonId, showPitchPractice, showFullRun]);
-  const canSeeTeam = ["admin", "manager", "super_admin"].includes(user?.role ?? "rep");
+  const [section, setSection] = useState<SectionId>("path");
+  const [openLessonId, setOpenLessonId] = useState<string | null>(null);
+  const [showFullRun, setShowFullRun] = useState(false);
+  const [rolePlayPersona, setRolePlayPersona] = useState<PersonaId | "any" | null>(null);
+  const [rehearsalScript, setRehearsalScript] = useState<string | null>(null);
+  const [focusCardId, setFocusCardId] = useState<string | null>(null);
+
+  const canSeeTeam = ["team_lead", "manager", "admin", "super_admin"].includes(user?.role ?? "rep");
+  const canManage = ["admin", "super_admin", "manager"].includes(user?.role ?? "rep");
   const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "rep");
   const pitchSupported = isPitchRecorderSupported();
 
+  // The list to lesson swap happens inside ONE route, so the app's scroll
+  // container never resets on its own. Reset it here, in a layout effect, so
+  // the new view paints at the top rather than mid-quiz.
+  useLayoutEffect(() => {
+    document.querySelector(".app-route-stage")?.scrollTo({ top: 0 });
+  }, [openLessonId, showFullRun, section, rolePlayPersona, rehearsalScript]);
+
+  // ── Lesson progress (unchanged contract) ────────────────────────────────────
   const { data, isLoading, isError, refetch } = useQuery<ProgressPayload>({
     queryKey: PROGRESS_KEY,
     queryFn: async () => (await apiRequest("GET", "/api/training/progress")).json(),
-    // Persisted (queryClient PERSISTED_QUERY_KEYS) + a short staleTime: after
-    // one warm visit the page paints its real numbers instantly from cache and
-    // reconciles in the background — no skeleton, no dash.
     staleTime: 30_000,
   });
+
+  const academy = useAcademyProgress();
+  const offers = useAcademyOffers();
+  const completeActivity = useCompleteActivity();
 
   const completedById = useMemo(() => {
     const map = new Map<string, ProgressRow>();
@@ -495,7 +329,6 @@ export default function Training() {
       );
       return res.json() as Promise<ProgressRow>;
     },
-    // Optimistic: the ring and hero move the instant the rep taps.
     onMutate: async ({ lessonId, quizScore }) => {
       await queryClient.cancelQueries({ queryKey: PROGRESS_KEY });
       const previous = queryClient.getQueryData<ProgressPayload>(PROGRESS_KEY);
@@ -514,9 +347,8 @@ export default function Training() {
       });
       return { previous };
     },
-    // The optimistic ring/streak just told the rep it worked, so a silent
-    // rollback IS the bug: a gated new hire can "finish", walk off, and stay
-    // locked out. Say it failed, in words, while they are still on the lesson.
+    // The optimistic ring just told the rep it worked, so a silent rollback IS
+    // the bug: a gated new hire can "finish", walk off, and stay locked out.
     onError: (_err, _vars, ctx) => {
       if (ctx?.previous) queryClient.setQueryData(PROGRESS_KEY, ctx.previous);
       toast({
@@ -525,35 +357,73 @@ export default function Training() {
         description: "Tap Mark lesson complete again when you have signal.",
       });
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: PROGRESS_KEY });
-    },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: PROGRESS_KEY }); },
   });
 
+  // Completing a path lesson also satisfies the path activity that points at
+  // it, so the two views never disagree about what is finished.
+  function completeLesson(lessonId: string, quizScore: number | null) {
+    completeMutation.mutate({ lessonId, quizScore });
+    const activity = academy.data?.path.stages
+      .flatMap((s) => s.stage.activities)
+      .find((a) => a.lessonId === lessonId);
+    if (activity) completeActivity.mutate({ activityId: activity.id, score: quizScore });
+  }
+
   const doneCount = completedById.size;
-  const total = TOTAL_TRAINING_LESSONS;
   const streak = useMemo(() => dayStreak(data?.completed ?? []), [data]);
-  const avgQuiz = useMemo(() => {
-    const scores = (data?.completed ?? []).map(r => r.quizScore).filter((s): s is number => s != null);
-    return scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
-  }, [data]);
   const openLesson = openLessonId ? getTrainingLesson(openLessonId) : undefined;
   const openModule = openLessonId ? getTrainingModuleForLesson(openLessonId) : undefined;
-  // Surface the fast-start track while a rep is still ramping — once they have
-  // cleared the curated five, they no longer need the "start here" scaffold.
-  const showFastStart = doneCount < TRAINING_FAST_START.length;
 
-  return (
-    <div className="hf-stagger mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
-      {showFullRun ? (
+  const assignments = academy.data ? openAssignments(academy.data.assignments) : [];
+  const objectionKeysDone = useMemo(() => {
+    const done = new Set<string>();
+    for (const record of academy.data?.records ?? []) {
+      const match = /^act-objection-(.+)$/.exec(record.activityId);
+      if (match) done.add(match[1]);
+    }
+    return done;
+  }, [academy.data]);
+  const readCardIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const record of academy.data?.records ?? []) {
+      const activity = academy.data?.path.stages
+        .flatMap((s) => s.stage.activities)
+        .find((a) => a.id === record.activityId);
+      if (activity?.cardId) ids.add(activity.cardId);
+    }
+    return ids;
+  }, [academy.data]);
+
+  const tabs = useMemo(() => {
+    const base: { id: SectionId; label: string; badge?: number }[] = [
+      { id: "path", label: "Path", badge: assignments.length },
+      { id: "practice", label: "Practice" },
+      { id: "pitch", label: "Pitch Lab" },
+      { id: "objections", label: "Objections" },
+      { id: "reference", label: "Reference" },
+      { id: "library", label: "Library" },
+    ];
+    if (canSeeTeam) base.push({ id: "team", label: "Team" });
+    return base;
+  }, [assignments.length, canSeeTeam]);
+
+  // ── Full-screen sub-views ───────────────────────────────────────────────────
+  if (showFullRun) {
+    return (
+      <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
         <FullPitchRun onBack={() => setShowFullRun(false)} />
-      ) : showPitchPractice ? (
-        <PitchPracticeView onBack={() => setShowPitchPractice(false)} />
-      ) : openLesson && openModule ? (
+      </div>
+    );
+  }
+
+  if (openLesson && openModule) {
+    return (
+      <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
         <LessonView
-          // Keyed by lesson: "Next lesson" swaps the lesson prop on a mounted
-          // view, and without the remount the previous lesson's local quiz
-          // score would be submitted for the new one.
+          // Keyed by lesson: "Next lesson" swaps the prop on a mounted view, and
+          // without the remount the previous lesson's quiz score would be
+          // submitted for the new one.
           key={openLesson.id}
           lesson={openLesson}
           module={openModule}
@@ -561,214 +431,370 @@ export default function Training() {
           savedScore={completedById.get(openLesson.id)?.quizScore ?? null}
           saving={completeMutation.isPending}
           onBack={() => setOpenLessonId(null)}
-          onComplete={(quizScore) => completeMutation.mutate({ lessonId: openLesson.id, quizScore })}
+          onComplete={(quizScore) => completeLesson(openLesson.id, quizScore)}
           onOpenLesson={setOpenLessonId}
         />
-      ) : (
-        <>
-          {/* Why the rest of the app is closed, stated where the rep can act on
-              it — and the one-time "you're in" when they clear it. */}
-          <TrainingGateBanner />
-          <TrainingClearedBanner />
-          {/* Admin lock/unlock console. Lives on the Training page because that
-              is where someone goes when they are thinking about who has and has
-              not been trained. */}
-          {isAdmin && <TrainingAccessPanel />}
-          <PageHeader
-            icon={GraduationCap}
-            title="Training"
-            subtitle="Door-to-door psychology and pitch craft, built for the field."
-            actions={
-              pitchSupported ? (
-                <button
-                  type="button"
-                  onClick={() => setShowPitchPractice(true)}
-                  data-testid="open-pitch-practice"
-                  className={cn(
-                    "inline-flex min-h-11 items-center gap-2 rounded-xl border border-primary/30 bg-primary/[0.08] px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/[0.14]",
-                    FOCUS,
-                  )}
-                >
-                   Pitch practice
-                </button>
-              ) : undefined
-            }
-          />
+      </div>
+    );
+  }
 
-          {/* Overall progress hero — ring, streak flame, quiz average. Three
-              numbers a rep can move today, side by side, Opal-style. */}
-          <div className="rounded-2xl border border-border bg-card p-4 md:p-5" data-testid="training-hero">
-            <div className="flex items-center gap-4">
-              <ProgressRing done={doneCount} total={total} size={56} />
-              <div className="min-w-0 flex-1">
-                <SectionLabel>Your progress</SectionLabel>
-                <div className="mt-0.5 text-xl font-bold tabular-nums tracking-tight text-foreground" data-testid="training-hero-count">
-                  {/* On error the count is UNKNOWN, not zero — "0 of 30" told a
-                      finished rep their progress had been reset. */}
-                  {isLoading || isError ? " - " : `${doneCount} of ${total}`}{" "}
-                  <span className="text-sm font-medium text-muted-foreground">lessons complete</span>
-                </div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
-                  <div
-                    className={cn("h-full rounded-full transition-all duration-500", doneCount >= total ? "bg-success" : "bg-primary")}
-                    style={{ width: `${total > 0 ? Math.round((doneCount / total) * 100) : 0}%` }}
-                  />
-                </div>
+  if (rolePlayPersona) {
+    return (
+      <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
+        <Suspense fallback={<PanelSkeleton rows={4} testId="roleplay-loading" />}>
+          <RolePlayCoach
+            offers={offers.data?.offers ?? []}
+            market={offers.data?.market ?? ""}
+            initialPersonaId={rolePlayPersona === "any" ? undefined : rolePlayPersona}
+            onBack={() => setRolePlayPersona(null)}
+          />
+        </Suspense>
+      </div>
+    );
+  }
+
+  if (rehearsalScript) {
+    return (
+      <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
+        <button
+          type="button"
+          onClick={() => setRehearsalScript(null)}
+          data-testid="rehearsal-back"
+          className={cn("-ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted-foreground hover:text-foreground", FOCUS)}
+        >
+          <span aria-hidden="true">&lsaquo;</span> Back to the Pitch Lab
+        </button>
+        <PageHeader title="Rehearse your pitch" subtitle="Read it at door pace, then listen back. Nothing leaves your device." />
+        <PitchRecorder prompt={rehearsalScript} persistKey="academy-pitch" />
+      </div>
+    );
+  }
+
+  // ── The tab ─────────────────────────────────────────────────────────────────
+  return (
+    <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
+      <div className="hf-stagger space-y-5">
+        <TrainingGateBanner />
+        <TrainingClearedBanner />
+        {isAdmin && <TrainingAccessPanel />}
+
+        <PageHeader
+          title="Fiber Sales Academy"
+          subtitle="Everything you need for a real conversation at a real door, in the order you need it."
+        />
+
+        {/* Hero. Three numbers a rep can move today. */}
+        <div className="rounded-2xl border border-border bg-card p-4 md:p-5" data-testid="training-hero">
+          <div className="flex items-center gap-4">
+            <Ring
+              done={academy.data?.path.done ?? 0}
+              total={academy.data?.path.total ?? 0}
+              size={56}
+              tone={academy.data?.path.percent === 100 ? "gold" : "primary"}
+            />
+            <div className="min-w-0 flex-1">
+              <SectionLabel>Your path</SectionLabel>
+              <div className="mt-0.5 text-xl font-bold tabular-nums tracking-tight text-foreground" data-testid="training-hero-count">
+                {/* On error the count is UNKNOWN, not zero: "0 of 30" told a
+                    finished rep their progress had been reset. */}
+                {academy.isLoading || academy.isError ? " - " : `${academy.data?.path.done ?? 0} of ${academy.data?.path.total ?? 0}`}{" "}
+                {/* BOTH, deliberately. The inherited `{" "}` renders collapsed
+                    against the tabular-nums run (the hero read "58activities
+                    done"), so the margin is what produces the visible gap. The
+                    space still has to be in the DOM, because a screen reader
+                    reads the text node, not the margin. */}
+                <span className="ml-1.5 text-sm font-medium text-muted-foreground">activities done</span>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary" aria-hidden="true">
                 <div
                   className={cn(
-                    "flex flex-col items-center rounded-xl border px-3 py-2",
-                    streak > 0 ? "border-warning/25 bg-warning/8" : "border-border bg-secondary/40",
+                    "h-full rounded-full transition-all duration-500",
+                    (academy.data?.path.percent ?? 0) >= 100 ? "bg-success" : "bg-primary",
                   )}
-                  data-testid="training-streak"
-                >
-                  
-                  <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{streak}</span>
-                  <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">day streak</span>
-                </div>
-                <div className="hidden flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex" data-testid="training-avg-quiz">
-                  
-                  <span className="mt-0.5 text-sm font-bold tabular-nums leading-none text-foreground">{avgQuiz != null ? `${avgQuiz}%` : " - "}</span>
-                  <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">avg quiz</span>
-                </div>
+                  style={{ width: `${academy.data?.path.percent ?? 0}%` }}
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                About {TOTAL_PATH_MINUTES} minutes end to end. Nothing has to be done in one sitting.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col gap-2">
+              <div
+                className={cn(
+                  "flex flex-col items-center rounded-xl border px-3 py-2",
+                  streak > 0 ? "border-[hsl(var(--accent-gold))]/30 bg-[hsl(var(--accent-gold-soft))]" : "border-border bg-secondary/40",
+                )}
+                data-testid="training-streak"
+              >
+                <span className="text-sm font-bold tabular-nums leading-none text-foreground">{streak}</span>
+                <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">day streak</span>
+              </div>
+              <div className="hidden flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex" data-testid="training-lessons-done">
+                <span className="text-sm font-bold tabular-nums leading-none text-foreground">
+                  {isLoading || isError ? " - " : doneCount}
+                </span>
+                <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">lessons</span>
               </div>
             </div>
-            {isError && (
-              <button
-                type="button"
-                onClick={() => refetch()}
-                data-testid="training-progress-retry"
-                className={cn("mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-secondary px-4 text-sm font-semibold text-foreground", FOCUS)}
-              >
-                 Progress didn't load. Retry
-              </button>
-            )}
           </div>
+          {isError && (
+            <div className="mt-3">
+              <QuietButton onClick={() => refetch()} testId="training-progress-retry">
+                Progress didn't load. Retry
+              </QuietButton>
+            </div>
+          )}
+        </div>
 
-          {/* The flagship drill gets a full-width door, not a header button:
-              the complete pitch as one rehearsal, then live objections. */}
+        {/* Certifications and assignments. Only when there is something to say. */}
+        {academy.data && (
+          <>
+            {assignments.length > 0 && (
+              <Panel tone="accent" testId="academy-assignments">
+                <SectionLabel className="text-primary">
+                  Assigned to you
+                </SectionLabel>
+                <ul className="mt-2 space-y-2">
+                  {assignments.slice(0, 3).map((a) => (
+                    <li key={a.id} className="text-[13px] leading-relaxed text-foreground">
+                      <span className="font-semibold">
+                        {academy.data!.path.stages.find((s) => s.stage.id === a.targetId)?.stage.title ?? a.targetId}
+                      </span>
+                      {a.dueOn && <span className="text-muted-foreground"> · due {a.dueOn}</span>}
+                      {a.note && <span className="block text-xs text-muted-foreground">{a.note}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+            )}
+
+            {academy.data.certifications.some((c) => c.earned) && (
+              <div data-testid="academy-certifications">
+                <SectionLabel className="mb-1.5 px-1">Earned</SectionLabel>
+                <div className="flex flex-wrap gap-1.5">
+                  {academy.data.certifications.filter((c) => c.earned).map((c) => (
+                    <Chip key={c.certification.id} tone="gold">{c.certification.title}</Chip>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {academy.data.practiceAreas.length > 0 && (
+              <Panel testId="academy-practice-areas">
+                <SectionLabel>Worth practising</SectionLabel>
+                <ul className="mt-2 space-y-2">
+                  {academy.data.practiceAreas.map((area) => (
+                    <li key={area.dimension} className="text-[13px] leading-relaxed">
+                      <span className="font-semibold text-foreground">{area.label}</span>
+                      <span className="text-muted-foreground"> · {area.suggestion}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+            )}
+          </>
+        )}
+
+        <SectionTabs tabs={tabs} value={section} onChange={setSection} />
+      </div>
+
+      {/* ── Sections ─────────────────────────────────────────────────────────── */}
+      {section === "path" && (
+        academy.isLoading ? <PanelSkeleton rows={5} />
+          : academy.isError ? (
+            <ErrorPanel
+              title="Your path didn't load"
+              description="Nothing is lost. Your progress is on the server."
+              onRetry={() => academy.refetch()}
+            />
+          ) : academy.data ? (
+            <PathView
+              progress={academy.data.path}
+              records={academy.data.records}
+              offers={offers.data?.offers ?? []}
+              headline={offers.data?.headline ?? null}
+              market={offers.data?.market ?? ""}
+              onOpenLesson={setOpenLessonId}
+              onOpenReference={(cardId) => { setFocusCardId(cardId); setSection("reference"); }}
+            />
+          ) : null
+      )}
+
+      {section === "practice" && (
+        <div className="space-y-4" data-testid="academy-practice">
           <button
             type="button"
-            onClick={() => setShowFullRun(true)}
-            data-testid="open-full-pitch-run"
+            onClick={() => setRolePlayPersona("any")}
+            data-testid="open-roleplay"
             className={cn(
               "flex w-full items-center gap-4 rounded-2xl border border-primary/30 bg-primary/[0.08] p-4 text-left transition-colors hover:bg-primary/[0.14]",
               FOCUS,
             )}
           >
-            
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-bold text-foreground">Practise on a real door</span>
+              <span className="block text-[13px] leading-snug text-muted-foreground">
+                Ten households, by voice or by text. They push back, ask follow-ups, and walk away if you earn it.
+                Everything runs on your device.
+              </span>
+            </span>
+            <span aria-hidden="true" className="shrink-0 text-primary">&rsaquo;</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowFullRun(true)}
+            data-testid="open-full-pitch-run"
+            className={cn(
+              "flex w-full items-center gap-4 rounded-2xl border border-border bg-card p-4 text-left transition-colors hover:bg-secondary/50",
+              FOCUS,
+            )}
+          >
             <span className="min-w-0 flex-1">
               <span className="block text-[15px] font-bold text-foreground">Run the full pitch</span>
-              <span className="block text-[13px] text-muted-foreground">
+              <span className="block text-[13px] leading-snug text-muted-foreground">
                 Four beats, one 30-second take, then the door talks back. About three minutes.
               </span>
             </span>
-            <ChevronRight className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+            <span aria-hidden="true" className="shrink-0 text-muted-foreground/50">&rsaquo;</span>
           </button>
 
-          {/* Fast-start track - "start here" for reps still ramping */}
-          {showFastStart && <FastStartTrack completedById={completedById} onOpen={setOpenLessonId} />}
+          {pitchSupported && (
+            <button
+              type="button"
+              onClick={() => setRehearsalScript("Say your own opener, then your discovery question, then the one benefit this household would feel, then your ask.")}
+              data-testid="open-pitch-practice"
+              className={cn(
+                "flex w-full items-center gap-4 rounded-2xl border border-border bg-card p-4 text-left transition-colors hover:bg-secondary/50",
+                FOCUS,
+              )}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] font-bold text-foreground">Record and listen back</span>
+                <span className="block text-[13px] leading-snug text-muted-foreground">
+                  Hear your own pace. The audio never leaves your phone.
+                </span>
+              </span>
+              <span aria-hidden="true" className="shrink-0 text-muted-foreground/50">&rsaquo;</span>
+            </button>
+          )}
 
-          {/* The interactive layer - motivation as arithmetic, psychology as a
-              deck. These are the parts a rep opens twice. */}
           <NumbersGame />
           <PsychologyDeck />
+        </div>
+      )}
 
-          {/* Manager rollup */}
-          {canSeeTeam && <TeamProgressTable />}
+      {section === "pitch" && (
+        <PitchLab
+          activityId={null}
+          resume={null}
+          offer={offers.data?.headline ?? null}
+          onRehearse={(script) => setRehearsalScript(script)}
+        />
+      )}
 
-          {/* Modules */}
-          <div className="space-y-4">
-            {TRAINING_MODULES.map((mod, mi) => {
-              const modDone = mod.lessons.filter((l) => completedById.has(l.id)).length;
-              return (
-                <div key={mod.id} className="overflow-hidden rounded-2xl border border-border bg-card" data-testid={`training-module-${mod.id}`}>
-                  <div className="flex items-center gap-3 border-b border-border px-4 py-3.5">
-                    <ProgressRing done={modDone} total={mod.lessons.length} />
-                    <div className="min-w-0 flex-1">
-                      <SectionLabel>Module {mi + 1}</SectionLabel>
-                      <div className="text-[15px] font-bold leading-snug tracking-tight text-foreground">{mod.title}</div>
-                      <div className="line-clamp-2 text-xs text-muted-foreground">{mod.tagline}</div>
-                    </div>
-                  </div>
+      {section === "objections" && (
+        <ObjectionDojo
+          completedKeys={objectionKeysDone}
+          onComplete={(key) => completeActivity.mutate({ activityId: `act-objection-${key}` })}
+          onPractise={(personaId) => setRolePlayPersona(personaId)}
+        />
+      )}
 
-                  {/* Engagement layer - punchy hook, a real-talk field story, and
-                      one say-this-not-that swap. All optional and additive. */}
-                  {(mod.hook || mod.fieldStory || mod.sayThisNotThat) && (
-                    <div className="space-y-3 border-b border-border bg-secondary/20 px-4 py-3" data-testid={`training-module-engagement-${mod.id}`}>
-                      {mod.hook && (
-                        <p className="flex items-start gap-2 text-[13px] font-semibold leading-snug text-foreground">
-                          
-                          <span>{mod.hook}</span>
-                        </p>
-                      )}
-                      {mod.fieldStory && (
-                        <div className="rounded-lg border border-border bg-card p-3">
-                          <SectionLabel className="text-primary">Real talk</SectionLabel>
-                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{mod.fieldStory}</p>
-                        </div>
-                      )}
-                      {mod.sayThisNotThat && (
-                        <div className="rounded-lg border border-border bg-card p-3" data-testid={`training-say-this-${mod.id}`}>
-                          <div className="flex items-center gap-1.5">
-                            
-                            <SectionLabel className="text-primary">Say this, not that</SectionLabel>
-                          </div>
-                          <div className="mt-2 space-y-1.5 text-xs leading-relaxed">
-                            <p className="flex items-start gap-2 text-muted-foreground line-through decoration-red-500/50">
-                              <span aria-hidden="true" className="font-semibold text-destructive/80 no-underline">Not</span>
-                              <span>{mod.sayThisNotThat.instead}</span>
-                            </p>
-                            <p className="flex items-start gap-2 text-foreground">
-                              <span aria-hidden="true" className="font-semibold text-success">Say</span>
-                              <span>{mod.sayThisNotThat.say}</span>
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+      {section === "reference" && (
+        offers.isLoading ? <PanelSkeleton rows={4} />
+          : offers.isError ? (
+            <ErrorPanel
+              title="The reference library didn't load"
+              description="Offers and competitor figures could not be fetched. Do not quote numbers from memory."
+              onRetry={() => offers.refetch()}
+            />
+          ) : (
+            <ReferenceLibrary
+              offers={offers.data?.offers ?? []}
+              expired={offers.data?.expired ?? []}
+              competitors={offers.data?.competitors ?? []}
+              day={offers.data?.day ?? ""}
+              market={offers.data?.market ?? null}
+              readCardIds={readCardIds}
+              focusCardId={focusCardId}
+              onCloseCard={() => setFocusCardId(null)}
+            />
+          )
+      )}
 
-                  <div className="divide-y divide-border">
-                    {mod.lessons.map((lesson) => {
-                      const done = completedById.has(lesson.id);
-                      const score = completedById.get(lesson.id)?.quizScore ?? null;
-                      return (
-                        <button
-                          key={lesson.id}
-                          type="button"
-                          onClick={() => setOpenLessonId(lesson.id)}
-                          data-testid={`training-lesson-${lesson.id}`}
-                          className={cn("flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-secondary/50", FOCUS)}
-                        >
-                          {done ? (
-                            null
-                          ) : (
-                            null
-                          )}
-                          {/* Titles carry their meaning in the tail ("the assumptive
-                              close: the full play" vs "…: the full pl…"), so they
-                              must wrap, not truncate. The summary stays one line -
-                              it is a teaser, and the lesson page has the rest. */}
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-[13px] font-semibold leading-snug text-foreground">{lesson.title}</span>
-                            <span className="block truncate text-xs text-muted-foreground">{lesson.summary}</span>
-                          </span>
-                          <span className="flex shrink-0 items-center gap-2 text-xs tabular-nums text-muted-foreground">
-                            {score != null && <span className="rounded-full bg-secondary px-1.5 py-0.5 font-semibold">{score}%</span>}
-                            <span>{lesson.minutes} min</span>
-                            <ChevronRight className="h-4 w-4 text-muted-foreground/50" aria-hidden="true" />
-                          </span>
-                        </button>
-                      );
-                    })}
+      {section === "library" && (
+        <div className="space-y-4" data-testid="academy-library">
+          <p className="px-1 text-[13px] leading-relaxed text-muted-foreground">
+            The full curriculum, {TOTAL_TRAINING_LESSONS} lessons across {TRAINING_MODULES.length} modules. The path
+            above pulls the important ones into order; this is everything, for when you want to go deeper on one thing.
+          </p>
+          {TRAINING_MODULES.map((mod, mi) => {
+            const modDone = mod.lessons.filter((l) => completedById.has(l.id)).length;
+            return (
+              <div key={mod.id} className="overflow-hidden rounded-2xl border border-border bg-card" data-testid={`training-module-${mod.id}`}>
+                <div className="flex items-center gap-3 border-b border-border px-4 py-3.5">
+                  <Ring done={modDone} total={mod.lessons.length} />
+                  <div className="min-w-0 flex-1">
+                    <SectionLabel>Module {mi + 1}</SectionLabel>
+                    <div className="text-[15px] font-bold leading-snug tracking-tight text-foreground">{mod.title}</div>
+                    <div className="line-clamp-2 text-xs text-muted-foreground">{mod.tagline}</div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </>
+                <div className="divide-y divide-border">
+                  {mod.lessons.map((lesson) => {
+                    const done = completedById.has(lesson.id);
+                    const score = completedById.get(lesson.id)?.quizScore ?? null;
+                    return (
+                      <button
+                        key={lesson.id}
+                        type="button"
+                        onClick={() => setOpenLessonId(lesson.id)}
+                        data-testid={`training-lesson-${lesson.id}`}
+                        className={cn("flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-secondary/50", FOCUS)}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[11px] font-bold",
+                            done ? "border-success bg-success text-white" : "border-border bg-background text-muted-foreground",
+                          )}
+                        >
+                          {done && <Check className="h-3.5 w-3.5" />}
+                        </span>
+                        {/* Titles carry their meaning in the tail, so they must
+                            wrap. The summary stays one line: it is a teaser. */}
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13px] font-semibold leading-snug text-foreground">{lesson.title}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{lesson.summary}</span>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-2 text-xs tabular-nums text-muted-foreground">
+                          {score != null && <span className="rounded-full bg-secondary px-1.5 py-0.5 font-semibold">{score}%</span>}
+                          <span>{lesson.minutes} min</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {section === "team" && canSeeTeam && (
+        <Suspense fallback={<PanelSkeleton rows={4} testId="supervisor-loading" />}>
+          <SupervisorPanel canManage={canManage} />
+        </Suspense>
+      )}
+
+      {/* A quiet footer note so the ten objections are discoverable from the
+          path even before a rep reaches that stage. */}
+      {section === "path" && (
+        <p className="px-1 text-xs text-muted-foreground">
+          {ACADEMY_OBJECTIONS.length} objections are drilled in their own tab, and everything you may quote in your
+          market is under Reference.
+        </p>
       )}
     </div>
   );

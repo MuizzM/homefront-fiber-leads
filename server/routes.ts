@@ -164,6 +164,7 @@ import { registerLeadRankingRoutes } from "./leadRanking";
 import { registerKineticScannerRoutes } from "./kineticScannerRoutes";
 import { registerKineticBuildRoutes } from "./kineticBuildRoutes";
 import { registerTrainingEngineRoutes, payRampBonus } from "./trainingEngine";
+import { registerAcademyRoutes } from "./academyRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -1355,6 +1356,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // CE-1 drill engine — due deck, review capture, coach summary. Lives under
   // /api/training, so the training gate's allowlist already covers it.
   registerTrainingEngineRoutes(app, { requireAuth });
+  // Fiber Sales Academy — guided path, role-play coaching, pitch lab and the
+  // market offer catalog. Also under /api/training, for the same gate reason:
+  // a new hire who has not cleared training must be able to reach the thing
+  // that clears it.
+  registerAcademyRoutes(app, { requireAuth, requireCapability });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
