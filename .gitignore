@@ -16,6 +16,11 @@ ops-data/
 data/*
 # …except committed datasets the build ships (import-fcc-pins reads this one)
 !data/fcc-additions-cabarrus-rowan-2025.json
+# The Kinetic 2026 per-block footprint ships INSIDE the production image
+# (script/build.ts copies it to dist/), so it has to be tracked. The raw
+# per-location JSONL it was built from stays ignored - 40MB with no further use
+# once the blocks are counted.
+!data/kinetic-2026-footprint.json
 data.db
 data.db-shm
 data.db-wal

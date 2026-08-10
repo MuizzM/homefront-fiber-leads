@@ -1,0 +1,171 @@
+name: Load Kinetic 2026 build front (production)
+
+# Puts Kinetic's build front on the production field map: the per-block FCC
+# footprint (D24 -> J25 -> D25), then the org's EXISTING doors classified
+# against it, so a rep can be sent to the ones sitting in blocks Kinetic was
+# actively building. See script/load-kinetic-2026.ts for exactly what runs.
+#
+# THIS CREATES NO LEADS. Only confirmed_2026 is lead-eligible and nothing here
+# can confirm — that needs an authorized address qualification. Doors the org
+# already has get classified; none are created, retagged or deleted.
+#
+# NOTHING HERE IS A 2026 BUILD. The newest published FCC filing describes
+# 2025-12-31. These are candidates: blocks Kinetic was building through the end
+# of 2025 with premises still unserved. Reps verify at the door.
+#
+# Same rails as import-fcc-pins.yml: the production SSH key exists only as a
+# repository secret, so the only thing that can reach the box is Actions, over
+# deploy.yml's pinned-host-key connection. The loader and its dataset must
+# already be in the RUNNING image (deploy a build containing
+# dist/load-kinetic-2026.cjs first — the run refuses with a clear error if the
+# live image predates it).
+#
+# DRY RUN IS THE DEFAULT. `apply: true` additionally requires retyping the org
+# id into `confirm`. Undo: the footprint is removable per vintage via
+# POST /api/kinetic-2026/vintages/<code>/revert.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Organization id to load into (prod org is 1)"
+        required: true
+        type: string
+      apply:
+        description: "WRITE. Leave unchecked for a dry run that changes nothing."
+        required: false
+        default: false
+        type: boolean
+      confirm:
+        description: "Required when apply is checked: retype the tenant id exactly"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-kinetic-2026-production
+  cancel-in-progress: false
+
+jobs:
+  load:
+    name: ${{ inputs.apply && 'APPLY — load Kinetic 2026 build front' || 'Dry run — load Kinetic 2026 build front' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Validate inputs
+        env:
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Whitelist, not sanitize: this string is interpolated into a remote
+          # shell command, so anything but a bare id is refused outright.
+          if [[ ! "$TENANT" =~ ^[0-9]+$ ]]; then
+            echo "tenant must be a positive integer (got: $TENANT)" >&2
+            exit 1
+          fi
+          if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "$TENANT" ]; then
+            echo "Refusing to write: 'confirm' must exactly match 'tenant' ($TENANT)." >&2
+            echo "Re-run with confirm=$TENANT, or leave 'apply' unchecked for a dry run." >&2
+            exit 1
+          fi
+          echo "tenant=$TENANT  apply=$APPLY"
+
+      - name: Run the loader on the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=80 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              bash -s -- "$TENANT" "$APPLY" <<'REMOTE'
+          set -euo pipefail
+          TENANT="$1"
+          APPLY="$2"
+          [[ "$TENANT" =~ ^[0-9]+$ ]]
+          [[ "$APPLY" =~ ^(true|false)$ ]]
+
+          cd /srv/homefront
+
+          # The image tag the LIVE release is running — deploy.sh records it in
+          # .deployed-tag. Reused rather than rebuilt, so this runs the exact
+          # code serving traffic.
+          TAG="$(cat .deployed-tag 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            RUNNING="$(docker ps --filter 'ancestor=homefront-app' --format '{{.Image}}' | head -n1)"
+            TAG="${RUNNING##*:}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Could not determine the running image tag — refusing to guess" >&2
+            exit 1
+          fi
+          echo "running against image homefront-app:$TAG"
+
+          # Both the loader AND its dataset ship inside the image (bundled by
+          # script/build.ts). A live image from before this branch has neither.
+          #
+          # Both compose runs get </dev/null: this script IS the remote bash's
+          # stdin, and `compose run` keeps stdin open by default — without the
+          # redirect the existence check swallows the rest of the heredoc and
+          # the loader below silently never runs (bash reads EOF, exits 0).
+          if ! APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+              run --rm --no-deps --entrypoint sh app \
+              -c 'test -f dist/load-kinetic-2026.cjs && test -f dist/kinetic-2026-footprint.json' </dev/null; then
+            echo "dist/load-kinetic-2026.cjs or its dataset is not in the running image — deploy a build containing them first (deploy.yml on this branch's commit)." >&2
+            exit 1
+          fi
+
+          if [ "$APPLY" = "true" ]; then MODE=(--apply); else MODE=(); fi
+
+          # `compose run` on the same volume, never `exec` into the live
+          # container — the app keeps serving and this cannot disturb it. The
+          # loader fetches block polygons from TIGERweb, so this takes a few
+          # minutes; the job timeout allows for it.
+          APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+            run --rm --no-deps --entrypoint node app \
+            dist/load-kinetic-2026.cjs --tenant "$TENANT" "${MODE[@]}" </dev/null
+          REMOTE
+
+      - name: What to do next
+        if: success()
+        shell: bash
+        run: |
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            echo "::notice::Loaded. The build front is live at /api/kinetic-2026/map and /api/kinetic-2026/ranked. These are CANDIDATES, not confirmed 2026 builds — reps verify at the door. Undo a vintage: POST /api/kinetic-2026/vintages/<code>/revert."
+          else
+            echo "::notice::Dry run only — nothing was written. Re-run with apply checked and confirm set to the tenant id to commit."
+          fi

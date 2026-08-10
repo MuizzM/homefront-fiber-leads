@@ -529,6 +529,115 @@ export function additionBlocks(
   `).all(baseline, tenantId, latest, ...counties, Math.max(1, Math.min(50_000, opts.limit ?? 5_000))) as any[];
 }
 
+// ── Baked footprint: shipping the durable artifact into the image ────────────
+//
+// The staged chunk API is how a browser-driven operator loads a vintage. It is
+// not how PRODUCTION loads one: there is no shell on the box, and the raw
+// availability rows are ~40MB of location records whose only durable product
+// is the per-block rollup below. So the rollup travels in the image beside the
+// loader (exactly how import-fcc-pins.ts carries its dataset) and is applied by
+// a workflow dispatch.
+//
+// Location ids are carried ONLY for blocks that gained coverage, and for BOTH
+// vintages of those blocks. Both sides is the point: with the before-set and
+// the after-set, WHICH locations were newly lit is derivable rather than merely
+// counted, so the central claim carries its own evidence. Untouched blocks
+// carry none - shipping all ~100k ids to evidence a claim nobody makes about
+// them would add tens of megabytes to the production image.
+
+export interface FootprintRow {
+  vintage: FccVintageCode;
+  blockGeoid: string;
+  countyFips: string;
+  stateFips: string;
+  kineticLocations: number;
+  totalResidentialLocations: number;
+  maxDownMbps: number | null;
+  maxUpMbps: number | null;
+  sourceAsOf: string;
+  locationIds?: string[];
+}
+
+export interface FootprintExport {
+  tenantHint: number;
+  generatedAt: string | null;
+  vintages: FccVintageCode[];
+  rows: FootprintRow[];
+}
+
+export function exportFootprint(tenantId: number, opts: { generatedAt?: string } = {}): FootprintExport {
+  const additions = new Set(additionBlocks(tenantId, { limit: 50_000 }).map((b) => b.blockGeoid));
+  const rows = rawDb.prepare(`
+    SELECT vintage, block_geoid AS blockGeoid, county_fips AS countyFips, state_fips AS stateFips,
+           kinetic_locations AS kineticLocations, total_residential_locations AS totalResidentialLocations,
+           max_down_mbps AS maxDownMbps, max_up_mbps AS maxUpMbps,
+           source_as_of AS sourceAsOf, location_ids_json AS locationIdsJson
+      FROM fcc_block_footprint
+     WHERE tenant_id = ?
+     ORDER BY vintage, block_geoid
+  `).all(tenantId) as any[];
+
+  return {
+    tenantHint: tenantId,
+    generatedAt: opts.generatedAt ?? null,
+    vintages: importedVintages(tenantId),
+    rows: rows.map((r) => {
+      const row: FootprintRow = {
+        vintage: r.vintage, blockGeoid: r.blockGeoid, countyFips: r.countyFips,
+        stateFips: r.stateFips, kineticLocations: r.kineticLocations,
+        totalResidentialLocations: r.totalResidentialLocations,
+        maxDownMbps: r.maxDownMbps, maxUpMbps: r.maxUpMbps, sourceAsOf: r.sourceAsOf,
+      };
+      if (additions.has(r.blockGeoid)) row.locationIds = safeIds(r.locationIdsJson);
+      return row;
+    }),
+  };
+}
+
+/**
+ * Apply a baked footprint. Idempotent per (tenant, vintage, block), and
+ * REPLACES each named vintage wholesale rather than merging: a partial overlay
+ * on top of a stale vintage would leave blocks the new file no longer lists
+ * still reporting coverage, which reads downstream as service that is not
+ * there. Reversible with revertVintage().
+ */
+export function loadFootprint(tenantId: number, data: FootprintExport): { vintages: FccVintageCode[]; blocks: number } {
+  const vintages = [...new Set(data.rows.map((r) => r.vintage))];
+  const insert = rawDb.prepare(`
+    INSERT INTO fcc_block_footprint (
+      tenant_id, vintage, block_geoid, county_fips, state_fips,
+      kinetic_locations, total_residential_locations, max_down_mbps, max_up_mbps,
+      location_ids_json, source_as_of
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(tenant_id, vintage, block_geoid) DO UPDATE SET
+      kinetic_locations = excluded.kinetic_locations,
+      total_residential_locations = excluded.total_residential_locations,
+      max_down_mbps = excluded.max_down_mbps,
+      max_up_mbps = excluded.max_up_mbps,
+      location_ids_json = excluded.location_ids_json
+  `);
+  const clear = rawDb.prepare(`DELETE FROM fcc_block_footprint WHERE tenant_id = ? AND vintage = ?`);
+
+  rawDb.transaction(() => { for (const v of vintages) clear.run(tenantId, v); }).immediate();
+
+  // Batched for the same reason finalize is: an import must never hold the
+  // writer lock long enough to starve the WAL checkpointer.
+  for (let offset = 0; offset < data.rows.length; offset += FINALIZE_BATCH_BLOCKS) {
+    const batch = data.rows.slice(offset, offset + FINALIZE_BATCH_BLOCKS);
+    rawDb.transaction(() => {
+      for (const row of batch) {
+        insert.run(
+          tenantId, row.vintage, row.blockGeoid, row.countyFips, row.stateFips ?? "37",
+          row.kineticLocations, row.totalResidentialLocations,
+          row.maxDownMbps, row.maxUpMbps,
+          JSON.stringify(row.locationIds ?? []), row.sourceAsOf,
+        );
+      }
+    }).immediate();
+  }
+  return { vintages: sortVintages(vintages), blocks: data.rows.length };
+}
+
 /** As-of date of the newest imported vintage, for operator-facing copy. */
 export function latestVintageAsOf(tenantId: number): { vintage: FccVintageCode; asOfMs: number } | null {
   const vintages = importedVintages(tenantId);

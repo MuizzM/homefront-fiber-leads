@@ -17,6 +17,7 @@
 //   tsx script/kinetic-2026-report.ts --tenant 1 --class likely_2026 --limit 40
 //   tsx script/kinetic-2026-report.ts --tenant 1 --territories
 
+import { writeFileSync } from "node:fs";
 import { rawDb } from "../server/db";
 import { runMigrations } from "../server/storage";
 import { importedVintages, TARGET_COUNTY_FIPS } from "../server/fccImportStore";
@@ -114,3 +115,71 @@ function main() {
 }
 
 main();
+
+// ── Route sheet export ───────────────────────────────────────────────────────
+// `--json <path>` writes the full territory + door detail a rep needs in the
+// field, rather than the console summary above. Addresses are the deliverable:
+// they are stable across databases (dev and prod share the FCC-derived doors),
+// so a sheet generated here is workable in the live app by address search.
+export function writeRouteSheet(path: string, tenant: number, klass: KineticBuildClass, topTerritories: number) {
+  const vintages = importedVintages(tenant);
+  const latest = vintages[vintages.length - 1];
+  const baseline = vintages[vintages.length - 2];
+
+  const all = rankedBuilds(tenant, { limit: 500, poolMax: 5_000, classifications: [klass] });
+  const byId = new Map(all.map((r) => [r.id, r]));
+  const pool = all.filter((r) => r.lat != null && r.lng != null)
+    .map((r) => ({ id: r.id, lat: r.lat as number, lng: r.lng as number }));
+
+  const blockPct = new Map<string, number>();
+  for (const row of rawDb.prepare(`
+    SELECT f.block_geoid AS b,
+           CAST(f.kinetic_locations - COALESCE(p.kinetic_locations,0) AS REAL)
+             / NULLIF(f.total_residential_locations,0) AS pct
+      FROM fcc_block_footprint f
+      LEFT JOIN fcc_block_footprint p
+        ON p.tenant_id=f.tenant_id AND p.block_geoid=f.block_geoid AND p.vintage=?
+     WHERE f.tenant_id=? AND f.vintage=?
+  `).all(baseline, tenant, latest) as any[]) blockPct.set(row.b, row.pct ?? 0);
+
+  const detail = rawDb.prepare(`SELECT id, block_geoid AS b, address, city, zip, lat, lng, lead_id AS leadId FROM kinetic_build_state WHERE id = ?`);
+
+  const territories = groupIntoTerritories(pool, { maxDoors: 60, maxRadiusM: 1_200 })
+    .slice(0, topTerritories)
+    .map((group, index) => {
+      const ordered = routeOrder(group.doors.map((id) => pool.find((d) => d.id === id)!));
+      const doors = ordered.map((id) => {
+        const d = detail.get(id) as any;
+        return {
+          address: d.address, city: d.city, zip: d.zip,
+          lat: d.lat, lng: d.lng, leadId: d.leadId,
+          block: d.b,
+          blockNewlyLitPct: Math.round((blockPct.get(d.b) ?? 0) * 100),
+          score: byId.get(id)?.score ?? 0,
+        };
+      });
+      return {
+        name: `Territory ${index + 1}`,
+        doorCount: doors.length,
+        radiusM: group.radiusM,
+        centroid: group.centroid,
+        city: doors[0]?.city ?? "",
+        doors,
+      };
+    });
+
+  const payload = {
+    generatedFor: `tenant ${tenant}`,
+    classification: klass,
+    evidenceThrough: latest ? vintageOf(latest).label : null,
+    vintages,
+    totals: buildSummary(tenant),
+    territories,
+  };
+  writeFileSync(path, JSON.stringify(payload, null, 2));
+  console.log(`route sheet -> ${path} (${territories.length} territories, ${territories.reduce((n, t) => n + t.doorCount, 0)} doors)`);
+}
+
+if (argv.includes("--json")) {
+  writeRouteSheet(flag("json") ?? "route-sheet.json", TENANT, CLASS, Number(flag("territories-count")) || 10);
+}

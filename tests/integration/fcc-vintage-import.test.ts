@@ -264,6 +264,107 @@ describe("vintage comparison", () => {
   });
 });
 
+describe("baked footprint - the artifact production actually loads", () => {
+  // Production has no shell and the raw availability rows are ~40MB, so what
+  // ships in the image is the per-block rollup. These pin the round trip and
+  // the one rule that makes re-loading safe.
+  const T3 = 903;
+  const A = "370250401002090";
+  const B = "370250401002091";
+
+  function seedInto(tenant: number, vintage: string, blocks: Record<string, number>) {
+    const rows = Object.entries(blocks).flatMap(([blockGeoid, n]) =>
+      Array.from({ length: n }, (_, i) => ({
+        // Location ids are STABLE across vintages in real BDC data - that is
+        // what makes a diff a diff. Embedding the vintage here would make every
+        // row look newly added.
+        locationId: `${tenant}-${blockGeoid}-${i}`,
+        blockGeoid, providerId: WIN, technology: 50, brCode: "R",
+        maxDownMbps: 1000, maxUpMbps: 1000,
+      })));
+    const job = store.openImport({
+      tenantId: tenant, vintage, providerIds: [WIN],
+      manifest: `bake-${tenant}-${vintage}`, expectedChunkCount: 1, expectedRowCount: rows.length,
+    });
+    store.ingestChunk(job.id, 0, rows);
+    store.finalizeImport(job.id);
+  }
+
+  /** Present at both vintages with the SAME count - gained nothing. */
+  const C = "370250401002092";
+
+  beforeAll(() => {
+    seedInto(T3, "D24", { [A]: 4, [C]: 6 });
+    seedInto(T3, "D25", { [A]: 9, [B]: 5, [C]: 6 });
+    store.setBlockDenominators(T3, "D25", [{ blockGeoid: A, totalResidentialLocations: 20 }]);
+  });
+
+  it("round-trips the footprint into a different org unchanged", () => {
+    const exported = store.exportFootprint(T3);
+    expect(exported.vintages).toEqual(["D24", "D25"]);
+    expect(exported.rows.length).toBe(5);   // A@D24, A@D25, B@D25, C@D24, C@D25
+
+    const T4 = 904;
+    const applied = store.loadFootprint(T4, exported);
+    expect(applied.blocks).toBe(5);
+
+    const facts = store.blockFactsFor(T4, A)!;
+    expect(facts.latestVintage).toBe("D25");
+    expect(facts.baselineVintage).toBe("D24");
+    expect(facts.reportedLocations).toBe(9);
+    expect(facts.addedLocations).toBe(5);
+    // The denominator survives the trip - without it likely_2026 cannot fire.
+    expect(facts.totalLocations).toBe(20);
+    expect(store.additionBlocks(T4).map((b) => b.blockGeoid).sort()).toEqual([A, B].sort());  // not C
+  });
+
+  it("carries FCC location ids across BOTH vintages of an addition block", () => {
+    const exported = store.exportFootprint(T3);
+    const now = exported.rows.find((r) => r.blockGeoid === A && r.vintage === "D25")!;
+    const before = exported.rows.find((r) => r.blockGeoid === A && r.vintage === "D24")!;
+    expect(now.locationIds?.length).toBe(9);
+    // Both sides, deliberately: with the before-set AND the after-set, WHICH
+    // locations were added is derivable, not merely how many. Counting alone
+    // would leave the central claim unevidenced.
+    expect(before.locationIds?.length).toBe(4);
+    const added = now.locationIds!.filter((id) => !before.locationIds!.includes(id));
+    expect(added).toHaveLength(5);
+  });
+
+  it("carries no ids for a block that gained nothing", () => {
+    // Shipping ~100k ids to evidence a claim nobody makes about untouched
+    // blocks would add tens of megabytes to the production image.
+    const exported = store.exportFootprint(T3);
+    for (const vintage of ["D24", "D25"]) {
+      expect(exported.rows.find((r) => r.blockGeoid === C && r.vintage === vintage)!.locationIds).toBeUndefined();
+    }
+  });
+
+  it("REPLACES a vintage wholesale rather than merging into a stale one", () => {
+    const T5 = 905;
+    store.loadFootprint(T5, store.exportFootprint(T3));
+    expect(store.blockFactsFor(T5, B)!.reportedLocations).toBe(5);
+
+    // A later dataset in which block B no longer appears at D25. Merging would
+    // leave B still reporting coverage - service that is not there.
+    const shrunk = store.exportFootprint(T3);
+    shrunk.rows = shrunk.rows.filter((r) => r.blockGeoid !== B);
+    store.loadFootprint(T5, shrunk);
+    expect(store.blockFactsFor(T5, B)!.reportedLocations).toBe(0);
+    expect(store.blockFactsFor(T5, A)!.reportedLocations).toBe(9);
+  });
+
+  it("is idempotent - loading twice changes nothing", () => {
+    const T6 = 906;
+    const exported = store.exportFootprint(T3);
+    store.loadFootprint(T6, exported);
+    const first = store.blockFactsFor(T6, A)!;
+    store.loadFootprint(T6, exported);
+    expect(store.blockFactsFor(T6, A)).toEqual(first);
+    expect(rawDb.prepare(`SELECT COUNT(*) n FROM fcc_block_footprint WHERE tenant_id = ?`).get(T6)).toEqual({ n: 5 });
+  });
+});
+
 describe("reversibility", () => {
   it("removing a vintage leaves every other vintage intact", () => {
     const before = store.blockFactsFor(TENANT, ROWAN_A)!;

@@ -68,7 +68,7 @@ async function buildAll() {
   // wal-maintenance is not an operator script - it is a long-lived sidecar the
   // server forks at boot (server/walMaintenance.ts). It is built here for the
   // same reason: dist/ is all that ships, so the entry must exist there.
-  for (const entry of ["reset-areas", "import-fcc-pins", "wal-maintenance"]) {
+  for (const entry of ["reset-areas", "import-fcc-pins", "load-kinetic-2026", "wal-maintenance"]) {
     await esbuild({
       entryPoints: [`script/${entry}.ts`],
       platform: "node",
@@ -104,6 +104,19 @@ async function buildAll() {
     console.log("copied GIS addresses to dist/");
   } catch (e) {
     console.warn("Could not copy GIS addresses:", e);
+  }
+
+  // The Kinetic 2026 per-block footprint rides beside load-kinetic-2026.cjs.
+  // Only the ROLLUP ships: the raw availability rows it was finalized from are
+  // ~40MB of location records with no further use once the blocks are counted.
+  try {
+    await copyFile(
+      "data/kinetic-2026-footprint.json",
+      "dist/kinetic-2026-footprint.json"
+    );
+    console.log("copied Kinetic 2026 footprint to dist/");
+  } catch (e) {
+    console.warn("Could not copy Kinetic 2026 footprint:", e);
   }
 
   // FCC addition pins ride beside import-fcc-pins.cjs the same way — the

@@ -39,7 +39,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { runMigrations } from "../server/storage";
 import {
-  additionBlocks, discardImport, finalizeImport, importedVintages,
+  additionBlocks, discardImport, exportFootprint, finalizeImport, importedVintages,
   ingestChunk, listImports, openImport, TARGET_COUNTY_FIPS,
   type FccAvailabilityRow,
 } from "../server/fccImportStore";
@@ -159,6 +159,16 @@ function main() {
     entry.blocks++; entry.added += block.added;
   }
   console.table(byCounty);
+
+  // Bake the durable artifact for production. The raw availability rows never
+  // ship - only the per-block rollup they finalize into.
+  const exportPath = flag("export");
+  if (exportPath) {
+    const payload = exportFootprint(TENANT, { generatedAt: new Date().toISOString() });
+    fs.writeFileSync(exportPath, JSON.stringify(payload));
+    const mb = (fs.statSync(exportPath).size / 1e6).toFixed(1);
+    console.log(`\nbaked footprint -> ${exportPath} (${payload.rows.length} block-vintage rows, ${mb} MB)`);
+  }
 }
 
 main();
