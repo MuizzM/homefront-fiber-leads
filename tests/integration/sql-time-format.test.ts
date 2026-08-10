@@ -32,8 +32,14 @@ const q = (sql: string, ...args: any[]) => rawDb.prepare(sql).get(...args);
 
 describe("the mixed-format comparison bug", () => {
   it("reproduces it: datetime() wrongly admits an ISO row from earlier on the boundary day", () => {
-    const threshold = q("SELECT datetime('now','-7 days') AS t").t as string;
-    // 00:30 on the boundary date is ~7.5 days old — outside a 7-day window.
+    // A PINNED instant, not 'now': the bug being demonstrated is purely about
+    // the space-vs-'T' byte order between the two formats. Deriving it from
+    // the live clock made the "truth" assertion flip whenever the suite ran
+    // between 00:00 and 00:30 UTC, when 00:30-on-the-boundary-day is not in
+    // fact older than the threshold.
+    const threshold = q("SELECT datetime('2026-03-04 12:00:00','-7 days') AS t").t as string;
+    // 00:30 on the boundary date is ~7.5 days before the pinned instant —
+    // outside a 7-day window.
     const tooOld = `${threshold.slice(0, 10)}T00:30:00.000Z`;
     expect(q("SELECT (? >= ?) AS r", tooOld, threshold).r).toBe(1);      // the bug
     expect(q("SELECT (julianday(?) >= julianday(?)) AS r", tooOld, threshold).r).toBe(0);  // the truth
@@ -66,9 +72,12 @@ describe("the mixed-format comparison bug", () => {
     const row = q("SELECT created_at AS c FROM leads WHERE id = ?", lead.id);
     // Pins the premise the whole fix rests on: this column really is ISO.
     expect(row.c).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/);
-    // A brand-new lead is inside every window, and outside a negative-width one.
+    // A brand-new lead is inside every window, and "now" is at-or-after its
+    // creation. The second probe is >= in THIS direction on purpose: asserting
+    // created_at >= now = 0 raced the clock - insert and threshold can land in
+    // the same millisecond, where equality flipped the answer.
     expect(q(`SELECT (? >= ${isoDaysAgo(7)}) AS r`, row.c).r).toBe(1);
-    expect(q(`SELECT (? >= ${isoHoursAgo(0)}) AS r`, row.c).r).toBe(0);
+    expect(q(`SELECT (${isoHoursAgo(0)} >= ?) AS r`, row.c).r).toBe(1);
   });
 
   it("refuses a non-integer offset rather than interpolating it into SQL", () => {
