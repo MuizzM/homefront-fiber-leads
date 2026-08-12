@@ -42,13 +42,29 @@
 
 export type BasemapMode = "satellite" | "streets" | "dark";
 
-/** Google serves the same tiles from four hosts; MapLibre round-robins the
- *  list. (It has no `{s}` placeholder - that is a Leaflet-ism - so the hosts
- *  are spelled out.) */
+/**
+ * ONE host, deliberately - not the four Google also serves these from.
+ *
+ * Sharding a tile source across mt0-mt3 is an HTTP/1.1 optimisation: it bought
+ * parallelism past the six-connections-per-origin cap. Over HTTP/2, which is
+ * what these hosts speak, it is a straight loss. Four origins means four DNS
+ * lookups, four TCP handshakes and four TLS negotiations before the map is
+ * fully painted; one origin multiplexes every tile over a single connection
+ * that is already warm. On a field phone at 100ms RTT that difference is most
+ * of a second on the screen a rep opens first.
+ *
+ * It also makes the preconnect in index.html actually work. That tag names
+ * mt1, so under the old round-robin it warmed the connection for a quarter of
+ * the tiles and the other three hosts still paid full handshake cost. Keep this
+ * host and that tag in step.
+ *
+ * (MapLibre has no `{s}` placeholder - that is a Leaflet-ism - so the host is
+ * spelled out rather than templated.)
+ */
+const GOOGLE_TILE_HOST = "https://mt1.google.com";
+
 function googleTiles(layers: string): string[] {
-  return [0, 1, 2, 3].map(
-    n => `https://mt${n}.google.com/vt/lyrs=${layers}&hl=en&gl=us&x={x}&y={y}&z={z}`,
-  );
+  return [`${GOOGLE_TILE_HOST}/vt/lyrs=${layers}&hl=en&gl=us&x={x}&y={y}&z={z}`];
 }
 
 // Computed, not hardcoded. A literal year in an attribution string is wrong
