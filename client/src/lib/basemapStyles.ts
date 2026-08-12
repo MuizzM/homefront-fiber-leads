@@ -92,20 +92,26 @@ interface RasterBasemap {
 }
 
 const BASEMAP_TILES: Record<BasemapMode, RasterBasemap> = {
-  // lyrs=s is BARE IMAGERY - deliberately not lyrs=y (hybrid).
+  // lyrs=y is HYBRID: imagery with Google's own house numbers and street names
+  // baked into the tile.
   //
-  // Hybrid bakes Google's own house numbers into the tile, and we draw house
-  // numbers from the county E911 import. Both at once meant every roof carried
-  // two numbers in two typefaces: ours large and haloed, Google's small and
-  // grey, sometimes disagreeing. A rep reading a door off the map should never
-  // have to decide which number the app means.
+  // This was `lyrs=s` (bare imagery) on the reasoning that we draw house
+  // numbers ourselves from the county E911 import, and two label systems on one
+  // roof would make a rep decide which number the app meant. That reasoning was
+  // sound and the premise was false: the E911 import is an ADMIN ACTION that
+  // has to be run per county, and it had never been run anywhere. The
+  // address_points table did not exist in a single data directory. So the
+  // satellite map was bare imagery with no numbers, no street names, and
+  // nothing at all to replace them - which is what "I can't see any house
+  // numbers" was.
   //
-  // Bare imagery drops Google's STREET names too, so those are drawn from the
-  // same E911 data (see the street-label layer in mapPins.ts). One label
-  // system, one source of truth, and both layers can be styled, moved and
-  // toggled - none of which was possible while the labels were pixels in
-  // someone else's JPEG.
-  satellite: { tiles: googleTiles("s"), maxzoom: 21, attribution: GOOGLE_ATTRIBUTION },
+  // Hybrid is the floor, not the ceiling: it works in every county on day one
+  // with no import, which our own labels by definition cannot. Where E911 data
+  // HAS been imported, our layer still draws on top of it - better data,
+  // styleable, toggleable, and the same rows the lasso creates doors from. If
+  // that doubling is ever unwanted on a covered county, the "House numbers"
+  // toggle in map settings turns ours off; it is a real control a rep can find.
+  satellite: { tiles: googleTiles("y"), maxzoom: 21, attribution: GOOGLE_ATTRIBUTION },
   streets:   { tiles: googleTiles("m"), maxzoom: 21, attribution: GOOGLE_ATTRIBUTION },
   // Google publishes no dark basemap, and darkening the road tiles with raster
   // paint filters gives mud rather than a dark map (you cannot invert with

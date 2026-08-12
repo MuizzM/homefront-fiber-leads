@@ -727,10 +727,14 @@ export const STREET_LABEL_SOURCE = "hf-streetname-src";
 /**
  * Street names, drawn from the same E911 points as the house numbers.
  *
- * The satellite basemap is bare imagery (lyrs=s) so Google's own labels are
- * gone along with its duplicate house numbers - these put navigation back,
- * under our control. They turn on EARLIER than house numbers (z14 vs z16.8):
- * knowing which street you are on matters while you are still driving to it.
+ * These draw only where the E911 import has actually been run - the source is
+ * fed from /api/address-points and stays an empty FeatureCollection otherwise,
+ * so an uncovered county silently gets nothing from this layer rather than a
+ * partial set. The basemap is hybrid (lyrs=y) and carries Google's own street
+ * names underneath, which is what a county with no import falls back to.
+ *
+ * They turn on EARLIER than house numbers (z14 vs z16.8): knowing which street
+ * you are on matters while you are still driving to it.
  */
 export function ensureStreetLabelLayer(map: any, styleMode: "satellite" | "streets" | "dark"): void {
   try {

@@ -8505,8 +8505,43 @@ export default function MapView() {
                 // Primary path: the GeolocateControl enters ACTIVE_LOCK (blue dot +
                 // live follow); each fix then drives the smooth follow-camera in the
                 // geolocate handler, so the map tracks the rep like Apple/Google Maps.
+                //
+                // trigger() is a TOGGLE, and that is the whole bug this guard
+                // fixes. MapLibre's state machine turns tracking OFF when
+                // trigger() is called from WAITING_ACTIVE or ACTIVE_LOCK. The
+                // native control button - which is the only thing that would
+                // show that state - is hidden by `rep-clean-map`, so a rep who
+                // tapped Locate a second time silently STOPPED following with
+                // no dot, no message and no way to tell why. It read exactly as
+                // "the locate button does not work".
+                //
+                // A tap on this FAB always means "put me on the map". Never
+                // "cancel". Stopping follow stays where it already was: any
+                // pan/zoom gesture drops the control to BACKGROUND.
                 try {
-                  geolocateRef.current?.trigger();
+                  const geo = geolocateRef.current;
+                  const state = geo?._watchState;
+                  if (geo) {
+                    if (state === "ACTIVE_LOCK") {
+                      // Already following. Do not toggle it off - just re-centre
+                      // on the freshest known position so the tap still does
+                      // something visible.
+                      const last = readCachedFix();
+                      const m = mapRef.current;
+                      if (last && m) {
+                        moveCamera(m, {
+                          center: [last.lng, last.lat],
+                          zoom: Math.max(m.getZoom?.() ?? STREET_ZOOM, STREET_ZOOM),
+                          duration: 600,
+                          essential: true,
+                        });
+                      }
+                    } else {
+                      // OFF, BACKGROUND, or an error state - trigger() moves all
+                      // of these toward tracking, which is what the tap asked for.
+                      geo.trigger();
+                    }
+                  }
                 } catch {}
                 // Fallback for iOS standalone, where the control's state machine can
                 // stall (the dot never appears): grab a direct fix in the SAME user
