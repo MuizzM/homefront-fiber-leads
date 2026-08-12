@@ -435,7 +435,8 @@
 }
 
 /* Mapbox overrides */
-.mapboxgl-map {
+.mapboxgl-map,
+.maplibregl-map {
   border-radius: 0.5rem;
 }
 
@@ -452,7 +453,8 @@
 
 /* Popups/controls stay ink-dark to match the (always-dark) map, aligned to the v3
    ink surfaces — deliberately not theme-switched, since the map tiles don't change. */
-.mapboxgl-popup-content {
+.mapboxgl-popup-content,
+.maplibregl-popup-content {
   background: var(--map-chrome-surface) !important;
   color: var(--map-chrome-foreground) !important;
   border: 1px solid var(--map-chrome-border) !important;
@@ -464,20 +466,24 @@
   box-shadow: 0 12px 32px rgba(0,0,0,0.45) !important;
 }
 
-.mapboxgl-popup-tip {
+.mapboxgl-popup-tip,
+.maplibregl-popup-tip {
   border-top-color: var(--map-chrome-surface) !important;
 }
 
-.mapboxgl-ctrl-group {
+.mapboxgl-ctrl-group,
+.maplibregl-ctrl-group {
   background: var(--map-chrome-surface) !important;
   border: 1px solid var(--map-chrome-border) !important;
 }
 
-.mapboxgl-ctrl-group button {
+.mapboxgl-ctrl-group button,
+.maplibregl-ctrl-group button {
   background: transparent !important;
 }
 
-.mapboxgl-ctrl-icon {
+.mapboxgl-ctrl-icon,
+.maplibregl-ctrl-icon {
   filter: invert(1);
 }
 
@@ -785,7 +791,8 @@
    zoom + the locate FAB cover their function, and the porch test says every
    leftover control is clutter. Applied by MapView on the map container
    unconditionally. */
-.rep-clean-map .mapboxgl-ctrl-top-right {
+.rep-clean-map .mapboxgl-ctrl-top-right,
+.rep-clean-map .maplibregl-ctrl-top-right {
   display: none;
 }
 
@@ -793,16 +800,20 @@
    (added per-map with AttributionControl{compact:true}) remains the single,
    tiny, legally-required license affordance. Force-collapse it everywhere so
    it can never expand into a text bar at rest. */
-.mapboxgl-ctrl-logo {
+.mapboxgl-ctrl-logo,
+.maplibregl-ctrl-logo {
   display: none !important;
 }
-.mapboxgl-ctrl-attrib:not(.mapboxgl-compact-show) .mapboxgl-ctrl-attrib-inner {
+.mapboxgl-ctrl-attrib:not(.mapboxgl-compact-show) .mapboxgl-ctrl-attrib-inner,
+.maplibregl-ctrl-attrib:not(.maplibregl-compact-show) .maplibregl-ctrl-attrib-inner {
   display: none;
 }
-.mapboxgl-ctrl-attrib {
+.mapboxgl-ctrl-attrib,
+.maplibregl-ctrl-attrib {
   background: transparent;
 }
-.mapboxgl-ctrl-attrib-button {
+.mapboxgl-ctrl-attrib-button,
+.maplibregl-ctrl-attrib-button {
   opacity: 0.45;
 }
 

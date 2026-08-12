@@ -54,7 +54,10 @@ vi.mock("wouter", () => ({
 import Today from "../../client/src/pages/Today";
 import { packMapPins } from "@shared/mapPinsWire";
 
-interface PinOver { id: number; leadStatus?: string; lastOutcome?: string | null; leadScore?: number; address?: string; }
+interface PinOver {
+  id: number; leadStatus?: string; lastOutcome?: string | null; leadScore?: number; address?: string;
+  carrier?: string | null; freshConfirmedAt?: string | null; knockCount?: number;
+}
 function pin(o: PinOver) {
   return {
     id: o.id, lat: null, lng: null,
@@ -62,7 +65,16 @@ function pin(o: PinOver) {
     leadScore: o.leadScore ?? 50,
     address: o.address ?? `${o.id} Elm St`, city: "Testburg", state: "TX", zip: "70001",
     visited: false,
+    // Both ride the packed pin wire (shared/mapPinsWire MAP_PIN_WIRE_FIELDS) and
+    // are what the door opener is built from.
+    carrier: o.carrier ?? null, freshConfirmedAt: o.freshConfirmedAt ?? null,
+    knockCount: o.knockCount ?? 0,
   };
+}
+
+/** One row of GET /api/leads/ranked (server/leadRanking.ts). */
+function ranked(id: number, score: number, reasons: string[] = []) {
+  return { id, score, reasons };
 }
 
 interface Endpoints {
@@ -72,12 +84,20 @@ interface Endpoints {
   followups?: Array<{ callbackDate: string }>;
   failPins?: boolean;
   failBoard?: boolean;
+  ranked?: Array<{ id: number; score: number; reasons: string[] }>;
+  failRanked?: boolean;
   announcements?: { items: any[]; unread: number; latestId: number };
 }
 function renderToday(e: Endpoints = {}) {
   const pins = e.pins ?? [];
   const board = e.board ?? [{ rep: { id: 9, name: "Rae Rep", role: "rep" }, knocks: 40, sales: 12, knocksToday: 6, salesToday: 2 }];
   apiRequest.mockImplementation((_method: string, url: string) => {
+    // Checked BEFORE the map branch: both start "/api/leads/".
+    if (url.startsWith("/api/leads/ranked")) {
+      return e.failRanked
+        ? Promise.reject(Object.assign(new Error("no ranking here"), { status: 403 }))
+        : Promise.resolve({ json: () => Promise.resolve({ count: (e.ranked ?? []).length, limit: 200, generatedAt: "2026-08-11T15:00:00.000Z", leads: e.ranked ?? [] }) });
+    }
     if (url.startsWith("/api/leads/map")) {
       // Today requests ?format=packed and unpacks — serve the real wire shape so
       // the test exercises the same path production does.
@@ -165,6 +185,70 @@ describe("Today - the rep's home", () => {
     const hero = await screen.findByTestId("today-hero");
     expect(hero.textContent).toContain("20 High St");
     expect(hero.textContent).not.toContain("10 Low St");
+  });
+
+  // ── Why this door ──────────────────────────────────────────────────────────
+  // The opportunity score and its sentences come from server/leadRanking.ts,
+  // which scores signals nothing else in the product can compute. These pin the
+  // bridge: the reasons must be the SERVER's words, the score must actually
+  // change the order, and every one of it must degrade to the old distance
+  // route when the fetch fails — Today is the screen a rep opens in a dead zone.
+
+  it("explains the hero in the ranking engine's own words", async () => {
+    renderToday({
+      pins: [pin({ id: 1, address: "10 Low St" })],
+      ranked: [ranked(1, 62, ["newly lit - was coming soon", "6 fresh leads within 800m"])],
+    });
+    const hero = await screen.findByTestId("today-hero");
+    await waitFor(() => expect(hero.textContent).toContain("newly lit - was coming soon"));
+    expect(hero.textContent).toContain("6 fresh leads within 800m");
+  });
+
+  it("lets the opportunity score outrank a door with a better lead score", async () => {
+    // Lead score alone would put "20 High St" first, which is exactly the old
+    // behaviour. The ranked door wins because the engine proved it flipped.
+    renderToday({
+      pins: [pin({ id: 1, leadScore: 10, address: "10 Fresh St" }), pin({ id: 2, leadScore: 95, address: "20 High St" })],
+      ranked: [ranked(1, 58, ["lit 43m ago"])],
+    });
+    const hero = await screen.findByTestId("today-hero");
+    await waitFor(() => expect(hero.textContent).toContain("10 Fresh St"));
+    expect(hero.textContent).not.toContain("20 High St");
+  });
+
+  it("keeps the old route when the ranking endpoint refuses (403)", async () => {
+    renderToday({
+      failRanked: true,
+      pins: [pin({ id: 1, leadScore: 30, address: "10 Low St" }), pin({ id: 2, leadScore: 95, address: "20 High St" })],
+    });
+    const hero = await screen.findByTestId("today-hero");
+    expect(hero.textContent).toContain("20 High St");
+    // No error surface: a missing overlay is not something a rep can act on.
+    expect(screen.queryByTestId("today-error")).toBeNull();
+  });
+
+  it("keeps the old route when the ranking payload is empty", async () => {
+    renderToday({
+      ranked: [],
+      pins: [pin({ id: 1, leadScore: 30, address: "10 Low St" }), pin({ id: 2, leadScore: 95, address: "20 High St" })],
+    });
+    const hero = await screen.findByTestId("today-hero");
+    expect(hero.textContent).toContain("20 High St");
+  });
+
+  it("gives the rep an opening line built from the carrier and the lit date", async () => {
+    renderToday({
+      pins: [pin({ id: 1, carrier: "kinetic", freshConfirmedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() })],
+    });
+    const opener = await screen.findByTestId("today-opener");
+    expect(opener.textContent).toContain("Kinetic fiber went live at this address 2 days ago.");
+    expect(opener.textContent).toContain("Do you know what you're paying for internet right now?");
+  });
+
+  it("says nothing at all when there is no verified fact about the door", async () => {
+    renderToday({ pins: [pin({ id: 1, carrier: null, freshConfirmedAt: null })] });
+    await screen.findByTestId("today-hero");
+    expect(screen.queryByTestId("today-opener")).toBeNull();
   });
 
   it("shows the follow-ups CTA when a callback is due", async () => {

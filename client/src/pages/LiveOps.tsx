@@ -19,6 +19,8 @@ import {
   type RepLiveState,
   type RepStatus,
 } from "@shared/liveOps";
+import { basemapStyle } from "@/lib/basemapStyles";
+import { clusterExpansionZoom } from "@/lib/mapLibrary";
 
 declare const mapboxgl: any;
 
@@ -397,20 +399,20 @@ function LiveMapCanvas({
   });
 
   useEffect(() => {
-    if (!config?.token || !container.current || map.current) return;
+    if (!container.current || map.current) return; // no token gate - MapLibre needs none
     let cancelled = false;
     (window as any).__loadMapbox?.();
     (window as any).__onMapboxReady?.(() => {
       if (cancelled || !container.current || map.current) return;
       try {
-        mapboxgl.accessToken = config.token;
+        mapboxgl.accessToken = config?.token ?? ""; // no-op on MapLibre
         // Follow the app theme. A daylight basemap inside the dark theme is not
         // just inconsistent - it is the brightest thing on a screen someone is
         // watching in a truck at night.
         const dark = document.documentElement.classList.contains("dark");
         map.current = new mapboxgl.Map({
           container: container.current,
-          style: dark ? "mapbox://styles/mapbox/dark-v11" : "mapbox://styles/mapbox/streets-v12",
+          style: basemapStyle(dark ? "dark" : "streets"),
           center: [-80.4139, 35.5501],
           zoom: 10,
           attributionControl: false,
@@ -459,8 +461,8 @@ function LiveMapCanvas({
           map.current.on("click", "live-reps-clusters", (e: any) => {
             const f = map.current.queryRenderedFeatures(e.point, { layers: ["live-reps-clusters"] })[0];
             const src = map.current.getSource("live-reps");
-            src?.getClusterExpansionZoom?.(f.properties.cluster_id, (err: any, zoom: number) => {
-              if (!err) map.current.easeTo({ center: f.geometry.coordinates, zoom });
+            void clusterExpansionZoom(src, f.properties.cluster_id).then((zoom) => {
+              if (zoom != null) map.current.easeTo({ center: f.geometry.coordinates, zoom });
             });
           });
           setReady(true);

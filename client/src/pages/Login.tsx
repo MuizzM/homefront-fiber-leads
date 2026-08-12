@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowRight, Loader2 } from "lucide-react";
+import { InstallAppBanner } from "@/components/InstallAppBanner";
 
 const API_BASE = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
 
@@ -276,6 +277,13 @@ export default function Login() {
           © {new Date().getFullYear()} Home Front Solutions
         </p>
       </div>
+
+      {/* The install ask belongs on THIS side of the door. PushSetupCard makes
+          the same case on Today, but a rep only reaches Today after signing in,
+          and on iPhone there are no notifications at all until the app is on
+          the Home Screen. Renders nothing when already installed or when the
+          device has no install path to offer. */}
+      <InstallAppBanner />
     </div>
   );
 }

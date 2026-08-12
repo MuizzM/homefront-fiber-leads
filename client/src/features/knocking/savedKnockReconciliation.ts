@@ -1,5 +1,5 @@
 export type SavedKnockMessage = {
-  title: "Sale saved" | "Outcome saved" | "A newer outcome already stands" | "SPIFF earned";
+  title: "A newer outcome already stands" | "SPIFF earned";
   description?: string;
 };
 
@@ -92,7 +92,7 @@ export function createSavedKnockReconciliation(
 ) {
   return (
     leadId: number,
-    outcome?: string,
+    _outcome?: string,
     superseded = false,
     campaignAwards?: readonly KnockCampaignAward[],
   ): void => {
@@ -103,9 +103,19 @@ export function createSavedKnockReconciliation(
           "This knock was recorded as history; the door keeps its latest status.",
       });
     } else {
-      effects.notify({
-        title: outcome === "sold" ? "Sale saved" : "Outcome saved",
-      });
+      // Deliberately silent on the ordinary save.
+      //
+      // The pin has ALREADY recoloured optimistically by the time this runs -
+      // that recolour is the feedback, and it is the feedback a rep actually
+      // reads, because they are looking at the door they just marked. A toast
+      // saying "Outcome saved" restates what the map already shows, costs a
+      // corner of a phone screen mid-street, and on a good run fires every
+      // thirty seconds.
+      //
+      // The two cases that still speak are the ones the map CANNOT show:
+      // `superseded` above, where the rep's mark did not win and the pin they
+      // are looking at is not theirs, and a SPIFF below, which is money and
+      // appears nowhere on the map at all.
     }
 
     // The campaign the rep just cleared, announced AT the door rather than the

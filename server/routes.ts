@@ -168,6 +168,9 @@ import { registerKineticScannerRoutes } from "./kineticScannerRoutes";
 import { registerKineticBuildRoutes } from "./kineticBuildRoutes";
 import { registerTrainingEngineRoutes, payRampBonus } from "./trainingEngine";
 import { registerAcademyRoutes } from "./academyRoutes";
+import { registerVendorOrderRoutes } from "./vendorOrderRoutes";
+import { registerGuardedActionRoutes } from "./guardedActionRoutes";
+import { registerAddressPointRoutes } from "./addressPointRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -1365,6 +1368,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // a new hire who has not cleared training must be able to reach the thing
   // that clears it.
   registerAcademyRoutes(app, { requireAuth, requireCapability });
+  // Provider order status + recovery (PerfectVision submitted orders). Safe to
+  // register unconditionally: automated retrieval and automated messaging are
+  // both behind process flags that ship off, and every route is capability-
+  // gated, so an organization that has never uploaded a report sees an empty
+  // screen rather than a missing one.
+  registerVendorOrderRoutes(app, { requireAuth, requireCapability });
+
+  // The guarded-action gate: the approval queue and undo journal in front of
+  // dangerous writes. Registered unconditionally and inert by default - every
+  // route in it checks GUARDED_ACTIONS_ENABLED first and answers 404 without
+  // it, so mounting the surface changes nothing until the flag is turned on.
+  registerGuardedActionRoutes(app, { requireAuth, requireCapability });
+
+  // County E911 address points: the house-number layer's data source, and the
+  // thing that lets a lasso create a lead for every door inside it rather than
+  // only select the ones that already existed.
+  registerAddressPointRoutes(app, { requireAuth, requireTeamLead, requireAdmin });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle

@@ -22,29 +22,43 @@ import { WarmupStrip } from "@/components/training/WarmupStrip";
 import { unpackMapPins } from "@shared/mapPinsWire";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
-  nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
+  distanceHint, haversineMeters, todayISO, type RoutablePin,
 } from "@shared/knock";
+import { orderNextDoors, type DoorRank } from "@shared/doorPriority";
+import { doorOpener } from "@shared/doorOpener";
+import { useRankedDoors } from "@/lib/useRankedDoors";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSustained } from "@/hooks/use-sustained";
-import { Navigation, Clock, RefreshCw, ChevronRight, MapPin as MapPinIcon, Zap, Flame, Repeat, Trophy, SkipForward } from "lucide-react";
+import { Navigation, Clock, RefreshCw, ChevronRight, SkipForward } from "lucide-react";
 
 
 interface Pin extends RoutablePin {
   address: string; city: string; state?: string | null; zip?: string | null;
-  leadTag?: string | null; fiberStatus?: string | null; isNewFiber?: boolean | null;
-  competitorName?: string | null; inCompetitorArea?: boolean | null;
+  leadTag?: string | null; fiberStatus?: string | null;
+  carrier?: string | null; freshConfirmedAt?: string | null;
   contactName?: string | null; assignedRepId?: number | null; lastKnockedAt?: string | null; knockCount?: number | null;
 }
 interface LeaderRow { rep: { id: number; name: string; role: string }; knocks: number; sales: number; knocksToday: number; salesToday: number }
 interface LatLng { lat: number; lng: number }
 
-function reasons(p: Pin): { label: string; icon: any; tone: string }[] {
-  const out: { label: string; icon: any; tone: string }[] = [];
-  if (p.isNewFiber || p.fiberStatus === "new_fiber") out.push({ label: "New fiber", icon: Zap, tone: "text-primary" });
-  if (p.leadTag === "hot_lead") out.push({ label: "Hot lead", icon: Flame, tone: "text-destructive" });
-  if (p.lastOutcome === "callback" || p.leadStatus === "follow_up") out.push({ label: "Callback due", icon: Repeat, tone: "text-info" });
-  if (p.competitorName && p.inCompetitorArea) out.push({ label: `Switch from ${p.competitorName}`, icon: MapPinIcon, tone: "text-warning" });
-  if (!out.length && (p.leadScore ?? 0) >= 80) out.push({ label: "High-priority", icon: Trophy, tone: "text-warning" });
+// Why THIS door. The server scores it (server/leadRanking.ts) on signals only
+// this product has - a proven coming-soon to live flip, lit-age decay,
+// confirmed-fresh density within 800m - and hands back the sentences with it.
+// Those server reasons are the truth; the two local rules below are only a
+// fallback for doors the ranker never pooled (it pools confirmed-fresh leads
+// only) and for a dead zone, where the ranked fetch simply fails.
+//
+// Three rules were deleted rather than fixed: they read `isNewFiber`,
+// `competitorName` and `inCompetitorArea`, none of which are on the map pin
+// wire (shared/mapPinsWire.ts MAP_PIN_WIRE_FIELDS), so they could never fire.
+// The "Hot lead" leadTag rule went too - the fresh-fiber projector stamps every
+// confirmed-fresh door `fresh_fiber_confirmed`, so it was dead on exactly the
+// doors it was meant to mark.
+function reasons(p: Pin, rank: DoorRank | null): string[] {
+  if (rank?.reasons.length) return rank.reasons.slice(0, 2);
+  const out: string[] = [];
+  if (p.fiberStatus === "new_fiber") out.push("New fiber");
+  if (p.leadStatus === "follow_up") out.push("Callback due");
   return out.slice(0, 2);
 }
 const directionsUrl = (p: Pin) => {
@@ -130,41 +144,26 @@ export default function Today() {
   const pins = pinsQ.data?.pins ?? [];
 
   const [skip, setSkip] = useState<Set<number>>(new Set());
+  // Why this door, in the rep's hand. The overlay is leadId -> {score, reasons}
+  // from the ranking engine; it is sparse (only confirmed-fresh leads are
+  // scored) and it is EMPTY offline, both of which shared/doorPriority.ts
+  // handles by falling back to plain distance order.
+  const rankById = useRankedDoors();
   // The screen shows one hero door and six rows, so only the best seven need
-  // ordering. This used to filter, then map the whole open set into {p,d}
-  // objects, then sort all of them, then filter again for the open count —
-  // four passes plus an O(n log n) sort over every pin the rep can see, re-run
-  // on every "skip this door" tap and every GPS fix. One pass keeping a
-  // bounded top-N does the same job with no intermediate arrays.
-  const route = useMemo(() => {
-    const WANTED = 7; // hero + 6 rows
-    const top: { p: Pin; d: number }[] = [];
-    let openCount = 0;
-
-    for (const p of pins) {
-      const state = pinDisplayState(p);
-      if (state !== "unworked" && state !== "not_home") continue;
-      openCount += 1;
-      if (skip.has(p.id)) continue;
-      // Without a fix, rank by lead score instead of distance; negate so the
-      // same "smaller is better" insertion below serves both orders.
-      const d = myLoc ? haversineMeters(myLoc, p) : -(p.leadScore ?? 0);
-      if (top.length === WANTED && d >= top[WANTED - 1].d) continue;
-      let i = top.length;
-      while (i > 0 && top[i - 1].d > d) i -= 1;
-      top.splice(i, 0, { p, d });
-      if (top.length > WANTED) top.pop();
-    }
-
-    const ordered = top.map(x => x.p);
-    // nearestUnworkedLead owns the "which door next" rule (it weighs more than
-    // raw distance), so keep it as the authority when we have a fix — the
-    // nearest-first list above is exactly the candidate set it needs.
-    const hero = (myLoc ? (nearestUnworkedLead(myLoc, ordered as RoutablePin[], skip) as Pin | null) : null)
-      ?? ordered[0] ?? null;
-    const rest = ordered.filter(p => p.id !== hero?.id).slice(0, 6);
-    return { hero, rest, openCount };
-  }, [pins, myLoc, skip]);
+  // ordering — orderNextDoors keeps the bounded top-N single pass this used to
+  // do inline, and adds the one thing distance alone cannot know: an
+  // opportunity score buys a door at most DISCOUNT_MAX_M of extra walking.
+  const route = useMemo(
+    () => orderNextDoors<Pin>(myLoc, pins, rankById, skip, 7),
+    [pins, myLoc, skip, rankById],
+  );
+  // leadId -> rank for the seven doors actually on screen, so the cards can
+  // render the server's own words without re-reading the overlay.
+  const rankOf = useMemo(() => {
+    const m = new Map<number, DoorRank | null>();
+    for (const view of route.ranked) m.set(view.pin.id, view.rank);
+    return m;
+  }, [route]);
 
   const [sheetLead, setSheetLead] = useState<Pin | null>(null);
   // Follow-ups included in the gate so the banner doesn't pop in above the hero
@@ -368,7 +367,7 @@ export default function Today() {
           ) : !route.hero ? (
             <AllDoneCard sales={myRow?.salesToday ?? 0} />
           ) : (
-            <HeroCard p={route.hero} loc={myLoc}
+            <HeroCard p={route.hero} loc={myLoc} rank={rankOf.get(route.hero.id) ?? null}
               onLog={() => setSheetLead(route.hero!)}
               onOpen={() => navigate(`/lead/${route.hero!.id}`)}
               onSkip={() => { setSkip(s => new Set(s).add(route.hero!.id)); toast({ title: "Door skipped" }); }} />
@@ -382,7 +381,7 @@ export default function Today() {
               <span className="text-[11px] text-muted-foreground tabular-nums">{route.openCount} doors on your route</span>
             </div>
             <div className="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
-              {route.rest.map((p, i) => <DoorRow key={p.id} p={p} n={i + 2} loc={myLoc} onOpen={() => navigate(`/lead/${p.id}`)} />)}
+              {route.rest.map((p, i) => <DoorRow key={p.id} p={p} n={i + 2} loc={myLoc} rank={rankOf.get(p.id) ?? null} onOpen={() => navigate(`/lead/${p.id}`)} />)}
             </div>
           </div>
         )}
@@ -426,23 +425,30 @@ function Stat({ label, value, tone, accent = "bg-muted-foreground/50", border, e
   );
 }
 
-function ReasonChips({ p }: { p: Pin }) {
-  const rs = reasons(p);
+function ReasonChips({ p, rank }: { p: Pin; rank: DoorRank | null }) {
+  const rs = reasons(p, rank);
   if (!rs.length) return null;
   return (
-    <div className="flex flex-wrap gap-1.5 mt-2.5">
-      {rs.map((r, i) => { return (
-        <span key={i} className="inline-flex items-center gap-1 rounded-full bg-secondary border border-border px-2 py-1 text-[11px] font-medium text-foreground">
-          {r.label}
+    <div className="flex flex-wrap gap-1.5 mt-2.5" data-testid="today-reasons">
+      {rs.map((r) => (
+        <span key={r} className="inline-flex items-center gap-1 rounded-full bg-secondary border border-border px-2 py-1 text-[11px] font-medium text-foreground">
+          {r}
         </span>
-      ); })}
+      ))}
     </div>
   );
 }
 
-function HeroCard({ p, loc, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng | null; onLog: () => void; onOpen: () => void; onSkip: () => void }) {
+function HeroCard({ p, loc, rank, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng | null; rank: DoorRank | null; onLog: () => void; onOpen: () => void; onSkip: () => void }) {
   const st = pinDisplayState(p);
   const dist = loc ? distanceHint(haversineMeters(loc, p)) : null;
+  // The other half of "which door next": what to open with. Grounded in the
+  // carrier and the confirmed-fresh stamp this pin already carries, and null
+  // when the system has verified nothing worth saying (see shared/doorOpener).
+  const opener = doorOpener({
+    carrier: p.carrier, freshConfirmedAt: p.freshConfirmedAt,
+    lastOutcome: p.lastOutcome, knockCount: p.knockCount,
+  });
   return (
     // Status-colored spine + elevated card = the one thing to do next (Jobber's visit card).
     <div className="relative rounded-2xl border border-border bg-card pl-5 pr-4 py-4 shadow-sm overflow-hidden" data-testid="today-hero">
@@ -458,10 +464,21 @@ function HeroCard({ p, loc, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng | nul
           </div>
           <div className="text-[21px] font-bold text-foreground leading-tight mt-1">{p.address}</div>
           <div className="text-[13px] text-muted-foreground mt-0.5">{p.city}{p.state ? `, ${p.state}` : ""}{p.zip ? ` ${p.zip}` : ""}</div>
-          <ReasonChips p={p} />
+          <ReasonChips p={p} rank={rank} />
         </div>
         <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 mt-1" aria-hidden="true" />
       </button>
+      {/* What to say. Sits between the address and the action because it is
+          read on the walk up, not at the porch. Quiet by design - it is a
+          prompt, not a script the rep is expected to recite. */}
+      {opener && (
+        <div className="mt-3 rounded-xl border border-border bg-secondary/40 px-3.5 py-2.5" data-testid="today-opener">
+          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">Open with</div>
+          <p className="text-[13px] text-foreground mt-1 leading-snug">
+            {opener.fact} <span className="text-muted-foreground">{opener.ask}</span>
+          </p>
+        </div>
+      )}
       <div className="flex gap-2.5 mt-4">
         <button onClick={onLog} data-testid="hero-log" className={`flex-1 h-12 rounded-xl bg-primary text-primary-foreground font-semibold text-[15px] shadow-sm active:scale-95 transition-transform hover:bg-primary/90 ${FOCUS}`}>Log outcome</button>
         <a href={directionsUrl(p)} target="_blank" rel="noreferrer" aria-label="Navigate to this address" className={`w-12 h-12 rounded-xl bg-secondary border border-border flex items-center justify-center active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><Navigation className="w-5 h-5 text-foreground" aria-hidden="true" /></a>
@@ -471,10 +488,10 @@ function HeroCard({ p, loc, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng | nul
   );
 }
 
-function DoorRow({ p, n, loc, onOpen }: { p: Pin; n: number; loc: LatLng | null; onOpen: () => void }) {
+function DoorRow({ p, n, loc, rank, onOpen }: { p: Pin; n: number; loc: LatLng | null; rank: DoorRank | null; onOpen: () => void }) {
   const st = pinDisplayState(p);
   const dist = loc ? distanceHint(haversineMeters(loc, p)) : null;
-  const rs = reasons(p);
+  const rs = reasons(p, rank);
   return (
     <button onClick={onOpen} data-testid={`door-${p.id}`} className={`w-full flex items-center gap-3 px-4 py-3 text-left active:bg-secondary/60 transition-colors hover:bg-secondary/40 ${FOCUS}`}>
       {/* Numbered route stop with a status-colored badge (delivery-driver stop list). */}
@@ -484,7 +501,7 @@ function DoorRow({ p, n, loc, onOpen }: { p: Pin; n: number; loc: LatLng | null;
       </span>
       <div className="flex-1 min-w-0">
         <div className="text-[14px] font-semibold text-foreground truncate">{p.address}</div>
-        <div className="text-[12px] text-muted-foreground truncate">{p.city}{dist ? ` · ${dist}` : ""}{rs[0] ? ` · ${rs[0].label}` : ""}</div>
+        <div className="text-[12px] text-muted-foreground truncate">{p.city}{dist ? ` · ${dist}` : ""}{rs[0] ? ` · ${rs[0]}` : ""}</div>
       </div>
       <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
     </button>

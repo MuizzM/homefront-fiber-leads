@@ -164,10 +164,22 @@ describe("house numbers are opt-in from the settings sheet", () => {
     // Both the init pass and the style.load re-add consult the live pref…
     const guarded = src.match(/if \(showHouseNumsRef\.current\) ensureHousenumLayer\(/g) ?? [];
     expect(guarded.length).toBe(2);
-    // …and the toggle effect actually removes the layer on OFF.
-    expect(src).toContain("else removeHousenumLayer(map);");
-    // No unconditional mount survives.
-    expect(src).not.toMatch(/^\s*ensureHousenumLayer\(/m);
+    // …and the toggle effect actually removes the layer on OFF. The effect
+    // now bails early rather than using an `else`, because the ON branch grew
+    // a viewport subscription that must not run when the pref is off - so the
+    // assertion is on the guard, not on the keyword that used to express it.
+    // Turning the pref off must drop BOTH label layers. The street names ride
+    // on the same toggle and the same fetch, so leaving them mounted would
+    // strand labels on the map with nothing left to refresh them.
+    expect(src).toMatch(
+      /if \(!showHouseNums\) \{ removeHousenumLayer\(map\); removeStreetLabelLayer\(map\); return; \}/,
+    );
+    // No unconditional mount survives: every ensureHousenumLayer call is
+    // preceded on the same line by a pref check, or sits after the early
+    // return above. Assert there is no call at top-level effect indentation
+    // that is NOT one of the three known-guarded sites.
+    const mounts = src.match(/ensureHousenumLayer\(map/g) ?? [];
+    expect(mounts.length).toBe(3); // 2 ref-guarded + 1 after the early return
   });
 });
 

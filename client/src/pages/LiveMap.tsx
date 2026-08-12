@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { basemapStyle } from "@/lib/basemapStyles";
 
 interface LocationPing {
   id: number; repId: number; userId: number; lat: number; lng: number;
@@ -90,8 +91,9 @@ export default function LiveMap() {
 
   // Init map — Mapbox GL is lazy-loaded (index.html); trigger the fetch on mount.
   useEffect(() => {
-    if (!config?.token || !mapContainer.current || mapRef.current) return;
-    const token = config.token;
+    // No token gate: MapLibre does not use one. Only the container matters.
+    if (!mapContainer.current || mapRef.current) return;
+    const token = config?.token ?? "";
     (window as any).__loadMapbox?.(); // kick off the lazy library load
     const tryInit = () => {
       const mgl = (window as any).mapboxgl;
@@ -99,7 +101,7 @@ export default function LiveMap() {
       mgl.accessToken = token;
       mapRef.current = new mgl.Map({
         container: mapContainer.current!,
-        style: "mapbox://styles/mapbox/dark-v11",
+        style: basemapStyle("dark"),
         center: [-80.4139, 35.5501],
         zoom: 12,
       });

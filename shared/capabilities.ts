@@ -85,6 +85,44 @@ export type Capability =
   | "incentive.campaign.manage"
   // Dashboards / analytics read models
   | "dashboard.read.self" | "dashboard.read.team" | "dashboard.read.org"
+  // Provider order status (PerfectVision submitted orders and any future
+  // carrier order feed). Deliberately its OWN domain rather than an extension
+  // of commission.*: this plane is order LIFECYCLE, and granting somebody the
+  // right to see which installs are failing must not hand them the pay ledger.
+  | "order.read.self" | "order.read.team" | "order.read.org"
+  // Uploading a provider export, editing the column mapping, and configuring
+  // the connection. One capability, admin-only: whoever holds it decides how
+  // every order in the organization is interpreted.
+  | "order.import.manage"
+  // Resolving a match exception - deciding that a provider order IS a given
+  // internal sale. It attributes a commission-bearing order to a rep, so it
+  // sits with the supervisory tier, never with the rep who would benefit.
+  | "order.match.resolve"
+  // Order recovery. read.self is a rep's own queue; .work is acting on a case
+  // they hold (note, callback, resolve); .manage is assignment across the
+  // queue, which is a supervisory act.
+  | "recovery.read.self" | "recovery.read.team" | "recovery.read.org"
+  | "recovery.work" | "recovery.manage"
+  // Messaging a customer. Drafting and sending are split because a draft is a
+  // screen and a send is an irreversible act on somebody else's phone. Both
+  // still pass the consent gate; the capability only decides who may try.
+  | "recovery.message.draft" | "recovery.message.send"
+  // Policy: stall windows, recoverable cancellation reasons, message caps,
+  // sender identities, and the organization-level messaging approval.
+  | "recovery.policy.manage"
+  // Authoring and APPROVING the words that get sent.
+  | "messaging.templates.manage"
+  // The consent ledger and the suppression list. Held by compliance as well as
+  // by the org owner, and never by a rep - lifting a suppression is the one
+  // action that could un-block somebody who asked us to stop.
+  | "contact.consent.manage" | "contact.suppression.manage"
+  // Guarded actions - the approval queue in front of dangerous writes.
+  // `queue.read` is seeing the queue and deciding the kinds you already hold the
+  // approve capability for; the engine does that per-kind check, so this one
+  // opens the SCREEN and never widens what a person may approve on it.
+  // `policy.manage` is configuring the gate itself, which is why it is separate
+  // and admin-only: whoever holds it decides how much of this layer applies.
+  | "action.queue.read" | "action.policy.manage"
   // Audit / activity
   | "audit.read.team" | "audit.read.org"
   // Org settings / policy
@@ -116,6 +154,15 @@ const REP: readonly Capability[] = [
   // opens the endpoint, the scope decides the rows, exactly as
   // commission.read.self already works.
   "earnings.read.self", "training.read.self", "mileage.submit.self", "referral.read.self",
+  // Their own orders and their own recovery queue. `recovery.message.send` is
+  // here deliberately: the brief's rep view is built around consent-safe
+  // contact actions, and every send passes the same gate whoever taps it - the
+  // capability decides who may try, the gate decides whether it goes. A rep
+  // cannot approve the template, cannot configure the sender, and cannot lift a
+  // suppression, so the three things that would make a send unsafe are all out
+  // of reach.
+  "order.read.self", "recovery.read.self", "recovery.work",
+  "recovery.message.draft", "recovery.message.send",
 ];
 // Deliberately NOT here: scan.submit. Address discovery spends metered upstream
 // geocoding budget, and choosing which streets are worth buying data for is a
@@ -153,6 +200,16 @@ const TEAM_LEAD: readonly Capability[] = [
   // team lead sees their own tree's training compliance, trips and earnings —
   // never the whole tenant, which starts at MANAGER below.
   "earnings.read.team", "training.read.team", "mileage.read.team",
+  // The branch's orders and recoveries. Mirrors commission.read.team: a team
+  // lead sees their own tree, never the whole organization.
+  "order.read.team", "recovery.read.team",
+  // Team leads are the people who reassign doors, so they are the people whose
+  // bulk moves land in the approval queue. Giving them the screen lets them see
+  // their own request waiting rather than wondering why nothing happened. It
+  // does NOT let them approve anything: the engine checks each kind's own
+  // approve capability, and a team lead holds lead.assign but is still refused
+  // self-approval by default.
+  "action.queue.read",
 ];
 
 // A manager adds org-wide oversight reads AND the commission write surface
@@ -182,6 +239,10 @@ const MANAGER: readonly Capability[] = [
   // money-write caps rather than with the softer structure.manage tier that
   // the knock-shaped spiff campaigns use today.
   "incentive.campaign.manage",
+  // Org-wide order visibility, queue assignment, and resolving match
+  // exceptions. Resolving an exception attributes a commission-bearing order to
+  // a rep, which is why it lands here and not on the rep who benefits.
+  "order.read.org", "recovery.read.org", "recovery.manage", "order.match.resolve",
 ];
 
 // Admin (and super_admin) hold the full set including org policy + paying reps.
@@ -196,11 +257,21 @@ const MANAGER: readonly Capability[] = [
 const ADMIN: readonly Capability[] = [
   ...MANAGER, "settings.manage.org", "payouts.pay",
   "referral.approve", "referral.settings.manage", "mileage.settings.manage",
+  // The four switches that decide how the order plane behaves: how a provider
+  // export is read, what counts as recoverable, which words may be sent, and
+  // who may never be contacted again. Every one of them is org policy.
+  "order.import.manage", "recovery.policy.manage", "messaging.templates.manage",
+  "contact.consent.manage", "contact.suppression.manage",
   // Unrestricted location read, and the separate right to pull a movement
   // history out of the system. Deliberately admin-only: a supervisor needs to
   // find their team right now, which .team gives them; nobody needs to export
   // another person's route to answer that question.
   "field.location.read.org", "field.location.export",
+  // Configuring the action gate. Admin-only because this is the setting that
+  // decides how much of the gate applies at all - it can turn an approval queue
+  // into an audit log. It cannot go below a kind's catalogue floor, which is
+  // the one thing about this layer an admin cannot change.
+  "action.policy.manage",
 ];
 
 const CALLING_REP: readonly Capability[] = [
@@ -220,10 +291,29 @@ const COMPLIANCE_ADMIN: readonly Capability[] = [
   // Read-only: compliance must be able to review what a vendor screen decided
   // without gaining the ability to spend budget starting one.
   "lead.skip_trace.read",
+  // The consent ledger and the suppression list are a compliance surface first
+  // and an operations one second. Reading the order and recovery planes comes
+  // with it, because a suppression only makes sense next to the outreach that
+  // caused it. Deliberately NOT recovery.message.send.
+  "order.read.org", "recovery.read.org",
+  "contact.consent.manage", "contact.suppression.manage",
+  // Compliance is the right approver for a suppression lift, which is the one
+  // action kind whose catalogue floor is "approval". They reach it through this
+  // screen; the engine authorizes the decision itself on
+  // contact.suppression.manage, which they already hold.
+  "action.queue.read",
 ];
 
 const AUDITOR: readonly Capability[] = [
   "dashboard.read.org", "audit.read.org", "calling.compliance.read", "lead.skip_trace.read",
+  // Read, and nothing else. An auditor can see every order and every case and
+  // change none of them.
+  "order.read.org", "recovery.read.org",
+  // The action queue is read-only for this role in practice as well as in
+  // intent: an auditor holds none of the four kinds' approve capabilities, so
+  // every decide route refuses them. The screen is where they read what was
+  // approved, by whom, and what was reversed.
+  "action.queue.read",
 ];
 
 export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
@@ -270,7 +360,8 @@ export function capabilitiesFor(role: Role | string | undefined | null): Capabil
 export type CapabilityDomain =
   | "field" | "leads" | "assignments" | "scanning" | "calling" | "compliance" | "enrichment"
   | "commissions" | "earnings" | "incentives" | "training" | "mileage" | "referrals"
-  | "onboarding" | "dashboard" | "audit" | "settings";
+  | "onboarding" | "dashboard" | "audit" | "settings" | "orders" | "messaging"
+  | "actions";
 
 export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "field.app.use": "field",
@@ -334,6 +425,24 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "audit.read.team": "audit",
   "audit.read.org": "audit",
   "settings.manage.org": "settings",
+  "order.read.self": "orders",
+  "order.read.team": "orders",
+  "order.read.org": "orders",
+  "order.import.manage": "orders",
+  "order.match.resolve": "orders",
+  "recovery.read.self": "orders",
+  "recovery.read.team": "orders",
+  "recovery.read.org": "orders",
+  "recovery.work": "orders",
+  "recovery.manage": "orders",
+  "recovery.policy.manage": "orders",
+  "recovery.message.draft": "messaging",
+  "recovery.message.send": "messaging",
+  "messaging.templates.manage": "messaging",
+  "contact.consent.manage": "compliance",
+  "contact.suppression.manage": "compliance",
+  "action.queue.read": "actions",
+  "action.policy.manage": "actions",
 };
 
 // High-risk grants — governance highlights these because they move money,
@@ -366,6 +475,21 @@ export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capabilit
   // setting the per-mile rate, and releasing a referral reward.
   "mileage.approve", "mileage.settings.manage",
   "referral.approve", "referral.settings.manage",
+  // Sending to a customer's phone or inbox under the company's identity. The
+  // consent gate is the wall; this flag is what makes the grant visible in the
+  // permissions matrix beside the money capabilities.
+  "recovery.message.send",
+  // Deciding which words may be sent, who may never be contacted, and how a
+  // provider export is read. Each one is a policy that every later message
+  // inherits.
+  "messaging.templates.manage", "contact.consent.manage", "contact.suppression.manage",
+  "order.import.manage", "recovery.policy.manage",
+  // Attributing a provider order - and the commission behind it - to a rep.
+  "order.match.resolve",
+  // Configuring the gate that stands in front of every other high-risk write.
+  // Flagged above the capabilities it protects, because loosening this one is
+  // how somebody would reach them without appearing in an approval queue.
+  "action.policy.manage",
 ]);
 
 export function isHighRisk(cap: Capability): boolean {
@@ -374,7 +498,7 @@ export function isHighRisk(cap: Capability): boolean {
 
 // Every capability, grouped by domain, in a stable domain order — the matrix
 // and the "grouped capabilities" governance view render straight from this.
-const DOMAIN_ORDER: CapabilityDomain[] = ["field", "leads", "assignments", "scanning", "calling", "compliance", "enrichment", "commissions", "earnings", "incentives", "training", "mileage", "referrals", "onboarding", "dashboard", "audit", "settings"];
+const DOMAIN_ORDER: CapabilityDomain[] = ["field", "leads", "assignments", "scanning", "calling", "compliance", "enrichment", "orders", "messaging", "commissions", "earnings", "incentives", "training", "mileage", "referrals", "onboarding", "dashboard", "actions", "audit", "settings"];
 export function groupedCapabilities(): { domain: CapabilityDomain; capabilities: Capability[] }[] {
   const all = Object.keys(CAPABILITY_DOMAIN) as Capability[];
   return DOMAIN_ORDER.map(domain => ({

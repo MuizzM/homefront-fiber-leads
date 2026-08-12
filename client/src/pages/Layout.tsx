@@ -35,6 +35,10 @@ import {
   MessagesSquare,
   Car,
   UserPlus,
+  LifeBuoy,
+  PackageSearch,
+  FileUp,
+  Send,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -103,6 +107,9 @@ const NAV_ITEMS: NavItem[] = [
   // ever point a role at a page that would render Access Denied.
   { href: "/mileage",      label: "Mileage",       icon: Car,          show: r => can(r, "mileage.submit.self"),       group: "Field" },
   { href: "/referrals",    label: "Referrals",     icon: UserPlus,     show: r => can(r, "referral.read.self"),        group: "Field" },
+  // A rep's own stalled orders. Gated on the same capability the route and the
+  // API use, so it can never point somebody at a page that would refuse them.
+  { href: "/my-recoveries", label: "My recoveries", icon: LifeBuoy,    show: r => can(r, "recovery.read.self"),        group: "Field" },
   { href: "/my-commission",label: "My commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
   { href: "/my-documents", label: "My documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
   // NOTE: /tax-and-pay is deliberately NOT a nav item. The W-9 and direct
@@ -122,6 +129,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/commission-console", label: "Commissions & Pay", icon: Banknote, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Rep Onboarding", icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-ops",     label: "Live Operations", icon: Radio,       show: r => can(r, "field.location.read.team"),  group: "Manage" },
+  // Order recovery is a MANAGE surface, not a governance one: it is a queue of
+  // work, and the people who run it are the people who run the floor.
+  { href: "/order-recovery", label: "Order Recovery", icon: PackageSearch, show: r => can(r, "recovery.read.team"),   group: "Manage" },
   // ── Governance (Phase 2) ──────────────────────────────────────────────────
   // admin + manager only: /api/auth/login-attempts is behind requireManager,
   // which does not admit team_lead, so a team lead tapping this landed on a
@@ -130,6 +140,17 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/diagnostics",  label: "Diagnostics",   icon: Activity,     show: r => hasRole(r, "admin", "manager"),      group: "Governance" },
   { href: "/governance",   label: "Permissions",   icon: ShieldCheck,  show: r => hasRole(r, "admin"),                 group: "Governance" },
   { href: "/billing",      label: "Billing",       icon: CreditCard,   show: r => hasRole(r, "admin"),                 group: "Governance" },
+  // The two admin screens behind the recovery queue: how a provider export is
+  // read, and what may be said to a customer. Both are org policy, which is why
+  // they sit in Governance rather than beside the queue itself.
+  { href: "/order-imports", label: "Order Imports", icon: FileUp,      show: r => can(r, "order.import.manage"),       group: "Governance" },
+  { href: "/order-messaging", label: "Recovery Messaging", icon: Send, show: r => can(r, "messaging.templates.manage"), group: "Governance" },
+  // The approval queue in front of dangerous writes. Governance rather than
+  // Manage: it is where you go to answer "who allowed this, and can it be put
+  // back", which is an oversight question even when a floor manager is the one
+  // clicking Approve. Also filtered on the feature flag below - the capability
+  // alone would point at an empty screen while the gate is off.
+  { href: "/action-approvals", label: "Action Approvals", icon: ShieldCheck, show: r => can(r, "action.queue.read"), group: "Governance" },
   // ── Admin ─────────────────────────────────────────────────────────────────
   // Gated on the immutable is_super_admin column that rides on the session
   // user. This used to compare the user's email against a list fetched from
@@ -289,9 +310,26 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // While gated, the sidebar shows only what the server would actually answer.
   // Listing links that 403 on tap is worse than hiding them: it reads as a
   // broken app rather than a locked one.
+  //
+  // The action gate needs one more filter than a capability can express. It is
+  // behind a process flag that ships off, and with the flag down every
+  // /api/actions route answers 404 - so a role that HOLDS action.queue.read
+  // would still land on a permanently empty screen. The count endpoint is the
+  // probe: a 200 means the feature is on, and it doubles as the badge. Same
+  // mistake the Login Activity comment above records, avoided the same way.
+  const gateProbe = useQuery<{ pending: number }>({
+    queryKey: ["/api/actions/pending-count"],
+    refetchInterval: 60_000,
+    enabled: can(role, "action.queue.read") && !gated,
+    retry: false,
+  });
+  const actionGateLive = gateProbe.isSuccess;
+  const pendingActionCount = gateProbe.data?.pending ?? 0;
+
   const visibleNav = NAV_ITEMS
     .filter(item => item.show(role, user ?? undefined))
-    .filter(item => !gated || gateOpenPath(item.href));
+    .filter(item => !gated || gateOpenPath(item.href))
+    .filter(item => item.href !== "/action-approvals" || actionGateLive);
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -344,6 +382,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     const badgeCount =
                       href === "/messages" ? chatUnread
                       : canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount
+                      : href === "/action-approvals" ? pendingActionCount
                       : 0;
                     return (
                       <Link

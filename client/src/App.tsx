@@ -64,6 +64,14 @@ const SuperAdmin = lazyRoute(() => import("@/pages/SuperAdmin"));
 const Training = lazyRoute(() => import("@/pages/Training"));
 const Coach = lazyRoute(() => import("@/pages/Coach"));
 const CallingQueue = lazyRoute(() => import("@/pages/CallingQueue"));
+// Provider order status and recovery. Three surfaces, one plane: the rep's own
+// stalled orders, the supervisory queue, and the admin screens that decide how
+// a provider export is read and what may be sent to a customer.
+const MyRecoveries = lazyRoute(() => import("@/pages/MyRecoveries"));
+const OrderRecovery = lazyRoute(() => import("@/pages/OrderRecovery"));
+const OrderImports = lazyRoute(() => import("@/pages/OrderImports"));
+const OrderMessaging = lazyRoute(() => import("@/pages/OrderMessaging"));
+const ActionApprovals = lazyRoute(() => import("@/pages/ActionApprovals"));
 const CallingLead = lazyRoute(() => import("@/pages/CallingLead"));
 
 // Radix Toast and the dismissable-layer/presence machinery behind it are ~9 KB
@@ -398,6 +406,31 @@ function RouteTable({ location, role, isSuperAdmin }: {
                 does not admit team_lead. Widening the server would be wrong:
                 the endpoint returns the whole org's auth trail. */}
             <Guard role={role} allowed={["admin", "manager"]}><LoginActivity /></Guard>
+          </Route>
+          {/* ── Provider orders and recovery ──────────────────────────────
+              Every gate below is a CapabilityGuard rather than a role list,
+              because the server authorizes these routes on the same
+              capabilities - so a page can never render for someone the API
+              would refuse. */}
+          <Route path="/my-recoveries">
+            <CapabilityGuard role={role} capability="recovery.read.self"><MyRecoveries /></CapabilityGuard>
+          </Route>
+          <Route path="/order-recovery">
+            <CapabilityGuard role={role} capability="recovery.read.team"><OrderRecovery /></CapabilityGuard>
+          </Route>
+          <Route path="/order-imports">
+            <CapabilityGuard role={role} capability="order.import.manage"><OrderImports /></CapabilityGuard>
+          </Route>
+          <Route path="/order-messaging">
+            <CapabilityGuard role={role} capability="messaging.templates.manage"><OrderMessaging /></CapabilityGuard>
+          </Route>
+          {/* The approval queue in front of dangerous writes. Same capability
+              the API gates on, so the page can never render for somebody the
+              server would refuse. The per-kind approve check lives in the
+              engine, which is why one capability opens the screen and still
+              does not decide what may be approved on it. */}
+          <Route path="/action-approvals">
+            <CapabilityGuard role={role} capability="action.queue.read"><ActionApprovals /></CapabilityGuard>
           </Route>
           <Route path="/governance">
             <Guard role={role} allowed={["admin"]}><Governance /></Guard>

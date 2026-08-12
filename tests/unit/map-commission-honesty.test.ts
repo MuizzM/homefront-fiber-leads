@@ -84,7 +84,9 @@ describe("canonical saved-knock reconciliation", () => {
 
     await queue.enqueue({ leadId: 42, outcome: "sold" });
 
-    expect(saved.notify).toHaveBeenCalledWith({ title: "Sale saved" });
+    // Silent on the ordinary save: the optimistic pin recolour IS the
+    // feedback, and a toast per door is noise on a good run.
+    expect(saved.notify).not.toHaveBeenCalled();
     expect(JSON.stringify(saved.notify.mock.calls)).not.toMatch(/commission/i);
     expect(saved.invalidateQuery).toHaveBeenCalledWith(["/api/leads/map"]);
     queue.destroy();
@@ -109,7 +111,7 @@ describe("canonical saved-knock reconciliation", () => {
 
     saved.onSaved(42, "not_interested");
 
-    expect(saved.notify).toHaveBeenCalledWith({ title: "Outcome saved" });
+    expect(saved.notify).not.toHaveBeenCalled();
     expect(saved.invalidatePrefix.mock.calls).toEqual([
       ["/api/commission"],
       ["/api/commissions"],

@@ -7,6 +7,8 @@ import { ensureAdminAuditSchema } from "./adminAudit";
 import { runKineticBuildMigrations as ensureKineticBuildSchema } from "./kineticBuildMigrations";
 import { runAcademyMigrations as ensureAcademySchema } from "./academyMigrations";
 import { runLiveOpsMigrations as ensureLiveOpsSchema } from "./liveOpsMigrations";
+import { runVendorOrderMigrations as ensureVendorOrderSchema } from "./vendorOrderMigrations";
+import { runGuardedActionMigrations as ensureGuardedActionSchema } from "./guardedActionMigrations";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -2949,6 +2951,35 @@ export function runMigrations() {
   try {
     ensureLiveOpsSchema();
   } catch (e: any) { console.warn("[migration] live ops schema:", e?.message); }
+
+  // Provider ORDER STATUS and recovery (PerfectVision "Total Submitted Orders
+  // by Program", and any later carrier order feed): the import runs and their
+  // rows, the order table and its immutable event stream, the recovery queue,
+  // the outreach record, and the consent and suppression ledgers.
+  //
+  // Own module and own transaction, on the same terms as the planes above, and
+  // non-fatal for a reason worth stating precisely: nothing in this plane can
+  // send a message on its own. Messaging needs a process flag that ships off,
+  // an organization-level approval, an approved template and a consent record,
+  // so a missing table means an empty screen - never an unsupervised message.
+  // The tables it needs in order to REFUSE (suppression, consent) are created
+  // in the same transaction as the ones it needs in order to act, so there is
+  // no state where the queue exists and the wall does not.
+  try {
+    ensureVendorOrderSchema();
+  } catch (e: any) { console.warn("[migration] vendor order schema:", e?.message); }
+
+  // The guarded-action gate: policy, the request queue, and the append-only
+  // transition log behind it.
+  //
+  // Non-fatal on the same terms, and the failure mode is the safe one. The
+  // whole plane is behind GUARDED_ACTIONS_ENABLED, which ships off, and every
+  // route answers 404 without it. A missing table therefore means the approval
+  // screen is unreachable - never that a write slips through ungated, because
+  // with the flag down no call site routes through the gate in the first place.
+  try {
+    ensureGuardedActionSchema();
+  } catch (e: any) { console.warn("[migration] guarded action schema:", e?.message); }
 }
 
 /**

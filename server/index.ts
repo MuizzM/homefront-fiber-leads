@@ -143,14 +143,40 @@ app.use(helmet({
       // styleSrc keeps 'unsafe-inline' below: Radix and Mapbox both set element
       // style attributes at runtime, and CSS injection is a far weaker primitive
       // than script injection. Tracked, not forgotten.
-      scriptSrc:      ["'self'", "blob:", "https://api.mapbox.com"],   // Mapbox GL CDN
-      scriptSrcElem:  scriptSrcElem(["blob:", "https://api.mapbox.com"]),
-      workerSrc:      ["'self'", "blob:"],   // service worker (PWA offline shell)
+      // No third-party SCRIPT origin at all any more. The map library used to
+      // come from api.mapbox.com; it is now a Vite chunk served from 'self'
+      // (client/src/lib/mapLibrary.ts), so the allowlist shrank rather than
+      // grew when the basemap changed hands. blob: stays for MapLibre's
+      // workers, which it mints as blobs.
+      scriptSrc:      ["'self'", "blob:"],
+      scriptSrcElem:  scriptSrcElem(["blob:"]),
+      workerSrc:      ["'self'", "blob:"],   // service worker + MapLibre workers
       manifestSrc:    ["'self'"],            // installable web app manifest
-      styleSrc:       ["'self'", "'unsafe-inline'", "https://api.mapbox.com", "https://fonts.googleapis.com"],
-      styleSrcElem:   ["'self'", "'unsafe-inline'", "https://api.mapbox.com", "https://fonts.googleapis.com"],
-      imgSrc:         ["'self'", "data:", "blob:", "https://*.mapbox.com", "https://*.mapbox.cn"],
-      connectSrc:     ["'self'", "https://*.mapbox.com", "https://events.mapbox.com"],
+      styleSrc:       ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      styleSrcElem:   ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      // ── Basemap origins ────────────────────────────────────────────────
+      // Google's tile hosts are named ONE BY ONE rather than as
+      // https://*.google.com: the wildcard would admit every Google property
+      // to img-src and connect-src, which is a far wider grant than four tile
+      // servers. See client/src/lib/basemapStyles.ts for what these are and
+      // the terms question that comes with them.
+      imgSrc: [
+        "'self'", "data:", "blob:",
+        "https://mt0.google.com", "https://mt1.google.com",
+        "https://mt2.google.com", "https://mt3.google.com",
+        "https://*.basemaps.cartocdn.com",           // dark basemap
+      ],
+      // MapLibre fetch()es raster tiles (it decodes to ImageBitmap) and glyph
+      // PBFs, so the tile hosts need connect-src as well as img-src - a
+      // tile-only img-src allowlist yields a blank map and a console full of
+      // CSP violations.
+      connectSrc: [
+        "'self'",
+        "https://mt0.google.com", "https://mt1.google.com",
+        "https://mt2.google.com", "https://mt3.google.com",
+        "https://*.basemaps.cartocdn.com",
+        "https://fonts.openmaptiles.org",            // map label glyphs
+      ],
       fontSrc:        ["'self'", "data:", "https://fonts.gstatic.com"],
       // 'self' + blob: — NOT 'none'. Both PDF viewers render the document with
       // <object data="blob:…" type="application/pdf"> (PdfReviewer,
@@ -904,6 +930,22 @@ app.use((req, res, next) => {
   // surviving node currently needs that node to (re)boot as primary — the lease
   // makes multi-node SAFE now; automatic producer-failover is the next step.
   if (IS_CONTROL_ROLE && startPrimaryElection()) {
+  // ── Provider order-import worker ───────────────────────────────────────────
+  // Parsing and matching a 40,000-row provider export is minutes of synchronous
+  // SQLite work, and better-sqlite3 blocks the one thread this app runs on - so
+  // it must never happen inside the upload request. The worker claims queued
+  // imports with an atomic UPDATE and yields the event loop between chunks.
+  //
+  // Control role only, and behind the primary-node lease, for the same reason
+  // the other producers are: one writer. A scan worker that also drained this
+  // queue would race the control process for the same import row (the claim is
+  // safe, but the duplicated effort is not) and would block HTTP while doing it.
+  // Kill-switch: VENDOR_ORDER_WORKER=off.
+  if (process.env.VENDOR_ORDER_WORKER !== "off") {
+    void import("./vendorOrderImportWorker")
+      .then((m) => m.startVendorOrderImportWorker())
+      .catch((e: any) => console.warn("[vendor-order-worker] not started:", e?.message));
+  }
   // Alert-outbox janitor — supersede the runaway pending backlog (1.25M rows
   // observed) down to the cap, chunked with yields so it can never block /api.
   // Control worker only (one writer), deferred past the health gate. Kill-switch:

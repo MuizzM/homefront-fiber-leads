@@ -201,15 +201,26 @@ export const iconImageMatchExpression = iconImageConcatExpression;
 export interface ImageMap {
   hasImage(id: string): boolean;
   addImage(id: string, image: HTMLImageElement | ImageBitmap | ImageData, options?: { pixelRatio?: number }): void;
-  loadImage(url: string, callback: (error?: Error | null, image?: HTMLImageElement | ImageBitmap | ImageData) => void): void;
+  /** Callback form (mapbox-gl) OR promise-returning (MapLibre v5). */
+  loadImage(url: string, callback: (error?: Error | null, image?: HTMLImageElement | ImageBitmap | ImageData) => void): void | Promise<any>;
 }
 
 function loadMapImage(map: ImageMap, url: string): Promise<HTMLImageElement | ImageBitmap | ImageData> {
   return new Promise((resolve, reject) => {
-    map.loadImage(url, (error, image) => {
-      if (error || !image) reject(error ?? new Error("Mapbox returned no image"));
+    // mapbox-gl took a callback; MapLibre v5 dropped the callback form and
+    // returns a Promise instead. Handed a callback it never calls, this
+    // Promise would simply never settle - a hang, not an error, which is the
+    // worst shape a failure can take. So take whichever the library gives back.
+    const maybe: any = map.loadImage(url, (error, image) => {
+      if (error || !image) reject(error ?? new Error("map library returned no image"));
       else resolve(image);
     });
+    if (maybe && typeof maybe.then === "function") {
+      maybe.then(
+        (r: any) => (r?.data ? resolve(r.data) : reject(new Error("map library returned no image"))),
+        (e: any) => reject(e),
+      );
+    }
   });
 }
 

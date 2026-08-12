@@ -42,75 +42,22 @@
         } catch (e) { document.documentElement.classList.add('light'); }
       })();
     </script>
-    <!-- Fonts are self-hosted (@fontsource-variable/geist, bundled by Vite) — no
+    <!-- Fonts are self-hosted (@fontsource-variable/geist, bundled by Vite) - no
          Google Fonts requests. The latin subset is preloaded by a build plugin
          (vite.config.ts) because its @font-face rule lives inside the stylesheet
-         and would otherwise be discovered a round trip late. Mapbox GL (~230KB
-         gz + CSS) is the only third-party origin and is LAZY-loaded (see below):
-         login + the entire rep flow never download it. -->
-    <!-- ONE preconnect, deliberately without crossorigin. Browsers pool
-         connections separately by CORS mode, and every request this app makes
-         to api.mapbox.com is no-CORS: the lazy loader below injects the Mapbox
-         script and stylesheet as plain elements with no crossorigin attribute,
-         and the library's own tile/style fetches follow. The second,
-         crossorigin preconnect opened a connection nothing ever used. -->
-    <link rel="preconnect" href="https://api.mapbox.com" />
-    <script>
-      // ── Lazy Mapbox loader ───────────────────────────────────────────────────
-      // Mapbox GL used to load on EVERY page (login, Today, Leads…) even though
-      // only the admin/scan map screens use it. Now the library + CSS are injected
-      // on the FIRST call to window.__onMapboxReady(cb) / window.__loadMapbox() —
-      // so a session that never opens a map screen never pays the ~230KB. The
-      // __onMapboxReady(cb) contract is unchanged for existing callers.
-      (function () {
-        var V = "https://api.mapbox.com/mapbox-gl-js/v3.3.0/";
-        window.__mapboxReady = false;
-        window.__mapboxReadyCallbacks = [];
-        window.__loadMapbox = function () {
-          if (window.__mapboxLoading || window.__mapboxReady || typeof window.mapboxgl !== "undefined") return;
-          window.__mapboxLoading = true;
-          if (!document.getElementById("mapbox-css")) {
-            var css = document.createElement("link");
-            css.id = "mapbox-css"; css.rel = "stylesheet"; css.href = V + "mapbox-gl.css";
-            document.head.appendChild(css);
-          }
-          var js = document.createElement("script");
-          js.src = V + "mapbox-gl.js"; js.async = true;
-          js.onload = function () {
-            window.__mapboxReady = true;
-            window.__mapboxReadyCallbacks.forEach(function (cb) { cb(); });
-            window.__mapboxReadyCallbacks = [];
-          };
-          // FAILURE IS A STATE, NOT SILENCE. Without this the callback simply
-          // never fired on a blocked CDN, a captive portal or a dropped LTE
-          // fetch — the map screen was left with no spinner, no error and no
-          // retry, forever, on the primary screen of the app. Callbacks are
-          // invoked WITH an error so the caller can render its own failure UI.
-          js.onerror = function () {
-            window.__mapboxLoading = false;
-            window.__mapboxFailed = true;
-            var err = new Error("mapbox-gl failed to load");
-            window.__mapboxReadyCallbacks.forEach(function (cb) { cb(err); });
-            window.__mapboxReadyCallbacks = [];
-          };
-          document.head.appendChild(js);
-        };
-        window.__onMapboxReady = function (cb) {
-          // Already present (cached / re-exec) → resolve immediately; else queue
-          // the callback AND kick off the lazy load.
-          if (window.__mapboxReady || typeof window.mapboxgl !== "undefined") { cb(); return; }
-          if (window.__mapboxFailed) { cb(new Error("mapbox-gl failed to load")); return; }
-          window.__mapboxReadyCallbacks.push(cb);
-          window.__loadMapbox();
-        };
-        // Clears the failure latch so a "Retry" affordance can genuinely retry.
-        window.__retryMapbox = function () {
-          window.__mapboxFailed = false;
-          window.__mapboxLoading = false;
-          window.__loadMapbox();
-        };
-      })();
-    </script>
+         and would otherwise be discovered a round trip late.
+
+         The map library used to load here, from an inline loader that pulled
+         mapbox-gl from api.mapbox.com. It now resolves through Vite as a lazy
+         chunk from our OWN origin (client/src/lib/mapLibrary.ts), which keeps
+         the same __onMapboxReady contract and the same "a session that never
+         opens a map never pays for the library" behaviour, while removing a
+         third-party script origin from the CSP entirely.
+
+         Preconnects point at the tile and glyph hosts the map actually reaches
+         for on its first frame. -->
+    <link rel="preconnect" href="https://mt1.google.com" />
+    <link rel="preconnect" href="https://fonts.openmaptiles.org" crossorigin />
   </head>
   <body>
     <div id="root"></div>

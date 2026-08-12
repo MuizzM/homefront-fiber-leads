@@ -345,6 +345,11 @@ export const PERSISTED_QUERY_KEYS = new Set<string>([
 const OFFLINE_RETAINED_QUERY_KEYS: readonly string[] = [
   "/api/followups",
   "/api/clock/status",
+  // The opportunity-score overlay behind Today's route order and its "why"
+  // chips. In a dead zone this fetch simply fails, and without retention the
+  // rep's route silently degrades to distance-only mid-shift. Retained in
+  // MEMORY only, never persisted: it is lead-level data, like the map pins.
+  "/api/leads/ranked",
 ];
 
 const DAY_MS = 1000 * 60 * 60 * 24;

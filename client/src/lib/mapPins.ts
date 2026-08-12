@@ -4,6 +4,7 @@
 // one palette for buttons, pins, and legend.
 
 import { STATE_COLORS } from "@shared/knock";
+import { GLYPH_FONT_BOLD, GLYPH_FONT_REGULAR } from "@/lib/basemapStyles";
 
 // Flat GPU match on the precomputed `ds` feature prop — no nested case logic.
 // Pin hue = STATE_COLORS verbatim: one color per status, identical on the map,
@@ -265,7 +266,7 @@ export function clusterLayerSpecs(): any[] {
       maxzoom: CLUSTER_LAYER_MAX_ZOOM,
       layout: {
         "text-field": "{point_count_abbreviated}",
-        "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+        "text-font": [GLYPH_FONT_BOLD],
         "text-size": ["step", ["get", "point_count"], 13, 10, 14, 30, 16],
         "text-allow-overlap": true,
       },
@@ -366,7 +367,7 @@ export function densityLayerSpecs(): any[] {
         // The EXACT cell count — a density bubble that abbreviates ("1.2k")
         // reads as an estimate; the grid's whole job is honest territory.
         "text-field": ["to-string", ["get", "n"]],
-        "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+        "text-font": [GLYPH_FONT_BOLD],
         "text-size": ["step", ["get", "n"], 13, 25, 14, 250, 16],
         "text-allow-overlap": true,
       },
@@ -551,9 +552,22 @@ export function moveCamera(map: any, opts: any): void {
 // number never covers a lead pin, territory, or selection. Called from BOTH
 // the init layer-setup and every style.load re-add (setStyle wipes layers).
 // Cost: one GPU symbol layer over existing tiles — zero DOM, zero extra fetch.
+export const HOUSENUM_SOURCE = "hf-housenum-src";
+
 export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets" | "dark"): void {
   try {
-    if (!map?.getSource?.("composite")) return;    // style without streets tiles
+    if (!map?.addLayer) return;
+    // Our OWN GeoJSON source, fed from /api/address-points (county E911). It
+    // used to be Mapbox's `composite` vector source, which no longer exists
+    // under a raster basemap - and which was never ours to begin with: it
+    // rendered whatever Mapbox had, at whatever coverage, with no way to ask
+    // it what a house number was, only to draw it.
+    if (!map.getSource(HOUSENUM_SOURCE)) {
+      map.addSource(HOUSENUM_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+    }
     if (map.getLayer("hf-housenum")) map.removeLayer("hf-housenum");
     const colors = styleMode === "satellite"
       ? { text: "#ffffff", halo: "rgba(0,0,0,0.85)" }   // over imagery: white + dark halo
@@ -567,23 +581,26 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
     map.addLayer({
       id: "hf-housenum",
       type: "symbol",
-      source: "composite",
-      "source-layer": "housenum_label",
+      source: HOUSENUM_SOURCE,
       minzoom: 16.8, // route-planning zoom — the address IS the operational label
       layout: {
-        "text-field": ["get", "house_num"],
-        "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
+        "text-field": ["get", "n"],
+        "text-font": [GLYPH_FONT_REGULAR],
         // Legible on a phone at arm's length: floor 11px, scales up close in.
         "text-size": ["interpolate", ["linear"], ["zoom"], 16.6, 11.5, 18.5, 14.5, 20, 17.5],
-        // Sit the number BESIDE its house, not on top of it. Variable anchor lets
-        // Mapbox place each label in whatever open space is nearest (preferring
-        // below), and the collision engine keeps numbers off each other and off
-        // street names — so a number never smothers a house, a pin, or a label.
-        "text-variable-anchor": ["bottom", "top", "right", "left"],
-        "text-radial-offset": 0.75,
-        "text-justify": "auto",
-        "text-padding": 4,
-        "text-optional": true, // drop a number before letting it collide/overlap
+        // ON the roof, not beside it. The E911 point IS the structure, so a
+        // centred label reads as "this building is 412" with no ambiguity
+        // about which of two adjacent houses it belongs to - which is exactly
+        // the ambiguity the old variable-anchor placement introduced, since it
+        // pushed each number into whatever whitespace was nearest.
+        "text-anchor": "center",
+        "text-padding": 2,
+        // NOT optional, and allowed to overlap nothing: every house that has a
+        // number shows it. `text-optional` let the collision engine silently
+        // drop numbers in dense blocks, and a missing number reads to a rep as
+        // "not a door" rather than "we hid this one".
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
       },
       paint: {
         "text-color": colors.text,
@@ -594,7 +611,44 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
         "text-opacity": ["interpolate", ["linear"], ["zoom"], 16.8, 0, 17.15, 1],
       },
     }, before);
-  } catch { /* a style variant without housenum tiles — skip, never fake it */ }
+  } catch { /* never let a label layer take the map down */ }
+}
+
+/**
+ * Push a viewport's worth of house numbers into the layer.
+ *
+ * Returns false when the layer is not installed or the payload was truncated -
+ * the caller HIDES the numbers in that case rather than drawing a partial set.
+ * A map showing numbers for an arbitrary subset of the houses on screen is
+ * worse than one showing none, because a rep cannot tell which houses were
+ * left out and will read a missing number as "not a house".
+ */
+export function setHousenumData(
+  map: any,
+  points: Array<[number, number, string]>,
+  truncated: boolean,
+): boolean {
+  try {
+    const src = map?.getSource?.(HOUSENUM_SOURCE);
+    if (!src?.setData) return false;
+    if (truncated) {
+      src.setData({ type: "FeatureCollection", features: [] });
+      return false;
+    }
+    src.setData({
+      type: "FeatureCollection",
+      features: points
+        .filter(([, , n]) => n !== "")
+        .map(([lng, lat, n]) => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [lng, lat] },
+          properties: { n },
+        })),
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Counterpart for the settings toggle: unmount the layer entirely (not just
@@ -666,4 +720,90 @@ export function createRafCoalescedFlush(
       flush();
     });
   };
+}
+
+export const STREET_LABEL_SOURCE = "hf-streetname-src";
+
+/**
+ * Street names, drawn from the same E911 points as the house numbers.
+ *
+ * The satellite basemap is bare imagery (lyrs=s) so Google's own labels are
+ * gone along with its duplicate house numbers - these put navigation back,
+ * under our control. They turn on EARLIER than house numbers (z14 vs z16.8):
+ * knowing which street you are on matters while you are still driving to it.
+ */
+export function ensureStreetLabelLayer(map: any, styleMode: "satellite" | "streets" | "dark"): void {
+  try {
+    if (!map?.addLayer) return;
+    if (!map.getSource(STREET_LABEL_SOURCE)) {
+      map.addSource(STREET_LABEL_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+    }
+    if (map.getLayer("hf-streetname")) map.removeLayer("hf-streetname");
+
+    const colors = styleMode === "satellite"
+      ? { text: "#ffffff", halo: "rgba(0,0,0,0.9)" }
+      : styleMode === "dark"
+      ? { text: "#aebac7", halo: "rgba(10,14,20,0.92)" }
+      : { text: "#46505a", halo: "rgba(255,255,255,0.94)" };
+
+    // Inserted ABOVE hf-housenum, deliberately.
+    //
+    // MapLibre places symbols in style order, and whatever is placed first
+    // wins the collision. Sitting this layer below the house numbers therefore
+    // gave STREET names priority over door numbers - the exact inversion of
+    // what a rep needs - and produced overlaps like "Broa100treet" where a
+    // street name and a house number were both drawn into the same pixels.
+    // Above hf-housenum, the numbers are placed first and the street name
+    // yields (it is text-optional; a house number is not).
+    const before = ["lead-clusters-glow", "lead-clusters", "lead-selected-ring"]
+      .find(id => { try { return !!map.getLayer(id); } catch { return false; } });
+
+    map.addLayer({
+      id: "hf-streetname",
+      type: "symbol",
+      source: STREET_LABEL_SOURCE,
+      minzoom: 14,
+      layout: {
+        "text-field": ["get", "n"],
+        "text-font": [GLYPH_FONT_REGULAR],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 14, 11, 18, 13.5],
+        "text-anchor": "center",
+        "text-padding": 14,
+        // A street name IS optional in a way a house number is not: dropping a
+        // colliding one costs a rep nothing, because the street is still
+        // visible and usually labelled again nearby.
+        "text-optional": true,
+        "text-letter-spacing": 0.04,
+        "text-max-width": 9,
+      },
+      paint: {
+        "text-color": colors.text,
+        "text-halo-color": colors.halo,
+        "text-halo-width": 1.6,
+        "text-opacity": ["interpolate", ["linear"], ["zoom"], 14, 0, 14.6, 1],
+      },
+    }, before);
+  } catch { /* never let a label layer take the map down */ }
+}
+
+export function setStreetLabelData(map: any, streets: Array<[number, number, string]>): void {
+  try {
+    const src = map?.getSource?.(STREET_LABEL_SOURCE);
+    if (!src?.setData) return;
+    src.setData({
+      type: "FeatureCollection",
+      features: streets.map(([lng, lat, n]) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [lng, lat] },
+        properties: { n },
+      })),
+    });
+  } catch { /* stale map handle */ }
+}
+
+export function removeStreetLabelLayer(map: any): void {
+  try { if (map?.getLayer?.("hf-streetname")) map.removeLayer("hf-streetname"); } catch { /* gone */ }
 }

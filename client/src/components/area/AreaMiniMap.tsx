@@ -17,6 +17,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { territoryPaint } from "@/lib/territoryStyle";
 import { colorForRep } from "@shared/repColors";
+import { basemapStyle } from "@/lib/basemapStyles";
 
 interface AreaMiniMapProps {
   polygon: [number, number][];
@@ -49,12 +50,14 @@ export function AreaMiniMap({ polygon, color, status, repId, areaName }: AreaMin
         .then((r) => r.json())
         .then((d: { token?: string }) => {
           if (cancelled) return;
-          if (!d?.token || !containerRef.current) {
+          // Only the container is required now - the token is passed
+          // through for continuity but MapLibre ignores it.
+          if (!containerRef.current) {
             setState("unavailable");
             return;
           }
           const mapboxgl = (window as any).mapboxgl;
-          mapboxgl.accessToken = d.token;
+          mapboxgl.accessToken = d?.token ?? "";
 
           // The ring is stored OPEN (last point ≠ first); GeoJSON wants closed.
           const ring = [...polygon, polygon[0]];
@@ -66,7 +69,7 @@ export function AreaMiniMap({ polygon, color, status, repId, areaName }: AreaMin
 
           const map = new mapboxgl.Map({
             container: containerRef.current,
-            style: "mapbox://styles/mapbox/satellite-streets-v12",
+            style: basemapStyle("satellite"),
             bounds: [[w, s], [e, n]],
             fitBoundsOptions: { padding: 32 },
             // A preview, not a workspace: pan/zoom stay available for a closer

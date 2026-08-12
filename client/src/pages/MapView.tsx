@@ -59,6 +59,10 @@ import {
   readCachedFix,
   writeCachedFix,
   ensureHousenumLayer,
+  setHousenumData,
+  ensureStreetLabelLayer,
+  setStreetLabelData,
+  removeStreetLabelLayer,
   removeHousenumLayer,
   readPersistedHouseNumbers,
   persistHouseNumbers,
@@ -214,6 +218,8 @@ import {
   persistedRunningIsStale,
   type PersistedScan,
 } from "@/lib/areaScanMachine";
+import { basemapStyle, GLYPH_FONT_BOLD } from "@/lib/basemapStyles";
+import { NO_TOKEN_REQUIRED, clusterExpansionZoom } from "@/lib/mapLibrary";
 
 // localStorage key for the field map's OWN scan lifecycle. Versioned so a
 // schema change to PersistedScan never resurrects an incompatible record.
@@ -728,7 +734,7 @@ function ensureTransientMapLayers(map: any): void {
       filter: ["has", "point_count"],
       layout: {
         "text-field": "{point_count_abbreviated}",
-        "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+        "text-font": [GLYPH_FONT_BOLD],
         "text-size": 12,
         "text-allow-overlap": true,
       },
@@ -2688,13 +2694,13 @@ export default function MapView() {
       if (err) { setMapFailureKind("library"); setMapTokenFailed(true); return; }
       void tokenPromise.then((token) => {
         if (cancelled) return;
-        if (token) {
-          (window as any).mapboxgl.accessToken = token;
-          setMapboxToken(token);
-        } else {
-          setMapFailureKind("token");
-          setMapTokenFailed(true);
-        }
+        // MapLibre needs no token, so a server without one configured is
+        // no longer a failure - it used to strand the rep on the app's
+        // primary screen with a "token" error for a credential the map does
+        // not use. The assignment below is a harmless no-op kept so the
+        // token still reaches Mapbox-backed server calls unchanged.
+        (window as any).mapboxgl.accessToken = token ?? "";
+        setMapboxToken(token || NO_TOKEN_REQUIRED);
       });
     };
     (window as any).__onMapboxReady(init);
@@ -2730,7 +2736,7 @@ export default function MapView() {
     const savedCamera = readPersistedMapCamera();
     const map = new (window as any).mapboxgl.Map({
       container: el,
-      style: "mapbox://styles/mapbox/satellite-streets-v12",
+      style: basemapStyle("satellite"),
       center: savedCamera?.center ?? ROCKWELL_CENTER,
       zoom: savedCamera?.zoom ?? 13,
       // No wordmark, no attribution bar on the map (owner ask). The license
@@ -3078,16 +3084,13 @@ export default function MapView() {
         });
         const clusterId = features[0]?.properties?.cluster_id;
         if (!clusterId) return;
-        (map.getSource("leads-cluster") as any).getClusterExpansionZoom(
-          clusterId,
-          (err: any, zoom: number) => {
-            if (err) return;
-            map.easeTo({
-              center: features[0].geometry.coordinates,
-              zoom: zoom + 1,
-            });
-          },
-        );
+        void clusterExpansionZoom(map.getSource("leads-cluster"), clusterId).then((zoom) => {
+          if (zoom == null) return;
+          map.easeTo({
+            center: features[0].geometry.coordinates,
+            zoom: zoom + 1,
+          });
+        });
       });
 
       const hoverCursor = (c: string) => {
@@ -3193,13 +3196,9 @@ export default function MapView() {
         const feature = e.features?.[0];
         const clusterId = feature?.properties?.cluster_id;
         if (clusterId == null) return;
-        (map.getSource(SCAN_RESULTS_SOURCE) as any).getClusterExpansionZoom(
-          clusterId,
-          (err: any, zoom: number) => {
-            if (!err)
-              map.easeTo({ center: feature.geometry.coordinates, zoom });
-          },
-        );
+        void clusterExpansionZoom(map.getSource(SCAN_RESULTS_SOURCE), clusterId).then((zoom) => {
+          if (zoom != null) map.easeTo({ center: feature.geometry.coordinates, zoom });
+        });
       });
       map.on("click", SCAN_RESULTS_POINT_LAYER, (e: any) => {
         if (drawToolActive()) return;
@@ -4268,7 +4267,7 @@ export default function MapView() {
               "text-field": territoryLabelForRef.current(t),
               "text-size": 12,
               "text-line-height": 1.3,
-              "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+              "text-font": [GLYPH_FONT_BOLD],
               "text-allow-overlap": false,
             },
             paint: {
@@ -4347,12 +4346,10 @@ export default function MapView() {
     // style. Only re-style when the user actually toggles satellite ↔ street.
     if (appliedStyleRef.current === mapStyleMode) return;
     appliedStyleRef.current = mapStyleMode;
-    const STYLE =
-      mapStyleMode === "satellite"
-        ? "mapbox://styles/mapbox/satellite-streets-v12" // hybrid
-        : mapStyleMode === "streets"
-          ? "mapbox://styles/mapbox/streets-v12" // street
-          : "mapbox://styles/mapbox/dark-v11"; // dark
+    // basemapStyle() returns a FRESH object per call, which matters here:
+    // MapLibre annotates the style object it is given, so handing the same
+    // literal to a second setStyle would feed it something already mutated.
+    const STYLE = basemapStyle(mapStyleMode);
     // setStyle wipes all layers — re-add cluster source + layers after style loads
     map.once("style.load", async () => {
       // Density tier first (sits UNDER the pin clusters) — same idempotent
@@ -4430,8 +4427,57 @@ export default function MapView() {
     persistHouseNumbers(showHouseNums);
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    if (showHouseNums) ensureHousenumLayer(map, mapStyleMode);
-    else removeHousenumLayer(map);
+    if (!showHouseNums) { removeHousenumLayer(map); removeStreetLabelLayer(map); return; }
+
+    ensureHousenumLayer(map, mapStyleMode);
+    // Street names come from the same request and the same data. On the
+    // satellite basemap they are the ONLY street labels there are, since the
+    // imagery is bare - so they mount alongside the numbers, not separately.
+    ensureStreetLabelLayer(map, mapStyleMode);
+
+    // The numbers are DATA now, not a vector-tile layer that redraws itself, so
+    // the viewport has to feed them. Refetch on moveend, coalesced: a rep
+    // panning down a street fires dozens of them and only the last one matters.
+    let cancelled = false;
+    let timer: number | undefined;
+    // apiRequest takes no AbortSignal, so staleness is handled by generation
+    // rather than cancellation: a rep panning fast can have two responses in
+    // flight, and the older one must not overwrite the newer viewport's labels
+    // just because it landed second.
+    let generation = 0;
+
+    const refresh = () => {
+      if (cancelled) return;
+      // Below the layer's own minzoom there is nothing to draw; skip the round
+      // trip entirely rather than fetching a county's worth of labels.
+      // Street names start at z14, house numbers at z16.8 - so the fetch is
+      // still worth making between the two, for streets alone.
+      if (map.getZoom() < 14) { setHousenumData(map, [], false); setStreetLabelData(map, []); return; }
+      const b = map.getBounds();
+      const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
+      const mine = ++generation;
+      apiRequest("GET", `/api/address-points?bbox=${bbox}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (cancelled || mine !== generation) return;
+          setHousenumData(map, d?.points ?? [], !!d?.truncated);
+          setStreetLabelData(map, d?.streets ?? []);
+        })
+        .catch(() => { /* offline or a torn-down map - keep the last good set */ });
+    };
+
+    const onMoveEnd = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(refresh, 180);
+    };
+
+    refresh();
+    map.on("moveend", onMoveEnd);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      try { map.off("moveend", onMoveEnd); } catch { /* map already torn down */ }
+    };
   }, [showHouseNums, mapReady, mapStyleMode, styleEpoch]);
 
   // ── Assign-Area (freehand) — SalesRabbit-style draw → assign → colored region ─
@@ -4728,18 +4774,22 @@ export default function MapView() {
   useEffect(() => {
     const style = document.createElement("style");
     style.textContent = `
-      .sr-popup .mapboxgl-popup-content {
+      .sr-popup .mapboxgl-popup-content,
+      .sr-popup .maplibregl-popup-content {
         background: #0f1420;
         border: 1px solid #1e2e3d;
         border-radius: 10px;
         padding: 14px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.6);
       }
-      .sr-popup .mapboxgl-popup-tip { border-top-color: #0f1420 !important; }
-      .sr-popup .mapboxgl-popup-close-button {
+      .sr-popup .mapboxgl-popup-tip,
+      .sr-popup .maplibregl-popup-tip { border-top-color: #0f1420 !important; }
+      .sr-popup .mapboxgl-popup-close-button,
+      .sr-popup .maplibregl-popup-close-button {
         color: #64748b; font-size: 18px; top: 6px; right: 8px;
       }
-      .sr-popup .mapboxgl-popup-close-button:hover { color: #e2e8f0; background: transparent; }
+      .sr-popup .mapboxgl-popup-close-button:hover,
+      .sr-popup .maplibregl-popup-close-button:hover { color: #e2e8f0; background: transparent; }
     `;
     document.head.appendChild(style);
     return () => {

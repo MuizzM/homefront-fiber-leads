@@ -4,7 +4,10 @@
     {
       "name": "homefront",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "SCAN_GLOBAL_CONCURRENCY=24 SCAN_BATCH_CONCURRENCY=12 RESEND_DELIVERY_MODE=log npm run dev"],
+      "runtimeArgs": [
+        "-c",
+        "SCAN_GLOBAL_CONCURRENCY=24 SCAN_BATCH_CONCURRENCY=12 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
       "port": 5050,
       "autoPort": true
     },
@@ -29,6 +32,16 @@
       "autoPort": false
     },
     {
+      "name": "homefront-ranked",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5071 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/d9867162-4992-4623-8b5b-333ab63dbacb/scratchpad/ranked-data SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5071,
+      "autoPort": false
+    },
+    {
       "name": "homefront-verify",
       "runtimeExecutable": "sh",
       "runtimeArgs": [
@@ -39,6 +52,16 @@
       "autoPort": true
     },
     {
+      "name": "homefront-gate",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5074 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/21c95b0b-7680-42ac-9188-20f79cf3275a/scratchpad/gate-data GUARDED_ACTIONS_ENABLED=true SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5074,
+      "autoPort": false
+    },
+    {
       "name": "hfs-marketing-site",
       "runtimeExecutable": "sh",
       "runtimeArgs": [
@@ -46,6 +69,26 @@
         "cd /Applications/home-front-solutions && npm run dev -- --port 5177 --strictPort"
       ],
       "port": 5177,
+      "autoPort": false
+    },
+    {
+      "name": "homefront-install",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5073 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/b622a78e-de8d-48e1-a8ba-79e89e4bdd06/scratchpad/install-data SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5073,
+      "autoPort": false
+    },
+    {
+      "name": "homefront-orders",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5072 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/9610d531-9e1d-4b23-98b7-581dbba07517/scratchpad/orders-data VENDOR_ORDER_ENCRYPTION_KEY=1111111111111111111111111111111111111111111111111111111111111111 VENDOR_CONTACT_HASH_KEY=2222222222222222222222222222222222222222222222222222222222222222 PUBLIC_BASE_URL=http://localhost:5072 SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5072,
       "autoPort": false
     }
   ]
