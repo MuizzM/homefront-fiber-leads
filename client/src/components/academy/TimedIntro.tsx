@@ -152,7 +152,7 @@ export default function TimedIntro({
             style={{ width: `${railPct}%` }}
           />
         </div>
-        <div className="mt-1 flex justify-between text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="mt-1 flex justify-between text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
           <span>0s</span>
           <span>target {TARGET_MIN_SECONDS} to {TARGET_MAX_SECONDS}s</span>
         </div>

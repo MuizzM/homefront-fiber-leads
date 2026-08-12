@@ -87,7 +87,7 @@ export function FreshnessBadge({
     >
       {/* A shape as well as a colour: filled for live, hollow for recent, a bar
           for stale. The distinction survives greyscale. */}
-      <span aria-hidden="true" className="text-[9px] leading-none">
+      <span aria-hidden="true" className="text-2xs leading-none">
         {freshness === "live" ? "●" : freshness === "recent" ? "○" : freshness === "stale" ? "▬" : "–"}
       </span>
       {FRESHNESS_LABEL[freshness]}

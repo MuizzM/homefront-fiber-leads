@@ -56,9 +56,9 @@ interface SigningContent {
 }
 
 const STATUS: Record<OnboardingDocumentStatus, { label: string; className: string }> = {
-  creating: { label: "Preparing", className: "bg-info/10 text-info" },
+  creating: { label: "Preparing", className: "bg-muted text-muted-foreground" },
   sent: { label: "Ready to sign", className: "bg-warning/10 text-warning" },
-  delivered: { label: "Opened", className: "bg-purple-500/15 text-purple-400" },
+  delivered: { label: "Opened", className: "bg-info/10 text-info" },
   completed: { label: "Signed", className: "bg-success/10 text-success" },
   declined: { label: "Declined", className: "bg-destructive/10 text-destructive" },
   voided: { label: "Voided", className: "bg-muted text-muted-foreground" },

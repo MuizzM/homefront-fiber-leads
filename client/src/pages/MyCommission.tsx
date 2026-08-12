@@ -562,7 +562,7 @@ const rankTint = (name: string) =>
 function RankChip({ rank, size = "md" }: { rank: Rank; size?: "sm" | "md" }) {
   const tint = rankTint(rank.name);
   return (
-    <span className={`inline-flex items-center gap-1 whitespace-nowrap flex-shrink-0 rounded-full font-bold ${tint.chip} ${size === "md" ? "px-2.5 py-1 text-xs" : "px-2 py-0.5 text-[10px]"}`}>
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap flex-shrink-0 rounded-full font-bold ${tint.chip} ${size === "md" ? "px-2.5 py-1 text-xs" : "px-2 py-0.5 text-2xs"}`}>
       
       {rank.name}
     </span>
@@ -694,7 +694,7 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
 function RankRail({ p, className = "", secondary = false }: { p: NonNullable<ReturnType<typeof rankProgress>>; className?: string; secondary?: boolean }) {
   return (
     <div className={className}>
-      {secondary && <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">The full ladder</p>}
+      {secondary && <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground/70">The full ladder</p>}
       <div className="grid gap-1.5" data-testid="rank-rail">
         {p.ladder.map(r => {
           const isCurrent = p.current?.bandIndex === r.bandIndex;

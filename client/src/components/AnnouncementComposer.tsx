@@ -142,7 +142,9 @@ export function AnnouncementComposer({ className }: { className?: string }) {
       <div className="rounded-2xl border border-border bg-secondary/40 p-3" data-testid="announcement-preview">
         <SectionLabel className="mb-1.5">On their phone</SectionLabel>
         <div className="rounded-xl border border-border bg-card p-2.5 shadow-sm">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {/* type-floor-exempt: the app icon inside a scale model of a lock
+                screen notification. Sized to the mock, not read as text. */}
             <span className="grid h-3.5 w-3.5 place-items-center rounded bg-primary text-[7px] font-black text-primary-foreground">HF</span>
             Homefront · now
           </div>

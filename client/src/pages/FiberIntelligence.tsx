@@ -84,7 +84,7 @@ export default function FiberIntelligence() {
               aria-selected={tab === key}
               onClick={(e) => { setTab(key); (e.currentTarget as HTMLElement).scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); }}
               data-testid={`fi-tab-${key}`}
-              className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-[13px] font-semibold transition-colors ${tab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              className={`relative flex min-h-11 md:min-h-10 items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-[13px] font-semibold transition-colors ${tab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
                {label}
               {tab === key && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
@@ -182,7 +182,7 @@ function FreshNow() {
               onClick={() => setHours(h)}
               aria-pressed={hours === h}
               data-testid={`fi-window-${h}`}
-              className={`rounded-lg px-2.5 py-1 text-[11px] font-bold ${hours === h ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}
+              className={`inline-flex min-h-11 md:min-h-8 items-center rounded-lg px-2.5 py-1 text-[11px] font-bold ${hours === h ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}
             >{h === 24 ? "24h" : "7d"}</button>
           ))}
         </div>
@@ -216,7 +216,7 @@ function FreshNow() {
                   {a.carrier === "frontier" && <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-destructive">Frontier</span>}
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
                   {a.leadId != null
-                    ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
+                    ? <Link href={`/lead/${a.leadId}`} className="inline-flex min-h-11 md:min-h-8 shrink-0 items-center rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
                     : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary">Map</Link>}
                 </div>
               ))}
@@ -246,7 +246,7 @@ function FreshNow() {
                   <div className="text-[11px] text-muted-foreground">{fmtTime(c.at)}</div>
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${KIND_STYLE[c.kind]?.cls ?? ""}`}>{KIND_STYLE[c.kind]?.label ?? c.kind}</span>
-                {c.leadId != null && <Link href={`/lead/${c.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>}
+                {c.leadId != null && <Link href={`/lead/${c.leadId}`} className="inline-flex min-h-11 md:min-h-8 shrink-0 items-center rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>}
               </div>
             ))}
           </div>

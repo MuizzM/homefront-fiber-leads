@@ -195,7 +195,7 @@ function TerritoryCard({ row, onReview }: { row: TerritoryRow; onReview: () => v
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <dt className="truncate text-[10px] text-muted-foreground">{label}</dt>
+      <dt className="truncate text-2xs text-muted-foreground">{label}</dt>
       <dd className="text-[13px] font-semibold tabular-nums text-foreground">{value}</dd>
     </div>
   );
@@ -263,7 +263,7 @@ function ReclaimReviewDialog({ row, onClose }: { row: TerritoryRow; onClose: () 
         <Textarea className="mt-3" rows={3} value={note} onChange={(e) => setNote(e.target.value)}
                   placeholder="Why did you decide this? Recorded with your name." />
 
-        <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+        <p className="mt-2 text-2xs leading-relaxed text-muted-foreground">
           This records your decision to the audit trail. It does not move any doors. To actually reclaim or
           reassign, use the Areas screen, where the change is separately permission checked.
         </p>

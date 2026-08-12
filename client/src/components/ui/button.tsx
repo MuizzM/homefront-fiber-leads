@@ -28,7 +28,12 @@ const buttonVariants = cva(
       // but will expand to fit large amounts of content.
       size: {
         default: "min-h-11 px-4 py-2 md:min-h-9",
-        sm: "min-h-10 px-3 text-xs md:min-h-8",
+        // 44px on touch, like `default`. There is no "small" exception to the
+        // one-handed hit-area floor - a thumb is the same size whatever the
+        // button is called - so `sm` differs from `default` on the DESKTOP half
+        // (32px vs 36px) and on padding, not on whether a rep can hit it.
+        // Measured at 40px on Referrals' Retry and Mileage's Export before this.
+        sm: "min-h-11 px-3 text-xs md:min-h-8",
         lg: "min-h-12 px-6 md:min-h-10 md:px-8",
         icon: "h-11 w-11 md:h-9 md:w-9",
       },

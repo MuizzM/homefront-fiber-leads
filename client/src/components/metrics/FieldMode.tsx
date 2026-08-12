@@ -203,7 +203,7 @@ export function FieldModeCard() {
 function Hud({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-card px-3 py-2.5">
-      <dt className="truncate text-[10px] font-medium text-muted-foreground">{label}</dt>
+      <dt className="truncate text-2xs font-medium text-muted-foreground">{label}</dt>
       <dd className="mt-0.5 truncate text-[15px] font-bold capitalize tabular-nums text-foreground">{value}</dd>
     </div>
   );
@@ -260,7 +260,7 @@ function ShiftSummaryCard({ summary, onDismiss }: { summary: ShiftSummary; onDis
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <dt className="truncate text-[10px] text-muted-foreground">{label}</dt>
+      <dt className="truncate text-2xs text-muted-foreground">{label}</dt>
       <dd className="text-[13px] font-semibold tabular-nums text-foreground">{value}</dd>
     </div>
   );

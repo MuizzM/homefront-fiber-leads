@@ -199,7 +199,7 @@ export function TeamMetrics() {
                       <div className="mt-0.5 flex items-center gap-1.5">
                         <span className={`h-1.5 w-1.5 rounded-full ${r.inFieldMode ? "bg-success" : "bg-muted-foreground/40"}`}
                               aria-hidden="true" />
-                        <span className="text-[10px] text-muted-foreground">
+                        <span className="text-2xs text-muted-foreground">
                           {r.inFieldMode ? "In Field Mode" : r.lastActivityAt ? `Last door ${new Date(r.lastActivityAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "No activity"}
                         </span>
                       </div>
@@ -379,7 +379,7 @@ function RepDrilldown({ repId, period, onClose }: {
                       Save note
                     </Button>
                   </div>
-                  <p className="mt-2 text-[10px] text-muted-foreground">
+                  <p className="mt-2 text-2xs text-muted-foreground">
                     Notes are private to supervisors unless you share them. A shared note appears on the
                     rep's own Metrics screen.
                   </p>
@@ -389,7 +389,7 @@ function RepDrilldown({ repId, period, onClose }: {
                   {(data?.notes ?? []).map((n) => (
                     <div key={n.id} className="rounded-xl border border-border bg-card p-3">
                       <p className="text-xs text-foreground">{n.body}</p>
-                      <p className="mt-1 text-[10px] text-muted-foreground">
+                      <p className="mt-1 text-2xs text-muted-foreground">
                         {n.authorName ?? "Supervisor"} · {new Date(n.createdAt).toLocaleDateString()}
                         {n.sharedWithRep ? " · shared with rep" : " · private"}
                       </p>

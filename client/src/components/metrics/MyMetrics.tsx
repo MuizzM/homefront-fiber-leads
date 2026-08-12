@@ -284,7 +284,7 @@ export function CoachingPanel({ insights }: { insights: readonly Insight[] }) {
               <span className={`absolute inset-y-0 left-0 w-[3px] ${style.rail}`} aria-hidden="true" />
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-[13px] font-semibold text-foreground">{i.title}</h3>
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${style.chip}`}>
+                <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${style.chip}`}>
                   {style.label}
                 </span>
               </div>
@@ -296,7 +296,7 @@ export function CoachingPanel({ insights }: { insights: readonly Insight[] }) {
                 <dl className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
                   {i.supportingMetrics.map((m) => (
                     <div key={m.key} className="min-w-0">
-                      <dt className="truncate text-[10px] text-muted-foreground">{m.label}</dt>
+                      <dt className="truncate text-2xs text-muted-foreground">{m.label}</dt>
                       <dd className="text-[12px] font-semibold tabular-nums text-foreground">
                         {m.value}
                         {m.baseline && <span className="ml-1 font-normal text-muted-foreground">vs {m.baseline}</span>}

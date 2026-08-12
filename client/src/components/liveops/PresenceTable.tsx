@@ -77,7 +77,7 @@ export function PresenceTable({
                 <td className="px-4 py-2.5 text-muted-foreground">{r.appArea ?? "-"}</td>
                 <td className="px-4 py-2.5 capitalize text-muted-foreground">{r.deviceKind}</td>
                 <td className={`px-4 py-2.5 font-medium ${CONNECTION_TONE[conn] ?? "text-muted-foreground"}`}>
-                  <span aria-hidden="true" className="mr-1.5 text-[9px]">{CONNECTION_MARK[conn] ?? "○"}</span>
+                  <span aria-hidden="true" className="mr-1.5 text-2xs">{CONNECTION_MARK[conn] ?? "○"}</span>
                   <span className="capitalize">{conn}</span>
                 </td>
               </tr>

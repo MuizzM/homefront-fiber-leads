@@ -141,7 +141,7 @@ export function CoachingBoard() {
                     <dl className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-4">
                       {i.supportingMetrics.map((m) => (
                         <div key={m.key} className="min-w-0">
-                          <dt className="truncate text-[10px] text-muted-foreground">{m.label}</dt>
+                          <dt className="truncate text-2xs text-muted-foreground">{m.label}</dt>
                           <dd className="text-[12px] font-semibold tabular-nums text-foreground">
                             {m.value}
                             {m.baseline && <span className="ml-1 font-normal text-muted-foreground">vs {m.baseline}</span>}

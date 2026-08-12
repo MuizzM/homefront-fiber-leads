@@ -234,7 +234,7 @@ function PillsRow({ lead, showScore = true }: { lead: Lead; showScore?: boolean 
   const ds = pinDisplayState(lead);
   const color = STATE_COLORS[ds];
   const fiberShort = lead.fiberStatus ? FIBER_SHORT[lead.fiberStatus] : undefined;
-  const pill = "inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-[10.5px] font-semibold uppercase tracking-wider";
+  const pill = "inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-2xs font-semibold uppercase tracking-wider";
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span data-testid="detail-status-pill" className={`${pill} text-foreground`} style={{ backgroundColor: `${color}1F`, borderColor: `${color}52` }}>
@@ -311,7 +311,7 @@ function SummarySplit({ lead, canOpenCalling, onLog }: SummaryProps) {
           <div className="flex divide-x divide-border border-t border-border sm:min-w-[8.5rem] sm:flex-col sm:divide-x-0 sm:divide-y sm:border-l sm:border-t-0">
             {stats.map(s => (
               <div key={s.label} className="min-w-0 flex-1 px-4 py-2.5 sm:flex sm:flex-1 sm:flex-col sm:justify-center sm:py-3">
-                <div className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</div>
+                <div className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</div>
                 <div className="truncate text-[14px] font-semibold tabular-nums text-foreground" title={s.value}>{s.value}</div>
               </div>
             ))}

@@ -65,7 +65,7 @@ function UnreadPill({ n, testId }: { n: number; testId: string }) {
     <span
       data-testid={testId}
       aria-label={`${n} unread`}
-      className="min-w-[18px] shrink-0 rounded-full bg-primary px-1 text-center text-[10px] font-bold leading-[18px] text-primary-foreground tabular-nums"
+      className="min-w-[18px] shrink-0 rounded-full bg-primary px-1 text-center text-2xs font-bold leading-[18px] text-primary-foreground tabular-nums"
     >
       {n > 9 ? "9+" : n}
     </span>
@@ -387,7 +387,7 @@ function NewThreadSheet({
                 >
                   <span
                     aria-hidden="true"
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-bold"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-2xs font-bold"
                     style={{ backgroundColor: `${hue}26`, color: hue }}
                   >
                     {chatInitials(r.name)}
@@ -505,7 +505,7 @@ export function GroupMembersSheet({
               <div key={m.userId} className="flex min-h-[52px] items-center gap-3 border-b border-border px-4 py-2.5 last:border-b-0" data-testid={`group-member-${m.userId}`}>
                 <span
                   aria-hidden="true"
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-bold"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-2xs font-bold"
                   style={{ backgroundColor: `${hueFor(roster, m.memberId)}26`, color: hueFor(roster, m.memberId) }}
                 >
                   {chatInitials(m.name)}
@@ -552,7 +552,7 @@ export function GroupMembersSheet({
                   >
                     <span
                       aria-hidden="true"
-                      className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-bold"
+                      className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-2xs font-bold"
                       style={{ backgroundColor: `${repColorOf(r)}26`, color: repColorOf(r) }}
                     >
                       {chatInitials(r.name)}

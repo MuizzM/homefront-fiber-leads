@@ -47,7 +47,7 @@ function DateBlock({ ms, urgency }: { ms: number | null; urgency: WatchlistItem[
   const d = new Date(ms);
   return (
     <span className={`flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-lg leading-none ${urgency === "hot" ? "bg-warning/10" : "bg-secondary"}`}>
-      <span className={`text-[8.5px] font-bold uppercase tracking-wide ${urgency === "hot" ? "text-warning" : "text-muted-foreground"}`}>
+      <span className={`text-2xs font-bold uppercase tracking-wide ${urgency === "hot" ? "text-warning" : "text-muted-foreground"}`}>
         {d.toLocaleDateString("en-US", { month: "short" })}
       </span>
       <span className="text-[15px] font-bold tabular-nums text-foreground">{d.getDate()}</span>

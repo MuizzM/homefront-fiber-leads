@@ -53,7 +53,7 @@ function PhoneDemo() {
               data-anim="icon"
               className="relative grid h-full w-full place-items-center rounded-[6px] bg-primary text-primary-foreground shadow"
             >
-              <span className="text-[9px] font-black leading-none">HF</span>
+              <span className="text-2xs font-black leading-none">HF</span>
             </div>
           </div>
         </div>
@@ -77,6 +77,9 @@ function PhoneDemo() {
             className="mt-1 flex items-center gap-1 rounded px-1 py-1"
           >
             
+            {/* type-floor-exempt: a scale model of the iOS share sheet, drawn so
+                the user recognises the real row when they open it. Picture of
+                type, not type. */}
             <span className="text-[7px] font-semibold leading-none text-foreground/80">Add to Home Screen</span>
           </div>
           <div className="mt-1 h-3 rounded bg-foreground/[0.06]" />

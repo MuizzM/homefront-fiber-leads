@@ -52,7 +52,7 @@ type TeamRow = { id: number; name: string; active?: boolean; color?: string | nu
 
 type TabId = "overview" | "passes" | "stats" | "doors" | "phones" | "map";
 
-const CHIP = "text-[10px] font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
+const CHIP = "text-2xs font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
 
 export default function AreaDetail() {
   const [, params] = useRoute("/areas/:id");
@@ -734,7 +734,7 @@ export default function AreaDetail() {
                       <span className="min-w-0 truncate text-[13px] font-semibold text-foreground">
                         {a.repName ?? `Rep #${a.repId}`}
                         {a.roleInTerritory === "primary" && (
-                          <span className="ml-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">primary</span>
+                          <span className="ml-1.5 text-2xs font-bold uppercase tracking-wide text-muted-foreground">primary</span>
                         )}
                       </span>
                       <span className={cn(CHIP, "shrink-0", a.unassignedAt == null
@@ -1013,7 +1013,7 @@ function VerifyTile({ label, value, className, testId }: {
         
         <span className="text-sm font-bold tabular-nums">{value.toLocaleString()}</span>
       </div>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</div>
     </div>
   );
 }

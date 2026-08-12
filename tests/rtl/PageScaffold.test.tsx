@@ -25,7 +25,25 @@ describe("StatTile - the Revolut grammar", () => {
     render(<StatTile label="Sales" value={7} testId="t" delta={<StatDelta tone="up">+2</StatDelta>} />);
     const chip = screen.getByText("+2");
     expect(chip.className).toContain("rounded-full");
-    expect(chip.className).toContain("emerald");
+    expect(chip.className).toContain("text-success");
+  });
+
+  // The tones used to be `text-emerald-400` / `text-red-400`, steps chosen when
+  // the app was dark by default. Light is the default now and those land near
+  // 2:1. Semantic tokens are tuned to clear AA on white and on a wash of
+  // themselves, which is what a tinted chip is (docs/DESIGN_SYSTEM.md).
+  it("carries the delta tones as semantic tokens, not raw palette steps", () => {
+    render(
+      <>
+        <StatDelta tone="up">+2</StatDelta>
+        <StatDelta tone="down">-3</StatDelta>
+      </>,
+    );
+    const up = screen.getByText("+2").className;
+    const down = screen.getByText("-3").className;
+    expect(up).toContain("bg-success/15");
+    expect(down).toContain("text-destructive");
+    expect(`${up} ${down}`).not.toMatch(/emerald|red-\d|green-\d/);
   });
 });
 

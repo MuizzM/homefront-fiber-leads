@@ -3,9 +3,10 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { StatStrip, StatTile } from "@/components/ui/page-scaffold";
 import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
+import { ErrorState } from "@/components/ErrorState";
 import { useAuth } from "@/lib/auth";
 import type { TeamMember } from "@shared/schema";
 
@@ -122,7 +123,7 @@ export default function Leaderboard() {
               onClick={() => setRange(p.key)}
               aria-pressed={range === p.key}
               data-testid={`range-${p.key}`}
-              className={`whitespace-nowrap px-2.5 h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
+              className={`whitespace-nowrap px-2.5 h-11 md:h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
                 range === p.key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -134,7 +135,7 @@ export default function Leaderboard() {
             onClick={() => setRange("custom")}
             aria-pressed={range === "custom"}
             data-testid="range-custom"
-            className={`whitespace-nowrap inline-flex items-center gap-1 px-2.5 h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
+            className={`whitespace-nowrap inline-flex items-center gap-1 px-2.5 h-11 md:h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
               range === "custom" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -148,14 +149,14 @@ export default function Leaderboard() {
               type="date" value={since} max={until || undefined}
               onChange={(e) => setSince(e.target.value)}
               aria-label="From date" data-testid="range-since"
-              className="h-8 px-2.5 rounded-lg bg-secondary border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
+              className="h-11 md:h-8 px-2.5 rounded-lg bg-secondary border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
             <span className="text-muted-foreground">to</span>
             <input
               type="date" value={until} min={since || undefined}
               onChange={(e) => setUntil(e.target.value)}
               aria-label="To date" data-testid="range-until"
-              className="h-8 px-2.5 rounded-lg bg-secondary border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
+              className="h-11 md:h-8 px-2.5 rounded-lg bg-secondary border border-border text-foreground text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
           </div>
         )}
@@ -203,17 +204,11 @@ export default function Leaderboard() {
           ))}
         </Card>
       ) : isError ? (
-        <Card className="bg-card border-border">
-          <CardContent className="py-12 text-center" data-testid="leaderboard-error">
-            
-            <div className="text-sm font-semibold text-foreground">Couldn't load the leaderboard</div>
-            <div className="text-sm text-muted-foreground mt-1">Check your connection and try again.</div>
-            <button onClick={() => refetch()}
-              className={`mt-4 inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>
-              Retry
-            </button>
-          </CardContent>
-        </Card>
+        <ErrorState
+          testId="leaderboard-error"
+          title="Couldn't load the leaderboard"
+          onRetry={() => refetch()}
+        />
       ) : board.length === 0 ? (
         <Card className="bg-card border-border">
           <EmptyState

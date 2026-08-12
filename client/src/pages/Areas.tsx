@@ -28,7 +28,7 @@ import {
   AREA_STATUS_FILTERS, areaHolders, areaStatusMeta, isPoolArea, type AreaProgressRow,
 } from "@/lib/areaProgress";
 
-const CHIP = "text-[10px] font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
+const CHIP = "text-2xs font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
 
 export default function Areas() {
   const [query, setQuery] = useState("");
@@ -262,7 +262,7 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
           aria-label={`Delete ${row.name}`}
           data-testid={`area-card-${row.id}-delete`}
           className={cn(
-            "absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center rounded-xl",
+            "absolute right-2 top-2 z-10 grid h-11 w-11 md:h-9 md:w-9 place-items-center rounded-xl",
             "text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
             FOCUS,
           )}
@@ -342,7 +342,7 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
 function CardStat({ label, value, emphasis }: { label: string; value: number; emphasis?: boolean }) {
   return (
     <div className={cn("rounded-xl py-1.5", emphasis ? "bg-primary/10" : "bg-secondary/50")}>
-      <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dt className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
       <dd className="text-base font-bold leading-tight tabular-nums text-foreground">{value.toLocaleString()}</dd>
     </div>
   );

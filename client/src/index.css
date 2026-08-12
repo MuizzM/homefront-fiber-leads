@@ -418,6 +418,62 @@
   contain-intrinsic-size: auto 64px;
 }
 
+/* A secondary row control that fades in when the row is hovered - the pattern
+   every dense table reaches for to keep destructive actions quiet.
+
+   Written as `opacity-0 group-hover:opacity-100` it is not a quiet control, it
+   is an ABSENT one for anyone without a pointer. The desktop lead table starts
+   at the lg breakpoint, which an iPad in landscape clears, so Edit and Delete
+   were unreachable on exactly the device a manager qualifies pipeline on.
+
+   The reveal is therefore scoped to devices that actually have a pointer.
+   Everywhere else the control is simply always visible, which is the correct
+   answer for touch and costs nothing. Keyboard focus reveals it in both cases,
+   since a focused-but-invisible control is the same bug wearing a hat. */
+/* Extends a control's HIT area to the 44px floor without changing its drawn
+   size. Some controls genuinely should stay small - a 36px header avatar reads
+   as an avatar, and a 44px one reads as a button - but "looks small" and "is
+   hard to hit" are separable problems, and only the second one matters to a rep
+   tapping between doors. The pseudo-element is transparent and inert to
+   pointer-events inheritance, so it enlarges the target without disturbing
+   layout or covering a neighbour's label.
+
+   Requires the host to establish a stacking/positioning context, which
+   `position: relative` here does. Pair it with a real size increase, never as a
+   substitute, whenever the control HAS visual mass to grow into. */
+.tap-expand {
+  position: relative;
+}
+.tap-expand::after {
+  content: "";
+  position: absolute;
+  /* Centred on the control and floored at 44px in both axes, so ONE utility is
+     correct for a 36px avatar and a 24px switch track alike. A fixed negative
+     inset is not: -4px rescues the avatar and leaves the switch at 32px, which
+     is how a "fixed" hit area ships still broken. */
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  width: 100%;
+  height: 100%;
+  min-width: var(--tap-target-min);
+  min-height: var(--tap-target-min);
+}
+
+.reveal-on-hover {
+  transition: opacity 120ms ease-out;
+}
+@media (hover: hover) and (pointer: fine) {
+  .reveal-on-hover {
+    opacity: 0;
+  }
+  .group:hover .reveal-on-hover,
+  .reveal-on-hover:focus-visible,
+  .reveal-on-hover:focus-within {
+    opacity: 1;
+  }
+}
+
 @media (max-width: 767px) {
   .app-canvas {
     scrollbar-gutter: auto;

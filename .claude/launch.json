@@ -92,6 +92,16 @@
       "autoPort": false
     },
     {
+      "name": "homefront-uiaudit",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5076 SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5076,
+      "autoPort": false
+    },
+    {
       "name": "homefront-orders",
       "runtimeExecutable": "sh",
       "runtimeArgs": [

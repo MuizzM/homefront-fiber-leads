@@ -135,7 +135,7 @@ export function CallingUnknownState({ retry }: { retry: () => void }) {
       
       <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">Calling status is unknown</h2>
       <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">The compliance service could not be verified. Calling remains locked; no number is available.</p>
-      <button type="button" onClick={retry} className="mt-4 min-h-10 rounded-xl border border-border bg-card px-4 text-[13px] font-semibold transition-colors hover:bg-secondary/60">Retry status check</button>
+      <button type="button" onClick={retry} className="mt-4 min-h-11 md:min-h-10 rounded-xl border border-border bg-card px-4 text-[13px] font-semibold transition-colors hover:bg-secondary/60">Retry status check</button>
     </div>
   );
 }

@@ -183,7 +183,7 @@ export function RepPicker({
                         >
                           <span
                             aria-hidden="true"
-                            className={`h-1.5 w-1.5 rounded-full shrink-0 ${held > 0 ? "bg-emerald-400" : "bg-rose-400"}`}
+                            className={`h-1.5 w-1.5 rounded-full shrink-0 ${held > 0 ? "bg-success" : "bg-muted-foreground"}`}
                           />
                           {held > 0 ? (
                             <>Assigned to <span className="tabular-nums">{held}</span> {held === 1 ? "area" : "areas"}</>

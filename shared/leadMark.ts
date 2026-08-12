@@ -47,7 +47,7 @@ export const LEAD_MARK_META: Record<LeadMark, LeadMarkMeta> = {
     label: "Hold",
     short: "Hold",
     description: "Don't assign yet - needs review or is on pause.",
-    chip: "bg-slate-500/15 text-slate-400",
+    chip: "bg-muted text-muted-foreground",
     ring: "#64748b",
   },
 };

@@ -229,7 +229,7 @@ function OfferCard({ offers, expired, day, market }: {
                 <div className="text-base font-bold tabular-nums leading-none text-foreground">
                   {centsToUsd(effectivePriceCents(offer))}
                 </div>
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">per month</div>
+                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">per month</div>
               </div>
             </div>
             <ul className="mt-2 space-y-1">

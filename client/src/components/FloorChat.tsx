@@ -448,7 +448,7 @@ export function FloorChat({
                   newGroup ? (
                     <span
                       aria-hidden="true"
-                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-bold"
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-2xs font-bold"
                       style={{ backgroundColor: `${hue}26`, color: hue }}
                     >
                       {chatInitials(m.authorName)}

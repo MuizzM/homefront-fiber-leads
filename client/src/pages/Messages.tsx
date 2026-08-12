@@ -162,7 +162,7 @@ export default function Messages() {
               onClick={() => setTab(t.id)}
               data-testid={`tab-${t.id}`}
               className={cn(
-                "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-xs font-semibold transition-colors",
+                "inline-flex h-11 md:h-9 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-xs font-semibold transition-colors",
                 on ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
                 FOCUS,
               )}
@@ -173,7 +173,7 @@ export default function Messages() {
                 <span
                   data-testid={`tab-${t.id}-unread`}
                   aria-label={`${t.badge} unread`}
-                  className="min-w-[18px] rounded-full bg-primary px-1 text-center text-[10px] font-bold leading-[18px] text-primary-foreground tabular-nums"
+                  className="min-w-[18px] rounded-full bg-primary px-1 text-center text-2xs font-bold leading-[18px] text-primary-foreground tabular-nums"
                 >
                   {t.badge > 9 ? "9+" : t.badge}
                 </span>
@@ -336,8 +336,11 @@ interface BoardEntry {
   sales: number;
 }
 
-/** Gold, silver, bronze — same trio the full leaderboard wears. */
-const PODIUM_TONE = ["text-warning", "text-slate-300", "text-warning"];
+/** Gold, silver, bronze - same trio the full leaderboard wears.
+ *  First and third used to be the identical `text-warning`, and second was a
+ *  raw `text-slate-300` at ~1.9:1 on the light card, so the podium was two
+ *  indistinguishable places and one unreadable one. */
+const PODIUM_TONE = ["text-gold-text", "text-muted-foreground", "text-warning"];
 
 function BoardPanel() {
   const { user } = useAuth();
@@ -411,7 +414,7 @@ function BoardPanel() {
                 </span>
                 <span className="max-w-full truncate text-xs font-semibold text-foreground">{entry.rep.name}</span>
                 <span className="text-lg font-bold leading-none tabular-nums text-success">{entry.sales}</span>
-                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">sales</span>
+                <span className="text-2xs uppercase tracking-wide text-muted-foreground">sales</span>
               </div>
             ))}
           </div>

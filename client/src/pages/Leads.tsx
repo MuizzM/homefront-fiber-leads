@@ -71,12 +71,19 @@ const STATUS_LABEL: Record<string, string> = {
 // pairing (-600 on a /10 tint in light, -400 on /15 in dark) so chips clear AA
 // in BOTH themes; the generic "good" green rides the semantic success token.
 const STATUS_COLOR: Record<string, string> = {
-  prospect:      "bg-red-500/10 text-red-600 dark:bg-red-500/15 dark:text-red-400",
+  // 4.23:1 measured at -600 on its own /10 tint; -700 lands at 5.66:1. The
+  // hue stays because this ramp is categorical - "prospect" is not a failure.
+  prospect:      "bg-red-500/10 text-red-700 dark:bg-red-500/15 dark:text-red-400",
   contacted:     "bg-slate-500/10 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300",
   interested:    "bg-violet-500/10 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
   sold:          "bg-success/10 text-success",
   not_interested:"bg-slate-600/15 text-slate-700 dark:bg-slate-700/40 dark:text-slate-300",
-  follow_up:     "bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400",
+  // Measured on the running app at 3.56:1, not the AA the comment above claims:
+  // `-600 on a /10 tint` was checked against WHITE, but the chip puts the ink on
+  // a 10% wash of ITSELF, which is darker. Follow-up means work owed, which is
+  // exactly what --warning is for, and that token is tuned to clear AA on white,
+  // on /10 and on /15 (docs/DESIGN_SYSTEM.md).
+  follow_up:     "bg-warning/10 text-warning",
 };
 
 
@@ -518,7 +525,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <Badge className={`text-2xs px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
               {leadStateLabel(current)}
             </Badge>
-            {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400 text-2xs">High priority</Badge>}
+            {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-warning/10 text-warning text-2xs">High priority</Badge>}
           </div>
           <SheetTitle className="text-lg font-semibold tracking-tight mt-2">{current.address}</SheetTitle>
           <p className="text-xs text-muted-foreground">{current.city}, {current.state} {current.zip}</p>
@@ -782,7 +789,7 @@ const LeadTableRow = memo(function LeadTableRow({
   const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
   return (
     <tr data-testid={`card-lead-${lead.id}`} className={`group hover:bg-muted/35 transition-colors${saving ? " opacity-70" : ""}`}>
-      <td className="px-4 py-3"><button onClick={() => !saving && onOpen(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+      <td className="px-4 py-3"><button onClick={() => !saving && onOpen(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
       <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
@@ -796,11 +803,16 @@ const LeadTableRow = memo(function LeadTableRow({
           </div>
         ) : (
         <div className="flex items-center justify-end gap-0.5">
-          {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
-          {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
-          <button onClick={() => onOpen(lead)} title="Open details" aria-label={`Open details for ${lead.address}`} className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" /></button>
-          {canEdit && <button onClick={() => onEdit(lead)} aria-label={`Edit ${lead.address}`} className="h-8 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100">Edit</button>}
-          {canDelete && <button onClick={() => onDelete(lead.id)} aria-label={`Delete ${lead.address}`} className="h-8 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100">Delete</button>}
+          {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
+          {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
+          <button onClick={() => onOpen(lead)} title="Open details" aria-label={`Open details for ${lead.address}`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" /></button>
+          {/* `reveal-on-hover` rather than `opacity-0 group-hover:opacity-100`:
+              this table starts at lg, which an iPad in landscape clears, and a
+              hover-only control does not exist on a touch screen. See
+              index.css - the fade is scoped to real pointers, and everywhere
+              else these are simply always visible. */}
+          {canEdit && <button onClick={() => onEdit(lead)} aria-label={`Edit ${lead.address}`} className="reveal-on-hover h-9 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground">Edit</button>}
+          {canDelete && <button onClick={() => onDelete(lead.id)} aria-label={`Delete ${lead.address}`} className="reveal-on-hover h-9 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-destructive/10 hover:text-destructive">Delete</button>}
         </div>
         )}
       </td>
@@ -1238,10 +1250,10 @@ export default function Leads() {
           <div className="flex flex-col lg:flex-row gap-2.5">
             <div className="relative flex-1 min-w-[240px]">
               
-              <Input value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-9" data-testid="input-search-leads" />
+              <Input value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-11 lg:h-9" data-testid="input-search-leads" />
               {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
             </div>
-            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2">Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
+            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-11 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2">Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
             <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 lg:flex gap-2`}>
               {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
               <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
@@ -1254,9 +1266,9 @@ export default function Leads() {
             {["all", ...LEAD_STATUSES].map(status => {
               const active = filterStatus === status;
               const count = status === "all" ? (leadStats?.total ?? 0) : (bs[status] ?? 0);
-              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-9 px-3 text-[12px] lg:h-7 lg:px-2.5 lg:text-2xs rounded-md font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
+              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-11 px-3 text-[12px] lg:h-7 lg:px-2.5 lg:text-2xs rounded-md font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
             })}
-            {activeFilters && <button onClick={clearAllFilters} className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-2xs ml-auto font-semibold text-muted-foreground hover:text-foreground whitespace-nowrap">Clear filters</button>}
+            {activeFilters && <button onClick={clearAllFilters} className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-2xs ml-auto font-semibold text-muted-foreground hover:text-foreground whitespace-nowrap">Clear filters</button>}
           </div>
         </div>
 
@@ -1312,7 +1324,7 @@ export default function Leads() {
           </div>
         )}
 
-        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}-{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
+        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}-{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
       </section>
 
       {/* Dialogs */}

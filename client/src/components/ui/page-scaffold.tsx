@@ -57,11 +57,17 @@ export function SectionLabel({ children, className }: { children: ReactNode; cla
 }
 
 /** Delta/status chip beside a stat — tinted pill, never a bare colored number.
- *  A number that is itself green reads as a different UNIT, not a trend. */
+ *  A number that is itself green reads as a different UNIT, not a trend.
+ *
+ *  The tones are semantic tokens, not raw palette steps. They were written as
+ *  `text-emerald-400` / `text-red-400` against the app's old dark ground; on the
+ *  light default those land near 2:1 and the chip is unreadable. `--success` and
+ *  `--destructive` are tuned to clear AA on white AND on a /10 and /15 wash of
+ *  themselves, which is exactly what a tinted chip is (docs/DESIGN_SYSTEM.md). */
 export function StatDelta({ tone, children }: { tone: "up" | "down" | "neutral"; children: ReactNode }) {
   const tones = {
-    up: "bg-emerald-500/15 text-emerald-400",
-    down: "bg-red-500/15 text-red-400",
+    up: "bg-success/15 text-success",
+    down: "bg-destructive/15 text-destructive",
     neutral: "bg-secondary text-muted-foreground",
   } as const;
   return (

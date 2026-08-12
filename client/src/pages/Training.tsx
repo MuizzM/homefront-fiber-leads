@@ -148,7 +148,7 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
                   >
                     <span
                       className={cn(
-                        "grid h-5 w-5 shrink-0 place-items-center rounded-full border text-[10px] font-bold",
+                        "grid h-5 w-5 shrink-0 place-items-center rounded-full border text-2xs font-bold",
                         answered && isCorrect ? "border-success bg-success text-white"
                           : answered && isPicked ? "border-destructive bg-destructive text-white"
                           : "border-border text-muted-foreground",
@@ -527,13 +527,13 @@ export default function Training() {
                 data-testid="training-streak"
               >
                 <span className="text-sm font-bold tabular-nums leading-none text-foreground">{streak}</span>
-                <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">day streak</span>
+                <span className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">day streak</span>
               </div>
               <div className="hidden flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex" data-testid="training-lessons-done">
                 <span className="text-sm font-bold tabular-nums leading-none text-foreground">
                   {isLoading || isError ? " - " : doneCount}
                 </span>
-                <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">lessons</span>
+                <span className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">lessons</span>
               </div>
             </div>
           </div>

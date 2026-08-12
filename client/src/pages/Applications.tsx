@@ -589,7 +589,7 @@ export default function Applications() {
         {[
           { label: "Pipeline", value: summary.total, icon: Users, tone: "text-info" },
           { label: "Needs action", value: summary.needsAction, icon: ClipboardCheck, tone: "text-warning" },
-          { label: "In progress", value: summary.inProgress, icon: Clock3, tone: "text-violet-400" },
+          { label: "In progress", value: summary.inProgress, icon: Clock3, tone: "text-info" },
           { label: "Active", value: summary.active, icon: UserCheck, tone: "text-success" },
         ].map(metric => <div key={metric.label} className="rounded-2xl border border-border bg-card p-3.5"><div className="flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">{metric.label}</span></div><div className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{metric.value}</div></div>)}
       </section>
@@ -738,7 +738,7 @@ export default function Applications() {
             <CompTermsEditor value={inviteTerms} onChange={setInviteTerms} disabled={inviteMutation.isPending} />
           </div>
 
-          <button type="submit" disabled={!pipeline.data?.configured || !inviteName.trim() || !inviteEmail.trim() || !inviteTermsCheck.ok || inviteMutation.isPending} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50 sm:w-auto" data-testid="send-candidate-invite">{inviteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Send private invite</button>
+          <button type="submit" disabled={!pipeline.data?.configured || !inviteName.trim() || !inviteEmail.trim() || !inviteTermsCheck.ok || inviteMutation.isPending} className="inline-flex h-11 md:h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50 sm:w-auto" data-testid="send-candidate-invite">{inviteMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Send private invite</button>
         </form>
         {pipeline.data && !pipeline.data.configured && <p className="mt-2 text-xs text-warning">Resend must be connected before invitations can be sent.</p>}
       </section>
@@ -960,7 +960,7 @@ export default function Applications() {
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center justify-between gap-2">
                                 <p className="truncate text-xs font-semibold text-foreground">{cp.label}</p>
-                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${hrTone(cp)}`}>{hrStatusLabel(cp.status)}</span>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-2xs font-semibold ${hrTone(cp)}`}>{hrStatusLabel(cp.status)}</span>
                               </div>
                               <p className="mt-0.5 text-[11px] text-muted-foreground">{cp.description}</p>
                               <div className="mt-2 flex flex-wrap items-center gap-2">

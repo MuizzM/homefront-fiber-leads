@@ -37,7 +37,7 @@ const PLAN_COLORS: Record<string, string> = {
   trial: "bg-warning/10 text-warning",
   starter: "bg-info/10 text-info",
   pro: "bg-primary/15 text-primary",
-  enterprise: "bg-purple-500/15 text-purple-400",
+  enterprise: "bg-purple-500/15 text-purple-700 dark:text-purple-400",
 };
 
 const PLAN_PRICES: Record<string, number> = {

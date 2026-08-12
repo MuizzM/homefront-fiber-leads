@@ -309,7 +309,7 @@ export function SectionTabs<T extends string>({ tabs, value, onChange, testIdPre
           >
             {tab.label}
             {tab.badge != null && tab.badge > 0 && (
-              <span className="rounded-full bg-primary px-1.5 text-[10px] font-bold tabular-nums text-primary-foreground">
+              <span className="rounded-full bg-primary px-1.5 text-2xs font-bold tabular-nums text-primary-foreground">
                 {tab.badge}
               </span>
             )}

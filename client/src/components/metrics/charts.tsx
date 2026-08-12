@@ -86,7 +86,7 @@ export function BarChart({ data, height = 140, emptyLabel = "No activity in this
       </div>
       <div className="mt-1.5 flex gap-1">
         {data.map((d, i) => (
-          <div key={`l-${d.label}-${i}`} className="min-w-0 flex-1 truncate text-center text-[10px] text-muted-foreground">
+          <div key={`l-${d.label}-${i}`} className="min-w-0 flex-1 truncate text-center text-2xs text-muted-foreground">
             {d.label}
           </div>
         ))}
@@ -140,7 +140,7 @@ export function LineChart({ points, height = 120, emptyLabel = "Not enough histo
                 vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
         ))}
       </svg>
-      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+      <div className="mt-1 flex justify-between text-2xs text-muted-foreground">
         <span>{points[0]?.label}</span>
         <span className="tabular-nums">{format ? format(last.value) : last.value}</span>
         <span>{points[points.length - 1]?.label}</span>

@@ -103,9 +103,10 @@ export default {
       // designTokens.ts; tests/unit/design-tokens.test.ts fails on any drift.
       //
       // Legibility floor: 11px is the smallest sanctioned text size (reps read
-      // this on phones in sunlight). Do NOT add a token below it — the 16
-      // `text-[10px]`, 11 `text-[10.5px]` and 3 sub-10px call sites in the app
-      // are floor violations to be raised, not sizes to be blessed.
+      // this on phones in sunlight). Do NOT add a token below it. The app's 93
+      // sub-floor call sites have been raised and
+      // tests/unit/type-and-tap-floors.test.ts now fails the build on any new
+      // one, so this is an enforced rule rather than an aspiration.
       fontSize: {
         "2xs": "0.6875rem",     // 11px — meta, captions, pill text
         // 13px sits between Tailwind's text-xs (12px) and text-sm (14px), a real

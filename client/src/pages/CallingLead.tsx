@@ -592,7 +592,7 @@ export default function CallingLead() {
                 indicator on notched phones (same env() pattern as the map). */}
             {activeAttempt && !completed && (
               <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="calling-quick-dispositions">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Quick outcome</div>
+                <div className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">Quick outcome</div>
                 <div className="mt-2 grid grid-cols-4 gap-2">
                   {([
                     { code: "NO_ANSWER", label: "No answer" },

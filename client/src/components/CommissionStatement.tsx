@@ -123,7 +123,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
       <td className="py-2" style={{ color: l.counted ? INK : MUTED }}>
         {l.address}
         {l.city ? <span style={{ color: FAINT }}>, {l.city}</span> : null}
-        {!l.counted && <span className="ml-2 text-[10.5px] uppercase tracking-wide" style={{ color: FAINT }}>{l.status}</span>}
+        {!l.counted && <span className="ml-2 text-2xs uppercase tracking-wide" style={{ color: FAINT }}>{l.status}</span>}
       </td>
       {doc.showHouseColumn && (
         <td className="py-2 text-right tabular-nums" style={{ color: l.counted ? INK : FAINT }}>
@@ -217,13 +217,13 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
         {/* Paid to + net pay */}
         <div className="grid grid-cols-2 gap-6 py-7">
           <div>
-            <div className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Paid to</div>
+            <div className="text-2xs font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Paid to</div>
             <div className="mt-2 text-[15px] font-semibold" data-testid="statement-rep">{doc.rep.name}</div>
             <div className="text-[12.5px]" style={{ color: MUTED }}>Field sales representative</div>
             <div className="text-[12.5px]" style={{ color: MUTED }}>{doc.planLabel}</div>
           </div>
           <div className="text-right">
-            <div className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Net pay this period</div>
+            <div className="text-2xs font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Net pay this period</div>
             <div className="mt-1 text-[30px] font-bold tabular-nums leading-none" data-testid="statement-net-pay">
               {money(doc.payout.netPayCents)}
             </div>
@@ -235,7 +235,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
 
         {/* Line items — the doors behind the number */}
         <div className="mt-1">
-          <div className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: FAINT }}>
+          <div className="text-2xs font-semibold uppercase tracking-wide" style={{ color: FAINT }}>
             Sales this period ({doc.totals.countedSaleCount})
           </div>
           {counted.length === 0 ? (
@@ -245,7 +245,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
           ) : (
             <table className="mt-2 w-full border-collapse text-[12.5px]">
               <thead>
-                <tr className="text-left text-[10.5px] uppercase tracking-wide" style={{ borderBottom: `1px solid ${RULE}`, color: FAINT }}>
+                <tr className="text-left text-2xs uppercase tracking-wide" style={{ borderBottom: `1px solid ${RULE}`, color: FAINT }}>
                   <th className="py-2 font-semibold">Date</th>
                   <th className="py-2 font-semibold">Address</th>
                   {doc.showHouseColumn && <th className="py-2 text-right font-semibold">House amount</th>}
@@ -277,7 +277,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
         {/* Doors that didn't pay — listed, never silently dropped */}
         {uncounted.length > 0 && (
           <div className="mt-6">
-            <div className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: FAINT }}>
+            <div className="text-2xs font-semibold uppercase tracking-wide" style={{ color: FAINT }}>
               Not counted toward this period ({uncounted.length})
             </div>
             <table className="mt-2 w-full border-collapse text-[12.5px]">
@@ -289,7 +289,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
         {/* Holdback balance + money summary */}
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
           <div className="rounded-lg p-5" style={{ background: "#F5F8FA", border: `1px solid ${RULE}` }}>
-            <div className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Current holdback balance</div>
+            <div className="text-2xs font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Current holdback balance</div>
             <div className="mt-1 text-[24px] font-bold tabular-nums" data-testid="statement-holdback-balance">
               {money(doc.payout.reserveBalanceCents)}
             </div>
@@ -305,7 +305,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
                 <div className="h-1.5 w-full rounded-full" style={{ background: "#E3EBF0" }}>
                   <div className="h-1.5 rounded-full" style={{ width: `${capPct}%`, background: "#3EA394" }} />
                 </div>
-                <div className="mt-1 text-[10.5px] tabular-nums" style={{ color: FAINT }}>{capPct}% of cap</div>
+                <div className="mt-1 text-2xs tabular-nums" style={{ color: FAINT }}>{capPct}% of cap</div>
               </div>
             )}
           </div>
@@ -330,7 +330,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
         {/* Adjustment detail — a deduction is never an unexplained number */}
         {doc.adjustments.length > 0 && (
           <div className="mt-6">
-            <div className="text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Adjustments applied</div>
+            <div className="text-2xs font-semibold uppercase tracking-wide" style={{ color: FAINT }}>Adjustments applied</div>
             <table className="mt-2 w-full border-collapse text-[12.5px]">
               <tbody>
                 {doc.adjustments.map(a => (

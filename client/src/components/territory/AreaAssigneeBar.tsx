@@ -152,7 +152,7 @@ export function AreaAssigneeBar({
               onBlur={() => setConfirmRemoveId((c) => (c === rep.id ? null : c))}
               className={`group relative flex h-11 items-center gap-2 rounded-full border py-1 pl-1 pr-3 text-[12px] font-medium transition-colors disabled:opacity-60 ${
                 arming
-                  ? "border-red-500/60 bg-red-500/10 text-red-400"
+                  ? "border-destructive/60 bg-destructive/10 text-destructive"
                   : "border-border bg-secondary/60 text-foreground hover:bg-secondary"
               } ${FOCUS}`}
             >
@@ -168,7 +168,7 @@ export function AreaAssigneeBar({
                   the old bg-foreground/10 wash was near-invisible on the light
                   card and read as a malformed empty pill. */}
               {i === 0 && !arming && holders.length > 1 && (
-                <span className="rounded-full border border-primary/30 bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
+                <span className="rounded-full border border-primary/30 bg-primary/15 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide text-primary">
                   1st
                 </span>
               )}

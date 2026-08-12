@@ -74,7 +74,7 @@ export default function ScoreReport({
             <div className="text-2xl font-bold tabular-nums leading-none text-foreground" data-testid="score-overall">
               {score.overall}
             </div>
-            <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               your average
             </div>
           </div>
@@ -89,7 +89,7 @@ export default function ScoreReport({
             <li key={i} className="flex items-start gap-2.5 text-[13px] leading-relaxed text-foreground">
               <span
                 aria-hidden="true"
-                className="mt-px grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold tabular-nums text-primary-foreground"
+                className="mt-px grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-2xs font-bold tabular-nums text-primary-foreground"
               >
                 {i + 1}
               </span>
@@ -194,7 +194,7 @@ export default function ScoreReport({
           <div className="mt-2 space-y-2.5 rounded-2xl border border-border bg-card p-4" data-testid="score-transcript">
             {session.turns.map((turn, i) => (
               <div key={i} className={cn("max-w-[85%]", turn.role === "rep" && "ml-auto")}>
-                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <div className="mb-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
                   {turn.role === "rep" ? "You" : persona?.name ?? "Customer"}
                 </div>
                 <div

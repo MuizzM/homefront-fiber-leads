@@ -13,6 +13,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { FOCUS } from "@/lib/a11y";
 import { VerificationBadge, DistanceDiagram, formatDistance, type VStatus } from "@/components/verification";
+import { ErrorState } from "@/components/ErrorState";
 
 interface Activity {
   knockId: number; leadId: number; leadName: string; address: string;
@@ -47,7 +48,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
   const [overrideReason, setOverrideReason] = useState("");
 
   const key = `/api/territories/${territoryId}/activity`;
-  const { data, isLoading, isError } = useQuery<ActivityResponse>({
+  const { data, isLoading, isError, refetch } = useQuery<ActivityResponse>({
     queryKey: [key],
     queryFn: async () => (await apiRequest("GET", key)).json(),
   });
@@ -163,7 +164,18 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
         {/* List */}
         <div className="flex-1 overflow-y-auto">
           {isLoading && <div className="p-6 text-center text-sm text-muted-foreground">Loading activity…</div>}
-          {isError && <div className="p-6 text-center text-sm text-red-400">Couldn’t load activity. Try again.</div>}
+          {/* Was a bare line of `text-red-400` text with the words "Try again"
+              and nothing to press. The shared primitive carries the alert role
+              and a real retry control. */}
+          {isError && (
+            <ErrorState
+              testId="territory-activity-error"
+              title="Couldn't load activity"
+              onRetry={() => refetch()}
+              bordered={false}
+              className="p-6"
+            />
+          )}
           {!isLoading && !isError && rows.length === 0 && (
             <div className="p-8 text-center text-sm text-muted-foreground">No activity{status !== "all" ? ` matching “${status.replace("_", " ")}”` : " recorded yet"}.</div>
           )}

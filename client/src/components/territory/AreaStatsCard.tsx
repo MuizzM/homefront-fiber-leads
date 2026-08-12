@@ -73,7 +73,7 @@ function Info({ label, formula }: { label: string; formula: string }) {
         data-testid={`stat-info-${label.toLowerCase().replace(/\s+/g, "-")}`}
         // 24px visual dot, 44px effective target via the ::after halo — a
         // full-size h-11 button would dwarf the 9px figures it annotates.
-        className={`relative ml-1 flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground after:absolute after:-inset-2.5 after:content-[''] ${FOCUS}`}
+        className={`relative ml-1 flex h-6 w-6 items-center justify-center rounded-full text-2xs font-bold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground after:absolute after:-inset-2.5 after:content-[''] ${FOCUS}`}
       >
         i
       </button>
@@ -81,7 +81,7 @@ function Info({ label, formula }: { label: string; formula: string }) {
         <span
           id={id}
           role="tooltip"
-          className="absolute bottom-full left-1/2 z-20 mb-1 w-44 -translate-x-1/2 rounded-lg border border-border bg-popover px-2 py-1.5 text-[10px] leading-snug text-popover-foreground shadow-lg"
+          className="absolute bottom-full left-1/2 z-20 mb-1 w-44 -translate-x-1/2 rounded-lg border border-border bg-popover px-2 py-1.5 text-2xs leading-snug text-popover-foreground shadow-lg"
         >
           {formula}
         </span>
@@ -126,7 +126,7 @@ export function AreaStatsCard({
               of {base.toLocaleString()} worked
             </span>
           </div>
-          <div className="mt-1 flex items-center text-[10px] uppercase tracking-wide text-muted-foreground">
+          <div className="mt-1 flex items-center text-2xs uppercase tracking-wide text-muted-foreground">
             Completion
             <Info label="completion" formula={`Doors knocked ÷ ${DENOM}.`} />
           </div>
@@ -170,16 +170,16 @@ export function AreaStatsCard({
           three small numbers is more border than content at this width. */}
       <div className="mt-3 grid grid-cols-3 divide-x divide-border border-t border-border pt-2.5 text-center">
         <div>
-          <div data-testid="stat-sold" className="text-sm font-bold text-emerald-400">
+          <div data-testid="stat-sold" className="text-sm font-bold text-success">
             {num(sold).toLocaleString()}
           </div>
-          <div className="text-[9.5px] uppercase tracking-wide text-muted-foreground">Sold</div>
+          <div className="text-2xs uppercase tracking-wide text-muted-foreground">Sold</div>
         </div>
         <div>
           <div data-testid="stat-penetration" className="text-sm font-bold text-foreground">
             {pct(penetrationRate)}
           </div>
-          <div className="flex items-center justify-center text-[9.5px] uppercase tracking-wide text-muted-foreground">
+          <div className="flex items-center justify-center text-2xs uppercase tracking-wide text-muted-foreground">
             Penetration
             <Info label="penetration" formula={`Sales ÷ ${DENOM}.`} />
           </div>
@@ -188,12 +188,12 @@ export function AreaStatsCard({
           <div data-testid="stat-untouched" className="text-sm font-bold text-foreground">
             {num(untouched).toLocaleString()}
           </div>
-          <div className="text-[9.5px] uppercase tracking-wide text-muted-foreground">Untouched</div>
+          <div className="text-2xs uppercase tracking-wide text-muted-foreground">Untouched</div>
         </div>
       </div>
 
       {contactRate != null && (
-        <div className="mt-2 flex items-center justify-center text-[10px] text-muted-foreground">
+        <div className="mt-2 flex items-center justify-center text-2xs text-muted-foreground">
           <span data-testid="stat-contact">{pct(contactRate)} contact rate</span>
           <Info label="contact rate" formula={`Doors that reached a person ÷ ${DENOM}.`} />
         </div>

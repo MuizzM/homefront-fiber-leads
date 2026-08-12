@@ -627,7 +627,7 @@ export default function Mileage() {
         {PERIODS.map(p => (
           <button key={p.key} type="button" role="tab" aria-selected={period === p.key}
             onClick={() => setPeriod(p.key)} data-testid={`mileage-period-${p.key}`}
-            className={`h-9 min-w-0 flex-1 truncate rounded-lg px-1.5 text-xs font-semibold transition-colors ${
+            className={`h-11 md:h-9 min-w-0 flex-1 truncate rounded-lg px-1.5 text-xs font-semibold transition-colors ${
               period === p.key ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
             {p.label}
           </button>

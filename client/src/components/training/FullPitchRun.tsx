@@ -301,15 +301,15 @@ export default function FullPitchRun({ onBack }: { onBack: () => void }) {
           </div>
           <dl className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-xl border border-border bg-card py-3">
-              <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Beats</dt>
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Beats</dt>
               <dd className="text-lg font-bold tabular-nums text-foreground">{BEATS.length}</dd>
             </div>
             <div className="rounded-xl border border-border bg-card py-3">
-              <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Objections</dt>
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Objections</dt>
               <dd className="text-lg font-bold tabular-nums text-foreground">{OBJECTION_ROUNDS}</dd>
             </div>
             <div className="rounded-xl border border-border bg-card py-3" data-testid="pitch-run-score">
-              <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Had it</dt>
+              <dt className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Had it</dt>
               <dd className="text-lg font-bold tabular-nums text-foreground">{hadIt.filter(Boolean).length} of {OBJECTION_ROUNDS}</dd>
             </div>
           </dl>

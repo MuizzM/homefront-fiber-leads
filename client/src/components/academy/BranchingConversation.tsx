@@ -126,7 +126,7 @@ export default function BranchingConversation({
                 FOCUS,
               )}
             >
-              <span aria-hidden="true" className="mt-px grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border text-[10px] font-bold text-muted-foreground">
+              <span aria-hidden="true" className="mt-px grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border text-2xs font-bold text-muted-foreground">
                 {String.fromCharCode(65 + oi)}
               </span>
               <span className="min-w-0 flex-1">{option.text}</span>

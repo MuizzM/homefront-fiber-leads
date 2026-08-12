@@ -401,7 +401,7 @@ export default function CallingQueue() {
               <div className="relative">
                 
                 <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search address or resident" aria-label="Search calling queue"
-                  className="h-10 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-ring/30" />
+                  className="h-11 md:h-9 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-ring/30" />
               </div>
               <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter calling queue">
                 {STAGE_FILTERS.map(filter => {
@@ -415,7 +415,7 @@ export default function CallingQueue() {
                           : "border-border bg-card text-muted-foreground hover:bg-secondary/40 hover:text-foreground")}>
                       {filter.label}
                       {typeof count === "number" && (
-                        <span className={cn("inline-flex min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums",
+                        <span className={cn("inline-flex min-w-5 items-center justify-center rounded-full px-1 text-2xs font-semibold tabular-nums",
                           stage === filter.value ? "bg-primary/15 text-primary" : "bg-secondary text-muted-foreground")}>
                           {count}
                         </span>

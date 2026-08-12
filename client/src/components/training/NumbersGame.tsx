@@ -58,8 +58,8 @@ function FunnelStat({ label, value, sub }: { icon: typeof DoorOpen; label: strin
     <div className="flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl border border-border bg-background px-2 py-2.5 text-center">
       
       <span className="text-base font-bold tabular-nums leading-none text-foreground">{value}</span>
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-      <span className="text-[10px] tabular-nums text-muted-foreground/70">{sub}</span>
+      <span className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-2xs tabular-nums text-muted-foreground/70">{sub}</span>
     </div>
   );
 }
@@ -139,7 +139,7 @@ export default function NumbersGame() {
           data-testid="numbers-game-slider"
           aria-valuetext={`${doorsPerDay} doors per day`}
         />
-        <div className="mt-1 flex justify-between text-[10px] tabular-nums text-muted-foreground/70">
+        <div className="mt-1 flex justify-between text-2xs tabular-nums text-muted-foreground/70">
           <span>20 · a warm-up</span>
           <span>60 · a shift</span>
           <span>120 · a grinder</span>
@@ -162,7 +162,7 @@ export default function NumbersGame() {
           <span className="font-semibold tabular-nums">{formatUsdCents(skipCostCents)}</span>.
         </span>
       </p>
-      <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/60">
+      <p className="mt-2 text-2xs leading-relaxed text-muted-foreground/60">
         Field-average rates, house ladder - your live plan and week are on My commission. This is the shape, not a promise.
       </p>
     </div>

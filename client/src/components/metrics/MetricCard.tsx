@@ -83,7 +83,7 @@ export function MetricCard({
           onClick={() => setWhyOpen((v) => !v)}
           aria-expanded={whyOpen}
           aria-label={`How ${def?.label ?? metricKey} is calculated`}
-          className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border text-[10px] font-bold text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border text-2xs font-bold text-muted-foreground transition-colors hover:border-primary hover:text-primary"
           data-testid={`why-${metricKey}`}
         >
           ?

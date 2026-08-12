@@ -286,7 +286,7 @@ export default function RolePlayCoach({
       >
         {session.turns.map((turn, i) => (
           <div key={i} className={cn("max-w-[85%]", turn.role === "rep" && "ml-auto", !reduced && "hf-rise")}>
-            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <div className="mb-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               {turn.role === "rep" ? "You" : persona.name}
             </div>
             <div

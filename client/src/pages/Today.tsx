@@ -415,7 +415,7 @@ export default function Today() {
 function Stat({ label, value, tone, accent = "bg-muted-foreground/50", border, error }: { label: string; value: number | null; tone: string; accent?: string; border?: boolean; error?: boolean }) {
   return (
     <div className={`px-3 py-3.5 ${border ? "border-l border-border" : ""}`}>
-      <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
         <span className={`w-1.5 h-1.5 rounded-full ${accent}`} aria-hidden="true" />{label}
       </div>
       {/* A failed query must not render as a real "0" - show an honest em-dash. */}
@@ -473,7 +473,7 @@ function HeroCard({ p, loc, rank, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng
           prompt, not a script the rep is expected to recite. */}
       {opener && (
         <div className="mt-3 rounded-xl border border-border bg-secondary/40 px-3.5 py-2.5" data-testid="today-opener">
-          <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">Open with</div>
+          <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Open with</div>
           <p className="text-[13px] text-foreground mt-1 leading-snug">
             {opener.fact} <span className="text-muted-foreground">{opener.ask}</span>
           </p>

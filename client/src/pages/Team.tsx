@@ -38,8 +38,8 @@ export const ROLES = [
     label: "Team Lead",
     short: "Team Lead",
     description: "Everything a Rep can do + can onboard new reps, view team stats",
-    color: "bg-purple-500/15 text-purple-400",
-    avatarColor: "bg-purple-500/20 text-purple-400",
+    color: "bg-purple-500/15 text-purple-700 dark:text-purple-400",
+    avatarColor: "bg-purple-500/20 text-purple-700 dark:text-purple-400",
     Icon: Star,
   },
   {

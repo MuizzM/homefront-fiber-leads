@@ -113,7 +113,7 @@ win wherever it sits, so re-ordering the stylesheet can never silently undo it.
 white they land near 1.9:1 and fail AA badly. Prefer the semantic token; it is
 correct in both themes and needs no `dark:` twin.
 
-An unpaired `-300`/`-400` step is the obvious case. Two less obvious ones:
+An unpaired `-300`/`-400` step is the obvious case. Three less obvious ones:
 
 - **A `-600 dark:-400` pair is not automatically safe.** `emerald-600` measures
   3.28:1 and `amber-700` 4.47:1. That rule was written to stop a bare `-400`
@@ -123,14 +123,38 @@ An unpaired `-300`/`-400` step is the obvious case. Two less obvious ones:
 - **A `[.light_&]:` override on a semantic base is dead weight.** The token
   already handles light, so the override only shadows it with the raw step it
   was meant to replace.
+- **A chip's ink sits on a wash of ITSELF, not on the card.** This is the third
+  variant of the same mistake and the one that survived the first two passes,
+  because the arithmetic looks fine until you notice which background you
+  measured against. `Leads.tsx` carried a comment stating that its `-600 on a
+  /10 tint` chips "clear AA in BOTH themes". Measured on the running app, the
+  Follow-up chip was **3.56:1** and Prospect **4.23:1** - both under AA, on the
+  screen a manager spends the day in, repeated down 100 rows. The pair had been
+  checked against white; the chip actually paints the ink on a 10% wash of its
+  own hue, which is darker than white and eats the margin.
 
-This migration is **not finished**. 83 unpaired call sites remain, more than
-half of them in `MapView` (27) and the two orphaned scanner tabs (`USAScanner`
-15, `CityScanner` 12); the rest is a long tail of one or two per file. MapView
-is excluded deliberately: it carries its own dark map chrome, and the semantic
-tokens are tuned for the light default, so a chip on a dark panel needs hand
-review rather than a blanket replacement. Check any file for `bg-slate-900`,
-`bg-black` or map chrome before converting it.
+  Follow-up moved to `--warning` (5.27:1 on its own /10), because follow-up
+  means work owed and that is what the token is for. Prospect kept its hue and
+  darkened one step to `-700` (5.66:1): the lead-status ramp is **categorical**,
+  not semantic, and collapsing Prospect onto `--destructive` would assert that a
+  fresh lead is a failure.
+
+  The general rule: when a colour is both the ink and the tint, compute the
+  contrast against the composited tint. Every semantic token in the table above
+  already clears AA on white, on /10 and on /15; a raw step almost never does.
+
+This migration is **nearly finished on the light surfaces**. Outside the map
+chrome, 20 unpaired call sites remain, and all but a handful of those sit on
+panels that float over the dark map (`LeadsInViewPanel`, `lead-sheet/*`,
+`FieldStatusBar`'s overlay branch) and belong with MapView rather than with the
+light screens. The genuinely open ones are `ScanInspector`, `CallingLead`'s
+INTERESTED chip, and the two `MyCommission` rank tints whose `[.light_&]:`
+overrides currently carry them.
+
+MapView and the two orphaned scanner tabs are excluded deliberately: they carry
+their own dark chrome, and the semantic tokens are tuned for the light default,
+so a chip on a dark panel needs hand review rather than a blanket replacement.
+Check any file for `bg-slate-900`, `bg-black` or map chrome before converting it.
 
 Also check `.ts` files, not just `.tsx`. Every grep in the first pass of this
 migration used `--include='*.tsx'`, which hid `client/src/lib/areaProgress.ts`
@@ -171,9 +195,40 @@ Four gotchas when measuring this app specifically:
 | `--tap-target-min` | 44px | `min-h-tap` |
 | `--radius` | 12px | inherited by cards, buttons, inputs |
 
-11px is the legibility floor — reps read this on phones in sunlight. The
-`text-[10px]` call sites that remain are violations to be raised, not sizes to
-be blessed. 44px is the one-handed hit-area floor (WCAG 2.5.5, iOS HIG).
+11px is the legibility floor — reps read this on phones in sunlight. 44px is the
+one-handed hit-area floor (WCAG 2.5.5, iOS HIG).
+
+Both floors are now **enforced** by `tests/unit/type-and-tap-floors.test.ts`
+rather than asserted here. The 93 sub-11px call sites across 41 files that had
+accumulated are gone; the token is size-only, so swapping `text-[10px]` for
+`text-2xs` never reflows a line box. The test allows exactly one kind of
+exception, marked inline with a `type-floor-exempt:` comment carrying its
+reason: a **scale model of another interface**, like the miniature iOS share
+sheet in `AddToHomeScreen` or the mock lock-screen notification in
+`AnnouncementComposer`. That text is a picture of type; nobody reads it.
+
+A comment could not fail a build, which is why both floors kept being breached
+by people who agreed with them. The test found two `text-[7px]` sites and two
+hover-only controls that a hand-written grep had missed.
+
+### Touch reachability
+
+Two utilities in `index.css`, because the alternatives keep getting reinvented
+wrong:
+
+- **`.reveal-on-hover`** replaces `opacity-0 group-hover:opacity-100`. Written
+  the raw way, a secondary row control is not quiet on a touch screen, it is
+  **absent** — and the desktop lead table starts at `lg`, which an iPad in
+  landscape clears, so Edit and Delete did not exist on the device a manager
+  qualifies pipeline on. The fade is scoped to `(hover: hover) and (pointer:
+  fine)`; everywhere else the control is simply always visible. The floors test
+  fails any new raw spelling on an interactive element.
+- **`.tap-expand`** grows a control's hit area to the floor without changing its
+  drawn size, for the cases where small is correct: a 36px header avatar reads
+  as an avatar and a 44px one reads as a button. "Looks small" and "is hard to
+  hit" are separable, and only the second matters between doors. Pair it with a
+  real size increase, never as a substitute, when the control has visual mass to
+  grow into.
 
 ## One page title, app-wide
 

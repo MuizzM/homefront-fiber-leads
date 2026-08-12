@@ -11,6 +11,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { EmptyState } from "@/components/EmptyState";
+import { ErrorState } from "@/components/ErrorState";
 import { STATE_COLORS, pinDisplayState, todayISO } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronRight, CheckCircle2 } from "lucide-react";
@@ -104,13 +105,12 @@ export default function FollowUps() {
             ))}
           </div>
         ) : q.isError ? (
-          <div className="mt-6 rounded-2xl border border-border bg-card p-6 text-center" data-testid="followups-error">
-            <div className="text-[14px] font-semibold text-foreground">Couldn't load your follow-ups</div>
-            <div className="text-[13px] text-muted-foreground mt-1">Check your connection and try again.</div>
-            <button onClick={() => q.refetch()} className={`mt-4 inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>
-              Retry
-            </button>
-          </div>
+          <ErrorState
+            testId="followups-error"
+            title="Couldn't load your follow-ups"
+            onRetry={() => q.refetch()}
+            className="mt-6"
+          />
         ) : groups.total === 0 ? (
           <div className="mt-6">
             <EmptyState

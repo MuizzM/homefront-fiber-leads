@@ -149,10 +149,18 @@ const statusCopy = (status: string) =>
 
 // Heat is the algorithm's 0..100 read on how locked-in a rep is. Warm tint the
 // higher it climbs — never a bare colored number, and readable in BOTH themes.
+// Three bands that all returned the same class is a ramp that carries no
+// information: 15 and 95 rendered identically, so the number's colour told a
+// rep nothing the number itself did not. The collapse happened during the
+// palette migration, when three distinct amber steps were each replaced by the
+// single token nearest to them.
+//
+// Cold is quiet, warming is amber, and the top band is gold because that is
+// where the money is - the same split the rest of the app uses.
 function heatTone(heat: number): string {
-  if (heat >= 70) return "text-warning";
+  if (heat >= 70) return "text-gold-text";
   if (heat >= 40) return "text-warning";
-  if (heat >= 15) return "text-warning";
+  if (heat >= 15) return "text-muted-foreground";
   return "text-muted-foreground";
 }
 
@@ -162,7 +170,7 @@ function HeatMeter({ heat, testId }: { heat: number; testId?: string }) {
     <div className="flex items-center gap-2" data-testid={testId}>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary" role="meter"
            aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Heat score">
-        <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500" style={{ width: `${pct}%` }} />
+        <div className="h-full rounded-full bg-gold" style={{ width: `${pct}%` }} />
       </div>
       <span className={cn("w-9 shrink-0 text-right text-sm font-bold tabular-nums", heatTone(pct))}>{pct}</span>
     </div>
@@ -803,14 +811,14 @@ function TabButton({ id, label, active, onSelect, badge }: {
       onClick={() => onSelect(id)}
       data-testid={`tab-${id}`}
       className={cn(
-        "inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors",
+        "inline-flex h-11 md:h-9 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors",
         active ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
         FOCUS,
       )}
     >
       {label}
       {typeof badge === "number" && badge > 0 && (
-        <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold leading-none tabular-nums text-primary-foreground"
+        <span className="rounded-full bg-primary px-1.5 py-0.5 text-2xs font-bold leading-none tabular-nums text-primary-foreground"
               data-testid={`tab-${id}-badge`}>
           {badge}
         </span>

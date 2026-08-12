@@ -97,7 +97,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                     </span>
                   </span>
                   <span
-                    className="shrink-0 rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-warning"
+                    className="shrink-0 rounded-full bg-warning/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-warning"
                     data-testid="lead-phone-badge"
                   >
                     Door only
@@ -123,7 +123,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                     {line && <span className="block truncate text-[11px] capitalize text-muted-foreground">{line}</span>}
                   </span>
                   <span
-                    className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-success"
+                    className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-success"
                     data-testid="lead-phone-badge"
                   >
                     OK to call

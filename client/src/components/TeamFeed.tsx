@@ -140,7 +140,7 @@ export function TeamFeedBell({ className }: { className?: string }) {
         {unread > 0 && (
           <span
             data-testid="team-feed-unread"
-            className="absolute right-1 top-1 min-w-[18px] rounded-full bg-primary px-1 text-[10px] font-bold leading-[18px] text-primary-foreground tabular-nums"
+            className="absolute right-1 top-1 min-w-[18px] rounded-full bg-primary px-1 text-2xs font-bold leading-[18px] text-primary-foreground tabular-nums"
           >
             {unread > 9 ? "9+" : unread}
           </span>
@@ -217,7 +217,7 @@ export function TeamFeedHeadline({ className }: { className?: string }) {
             <span className="block truncate text-[12px] leading-snug text-muted-foreground">{item.body}</span>
           </span>
           {unread > 1 && (
-            <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-bold leading-[18px] text-primary-foreground tabular-nums">
+            <span className="shrink-0 rounded-full bg-primary px-1.5 text-2xs font-bold leading-[18px] text-primary-foreground tabular-nums">
               {unread > 9 ? "9+" : unread}
             </span>
           )}

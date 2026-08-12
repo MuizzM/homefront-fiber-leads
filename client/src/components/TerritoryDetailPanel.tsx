@@ -91,11 +91,16 @@ export interface TerritoryDetailPanelProps {
 const STATUS_STYLE: Record<string, string> = {
   active:     "bg-success/10 text-success",
   shared:     "bg-info/10 text-info",
-  completed:  "bg-slate-500/15 text-slate-300",
+  // The four quiet states are all "no signal to act on", which is what --muted
+  // is for. They were three different raw greys (slate-300, zinc-400, zinc-500,
+  // slate-400) picked against the old dark ground; on the light default they
+  // land between 1.8:1 and 3.1:1, so the statuses nobody needs to act on were
+  // also the ones nobody could read.
+  completed:  "bg-muted text-muted-foreground",
   reclaimed:  "bg-warning/10 text-warning",
-  unassigned: "bg-zinc-500/15 text-zinc-400",
-  archived:   "bg-zinc-700/20 text-zinc-500",
-  draft:      "bg-slate-500/15 text-slate-400",
+  unassigned: "bg-muted text-muted-foreground",
+  archived:   "bg-muted text-muted-foreground",
+  draft:      "bg-muted text-muted-foreground",
 };
 
 /**
@@ -311,7 +316,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
                 color={swatch}
               />
               {progress.lastActivityAt && (
-                <div className="mt-1.5 text-[10.5px] text-muted-foreground" data-testid="stat-last-activity">
+                <div className="mt-1.5 text-2xs text-muted-foreground" data-testid="stat-last-activity">
                   Last activity {shortDate(progress.lastActivityAt)}
                 </div>
               )}

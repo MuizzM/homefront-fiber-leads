@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/ui/page-scaffold";
+import { ErrorState } from "@/components/ErrorState";
 import { TrackingIndicator } from "@/components/liveops/TrackingIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
@@ -119,14 +120,14 @@ export default function ClockIn() {
           ) : statusError ? (
             // NEVER show "Off Duty" on a failed fetch — a clocked-in rep would
             // think their hours stopped counting (they didn't; the server has it).
-            <div className="text-center py-4" data-testid="clock-status-error">
-              <div className="text-sm font-semibold text-foreground">Can't reach the server</div>
-              <div className="text-sm text-muted-foreground mt-1">Your clock status is unknown right now - if you clocked in, your hours are still counting.</div>
-              <button onClick={() => refetchStatus()}
-                className="mt-3 inline-flex items-center justify-center h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
-                Retry
-              </button>
-            </div>
+            <ErrorState
+              testId="clock-status-error"
+              title="Can't reach the server"
+              description="Your clock status is unknown right now - if you clocked in, your hours are still counting."
+              onRetry={() => refetchStatus()}
+              bordered={false}
+              className="py-4"
+            />
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5 md:gap-8">
               <div className="space-y-3 text-center sm:text-left">
@@ -252,14 +253,14 @@ export default function ClockIn() {
             <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-secondary" />)}</div>
           ) : sessionsError ? (
             // A fetch failure is NOT "no sessions yet" - say so, offer retry.
-            <div className="p-5 text-center" data-testid="sessions-error">
-              <p className="text-sm font-semibold text-foreground">Couldn't load your sessions</p>
-              <p className="text-sm text-muted-foreground mt-1">Your hours are safe on the server - check your connection.</p>
-              <button onClick={() => refetchSessions()}
-                className="mt-3 inline-flex items-center justify-center h-11 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
-                Retry
-              </button>
-            </div>
+            <ErrorState
+              testId="sessions-error"
+              title="Couldn't load your sessions"
+              description="Your hours are safe on the server - check your connection."
+              onRetry={() => refetchSessions()}
+              bordered={false}
+              className="p-5"
+            />
           ) : sessions.length === 0 ? (
             <p className="text-sm text-muted-foreground p-5">No sessions yet</p>
           ) : (

@@ -435,7 +435,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {/* Territory Requests alert */}
           {canManage && pendingTerritoryCount > 0 && (
             <div className="mt-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/20">
-              <div className="flex items-center gap-2 text-xs text-amber-400 font-medium">
+              <div className="flex items-center gap-2 text-xs text-warning font-medium">
                 <Bell className="w-3.5 h-3.5 flex-shrink-0" />
                 <span className="flex-1">{pendingTerritoryCount} territory request{pendingTerritoryCount !== 1 ? "s" : ""}</span>
               </div>
@@ -450,7 +450,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               href="/profile"
               onClick={() => setMobileOpen(false)}
               data-testid="link-profile"
-              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg -mx-1 -my-0.5 px-1 py-0.5 hover:bg-secondary transition-colors"
+              className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-lg -mx-1 -my-0.5 px-1 py-0.5 hover:bg-secondary transition-colors"
             >
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${AVATAR}`}>
                 {user?.name?.slice(0, 2).toUpperCase()}
@@ -464,7 +464,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               onClick={toggle}
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               data-testid="button-theme-toggle"
-              className="grid h-9 w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              className="grid h-11 w-11 md:h-9 md:w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
               {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
             </button>
@@ -472,7 +472,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               onClick={() => logout()}
               title="Sign out"
               data-testid="button-logout"
-              className="grid h-9 w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              className="grid h-11 w-11 md:h-9 md:w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
               <LogOut size={14} />
             </button>
@@ -511,7 +511,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <button type="button" aria-label="Open account menu" aria-expanded={moreOpen} aria-controls="mobile-more-sheet"
             onClick={() => { setMobileOpen(false); setMoreOpen(true); }}
-            className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold ring-2 ring-border ${AVATAR}`}>
+            className={`tap-expand grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold ring-2 ring-border ${AVATAR}`}>
             {user?.name?.slice(0, 2).toUpperCase()}
           </button>
         </header>

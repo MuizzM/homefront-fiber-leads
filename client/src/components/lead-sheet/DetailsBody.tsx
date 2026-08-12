@@ -34,7 +34,7 @@ export function VerifiedPremiseFacts({ detail }: { detail: LeadDetail | undefine
     <div data-testid="knock-premise-facts" className="flex flex-wrap gap-x-3 gap-y-0.5">
       {facts.map(([label, value]) => (
         <span key={label} className="text-[11px] leading-tight" style={{ color: "rgba(255,255,255,0.55)" }}>
-          <span className="uppercase tracking-wide text-[9.5px] mr-1" style={{ color: "rgba(255,255,255,0.35)" }}>{label}</span>
+          <span className="uppercase tracking-wide text-2xs mr-1" style={{ color: "rgba(255,255,255,0.35)" }}>{label}</span>
           {value}
         </span>
       ))}

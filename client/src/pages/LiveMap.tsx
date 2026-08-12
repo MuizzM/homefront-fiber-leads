@@ -184,7 +184,7 @@ export default function LiveMap() {
           {/* Rep tracking toggle */}
           {!isManager && (
             tracking ? (
-              <Button size="sm" variant="outline" onClick={stopTracking} className="border-red-500/30 text-red-400 hover:bg-red-500/10" data-testid="button-stop-tracking">
+              <Button size="sm" variant="outline" onClick={stopTracking} className="border-destructive/30 text-destructive hover:bg-destructive/10" data-testid="button-stop-tracking">
                 Stop Sharing Location
               </Button>
             ) : (
@@ -231,7 +231,7 @@ export default function LiveMap() {
                      false-negative would send a manager chasing phantom idle
                      reps. Distinct error + retry instead of the empty branch. */
                   <div className="px-3 pb-3 pt-1" role="alert" data-testid="livemap-pings-error">
-                    <p className="text-xs text-amber-400 font-medium">Couldn&apos;t load rep locations</p>
+                    <p className="text-xs text-destructive font-medium">Couldn&apos;t load rep locations</p>
                     <button type="button" onClick={() => refetch()} data-testid="livemap-pings-retry"
                       className="mt-2 inline-flex h-8 items-center rounded-lg border border-border bg-secondary px-3 text-xs font-semibold text-foreground active:scale-95 transition-transform">
                       Retry
@@ -255,7 +255,7 @@ export default function LiveMap() {
                           <p className="text-xs text-foreground font-medium truncate">{p.repName}</p>
                           <p className="text-xs text-muted-foreground">{timeAgo(p.pingAt)}</p>
                         </div>
-                        <div className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" aria-hidden="true" />
+                        <div className="w-2 h-2 rounded-full bg-success flex-shrink-0" aria-hidden="true" />
                       </button>
                     ))}
                   </div>
@@ -303,7 +303,7 @@ export default function LiveMap() {
                   <span className="text-xs text-muted-foreground">Active rep</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-emerald-400" />
+                  <div className="w-3 h-3 rounded-full bg-success" />
                   <span className="text-xs text-muted-foreground">Online (last 15 min)</span>
                 </div>
               </div>
