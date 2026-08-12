@@ -4473,10 +4473,30 @@ export default function MapView() {
     if (!map || !mapReady) return;
     if (!showHouseNums) { removeHousenumLayer(map); removeStreetLabelLayer(map); return; }
 
+    // ── Google is the label source wherever Google draws labels ─────────────
+    //
+    // The satellite basemap is lyrs=y (hybrid) and streets is lyrs=m: both bake
+    // house numbers AND street names into the tile image. Drawing ours on top
+    // put two numbers on every roof in two typefaces, occasionally disagreeing,
+    // and a rep reading a door off the map should never have to decide which
+    // number the app means.
+    //
+    // So on those two basemaps we draw nothing and skip the fetch entirely -
+    // that is a request per pan saved, not just a hidden layer. Google's
+    // coverage is also the point of deferring to it: our address points cover
+    // the counties we have imported, Google's cover everywhere a rep might go.
+    //
+    // Dark is the exception. CARTO's dark_all carries street names but no house
+    // numbers, so our layer is the only thing that can put a number on a roof
+    // there, and it stays.
+    const basemapDrawsLabels = mapStyleMode === "satellite" || mapStyleMode === "streets";
+    if (basemapDrawsLabels) {
+      removeHousenumLayer(map);
+      removeStreetLabelLayer(map);
+      return;
+    }
+
     ensureHousenumLayer(map, mapStyleMode);
-    // Street names come from the same request and the same data. On the
-    // satellite basemap they are the ONLY street labels there are, since the
-    // imagery is bare - so they mount alongside the numbers, not separately.
     ensureStreetLabelLayer(map, mapStyleMode);
 
     // The numbers are DATA now, not a vector-tile layer that redraws itself, so
@@ -6422,7 +6442,7 @@ export default function MapView() {
                 {ltResult.stages.map((s: any, i: number) => (
                   <div key={i} className="rounded-lg bg-white/[0.05] p-2">
                     <div className="flex items-center gap-1.5"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.ok ? "bg-emerald-400" : "bg-red-400"}`} /><span className="text-[11px] font-semibold text-white">{s.stage}</span></div>
-                    <div className="mt-0.5 break-words font-mono text-[10px] text-white/55">{s.detail}</div>
+                    <div className="mt-0.5 break-words font-mono text-2xs text-white/55">{s.detail}</div>
                   </div>
                 ))}
                 <div className={`rounded-lg p-2 text-[11px] font-semibold ${ltResult.checked ? (ltResult.wouldSaveLead ? "bg-emerald-500/15 text-emerald-300" : "bg-sky-500/15 text-sky-300") : ltResult.pendingAuth ? "bg-amber-500/15 text-amber-300" : "bg-red-500/15 text-red-300"}`}>
@@ -6628,7 +6648,7 @@ export default function MapView() {
                 ["partial_coverage", "sparse_source_data", "verification_required", "source_unavailable"].includes(
                   String(scanSummary.coverage),
                 ) && (
-                  <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-300/90" data-testid="scan-coverage-gap">
+                  <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-2xs leading-snug text-amber-300/90" data-testid="scan-coverage-gap">
                     
                     <span>
                       OpenStreetMap coverage looks{" "}
@@ -6669,7 +6689,7 @@ export default function MapView() {
                 {pendingRequests.length} territory request
                 {pendingRequests.length !== 1 ? "s" : ""}
               </span>
-              <span className="text-[10px] text-muted-foreground">
+              <span className="text-2xs text-muted-foreground">
                 {showTerritoryRequests ? "Hide" : "Show"}
               </span>
             </button>
@@ -7048,7 +7068,7 @@ export default function MapView() {
                             </span>
                           </span>
                           {l.fiberStatus === "new_fiber" && (
-                            <span className="text-[9px] font-bold text-teal-400 flex-shrink-0">
+                            <span className="text-2xs font-bold text-teal-400 flex-shrink-0">
                               NEW
                             </span>
                           )}
@@ -7584,7 +7604,7 @@ export default function MapView() {
                               >
                                 {m.name}
                                 {idx === 0 && lassoRepIds.length > 1 && (
-                                  <span className="rounded-full bg-teal-400/30 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide">
+                                  <span className="rounded-full bg-teal-400/30 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide">
                                     1st
                                   </span>
                                 )}
@@ -8722,7 +8742,7 @@ export default function MapView() {
               )}
               {canAssign && repColorMode ? (
                 <div className="mb-2.5">
-                  <span className="block text-[10px] text-white/40 uppercase tracking-wider font-semibold mb-1">
+                  <span className="block text-2xs text-white/40 uppercase tracking-wider font-semibold mb-1">
                     Assignments (tap to filter)
                   </span>
                   <button
@@ -8753,7 +8773,7 @@ export default function MapView() {
               ) : null}
               {canAssign && (
                 <div className="mb-2.5" style={repColorMode ? { display: "none" } : undefined}>
-                  <span className="block text-[10px] text-white/40 uppercase tracking-wider font-semibold mb-1">
+                  <span className="block text-2xs text-white/40 uppercase tracking-wider font-semibold mb-1">
                     Rep
                   </span>
                   <select
@@ -8776,14 +8796,14 @@ export default function MapView() {
                 </div>
               )}
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">
+                <span className="text-2xs text-white/40 uppercase tracking-wider font-semibold">
                   Filter by status
                 </span>
                 <span className="flex items-center gap-2">
                   {filterStatus !== "all" && (
                     <button
                       onClick={() => setFilterStatus("all")}
-                      className="relative text-[10px] text-teal-400 hover:text-teal-300 after:absolute after:-inset-3"
+                      className="relative text-2xs text-teal-400 hover:text-teal-300 after:absolute after:-inset-3"
                     >
                       Clear
                     </button>
@@ -8858,12 +8878,12 @@ export default function MapView() {
               {canAssign && territories.length > 0 && (
                 <div className="pt-2 mt-1 border-t border-white/10">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">
+                    <span className="text-2xs text-white/40 uppercase tracking-wider font-semibold">
                       Assigned areas
                     </span>
                     <button
                       onClick={() => setShowTerritories((v) => !v)}
-                      className="relative text-[10px] text-white/50 hover:text-white/80 after:absolute after:-inset-3"
+                      className="relative text-2xs text-white/50 hover:text-white/80 after:absolute after:-inset-3"
                     >
                       {showTerritories ? "Hide" : "Show"}
                     </button>
@@ -8902,7 +8922,7 @@ export default function MapView() {
                               </span>
                             )}
                             {prog && (
-                              <span className="ml-auto text-[10px] text-white/50 tabular-nums">
+                              <span className="ml-auto text-2xs text-white/50 tabular-nums">
                                 {prog.knocked}/{prog.total}
                               </span>
                             )}
