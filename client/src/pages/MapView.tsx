@@ -1439,6 +1439,55 @@ export default function MapView() {
       });
       return res.json();
     },
+    // Repaint the whole selection BEFORE the request, the same way a single
+    // central mark does. Setting 400 doors used to mean a round trip plus a
+    // refetch of the window before anything on screen moved; the colours are
+    // the answer, so they land on the tap.
+    //
+    // One pass over the pin array and one coalesced re-cluster, NOT one slice
+    // per lead - a 5,000-door selection against a 5,000-pin window would
+    // otherwise be 25M copies on the main thread, which is its own freeze.
+    onMutate: ({ leadIds, outcome }: { leadIds: number[]; outcome: KnockOutcome }) => {
+      const ids = new Set(leadIds);
+      const at = new Date().toISOString();
+      const dsFor = (leadStatus: string) =>
+        pinDisplayState({ leadStatus, visited: true, lastOutcome: outcome });
+
+      // Imperative layer: the features the map actually draws from.
+      const prevProps = new Map<number, { status: any; ds: any; visited: any }>();
+      for (const id of leadIds) {
+        const f = featureByIdRef.current.get(id);
+        if (!f) continue;
+        prevProps.set(id, { status: f.properties.status, ds: f.properties.ds, visited: f.properties.visited });
+        const next = OUTCOME_TO_STATUS[outcome] ?? f.properties.leadStatus ?? "prospect";
+        const ds = dsFor(next);
+        f.properties.status = toLeadMapStatus(ds);
+        f.properties.ds = ds;
+        f.properties.visited = 1;
+      }
+      if (prevProps.size) scheduleClusterSetData();
+
+      // Shared cache: what every other surface reads.
+      const prevPins = new Map<number, any>();
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        if (!old?.pins) return old;
+        let touched = false;
+        const pins = old.pins.map((p: any) => {
+          if (!ids.has(p.id)) return p;
+          prevPins.set(p.id, p);
+          touched = true;
+          return {
+            ...p,
+            leadStatus: OUTCOME_TO_STATUS[outcome] ?? p.leadStatus,
+            visited: true,
+            lastOutcome: outcome,
+            lastOutcomeAt: at,
+          };
+        });
+        return touched ? { ...old, pins } : old;
+      });
+      return { prevProps, prevPins };
+    },
     onSuccess: (data: {
       updated: number;
       skipped: number;
@@ -1446,13 +1495,37 @@ export default function MapView() {
     }) => {
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      const label = OUTCOME_META[data.outcome]?.label ?? "status";
-      toast({
-        title: `${data.updated} set to ${label}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
-      });
+      // Silent when the map told the whole story. A door the server REFUSED is
+      // the exception: it looks identical to one it changed, because nothing
+      // moved on it - so skips still speak.
+      if (data.skipped) {
+        const label = OUTCOME_META[data.outcome]?.label ?? "status";
+        toast({
+          title: `${data.updated} set to ${label} · ${data.skipped} skipped (out of scope)`,
+        });
+      }
       exitLasso();
     },
-    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+    onError: (e: any, _vars, ctx: any) => {
+      // Put every door back exactly as it was before the tap.
+      if (ctx?.prevProps?.size) {
+        for (const [id, props] of ctx.prevProps) {
+          const f = featureByIdRef.current.get(id);
+          if (!f) continue;
+          f.properties.status = props.status;
+          f.properties.ds = props.ds;
+          f.properties.visited = props.visited;
+        }
+        scheduleClusterSetData();
+      }
+      if (ctx?.prevPins?.size) {
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          if (!old?.pins) return old;
+          return { ...old, pins: old.pins.map((p: any) => ctx.prevPins.get(p.id) ?? p) };
+        });
+      }
+      toast({ title: e.message, variant: "destructive" });
+    },
   });
 
   // "Mark before assignment" — flag/clear a lassoed pool selection with a
@@ -5962,8 +6035,13 @@ export default function MapView() {
         pins[i] = { ...pins[i], leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome, lastOutcomeAt: optimisticAt };
         return { ...old, pins };
       });
+      // Silent on the ordinary mark, same rule the rep knock already follows
+      // (see createSavedKnockReconciliation): the pin recoloured on the line
+      // above, the manager is looking straight at the door they just marked,
+      // and the haptic already answered the tap. A toast restating it costs a
+      // corner of the screen on every door. The revert below still speaks -
+      // a pin snapping BACK is the one outcome the map cannot explain.
       try { navigator.vibrate?.(10); } catch { /* */ }
-      toast({ title: "Marked centrally", severity: "success", description: `${lead.address}: ${OUTCOME_META[outcome]?.label ?? outcome}` });
       try {
         const res = await apiRequest("POST", `/api/leads/${lead.id}/central-disposition`, { outcome });
         const updated = await res.json();

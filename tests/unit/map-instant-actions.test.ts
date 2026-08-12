@@ -33,13 +33,20 @@ describe("central mark is optimistic - recolor before the round-trip", () => {
     expect(recolor).toBeLessThan(firstAwait);
   });
 
-  it("writes the map cache and fires the success toast before the first await", () => {
+  it("writes the map cache before the first await", () => {
     const cacheWrite = body.indexOf('qc.setQueryData(["/api/leads/map"]');
-    const successToast = body.indexOf('"Marked centrally"');
     expect(cacheWrite).toBeGreaterThan(-1);
     expect(cacheWrite).toBeLessThan(firstAwait);
-    expect(successToast).toBeGreaterThan(-1);
-    expect(successToast).toBeLessThan(firstAwait);
+  });
+
+  it("no longer announces the ordinary mark - the recolour is the receipt", () => {
+    // Superseded 2026-08-12 by the owner rule "no need for notifications when
+    // we mark leads as long as it changes the shape on leads, and it should be
+    // instant". The INSTANT half of this file's contract is untouched (the
+    // assertions above still hold); only the success toast is gone, because
+    // the pin above it already moved. The failure toast stays - see below.
+    // Full policy + the bulk path: marking-is-silent-and-instant.test.ts.
+    expect(body).not.toContain('title: "Marked centrally"');
   });
 
   it("rolls the door back on failure (catch restores the prior pin state)", () => {
