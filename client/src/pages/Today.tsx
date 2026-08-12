@@ -3,7 +3,7 @@
 // taps, and advance — one thumb, sunlight-readable, offline-safe. 100% real data:
 // /api/leads/map pins, /api/leaderboard (today's doors/sales), /api/clock/status,
 // and the SHARED offline logger (useKnockLogger → knockQueue + GPS evidence).
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, type ReactNode } from "react";
 import { FOCUS } from "@/lib/a11y";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -14,7 +14,7 @@ import { captureFieldFix } from "@/lib/geoFix";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { LiveSlot } from "@/components/LiveSlot";
-import { EarningsToday } from "@/components/EarningsToday";
+import { EarningsToday, useEarningsToday } from "@/components/EarningsToday";
 import { PushSetupCard } from "@/components/PushSetupCard";
 import { TeamFeedBell, TeamFeedHeadline } from "@/components/TeamFeed";
 import { useLiveItems } from "@/hooks/useLiveItems";
@@ -24,8 +24,9 @@ import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   distanceHint, haversineMeters, todayISO, type RoutablePin,
 } from "@shared/knock";
-import { orderNextDoors, type DoorRank } from "@shared/doorPriority";
+import { orderNextDoors, SCORE_SATURATION, type DoorRank } from "@shared/doorPriority";
 import { doorOpener } from "@shared/doorOpener";
+import { usd } from "@shared/moneyFormat";
 import { useRankedDoors } from "@/lib/useRankedDoors";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSustained } from "@/hooks/use-sustained";
@@ -186,6 +187,10 @@ export default function Today() {
   // One resolver, fed by the four incentive queries this page already makes.
   const liveItems = useLiveItems();
 
+  // Same query key EarningsToday reads in the header, so the Key metrics block
+  // below rides that request rather than opening a second one.
+  const { data: earn, isError: earnError } = useEarningsToday();
+
   const doorsDone = myRow?.knocksToday ?? 0;
   const doorsLeft = route.openCount;
   const routeTotal = doorsDone + doorsLeft;
@@ -288,17 +293,42 @@ export default function Today() {
           </button>
         )}
 
-        <div className="mt-4 rounded-xl border border-border bg-card overflow-hidden">
-          <div className="grid grid-cols-3">
-            <Stat label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)} tone="text-foreground" accent="bg-primary" error={boardQ.isError} />
-            <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-success" accent="bg-success" border error={boardQ.isError} />
-            <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" accent="bg-info" border error={pinsQ.isError} />
+        {/* ── The glance band ────────────────────────────────────────────────
+            Four numbers in one scrolling row, each one tappable through to the
+            screen that owns it. Three things were wrong with the equal-thirds
+            grid this replaces:
+
+            · Three 25px numbers split a 343px card into thirds, so every label
+              wrapped and the numbers had no room to be the largest thing in
+              their own cell.
+            · The numbers were dead ends. A rep who reads "2 doors left" wants
+              the map; who reads "2 sales" wants the statement. Every cell was
+              inert, and the route to each screen was the tab bar.
+            · Follow-ups owed existed only as a banner below, which vanishes at
+              zero — so "nothing owed" was never a fact a rep could read, only
+              the absence of one.
+
+            A strip gives each number a fixed width no matter how many there
+            are, and the fourth chip clipped at the edge is the affordance that
+            says there is more. Amber is spent here and nowhere else on this
+            screen: follow-ups due is the one figure that is owed TODAY. */}
+        <div className="mt-4" data-testid="today-glance">
+          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5">
+            <GlanceChip to="/leaderboard" label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)}
+              tone="text-foreground" accent="bg-primary" error={boardQ.isError} />
+            <GlanceChip to="/my-commission" label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)}
+              tone="text-success" accent="bg-success" error={boardQ.isError} />
+            <GlanceChip to="/map" label="Doors left" value={loading ? null : route.openCount}
+              tone="text-primary" accent="bg-info" error={pinsQ.isError} />
+            <GlanceChip to="/followups" label="Follow-ups" value={loading ? null : followupsDue}
+              tone={followupsDue > 0 ? "text-warning" : "text-foreground"}
+              accent={followupsDue > 0 ? "bg-warning" : "bg-border"} error={followupsQ.isError} />
           </div>
           {!loading && routeTotal > 0 && (
-            <div className="border-t border-border px-3.5 py-3">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-semibold uppercase tracking-wide text-muted-foreground">Today's progress</span>
-                <span className="tabular-nums text-muted-foreground"><span className="text-foreground font-semibold">{doorsDone} done</span> · {doorsLeft} to go</span>
+            <div className="mt-2 rounded-xl border border-border bg-card px-3.5 py-3">
+              <div className="flex items-baseline justify-between gap-3 text-[12px]">
+                <span className="font-semibold text-foreground">Today's progress</span>
+                <span className="tabular-nums text-muted-foreground"><span className="font-semibold text-foreground">{doorsDone} done</span> · {doorsLeft} to go</span>
               </div>
               <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden" role="progressbar" aria-valuenow={routePct} aria-valuemin={0} aria-valuemax={100} aria-label="Doors worked today">
                 <div className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out" style={{ width: `${routePct}%` }} />
@@ -349,10 +379,7 @@ export default function Today() {
         )}
 
         <div className="mt-6">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Your next door</h2>
-            {locState === "off" && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">Location off · by priority</span>}
-          </div>
+          <SectionTitle meta={locState === "off" ? "Location off · by priority" : null}>Your next door</SectionTitle>
           {loading ? (
             <div className="rounded-2xl border border-border bg-card p-5">
               <Skeleton className="h-4 w-20" />
@@ -376,25 +403,43 @@ export default function Today() {
 
         {!loading && route.rest.length > 0 && (
           <div className="mt-6">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Up next</h2>
-              <span className="text-[11px] text-muted-foreground tabular-nums">{route.openCount} doors on your route</span>
-            </div>
+            <SectionTitle meta={`${route.openCount} doors on your route`}>Up next</SectionTitle>
             <div className="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
               {route.rest.map((p, i) => <DoorRow key={p.id} p={p} n={i + 2} loc={myLoc} rank={rankOf.get(p.id) ?? null} onOpen={() => navigate(`/lead/${p.id}`)} />)}
             </div>
           </div>
         )}
 
+        {/* ── Key metrics ────────────────────────────────────────────────────
+            The standing totals, below the route because they are context, not
+            the next action. The glance band answers "how is today going"; this
+            answers "where do I stand", and the two must not be read as the same
+            kind of number - which is exactly what happened when the only thing
+            down here was one row reading "12 sales · 2 today", repeating a
+            figure the top of the screen already owned.
+
+            All four come from queries this screen already makes: the earnings
+            hook is the same key EarningsToday reads in the header, so this
+            costs no extra request. */}
         {myRow && (
-          <Link href="/my-commission" className={`group mt-6 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 active:scale-[.99] transition-transform hover:border-success/25 ${FOCUS}`} data-testid="today-pay">
-            
-            <span className="flex-1 min-w-0">
-              <span className="block text-[14px] font-semibold text-foreground tabular-nums">{myRow.sales} sale{myRow.sales === 1 ? "" : "s"} · {myRow.salesToday} today</span>
-              <span className="block text-[12px] text-muted-foreground">View your weekly pay statement</span>
-            </span>
-            <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
-          </Link>
+          <div className="mt-6" data-testid="today-metrics">
+            <SectionTitle>Key metrics</SectionTitle>
+            <div className="grid grid-cols-2 gap-2">
+              <MetricTile label="Doors all time" value={myRow.knocks.toLocaleString("en-US")} />
+              <MetricTile label="Sales all time" value={myRow.sales.toLocaleString("en-US")} />
+              {/* Guarded on the NUMBER, not on the response: a query that
+                  resolves to something unexpected must degrade to a dash the
+                  same way a rejected one does, never to "NaNh NaNm". */}
+              <MetricTile label="On the clock" error={earnError}
+                value={typeof earn?.hourlyMinutes === "number" ? clockLabel(earn.hourlyMinutes) : null} />
+              <MetricTile label="Bonuses today" error={earnError}
+                value={typeof earn?.spiffCents === "number" ? usd(earn.spiffCents) : null} />
+            </div>
+            <Link href="/my-commission" className={`group mt-2 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 active:scale-[.99] transition-transform hover:border-success/25 ${FOCUS}`} data-testid="today-pay">
+              <span className="flex-1 min-w-0 text-[14px] font-semibold text-foreground">View your weekly pay statement</span>
+              <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+            </Link>
+          </div>
         )}
       </div>
 
@@ -412,17 +457,61 @@ export default function Today() {
   );
 }
 
-function Stat({ label, value, tone, accent = "bg-muted-foreground/50", border, error }: { label: string; value: number | null; tone: string; accent?: string; border?: boolean; error?: boolean }) {
+// One number in the glance band. The tone dot is the only colour the label
+// carries: the value itself is toned, and a coloured label on a coloured value
+// is two signals for one fact.
+function GlanceChip({ to, label, value, tone, accent, error }: { to: string; label: string; value: number | null; tone: string; accent: string; error?: boolean }) {
   return (
-    <div className={`px-3 py-3.5 ${border ? "border-l border-border" : ""}`}>
-      <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
-        <span className={`w-1.5 h-1.5 rounded-full ${accent}`} aria-hidden="true" />{label}
-      </div>
-      {/* A failed query must not render as a real "0" - show an honest em-dash. */}
-      {error ? <div className="text-[25px] font-bold tabular-nums leading-none mt-1.5 text-muted-foreground/60" aria-label={`${label} unavailable`}>-</div>
-        : value == null ? <Skeleton className="h-7 w-10 mt-1.5" /> : <div className={`text-[25px] font-bold tabular-nums leading-none mt-1.5 ${tone}`}>{value}</div>}
+    <Link
+      href={to}
+      data-testid={`glance-${label.toLowerCase().replace(/\s+/g, "-")}`}
+      className={`shrink-0 w-[104px] rounded-2xl border border-border bg-card px-3.5 pt-3 pb-3.5 active:scale-[.97] transition-transform hover:border-primary/25 ${FOCUS}`}
+    >
+      <span className={`block w-1.5 h-1.5 rounded-full ${accent}`} aria-hidden="true" />
+      {/* A failed query must not render as a real "0" - show an honest dash. */}
+      {error ? <div className="text-[28px] font-bold tabular-nums leading-none mt-2 text-muted-foreground/60" aria-label={`${label} unavailable`}>-</div>
+        : value == null ? <Skeleton className="h-7 w-10 mt-2" /> : <div className={`text-[28px] font-bold tabular-nums leading-none mt-2 ${tone}`}>{value}</div>}
+      <div className="text-[11px] font-semibold text-muted-foreground mt-1.5">{label}</div>
+    </Link>
+  );
+}
+
+// Section headings were 11px uppercase muted - below the 11px legibility floor
+// once tracking is added, and the same weight as the metadata beside them. A
+// rep reading this at arm's length in sunlight needs the heading to be the
+// thing that separates one block from the next.
+function SectionTitle({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 mb-2.5">
+      <h2 className="text-[17px] font-bold tracking-tight text-foreground">{children}</h2>
+      {meta ? <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{meta}</span> : null}
     </div>
   );
+}
+
+function MetricTile({ label, value, error }: { label: string; value: string | null; error?: boolean }) {
+  return (
+    <div className="rounded-2xl border border-border bg-card px-3.5 py-3">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      {error
+        ? <div className="text-[22px] font-bold tabular-nums leading-none mt-1.5 text-muted-foreground/60" aria-label={`${label} unavailable`}>-</div>
+        : value == null
+          ? <Skeleton className="h-6 w-16 mt-1.5" />
+          : <div className="text-[22px] font-bold tabular-nums leading-none tracking-tight text-foreground mt-1.5">{value}</div>}
+    </div>
+  );
+}
+
+const clockLabel = (m: number) => `${Math.floor(m / 60)}h ${m % 60}m`;
+
+// How hard the ranker argued for this door, as a word rather than a number.
+// The score is real (server/leadRanking.ts) and SCORE_SATURATION is the
+// product's own line for "hot", so the rail is measured against the same
+// constant the route ordering uses. Shown WITHOUT the raw figure: a rep needs
+// to know this door earned its place, not to audit a 0-105 scale.
+function opportunity(score: number): { pct: number; verdict: string } {
+  const pct = Math.max(0, Math.min(100, Math.round((score / SCORE_SATURATION) * 100)));
+  return { pct, verdict: pct >= 100 ? "Prime" : pct >= 60 ? "Strong" : "Fair" };
 }
 
 function ReasonChips({ p, rank }: { p: Pin; rank: DoorRank | null }) {
@@ -468,6 +557,24 @@ function HeroCard({ p, loc, rank, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng
         </div>
         <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 mt-1" aria-hidden="true" />
       </button>
+      {/* Why this door is FIRST, as opposed to why it is worth knocking. The
+          reason chips above say what is true about the address; this says how
+          strongly the ranker argued for it, which is the question a rep asks
+          when the hero is not the closest door on the street. Renders only for
+          doors the ranker actually scored - it pools confirmed-fresh leads
+          only, and an unranked door is neutral, never weak. */}
+      {rank && (
+        <div className="mt-3.5" data-testid="today-opportunity">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Opportunity</span>
+            <span className="text-[12px] font-semibold text-foreground">{opportunity(rank.score).verdict}</span>
+          </div>
+          <div className="mt-1.5 h-1 rounded-full bg-muted overflow-hidden"
+            role="progressbar" aria-valuenow={opportunity(rank.score).pct} aria-valuemin={0} aria-valuemax={100} aria-label="Opportunity score for this door">
+            <div className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out" style={{ width: `${opportunity(rank.score).pct}%` }} />
+          </div>
+        </div>
+      )}
       {/* What to say. Sits between the address and the action because it is
           read on the walk up, not at the porch. Quiet by design - it is a
           prompt, not a script the rep is expected to recite. */}

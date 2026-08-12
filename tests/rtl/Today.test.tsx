@@ -279,6 +279,78 @@ describe("Today - the rep's home", () => {
     renderToday({ clockedIn: true, pins: [pin({ id: 1 })] });
     expect(await screen.findByTestId("today-clock-out")).toBeTruthy();
   });
+
+  // Every glance number used to be inert: a rep who read "2 doors left" had to
+  // find the map themselves. The number IS the way to the screen that owns it.
+  it("routes each glance number to the screen that owns it", async () => {
+    renderToday({ pins: [pin({ id: 1 })] });
+    const href = async (label: string) =>
+      (await screen.findByTestId(`glance-${label}`)).getAttribute("href");
+    expect(await href("doors-today")).toBe("/leaderboard");
+    expect(await href("sales-today")).toBe("/my-commission");
+    expect(await href("doors-left")).toBe("/map");
+    expect(await href("follow-ups")).toBe("/followups");
+  });
+
+  // Follow-ups owed is the one figure on this screen that is owed TODAY, so it
+  // must be readable as a FACT at zero - not merely as the absence of a banner.
+  it("shows follow-ups owed even when none are due", async () => {
+    renderToday({ pins: [pin({ id: 1 })], followups: [] });
+    const chip = await screen.findByTestId("glance-follow-ups");
+    expect(within(chip).getByText("0")).toBeTruthy();
+    expect(screen.queryByTestId("today-followups")).toBeNull();
+  });
+});
+
+// ── Why THIS door is first ──────────────────────────────────────────────────
+//
+// The reason chips say what is true about the address. The opportunity rail says
+// how hard the ranker argued for it, which is the question a rep asks when the
+// hero is not the nearest door on the street. It is measured against
+// SCORE_SATURATION - the same constant the route ordering uses - so the bar and
+// the order can never tell different stories.
+describe("Today - the opportunity rail", () => {
+  it("reads a saturated score as Prime and fills the rail", async () => {
+    renderToday({ pins: [pin({ id: 1 })], ranked: [ranked(1, 90, ["newly lit"])] });
+    const rail = await screen.findByTestId("today-opportunity");
+    expect(rail.textContent).toContain("Prime");
+    expect(within(rail).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("100");
+  });
+
+  it("reads a weak score as Fair without ever going negative", async () => {
+    renderToday({ pins: [pin({ id: 1 })], ranked: [ranked(1, 6, ["lit 40d ago"])] });
+    const rail = await screen.findByTestId("today-opportunity");
+    expect(rail.textContent).toContain("Fair");
+    expect(within(rail).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("10");
+  });
+
+  // An unranked door is NEUTRAL, never weak - rankLeads pools confirmed-fresh
+  // leads only, so most doors carry no score and an empty rail would read as a
+  // bad door rather than an unscored one.
+  it("says nothing for a door the ranker never scored", async () => {
+    renderToday({ pins: [pin({ id: 1 })], ranked: [] });
+    await screen.findByTestId("today-hero");
+    expect(screen.queryByTestId("today-opportunity")).toBeNull();
+  });
+});
+
+// ── Key metrics ─────────────────────────────────────────────────────────────
+//
+// The standing totals, kept apart from the glance band because "where do I
+// stand" and "how is today going" are different questions. The block this
+// replaced was one row reading "12 sales · 2 today", which repeated a figure the
+// top of the screen already owned.
+describe("Today - key metrics", () => {
+  it("reads all-time doors and sales off the leaderboard row", async () => {
+    renderToday({
+      pins: [pin({ id: 1 })],
+      board: [{ rep: { id: 9, name: "Rae Rep", role: "rep" }, knocks: 1240, sales: 12, knocksToday: 6, salesToday: 2 }],
+    });
+    const block = await screen.findByTestId("today-metrics");
+    const tile = (label: string) => within(block).getByText(label).parentElement!;
+    expect(within(tile("Doors all time")).getByText("1,240")).toBeTruthy();
+    expect(within(tile("Sales all time")).getByText("12")).toBeTruthy();
+  });
 });
 
 // ── Mounted at all ──────────────────────────────────────────────────────────
