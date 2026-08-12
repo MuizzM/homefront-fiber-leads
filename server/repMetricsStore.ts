@@ -38,15 +38,30 @@ import {
 
 export const DEFAULT_TIMEZONE = "America/New_York";
 
-/** The org's IANA timezone. Falls back to the product default rather than UTC:
- *  a US field org bucketed by UTC days would split every evening shift in two. */
+/**
+ * The org's IANA timezone. Falls back to the product default rather than UTC:
+ * a US field org bucketed by UTC days would split every evening shift in two.
+ *
+ * Memoised with a short TTL because this is called once per rep per sweep -
+ * every 20 seconds, forever - to answer a question whose answer changes about
+ * never. The TTL rather than a permanent cache so an admin changing the org
+ * timezone is picked up without a restart.
+ */
+const TZ_TTL_MS = 5 * 60_000;
+const tzCache = new Map<number, { tz: string; at: number }>();
+
 export function tenantTimezone(tenantId: number | null): string {
   if (tenantId == null) return DEFAULT_TIMEZONE;
+  const hit = tzCache.get(tenantId);
+  const now = Date.now();
+  if (hit && now - hit.at < TZ_TTL_MS) return hit.tz;
   try {
     const row = rawDb
       .prepare(`SELECT commission_timezone AS tz FROM tenants WHERE id = ?`)
       .get(tenantId) as { tz?: string } | undefined;
-    return row?.tz || DEFAULT_TIMEZONE;
+    const tz = row?.tz || DEFAULT_TIMEZONE;
+    tzCache.set(tenantId, { tz, at: now });
+    return tz;
   } catch { return DEFAULT_TIMEZONE; }
 }
 
@@ -316,15 +331,38 @@ function loadOrders(repId: number, startMs: number, endMs: number): OrderInput {
   };
 }
 
-/** Doors this rep knocked BEFORE the day started - the revisit baseline. */
-function loadPreviouslyKnocked(repId: number, startMs: number): ReadonlySet<number> {
-  const rows = rawDb.prepare(`
-    SELECT DISTINCT lead_id AS id
-      FROM knock_log
-     WHERE rep_id = ? AND replace(knocked_at,'T',' ') < ?
-     LIMIT 50000
-  `).all(repId, sqlTs(startMs)) as any[];
-  return new Set(rows.map((r) => Number(r.id)));
+/**
+ * Doors this rep knocked BEFORE the day started - the revisit baseline.
+ *
+ * Scoped to the doors actually knocked ON the day, not to the rep's whole
+ * history. The caller only ever asks `previously.has(leadId)` for a lead that
+ * appears in the day's events, so the wider query returned tens of thousands of
+ * ids nobody would look up - and it ran on EVERY recompute of EVERY day, with
+ * today's row recomputed every rollup tick. A rep two years into the job would
+ * have made that cost grow without bound while answering the same question.
+ *
+ * Returns an empty set for a day with no doors rather than issuing a query with
+ * no useful predicate.
+ */
+function loadPreviouslyKnocked(
+  repId: number, startMs: number, leadIds: readonly number[],
+): ReadonlySet<number> {
+  if (leadIds.length === 0) return new Set();
+  // Chunked so a very long day cannot exceed SQLite's variable limit (999).
+  const out = new Set<number>();
+  const CHUNK = 400;
+  for (let i = 0; i < leadIds.length; i += CHUNK) {
+    const slice = leadIds.slice(i, i + CHUNK);
+    const rows = rawDb.prepare(`
+      SELECT DISTINCT lead_id AS id
+        FROM knock_log
+       WHERE rep_id = ?
+         AND lead_id IN (${slice.map(() => "?").join(",")})
+         AND replace(knocked_at,'T',' ') < ?
+    `).all(repId, ...slice, sqlTs(startMs)) as any[];
+    for (const r of rows) out.add(Number(r.id));
+  }
+  return out;
 }
 
 /**
@@ -384,7 +422,9 @@ export function recomputeRepDay(
   markTerritory(repId, points);
   const assignment = loadAssignment(repId);
   const orders = loadOrders(repId, startMs, endMs);
-  const previouslyKnockedLeadIds = loadPreviouslyKnocked(repId, startMs);
+  const previouslyKnockedLeadIds = loadPreviouslyKnocked(
+    repId, startMs, [...new Set(events.map((e) => e.leadId))],
+  );
 
   const facts = computeDailyFacts({
     events, shifts, points, assignment, orders, previouslyKnockedLeadIds, nowMs,
