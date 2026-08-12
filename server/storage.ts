@@ -7,6 +7,8 @@ import { ensureAdminAuditSchema } from "./adminAudit";
 import { runKineticBuildMigrations as ensureKineticBuildSchema } from "./kineticBuildMigrations";
 import { runAcademyMigrations as ensureAcademySchema } from "./academyMigrations";
 import { runLiveOpsMigrations as ensureLiveOpsSchema } from "./liveOpsMigrations";
+import { runRepMetricsMigrations as ensureRepMetricsSchema } from "./repMetricsMigrations";
+import { attachShiftAndDwell, markRepDayDirty } from "./repMetricsStore";
 import { runVendorOrderMigrations as ensureVendorOrderSchema } from "./vendorOrderMigrations";
 import { runGuardedActionMigrations as ensureGuardedActionSchema } from "./guardedActionMigrations";
 import { recordTransition } from "./fiberTransitions";
@@ -2952,6 +2954,20 @@ export function runMigrations() {
     ensureLiveOpsSchema();
   } catch (e: any) { console.warn("[migration] live ops schema:", e?.message); }
 
+  // Rep metrics and field performance: the daily rollups, the coaching insight
+  // and note tables, the territory health rollup, the reclaim review audit, and
+  // the door-arrival event that makes dwell time computable. Also the Field
+  // Activity & Privacy columns on field_location_policy.
+  //
+  // Non-fatal on the same terms: every one of these is a REPORTING surface. A
+  // failure here means the Metrics tab renders empty, never that a knock, a
+  // shift, or a commission is lost - none of those write to any table created
+  // in this module, which is exactly why the metrics layer was built on top of
+  // the existing event tables rather than beside them.
+  try {
+    ensureRepMetricsSchema();
+  } catch (e: any) { console.warn("[migration] rep metrics schema:", e?.message); }
+
   // Provider ORDER STATUS and recovery (PerfectVision "Total Submitted Orders
   // by Program", and any later carrier order feed): the import runs and their
   // rows, the order table and its immutable event stream, the recovery queue,
@@ -4584,6 +4600,14 @@ export class Storage implements IStorage {
       ...(verdict ?? {}),
     }).returning().get();
     bumpLeaderboardEpoch();
+    // Field-metrics attribution. Deliberately AFTER the knock is durable and
+    // wrapped so nothing here can fail the disposition: a rep on a doorstep must
+    // never lose a save because a reporting rollup had a bad day. Each of these
+    // is separately try/caught inside its own module for the same reason.
+    try {
+      attachShiftAndDwell(row.id, knock.repId, knock.leadId, safeTs);
+      markRepDayDirty(tenantId, knock.repId, Date.parse(safeTs) || Date.now());
+    } catch { /* metrics are never load-bearing for a field write */ }
     return row;
   }
   getKnockById(id: number): Knock | undefined {

@@ -82,6 +82,16 @@
       "autoPort": false
     },
     {
+      "name": "homefront-metrics",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5075 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/123c5b52-57da-47d4-9eea-555e2225d01a/scratchpad/metrics-data SCAN_GLOBAL_CONCURRENCY=2 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5075,
+      "autoPort": false
+    },
+    {
       "name": "homefront-orders",
       "runtimeExecutable": "sh",
       "runtimeArgs": [

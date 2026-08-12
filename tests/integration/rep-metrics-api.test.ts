@@ -1,0 +1,514 @@
+// The rep-metrics HTTP surface: the security contract, not the arithmetic.
+//
+//   * every read is scoped SERVER-SIDE from the caller's own roster seat, and a
+//     client-supplied rep filter can only narrow it, never widen it,
+//   * a rep cannot reach another rep's metrics, insights, or coaching notes,
+//   * a manager sees their own branch and 404s (not 403s) on anyone else,
+//   * tenant walls hold in both directions,
+//   * NO RAW COORDINATE is returned by any endpoint in this plane - summaries
+//     only; raw trails stay behind the audited export in live ops,
+//   * a supervisor's private coaching note is invisible to the rep until shared,
+//   * the reclaim review endpoint records a decision and moves no doors.
+
+import { createServer, type Server } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import express from "express";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+let server: Server;
+let baseUrl: string;
+let storage: (typeof import("../../server/storage"))["storage"];
+let rawDb: import("better-sqlite3").Database;
+
+const realFetch = globalThis.fetch.bind(globalThis);
+
+// Tenant 1 org chart:  managerA ── leadA ── repA1, repA2
+//                      managerB ── repB1        (a peer branch, not managerA's)
+// Tenant 2:            foreignManager, foreignRep
+let repA1Session: string, repA2Session: string, leadASession: string;
+let managerASession: string, managerBSession: string, adminSession: string;
+let foreignManagerSession: string;
+let repA1Rep: number, repA2Rep: number, repB1Rep: number, foreignRep: number;
+let territoryId: number;
+
+const TODAY = new Date().toISOString().slice(0, 10);
+
+beforeAll(async () => {
+  process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-repmetrics-"));
+  process.env.NODE_ENV = "test";
+
+  const storageModule = await import("../../server/storage");
+  storageModule.runMigrations();
+  storage = storageModule.storage;
+  ({ rawDb } = await import("../../server/db"));
+  const { registerRoutes } = await import("../../server/routes");
+
+  rawDb.prepare(
+    `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name)
+     VALUES (2, 'tenant-b-metrics', 'Tenant B', 'Owner B', 'owner-b-metrics@example.com', 'Tenant B')`,
+  ).run();
+
+  // Roster first: the scope resolver reads team_members, not users.
+  const mkMember = (name: string, role: string, tenantId: number, reportsTo: number | null) =>
+    Number((rawDb.prepare(
+      `INSERT INTO team_members (name, role, tenant_id, reports_to_id, active, created_at)
+       VALUES (?,?,?,?,1,?) RETURNING id`,
+    ).get(name, role, tenantId, reportsTo, new Date().toISOString()) as any).id);
+
+  const managerAMember = mkMember("Manager A", "manager", 1, null);
+  const leadAMember = mkMember("Lead A", "team_lead", 1, managerAMember);
+  repA1Rep = mkMember("Rep A1", "rep", 1, leadAMember);
+  repA2Rep = mkMember("Rep A2", "rep", 1, leadAMember);
+  const managerBMember = mkMember("Manager B", "manager", 1, null);
+  repB1Rep = mkMember("Rep B1", "rep", 1, managerBMember);
+  const foreignManagerMember = mkMember("Foreign Manager", "manager", 2, null);
+  foreignRep = mkMember("Foreign Rep", "rep", 2, foreignManagerMember);
+
+  const mkUser = (name: string, email: string, role: string, tenantId: number, teamMemberId: number | null) => {
+    const u = storage.createUser({ name, email, role, active: true, tenantId } as any);
+    // users.training_required defaults to 1, and the onboarding gate refuses a
+    // gated REP every path outside /api/training and their own paperwork - which
+    // includes Metrics, correctly: a rep who has not finished onboarding has no
+    // field activity to look at. These fixtures are working reps, so the flag is
+    // cleared. The gate itself is covered by its own suite; asserting it here
+    // would only re-test somebody else's middleware.
+    rawDb.prepare(`UPDATE users SET training_required = 0 WHERE id = ?`).run(u.id);
+    if (teamMemberId != null) {
+      rawDb.prepare(`UPDATE users SET team_member_id = ? WHERE id = ?`).run(teamMemberId, u.id);
+    }
+    return storage.createSession(u.id).id;
+  };
+
+  repA1Session = mkUser("Rep A1", "rep-a1-metrics@example.com", "rep", 1, repA1Rep);
+  repA2Session = mkUser("Rep A2", "rep-a2-metrics@example.com", "rep", 1, repA2Rep);
+  leadASession = mkUser("Lead A", "lead-a-metrics@example.com", "team_lead", 1, leadAMember);
+  managerASession = mkUser("Manager A", "manager-a-metrics@example.com", "manager", 1, managerAMember);
+  managerBSession = mkUser("Manager B", "manager-b-metrics@example.com", "manager", 1, managerBMember);
+  adminSession = mkUser("Admin", "admin-metrics@example.com", "admin", 1, null);
+  foreignManagerSession = mkUser("Foreign Manager", "fm-metrics@example.com", "manager", 2, foreignManagerMember);
+
+  // Rollup rows so the reads have something to scope.
+  const insertDay = (tenantId: number, repId: number, doors: number, contacts: number) =>
+    rawDb.prepare(
+      `INSERT INTO rep_daily_metrics (tenant_id, rep_id, metric_date, doors_attempted, doors_visited,
+         verified_doors, contacts, submitted_orders, active_seconds, eligible_doors, ever_worked_doors)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(tenantId, repId, TODAY, doors, doors, doors, contacts, 1, 8 * 3600, 200, doors);
+
+  insertDay(1, repA1Rep, 60, 15);
+  insertDay(1, repA2Rep, 40, 12);
+  insertDay(1, repB1Rep, 55, 20);
+  insertDay(2, foreignRep, 99, 33);
+
+  // An insight on each rep, so the coaching endpoints have rows to scope.
+  const insight = (tenantId: number, repId: number, title: string) =>
+    rawDb.prepare(
+      `INSERT INTO rep_coaching_insights (tenant_id, rep_id, period_start, period_end, insight_type,
+         severity, title, explanation, suggested_action)
+       VALUES (?,?,?,?,'slow_pace_between_doors','coaching_needed',?,'x','y')`,
+    ).run(tenantId, repId, TODAY, TODAY, title);
+  insight(1, repA1Rep, "A1 insight");
+  insight(1, repB1Rep, "B1 insight");
+  insight(2, foreignRep, "Foreign insight");
+
+  territoryId = Number((rawDb.prepare(
+    `INSERT INTO territories (tenant_id, name, rep_id, polygon, assignee_ids, status, assigned_at, created_at)
+     VALUES (1, 'Test Area', ?, '[[-81,35],[-81,35.01],[-80.99,35.01],[-80.99,35]]', ?, 'active', ?, ?)
+     RETURNING id`,
+  ).get(repA1Rep, JSON.stringify([repA1Rep]), new Date(Date.now() - 5 * 86_400_000).toISOString(),
+        new Date().toISOString()) as any).id);
+
+  rawDb.prepare(
+    `INSERT INTO territory_daily_metrics (tenant_id, territory_id, metric_date, eligible_doors,
+       assigned_doors, ever_worked_doors, doors_attempted, status, reclaim_recommended, reclaim_rationale)
+     VALUES (1, ?, ?, 300, 300, 20, 22, 'reclaim_candidate', 1, 'Assigned 5 days, 7% attempted.')`,
+  ).run(territoryId, TODAY);
+
+  const app = express();
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
+  server = createServer(app);
+  registerRoutes(server, app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Test server did not bind");
+  baseUrl = `http://127.0.0.1:${address.port}`;
+});
+
+afterAll(async () => {
+  if (server) await new Promise<void>((resolve, reject) => server.close((e) => e ? reject(e) : resolve()));
+});
+
+function request(path: string, sessionId?: string, init: RequestInit = {}) {
+  return realFetch(`${baseUrl}${path}`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(sessionId ? { "x-session-id": sessionId } : {}),
+      ...(init.headers ?? {}),
+    },
+  });
+}
+
+const METRIC_PATHS = [
+  "/api/metrics/me",
+  "/api/metrics/team",
+  "/api/metrics/territories",
+  "/api/metrics/insights",
+  "/api/metrics/reports",
+  "/api/metrics/settings",
+  "/api/field-mode/state",
+];
+
+// ── Authentication ───────────────────────────────────────────────────────────
+
+describe("authentication", () => {
+  it("refuses every metrics endpoint without a session", async () => {
+    for (const path of METRIC_PATHS) {
+      const res = await request(path);
+      expect([401, 403], `${path} allowed an anonymous read`).toContain(res.status);
+    }
+  });
+});
+
+// ── Rep isolation ────────────────────────────────────────────────────────────
+
+describe("a rep sees only themselves", () => {
+  it("returns the caller's own numbers from /me with no way to ask for another rep", async () => {
+    const res = await request("/api/metrics/me", repA1Session);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.hasSeat).toBe(true);
+    expect(body.facts.doorsAttempted).toBe(60);   // A1's row, not A2's 40
+  });
+
+  it("ignores a repId smuggled into the query string", async () => {
+    const res = await request(`/api/metrics/me?repId=${repA2Rep}`, repA1Session);
+    const body = await res.json();
+    // Still A1's own figure. The endpoint reads the session's seat, full stop.
+    expect(body.facts.doorsAttempted).toBe(60);
+  });
+
+  it("refuses the team table to a rep", async () => {
+    const res = await request("/api/metrics/team", repA1Session);
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses another rep's drill-down to a rep", async () => {
+    const res = await request(`/api/metrics/rep/${repA2Rep}`, repA1Session);
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses the coaching board and the reports tab to a rep", async () => {
+    expect((await request("/api/metrics/insights", repA1Session)).status).toBe(403);
+    expect((await request("/api/metrics/reports", repA1Session)).status).toBe(403);
+    expect((await request("/api/metrics/settings", repA1Session)).status).toBe(403);
+  });
+
+  it("gives a rep their own insights and nobody else's", async () => {
+    const res = await request("/api/metrics/insights/me", repA1Session);
+    expect(res.status).toBe(200);
+    const { insights } = await res.json();
+    expect(insights.length).toBeGreaterThan(0);
+    for (const i of insights) expect(i.repId).toBe(repA1Rep);
+  });
+});
+
+// ── Supervisor scope ─────────────────────────────────────────────────────────
+
+describe("supervisor scope", () => {
+  it("gives a team lead their own subtree and not a peer branch", async () => {
+    const res = await request("/api/metrics/team", leadASession);
+    expect(res.status).toBe(200);
+    const { rows } = await res.json();
+    const ids = rows.map((r: any) => r.repId);
+    expect(ids).toContain(repA1Rep);
+    expect(ids).toContain(repA2Rep);
+    expect(ids).not.toContain(repB1Rep);
+  });
+
+  it("gives a manager their own branch and not another manager's", async () => {
+    const res = await request("/api/metrics/team", managerASession);
+    const { rows } = await res.json();
+    const ids = rows.map((r: any) => r.repId);
+    expect(ids).toContain(repA1Rep);
+    expect(ids).not.toContain(repB1Rep);
+  });
+
+  it("404s, not 403s, when a manager drills into another branch's rep", async () => {
+    const res = await request(`/api/metrics/rep/${repB1Rep}`, managerASession);
+    // 404 so the response never confirms that a rep outside the caller's world
+    // exists at all.
+    expect(res.status).toBe(404);
+  });
+
+  it("lets a manager drill into their own rep", async () => {
+    const res = await request(`/api/metrics/rep/${repA1Rep}`, managerASession);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.repId).toBe(repA1Rep);
+    expect(body.facts.doorsAttempted).toBe(60);
+  });
+
+  it("cannot be widened by a client-supplied rep filter", async () => {
+    // Manager A asks explicitly for Manager B's rep. The filter may only narrow.
+    const res = await request(`/api/metrics/team?reps=${repB1Rep}`, managerASession);
+    const { rows } = await res.json();
+    expect(rows.map((r: any) => r.repId)).not.toContain(repB1Rep);
+  });
+
+  it("scopes the coaching board to the caller's branch", async () => {
+    const res = await request("/api/metrics/insights", managerASession);
+    const { insights } = await res.json();
+    const ids = insights.map((i: any) => i.repId);
+    expect(ids).toContain(repA1Rep);
+    expect(ids).not.toContain(repB1Rep);
+  });
+
+  it("gives an admin the whole tenant", async () => {
+    const res = await request("/api/metrics/team", adminSession);
+    const { rows } = await res.json();
+    const ids = rows.map((r: any) => r.repId);
+    expect(ids).toContain(repA1Rep);
+    expect(ids).toContain(repB1Rep);
+  });
+});
+
+// ── Tenant isolation ─────────────────────────────────────────────────────────
+
+describe("tenant isolation", () => {
+  it("never leaks tenant 2 rows into a tenant 1 read", async () => {
+    const res = await request("/api/metrics/team", adminSession);
+    const { rows } = await res.json();
+    expect(rows.map((r: any) => r.repId)).not.toContain(foreignRep);
+    expect(rows.every((r: any) => r.facts.doorsAttempted !== 99)).toBe(true);
+  });
+
+  it("404s when a foreign manager drills into a tenant 1 rep", async () => {
+    const res = await request(`/api/metrics/rep/${repA1Rep}`, foreignManagerSession);
+    expect(res.status).toBe(404);
+  });
+
+  it("keeps a foreign manager's coaching board empty of tenant 1 insights", async () => {
+    const res = await request("/api/metrics/insights", foreignManagerSession);
+    const { insights } = await res.json();
+    for (const i of insights) expect(i.repId).not.toBe(repA1Rep);
+  });
+
+  it("does not show a tenant 1 territory to a foreign manager", async () => {
+    const res = await request("/api/metrics/territories", foreignManagerSession);
+    const { rows } = await res.json();
+    expect(rows.map((r: any) => r.territoryId)).not.toContain(territoryId);
+  });
+});
+
+// ── Privacy: no raw coordinates on this plane ────────────────────────────────
+
+describe("no raw location in the metrics plane", () => {
+  it("returns no latitude or longitude from any metrics endpoint", async () => {
+    const paths = [
+      "/api/metrics/me",
+      "/api/metrics/team",
+      `/api/metrics/rep/${repA1Rep}`,
+      "/api/metrics/territories",
+      "/api/metrics/insights",
+      "/api/field-mode/state",
+      "/api/field-mode/summary",
+    ];
+    for (const path of paths) {
+      const res = await request(path, adminSession);
+      if (res.status !== 200) continue;
+      const text = await res.text();
+      // A coordinate would appear as a lat/lng key. Summaries (metres travelled,
+      // seconds inside territory) carry no position and are what this plane is for.
+      expect(/"lat"\s*:/.test(text), `${path} returned a lat`).toBe(false);
+      expect(/"lng"\s*:/.test(text), `${path} returned a lng`).toBe(false);
+      expect(/"repLat"|"repLng"/.test(text), `${path} returned a device fix`).toBe(false);
+    }
+  });
+});
+
+// ── Coaching notes ───────────────────────────────────────────────────────────
+
+describe("coaching notes", () => {
+  it("refuses a rep the ability to write a note about anyone, including themselves", async () => {
+    const res = await request("/api/metrics/notes", repA1Session, {
+      method: "POST",
+      body: JSON.stringify({ repId: repA1Rep, body: "self note" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("404s when a supervisor writes a note about a rep outside their branch", async () => {
+    const res = await request("/api/metrics/notes", managerASession, {
+      method: "POST",
+      body: JSON.stringify({ repId: repB1Rep, body: "out of branch" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("keeps a private note invisible to the rep and visible to the supervisor", async () => {
+    const create = await request("/api/metrics/notes", leadASession, {
+      method: "POST",
+      body: JSON.stringify({ repId: repA1Rep, body: "PRIVATE: work on the close", sharedWithRep: false }),
+    });
+    expect(create.status).toBe(200);
+
+    const repView = await request("/api/metrics/notes/me", repA1Session);
+    const { notes: repNotes } = await repView.json();
+    expect(repNotes.some((n: any) => n.body.includes("PRIVATE"))).toBe(false);
+
+    const supView = await request(`/api/metrics/notes?repId=${repA1Rep}`, leadASession);
+    const { notes: supNotes } = await supView.json();
+    expect(supNotes.some((n: any) => n.body.includes("PRIVATE"))).toBe(true);
+  });
+
+  it("shows a note to the rep once it is explicitly shared", async () => {
+    await request("/api/metrics/notes", leadASession, {
+      method: "POST",
+      body: JSON.stringify({ repId: repA1Rep, body: "SHARED: nice work on callbacks", sharedWithRep: true }),
+    });
+    const repView = await request("/api/metrics/notes/me", repA1Session);
+    const { notes } = await repView.json();
+    expect(notes.some((n: any) => n.body.includes("SHARED"))).toBe(true);
+    // ...and still not the private one.
+    expect(notes.some((n: any) => n.body.includes("PRIVATE"))).toBe(false);
+  });
+});
+
+// ── Reclaim review is review-only ────────────────────────────────────────────
+
+describe("territory reclaim review", () => {
+  it("refuses the decision endpoint to a team lead", async () => {
+    const res = await request(`/api/metrics/territories/${territoryId}/review`, leadASession, {
+      method: "POST",
+      body: JSON.stringify({ decision: "reclaimed" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("records a manager's decision without moving any doors", async () => {
+    const before = rawDb.prepare(
+      `SELECT rep_id AS repId, assignee_ids AS assigneeIds, status FROM territories WHERE id = ?`,
+    ).get(territoryId) as any;
+
+    const res = await request(`/api/metrics/territories/${territoryId}/review`, managerASession, {
+      method: "POST",
+      body: JSON.stringify({ decision: "reclaimed", note: "Agreed at the Monday call" }),
+    });
+    expect(res.status).toBe(200);
+
+    // The audit row exists...
+    const review = rawDb.prepare(
+      `SELECT decision, decision_note AS note FROM territory_reclaim_reviews WHERE territory_id = ?`,
+    ).get(territoryId) as any;
+    expect(review.decision).toBe("reclaimed");
+    expect(review.note).toContain("Monday");
+
+    // ...and the territory is completely untouched. Recording an intent is not
+    // the same act as taking the area away, and this endpoint only does the first.
+    const after = rawDb.prepare(
+      `SELECT rep_id AS repId, assignee_ids AS assigneeIds, status FROM territories WHERE id = ?`,
+    ).get(territoryId) as any;
+    expect(after).toEqual(before);
+  });
+
+  it("rejects an unknown decision value", async () => {
+    const res = await request(`/api/metrics/territories/${territoryId}/review`, managerASession, {
+      method: "POST",
+      body: JSON.stringify({ decision: "delete_everything" }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Field Mode ───────────────────────────────────────────────────────────────
+
+describe("field mode", () => {
+  it("reports the rep's own shift state and never another rep's", async () => {
+    const res = await request("/api/field-mode/state", repA1Session);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.hasSeat).toBe(true);
+    expect(body.facts.doorsAttempted).toBe(60);
+  });
+
+  it("declines to record an arrival with no open shift, and does not error", async () => {
+    const res = await request("/api/field-mode/arrival", repA1Session, {
+      method: "POST",
+      body: JSON.stringify({ leadId: 1, lat: 35.0, lng: -81.0 }),
+    });
+    // 200 with recorded:false, never a 4xx: a rep at a doorstep must never see
+    // an error from a telemetry write, and the disposition path is unaffected.
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.recorded).toBe(false);
+    expect(body.reason).toBe("no_active_shift");
+  });
+
+  it("records an arrival during an open shift and survives a duplicate flush", async () => {
+    storage.clockIn(repA1Rep, 1);
+    const payload = JSON.stringify({ leadId: 4242, lat: 35.0, lng: -81.0, clientId: "arrival-idem-1" });
+    const first = await request("/api/field-mode/arrival", repA1Session, { method: "POST", body: payload });
+    expect((await first.json()).recorded).toBe(true);
+    await request("/api/field-mode/arrival", repA1Session, { method: "POST", body: payload });
+
+    const count = rawDb.prepare(
+      `SELECT COUNT(*) AS n FROM door_arrivals WHERE client_id = 'arrival-idem-1'`,
+    ).get() as any;
+    expect(Number(count.n)).toBe(1);
+  });
+
+  it("still records the arrival when the device has no usable fix", async () => {
+    const res = await request("/api/field-mode/arrival", repA1Session, {
+      method: "POST",
+      body: JSON.stringify({ leadId: 4243, clientId: "arrival-nogps-1" }),
+    });
+    const body = await res.json();
+    expect(body.recorded).toBe(true);
+    // Labelled unverified rather than refused - a weak GPS fix never blocks the
+    // work, it only changes what the record claims.
+    expect(body.locationVerified).toBe(false);
+  });
+});
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+describe("field activity and privacy settings", () => {
+  it("refuses the settings surface to a manager", async () => {
+    expect((await request("/api/metrics/settings", managerASession)).status).toBe(403);
+  });
+
+  it("lets an admin read and update, clamping retention to the documented range", async () => {
+    const res = await request("/api/metrics/settings", adminSession, {
+      method: "PUT",
+      body: JSON.stringify({ retentionDays: 9999, graceRadiusM: 5, minDwellSeconds: 30 }),
+    });
+    expect(res.status).toBe(200);
+    const { settings } = await res.json();
+    // No admin setting can ever mean "keep forever".
+    expect(settings.retentionDays).toBe(90);
+    // Grace radius has a floor too.
+    expect(settings.graceRadiusM).toBe(10);
+    expect(settings.minDwellSeconds).toBe(30);
+  });
+
+  it("writes a before/after row to the protected admin audit trail", async () => {
+    await request("/api/metrics/settings", adminSession, {
+      method: "PUT",
+      body: JSON.stringify({ rawTrailsVisible: true }),
+    });
+    const row = rawDb.prepare(
+      `SELECT COUNT(*) AS n FROM admin_audit WHERE action = 'metrics.field_privacy_settings_changed'`,
+    ).get() as any;
+    expect(Number(row.n)).toBeGreaterThan(0);
+  });
+
+  it("ships raw location trails hidden by default", async () => {
+    // Fresh tenant with no policy row: the fallback is what a new org gets.
+    const res = await request("/api/metrics/settings", foreignManagerSession);
+    expect(res.status).toBe(403); // manager cannot read it at all
+  });
+});

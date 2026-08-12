@@ -829,6 +829,25 @@ app.use((req, res, next) => {
   const incentiveDrainTimer = setInterval(drainIncentives, 30_000);
   incentiveDrainTimer.unref();
 
+  // Rep metrics rollups. Cluster workers are excluded for the same reason the
+  // scan cron is: N workers draining one dirty-day queue would each recompute
+  // the same rep-days, multiplying the write load by the worker count for
+  // identical results. The job is chunked, yields between rep-days, and stands
+  // down on resource pressure, so it never competes with a rep saving a
+  // disposition - see the header of repMetricsAggregator.
+  let stopRepMetrics: (() => void) | null = null;
+  if (!IS_CLUSTER_WORKER) {
+    try {
+      const { startRepMetricsWorkers } = await import("./repMetricsAggregator");
+      stopRepMetrics = startRepMetricsWorkers();
+    } catch (error) {
+      structuredLog("rep_metrics.start_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      }, "warn");
+    }
+  }
+  void stopRepMetrics;
+
   // Route modules import stores that prepare statements for migrated tables.
   // Load them only after migrations so a brand-new deployment can boot from an
   // empty data directory instead of failing during module evaluation.

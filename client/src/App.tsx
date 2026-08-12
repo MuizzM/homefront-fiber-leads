@@ -55,6 +55,7 @@ const TaxAndPay = lazyRoute(() => import("@/pages/TaxAndPay"));
 const LiveMap = lazyRoute(() => import("@/pages/LiveMap"));
 const LiveOps = lazyRoute(() => import("@/pages/LiveOps"));
 const ClockIn = lazyRoute(() => import("@/pages/ClockIn"));
+const Metrics = lazyRoute(() => import("@/pages/Metrics"));
 const Profile = lazyRoute(() => import("@/pages/Profile"));
 const Diagnostics = lazyRoute(() => import("@/pages/Diagnostics"));
 const LoginActivity = lazyRoute(() => import("@/pages/LoginActivity"));
@@ -353,6 +354,14 @@ function RouteTable({ location, role, isSuperAdmin }: {
             <Redirect to="/map" />
           </Route>
           <Route path="/clock"><CapabilityGuard role={role} capability="field.app.use"><ClockIn /></CapabilityGuard></Route>
+          {/* Metrics — one route, six capability-gated sub-pages. The :tab form
+              is listed FIRST so /metrics/team can never be shadowed by the bare
+              path as the switch grows (same precedent as /areas/:id). The page
+              itself falls back to the first tab the caller may see, so a rep
+              following a deep link to a manager tab lands on My Metrics rather
+              than an access-denied card. */}
+          <Route path="/metrics/:tab"><CapabilityGuard role={role} capability="dashboard.read.self"><Metrics /></CapabilityGuard></Route>
+          <Route path="/metrics"><CapabilityGuard role={role} capability="dashboard.read.self"><Metrics /></CapabilityGuard></Route>
           {/* Mileage is gated on the rep-level capability; the manager queue
               inside the page is gated separately on mileage.approve. */}
           <Route path="/mileage"><CapabilityGuard role={role} capability="mileage.submit.self"><Mileage /></CapabilityGuard></Route>

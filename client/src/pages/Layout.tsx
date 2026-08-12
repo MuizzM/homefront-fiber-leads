@@ -39,6 +39,9 @@ import {
   PackageSearch,
   FileUp,
   Send,
+  BarChart3,
+  Lightbulb,
+  FileBarChart,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -79,6 +82,16 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/",      label: "Dashboard",    icon: LayoutDashboard, show: (r: AppRole) => isFieldRole(r) && r !== "rep",       group: "Core" },
   { href: "/map",   label: "Field Map",    icon: Map,             show: isFieldRole,                                   group: "Core" },
   { href: "/leads", label: "Leads",        icon: MapPin,          show: isFieldRole,                                   group: "Core" },
+  // Metrics sits in Core, not in Field: for a rep it is the second screen they
+  // open after the map, and burying it under a collapsed group would make the
+  // one surface built for them the hardest to find. The sub-pages below are
+  // each gated on the SAME capability the tab inside the page checks, so a nav
+  // entry can never point somebody at a tab that would not render for them.
+  { href: "/metrics/my",        label: "Metrics",             icon: BarChart3,   show: r => can(r, "dashboard.read.self"),        group: "Core" },
+  { href: "/metrics/team",      label: "Team Metrics",        icon: BarChart3,   show: r => can(r, "dashboard.read.team"),        group: "Metrics" },
+  { href: "/metrics/territory", label: "Territory Metrics",   icon: LayoutGrid,  show: r => can(r, "dashboard.read.team"),        group: "Metrics" },
+  { href: "/metrics/coaching",  label: "Coaching Insights",   icon: Lightbulb,   show: r => can(r, "coaching.read.team"),         group: "Metrics" },
+  { href: "/metrics/reports",   label: "Reports",             icon: FileBarChart,show: r => can(r, "dashboard.read.org"),         group: "Metrics" },
   // Calling is a separate, capability-gated workspace. Field-map access never
   // implies calling authority and the map never reveals a phone number.
   { href: "/calling", label: "Cold Calling", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
@@ -378,7 +391,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       ? location === "/" || location === "/today"
                       : href === "/calling"
                         ? location === href || location.startsWith("/calling/lead/")
-                        : location === href;
+                        // The bare /metrics path resolves to the first tab the
+                        // caller may see, which for a rep is My Metrics. Light
+                        // that entry rather than leaving the whole group dark.
+                        : href === "/metrics/my"
+                          ? location === href || location === "/metrics"
+                          : location === href;
                     const badgeCount =
                       href === "/messages" ? chatUnread
                       : canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount

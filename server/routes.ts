@@ -126,6 +126,7 @@ import * as spiffStore from "./spiffStore";
 import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
 import { registerMileageRoutes } from "./mileageRoutes";
 import { registerLiveOpsRoutes, notifyLiveOpsChanged } from "./liveOpsRoutes";
+import { registerRepMetricsRoutes } from "./repMetricsRoutes";
 import { ingestFix, getLiveStates, clearLiveStateForRep } from "./liveOpsStore";
 import { liveOpsScope } from "./liveOpsScope";
 import { registerReferralRoutes } from "./referralRoutes";
@@ -1356,6 +1357,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // operator turns it on) — see the note in server/mileageStore.ts.
   registerMileageRoutes(app, { requireAuth, requireCapability });
   registerLiveOpsRoutes(app, { requireAuth, requireCapability });
+  // Rep metrics and field performance. Registered alongside live ops because
+  // the two share a scope resolver and a privacy contract: live ops answers
+  // "where is everyone right now", metrics answers "how is everyone doing", and
+  // keeping them on separate route modules is what stops the second quietly
+  // becoming a way to reach the first without an audit row.
+  registerRepMetricsRoutes(app, { requireAuth, requireCapability });
   // Rep-referral program. Ships DARK (referral.program.enabled = false), so the
   // link and pipeline render but no attribution is accepted and no reward is
   // ever created until an admin turns it on.

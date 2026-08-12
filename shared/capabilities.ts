@@ -85,6 +85,21 @@ export type Capability =
   | "incentive.campaign.manage"
   // Dashboards / analytics read models
   | "dashboard.read.self" | "dashboard.read.team" | "dashboard.read.org"
+  // Coaching. Deliberately its OWN domain rather than an extension of
+  // dashboard.*: an insight is a statement ABOUT a person, and the right to
+  // read a team's numbers is not the right to read what the system concluded
+  // about their weaknesses. `.self` is a rep reading their own; `.team` is a
+  // supervisor reading their downline's; `note.write` is authoring the private
+  // record, which a rep never holds even about themselves - a coaching note is
+  // the supervisor's file, and letting the subject write in it would make it
+  // useless as one.
+  | "coaching.read.self" | "coaching.read.team" | "coaching.note.write"
+  // Deciding a reclaim RECOMMENDATION. Separate from the territory rank model
+  // (shared/permissions.reclaim_territory, which is team_lead) because this is
+  // the audited review step in front of it: the engine recommends, a human with
+  // this capability records the decision, and only then does an ordinary
+  // reclaim happen through the existing rank-gated route.
+  | "territory.reclaim.review"
   // Provider order status (PerfectVision submitted orders and any future
   // carrier order feed). Deliberately its OWN domain rather than an extension
   // of commission.*: this plane is order LIFECYCLE, and granting somebody the
@@ -141,6 +156,12 @@ const REP: readonly Capability[] = [
   "field.location.read.self",
   "lead.read.assigned", "lead.disposition.update", "lead.note.write",
   "commission.read.self", "dashboard.read.self",
+  // A rep reads the insights generated about their OWN work. This is the half
+  // of the coaching engine the brief insists on: an insight a rep cannot see is
+  // a file kept on them, and every rule in shared/coachingInsights is written
+  // to be read by its subject. Deliberately NOT coaching.note.write - the
+  // supervisor's private note stays the supervisor's.
+  "coaching.read.self",
   "onboarding.documents.read.self",
   // READ only — a rep works the numbers an area run already produced. This is
   // safe to grant org-wide because the capability alone opens nothing: every
@@ -179,6 +200,11 @@ const TEAM_LEAD: readonly Capability[] = [
   "commission.read.team", "commission.read.downline", "commission.structure.manage",
   "dashboard.read.team", "audit.read.team",
   "field.location.read.team",
+  // Reading the downline's insights and writing coaching notes is the team
+  // lead's core job, so both land here. Deciding a territory reclaim does not:
+  // that stays with MANAGER below, matching how reset_territory_pass already
+  // sits above reclaim in the rank model.
+  "coaching.read.team", "coaching.note.write",
   // Scanning starts here. These sets are unions of the tier below, not supersets
   // of REP — TEAM_LEAD spreads REP and MANAGER spreads TEAM_LEAD — so removing
   // scan.submit from REP took it off every role at once; granting it back here
@@ -243,6 +269,9 @@ const MANAGER: readonly Capability[] = [
   // exceptions. Resolving an exception attributes a commission-bearing order to
   // a rep, which is why it lands here and not on the rep who benefits.
   "order.read.org", "recovery.read.org", "recovery.manage", "order.match.resolve",
+  // Recording a decision on a reclaim recommendation. A manager's call, and an
+  // audited one - the review row names who decided and what they decided.
+  "territory.reclaim.review",
 ];
 
 // Admin (and super_admin) hold the full set including org policy + paying reps.
@@ -361,7 +390,7 @@ export type CapabilityDomain =
   | "field" | "leads" | "assignments" | "scanning" | "calling" | "compliance" | "enrichment"
   | "commissions" | "earnings" | "incentives" | "training" | "mileage" | "referrals"
   | "onboarding" | "dashboard" | "audit" | "settings" | "orders" | "messaging"
-  | "actions";
+  | "actions" | "coaching";
 
 export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "field.app.use": "field",
@@ -422,6 +451,10 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "field.location.export": "field",
   "dashboard.read.team": "dashboard",
   "dashboard.read.org": "dashboard",
+  "coaching.read.self": "coaching",
+  "coaching.read.team": "coaching",
+  "coaching.note.write": "coaching",
+  "territory.reclaim.review": "assignments",
   "audit.read.team": "audit",
   "audit.read.org": "audit",
   "settings.manage.org": "settings",
@@ -464,6 +497,11 @@ export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capabilit
   // the product - it is about a person's body, not their work product. Flagged
   // so the governance matrix shows it beside the money capabilities.
   "field.location.read.team", "field.location.read.org", "field.location.export",
+  // Reading the system's conclusions about somebody's weaknesses, and taking
+  // territory off them. Both are statements about a person's livelihood, and
+  // both belong in the matrix beside the money capabilities for the same reason
+  // the location ones do.
+  "coaching.read.team", "territory.reclaim.review",
   // Org-wide money visibility across every earning type, including
   // reimbursements and referral bonuses.
   "earnings.read.org",
@@ -498,7 +536,7 @@ export function isHighRisk(cap: Capability): boolean {
 
 // Every capability, grouped by domain, in a stable domain order — the matrix
 // and the "grouped capabilities" governance view render straight from this.
-const DOMAIN_ORDER: CapabilityDomain[] = ["field", "leads", "assignments", "scanning", "calling", "compliance", "enrichment", "orders", "messaging", "commissions", "earnings", "incentives", "training", "mileage", "referrals", "onboarding", "dashboard", "actions", "audit", "settings"];
+const DOMAIN_ORDER: CapabilityDomain[] = ["field", "leads", "assignments", "scanning", "calling", "compliance", "enrichment", "orders", "messaging", "commissions", "earnings", "incentives", "training", "mileage", "referrals", "onboarding", "dashboard", "coaching", "actions", "audit", "settings"];
 export function groupedCapabilities(): { domain: CapabilityDomain; capabilities: Capability[] }[] {
   const all = Object.keys(CAPABILITY_DOMAIN) as Capability[];
   return DOMAIN_ORDER.map(domain => ({
