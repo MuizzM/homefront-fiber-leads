@@ -20,7 +20,7 @@
 //   so a 320px phone gets a smaller chart rather than a horizontal scrollbar.
 
 import { type ReactNode } from "react";
-import { formatDuration, formatRate, type FunnelStage } from "@shared/repMetrics";
+import { formatRate, type FunnelStage } from "@shared/repMetrics";
 
 function EmptyChart({ label, height = 120 }: { label: string; height?: number }) {
   return (
@@ -225,40 +225,6 @@ export function ActivityCalendar({ days }: {
   );
 }
 
-// ── Comparison bar ───────────────────────────────────────────────────────────
-
-/**
- * One value against a baseline, as a single rail with a marker.
- *
- * Used wherever "you vs the team median" appears. The marker is a line rather
- * than a second bar because the baseline is a reference, not a competitor, and
- * two bars invite the reading that one of them is losing.
- */
-export function ComparisonBar({ value, baseline, max, tone = "primary" }: {
-  value: number | null;
-  baseline: number | null;
-  max?: number;
-  tone?: "primary" | "success" | "warning";
-}) {
-  if (value == null) return <div className="h-2 rounded-full bg-secondary" aria-hidden="true" />;
-  const ceiling = max ?? (Math.max(value, baseline ?? 0) * 1.25 || 1);
-  const pct = Math.max(0, Math.min(100, (value / ceiling) * 100));
-  const basePct = baseline == null ? null : Math.max(0, Math.min(100, (baseline / ceiling) * 100));
-  const fill = { primary: "bg-primary", success: "bg-success", warning: "bg-warning" }[tone];
-  return (
-    <div className="relative h-2 overflow-hidden rounded-full bg-secondary">
-      <div className={`h-full rounded-full ${fill}`} style={{ width: `${pct}%` }} />
-      {basePct != null && (
-        <span
-          className="absolute inset-y-0 w-0.5 bg-foreground/60"
-          style={{ left: `${basePct}%` }}
-          aria-hidden="true"
-        />
-      )}
-    </div>
-  );
-}
-
 // ── Small helpers used by several views ──────────────────────────────────────
 
 export function ChartFrame({ title, hint, children, action }: {
@@ -281,6 +247,3 @@ export function ChartFrame({ title, hint, children, action }: {
   );
 }
 
-/** Seconds as a chart-axis label. Re-exported so views do not each import the
- *  shared module just for one formatter. */
-export const durationLabel = formatDuration;
