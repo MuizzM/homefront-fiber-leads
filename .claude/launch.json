@@ -110,6 +110,16 @@
       ],
       "port": 5072,
       "autoPort": false
+    },
+    {
+      "name": "homefront-fieldmap",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5077 DATA_DIR=.dev-verify FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5077,
+      "autoPort": false
     }
   ]
 }

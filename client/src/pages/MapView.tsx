@@ -9,7 +9,7 @@ import {
 } from "react";
 // mapbox-gl loaded via CDN in index.html — do not bundle
 declare const mapboxgl: any;
-import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, List, Plus, Crosshair, Users, Settings2, Landmark, Tag, Flag, Palette, Undo2, Trash2 } from "lucide-react";
+import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, List, Plus, Crosshair, Users, Settings2, Filter, Landmark, Tag, Flag, Palette, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, apiRequestIdempotent, getStoredSessionId } from "@/lib/queryClient";
@@ -8317,7 +8317,10 @@ export default function MapView() {
                   data-testid="map-filter-open"
                   className={`${RAIL_BTN} ${RAIL_BTN_IDLE}`}
                 >
-                  
+                  {/* An icon-only control: the glyph IS the label, so it is
+                      exempt from the decorative-icon sweep (092b277b removed it
+                      anyway and left a blank white square on the rail). */}
+                  <Filter className="w-5 h-5" aria-hidden="true" />
                   {mapFilterActive && (
                     <span
                       className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-primary ring-2 ring-card"

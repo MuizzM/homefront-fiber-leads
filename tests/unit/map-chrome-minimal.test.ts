@@ -192,3 +192,46 @@ describe("no map vendor chrome at rest", () => {
     expect(css.slice(css.indexOf(".mapboxgl-ctrl-logo"))).toContain("display: none !important");
   });
 });
+
+describe("every rail button carries its glyph", () => {
+  // The rail is six ICON-ONLY controls: the glyph is the whole label, so a
+  // button that loses its icon renders as a blank white square that still
+  // opens a sheet. That is exactly what happened to Filters in 092b277b (the
+  // decorative-icon sweep), which stated the opposite rule - "functional
+  // glyphs stay: ... icon-only controls" - and stripped one anyway. The sweep
+  // is a codemod, so the guard has to be structural rather than a named icon.
+  it("no rail button has an empty body", () => {
+    const rail = src.slice(
+      src.indexOf('data-testid="map-tools"'),
+      src.indexOf('data-testid="map-tools-menu"'),
+    );
+    expect(rail.length).toBeGreaterThan(500);
+
+    // Every <button …>…</button> whose className is the shared RAIL_BTN must
+    // contain at least one component element (the lucide glyph).
+    const buttons = rail.split("<button").slice(1);
+    const railButtons = buttons.filter((b) => b.includes("RAIL_BTN"));
+    expect(railButtons.length).toBeGreaterThanOrEqual(4);
+
+    for (const b of railButtons) {
+      const body = b.slice(b.indexOf(">") + 1, b.indexOf("</button>"));
+      const testid = /data-testid="([^"]+)"/.exec(b)?.[1] ?? "(unnamed)";
+      // A capitalised JSX tag is a component - the lucide icon. The active
+      // dot is a lowercase <span>, so a button holding ONLY the dot fails.
+      expect(/<[A-Z][A-Za-z0-9]*\b/.test(body), `rail button ${testid} renders no glyph`).toBe(true);
+    }
+  });
+
+  it("Filters is a funnel, distinct from the Settings sliders beside it", () => {
+    // Two adjacent slider glyphs read as one control duplicated; the rail sits
+    // them 8px apart, so they must not be the same family.
+    expect(src).toContain('import { X, Search,');
+    const filterBtn = src.slice(
+      src.indexOf('data-testid="map-filter-open"'),
+      src.indexOf('data-testid="map-settings-open"'),
+    );
+    expect(filterBtn).toContain("<Filter className=");
+    const settingsBtn = src.slice(src.indexOf('data-testid="map-settings-open"'));
+    expect(settingsBtn.slice(0, 400)).toContain("<Settings2 className=");
+  });
+});

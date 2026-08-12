@@ -194,6 +194,30 @@ export const GRID_TIER_HIDDEN_LAYER_IDS = [
 //     GPU draw; the row cap bounds its feature count.
 export const CLUSTER_MAX_ZOOM = 13; // source: collapse clusters below this tile zoom
 export const CLUSTER_LAYER_MAX_ZOOM = CLUSTER_MAX_ZOOM + 1; // layers: clusters EXIST until display z14
+
+// ── The one invariant that keeps the wide view readable ────────────────────
+// A cluster's DRAWN extent must never exceed the distance at which two
+// clusters can form. supercluster only promises that points within
+// `clusterRadius` join a cluster - it says nothing about how far apart the
+// resulting CENTROIDS land, so at wide zoom several towns collapse to
+// centroids a few px apart while each still paints a full-size bubble.
+//
+// Measured on the Lexington set (1,500 doors) before this was enforced, with
+// clusterRadius 50 against a 64px circle and an 84px glow:
+//   z13    0% of cluster pairs overlapping
+//   z12   83%, worst pair 37% merged
+//   z11  100%, worst 69%
+//   z10  100%, worst 84%  <- four bubbles rendering as one dark blob
+// Raising the grouping distance past the artwork makes those four MERGE into
+// one honest bubble instead of stacking: fewer, larger, readable.
+//
+// Keep these three in step. CLUSTER_MAX_RADIUS is the largest `circle-radius`
+// in the ramp below, CLUSTER_GLOW_PAD the halo drawn behind it; the guard in
+// tests/unit/map-cluster-overlap.test.ts fails if the drawn diameter ever
+// grows past the grouping distance again.
+export const CLUSTER_MAX_RADIUS = 32;
+export const CLUSTER_GLOW_PAD = 6;
+export const CLUSTER_RADIUS_PX = 80;
 /** The zoom where per-pin detail (glyph icons, halos) becomes legible; the
  *  plain circle layer runs at every zoom underneath. */
 export const PIN_DETAIL_MIN_ZOOM = 12;
@@ -203,7 +227,7 @@ export const LEADS_CLUSTER_SOURCE_SPEC: any = {
   data: { type: "FeatureCollection", features: [] },
   cluster: true,
   clusterMaxZoom: CLUSTER_MAX_ZOOM,
-  clusterRadius: 50, // px radius to cluster within
+  clusterRadius: CLUSTER_RADIUS_PX, // px radius to cluster within - see the invariant above
   clusterProperties: { fresh_count: ["+", ["get", "fresh"]] },
 };
 
@@ -218,7 +242,12 @@ export function clusterLayerSpecs(): any[] {
       maxzoom: CLUSTER_LAYER_MAX_ZOOM,
       paint: {
         "circle-color": ["step", ["get", "point_count"], "#0d9488", 10, "#0f766e", 30, "#115e59"],
-        "circle-radius": ["step", ["get", "point_count"], 26, 10, 33, 30, 42],
+        // A halo hugging the circle, not a second bubble around it. At the old
+        // 26/33/42 the glow was the WIDEST thing on the map (84px across) and
+        // neighbouring haloes merged into a haze well before the circles
+        // themselves touched - the blob had soft edges for that reason.
+        "circle-radius": ["step", ["get", "point_count"],
+          18 + CLUSTER_GLOW_PAD, 10, 24 + CLUSTER_GLOW_PAD, 30, CLUSTER_MAX_RADIUS + CLUSTER_GLOW_PAD],
         "circle-opacity": 0.25,
         "circle-stroke-width": 0,
       },
@@ -233,7 +262,7 @@ export function clusterLayerSpecs(): any[] {
       filter: ["all", ["has", "point_count"], [">", ["get", "fresh_count"], 0]],
       maxzoom: CLUSTER_LAYER_MAX_ZOOM,
       paint: {
-        "circle-radius": ["+", ["step", ["get", "point_count"], 18, 10, 24, 30, 32], 6],
+        "circle-radius": ["+", ["step", ["get", "point_count"], 18, 10, 24, 30, CLUSTER_MAX_RADIUS], CLUSTER_GLOW_PAD],
         "circle-color": "rgba(0,0,0,0)",
         "circle-stroke-width": 3,
         "circle-stroke-color": "#22c55e",
@@ -251,7 +280,7 @@ export function clusterLayerSpecs(): any[] {
       maxzoom: CLUSTER_LAYER_MAX_ZOOM,
       paint: {
         "circle-color": ["step", ["get", "point_count"], "#0d9488", 10, "#0f766e", 30, "#115e59"],
-        "circle-radius": ["step", ["get", "point_count"], 18, 10, 24, 30, 32],
+        "circle-radius": ["step", ["get", "point_count"], 18, 10, 24, 30, CLUSTER_MAX_RADIUS],
         "circle-opacity": 0.92,
         "circle-stroke-width": 2.5,
         "circle-stroke-color": "rgba(255,255,255,0.9)",
