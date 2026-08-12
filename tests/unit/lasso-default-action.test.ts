@@ -21,7 +21,10 @@ const src = readFileSync(join(process.cwd(), "client/src/pages/MapView.tsx"), "u
 describe("the lasso draws an area by default", () => {
   it("initialises lassoAction to 'area', not 'assign'", () => {
     const decl = src.match(
-      /useState<"assign"\s*\|\s*"status"\s*\|\s*"mark"\s*\|\s*"area">\(\s*"([a-z]+)"/,
+      // Tolerant of the union GROWING - "create" joined it when the lasso
+      // learned to add doors - but still pinned to the initial value, which is
+      // the thing this test is actually about.
+      /useState<"assign"\s*\|\s*"status"\s*\|\s*"mark"\s*\|\s*"area"[^>]*>\(\s*"([a-z]+)"/,
     );
     expect(decl, "lassoAction useState declaration not found - did it move?").not.toBeNull();
     expect(decl![1]).toBe("area");
@@ -81,11 +84,18 @@ describe("the action panel opens on the SHAPE, not on what it caught", () => {
     expect(src).not.toContain("lassoSelected.length === 0 ?");
   });
 
-  it("resolves an empty loop to Area, whatever tab was last used", () => {
+  it("resolves an empty loop to Area - except for the action that needs one empty", () => {
     // Opening on "Assign" with nothing selected shows one disabled button and
     // reads as broken — the same dead end by a shorter route.
-    expect(src).toContain("const lassoEffectiveAction = lassoHasLeads ? lassoAction : \"area\"");
-    for (const key of ["assign", "status", "mark", "area"]) {
+    //
+    // "create" is the deliberate exception. It adds a door for every house in
+    // the loop from the county address file, so a loop containing no leads is
+    // its PRIMARY case, not its degenerate one. Forcing that back to "area"
+    // would disable the only action the manager opened the panel for.
+    expect(src).toMatch(
+      /lassoHasLeads \|\| lassoAction === "create" \? lassoAction : "area"/,
+    );
+    for (const key of ["assign", "status", "mark", "area", "create"]) {
       expect(src).toContain(`{lassoEffectiveAction === "${key}" && (`);
     }
   });
@@ -93,7 +103,7 @@ describe("the action panel opens on the SHAPE, not on what it caught", () => {
   it("disables only the three actions that need lead IDs", () => {
     // Area needs the polygon and a rep. The others operate on lassoActiveIds and
     // would post an empty array.
-    expect(src).toContain('const disabled = !lassoHasLeads && key !== "area"');
+    expect(src).toContain('const disabled = !lassoHasLeads && key !== "area" && key !== "create"');
   });
 
   it("still sends the polygon, not the selection, when saving an area", () => {

@@ -986,7 +986,7 @@ export default function MapView() {
   // territory. Nothing appeared on the manager's map or the rep's, because
   // nothing had been created, and the only clue was that "Area" was the fourth
   // tab. The other three actions are still one tap away.
-  const [lassoAction, setLassoAction] = useState<"assign" | "status" | "mark" | "area">(
+  const [lassoAction, setLassoAction] = useState<"assign" | "status" | "mark" | "area" | "create">(
     "area",
   );
   const [lassoStatusOutcome, setLassoStatusOutcome] = useState<KnockOutcome>(
@@ -1345,6 +1345,45 @@ export default function MapView() {
   // Assign silently skipped every unsampled door inside the loop. The server
   // resolves the ring itself with the same scoped query, projection and
   // pinDisplayState the map is drawn from. See docs/architecture/BULK_ASSIGNMENT.md.
+  // Lasso a block, get a lead per door.
+  //
+  // Distinct from bulkAssign in what it consumes: assignment resolves LEADS
+  // inside the ring, this resolves ADDRESS POINTS (county E911) and creates the
+  // leads that were never there. That is why it is the one lasso action that
+  // is useful on a loop containing nothing at all.
+  //
+  // Server-side it is idempotent by canonical key, so a manager who lassos an
+  // overlapping block twice creates nothing the second time - which the result
+  // reports honestly rather than claiming a fresh batch.
+  const createFromSelectionMutation = useMutation({
+    mutationFn: async ({ polygon, repId }: { polygon: [number, number][]; repId?: number | null }) => {
+      const res = await apiRequestIdempotent("POST", "/api/leads/create-from-selection", {
+        polygon,
+        ...(repId ? { repId: Number(repId) } : {}),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? "Could not create doors from that outline");
+      return body as { created: number; existing: number; total: number };
+    },
+    onSuccess: (d) => {
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      // This one DOES speak, unlike a disposition: the map cannot show the
+      // difference between "82 new doors" and "these were already yours", and
+      // that difference is the whole result of the action.
+      toast({
+        title: d.created > 0
+          ? `${d.created} door${d.created === 1 ? "" : "s"} added`
+          : "No new doors - they were already on the map",
+        description: d.existing > 0 && d.created > 0
+          ? `${d.existing} already existed`
+          : undefined,
+      });
+      exitLasso();
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
   const bulkAssignMutation = useMutation({
     mutationFn: async ({
       polygon,
@@ -1471,7 +1510,12 @@ export default function MapView() {
   // resolves to it regardless of which tab was last used — otherwise the panel
   // would open on a tab whose only control is a disabled button.
   const lassoHasLeads = lassoSelected.length > 0;
-  const lassoEffectiveAction = lassoHasLeads ? lassoAction : "area";
+  // "create" joins "area" as an action that works on an EMPTY loop, and for
+  // the stronger reason: a loop with no leads in it is exactly the loop a
+  // manager draws over virgin territory to turn houses into doors. Forcing it
+  // back to "area" would disable the one action they opened the panel for.
+  const lassoEffectiveAction =
+    lassoHasLeads || lassoAction === "create" ? lassoAction : "area";
 
   // Rename an area — the friendly name reps see on their map. Server keeps an
   // audit trail (territory "renamed" event) and custom names survive reassign.
@@ -7216,17 +7260,20 @@ export default function MapView() {
                       flow rendered below to its EXISTING controls; the wide
                       Clear tile exits, same as the headline X. Mark keeps its
                       tile so no existing bulk action loses its entry point. */}
-                  <div className="grid grid-cols-4 gap-1.5">
+                  <div className="grid grid-cols-5 gap-1.5">
                     {(
                       [
                         ["assign", "Assign", Users],
                         ["status", "Status", Tag],
                         ["mark", "Mark", Flag],
                         ["area", "Area", Landmark],
+                        ["create", "Add doors", Plus],
                       ] as const
                     ).map(([key, label]) => {
-                      // Only "Area" works on an empty loop; the rest need lead IDs.
-                      const disabled = !lassoHasLeads && key !== "area";
+                      // "Area" and "Add doors" work on an empty loop; the rest
+                      // need lead IDs. Add doors is the only one that works
+                      // BECAUSE the loop is empty.
+                      const disabled = !lassoHasLeads && key !== "area" && key !== "create";
                       const active = lassoEffectiveAction === key;
                       return (
                         <button
@@ -7312,6 +7359,31 @@ export default function MapView() {
                           {bulkAssignMutation.isPending
                             ? "…"
                             : `Assign ${lassoActiveIds.length}`}
+                        </Button>
+                      </>
+                    )}
+                    {lassoEffectiveAction === "create" && (
+                      <>
+                        <p className="text-[12px] leading-snug text-white/70">
+                          Adds a door for every house inside the loop, using the
+                          county address file. Houses that are already on the map
+                          are left alone.
+                        </p>
+                        <Button
+                          disabled={!lassoDrawn || createFromSelectionMutation.isPending}
+                          onClick={() =>
+                            createFromSelectionMutation.mutate({
+                              polygon: lassoPoints,
+                              // Optional: if a rep is picked on the Assign tab,
+                              // the new doors land on them instead of the pool.
+                              repId: lassoRepId ? Number(lassoRepId) : null,
+                            })
+                          }
+                          type="button"
+                          data-testid="lasso-create-doors"
+                          className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
+                        >
+                          {createFromSelectionMutation.isPending ? "…" : "Add doors in this loop"}
                         </Button>
                       </>
                     )}
