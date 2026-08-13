@@ -24,6 +24,7 @@ vi.mock("@/lib/capabilities", () => ({
 }));
 
 import Diagnostics from "../../client/src/pages/Diagnostics";
+import OrderMessaging from "../../client/src/pages/OrderMessaging";
 import Governance from "../../client/src/pages/Governance";
 import TokenSetup from "../../client/src/pages/TokenSetup";
 
@@ -93,5 +94,53 @@ describe("token status before data arrives", () => {
     expect(screen.queryByText("Token Expired")).toBeNull();
     // The healthy state lands once data arrives - never the red alarm en route.
     await screen.findByText("Scanner Connected");
+  });
+});
+
+// ── The compliance screen ───────────────────────────────────────────────────
+// OrderMessaging is the highest-stakes instance of this defect in the app: it
+// decides what may be sent, to whom, and who may NEVER be contacted again.
+//
+// Two claims were derived from `?? []` and rendered on failure:
+//   · "Every requirement is met" - in green, on the sending-status card. It
+//     keyed off `blockers.length === 0`, and `blockers` comes from `config`,
+//     which is undefined both WHILE the policy loads and AFTER it fails. An
+//     empty blocker list therefore meant "no policy" as often as "nothing
+//     blocking".
+//   · "Nobody is suppressed" - a statement about the DO-NOT-CONTACT list,
+//     produced out of an error response.
+describe("order-recovery messaging under fetch failure", () => {
+  it("never claims sending is compliant when the policy did not load", async () => {
+    renderWithClient(<OrderMessaging />, url =>
+      url.includes("/policy")
+        ? Promise.resolve({ json: () => { throw new Error("api down"); } })
+        : Promise.resolve({ json: () => Promise.resolve({ templates: [], suppressions: [] }) }),
+    );
+    await waitFor(() => expect(screen.getByTestId("sending-status-error")).toBeTruthy());
+    expect(screen.queryByTestId("sending-ready")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Every requirement is met/i);
+    // And it says which way to fail safe.
+    expect(screen.getByTestId("sending-status-error").textContent).toMatch(/treat it as blocked/i);
+  });
+
+  it("never says nobody is suppressed when the suppression list failed", async () => {
+    renderWithClient(<OrderMessaging />, url =>
+      url.includes("/suppressions")
+        ? Promise.resolve({ json: () => { throw new Error("api down"); } })
+        : Promise.resolve({ json: () => Promise.resolve({ templates: [], config: null, flags: {} }) }),
+    );
+    await waitFor(() => expect(screen.getByTestId("suppressions-error")).toBeTruthy());
+    expect(document.body.textContent).not.toMatch(/Nobody is suppressed/i);
+    expect(screen.getByTestId("suppressions-error").textContent).toMatch(/not an empty one/i);
+  });
+
+  it("still says nobody is suppressed when the list genuinely loads empty", async () => {
+    // The fix must not swallow the true empty state - that is the other half of
+    // the contract, and the reason ErrorState and EmptyState are separate.
+    renderWithClient(<OrderMessaging />, () =>
+      Promise.resolve({ json: () => Promise.resolve({ templates: [], suppressions: [], config: null, flags: {} }) }),
+    );
+    await waitFor(() => expect(document.body.textContent).toMatch(/Nobody is suppressed/i));
+    expect(screen.queryByTestId("suppressions-error")).toBeNull();
   });
 });

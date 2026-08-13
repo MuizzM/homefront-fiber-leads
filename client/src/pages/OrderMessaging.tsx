@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/ErrorState";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
@@ -98,7 +99,24 @@ export default function OrderMessaging() {
       <Card className="mb-4">
         <CardHeader><CardTitle className="text-base">Sending status</CardTitle></CardHeader>
         <CardContent className="space-y-2 text-sm">
-          {blockers.length === 0 ? (
+          {/* An UNLOADED policy is not a compliant one. `blockers` derives from
+              `config`, and `config` is undefined while the policy query is in
+              flight AND after it fails - so an empty blocker list used to mean
+              "no policy" just as often as it meant "nothing blocking", and this
+              card announced in green that every requirement was met on the
+              strength of a request that never returned. On the one screen that
+              decides who may be contacted, that is the worst possible default. */}
+          {policy.isLoading ? (
+            <Skeleton className="h-16 w-full" data-testid="sending-status-loading" />
+          ) : policy.isError || !config ? (
+            <ErrorState
+              title="Can't confirm what may be sent"
+              description="The messaging policy did not load, so this screen cannot tell you whether sending is allowed. Treat it as blocked until it loads."
+              onRetry={() => void policy.refetch()}
+              bordered={false}
+              testId="sending-status-error"
+            />
+          ) : blockers.length === 0 ? (
             <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-success" data-testid="sending-ready">
               Every requirement is met. Reps can send approved messages, subject to each customer's consent and the
               limits below.
@@ -250,7 +268,21 @@ export default function OrderMessaging() {
                 )}
               </div>
             ))}
-            {(suppressions.data?.suppressions ?? []).length === 0 && !suppressions.isLoading && (
+            {/* "Nobody is suppressed" is a claim about the DO-NOT-CONTACT list.
+                On failure `data` is undefined and `?? []` made that claim out of
+                an error - telling an operator the list is empty when it simply
+                did not load. It renders on isSuccess only; a failure says so and
+                offers a retry. */}
+            {suppressions.isError && (
+              <ErrorState
+                title="Can't load the suppression list"
+                description="Nobody has been cleared to contact. This is a failure to read the do-not-contact list, not an empty one."
+                onRetry={() => void suppressions.refetch()}
+                bordered={false}
+                testId="suppressions-error"
+              />
+            )}
+            {suppressions.isSuccess && (suppressions.data?.suppressions ?? []).length === 0 && (
               <p className="text-sm text-muted-foreground">Nobody is suppressed.</p>
             )}
           </div>

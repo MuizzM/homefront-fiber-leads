@@ -130,13 +130,32 @@ describe("empty and edge states", () => {
     // and in viewport mode it never renders at all - an empty merged window
     // over an org with >60k leads is a skipped/sampled window, not "no leads"
     // (second owner report: blank "no leads" map at region zoom).
+    // ALSO gated on !mapPinsError. A failed full feed leaves mapPinData
+    // undefined, which makes pinsArrived false and suppressed the empty state -
+    // so the map painted nothing at all: no pins, no empty state, no message,
+    // no retry, indistinguishable from a territory with nothing in it. The
+    // error branch above it is role="alert" and this one is role="status";
+    // they must never both be eligible.
     expect(src).toContain(
-      "{mapReady && firstUseEmptyStateEnabled({ viewportMode, pinsArrived: mapPinData != null, leadCount: leads.length }) && (",
+      "{mapReady && !mapPinsError && firstUseEmptyStateEnabled({ viewportMode, pinsArrived: mapPinData != null, leadCount: leads.length }) && (",
     );
     expect(src).not.toContain("{mapReady && mapPinData != null && leads.length === 0 && (");
     expect(src).not.toContain("{mapReady && !isRep && leads.length === 0 && (");
     expect(src).toContain("No doors assigned yet");
     expect(src).toContain('data-testid="map-empty-state"');
+  });
+
+  it("a failed pin feed gets its own alert with a retry, not silence", () => {
+    // The query must expose the error at all - destructuring only `data` is how
+    // this went unnoticed.
+    expect(src).toContain("isError: mapPinsError, refetch: refetchMapPins");
+    expect(src).toContain('data-testid="map-pins-error"');
+    expect(src).toContain('data-testid="map-pins-error-retry"');
+    expect(src).toContain('role="alert"');
+    // Full-feed only: in viewport mode the window loader deliberately keeps the
+    // last good pins on screen and has its own 60s retry, so an alert there
+    // would cry wolf over a map that is still showing real doors.
+    expect(src).toContain("{mapReady && !viewportMode && mapPinsError && (");
   });
 
   it("filters that hide every door say so, with a one-tap Clear", () => {

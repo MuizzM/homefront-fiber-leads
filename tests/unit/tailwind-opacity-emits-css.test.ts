@@ -35,14 +35,26 @@ const CLIENT = join(ROOT, "client/src");
  *  though `text-sm/8` is valid line-height shorthand: the capture requires a
  *  colour-ish token, and any genuine line-height use would be `text-<size>/<n>`
  *  where the size is one of Tailwind's named sizes - if one ever appears here,
- *  narrow this list rather than deleting the test. */
-const DEAD_OPACITY =
-  /\b((?:bg|text|border|ring|from|to|via|shadow|outline|divide|accent|caret|decoration|fill|stroke)-[a-z0-9-]+)\/(8|12)\b/g;
+ *  narrow this list rather than deleting the test.
+ *
+ *  Matches ANY numeric opacity, not a hand-listed pair. The first version of
+ *  this test looked only for /8 and /12 - the two values the audit happened to
+ *  name - and three background classes at /92 sailed straight through it,
+ *  leaving the OFFLINE BANNER over the map with no background at all. A guard
+ *  that only knows the values you already found is not a guard. */
+const NUMERIC_OPACITY =
+  /\b((?:bg|text|border|ring|from|to|via|shadow|outline|divide|accent|caret|decoration|fill|stroke)-[a-z0-9-]+)\/(\d{1,3})\b/g;
 
-/** Tailwind 3.4's built-in opacity scale. Anything off it needs the bracketed
- *  arbitrary form. Kept here so the reason a value is legal is stated, not
- *  implied. */
-const EMITTING_STEPS = new Set([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]);
+/** Tailwind 3.4's built-in opacity scale, determined EMPIRICALLY by compiling
+ *  every value 0-100 through this repo's own tailwindcss with the project
+ *  config: exactly the 21 multiples of five emit, and the other 80 values emit
+ *  nothing at all. */
+const EMITTING_STEPS = new Set(Array.from({ length: 21 }, (_, i) => i * 5));
+
+/** Positioning utilities that this regex would otherwise catch: `left-1/2` is a
+ *  FRACTION, not an opacity, and `from-left-1/2` / `to-left-1/2` are real
+ *  classes in this codebase. Excluded by name so the exclusion is auditable. */
+const FRACTION_UTILITIES = /\b(?:from|to|via)-(?:left|right|top|bottom|inset)-\d+\/\d+\b/;
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -54,30 +66,50 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe("no colour utility uses an opacity step Tailwind will not emit", () => {
-  it("finds zero /8 or /12 colour utilities in client/src", () => {
+  it("finds zero off-scale colour opacities anywhere in client/src", () => {
     const offenders: string[] = [];
     for (const file of sourceFiles(CLIENT)) {
       const src = readFileSync(file, "utf8");
-      const lines = src.split("\n");
-      lines.forEach((line, i) => {
-        for (const m of line.matchAll(DEAD_OPACITY)) {
-          offenders.push(`${file.slice(ROOT.length + 1)}:${i + 1}  ${m[0]}`);
+      src.split("\n").forEach((line, i) => {
+        for (const m of line.matchAll(NUMERIC_OPACITY)) {
+          if (FRACTION_UTILITIES.test(m[0])) continue;   // left-1/2 and friends
+          const step = Number(m[2]);
+          if (EMITTING_STEPS.has(step)) continue;
+          offenders.push(`${file.slice(ROOT.length + 1)}:${i + 1}  ${m[0]}  (/${step} is not a multiple of 5)`);
         }
       });
     }
     expect(
       offenders,
-      `These compile to NO CSS, and tailwind-merge still lets them displace the base utility, so the surface renders unfilled. Use the bracketed form instead: /8 -> /[0.08], /12 -> /[0.12].\n${offenders.join("\n")}`,
+      `These compile to NO CSS, and because cn() is tailwind-merge they still DISPLACE the base utility - the surface renders with nothing.\n` +
+      `Only multiples of five emit. Use the bracketed form to keep the exact value: /8 -> /[0.08], /92 -> /[0.92].\n${offenders.join("\n")}`,
     ).toEqual([]);
   });
 
-  it("states which plain steps are safe, so the next author does not guess", () => {
-    // A guard against someone "fixing" a future /8 by picking another off-scale
-    // value like /7 or /13.
-    expect(EMITTING_STEPS.has(8)).toBe(false);
-    expect(EMITTING_STEPS.has(12)).toBe(false);
-    expect(EMITTING_STEPS.has(10)).toBe(true);
-    expect(EMITTING_STEPS.has(15)).toBe(true);
+  it("knows the real scale, not a hand-listed pair of bad values", () => {
+    // Empirically compiled: exactly the 21 multiples of five emit.
+    expect(EMITTING_STEPS.size).toBe(21);
+    for (const dead of [8, 12, 92, 7, 13, 33, 99]) expect(EMITTING_STEPS.has(dead)).toBe(false);
+    for (const live of [0, 5, 10, 15, 90, 95, 100]) expect(EMITTING_STEPS.has(live)).toBe(true);
+  });
+
+  it("does not flag fraction utilities, which are not opacities", () => {
+    // `from-left-1/2` is a real class here; /2 is a fraction, not 2% opacity.
+    expect(FRACTION_UTILITIES.test("from-left-1/2")).toBe(true);
+    expect(FRACTION_UTILITIES.test("bg-slate-950/92")).toBe(false);
+  });
+});
+
+describe("the offline banner actually has a background", () => {
+  it("FieldStatusBar uses emitting opacities for its overlay tones", () => {
+    // Three bg-*/92 classes meant the banner that tells a rep they have lost
+    // signal - drawn OVER the map - painted no background at all. /92 is not a
+    // multiple of five. The first version of this guard only knew /8 and /12
+    // and walked straight past it.
+    const src = readFileSync(join(CLIENT, "components/FieldStatusBar.tsx"), "utf8");
+    expect(src).toContain("bg-red-950/[0.92]");
+    expect(src).toContain("bg-slate-950/[0.92]");
+    expect(src).not.toMatch(/bg-(?:red|slate)-950\/92\b/);
   });
 });
 

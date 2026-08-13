@@ -1990,7 +1990,12 @@ export default function MapView() {
 
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
   // Fetch ALL map pins from dedicated lean endpoint — only runs after auth is ready
-  const { data: mapPinData } = useQuery<{ pins: MapPin[]; total: number; truncated?: boolean }>({
+  // isError/refetch are destructured, not just data: on a failed full feed
+  // `mapPinData` stays undefined, which makes firstUseEmptyStateEnabled's
+  // `pinsArrived` false and SUPPRESSES the empty state - so the rep got a map
+  // with no pins, no empty state, no message and no retry, indistinguishable
+  // from a territory with nothing in it.
+  const { data: mapPinData, isError: mapPinsError, refetch: refetchMapPins } = useQuery<{ pins: MapPin[]; total: number; truncated?: boolean }>({
     // ONE cache entry per lens pair is deliberate: the key stays
     // ["/api/leads/map"] so every optimistic update / viewport merge / SSE
     // invalidation targets it unchanged; the lens rides the URL (read from
@@ -6960,7 +6965,35 @@ export default function MapView() {
               NEVER in viewport mode: there the cache is a window — empty means
               unfetched/over-water/sampled, and the mode itself proves the org
               has >threshold leads (the zoom/sample chips carry the truth). */}
-          {mapReady && firstUseEmptyStateEnabled({ viewportMode, pinsArrived: mapPinData != null, leadCount: leads.length }) && (
+          {/* A FAILED feed is not an empty territory. This branch comes first so
+              the empty state below can never speak for an outage: the empty
+              state is role="status" ("there is nothing here", a claim), and a
+              dead network needs role="alert" ("we do not know"). Full-feed mode
+              only - in viewport mode the window loader keeps the last good pins
+              on screen deliberately and has its own 60s retry. */}
+          {mapReady && !viewportMode && mapPinsError && (
+            <div
+              className="absolute inset-x-0 top-20 z-20 flex justify-center px-6"
+              data-testid="map-pins-error"
+            >
+              <div className="glass-surface glass-ink-scope pointer-events-auto max-w-xs p-4 text-center" role="alert">
+                <p className="text-sm font-semibold text-white">Couldn't load your doors</p>
+                <p className="mt-1.5 text-xs leading-relaxed text-white/60">
+                  The map is showing nothing because the request failed, not because there is nothing here.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void refetchMapPins()}
+                  data-testid="map-pins-error-retry"
+                  className={`mt-3 min-h-tap w-full rounded-xl bg-white/15 px-4 text-sm font-semibold text-white ${FOCUS}`}
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+
+          {mapReady && !mapPinsError && firstUseEmptyStateEnabled({ viewportMode, pinsArrived: mapPinData != null, leadCount: leads.length }) && (
             <div
               className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6"
               data-testid="map-empty-state"

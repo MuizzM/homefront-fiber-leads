@@ -41,10 +41,10 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
   // in-flow banner uses theme tokens so it stays readable in light mode too.
   const tone = overlay
     ? failed > 0
-      ? "border-red-500/30 bg-red-950/92 text-red-100"
+      ? "border-red-500/30 bg-red-950/[0.92] text-red-100"
       : !online
-        ? "border-slate-500/35 bg-slate-950/92 text-slate-100"
-        : "border-teal-500/30 bg-slate-950/92 text-white"
+        ? "border-slate-500/35 bg-slate-950/[0.92] text-slate-100"
+        : "border-teal-500/30 bg-slate-950/[0.92] text-white"
     : failed > 0
       ? "border-destructive/30 bg-destructive/10 text-destructive"
       : !online
