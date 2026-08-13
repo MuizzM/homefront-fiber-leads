@@ -16,6 +16,7 @@
 // run means one is coming. That is true, it is all that is true, and it is the
 // only framing under which the next door is always the one that might pay.
 import { useQuery } from "@tanstack/react-query";
+import { useTabActive } from "@/lib/tabActivity";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,11 +33,18 @@ export interface DoorDropCardData {
 }
 
 export function useMyDoorDrops(enabled = true) {
+  const tabActive = useTabActive();
   return useQuery<DoorDropCardData>({
     queryKey: ["/api/me/door-drops"],
     // Same cadence as the ladder: the only thing that moves this is a knock,
     // and every knock already invalidates this key at the call site.
-    refetchInterval: 60_000,
+    // Paused while this stage is HIDDEN. useTabActive is stage-scoped (each
+    // KeepAliveStages stage gets its own TabActivityProvider), so a rep who
+    // opens /today and then works /map all shift left this polling forever
+    // behind a display:none div. Four such queries ran at 30-60s each: about
+    // five requests a minute, per rep, for a screen nobody was looking at. The
+    // stage re-show revalidation refreshes it the moment they return.
+    refetchInterval: tabActive ? 60_000 : false,
     enabled,
   });
 }

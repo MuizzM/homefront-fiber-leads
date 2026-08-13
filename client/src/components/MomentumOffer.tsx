@@ -18,6 +18,7 @@
 // and the deadline on screen are the ones the org has actually committed to.
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTabActive } from "@/lib/tabActivity";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { usd, offerCountdownLabel as offerCountdown } from "@shared/moneyFormat";
@@ -39,12 +40,19 @@ export interface MomentumCardData {
 }
 
 export function useMomentum(enabled = true) {
+  const tabActive = useTabActive();
   return useQuery<MomentumCardData>({
     queryKey: ["/api/me/momentum"],
     // Tighter than the other incentive cards on purpose: an offer has a clock,
     // and a stale card showing a promise that already expired is worse than no
     // card. Every knock also invalidates this key at the call site.
-    refetchInterval: 30_000,
+    // Paused while this stage is HIDDEN. useTabActive is stage-scoped (each
+    // KeepAliveStages stage gets its own TabActivityProvider), so a rep who
+    // opens /today and then works /map all shift left this polling forever
+    // behind a display:none div. Four such queries ran at 30-60s each: about
+    // five requests a minute, per rep, for a screen nobody was looking at. The
+    // stage re-show revalidation refreshes it the moment they return.
+    refetchInterval: tabActive ? 30_000 : false,
     enabled,
   });
 }

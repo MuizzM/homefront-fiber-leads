@@ -533,7 +533,21 @@ export default function Team() {
   const showActions = Boolean(canAddMembers || canManageCommission || canManageDocuments);
   const metricCols = ["Knocks", "Contacts", "Callbacks", "Sales"];
 
-  const RoleSection = ({ title, members, role }: { title: string; members: TeamMember[]; role: string }) => {
+  // A RENDER FUNCTION, not a component - and it must stay one. Declared inside
+  // Team(), every render produced a NEW function identity, and React treats a
+  // new function identity as a DIFFERENT COMPONENT TYPE: the entire roster was
+  // unmounted and rebuilt on every render of this page. Typing a 12-character
+  // name into "Add member" is 12 renders, so a 60-person org tore down and
+  // recreated roughly 2,400 DOM nodes per keystroke behind the open dialog.
+  //
+  // Calling it (see the call sites below) instead of rendering it as a JSX
+  // element inlines its output into Team's own tree, so there is no child
+  // instance left to remount. It captures 14 bindings from this scope and
+  // contains no hooks, which is what makes the plain call exactly equivalent -
+  // and what makes hoisting it to module scope a 14-prop refactor nobody needs.
+  // If it ever grows a hook, hoist it properly rather than turning it back into
+  // an element.
+  const renderRoleSection = ({ title, members, role }: { title: string; members: TeamMember[]; role: string }) => {
     const ri = roleInfo(role);
     if (members.length === 0) return null;
     return (
@@ -829,9 +843,10 @@ export default function Team() {
         </Card>
       ) : (
         <div className="space-y-6">
-          <RoleSection title="Managers" members={managers} role="manager" />
-          <RoleSection title="Team leads" members={leads} role="team_lead" />
-          <RoleSection title="Sales reps" members={reps} role="rep" />
+          {/* CALLED, not rendered as <JSX/> - see renderRoleSection above. */}
+          {renderRoleSection({ title: "Managers", members: managers, role: "manager" })}
+          {renderRoleSection({ title: "Team leads", members: leads, role: "team_lead" })}
+          {renderRoleSection({ title: "Sales reps", members: reps, role: "rep" })}
 
           {/* Former members - offboarded people keep their records but lose all
               access. Anyone who outranks them can bring them back. */}

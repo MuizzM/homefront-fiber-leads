@@ -349,9 +349,28 @@ services:
       DEFERRED_MIGRATIONS: "off"
       ADAPTIVE_PACE: "off"   # NIGHT BLITZ: owner says app may be down — all resources to scanning
       FRONTIER_BUILD_ZONES: "off"
+      # ── PORTAL-FIRST STOP, second pass (2026-08-13) ──────────────────────
+      # CITY_INGEST was the ELEVENTH producer, and it was still on. The
+      # 2026-08-09 stop turned off ten switches and the file has said "every
+      # producer is off" ever since, but this one was never in that inventory:
+      # it schedules a first pass at boot+5min and then a daily OSM harvest
+      # across the 22 cities listed below, and upsertScanTargets takes the
+      # write lock for a whole Overpass tile in ONE unchunked IMMEDIATE
+      # transaction - a dense tile is a multi-second exclusive write on the
+      # same 18.8GB file the field map reads from. That is precisely the shape
+      # the stop existed to eliminate.
       # Priority build cities: OSM-ingested daily (free), always scanned first
       # in every harvest cycle. Davidson + Lake Norman towns.
-      CITY_INGEST: "on"
+      CITY_INGEST: "off"
+      # Both of these are NESTED producers that default ON (`!== "off"`), so
+      # they are dark today only because their PARENT is off - YIELD_ENGINE
+      # inside FRESH_HARVEST, YIELD_THROUGHPUT_MATCH inside KEEPWARM_SCAN.
+      # Pinned explicitly so the documented "re-enable one producer at a time,
+      # watching /api/health p95" protocol actually holds: without this,
+      # flipping FRESH_HARVEST back on silently restarts the yield engine in
+      # the same breath, which is two producers, not one.
+      YIELD_ENGINE: "off"
+      YIELD_THROUGHPUT_MATCH: "off"
       FRESH_HARVEST_CITIES: "campobello:sc,landrum:sc,lexington:sc,albemarle:nc,broadway:nc,concord:nc,kannapolis:nc,harrisburg:nc,indian trail:nc,granite quarry:nc,hemby bridge:nc,morven:nc,pine bluff:nc,sanford:nc,tryon:nc,wingate:nc,norwood:nc,oakboro:nc,locust:nc,stanfield:nc,lexington:nc,davidson:nc"
       # States the PRIMARY yield-engine harvester scans (FOCUS_STATES). Was the
       # code default "nc,sc" — which fenced GA out of ALL the smart tiers (cluster

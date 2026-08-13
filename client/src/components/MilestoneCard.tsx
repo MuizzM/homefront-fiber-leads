@@ -13,6 +13,7 @@
 // discover it at payroll. Stating the rule up front is what makes it fair; a
 // silent anti-gaming filter just reads as a broken counter.
 import { useQuery } from "@tanstack/react-query";
+import { useTabActive } from "@/lib/tabActivity";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,11 +35,18 @@ export interface MilestoneCardData {
 }
 
 export function useMyMilestones(enabled = true) {
+  const tabActive = useTabActive();
   return useQuery<MilestoneCardData>({
     queryKey: ["/api/me/milestones"],
     // Progress only moves when the rep knocks, and every knock already
     // invalidates this key at the call site.
-    refetchInterval: 60_000,
+    // Paused while this stage is HIDDEN. useTabActive is stage-scoped (each
+    // KeepAliveStages stage gets its own TabActivityProvider), so a rep who
+    // opens /today and then works /map all shift left this polling forever
+    // behind a display:none div. Four such queries ran at 30-60s each: about
+    // five requests a minute, per rep, for a screen nobody was looking at. The
+    // stage re-show revalidation refreshes it the moment they return.
+    refetchInterval: tabActive ? 60_000 : false,
     enabled,
   });
 }
