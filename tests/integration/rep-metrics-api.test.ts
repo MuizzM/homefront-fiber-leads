@@ -33,7 +33,20 @@ let foreignManagerSession: string;
 let repA1Rep: number, repA2Rep: number, repB1Rep: number, foreignRep: number;
 let territoryId: number;
 
-const TODAY = new Date().toISOString().slice(0, 10);
+// The day these fixtures are filed under MUST be the day the API will ask for.
+//
+// This was `new Date().toISOString().slice(0, 10)` - the UTC calendar date -
+// while every read resolves "today" in the ORG's timezone
+// (periodOf → localDateString(Date.now(), tenantTimezone(...))). Those two
+// disagree for the four hours between 20:00 US-East and midnight, which is
+// both when this repo's CI runs and when the work happens: the rollups landed
+// on the server's TOMORROW, every "today" query matched nothing, and the suite
+// failed with doorsAttempted 0 instead of 60 and empty rep lists.
+//
+// Resolved through the same helpers the route uses, so the fixture cannot
+// drift from the server's definition of a day again. Assigned in beforeAll
+// because tenantTimezone reads the DB, which does not exist at module load.
+let TODAY: string;
 
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-repmetrics-"));
@@ -44,6 +57,9 @@ beforeAll(async () => {
   storage = storageModule.storage;
   ({ rawDb } = await import("../../server/db"));
   const { registerRoutes } = await import("../../server/routes");
+  const { localDateString, tenantTimezone } = await import("../../server/repMetricsStore");
+  // Tenant 1 is the org under test; its timezone is what "today" means here.
+  TODAY = localDateString(Date.now(), tenantTimezone(1));
 
   rawDb.prepare(
     `INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name)
