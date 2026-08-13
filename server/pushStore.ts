@@ -72,10 +72,32 @@ export function publicKey(): string | null {
   return vapidKeys()?.publicKey ?? null;
 }
 
+/** Devices one user may keep registered. A rep has a phone, maybe a tablet;
+ *  past that it is churn (reinstalls mint a NEW endpoint) or abuse. Uncapped,
+ *  one account could register thousands of endpoints, and every fan-out then
+ *  awaits a POST to each - the fan-out is the cost, not the row. */
+export const MAX_SUBSCRIPTIONS_PER_USER = 12;
+
 export function saveSubscription(input: {
   tenantId: number; userId: number; repId: number | null;
   endpoint: string; p256dh: string; auth: string; userAgent?: string | null;
 }): void {
+  // Evict oldest-first past the cap, AFTER the upsert below would have run -
+  // done here so a re-subscribe of an existing endpoint (the common case, and
+  // an UPDATE not an INSERT) can never evict anything.
+  const existing = rawDb.prepare(
+    `SELECT 1 FROM push_subscriptions WHERE endpoint = ?`,
+  ).get(input.endpoint);
+  if (!existing) {
+    rawDb.prepare(
+      `DELETE FROM push_subscriptions
+        WHERE endpoint IN (
+          SELECT endpoint FROM push_subscriptions
+           WHERE tenant_id = ? AND user_id = ?
+           ORDER BY created_at DESC
+           LIMIT -1 OFFSET ?)`,
+    ).run(input.tenantId, input.userId, MAX_SUBSCRIPTIONS_PER_USER - 1);
+  }
   rawDb.prepare(
     `INSERT INTO push_subscriptions
        (tenant_id, user_id, rep_id, endpoint, p256dh, auth, user_agent, created_at)

@@ -155,6 +155,7 @@ import {
   publicKey as pushPublicKey, saveSubscription, removeSubscription,
   pushToUsers, tenantUserIds, subscriptionCount,
 } from "./pushStore";
+import { isAllowedPushEndpoint } from "./webPush";
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { discoveryUploadBodyParser } from "./bodyParsers";
@@ -1391,7 +1392,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // County E911 address points: the house-number layer's data source, and the
   // thing that lets a lasso create a lead for every door inside it rather than
   // only select the ones that already existed.
-  registerAddressPointRoutes(app, { requireAuth, requireTeamLead, requireAdmin });
+  registerAddressPointRoutes(app, {
+    requireAuth, requireTeamLead, requireAdmin,
+    // The lasso-create route assigns leads, so it needs the same scope and
+    // tenant rules /assign-selection applies. Injected so there is ONE
+    // implementation of each and they cannot drift apart.
+    repInVisibilityScope, repInCallerTenant,
+  });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
@@ -2736,7 +2743,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tenantId = req.user?.tenantId, userId = Number(req.user?.id);
     const { endpoint, p256dh, auth, userAgent } = req.body ?? {};
     if (tenantId == null || !Number.isFinite(userId)) return res.status(403).json({ error: "Organization required" });
-    if (typeof endpoint !== "string" || !/^https:\/\//.test(endpoint) || !p256dh || !auth) {
+    // isAllowedPushEndpoint, not a scheme test. The endpoint is a URL this
+    // server will later POST to from inside the production container, so
+    // "starts with https://" was never a control - it let any signed-in rep
+    // aim the box at an arbitrary host. See webPush.ts for the allowlist and
+    // the PUSH_EXTRA_ENDPOINT_HOSTS escape hatch.
+    if (!isAllowedPushEndpoint(endpoint) || !p256dh || !auth) {
       return res.status(400).json({ error: "A valid push subscription is required" });
     }
     saveSubscription({
@@ -9486,6 +9498,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     },
   });
 
+  // Subdirectories of uploads/ that this untenanted static route must never
+  // serve. Each has its own tenant-walled endpoint; this list is the wall.
+  //   lead-photos — GET /api/photos/:id/file
+  //   headshots / licenses — applicant PII; a driver's licence is a government ID
+  //   badges — GET /api/onboarding/applications/:id/hr/badge-photo
+  // badges/ was created later and never added here, so it was reachable by URL
+  // to any tenant's admin. Kept as a named list so adding a directory under
+  // uploads/ without deciding its wall is a visible omission.
+  const BLOCKED_UPLOAD_PREFIXES = ["/lead-photos/", "/headshots/", "/licenses/", "/badges/"];
+
   // Serve uploaded files (admin only) — path traversal protected
   app.use("/uploads", requireAdmin, (req, res, next) => {
     // lead-photos/ has its OWN tenant-walled route (GET /api/photos/:id/file).
@@ -9496,15 +9518,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // it would let one tenant's admin read another tenant's applicant IDs by URL.
     // Block them here too (they are not rendered anywhere in the client, so this
     // breaks no feature); a future tenant-scoped viewer endpoint can serve them.
-    if (req.path.startsWith("/lead-photos/") || req.path.startsWith("/headshots/") || req.path.startsWith("/licenses/")) {
+    // NORMALISE FIRST. This test used to run on the raw req.path while the
+    // handler below resolved with path.resolve(), which DOES collapse dot
+    // segments — so `/uploads/./licenses/<uuid>.jpg` failed every startsWith()
+    // here and was then served from exactly the directory this block names.
+    // Express does not collapse dot segments for routing, so the raw value
+    // reaches us verbatim; path.posix.normalize is what closes the gap, and it
+    // must be the SAME string the handler resolves.
+    const safePath = path.posix.normalize(req.path);
+    if (BLOCKED_UPLOAD_PREFIXES.some(p => safePath.startsWith(p))) {
       return res.status(404).json({ error: "File not found" });
     }
+    (req as any).safeUploadPath = safePath;
     res.setHeader("Content-Disposition", "inline");
     res.setHeader("X-Content-Type-Options", "nosniff");
     next();
   }, (req, res) => {
     // Resolve and verify the path is strictly within uploadsDir — prevent traversal
-    const requestedPath = path.resolve(uploadsDir, req.path.replace(/^\//, ""));
+    const requestedPath = path.resolve(uploadsDir, ((req as any).safeUploadPath ?? path.posix.normalize(req.path)).replace(/^\//, ""));
     if (!requestedPath.startsWith(uploadsDir + path.sep) && requestedPath !== uploadsDir) {
       return res.status(400).json({ error: "Invalid path" });
     }

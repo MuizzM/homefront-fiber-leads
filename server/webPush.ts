@@ -198,13 +198,66 @@ export interface PushResult {
  * wiped). Those MUST be pruned — a table of dead endpoints grows forever and
  * every send pays for them in latency.
  */
+// ── Which hosts we are willing to POST to ───────────────────────────────────
+// A push endpoint is attacker-supplied: any signed-in rep can POST an arbitrary
+// URL to /api/push/subscribe, and this file then POSTs to it from inside the
+// production container, on the production IP, on a schedule triggered by
+// ordinary teammate activity. The only validation used to be `^https://`,
+// which is not a control - it is a scheme.
+//
+// So: an explicit host allowlist of the four services that actually mint web
+// push endpoints. PUSH_EXTRA_ENDPOINT_HOSTS exists because this list is the
+// kind of thing that goes stale when a browser vendor moves a hostname, and a
+// silent outage of all notifications is a bad way to discover that; a rejected
+// host is logged once per host so the cause is visible immediately.
+const PUSH_HOST_SUFFIXES = [
+  "push.services.mozilla.com",  // Firefox
+  "fcm.googleapis.com",         // Chrome / Edge (FCM)
+  "android.googleapis.com",     // Chrome (legacy GCM host)
+  "web.push.apple.com",         // Safari / iOS
+  "notify.windows.com",         // Edge (WNS)
+];
+
+const rejectedPushHosts = new Set<string>();
+
+export function isAllowedPushEndpoint(raw: unknown): boolean {
+  if (typeof raw !== "string" || !raw) return false;
+  let url: URL;
+  try { url = new URL(raw); } catch { return false; }
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  const extra = (process.env.PUSH_EXTRA_ENDPOINT_HOSTS ?? "")
+    .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const allowed = [...PUSH_HOST_SUFFIXES, ...extra];
+  const ok = allowed.some(s => host === s || host.endsWith(`.${s}`));
+  if (!ok && !rejectedPushHosts.has(host)) {
+    rejectedPushHosts.add(host);
+    if (rejectedPushHosts.size > 200) rejectedPushHosts.clear(); // bounded
+    console.warn("[push] rejected subscription endpoint host", JSON.stringify({ host }));
+  }
+  return ok;
+}
+
+/** Give a stalled push service a deadline. Without one, a fan-out to N slow
+ *  endpoints pins N sockets for as long as the peer keeps the connection open,
+ *  and the whole fan-out is awaited. */
+export const PUSH_REQUEST_TIMEOUT_MS = 10_000;
+
 export async function sendPush(
   sub: PushSubscription, payload: string, keys: VapidKeys, nowMs: number, ttlSeconds = 900,
 ): Promise<PushResult> {
   try {
+    // Re-checked at SEND, not only at subscribe: rows already in the table
+    // predate the allowlist, and this is the call that actually leaves the box.
+    if (!isAllowedPushEndpoint(sub.endpoint)) return { ok: false, status: 0, gone: true };
     const bodyBuf = encryptPayload(sub, payload);
     const res = await fetch(sub.endpoint, {
       method: "POST",
+      // A 302 to an internal address would otherwise be followed automatically:
+      // undici's redirect handler imposes no scheme or host restriction, so the
+      // allowlist above would only ever have covered the FIRST hop.
+      redirect: "manual",
+      signal: AbortSignal.timeout(PUSH_REQUEST_TIMEOUT_MS),
       headers: {
         Authorization: vapidHeader(sub.endpoint, keys, nowMs),
         "Content-Encoding": "aes128gcm",

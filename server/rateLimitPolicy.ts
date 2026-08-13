@@ -1,3 +1,30 @@
+/**
+ * Normalise a path to the spelling these matchers are written in.
+ *
+ * Every predicate in this file is a hand-rolled Set lookup or regexp, but
+ * EXPRESS decides what actually reaches a handler - and Express defaults to
+ * `caseSensitive: false` and `strict: false`. So `/API/SCAN/START` and
+ * `/api/scan/start/` both run the same route while missing a `Set.has()` on
+ * the exact lowercase, unslashed spelling. That is a bypass of every budget
+ * expressed here, including the 120/hour ceiling on money-spending scan
+ * mutations and the tighter per-IP controls on the auth endpoints.
+ *
+ * Path-MOUNTED limiters (`app.use("/api/x", limiter)`) are unaffected: Express
+ * does that matching itself, case-insensitively. Only these hand-rolled
+ * matchers drift, which is exactly why the normalisation belongs here, once,
+ * rather than at each call site.
+ *
+ * Dot segments are deliberately NOT collapsed: Express does not collapse them
+ * for routing either, so `/api/scan/./start` reaches no route at all and is not
+ * a bypass. (`/uploads` is a different story - that one is a static mount, and
+ * it is normalised at its own call site.)
+ */
+export function normalizeRateLimitPath(path: string): string {
+  const lowered = (path || "").toLowerCase();
+  // Trailing slash, but never turn "/" itself into "".
+  return lowered.length > 1 && lowered.endsWith("/") ? lowered.slice(0, -1) : lowered;
+}
+
 const AUTH_PATHS = new Set([
   "/api/auth/otp/request",
   "/api/auth/otp/verify",
@@ -7,7 +34,7 @@ const AUTH_PATHS = new Set([
 
 /** Auth endpoints have dedicated, tighter per-IP and per-email controls. */
 export function isDedicatedAuthPath(path: string): boolean {
-  return AUTH_PATHS.has(path);
+  return AUTH_PATHS.has(normalizeRateLimitPath(path));
 }
 
 /**
@@ -20,7 +47,8 @@ export function isDedicatedAuthPath(path: string): boolean {
  * below (isScanMutationPath / isScanPollPath / isScanReadPath). Nothing under
  * /api/scan or /api/sweeps is unmetered anymore.
  */
-export function isScanWorkflowPath(path: string): boolean {
+export function isScanWorkflowPath(rawPath: string): boolean {
+  const path = normalizeRateLimitPath(rawPath);
   return path === "/api/check-fiber"
     || path === "/api/scanner/state"
     || path === "/api/sweeps"
@@ -38,7 +66,8 @@ export function isScanWorkflowPath(path: string): boolean {
  * metered by dedicated PER-USER budgets instead (chat limiters in limiters.ts
  * plus the per-route post budget). Nothing under /api/chat is unmetered.
  */
-export function isChatPath(path: string): boolean {
+export function isChatPath(rawPath: string): boolean {
+  const path = normalizeRateLimitPath(rawPath);
   return path === "/api/chat" || path.startsWith("/api/chat/");
 }
 
@@ -93,7 +122,8 @@ const SCAN_MUTATION_PATHS = new Set([
   "/api/leads/scan-house",
 ]);
 
-export function isScanMutationPath(path: string): boolean {
+export function isScanMutationPath(rawPath: string): boolean {
+  const path = normalizeRateLimitPath(rawPath);
   if (SCAN_MUTATION_PATHS.has(path)) return true;
   // Run lifecycle actions (pause/resume/cancel) restart spend on demand.
   return /^\/api\/scan\/runs\/[^/]+\/(pause|resume|cancel|stop)$/.test(path);
@@ -105,7 +135,8 @@ export function isScanMutationPath(path: string): boolean {
  * for sustained polling — the SSE stream is the primary channel and has its
  * own connection caps (see scanSseCaps).
  */
-export function isScanPollPath(path: string): boolean {
+export function isScanPollPath(rawPath: string): boolean {
+  const path = normalizeRateLimitPath(rawPath);
   return path === "/api/scan"
     || path === "/api/scanner/state"
     || /^\/api\/scan\/[^/]+$/.test(path)                    // GET /api/scan/:jobId

@@ -60,9 +60,15 @@ export function registerAddressPointRoutes(
     requireAuth: any;
     requireTeamLead: any;
     requireAdmin: any;
+    /** Is `repId` inside the caller's lead-visibility scope? Injected rather
+     *  than reimplemented: the scope rule lives with the other lead routes and
+     *  the two must never drift. */
+    repInVisibilityScope: (user: any, repId: number | null | undefined) => boolean;
+    /** Is `repId` a team member of the caller's tenant? */
+    repInCallerTenant: (user: any, repId: number) => boolean;
   },
 ): void {
-  const { requireAuth, requireTeamLead, requireAdmin } = deps;
+  const { requireAuth, requireTeamLead, requireAdmin, repInVisibilityScope, repInCallerTenant } = deps;
 
   // ── Viewport feed for the house-number layer ─────────────────────────────
   //
@@ -104,6 +110,27 @@ export function registerAddressPointRoutes(
       });
     }
 
+    // ── Who may this selection be assigned to? ────────────────────────────
+    // Checked HERE, before addressPointsInRing and before the transaction, so
+    // a refused request creates nothing and pays for nothing.
+    //
+    // These are the same two guards POST /api/leads/assign-selection applies
+    // (routes.ts), and the same pair the single-lead POST /api/leads gained
+    // when cross-tenant hand-off via create was closed there. This route
+    // missed both, so a team_lead could bulk-assign up to MAX_CREATE_FROM_SELECTION
+    // doors to a rep outside their team - or in another tenant - by putting the
+    // id in the body, while the sibling endpoint refused the very same id.
+    const repId = req.body?.repId == null ? null : Number(req.body.repId);
+    if (repId != null && (!Number.isInteger(repId) || repId <= 0)) {
+      return res.status(400).json({ error: "repId must be a positive integer" });
+    }
+    if (repId != null && !repInVisibilityScope(user, repId)) {
+      return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    }
+    if (repId != null && !repInCallerTenant(user, repId)) {
+      return res.status(404).json({ error: "Rep not found" });
+    }
+
     const { points } = addressPointsInRing(ring, MAX_CREATE_FROM_SELECTION + 1);
     if (points.length > MAX_CREATE_FROM_SELECTION) {
       return res.status(400).json({
@@ -117,7 +144,7 @@ export function registerAddressPointRoutes(
     }
 
     const tenantId = user?.tenantId ?? undefined;
-    const repId = req.body?.repId == null ? null : Number(req.body.repId);
+    // repId was parsed and scope-checked above, before any work was done.
 
     // createLead is idempotent - it returns the EXISTING row when the
     // canonical key already has a lead. That is what makes lassoing an
