@@ -178,6 +178,19 @@ jobs:
           APP="$(docker compose -f docker-compose.production.yml ps -q app 2>/dev/null | head -n1 || true)"
           [ -n "$APP" ] || APP="$(docker ps --format '{{.ID}} {{.Image}}' | awk '/homefront-app:/{print $1; exit}' || true)"
           hr; echo "SQLITE CONFIG (read-only)"
+          # ── WHY THIS IS SPLIT IN TWO ───────────────────────────────────────
+          # This probe opens its OWN read-only connection. cache_size, mmap_size,
+          # temp_store, synchronous and busy_timeout are PER-CONNECTION settings,
+          # so reading them here reports THIS THROWAWAY CONNECTION's defaults -
+          # never what the running app uses. It printed them in one flat list
+          # beside the genuinely file-level values, and the result read as
+          # production config: `cache_size -16000`, `mmap_size 0`, `temp_store 0`.
+          #
+          # Those are exactly the numbers a fresh better-sqlite3 handle reports
+          # (verified: busy_timeout 5000, cache_size -16000, temp_store 0). The
+          # app actually sets a >=64MB cache, 4GB mmap and temp_store=MEMORY in
+          # server/db.ts. An audit read this report, concluded production ran on
+          # a 16MB cache with mmap disabled, and nearly "fixed" correct code.
           if [ -n "$APP" ]; then
             docker exec "$APP" node -e "
               const D=require('better-sqlite3');
@@ -185,12 +198,25 @@ jobs:
               const p=k=>db.pragma(k,{simple:true});
               const gb=b=>(b/1073741824).toFixed(2)+' GB';
               const pageSize=p('page_size'), pageCount=p('page_count'), free=p('freelist_count');
-              for (const k of ['journal_mode','synchronous','busy_timeout','mmap_size','cache_size','wal_autocheckpoint','journal_size_limit','auto_vacuum','temp_store','page_size'])
-                console.log('  '+k.padEnd(20)+p(k));
-              console.log('  page_count          '+pageCount+'  ('+gb(pageSize*pageCount)+')');
-              console.log('  freelist_count      '+free+'  ('+gb(pageSize*free)+', '+(100*free/pageCount).toFixed(1)+'%)');
-              console.log('  live data           '+gb(pageSize*(pageCount-free)));
+              console.log('  PERSISTENT (stored in the file - these ARE production):');
+              for (const k of ['journal_mode','auto_vacuum','page_size','wal_autocheckpoint','journal_size_limit'])
+                console.log('    '+k.padEnd(20)+p(k));
+              console.log('    page_count          '+pageCount+'  ('+gb(pageSize*pageCount)+')');
+              console.log('    freelist_count      '+free+'  ('+gb(pageSize*free)+', '+(100*free/pageCount).toFixed(1)+'%)');
+              console.log('    live data           '+gb(pageSize*(pageCount-free)));
+              console.log('');
+              console.log('  PER-CONNECTION (this probe only - NOT the app - see server/db.ts):');
+              for (const k of ['synchronous','busy_timeout','mmap_size','cache_size','temp_store'])
+                console.log('    '+k.padEnd(20)+p(k));
             " 2>&1 | sed 's/^/  /' || echo "  (could not read pragmas)"
+            # The app's REAL tuning inputs, from the environment it is running
+            # with. server/db.ts derives the per-connection budget from these,
+            # dividing the cache across workers.
+            echo "  APP TUNING (env the container has; server/db.ts derives the real values from these)"
+            echo "  anything absent below is UNSET and falls back to the code default, not to zero:"
+            docker exec "$APP" printenv 2>/dev/null \
+              | grep -E '^(SQLITE_CACHE_KB|SQLITE_MMAP_BYTES|SQLITE_BUSY_TIMEOUT_MS|SQLITE_WAL_LIMIT_BYTES|SCAN_WORKERS)=' \
+              | sort | sed 's/^/    /' || echo "    (none set - all code defaults)"
           else
             echo "  no running app container"
           fi
