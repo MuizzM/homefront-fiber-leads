@@ -39,6 +39,52 @@ describe("logout purge completeness (SEC-B)", () => {
     expect(window.localStorage.getItem("hf.mapCamera.v1")).toBe("camera");
     expect(window.localStorage.getItem("some-other-app")).toBe("x");
   });
+
+  // Four on-device stores that write real account data and were NOT in the
+  // sweep. Every one of them matters on a shared crew tablet, which is the
+  // exact device this sweep exists for.
+  it("clears the WINDOW pin snapshot, not just the full-feed one", () => {
+    // mapPinsSnapshot.ts writes two families; only hf.mapPinsSnapshot. was
+    // listed. The window family holds up to 1.5MB of the same address-level
+    // rows (street, city, zip, do-not-knock) plus the bbox they came from.
+    window.localStorage.setItem("hf.mapWindowSnapshot.v8.t1.u2", "window pins");
+    purgeSessionScopedKeys();
+    expect(window.localStorage.getItem("hf.mapWindowSnapshot.v8.t1.u2")).toBeNull();
+  });
+
+  it("clears recorded pitch audio, which is stored under a device-global key", () => {
+    // PitchRecorder's PERSIST_PREFIX carries no tenant or user segment, so
+    // without this the next rep to open the recorder gets a colleague's voice.
+    window.localStorage.setItem("pitch-take:objection-1", "data:audio/webm;base64,AAAA");
+    purgeSessionScopedKeys();
+    expect(window.localStorage.getItem("pitch-take:objection-1")).toBeNull();
+  });
+
+  it("clears the training review outbox", () => {
+    window.localStorage.setItem("hf.trainingReviews.v1.u2", "[]");
+    purgeSessionScopedKeys();
+    expect(window.localStorage.getItem("hf.trainingReviews.v1.u2")).toBeNull();
+  });
+
+  it("clears the offline GPS queue, so it cannot flush under the next rep", () => {
+    // fieldTracking's queue is not identity-keyed, so anything unflushed at
+    // logout is replayed inside the NEXT session - one rep's location trail
+    // written into another rep's shift.
+    window.localStorage.setItem("hfs.fieldTracking.queue", '[{"lat":35.6,"lng":-80.5}]');
+    purgeSessionScopedKeys();
+    expect(window.localStorage.getItem("hfs.fieldTracking.queue")).toBeNull();
+  });
+
+  it("still leaves convenience state alone", () => {
+    // The sweep is deliberately narrow. Guard against it widening into prefs.
+    for (const k of ["hf.mapCamera.v1", "hf.lastFix.v1", "hf.mapFilterStatus.v1", "hf.mapBasemap.v1"]) {
+      window.localStorage.setItem(k, "keep");
+    }
+    purgeSessionScopedKeys();
+    for (const k of ["hf.mapCamera.v1", "hf.lastFix.v1", "hf.mapFilterStatus.v1", "hf.mapBasemap.v1"]) {
+      expect(window.localStorage.getItem(k)).toBe("keep");
+    }
+  });
 });
 
 describe("session token storage (SEC-B)", () => {

@@ -267,7 +267,10 @@ async function expandRingInner(expansionId: string): Promise<void> {
   }
 
   // Resolve/ensure scan_targets ids (OSM rows were upserted above).
-  const idOf = rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(address)=lower(?) LIMIT 1`);
+  // lower(TRIM(...)) so this matches idx_scan_targets_addr_city_state - without
+  // the trim() SQLite cannot use the expression index and full-SCANs
+  // scan_targets (919,688 rows in production) once per address in the loop below.
+  const idOf = rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(trim(address))=lower(trim(?)) LIMIT 1`);
   const targetIds: number[] = [];
   const now = Date.now();
   const insMember = rawDb.prepare(`INSERT OR IGNORE INTO expansion_members (expansion_id,target_id,address_key,address,distance_m,ring,created_at) VALUES (?,?,?,?,?,?,?)`);

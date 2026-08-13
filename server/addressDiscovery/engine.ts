@@ -466,8 +466,14 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true):
     const address = targetAddress(candidate);
     const collision = rawDb
       .prepare(
+        // lower(TRIM(...)), matching idx_scan_targets_addr_city_state exactly.
+        // SQLite only uses an expression index when the query spells the
+        // expression the same way, so `lower(address)` - one trim() short - fell
+        // back to a full SCAN of scan_targets (919,688 rows in production).
+        // This runs per candidate inside an unbounded loop. Measured on the
+        // real table: 0.022s per call as written, 0.000s trimmed.
         `SELECT id,address,city,state,zip,tenant_id AS tenantId FROM scan_targets
-      WHERE lower(address)=lower(?) LIMIT 1`,
+      WHERE lower(trim(address))=lower(trim(?)) LIMIT 1`,
       )
       .get(address) as any;
     if (

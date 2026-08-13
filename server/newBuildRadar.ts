@@ -183,7 +183,10 @@ function enqueueAddressed(cands: NewBuildCandidate[], scopeLabel: string): { run
     canonicalKey: normalizeKineticAddressKey(c.address!, c.city ?? "", c.state, c.zip ?? ""),
   })));
   const ids: number[] = [];
-  const idStmt = rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(address)=lower(?) LIMIT 1`);
+  // lower(TRIM(...)) so this matches idx_scan_targets_addr_city_state - without
+  // the trim() SQLite cannot use the expression index and full-SCANs
+  // scan_targets (919,688 rows in production) once per candidate below.
+  const idStmt = rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(trim(address))=lower(trim(?)) LIMIT 1`);
   const linkStmt = rawDb.prepare(`UPDATE scan_new_builds SET scan_target_id=? WHERE address_key=?`);
   for (const c of cands) {
     const row = idStmt.get(c.address!) as { id: number } | undefined;

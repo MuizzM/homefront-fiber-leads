@@ -408,11 +408,29 @@ export function clearPersistedQueryCache(): void {
 // stay.
 const SESSION_SCOPED_KEY_PREFIXES = [
   "hf.mapPinsSnapshot.", // per-tenant/rep pin snapshots (address-level data)
+  // The direct sibling of the line above, and it was the one omission: the
+  // WINDOW snapshot persists up to 1.5MB of the same address-level rows
+  // (street, city, zip, do-not-knock) plus the bbox they were fetched for.
+  // Both families are written by mapPinsSnapshot.ts; only one was swept.
+  "hf.mapWindowSnapshot.",
   "hf.knockQueue.v1.",   // queued knocks for the signed-out rep
   "hf.knockDead.v1.",    // dead-lettered knocks for the signed-out rep
+  // Training review outbox - the one queue cloned from knockQueue whose prefix
+  // never made it into this list (trainingReviewQueue.ts).
+  "hf.trainingReviews.v1.",
+  // Recorded pitch audio, persisted under a DEVICE-GLOBAL key (PitchRecorder's
+  // PERSIST_PREFIX): without this, the next rep to open the recorder on a
+  // shared crew tablet is handed a colleague's voice recording.
+  "pitch-take:",
 ];
 const SESSION_SCOPED_KEYS = [
   "hf.pendingNotes.v1",  // stashed lead notes awaiting sync
+  // Offline GPS queue (fieldTracking.ts QUEUE_KEY). It is not keyed by
+  // identity, so anything unflushed at logout is replayed under the NEXT rep's
+  // session - one rep's location trail written into another's shift. Purging
+  // at logout is the containment; identity-keying the queue is the real fix
+  // and is a larger change.
+  "hfs.fieldTracking.queue",
 ];
 
 export function isSessionScopedStorageKey(key: string): boolean {

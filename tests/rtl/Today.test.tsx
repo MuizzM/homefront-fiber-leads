@@ -297,7 +297,14 @@ describe("Today - the rep's home", () => {
   it("shows follow-ups owed even when none are due", async () => {
     renderToday({ pins: [pin({ id: 1 })], followups: [] });
     const chip = await screen.findByTestId("glance-follow-ups");
-    expect(within(chip).getByText("0")).toBeTruthy();
+    // findByText, not getByText: the chip mounts immediately with a loading
+    // skeleton in place of the figure, so findByTestId above resolves a frame
+    // before the follow-ups query settles. A synchronous getByText raced that
+    // and failed under full-suite parallel load (never in isolation) with
+    // "Unable to find an element with the text: 0" against a DOM still showing
+    // `app-skeleton`. The assertion is unchanged; it just waits for the state
+    // it is actually about.
+    expect(await within(chip).findByText("0")).toBeTruthy();
     expect(screen.queryByTestId("today-followups")).toBeNull();
   });
 });
