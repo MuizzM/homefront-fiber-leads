@@ -573,7 +573,15 @@ export default function CallingLead() {
                         className={cn(
                           "min-h-11 rounded-xl border border-border bg-background px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-50",
                           item.tone,
-                          armed && "border-destructive bg-destructive/15 text-red-100 ring-1 ring-destructive",
+                          // The semantic token, not a raw light-red shade. The armed state
+                          // is the CONFIRM step on a control that suppresses a
+                          // number - "Confirm: Do not call?" - and near-white
+                          // ink on a 15% destructive tint over a white card
+                          // measured 1.05:1. The rep could not read the word on
+                          // the button they were about to press twice. The
+                          // semantic token is designed to sit on its own tint
+                          // and measures 4.69:1.
+                          armed && "border-destructive bg-destructive/15 text-destructive ring-1 ring-destructive",
                         )}
                       >
                         {armed ? `Confirm: ${item.label}?` : item.label}

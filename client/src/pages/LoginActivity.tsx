@@ -77,6 +77,15 @@ export default function LoginActivity() {
         </div>
         {loading ? (
           <div className="space-y-2 p-4">{[0,1,2].map(i => <div key={i} className="app-skeleton h-10 rounded-lg" />)}</div>
+        ) : summaryQuery.isError ? (
+          /* The page already prints a "couldn't load the audit trail" banner
+             above, and this branch printed its never-recorded-yet copy
+             directly underneath it - two contradictory answers on screen at
+             once, one of them a claim about a SECURITY log. The banner owns
+             the failure; this branch stays silent about it. */
+          <p className="p-4 text-xs text-muted-foreground" data-testid="login-activity-unknown">
+            Sign-in history is unknown while the audit trail is unavailable.
+          </p>
         ) : (summaryQuery.data?.summary.length ?? 0) === 0 ? (
           <p className="p-4 text-xs text-muted-foreground">No login activity recorded yet - rows appear as people request codes and sign in.</p>
         ) : (

@@ -25,6 +25,7 @@ vi.mock("@/lib/capabilities", () => ({
 
 import Diagnostics from "../../client/src/pages/Diagnostics";
 import OrderMessaging from "../../client/src/pages/OrderMessaging";
+import ActionApprovals from "../../client/src/pages/ActionApprovals";
 import Governance from "../../client/src/pages/Governance";
 import TokenSetup from "../../client/src/pages/TokenSetup";
 
@@ -142,5 +143,29 @@ describe("order-recovery messaging under fetch failure", () => {
     );
     await waitFor(() => expect(document.body.textContent).toMatch(/Nobody is suppressed/i));
     expect(screen.queryByTestId("suppressions-error")).toBeNull();
+  });
+});
+
+describe("action approvals under fetch failure", () => {
+  it("never issues the all-clear when the queue did not load", async () => {
+    // "Nothing is waiting on you" is a clearance to stop looking. Built from
+    // `?? []`, it was issued on every failed poll, so guarded actions sat
+    // unapproved while the approver was repeatedly told there was nothing to do.
+    renderWithClient(<ActionApprovals />, url =>
+      url.includes("/api/actions/pending")
+        ? Promise.resolve({ json: () => { throw new Error("api down"); } })
+        : Promise.resolve({ json: () => Promise.resolve({ actions: [], total: 0, kinds: [] }) }),
+    );
+    await waitFor(() => expect(screen.getByTestId("approvals-error")).toBeTruthy());
+    expect(screen.queryByTestId("approvals-empty")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Nothing is waiting on you/i);
+  });
+
+  it("still says the queue is empty when it genuinely is", async () => {
+    renderWithClient(<ActionApprovals />, () =>
+      Promise.resolve({ json: () => Promise.resolve({ actions: [], total: 0, kinds: [] }) }),
+    );
+    await waitFor(() => expect(screen.getByTestId("approvals-empty")).toBeTruthy());
+    expect(screen.queryByTestId("approvals-error")).toBeNull();
   });
 });

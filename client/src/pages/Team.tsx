@@ -319,7 +319,11 @@ export default function Team() {
     queryKey: ["/api/team"],
   });
 
-  const { data: leaderboard = [] } = useQuery<{
+  // isError matters here: statsFor falls back to all-zeros, so a failed
+  // leaderboard painted EVERY rep as 0 knocks and 0 sales - a manager reading
+  // that concludes the team did nothing today, which is a performance
+  // conversation started by an outage. Unknown renders as a dash instead.
+  const { data: leaderboard = [], isError: leaderboardError } = useQuery<{
     rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number;
   }[]>({
     queryKey: ["/api/leaderboard"],
@@ -492,7 +496,11 @@ export default function Team() {
     return m;
   }, [team]);
   const NO_STATS = { knocks: 0, contacts: 0, callbacks: 0, sales: 0 };
-  const statsFor = (repId: number) => statsById.get(repId) ?? NO_STATS;
+  /** null = UNKNOWN (the leaderboard failed), not zero. A rep genuinely absent
+   *  from a loaded leaderboard really has done nothing yet, and still gets 0. */
+  const UNKNOWN_STATS = { knocks: null, contacts: null, callbacks: null, sales: null } as const;
+  const statsFor = (repId: number): { knocks: number | null; contacts: number | null; callbacks: number | null; sales: number | null } =>
+    statsById.get(repId) ?? (leaderboardError ? UNKNOWN_STATS : NO_STATS);
 
   const openEdit = (m: TeamMember) => {
     setEditForm(fromMember(m));
@@ -655,7 +663,7 @@ export default function Team() {
                     <div className="flex md:hidden items-center gap-4 mt-2.5">
                       {metrics.map(({ label, val, highlight }) => (
                         <div key={label} className="flex items-baseline gap-1">
-                          <span className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-success" : "text-foreground"}`}>{val.toLocaleString()}</span>
+                          <span className={`text-sm font-semibold tabular-nums ${highlight && (val ?? 0) > 0 ? "text-success" : "text-foreground"}`}>{val == null ? "-" : val.toLocaleString()}</span>
                           <span className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</span>
                         </div>
                       ))}
@@ -666,7 +674,7 @@ export default function Team() {
                   <div className="hidden md:flex items-center gap-5 flex-shrink-0">
                     {metrics.map(({ label, val, highlight }) => (
                       <div key={label} className="w-14 text-right">
-                        <div className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-success" : val > 0 ? "text-foreground" : "text-muted-foreground/50"}`}>{val.toLocaleString()}</div>
+                        <div className={`text-sm font-semibold tabular-nums ${highlight && (val ?? 0) > 0 ? "text-success" : (val ?? 0) > 0 ? "text-foreground" : "text-muted-foreground"}`}>{val == null ? "-" : val.toLocaleString()}</div>
                       </div>
                     ))}
                   </div>

@@ -34,7 +34,13 @@ export function MapLensNotice({
       role="status"
       data-testid={testId}
       style={{ top: "calc(env(safe-area-inset-top) + 3.25rem)" }}
-      className="glass-capsule glass-opaque absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-3 pr-1.5 h-9 max-w-[92vw] border border-primary/40"
+      /* glass-ink-scope is REQUIRED on every glass surface, and this one was
+         missing it. .glass-opaque is a theme-invariant near-black navy, but
+         text-foreground still resolved to the LIGHT theme's navy ink - measured
+         at 1.02:1, which is not "hard to read", it is invisible. The scope
+         re-asserts the neutrals for an always-dark surface and takes it to
+         14.40:1. */
+      className="glass-capsule glass-opaque glass-ink-scope absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-3 pr-1.5 h-9 max-w-[92vw] border border-primary/40"
     >
       <EyeOff className="w-3.5 h-3.5 shrink-0 text-primary" aria-hidden="true" />
       <span className="text-[12px] font-semibold text-foreground truncate whitespace-nowrap">

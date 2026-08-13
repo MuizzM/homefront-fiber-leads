@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/ErrorState";
 import { PageHeader, StatStrip, StatTile } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
@@ -205,7 +206,21 @@ export default function ActionApprovals() {
         <CardHeader><CardTitle className="text-base">Waiting for a decision</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           {pending.isLoading && <Skeleton className="h-24 w-full" />}
-          {!pending.isLoading && waiting.length === 0 && (
+          {/* "Nothing is waiting on you" is a clearance to stop looking, and it
+              was being issued from `?? []` on a failed request. Guarded actions
+              then sit unapproved until somebody chases them out of band - and
+              because the query refetches, the approver is told all-clear again
+              on every poll. isSuccess only. */}
+          {pending.isError && (
+            <ErrorState
+              title="Can't load the approval queue"
+              description="There may be actions waiting. This is a failed request, not an empty queue."
+              onRetry={() => void pending.refetch()}
+              bordered={false}
+              testId="approvals-error"
+            />
+          )}
+          {pending.isSuccess && waiting.length === 0 && (
             <p className="text-sm text-muted-foreground" data-testid="approvals-empty">
               Nothing is waiting on you.
             </p>

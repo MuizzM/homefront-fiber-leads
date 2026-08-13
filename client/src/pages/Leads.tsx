@@ -467,7 +467,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
     ? `https://www.google.com/maps/dir/?api=1&destination=${current.lat},${current.lng}`
     : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${current.address}, ${current.city}, ${current.state} ${current.zip}`)}`;
 
-  const { data: enrich, isLoading, refetch, isFetching } = useQuery<EnrichmentData>({
+  const { data: enrich, isLoading, isError: isEnrichError, refetch, isFetching } = useQuery<EnrichmentData>({
     queryKey: ["/api/leads", lead.id, "enrichment"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/leads/${lead.id}/enrichment`);
@@ -584,6 +584,27 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           </div>
           {isLoading ? (
             <div className="bg-secondary/50 rounded-lg px-3 py-4 text-center text-xs text-muted-foreground">Loading...</div>
+          ) : isEnrichError ? (
+            /* The green "no competitor" panel used to be the FALLTHROUGH branch:
+               on a failed enrichment fetch `enrich` is undefined, so
+               `enrich?.inCompetitorArea` is falsy and the rep read a confident
+               green statement that nobody serves this address - then pitched a
+               switch against an incumbent they were never told about. Unknown
+               is not "none". */
+            <div className="rounded-lg border border-border bg-secondary/50 px-3 py-3" role="alert" data-testid="lead-competition-error">
+              <p className="text-xs font-medium text-foreground">Competition is unknown</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                This did not load, so it is not a claim that nobody serves this address.
+              </p>
+              <button
+                type="button"
+                onClick={() => void refetch()}
+                data-testid="lead-competition-retry"
+                className="mt-2 min-h-tap text-xs font-semibold text-primary underline"
+              >
+                Retry
+              </button>
+            </div>
           ) : enrich?.inCompetitorArea ? (
             <div className="bg-secondary/50 rounded-lg px-3 py-1 divide-y divide-border/50">
               <InfoRow icon={ShieldX} label="Competitor ISP" value={enrich.competitorName ?? "Unknown"} />

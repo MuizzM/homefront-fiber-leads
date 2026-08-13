@@ -25,6 +25,7 @@ import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { OUTCOME_META, STATE_COLORS, STATE_LABELS, pinDisplayState, type KnockOutcome } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/ErrorState";
 import { useCan } from "@/lib/capabilities";
 import { ChevronLeft, Zap, Wifi, Building2, User as UserIcon, Mail, AlertTriangle, StickyNote, UserPlus, RefreshCw, WifiOff, CloudUpload } from "lucide-react";
 
@@ -184,6 +185,18 @@ export default function PropertyDetail() {
             <SectionLabel>Activity</SectionLabel>
             {histQ.isLoading ? (
               <div className="space-y-3 rounded-xl border border-border bg-card p-4"><Skeleton className="h-5 w-3/4" /><Skeleton className="h-5 w-2/3" /><Skeleton className="h-5 w-1/2" /></div>
+            ) : histQ.isError ? (
+              /* "You'll be the first at this door" is a claim about the door,
+                 and it was being made out of a failed request - the worst
+                 possible moment, because a rep reads this ON the doorstep and
+                 decides how to open. A door another rep marked "not interested"
+                 an hour ago would have read as untouched. */
+              <ErrorState
+                title="Can't load this door's history"
+                description="Previous visits are unknown, not absent. Check with your team before assuming nobody has been here."
+                onRetry={() => void histQ.refetch()}
+                testId="detail-history-error"
+              />
             ) : !histQ.data?.length ? (
               <div className="rounded-xl border border-border bg-card p-6 text-center text-[13px] text-muted-foreground" data-testid="detail-history-empty">No knocks yet - you'll be the first at this door.</div>
             ) : (
