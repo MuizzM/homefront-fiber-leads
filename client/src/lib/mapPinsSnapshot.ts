@@ -173,8 +173,15 @@ export const MAP_VIEWPORT_MODE_PREFIX = "hf.mapViewportMode.";
 /** Bump when the hint's meaning changes (e.g. a threshold semantics change).
  *  v2: the threshold moved 60k → 75k AND the key gained a lens segment — a v1
  *  hint could answer for the wrong lens (a "latest" boot reading the hint the
- *  "all" probe wrote), so every v1 entry is swept rather than migrated. */
-export const MAP_VIEWPORT_MODE_VERSION = 2;
+ *  "all" probe wrote), so every v1 entry is swept rather than migrated.
+ *  v3: the threshold moved 75k → 25k (see MAP_VIEWPORT_MODE_THRESHOLD — the
+ *  production measurement that a 69k full feed costs 32.7s). Every device that
+ *  had probed between 25k and 75k was holding a "full feed" hint that the new
+ *  rule contradicts, and this file's own contract says a threshold change is a
+ *  version bump. Left at v2 those devices spend their first boot arming the
+ *  wrong path until the probe corrects them — exactly the RTT the hint exists
+ *  to save. */
+export const MAP_VIEWPORT_MODE_VERSION = 3;
 
 /** The identity stem (note the trailing separator: "u1." can never match
  *  "u12…"). Per-lens keys append scope.view; "all" is the no-lens entry. */

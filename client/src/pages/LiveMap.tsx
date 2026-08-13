@@ -24,6 +24,18 @@ export default function LiveMap() {
   const mapRef = useRef<any>(null);
   const markersRef = useRef<Map<number, any>>(new Map());
   const [mapReady, setMapReady] = useState(false);
+  // Library load failed. Without this the skeleton below is the terminal state:
+  // a blocked CDN, a captive portal or a dropped LTE fetch left this screen
+  // showing a shimmer forever, with nothing to tell the manager why and nothing
+  // to retry with. mapLibrary.ts calls its callbacks WITH an error precisely so
+  // callers can render this.
+  const [mapUnavailable, setMapUnavailable] = useState(false);
+  // Bumped by the Retry button. __retryMapbox() clears the loader's failure
+  // latch and refetches, but the callback list was already flushed with the
+  // error - so the init below has to RE-REGISTER, which is what re-running the
+  // effect does. Without this the button reloads the library and then nothing
+  // builds the map with it.
+  const [libRetry, setLibRetry] = useState(0);
   const [tracking, setTracking] = useState(false);
   const trackingInterval = useRef<any>(null);
 
@@ -94,22 +106,36 @@ export default function LiveMap() {
     // No token gate: MapLibre does not use one. Only the container matters.
     if (!mapContainer.current || mapRef.current) return;
     const token = config?.token ?? "";
-    (window as any).__loadMapbox?.(); // kick off the lazy library load
-    const tryInit = () => {
+    // Go through the loader's own contract rather than polling for the global.
+    // The old init was a 150ms timer that rescheduled itself until the global
+    // appeared: no bail, so a failed load span forever behind the skeleton, and
+    // no cleanup, so unmounting mid-load left a pending timer that then
+    // constructed a map into a null container. __onMapboxReady answers exactly
+    // once, with an error when the library could not be fetched.
+    let cancelled = false;
+    const init = (err?: Error) => {
+      if (cancelled || mapRef.current) return;
       const mgl = (window as any).mapboxgl;
-      if (!mgl) { setTimeout(tryInit, 150); return; }
+      if (err || !mgl || !mapContainer.current) { setMapUnavailable(true); return; }
+      setMapUnavailable(false);
       mgl.accessToken = token;
       mapRef.current = new mgl.Map({
-        container: mapContainer.current!,
+        container: mapContainer.current,
         style: basemapStyle("dark"),
         center: [-80.4139, 35.5501],
         zoom: 12,
       });
-      mapRef.current!.on("load", () => setMapReady(true));
+      mapRef.current!.on("load", () => { if (!cancelled) setMapReady(true); });
     };
-    tryInit();
-    return () => { mapRef.current?.remove(); mapRef.current = null; };
-  }, [config?.token]);
+    const onReady = (window as any).__onMapboxReady;
+    if (typeof onReady === "function") onReady(init);
+    else init(new Error("map library loader missing"));
+    return () => {
+      cancelled = true;
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
+  }, [config?.token, libRetry]);
 
   // Update markers when pings change
   useEffect(() => {
@@ -202,11 +228,33 @@ export default function LiveMap() {
         <div className="lg:col-span-3">
           <Card className="bg-card border-border overflow-hidden">
             <div ref={mapContainer} style={{ height: "520px", width: "100%" }}>
-              {!mapReady && (
+              {mapUnavailable ? (
+                <div
+                  className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center"
+                  role="alert"
+                  data-testid="livemap-library-error"
+                >
+                  <p className="text-sm text-muted-foreground">
+                    The map could not be loaded. Check your connection and try again.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    data-testid="livemap-library-retry"
+                    onClick={() => {
+                      setMapUnavailable(false);
+                      (window as any).__retryMapbox?.();
+                      setLibRetry(n => n + 1); // re-register the ready callback
+                    }}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              ) : !mapReady ? (
                 <div className="h-full flex items-center justify-center">
                   <Skeleton className="w-full h-full bg-secondary" />
                 </div>
-              )}
+              ) : null}
             </div>
           </Card>
         </div>

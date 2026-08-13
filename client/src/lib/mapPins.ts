@@ -713,6 +713,36 @@ export function persistHouseNumbers(on: boolean): void {
   }
 }
 
+// ── Persisted basemap mode ──────────────────────────────────────────────────
+// The other three controls in the Map settings sheet (status filter, source
+// lens, house numbers) all persist; the basemap did not, so a rep who works
+// nights on Dark got thrown back to Satellite on every launch and had to
+// re-pick it. Same storage pattern and same storage-blocked degradation as its
+// neighbours. Unknown/corrupt values fall back to the satellite default rather
+// than handing basemapStyle() a mode it has no tiles for.
+export const BASEMAP_MODE_LS_KEY = "hf.mapBasemap.v1";
+
+export type PersistedBasemapMode = "satellite" | "streets" | "dark";
+
+export const DEFAULT_BASEMAP_MODE: PersistedBasemapMode = "satellite";
+
+export function readPersistedBasemapMode(): PersistedBasemapMode {
+  try {
+    const v = localStorage.getItem(BASEMAP_MODE_LS_KEY);
+    return v === "satellite" || v === "streets" || v === "dark" ? v : DEFAULT_BASEMAP_MODE;
+  } catch {
+    return DEFAULT_BASEMAP_MODE; // storage blocked (private mode) — session-only
+  }
+}
+
+export function persistBasemapMode(mode: PersistedBasemapMode): void {
+  try {
+    localStorage.setItem(BASEMAP_MODE_LS_KEY, mode);
+  } catch {
+    /* storage blocked — the choice just won't survive a reload */
+  }
+}
+
 // ── Add-mode tap arbitration ────────────────────────────────────────────────
 // In tap-to-add mode a tap must hit-test existing pins FIRST: landing on (or
 // gloved-near-missing) a pin opens that lead instead of reverse-geocoding +

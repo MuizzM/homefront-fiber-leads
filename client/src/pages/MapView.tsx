@@ -66,6 +66,8 @@ import {
   removeHousenumLayer,
   readPersistedHouseNumbers,
   persistHouseNumbers,
+  readPersistedBasemapMode,
+  persistBasemapMode,
   isSheetDragActive,
   decideAddModeTap,
   createRafCoalescedFlush,
@@ -840,11 +842,23 @@ export default function MapView() {
   // geolocateSource-tagged follow move — left the rail, lasso included, stuck
   // at opacity-0. The rail is primary chrome and stays visible.)
 
-  // Map style toggle
+  // Map style toggle — persisted, like every other control in the settings
+  // sheet. The map is CREATED with this value (see basemapStyle below), so a
+  // rep who works on Dark opens on Dark instead of watching Satellite paint and
+  // then swap.
   const [mapStyleMode, setMapStyleMode] = useState<
     "dark" | "satellite" | "streets"
-  >("satellite");
+  >(() => readPersistedBasemapMode());
   const [showLeads, setShowLeads] = useState(true); // control-rail layer toggle
+  // The toggle as a ref, for the imperative writers that run OUTSIDE React's
+  // effect ordering — syncViewportTierLayers is called straight from the
+  // window/grid fetch callbacks, so it cannot read `showLeads` from a closure
+  // and cannot be sequenced after the visibility effect below. Without this the
+  // first window fetch to land after "Show leads" was turned off flipped every
+  // pin layer back to visible, and in viewport mode (which is what production
+  // runs at ~69k pins) that is EVERY pan.
+  const showLeadsRef = useRef(showLeads);
+  showLeadsRef.current = showLeads;
   // House numbers — OFF by default (owner's minimal-map directive); opt-in from
   // the Map settings sheet, persisted like the status filter. The ref lets the
   // once-bound init/style.load handlers read the live preference.
@@ -855,7 +869,9 @@ export default function MapView() {
   showHouseNumsRef.current = showHouseNums;
   // The style the map was actually created with. Prevents a redundant setStyle()
   // on first load (which would reload the whole style and blank the map).
-  const appliedStyleRef = useRef<"dark" | "satellite" | "streets">("satellite");
+  // Seeded from the SAME first-render value the map is constructed with, so a
+  // persisted non-default basemap still costs exactly one style load.
+  const appliedStyleRef = useRef<"dark" | "satellite" | "streets">(mapStyleMode);
   // Bumped after each style swap so lead pins + territories re-render onto the
   // fresh style (setStyle wipes all sources/layers).
   const [styleEpoch, setStyleEpoch] = useState(0);
@@ -1209,6 +1225,15 @@ export default function MapView() {
   // table: team leads gained reclaim/assign server-side but the UI kept hiding
   // every control from them. Ask the same source of truth the API does.
   const canManage = roleCan(user?.role, "assign_territory");
+  // Rep-colour mode OWNS the glyph-icon layer: it swaps the status glyphs out
+  // for rep-coloured circles at every zoom. Both of the other visibility
+  // writers (the "Show leads" effect and syncViewportTierLayers, which fires
+  // from the window/grid fetch callbacks) walk the same layer list, and without
+  // this ref they put the glyphs straight back - leaving BOTH representations
+  // drawing at once, which is the exact double-render the swap exists to avoid.
+  // Gated on canManage because the rep-colour effect itself bails without it.
+  const repColorActiveRef = useRef(false);
+  repColorActiveRef.current = canManage && repColorMode;
   const canReclaim = roleCan(user?.role, "reclaim_territory");
   const canResetPass = roleCan(user?.role, "reset_territory_pass");
   const canReclaimAll = roleCan(user?.role, "reclaim_all_territories");
@@ -2168,13 +2193,19 @@ export default function MapView() {
   const syncViewportTierLayers = useCallback((map: any) => {
     if (!map) return;
     const gridActive = viewportModeRef.current && viewportTierRef.current === "grid";
-    const showDensity = viewportModeRef.current && (gridActive ? gridWindowLandedRef.current : !pinWindowLandedRef.current);
-    const showPins = !gridActive || !gridWindowLandedRef.current;
+    // "Show leads" off means off on BOTH tiers: the density bubbles are the
+    // wide-zoom rendering of the same lead set, so leaving them up while the
+    // pins are hidden just moves the thing the rep asked to get rid of.
+    const leadsOn = showLeadsRef.current;
+    const showDensity = leadsOn && viewportModeRef.current && (gridActive ? gridWindowLandedRef.current : !pinWindowLandedRef.current);
+    const showPins = leadsOn && (!gridActive || !gridWindowLandedRef.current);
     for (const id of DENSITY_LAYER_IDS) {
       try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", showDensity ? "visible" : "none"); } catch {}
     }
     for (const id of GRID_TIER_HIDDEN_LAYER_IDS) {
-      try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", showPins ? "visible" : "none"); } catch {}
+      // The glyph layer is rep-colour mode's to hide (see repColorActiveRef).
+      const on = showPins && !(id === STATUS_ICON_LAYER && repColorActiveRef.current);
+      try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none"); } catch {}
     }
   }, []);
 
@@ -2474,8 +2505,21 @@ export default function MapView() {
   // the first bind fires the window fetch SYNCHRONOUSLY; every later bind
   // (style swap, mode re-flip) and every real moveend keeps the debounce.
   const firstViewportFetchRef = useRef(true);
+  // The viewportMode this effect was last bound with. A REBIND is not a reason
+  // to refetch on its own: this effect also re-runs on every styleEpoch bump,
+  // and a style swap wipes LAYERS, not the query cache — the pins are re-pushed
+  // onto the fresh style from the cache by the visibleLeads effect. Firing a
+  // window fetch there re-paid a full synchronous server query for a window the
+  // client already held; boot alone (probe flip + style.load epoch + the re-add
+  // block) measured EIGHT identical bbox fetches for one window. Only a genuine
+  // mode flip needs the catch-up fetch, which is what this ref detects.
+  const lastBoundViewportModeRef = useRef(false);
   useEffect(() => {
     const map = mapRef.current;
+    // Recorded BEFORE the guards, so an off-cycle (viewportMode false) is still
+    // observed — otherwise a false→true flip could not be told from a rebind.
+    const wasOn = lastBoundViewportModeRef.current;
+    lastBoundViewportModeRef.current = viewportMode;
     if (!map || !mapReady || !viewportMode) return;
     const onMoveEnd = () => {
       if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
@@ -2485,8 +2529,8 @@ export default function MapView() {
     if (firstViewportFetchRef.current) {
       firstViewportFetchRef.current = false;
       refreshViewportPinsRef.current(); // boot: no debounce on the first fetch
-    } else {
-      onMoveEnd(); // the mode may have flipped while the map sat still
+    } else if (!wasOn) {
+      onMoveEnd(); // the mode flipped ON while the map sat still — catch up
     }
     return () => {
       if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
@@ -2853,7 +2897,7 @@ export default function MapView() {
     const savedCamera = readPersistedMapCamera();
     const map = new (window as any).mapboxgl.Map({
       container: el,
-      style: basemapStyle("satellite"),
+      style: basemapStyle(appliedStyleRef.current),
       center: savedCamera?.center ?? ROCKWELL_CENTER,
       zoom: savedCamera?.zoom ?? 13,
       // No wordmark, no attribution bar on the map (owner ask). The license
@@ -4016,7 +4060,10 @@ export default function MapView() {
         if (map.getLayer(STATUS_ICON_LAYER)) map.setLayoutProperty(STATUS_ICON_LAYER, "visibility", "none");
         if (map.getLayer("lead-unclustered")) {
           map.setLayerZoomRange?.("lead-unclustered", 0, 24);
-          map.setLayoutProperty("lead-unclustered", "visibility", "visible");
+          // Rep-colour mode swaps WHICH layer draws the pins, never WHETHER
+          // they draw: "Show leads" off must survive turning this on, or the
+          // pins a rep just hid come straight back in different colours.
+          map.setLayoutProperty("lead-unclustered", "visibility", showLeads ? "visible" : "none");
           map.setPaintProperty("lead-unclustered", "circle-color", ["get", "repColor"]);
         }
       } else {
@@ -4448,15 +4495,27 @@ export default function MapView() {
       // isolated, never-clustered lead has. Flag off → the icon layer doesn't
       // exist (skipped above) and this behaves exactly as today.
       let v = vis;
-      if (!fieldMap && id === STATUS_ICON_LAYER) v = "none";
+      // The glyph layer is off whenever it is not the thing drawing the pins:
+      // flag off (dots build), or rep-colour mode, which draws them as
+      // rep-coloured circles instead and would otherwise get both.
+      if (id === STATUS_ICON_LAYER && (!fieldMap || repColorActiveRef.current)) v = "none";
       try {
         map.setLayoutProperty(id, "visibility", v);
       } catch {}
     }
-  }, [showLeads, mapReady, styleEpoch]);
+    // The loop above cannot decide the TIER-owned layers on its own: in the
+    // density tier the pin clusters must stay hidden even with the toggle on,
+    // and the density bubbles must appear/disappear with it. syncViewportTierLayers
+    // is the single owner of that decision (and now reads the same toggle), so
+    // it gets the last word rather than the two writers racing.
+    syncViewportTierLayers(map);
+  }, [showLeads, mapReady, styleEpoch, syncViewportTierLayers]);
 
   // ── Map style toggle ───────────────────────────────────────────────────────
   useEffect(() => {
+    // Persisted unconditionally, BEFORE the map guards below: the choice is the
+    // rep's whether or not a map instance is up to render it yet.
+    persistBasemapMode(mapStyleMode);
     const map = mapRef.current;
     if (!map || !mapReady) return;
     // Skip the redundant reload on initial load — the map is already showing this
@@ -8250,7 +8309,12 @@ export default function MapView() {
               {
                 key: "house-numbers",
                 label: "House numbers",
-                description: "Street numbers beside rooftops when zoomed in",
+                // Accurate on both counts: the label is drawn CENTRED on the
+                // roof (ensureHousenumLayer's text-anchor), not beside it, and
+                // it only draws on Dark - Satellite and Streets are Google
+                // hybrid tiles with their own numbers baked in, so our layer
+                // stands down there rather than putting two numbers on one roof.
+                description: "Numbers on rooftops when zoomed in (Dark basemap)",
                 on: showHouseNums,
                 onToggle: () => setShowHouseNums((v) => !v),
                 testId: "map-settings-toggle-house-numbers",
