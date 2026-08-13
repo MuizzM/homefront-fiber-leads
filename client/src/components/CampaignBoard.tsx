@@ -128,7 +128,7 @@ export function CampaignCard({ campaign, compact = false }: { campaign: RepCampa
 
           <span className={cn(
             "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
-            urgent && !progress.met ? "bg-warning/12 text-warning"
+            urgent && !progress.met ? "bg-warning/[0.12] text-warning"
                                     : "bg-secondary text-muted-foreground",
           )} data-testid={`campaign-countdown-${campaign.id}`}>
             

@@ -551,10 +551,10 @@ function OverrideEarningsCard() {
 // slate-300 on white is 1.26:1, invisible. Bars darken in light mode too so
 // the fill stays visible against the light track.
 const RANK_TINTS: Record<string, { chip: string; bar: string }> = {
-  Bronze:   { chip: "bg-warning/12 text-warning",   bar: "bg-warning [.light_&]:bg-warning" },
+  Bronze:   { chip: "bg-warning/[0.12] text-warning",   bar: "bg-warning [.light_&]:bg-warning" },
   Silver:   { chip: "bg-slate-400/20 text-slate-300 [.light_&]:text-slate-600",   bar: "bg-slate-300 [.light_&]:bg-slate-500" },
-  Gold:     { chip: "bg-warning/12 text-warning", bar: "bg-warning [.light_&]:bg-warning" },
-  Platinum: { chip: "bg-info/12 text-info",     bar: "bg-info [.light_&]:bg-info" },
+  Gold:     { chip: "bg-warning/[0.12] text-warning", bar: "bg-warning [.light_&]:bg-warning" },
+  Platinum: { chip: "bg-info/[0.12] text-info",     bar: "bg-info [.light_&]:bg-info" },
 };
 const rankTint = (name: string) =>
   RANK_TINTS[name] ?? { chip: "bg-violet-400/20 text-violet-300 [.light_&]:text-violet-700", bar: "bg-violet-300 [.light_&]:bg-violet-600" }; // Diamond+
@@ -1100,7 +1100,7 @@ function GetPaidSection() {
       {isReady ? (
         <>
           {/* Payouts-ready confirmation — Turo "You're verified!" */}
-          <div className="rounded-xl border border-success/25 bg-success/8 p-4 flex items-center gap-3" data-testid="payouts-ready">
+          <div className="rounded-xl border border-success/25 bg-success/[0.08] p-4 flex items-center gap-3" data-testid="payouts-ready">
             
             <div className="min-w-0">
               <div className="text-sm font-semibold tracking-tight text-foreground">Payouts ready</div>
@@ -1144,12 +1144,12 @@ function GetPaidSection() {
           </div>
 
           {account.onboardingStatus === "pending" && (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-warning/8 border border-warning/12 px-3 py-2 text-xs text-warning" data-testid="payout-status-note">
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-warning/[0.08] border border-warning/[0.12] px-3 py-2 text-xs text-warning" data-testid="payout-status-note">
               <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" aria-hidden="true" /> Verifying your details…
             </div>
           )}
           {account.onboardingStatus === "restricted" && (
-            <div className="mt-4 flex items-center gap-2 rounded-lg bg-destructive/8 border border-destructive/12 px-3 py-2 text-xs text-destructive" data-testid="payout-status-note">
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-destructive/[0.08] border border-destructive/[0.12] px-3 py-2 text-xs text-destructive" data-testid="payout-status-note">
                Action needed - reconnect to finish verification.
             </div>
           )}

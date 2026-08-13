@@ -71,21 +71,21 @@ function speedLabel(mbps?: number | null): string | null {
 // gradient (≈8-10% tint fading to transparent).
 type Badge = { text: string; short: string; cls: string; tone: string; band: string };
 function statusBadge(p: CardProperty): Badge {
-  const emerald = { tone: "text-success", cls: "bg-success/8 text-success ring-success/25", band: "from-success/8" };
+  const emerald = { tone: "text-success", cls: "bg-success/[0.08] text-success ring-success/25", band: "from-success/[0.08]" };
   if (p.leadTag === "fresh_fiber_confirmed")
     return { text: "Confirmed fresh fiber", short: "Fresh fiber", ...emerald };
   if (p.isNewFiber && p.billingStatus === "N")
     return { text: "New-fiber lead", short: "New lead", ...emerald };
   if (p.isNewFiber)
-    return { text: "New fiber here", short: "New fiber", tone: "text-success", cls: "bg-success/8 text-success ring-success/25", band: "from-success/8" };
+    return { text: "New fiber here", short: "New fiber", tone: "text-success", cls: "bg-success/[0.08] text-success ring-success/25", band: "from-success/[0.08]" };
   if (p.leadTag === "coming_soon")
-    return { text: "Fiber coming soon", short: "Coming soon", tone: "text-warning", cls: "bg-warning/8 text-warning ring-warning/25", band: "from-warning/8" };
+    return { text: "Fiber coming soon", short: "Coming soon", tone: "text-warning", cls: "bg-warning/[0.08] text-warning ring-warning/25", band: "from-warning/[0.08]" };
   if (p.competitorName)
-    return { text: `Competitor: ${p.competitorName}`, short: "Competitor", tone: "text-warning", cls: "bg-warning/8 text-warning ring-warning/25", band: "from-warning/8" };
+    return { text: `Competitor: ${p.competitorName}`, short: "Competitor", tone: "text-warning", cls: "bg-warning/[0.08] text-warning ring-warning/25", band: "from-warning/[0.08]" };
   if (p.fiberStatus === "copper" || p.fiberStatus === "no_service")
     return { text: "No fiber yet", short: "No fiber", tone: "text-foreground", cls: "bg-muted text-muted-foreground ring-border", band: "from-muted/40" };
   if (p.source === "tap")
-    return { text: "Tapped location", short: "Tapped", tone: "text-info", cls: "bg-info/8 text-info ring-info/25", band: "from-info/8" };
+    return { text: "Tapped location", short: "Tapped", tone: "text-info", cls: "bg-info/[0.08] text-info ring-info/25", band: "from-info/[0.08]" };
   return { text: p.fiberStatus || "Unknown", short: p.fiberStatus || "Unknown", tone: "text-foreground", cls: "bg-muted text-muted-foreground ring-border", band: "from-muted/40" };
 }
 

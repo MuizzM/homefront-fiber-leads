@@ -304,7 +304,7 @@ export default function CommissionConsole() {
           {/* Needs review — actionable, never decorative */}
           {ov.exceptions.length > 0 ? (
             <div className="rounded-2xl bg-card border border-warning/25 overflow-hidden" data-testid="exceptions-panel">
-              <div className="px-4 py-2.5 bg-warning/8 border-b border-warning/12 flex items-center gap-2">
+              <div className="px-4 py-2.5 bg-warning/[0.08] border-b border-warning/[0.12] flex items-center gap-2">
                 
                 <span className="text-sm font-semibold text-foreground">Needs review before closeout</span>
                 <span className="ml-auto text-xs text-muted-foreground">{ov.exceptions.length}</span>
@@ -312,7 +312,7 @@ export default function CommissionConsole() {
               <div className="divide-y divide-border">
                 {ov.exceptions.map((ex, i) => (
                   <div key={i} className="px-4 py-2.5 flex items-start gap-3 text-sm">
-                    <span className="text-2xs font-bold uppercase tracking-wide text-warning bg-warning/8 border border-warning/25 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
+                    <span className="text-2xs font-bold uppercase tracking-wide text-warning bg-warning/[0.08] border border-warning/25 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
                       {ex.type.replace(/_/g, " ").toLowerCase()}
                     </span>
                     <span className="text-muted-foreground">
@@ -438,7 +438,7 @@ export default function CommissionConsole() {
                     </div>
                     <div className="flex items-center gap-2 mt-1.5">
                       {r.structure && !r.planAccepted && (
-                        <span className="text-2xs font-bold uppercase text-warning bg-warning/8 border border-warning/25 rounded px-1.5 py-0.5">plan not accepted</span>
+                        <span className="text-2xs font-bold uppercase text-warning bg-warning/[0.08] border border-warning/25 rounded px-1.5 py-0.5">plan not accepted</span>
                       )}
                       {r.status === "OPEN" && r.salesUntilNextTier != null && (r.marginalJumpCents ?? 0) > 0 && (
                         <span className={`text-[11px] ${r.salesUntilNextTier <= 2 ? "text-warning font-semibold" : "text-muted-foreground"}`}>
@@ -473,7 +473,7 @@ export default function CommissionConsole() {
                           <div className="font-medium text-foreground flex items-center gap-1.5">
                             {r.repName}
                             {r.structure && !r.planAccepted && (
-                              <span className="text-2xs font-bold uppercase text-warning bg-warning/8 border border-warning/25 rounded px-1 py-0.5">plan not accepted</span>
+                              <span className="text-2xs font-bold uppercase text-warning bg-warning/[0.08] border border-warning/25 rounded px-1 py-0.5">plan not accepted</span>
                             )}
                           </div>
                           <div className="text-2xs text-muted-foreground flex items-center gap-1">
@@ -539,7 +539,7 @@ export default function CommissionConsole() {
                     onClick={() => setConfirmAction("FINALIZE")} data-testid="btn-finalize-week">
                      Finalize week
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 border-success/30 text-success hover:bg-success/8 text-xs"
+                  <Button size="sm" variant="outline" className="h-8 border-success/30 text-success hover:bg-success/[0.08] text-xs"
                     disabled={finalizedCount === 0 || transition.isPending}
                     onClick={() => setConfirmAction("MARK_PAID")} data-testid="btn-mark-paid">
                      Mark paid
@@ -928,7 +928,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
                       as the server gate. Managers (read.all) file; admins decide. */}
                   {canDecideAdj && a.status === "PENDING" && (
                     <div className="flex gap-1.5 mt-1.5">
-                      <Button size="sm" variant="outline" className="h-6 text-2xs border-success/30 text-success hover:bg-success/8"
+                      <Button size="sm" variant="outline" className="h-6 text-2xs border-success/30 text-success hover:bg-success/[0.08]"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "APPROVE" })} data-testid={`btn-approve-adj-${a.id}`}>Approve</Button>
                       <Button size="sm" variant="ghost" className="h-6 text-2xs text-muted-foreground"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "REJECT" })}>Reject</Button>
@@ -1121,7 +1121,7 @@ function PayStatusCell({ r }: { r: PayoutRow }) {
   if (r.payoutStatus === "reversed")
     return <span className={`${base} bg-warning/10 text-warning`}> Reversed</span>;
   if (r.eligible)
-    return <span className={`${base} bg-success/8 text-success`}> Ready</span>;
+    return <span className={`${base} bg-success/[0.08] text-success`}> Ready</span>;
   return (
     <span className="inline-flex items-center gap-1 text-[11px] text-warning" title={r.blockReason ?? undefined}>
        {r.blockLabel ?? "Not eligible"}
@@ -1193,7 +1193,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
           <div className="text-sm font-semibold text-foreground">Send commission via Stripe Connect</div>
         </div>
         {stripeEnabled && payableCount > 0 && (
-          <span className="ml-auto text-[11px] font-semibold text-success bg-success/8 rounded-full px-2 py-0.5 whitespace-nowrap">
+          <span className="ml-auto text-[11px] font-semibold text-success bg-success/[0.08] rounded-full px-2 py-0.5 whitespace-nowrap">
             {payableCount} ready
           </span>
         )}

@@ -275,7 +275,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
                       data-testid={`unassign-rep-${id}`}
                       disabled={busy}
                       onClick={() => setConfirmRemoveId(id)}
-                      className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/12 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
+                      className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/[0.12] hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
                     >
                       <UserMinus className="w-3 h-3" aria-hidden="true" />
                     </button>
@@ -355,15 +355,15 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
 
           {/* Verification summary — icon + text (WCAG: not colour alone) */}
           <div className="mt-3 grid grid-cols-3 gap-1.5" data-testid="verification-summary">
-            <div className="rounded-lg border border-success/15 bg-success/8 px-2 py-1.5 text-center">
+            <div className="rounded-lg border border-success/15 bg-success/[0.08] px-2 py-1.5 text-center">
               <div className="inline-flex items-center gap-1 text-success"><span className="text-sm font-bold tabular-nums">{progress.verified}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Verified</div>
             </div>
-            <div className="rounded-lg border border-warning/15 bg-warning/8 px-2 py-1.5 text-center">
+            <div className="rounded-lg border border-warning/15 bg-warning/[0.08] px-2 py-1.5 text-center">
               <div className="inline-flex items-center gap-1 text-warning"><span className="text-sm font-bold tabular-nums">{progress.needsReview}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Review</div>
             </div>
-            <div className="rounded-lg border border-destructive/15 bg-destructive/8 px-2 py-1.5 text-center">
+            <div className="rounded-lg border border-destructive/15 bg-destructive/[0.08] px-2 py-1.5 text-center">
               <div className="inline-flex items-center gap-1 text-destructive"><span className="text-sm font-bold tabular-nums">{progress.invalid}</span></div>
               <div className="text-2xs uppercase tracking-wide text-muted-foreground">Invalid</div>
             </div>

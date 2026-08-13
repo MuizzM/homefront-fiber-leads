@@ -221,7 +221,7 @@ export default function Billing() {
                     )}
                   </div>
                   {(summary.level === "critical" || summary.level === "exhausted") && (
-                    <div role="alert" className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/8 text-destructive px-3 py-2 text-[12.5px]">
+                    <div role="alert" className="mt-3 flex items-center gap-2 rounded-lg bg-destructive/[0.08] text-destructive px-3 py-2 text-[12.5px]">
                       
                       {summary.level === "exhausted"
                         ? (summary.overageMode === "stop"

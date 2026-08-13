@@ -62,10 +62,10 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
       type="button"
       onClick={onOpen}
       data-testid="ranked-hero"
-      className="relative block w-full overflow-hidden border-b border-border bg-gradient-to-br from-success/8 via-card to-card px-4 pb-3.5 pt-3 text-left hover:from-success/10"
+      className="relative block w-full overflow-hidden border-b border-border bg-gradient-to-br from-success/[0.08] via-card to-card px-4 pb-3.5 pt-3 text-left hover:from-success/10"
     >
       {/* Oversized rank numeral, Netflix-top-10 style — pure background texture. */}
-      <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-success/8">1</span>
+      <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-success/[0.08]">1</span>
       <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-[0.14em] text-success">
          Knock this door first
       </div>
@@ -77,7 +77,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
           {lead.reasons.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {lead.reasons.slice(0, 3).map((r) => (
-                <span key={r} className="rounded-full bg-success/8 px-1.5 py-0.5 text-2xs font-medium text-success">{r}</span>
+                <span key={r} className="rounded-full bg-success/[0.08] px-1.5 py-0.5 text-2xs font-medium text-success">{r}</span>
               ))}
             </div>
           )}

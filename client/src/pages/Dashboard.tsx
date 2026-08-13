@@ -572,7 +572,7 @@ export default function Dashboard() {
                             {Math.floor((s.durationMinutes ?? 0) / 60)}h {(s.durationMinutes ?? 0) % 60}m
                           </Badge>
                         ) : (
-                          <Badge className="border-success/25 bg-success/12 text-xs text-success">
+                          <Badge className="border-success/25 bg-success/[0.12] text-xs text-success">
                             <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
                             Active
                           </Badge>

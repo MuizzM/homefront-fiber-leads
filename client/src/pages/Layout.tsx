@@ -411,7 +411,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         className={cn(
                           "relative flex min-h-11 md:min-h-0 items-center gap-3 rounded-xl md:rounded-lg px-3 py-2.5 md:py-2 text-[14px] md:text-[13px] font-medium transition-colors",
                           isActive
-                            ? "bg-primary/12 text-foreground"
+                            ? "bg-primary/[0.12] text-foreground"
                             : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
                         )}
                         data-testid={`nav-${label.toLowerCase().replace(/\s/g, "-")}`}

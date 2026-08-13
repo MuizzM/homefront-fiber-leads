@@ -1,6 +1,6 @@
 # UX References — Mobbin Research
 
-Research for the product-wide UX transformation. Twelve references, two per workflow.
+Research for the product-wide UX transformation. Fifteen references across seven workflows.
 Every URL below came from a Mobbin search result. Nothing here is a suggestion to copy
 branding, colour, or literal layout — each entry isolates one **interaction principle**
 and states how it lands on our product (reps knocking doors, managers assigning
@@ -353,6 +353,83 @@ reassigned to Jordan. Undo." This pairs with 6.1: use the heavy typed-confirmati
 inventory for the truly irreversible actions (removing a person, voiding money), and use
 optimistic-plus-restore for the high-volume reversible ones. Applying the heavy pattern to
 routine bulk edits just trains people to type through it without reading.
+
+---
+
+## 7. Shift start - the first screen of the day
+
+Added 2026-08-13. This workflow had no reference in the original twelve, and it is the
+screen a rep opens before every shift. Today's version is five equal-weight boxes
+(Unassigned, Assigned, Dispositioned, Sold, Follow-ups due) at identical size with no
+ranking and no interpretation, so the rep has to do the reading. Both references below
+attack that directly.
+
+### 7.1 Oura (iOS) - one hero number, then a sentence that reads it for you
+https://mobbin.com/screens/bfe532d9-62fe-4246-9775-9c8934195bcb
+
+**What I see.** A horizontally scrollable rail of small circular metrics across the top
+(Readiness 63, Sleep 73, Resilience, Activity 98), each a value over a label. Below it, one
+enormous number - `80` - with the single word `READINESS` under it, and under that a
+plain-language headline, "Feeling good?", followed by two sentences interpreting the score
+and recommending an action. A `Learn more` button. Everything else scrolls beneath. On the
+second screenshot the Resilience metric has no data, and it renders as a dash with its
+label intact - not as a zero, and not omitted.
+
+**Principle.** A dashboard should answer one question at full size and relegate the rest.
+Pick the single metric that answers "how is it going", render it at hero scale with its
+name, and put a written interpretation directly beneath it - the number and the sentence
+are one unit. Every other metric becomes a small labelled chip in a rail above. Critically:
+a metric with no data renders as a dash, never as `0`. A zero is a claim; a dash is an
+absence, and the two must not look alike.
+
+**For us.** `pages/Today.tsx`. Choose the one number that describes a rep's shift - doors
+knocked today against their own recent average, or sales today - and give it the hero slot
+with a sentence ("23 doors, ahead of your usual 18 by this hour"). Unassigned / Assigned /
+Dispositioned / Sold / Follow-ups become the chip rail. The dash rule is the important part
+here and it is not cosmetic: it is the same defect as cross-cutting item 1 in
+`ui-audit-2026-08.md`, where a failed fetch renders `data ?? 0` and the screen states a
+confident falsehood. Oura's treatment is the correct rendering of "we do not know".
+
+### 7.2 Airtasker (iOS) - state the gap to the next threshold, and why it is worth closing
+https://mobbin.com/screens/e8c2be58-e311-41ff-b80a-14963418a6f5
+
+**What I see.** A tier badge (Bronze, with the fee it implies: "20% service fee excl. GST")
+and two progress bars. The first is a rating bar whose track is labelled underneath with
+named bands - Poor, Okay, Good, Excellent - rather than numbers. The second is an earnings
+bar labelled with the actual tier thresholds ($0, $880, $2,650, $5,300+), above the
+sentence "Your earnings are $880 away from Silver and lowering service fees." Below,
+a `Next tier benefits` section spells out the reward: "Reach Silver for lower service fees!
+Pay less with a service fee of 17.9%."
+
+**Principle.** Progress toward a threshold is three things, and most implementations ship
+only the first: the bar, the *distance remaining stated in the unit the user earns in*, and
+the *consequence of crossing it*. A bar without the sentence makes the user do arithmetic;
+a sentence without the consequence makes the threshold feel arbitrary. Also: label a
+qualitative scale with named bands, not a bare score.
+
+**For us.** The referral program is exactly this shape - $500 at 6 qualifying sales - and
+`pages/Referrals.tsx` and `pages/Incentives.tsx` should read "2 sales from $500", not a
+counter at 4. Same for spiffs and any tiered commission rate: state the gap in sales, and
+name the money on the other side. See `referral-program-live` for the qualification chain
+that supplies the real numbers.
+
+### 7.3 Turo (iOS) - list every component of a total, including the zeroes
+https://mobbin.com/screens/ce9c38cd-3099-4da4-aa5e-727c462679da
+
+**What I see.** An earnings chart with a legend below it, where each legend row is also a
+line item carrying its own value and its own `?` help affordance: `$19 Trip earnings`,
+`$0 Upcoming earnings`, `$0 Reimbursements`, `$0 Incentives`, `$0 Missed earnings`. Four of
+the five are zero and all four are still rendered, labelled, and explainable.
+
+**Principle.** When a total decomposes, show every component even when it is zero, and make
+each one explain itself in place. A component omitted because it is empty is indistinguishable
+from a component that does not exist, and the user cannot tell whether they earned nothing
+from incentives or whether incentives are not a thing here.
+
+**For us.** Commission statements with holds and chargebacks. This is the complement to
+Fiverr (5.1): Fiverr partitions money by *claimability*, Turo enumerates it by *source*
+including the empty sources. A rep looking at a statement with no chargebacks should see a
+`$0 Chargebacks` row, not the absence of one.
 
 ---
 

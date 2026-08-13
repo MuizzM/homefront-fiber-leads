@@ -30,7 +30,7 @@ export const ROLES = [
     short: "Rep",
     description: "Knocks doors, logs contacts, views own leads & territory only",
     color: "bg-info/10 text-info",
-    avatarColor: "bg-info/12 text-info",
+    avatarColor: "bg-info/[0.12] text-info",
     Icon: User,
   },
   {
@@ -48,7 +48,7 @@ export const ROLES = [
     short: "Manager",
     description: "Full visibility of all reps, leads & territories; can assign territories",
     color: "bg-warning/10 text-warning",
-    avatarColor: "bg-warning/12 text-warning",
+    avatarColor: "bg-warning/[0.12] text-warning",
     Icon: Crown,
   },
 ] as const;
@@ -590,7 +590,7 @@ export default function Team() {
                       <Badge className={`h-5 gap-1 px-1.5 rounded-full border-0 text-[11px] font-medium ${ri2.color}`}>
                         {ri2.short}
                       </Badge>
-                      <span className={`inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-full text-[11px] font-medium ${member.active ? "bg-success/8 text-success" : "bg-muted text-muted-foreground"}`}>
+                      <span className={`inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-full text-[11px] font-medium ${member.active ? "bg-success/[0.08] text-success" : "bg-muted text-muted-foreground"}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${member.active ? "bg-success" : "bg-muted-foreground/50"}`} />
                         {member.active ? "Active" : "Inactive"}
                       </span>
@@ -684,14 +684,14 @@ export default function Team() {
                         </Button>
                       )}
                       {canLifecycle(member) && member.active && (
-                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-warning hover:bg-warning/8"
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-warning hover:bg-warning/[0.08]"
                           onClick={() => setOffboardMember(member)} data-testid={`btn-offboard-rep-${member.id}`}
                           aria-label={`Offboard ${member.name}`} title="Offboard - remove access, keep records">
                           Offboard
                         </Button>
                       )}
                       {canHardDelete(member) && (
-                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive hover:bg-destructive/8"
+                        <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive hover:bg-destructive/[0.08]"
                           onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
                           aria-label={`Remove ${member.name}`} title="Delete member record">
                           Delete
@@ -871,7 +871,7 @@ export default function Team() {
                         <div className="flex items-center justify-end gap-1 flex-shrink-0">
                           {canLifecycle(member) && (
                             <Button variant="outline" size="sm"
-                              className="h-8 border-border text-success hover:text-success hover:bg-success/8"
+                              className="h-8 border-border text-success hover:text-success hover:bg-success/[0.08]"
                               onClick={() => reactivateMutation.mutate(member.id)}
                               disabled={reactivateMutation.isPending && reactivateMutation.variables === member.id}
                               data-testid={`btn-reactivate-rep-${member.id}`}
@@ -881,7 +881,7 @@ export default function Team() {
                             </Button>
                           )}
                           {canHardDelete(member) && (
-                            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive hover:bg-destructive/8"
+                            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive hover:bg-destructive/[0.08]"
                               onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
                               aria-label={`Remove ${member.name}`} title="Delete member record">
                               Delete

@@ -45,9 +45,9 @@ function DiffRows({ before, after }: { before: Record<string, unknown> | null; a
         <div key={k} className="grid grid-cols-[minmax(7rem,auto)_1fr] gap-x-3 gap-y-0.5 text-[12px]">
           <dt className="font-medium text-muted-foreground truncate">{k}</dt>
           <dd className="flex flex-wrap items-center gap-1.5 min-w-0">
-            <span className="rounded bg-destructive/8 px-1.5 py-0.5 text-destructive/90 line-through break-all">{show(before?.[k])}</span>
+            <span className="rounded bg-destructive/[0.08] px-1.5 py-0.5 text-destructive/90 line-through break-all">{show(before?.[k])}</span>
             <span className="text-muted-foreground">to</span>
-            <span className="rounded bg-success/8 px-1.5 py-0.5 text-success/90 break-all">{show(after?.[k])}</span>
+            <span className="rounded bg-success/[0.08] px-1.5 py-0.5 text-success/90 break-all">{show(after?.[k])}</span>
           </dd>
         </div>
       ))}

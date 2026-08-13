@@ -5,9 +5,9 @@ export type VStatus = "verified" | "needs_review" | "invalid" | null | undefined
 interface VMeta { label: string; Icon: typeof ShieldCheck; text: string; bg: string; ring: string; dot: string; }
 
 export const V_META: Record<"verified" | "needs_review" | "invalid" | "unknown", VMeta> = {
-  verified:     { label: "Verified",     Icon: ShieldCheck,   text: "text-success", bg: "bg-success/12", ring: "border-success/30", dot: "#10b981" },
-  needs_review: { label: "Needs Review", Icon: AlertTriangle, text: "text-warning",   bg: "bg-warning/12",   ring: "border-warning/30",   dot: "#f59e0b" },
-  invalid:      { label: "Invalid",      Icon: Ban,           text: "text-destructive",     bg: "bg-destructive/12",     ring: "border-destructive/30",     dot: "#ef4444" },
+  verified:     { label: "Verified",     Icon: ShieldCheck,   text: "text-success", bg: "bg-success/[0.12]", ring: "border-success/30", dot: "#10b981" },
+  needs_review: { label: "Needs Review", Icon: AlertTriangle, text: "text-warning",   bg: "bg-warning/[0.12]",   ring: "border-warning/30",   dot: "#f59e0b" },
+  invalid:      { label: "Invalid",      Icon: Ban,           text: "text-destructive",     bg: "bg-destructive/[0.12]",     ring: "border-destructive/30",     dot: "#ef4444" },
   // The other three rows moved onto semantic tokens and this one was left on
   // raw slate. `text-slate-400` is ~2.4:1 on the light card, so the one status
   // that means "we do not know" was the least readable of the four.

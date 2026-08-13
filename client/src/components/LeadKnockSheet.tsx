@@ -658,9 +658,9 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const contactPhones = detailForLead?.phones ?? renderedLead.phones;
   const contactOwnerName = detailForLead?.ownerName ?? renderedLead.ownerName;
   const statusBadge: { text: string; className: string } | null = needsReview
-    ? { text: "Needs review", className: "border-warning/35 bg-warning/8 text-warning" }
+    ? { text: "Needs review", className: "border-warning/35 bg-warning/[0.08] text-warning" }
     : freshFiber
-      ? { text: "Fresh fiber", className: "border-success/35 bg-success/8 text-success" }
+      ? { text: "Fresh fiber", className: "border-success/35 bg-success/[0.08] text-success" }
       : null;
 
   const offscreen = closing || !entered;
@@ -898,7 +898,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 {fccReported && (
                   <span
                     data-testid="fcc-fiber-chip"
-                    className="mt-1 inline-flex w-fit items-center rounded-full border border-warning/35 bg-warning/8 px-2 py-px text-2xs font-bold uppercase tracking-wide text-warning"
+                    className="mt-1 inline-flex w-fit items-center rounded-full border border-warning/35 bg-warning/[0.08] px-2 py-px text-2xs font-bold uppercase tracking-wide text-warning"
                   >
                     FCC-reported fiber - verify at door
                   </span>

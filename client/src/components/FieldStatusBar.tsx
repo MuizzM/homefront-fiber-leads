@@ -69,7 +69,7 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
             : `Syncing ${pending} field update${pending === 1 ? "" : "s"}…`}
       </span>
       {canRetry && (
-        <button type="button" onClick={retry} className={`min-h-11 shrink-0 rounded-full px-4 font-semibold focus-visible:outline-none focus-visible:ring-2 ${overlay ? "bg-white/12 text-white hover:bg-white/20 focus-visible:ring-white" : "bg-secondary text-secondary-foreground hover:bg-secondary/80 focus-visible:ring-ring"}`}>
+        <button type="button" onClick={retry} className={`min-h-11 shrink-0 rounded-full px-4 font-semibold focus-visible:outline-none focus-visible:ring-2 ${overlay ? "bg-white/[0.12] text-white hover:bg-white/20 focus-visible:ring-white" : "bg-secondary text-secondary-foreground hover:bg-secondary/80 focus-visible:ring-ring"}`}>
           Retry
         </button>
       )}

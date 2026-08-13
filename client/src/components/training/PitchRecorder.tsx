@@ -402,7 +402,7 @@ export default function PitchRecorder({
       {/* Permission / failure message */}
       {error && (
         <div
-          className="mt-3 flex items-start gap-2 rounded-lg bg-destructive/8 px-3 py-2 text-xs text-destructive"
+          className="mt-3 flex items-start gap-2 rounded-lg bg-destructive/[0.08] px-3 py-2 text-xs text-destructive"
           data-testid={error === "denied" ? "pitch-permission-denied" : "pitch-error"}
           role="alert"
         >

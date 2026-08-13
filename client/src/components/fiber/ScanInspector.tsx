@@ -45,9 +45,9 @@ interface Counters {
 
 const STAGE_TONE: Record<string, string> = {
   classified: "bg-success/10 text-success border-success/25",
-  saving: "bg-success/8 text-success border-success/12",
+  saving: "bg-success/[0.08] text-success border-success/[0.12]",
   searching: "bg-info/10 text-info border-info/25",
-  parsing: "bg-info/8 text-info border-info/12",
+  parsing: "bg-info/[0.08] text-info border-info/[0.12]",
   minting: "bg-violet-500/15 text-violet-300 border-violet-500/30",
   token_ready: "bg-violet-500/10 text-violet-300 border-violet-500/20",
   queued: "bg-muted text-muted-foreground border-border",
@@ -254,7 +254,7 @@ export default function ScanInspector() {
     <div className="space-y-4" data-testid="scan-inspector">
       {/* Health + connection */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-success/25 bg-success/8 text-success" : "border-warning/25 bg-warning/8 text-warning"}`}>
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-success/25 bg-success/[0.08] text-success" : "border-warning/25 bg-warning/[0.08] text-warning"}`}>
           {connected ? null : <Loader2 className="h-3.5 w-3.5 animate-spin" />} {connected ? "Live" : "Connecting…"}
         </span>
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-success/25 text-success" : "border-destructive/25 text-destructive"}`}>
@@ -264,7 +264,7 @@ export default function ScanInspector() {
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground">
            token {health?.tokenReady ? `ready · ${health?.tokenExpiresIn ?? "?"}s` : "none"} · pool {health?.tokenPool?.ready ?? 0}/{health?.tokenPool?.size ?? 0}
         </span>
-        {health?.paused && <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/25 bg-warning/8 px-2.5 py-1 text-warning">Paused</span>}
+        {health?.paused && <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/25 bg-warning/[0.08] px-2.5 py-1 text-warning">Paused</span>}
       </div>
 
       {/* Accounting counters — found = checked + queued + checking + retrying + unresolved */}
@@ -293,7 +293,7 @@ export default function ScanInspector() {
           ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-success px-3 py-2 text-[13px] font-semibold text-[#04241f] hover:bg-success"> Resume</button>
           : <button onClick={() => control("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Pause</button>}
         <button onClick={() => control("retry-failed")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Retry failed</button>
-        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-card px-3 py-2 text-[13px] font-semibold text-destructive hover:bg-destructive/8"> Stop</button>
+        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-card px-3 py-2 text-[13px] font-semibold text-destructive hover:bg-destructive/[0.08]"> Stop</button>
         <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Copy diagnostics</button>
       </div>
 

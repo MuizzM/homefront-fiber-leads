@@ -168,7 +168,7 @@ export default function ClockIn() {
                     variant="outline"
                     onClick={() => clockOutMutation.mutate()}
                     disabled={clockOutMutation.isPending}
-                    className="w-full border-destructive/25 text-destructive hover:bg-destructive/8 px-8 sm:w-auto"
+                    className="w-full border-destructive/25 text-destructive hover:bg-destructive/[0.08] px-8 sm:w-auto"
                     data-testid="button-clock-out"
                   >
                     

@@ -31,14 +31,14 @@ export default function Profile() {
           </h2>
           <div className="rounded-2xl bg-card border border-border overflow-hidden">
             {/* Gradient banner + overlapping avatar — a proper identity header */}
-            <div className="h-16 bg-gradient-to-r from-primary/30 via-primary/12 to-transparent" aria-hidden="true" />
+            <div className="h-16 bg-gradient-to-r from-primary/30 via-primary/[0.12] to-transparent" aria-hidden="true" />
             <div className="px-5 pb-5 -mt-9">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-success text-white flex items-center justify-center text-xl font-bold ring-4 ring-card shadow-lg">
                 {user.name?.slice(0, 2).toUpperCase()}
               </div>
               <div className="mt-3 flex items-center gap-2 flex-wrap">
                 <h3 className="text-[18px] font-bold tracking-tight text-foreground">{user.name}</h3>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/[0.12] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
                   <span className="w-1.5 h-1.5 rounded-full bg-primary" aria-hidden="true" />
                   {ROLE_LABEL[user.role] ?? user.role}
                 </span>

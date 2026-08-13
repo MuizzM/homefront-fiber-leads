@@ -459,7 +459,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
 
       {/* Manager: coverage gaps banner */}
       {isManager && gaps.length > 0 && (
-        <div className="rounded-xl border border-warning/25 bg-warning/8 px-3 py-2.5 text-[12px] text-warning">
+        <div className="rounded-xl border border-warning/25 bg-warning/[0.08] px-3 py-2.5 text-[12px] text-warning">
           <div className="mb-1 flex items-center gap-1.5 font-semibold"> {gaps.length} source coverage gap{gaps.length > 1 ? "s" : ""}</div>
           {gaps.map((g) => <div key={g.source} className="text-[11px] text-warning/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
         </div>
@@ -495,7 +495,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
                     : r.actionable ? <span className="rounded-full bg-success/10 px-2 py-0.5 text-2xs font-bold uppercase text-success">Fresh fiber</span>
                     : r.monitored ? <span className="rounded-full bg-warning/10 px-2 py-0.5 text-2xs font-semibold uppercase text-warning">Monitoring</span>
                     : r.checkedAt ? <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold uppercase text-muted-foreground">{(r.fiberStatus ?? "checked").replace(/_/g, " ")}</span>
-                    : <span className="rounded-full bg-info/8 px-2 py-0.5 text-2xs font-semibold uppercase text-info">Checking</span>}
+                    : <span className="rounded-full bg-info/[0.08] px-2 py-0.5 text-2xs font-semibold uppercase text-info">Checking</span>}
                   {r.address && <Link href="/map" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary">Map</Link>}
                 </div>
               </div>

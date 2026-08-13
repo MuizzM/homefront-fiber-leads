@@ -333,7 +333,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
             </div>
 
             <div className="border-t border-border bg-card px-4 sm:px-6 py-4 max-h-[46vh] overflow-y-auto flex-shrink-0" data-testid="signature-panel">
-              {!readToEnd && <div className="rounded-lg bg-warning/8 border border-warning/25 px-3 py-2 text-xs text-warning mb-3">Scroll through the complete agreement before signing, or use “Skip to the end”.</div>}
+              {!readToEnd && <div className="rounded-lg bg-warning/[0.08] border border-warning/25 px-3 py-2 text-xs text-warning mb-3">Scroll through the complete agreement before signing, or use “Skip to the end”.</div>}
               {!declining ? (
                 <div className="space-y-2.5 max-w-2xl mx-auto">
                   <LegalCheckbox checked={consent} onChange={setConsent} testId="esign-consent">I consent to receive and sign this agreement electronically, understand I may request a free paper copy, and confirm I can access this electronic record.</LegalCheckbox>
@@ -459,7 +459,7 @@ export default function MyDocuments() {
           )}
           {percentage === 100 && (
             <section
-              className="hf-shine relative overflow-hidden rounded-2xl border border-success/25 bg-success/8 p-4 flex items-center gap-3"
+              className="hf-shine relative overflow-hidden rounded-2xl border border-success/25 bg-success/[0.08] p-4 flex items-center gap-3"
               aria-label="All agreements signed"
               data-testid="all-signed-banner"
             >

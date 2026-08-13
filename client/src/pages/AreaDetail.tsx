@@ -786,11 +786,11 @@ export default function AreaDetail() {
             <div className="rounded-2xl border border-border bg-card p-4">
               <div className="grid grid-cols-3 gap-2" data-testid="area-verification">
                 <VerifyTile icon={ShieldCheck} label="Verified" value={area.verified}
-                  className="border-success/15 bg-success/8 text-success" testId="area-verified" />
+                  className="border-success/15 bg-success/[0.08] text-success" testId="area-verified" />
                 <VerifyTile icon={AlertTriangle} label="Needs review" value={area.needsReview}
-                  className="border-warning/15 bg-warning/8 text-warning" testId="area-needs-review" />
+                  className="border-warning/15 bg-warning/[0.08] text-warning" testId="area-needs-review" />
                 <VerifyTile icon={Ban} label="Invalid" value={area.invalid}
-                  className="border-destructive/15 bg-destructive/8 text-destructive" testId="area-invalid" />
+                  className="border-destructive/15 bg-destructive/[0.08] text-destructive" testId="area-invalid" />
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5">

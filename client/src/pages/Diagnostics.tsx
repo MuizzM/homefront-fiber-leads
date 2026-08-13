@@ -123,7 +123,7 @@ export default function Diagnostics() {
       ) : isError ? (
         // NEVER render a healthy panel when the fetch failed - that falsely
         // reassures an admin during an actual outage.
-        <div data-testid="diag-error" className="rounded-xl border border-destructive/30 bg-destructive/8 p-6 text-center">
+        <div data-testid="diag-error" className="rounded-xl border border-destructive/30 bg-destructive/[0.08] p-6 text-center">
           
           <p className="mt-2 text-sm font-semibold text-destructive">Couldn’t load diagnostics</p>
           <p className="mt-1 text-xs text-muted-foreground">The health API is unreachable - status below is unknown, not healthy.</p>

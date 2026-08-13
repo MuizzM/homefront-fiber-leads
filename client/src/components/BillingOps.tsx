@@ -151,7 +151,7 @@ export function BillingOps() {
                             <div
                               role="alert"
                               data-testid={`confirm-strip-${t.tenantId}`}
-                              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${danger ? "border-destructive/30 bg-destructive/8 text-destructive" : "border-border bg-secondary/60 text-foreground"}`}>
+                              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${danger ? "border-destructive/30 bg-destructive/[0.08] text-destructive" : "border-border bg-secondary/60 text-foreground"}`}>
                               <span>Change {t.companyName} to {stagedLabel}?</span>
                               <button
                                 disabled={busy === t.tenantId}

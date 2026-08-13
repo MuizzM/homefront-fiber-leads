@@ -141,8 +141,8 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
                       "flex min-h-11 w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[13px] transition-colors",
                       FOCUS,
                       !answered && "border-border bg-background hover:border-primary/40 hover:bg-secondary/50",
-                      answered && isCorrect && "border-success/50 bg-success/8 text-foreground",
-                      answered && isPicked && !isCorrect && "border-destructive/50 bg-destructive/8 text-foreground",
+                      answered && isCorrect && "border-success/50 bg-success/[0.08] text-foreground",
+                      answered && isPicked && !isCorrect && "border-destructive/50 bg-destructive/[0.08] text-foreground",
                       answered && !isPicked && !isCorrect && "border-border bg-background opacity-55",
                     )}
                   >
@@ -166,7 +166,7 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
               <div
                 className={cn(
                   "mt-3 rounded-lg px-3 py-2 text-xs leading-relaxed",
-                  picked === q.answerIndex ? "bg-success/8" : "bg-destructive/8",
+                  picked === q.answerIndex ? "bg-success/[0.08]" : "bg-destructive/[0.08]",
                 )}
                 data-testid={`quiz-q${qi}-feedback`}
               >

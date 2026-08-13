@@ -141,7 +141,7 @@ export function ChatThreadList({
           )}
         >
           <span aria-hidden="true"
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/12 text-[11px] font-bold text-primary">
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/[0.12] text-[11px] font-bold text-primary">
             ALL
           </span>
           <span className="min-w-0 flex-1">

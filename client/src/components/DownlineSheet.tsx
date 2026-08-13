@@ -211,7 +211,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
           {/* Needs review — same panel grammar as the week overview's exceptions */}
           {sheet.exceptions.length > 0 ? (
             <div className="rounded-2xl bg-card border border-warning/25 overflow-hidden" data-testid="override-exceptions">
-              <div className="px-4 py-2.5 bg-warning/8 border-b border-warning/12 flex items-center gap-2">
+              <div className="px-4 py-2.5 bg-warning/[0.08] border-b border-warning/[0.12] flex items-center gap-2">
                 
                 <span className="text-sm font-semibold text-foreground">Needs review before closeout</span>
                 <span className="ml-auto text-xs text-muted-foreground">{sheet.exceptions.length}</span>
@@ -219,7 +219,7 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
               <div className="divide-y divide-border">
                 {sheet.exceptions.map((ex, i) => (
                   <div key={i} className="px-4 py-2.5 flex items-start gap-3 text-sm">
-                    <span className="text-2xs font-bold uppercase tracking-wide text-warning bg-warning/8 border border-warning/25 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
+                    <span className="text-2xs font-bold uppercase tracking-wide text-warning bg-warning/[0.08] border border-warning/25 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
                       {ex.type.replace(/_/g, " ").toLowerCase()}
                     </span>
                     <span className="text-muted-foreground">

@@ -28,6 +28,7 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const SURFACES = [
   "client/src/pages/LiveMap.tsx",
   "client/src/components/area/AreaMiniMap.tsx",
+  "client/src/pages/LiveOps.tsx",
 ];
 
 describe.each(SURFACES)("%s", (path) => {
@@ -47,7 +48,38 @@ describe.each(SURFACES)("%s", (path) => {
   });
 
   it("renders a terminal failure state instead of an endless placeholder", () => {
-    expect(src).toMatch(/setMapUnavailable\(true\)|setState\("unavailable"\)/);
+    expect(src).toMatch(/setMapUnavailable\(true\)|setState\("unavailable"\)|setFailed\(true\)/);
+  });
+
+  it("acts on the error the loader passes, rather than falling through", () => {
+    // Every surface receives (err?: Error) and must branch on it. LiveOps used
+    // to ignore it and rely on the `mapboxgl` global being undefined to throw
+    // into a catch - correct by accident, and only until something else defines
+    // the global.
+    // AreaMiniMap writes `if (err || typeof ... === "undefined")`, LiveMap
+    // `if (err || !mgl || ...)`, LiveOps `if (err)` - all branch on it.
+    expect(src).toMatch(/if \(err\b/);
+  });
+});
+
+describe("no map surface gates rendering on a Mapbox token", () => {
+  // The app runs on MapLibre with Google/CARTO tiles and needs no Mapbox
+  // credential to draw. /api/config/map still 503s when MAPBOX_PUBLIC_TOKEN is
+  // unset, so `config` stays undefined - and LiveOps used to return
+  // "Loading map…" forever on that. Removing the now-unnecessary geocoding
+  // token, which is the correct post-migration cleanup, would have silently
+  // killed the screen. MapView already gets this right via NO_TOKEN_REQUIRED.
+  it.each([
+    "client/src/pages/LiveOps.tsx",
+    "client/src/pages/LiveMap.tsx",
+  ])("%s does not branch its render on config.token", (path) => {
+    const src = read(path);
+    expect(src).not.toMatch(/if \(!config\?\.token/);
+  });
+
+  it("MapView treats a tokenless server as success, not failure", () => {
+    const src = read("client/src/pages/MapView.tsx");
+    expect(src).toContain("setMapboxToken(token || NO_TOKEN_REQUIRED);");
   });
 });
 

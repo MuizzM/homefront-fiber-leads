@@ -112,16 +112,16 @@ interface PipelineResponse {
 }
 
 const STAGES: Record<PipelineStage, { label: string; tone: string; dot: string; next: string }> = {
-  invited: { label: "Invited", tone: "bg-info/8 text-info border-info/12", dot: "bg-info", next: "Waiting for application" },
-  under_review: { label: "Needs review", tone: "bg-warning/8 text-warning border-warning/12", dot: "bg-warning", next: "Review and approve" },
-  approved: { label: "Approved", tone: "bg-info/8 text-info border-info/12", dot: "bg-info", next: "Send access and documents" },
-  login_code_sent: { label: "Login sent", tone: "bg-info/8 text-info border-info/12", dot: "bg-info", next: "Confirm agreements" },
+  invited: { label: "Invited", tone: "bg-info/[0.08] text-info border-info/[0.12]", dot: "bg-info", next: "Waiting for application" },
+  under_review: { label: "Needs review", tone: "bg-warning/[0.08] text-warning border-warning/[0.12]", dot: "bg-warning", next: "Review and approve" },
+  approved: { label: "Approved", tone: "bg-info/[0.08] text-info border-info/[0.12]", dot: "bg-info", next: "Send access and documents" },
+  login_code_sent: { label: "Login sent", tone: "bg-info/[0.08] text-info border-info/[0.12]", dot: "bg-info", next: "Confirm agreements" },
   agreements_issued: { label: "Awaiting signatures", tone: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20", dot: "bg-violet-400", next: "Waiting for signatures" },
-  partially_signed: { label: "Partially signed", tone: "bg-warning/8 text-warning border-warning/12", dot: "bg-warning", next: "Complete remaining agreements" },
-  fully_signed: { label: "Fully signed", tone: "bg-success/8 text-success border-success/12", dot: "bg-success", next: "Finalizing activation" },
-  active: { label: "Active rep", tone: "bg-success/8 text-success border-success/12", dot: "bg-success", next: "Onboarding complete" },
-  rejected: { label: "Rejected", tone: "bg-destructive/8 text-destructive border-destructive/12", dot: "bg-destructive", next: "Closed" },
-  failed: { label: "Delivery failed", tone: "bg-destructive/8 text-destructive border-destructive/12", dot: "bg-destructive", next: "Resend invitation" },
+  partially_signed: { label: "Partially signed", tone: "bg-warning/[0.08] text-warning border-warning/[0.12]", dot: "bg-warning", next: "Complete remaining agreements" },
+  fully_signed: { label: "Fully signed", tone: "bg-success/[0.08] text-success border-success/[0.12]", dot: "bg-success", next: "Finalizing activation" },
+  active: { label: "Active rep", tone: "bg-success/[0.08] text-success border-success/[0.12]", dot: "bg-success", next: "Onboarding complete" },
+  rejected: { label: "Rejected", tone: "bg-destructive/[0.08] text-destructive border-destructive/[0.12]", dot: "bg-destructive", next: "Closed" },
+  failed: { label: "Delivery failed", tone: "bg-destructive/[0.08] text-destructive border-destructive/[0.12]", dot: "bg-destructive", next: "Resend invitation" },
 };
 
 const FILTERS = ["all", "needs_action", "in_progress", "active", "closed"] as const;
@@ -144,9 +144,9 @@ const memberRoleLabel = (role: string) => MEMBER_ROLE_LABEL[role as MemberRole] 
 
 
 function hrTone(checkpoint: HrCheckpoint) {
-  if (checkpoint.failed) return "text-destructive bg-destructive/8 border-destructive/12";
-  if (checkpoint.cleared) return "text-success bg-success/8 border-success/12";
-  if (checkpoint.status !== "not_started") return "text-warning bg-warning/8 border-warning/12";
+  if (checkpoint.failed) return "text-destructive bg-destructive/[0.08] border-destructive/[0.12]";
+  if (checkpoint.cleared) return "text-success bg-success/[0.08] border-success/[0.12]";
+  if (checkpoint.status !== "not_started") return "text-warning bg-warning/[0.08] border-warning/[0.12]";
   return "text-muted-foreground bg-secondary border-border";
 }
 
@@ -747,7 +747,7 @@ export default function Applications() {
         <section className="overflow-hidden rounded-2xl border border-border bg-card" aria-label="Candidate onboarding queue">
           <div className="border-b border-border p-3">
             <div className="relative"><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search candidates" className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-primary" /></div>
-            <div className="mt-2 flex gap-1 overflow-x-auto pb-1" aria-label="Pipeline filters">{FILTERS.map(key => <button key={key} onClick={() => setFilter(key)} className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === key ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>{key.replace(/_/g, " ")}</button>)}</div>
+            <div className="mt-2 flex gap-1 overflow-x-auto pb-1" aria-label="Pipeline filters">{FILTERS.map(key => <button key={key} onClick={() => setFilter(key)} className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === key ? "bg-primary/[0.12] text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>{key.replace(/_/g, " ")}</button>)}</div>
           </div>
           <div className="max-h-[720px] overflow-y-auto">
             {pipeline.isLoading && <div className="grid h-48 place-items-center text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>}
@@ -789,7 +789,7 @@ export default function Applications() {
             <div className="space-y-4 p-4 sm:p-5">
               <div className="rounded-xl border border-border bg-background/50 p-4"><div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Onboarding progression</h3><span className="text-xs font-semibold text-foreground">{selected.progress.completed} of {selected.progress.total}</span></div><div className="grid grid-cols-7 gap-1">{selected.timeline.map((step, index) => <div key={step.label} className="group relative"><div className={`h-1.5 rounded-full ${step.done ? "bg-primary" : "bg-secondary"}`} /><div className="pointer-events-none absolute right-0 top-3 z-10 hidden w-36 rounded-lg border border-border bg-popover p-2 text-2xs text-popover-foreground shadow-xl group-hover:block"><div className="font-semibold">{index + 1}. {step.label}</div><div className="mt-0.5 text-muted-foreground">{step.done ? formatDate(step.at) : "Pending"}</div></div></div>)}</div><div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground"><span>Invited</span><span>Active rep</span></div></div>
 
-              {selected.invite && <div className="rounded-xl border border-border p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">{selected.milestones.applied ? "Invitation delivery" : "Private application link"}</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.applied ? `Application received ${formatDate(selected.timeline[1]?.at)}` : `Expires ${formatDate(selected.invite.expiresAt)}`} · {selected.invite.deliveryAttempts} delivery attempt{selected.invite.deliveryAttempts === 1 ? "" : "s"}</p></div>{!selected.milestones.applied && <div className="flex gap-2"><button onClick={() => copySecureLink(selected)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary" data-testid="copy-secure-invite">{copiedKey === selected.key ? <Check className="h-3.5 w-3.5 text-success" /> : null}Copy</button>{["invited", "failed"].includes(selected.stage) && selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "invite", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">Resend</button>}</div>}</div>{selected.invite.failureReason && <p className="mt-2 rounded-lg bg-destructive/8 px-3 py-2 text-xs text-destructive">{selected.invite.failureReason}</p>}</div>}
+              {selected.invite && <div className="rounded-xl border border-border p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">{selected.milestones.applied ? "Invitation delivery" : "Private application link"}</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.applied ? `Application received ${formatDate(selected.timeline[1]?.at)}` : `Expires ${formatDate(selected.invite.expiresAt)}`} · {selected.invite.deliveryAttempts} delivery attempt{selected.invite.deliveryAttempts === 1 ? "" : "s"}</p></div>{!selected.milestones.applied && <div className="flex gap-2"><button onClick={() => copySecureLink(selected)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary" data-testid="copy-secure-invite">{copiedKey === selected.key ? <Check className="h-3.5 w-3.5 text-success" /> : null}Copy</button>{["invited", "failed"].includes(selected.stage) && selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "invite", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">Resend</button>}</div>}</div>{selected.invite.failureReason && <p className="mt-2 rounded-lg bg-destructive/[0.08] px-3 py-2 text-xs text-destructive">{selected.invite.failureReason}</p>}</div>}
 
               {selected.application && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">Application review</h3><span className="text-[11px] text-muted-foreground">Applied {formatDate(selected.application.createdAt)}</span></div><div className="mb-2 flex flex-wrap gap-2 text-2xs font-semibold uppercase tracking-wide"><span className="rounded-full bg-primary/10 px-2 py-1 text-primary">{selected.source === "careers" ? "Website careers" : selected.source === "invited" ? "Private invite" : "Public join link"}</span>{selected.desiredRole && <span className="rounded-full bg-secondary px-2 py-1 text-muted-foreground">{selected.desiredRole}</span>}</div><div className="grid gap-2 text-xs sm:grid-cols-2"><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Phone</span><div className="mt-0.5 font-medium text-foreground">{selected.application.phone}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Territory</span><div className="mt-0.5 font-medium text-foreground">{selected.application.city}, {selected.application.state} {selected.application.zip}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Carriers</span><div className="mt-0.5 font-medium text-foreground">{selected.application.preferredCarriers}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Sales experience</span><div className="mt-0.5 font-medium text-foreground">{selected.application.hasSalesExperience ? "Yes" : "No"}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Reliable transportation</span><div className={`mt-0.5 font-medium ${selected.application.hasReliableTransportation === false ? "text-warning" : "text-foreground"}`}>{selected.application.hasReliableTransportation == null ? "Not asked" : selected.application.hasReliableTransportation ? "Yes" : "No"}</div></div></div>{selected.application.salesExperienceDetails && <p className="mt-2 rounded-lg bg-secondary/50 p-3 text-xs text-muted-foreground">{selected.application.salesExperienceDetails}</p>}
                 {selected.stage === "under_review" && canReview && <div className="mt-4 border-t border-border pt-4" data-testid="review-comp-terms">
@@ -828,7 +828,7 @@ export default function Applications() {
                     </div>
                   </div>
                   {selected.invite?.invitedSupervisorActive === false && (
-                    <p className="mt-2 rounded-lg border border-warning/12 bg-warning/8 px-3 py-2 text-xs text-warning" data-testid="review-supervisor-offboarded">
+                    <p className="mt-2 rounded-lg border border-warning/[0.12] bg-warning/[0.08] px-3 py-2 text-xs text-warning" data-testid="review-supervisor-offboarded">
                       The proposed supervisor{selected.invite.invitedSupervisorName ? ` (${selected.invite.invitedSupervisorName})` : ""} was offboarded - pick a replacement or approve as top-level.
                     </p>
                   )}
@@ -937,10 +937,10 @@ export default function Applications() {
                       <p className="mt-1 text-xs text-muted-foreground">{selected.hr.cleared} of {selected.hr.total} gates cleared</p>
                     </div>
                     {selected.hr.anyFailed
-                      ? <span className="inline-flex items-center gap-1 rounded-full border border-destructive/12 bg-destructive/8 px-2.5 py-1 text-[11px] font-semibold text-destructive">Action needed</span>
+                      ? <span className="inline-flex items-center gap-1 rounded-full border border-destructive/[0.12] bg-destructive/[0.08] px-2.5 py-1 text-[11px] font-semibold text-destructive">Action needed</span>
                       : selected.hr.allClear
-                        ? <span className="inline-flex items-center gap-1 rounded-full border border-success/12 bg-success/8 px-2.5 py-1 text-[11px] font-semibold text-success">All clear</span>
-                        : <span className="inline-flex items-center gap-1 rounded-full border border-warning/12 bg-warning/8 px-2.5 py-1 text-[11px] font-semibold text-warning">In progress</span>}
+                        ? <span className="inline-flex items-center gap-1 rounded-full border border-success/[0.12] bg-success/[0.08] px-2.5 py-1 text-[11px] font-semibold text-success">All clear</span>
+                        : <span className="inline-flex items-center gap-1 rounded-full border border-warning/[0.12] bg-warning/[0.08] px-2.5 py-1 text-[11px] font-semibold text-warning">In progress</span>}
                   </div>
 
                   {canReview && !pipeline.data?.gustoConfigured && (
@@ -1005,7 +1005,7 @@ export default function Applications() {
 
               <div className="rounded-xl border border-border p-4"><h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">Audit timeline</h3><div className="space-y-0">{selected.timeline.map((event, index) => <div key={event.label} className="flex gap-3"><div className="flex w-5 flex-col items-center"><span className={`mt-1.5 h-2 w-2 rounded-full ${event.done ? "bg-primary" : "bg-secondary ring-1 ring-border"}`} />{index < selected.timeline.length - 1 && <span className={`h-9 w-px ${event.done ? "bg-primary/40" : "bg-border"}`} />}</div><div className="pb-3"><p className={`text-xs font-medium ${event.done ? "text-foreground" : "text-muted-foreground"}`}>{event.label}</p><p className="mt-0.5 text-2xs text-muted-foreground">{event.done ? formatDate(event.at) : "Pending"}</p></div></div>)}</div></div>
 
-              {selected.stage === "active" && <div className="rounded-xl border border-success/15 bg-success/8 p-4"><div className="flex gap-3"><div><h3 className="text-sm font-semibold text-success">Onboarding complete</h3><p className="mt-1 text-xs text-emerald-200/70">All four required agreements are signed. The rep’s field-sales profile is active.</p></div></div></div>}
+              {selected.stage === "active" && <div className="rounded-xl border border-success/15 bg-success/[0.08] p-4"><div className="flex gap-3"><div><h3 className="text-sm font-semibold text-success">Onboarding complete</h3><p className="mt-1 text-xs text-emerald-200/70">All four required agreements are signed. The rep’s field-sales profile is active.</p></div></div></div>}
             </div>
           </div>}
         </section>

@@ -402,8 +402,14 @@ function LiveMapCanvas({
     if (!container.current || map.current) return; // no token gate - MapLibre needs none
     let cancelled = false;
     (window as any).__loadMapbox?.();
-    (window as any).__onMapboxReady?.(() => {
+    (window as any).__onMapboxReady?.((err?: Error) => {
       if (cancelled || !container.current || map.current) return;
+      // Honour the error the loader hands us instead of falling through and
+      // relying on `mapboxgl` being undefined to throw into the catch below.
+      // That happened to work, but it made a deliberate failure signal look
+      // like an accident, and it would stop working the moment anything else
+      // defined the global.
+      if (err) { setFailed(true); return; }
       try {
         mapboxgl.accessToken = config?.token ?? ""; // no-op on MapLibre
         // Follow the app theme. A daylight basemap inside the dark theme is not
@@ -506,13 +512,21 @@ function LiveMapCanvas({
     });
   }, [selectedRepId, reps, ready]);
 
-  if (!config?.token || failed) {
+  // NO TOKEN GATE. The init effect above already dropped it ("MapLibre needs
+  // none") but this render gate kept it, so the two disagreed: /api/config/map
+  // 503s outright when MAPBOX_PUBLIC_TOKEN is unset, `config` stays undefined,
+  // and this branch returned "Loading map…" forever on a map that needs no
+  // credential to draw. Removing the Mapbox geocoding token - which is the
+  // correct thing to do now the basemap is MapLibre plus Google tiles - would
+  // have silently killed this screen. `failed` is the only real failure signal,
+  // and it is written by the map's own error event.
+  if (failed) {
     return (
       <div
         className="grid h-[420px] place-items-center rounded-2xl border border-border bg-card text-[13px] text-muted-foreground"
         data-testid="liveops-map-unavailable"
       >
-        {failed ? "The map could not load. The roster below is still live." : "Loading map…"}
+        The map could not load. The roster below is still live.
       </div>
     );
   }
