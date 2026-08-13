@@ -46,6 +46,29 @@ export function perUserKey(req: Request): string {
 }
 
 /**
+ * perUserKey for buckets that run BEFORE the auth middleware.
+ *
+ * perUserKey trusts the header, which is right for the scan/chat buckets: they
+ * sit behind an auth gate, so a forged token buys its own bucket and then 401s
+ * at the route. The GLOBAL bucket has no such gate in front of it - it is the
+ * first thing every request meets - so trusting the header there would let a
+ * caller mint a fresh budget per forged token and walk straight past the only
+ * ceiling anonymous traffic has.
+ *
+ * So the token has to be REAL before it earns its own bucket. `isLiveSession`
+ * is injected rather than imported to keep this module free of storage (see the
+ * header note about index <-> routes cycles); index.ts memoises it, because a
+ * lookup per request would put a DB read in front of every single call.
+ */
+export function sessionScopedKey(isLiveSession: (sid: string) => boolean) {
+  return (req: Request): string => {
+    const sid = req.headers["x-session-id"];
+    if (typeof sid === "string" && sid && isLiveSession(sid)) return `u:${sid}`;
+    return `ip:${ipKeyGenerator(req.ip ?? req.socket.remoteAddress ?? "unknown")}`;
+  };
+}
+
+/**
  * Rate-limit bucket key for a bare IP, for buckets that aren't express-rate-
  * limit's (the SQLite-backed OTP buckets). Same reasoning as perUserKey: keying
  * the full IPv6 /128 hands one caller their whole /64 worth of buckets. Exported

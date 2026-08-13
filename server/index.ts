@@ -9,7 +9,7 @@ import os from "node:os";
 import { decideRespawn } from "./clusterRespawnPolicy";
 import { runMigrations } from "./storage";
 import { rawDb } from "./db";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { scriptSrcElem, inlineScriptsAreHashed } from "./cspHashes";
 import { isAiCrawler, robotsTxt, X_ROBOTS_TAG } from "@shared/crawlerPolicy";
@@ -22,6 +22,7 @@ import {
   scanWorkflowRateLimits, payoutTransitionLimiter, payDisputeLimiter,
   punchCorrectionLimiter, documentSignLimiter, knockPostLimiter,
   callingAttemptLimiter, moneyExportLimiter, chatReadLimiter, chatWriteLimiter,
+  sessionScopedKey,
 } from "./limiters";
 import { BLOCKED_RESPONSE_FIELDS, scrubSecretText } from "./secretScrub";
 
@@ -438,6 +439,39 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Is this session token real? (memoised, for the global bucket's key) ──────
+// One indexed lookup on sessions.id (the PK), cached for 10s. A rep sends the
+// same token on every request, so the steady state is a Map hit and the DB sees
+// one read per session per 10s. The cache is bounded and cleared wholesale
+// because a caller spraying forged tokens would otherwise grow it without limit
+// - and forged tokens are exactly the case that must NOT be cheap to repeat.
+const LIVE_SESSION_TTL_MS = 10_000;
+const LIVE_SESSION_CACHE_MAX = 5_000;
+const _liveSessionCache = new Map<string, { ok: boolean; at: number }>();
+let _liveSessionStmt: any = null;
+function isLiveSession(sid: string): boolean {
+  // Cheap shape gate first: the tokens we mint are UUIDs, so anything else is
+  // forged and must never reach the DB (or the cache) at all.
+  if (sid.length !== 36) return false;
+  const now = Date.now();
+  const hit = _liveSessionCache.get(sid);
+  if (hit && now - hit.at < LIVE_SESSION_TTL_MS) return hit.ok;
+  let ok = false;
+  try {
+    _liveSessionStmt ??= rawDb.prepare(
+      "SELECT 1 FROM sessions WHERE id = ? AND expires_at > ? LIMIT 1",
+    );
+    ok = !!_liveSessionStmt.get(sid, new Date().toISOString());
+  } catch {
+    // Never let a limiter's bookkeeping fail a request; fall back to the IP
+    // bucket, which is what an unauthenticated caller would have got anyway.
+    ok = false;
+  }
+  if (_liveSessionCache.size >= LIVE_SESSION_CACHE_MAX) _liveSessionCache.clear();
+  _liveSessionCache.set(sid, { ok, at: now });
+  return ok;
+}
+
 // ── Global rate limit: mobile/shared-NAT safe, env-tunable for ops ────────────
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -453,13 +487,30 @@ app.use(rateLimit({
   // this general bucket prevents normal map/polling traffic from locking the
   // user out of the only way to authenticate.
   skip: (req) => shouldSkipGlobalRateLimit(req.path, process.env.NODE_ENV),
-  // Key on req.ip — with `trust proxy` set, Express resolves the real client from
-  // the RIGHTMOST trusted hop. The old leftmost X-Forwarded-For parse was
-  // client-spoofable (prepend a fake IP → dodge the limit), so never use raw XFF.
-  keyGenerator: (req) => {
-    const ip = req.ip ?? req.socket.remoteAddress;
-    return ip ? ipKeyGenerator(ip) : "unknown";
-  },
+  // Key on the SIGNED-IN USER, falling back to the IP for anyone who isn't.
+  //
+  // Keying the whole field API per-IP made this the one bucket a shared NAT
+  // could exhaust for everybody: a crew on one office WiFi or one carrier
+  // gateway pooled into a single 1,200-per-15-minutes budget, and the app is
+  // chatty on their behalf - ~15 API calls to open the map and ~4/min while it
+  // merely sits there, before a single door is knocked. Ten reps idling on one
+  // IP is already over half the budget; working reps blow through it and then
+  // EVERY rep behind that address reads "Try again in 15 minutes" at once.
+  //
+  // The scan and chat buckets were carved out of this exact problem ("shared
+  // carrier NATs must not cooldown a whole field team") - this is the same fix
+  // applied to the traffic that actually dominates: the field API.
+  //
+  // The token must RESOLVE to a live session to earn its own bucket, so a
+  // forged header falls back to the IP instead of minting a fresh budget - the
+  // global limiter is the only ceiling unauthenticated traffic has, and it runs
+  // before any auth gate.
+  //
+  // The IP fallback goes through ipKeyGenerator (IPv6 collapses to its subnet;
+  // a /64 holder would otherwise own 2^64 buckets). With `trust proxy` set,
+  // Express resolves the real client from the RIGHTMOST trusted hop; the old
+  // leftmost X-Forwarded-For parse was client-spoofable, so never use raw XFF.
+  keyGenerator: sessionScopedKey(isLiveSession),
 }));
 
 // ── Strict auth rate limit: failed attempts only; email limits live in route ─
