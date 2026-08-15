@@ -63,6 +63,8 @@ export interface OnboardingPipelineRecord {
     // null = the submitting form never asked (careers site, legacy rows).
     hasReliableTransportation: boolean | null;
     referralSource: string | null; headshotPath: string | null; licensePath: string | null;
+    /** Ad attribution captured by the careers site; null = pre-capture or untagged. */
+    channel: string | null; attribution: string | null;
     reviewNotes: string | null; createdAt: string;
   };
   account: null | { userId: number; repId: number | null; active: boolean };
@@ -216,6 +218,7 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
       hasReliableTransportation: application.has_reliable_transportation == null ? null : Boolean(application.has_reliable_transportation),
       salesExperienceDetails: application.sales_experience_details ?? null, referralSource: application.referral_source ?? null,
       headshotPath: application.headshot_path ?? null, licensePath: application.license_path ?? null,
+      channel: application.channel ?? null, attribution: application.attribution ?? null,
       reviewNotes: application.review_notes ?? null, createdAt: application.created_at,
     } : null,
     account: user ? { userId: Number(user.id), repId: rep?.id == null ? null : Number(rep.id), active } : null,

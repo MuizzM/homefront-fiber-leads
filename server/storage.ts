@@ -724,6 +724,11 @@ export function runMigrations() {
     `ALTER TABLE rep_applications ADD COLUMN activated_at TEXT`,
     // Nullable: null = form never asked (careers/legacy), distinct from "No".
     `ALTER TABLE rep_applications ADD COLUMN has_reliable_transportation INTEGER`,
+    // Ad attribution from the careers site: the one-line channel summary and
+    // the full JSON (utm_*, click ids, Meta cookie ids, landing path). Null
+    // for every application that predates the capture or arrived untagged.
+    `ALTER TABLE rep_applications ADD COLUMN channel TEXT`,
+    `ALTER TABLE rep_applications ADD COLUMN attribution TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_rep_applications_tenant_status_source ON rep_applications(tenant_id, status, application_source, created_at DESC)`,
     // HR / compliance checkpoints — parallel post-approval gates (background
     // check, drug screen, badge photo, Gusto). One row per (application, kind);

@@ -441,6 +441,12 @@ export const repApplications = sqliteTable("rep_applications", {
   hasReliableTransportation: integer("has_reliable_transportation", { mode: "boolean" }),
   preferredCarriers: text("preferred_carriers").notNull(),
   referralSource: text("referral_source"),
+  // Ad attribution from the marketing site. `channel` is the one-line human
+  // summary ("facebook / cpc / triad-reps-aug / video-a"); `attribution` is
+  // the full JSON payload (utm_*, click ids, Meta _fbp/_fbc, landing path),
+  // kept verbatim so a hire can later be reported back to the ad platform.
+  channel: text("channel"),
+  attribution: text("attribution"),
   headshotPath: text("headshot_path"),
   licensePath: text("license_path"),
   status: text("status").notNull().default("pending"), // "pending"|"approved"|"rejected"

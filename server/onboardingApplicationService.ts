@@ -36,6 +36,10 @@ export interface ApplicationIntakeInput {
   headshotPath?: string | null;
   licensePath?: string | null;
   actorIp?: string | null;
+  /** One-line ad-channel summary from the careers site ("facebook / cpc / ..."). */
+  channel?: string | null;
+  /** Full attribution payload as JSON (utm_*, click ids, _fbp/_fbc, landing path). */
+  attribution?: string | null;
 }
 
 function cleanSlug(value: string | null | undefined): string {
@@ -101,6 +105,8 @@ export function submitPublicApplication(input: ApplicationIntakeInput) {
     hasReliableTransportation: input.hasReliableTransportation ?? null,
     preferredCarriers: input.preferredCarriers.trim(),
     referralSource: input.referralSource?.trim() || null,
+    channel: input.channel?.trim() || null,
+    attribution: input.attribution || null,
     headshotPath: input.headshotPath ?? null,
     licensePath: input.licensePath ?? null,
   });

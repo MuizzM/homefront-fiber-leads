@@ -9487,7 +9487,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     limits: {
       fileSize: 10 * 1024 * 1024, // 10 MB per file
       files: 2,                    // headshot + license only
-      fields: 20,                  // cap number of text fields
+      // Cap number of text fields. Was 20, which the careers site's full
+      // application OVERFLOWED once flat attribution fields rode along on a
+      // fully tagged ad click (13 named fields + up to 12 tags), and multer
+      // rejected the whole application with a 500. The site now sends
+      // attribution as two fields, but the cap keeps headroom so the next
+      // added field is not one submit away from that failure again.
+      fields: 40,
       fieldSize: 100 * 1024,       // 100 KB per text field
     },
     fileFilter: (_req, file, cb) => {
@@ -9700,6 +9706,36 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         cleanupUploads(files);
         return res.status(415).json({ error: "Headshot must be a photo (JPEG, PNG or WebP), not a PDF." });
       }
+      // Ad attribution the careers site appends to every application (which
+      // campaign the applicant clicked, plus Meta's click/browser ids). Named
+      // keys only and length-capped: this is a public endpoint, so an open
+      // passthrough would invite arbitrary junk into the row. The site sends
+      // the compact shape (one `attribution` JSON field) because the flat
+      // shape once overflowed this endpoint's multipart field cap; the flat
+      // keys stay accepted for anything still posting them.
+      const ATTRIBUTION_KEYS = [
+        "channel", "landing_path", "referrer_host",
+        "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+        "fbclid", "gclid", "ttclid", "msclkid", "fbp", "fbc",
+      ];
+      const attribution: Record<string, string> = {};
+      const attributionJson = (req.body as any).attribution;
+      if (typeof attributionJson === "string" && attributionJson.length > 0 && attributionJson.length <= 4_000) {
+        try {
+          const parsed = JSON.parse(attributionJson);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            for (const key of ATTRIBUTION_KEYS) {
+              const value = (parsed as Record<string, unknown>)[key];
+              if (typeof value === "string" && value.length > 0) attribution[key] = value.slice(0, 200);
+            }
+          }
+        } catch {}
+      }
+      for (const key of ATTRIBUTION_KEYS) {
+        if (attribution[key]) continue;
+        const value = (req.body as any)[key];
+        if (typeof value === "string" && value.length > 0) attribution[key] = value.slice(0, 200);
+      }
       let app2: any;
       try {
         app2 = submitPublicApplication({
@@ -9726,6 +9762,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           headshotPath: headshotFile ? "/uploads/headshots/" + headshotFile.filename : null,
           licensePath: licenseFile ? "/uploads/licenses/" + licenseFile.filename : null,
           actorIp: req.ip,
+          channel: attribution.channel ?? null,
+          attribution: Object.keys(attribution).length > 0 ? JSON.stringify(attribution) : null,
         });
       } catch (error) {
         cleanupUploads(files);
@@ -9753,6 +9791,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               <tr><td style="padding:6px 12px;font-weight:bold;">Sales Exp.</td><td style="padding:6px 12px;">${hasSalesExperience === "true" ? "Yes" : "No"}${salesExperienceDetails ? " - " + esc(salesExperienceDetails) : ""}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Transportation</td><td style="padding:6px 12px;">${hasReliableTransportation === "true" ? "Yes" : hasReliableTransportation === "false" ? "No" : "Not asked"}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Referred by</td><td style="padding:6px 12px;">${esc(referralSource || " - ")}</td></tr>
+              <tr><td style="padding:6px 12px;font-weight:bold;">Ad channel</td><td style="padding:6px 12px;">${esc(app2.channel || "direct or untagged")}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Source</td><td style="padding:6px 12px;">${esc(app2.applicationSource)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Role</td><td style="padding:6px 12px;">${esc(app2.desiredRole || "Field Representative")}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Headshot</td><td style="padding:6px 12px;">${headshotFile ? "✓ Uploaded" : "Not uploaded"}</td></tr>
