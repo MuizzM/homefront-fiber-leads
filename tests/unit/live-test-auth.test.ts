@@ -1,13 +1,26 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
-// Live Test auth contract (DECODO-EXCLUSIVE):
+// Live Test auth contract, pinned under the DECODO-EXCLUSIVE configuration
+// (KFS_MINT_IMPERSONATE=off, KFS_MINT_DIRECT=off):
 //  - the token mint AND the address search both egress through proxyFetch (Decodo).
-//    There is no directFetch / server-IP path anywhere.
 //  - on an authenticated denial (401/403) the scanner asks for a fresh authorized
 //    Decodo session (rotateProxySession → new residential IP) and retries the SAME
 //    address; the mint's single-flight gate is preserved.
 //  - a persistent auth denial → PENDING_AUTH (address kept for retry), NEVER no_service.
+//
+// WHY THE CONFIG IS FORCED, LOUDLY
+//   Production mints through a ladder (curl-impersonate direct → impersonate
+//   proxy → direct fetch → Decodo). This suite only mocks the Decodo rung, and
+//   for weeks it passed by ACCIDENT: the direct rungs really fired, the
+//   provider's bot wall happened to reject the runner's IP, and the mint fell
+//   through to the mock. On 2026-08-14 the wall started answering the direct
+//   mint with a real 201, so every test run minted a REAL provider token over
+//   the live network and the mocked assertions went red with no code change.
+//   A unit test may never depend on a third party rejecting it: the env pins
+//   the ladder to the rung under test, and the fetch stub turns any future
+//   direct-egress rung into a deterministic local failure instead of a live
+//   network call.
 const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({
   proxyFetch: vi.fn(),
   rotateProxySession: vi.fn(async () => {}),
@@ -54,6 +67,14 @@ describe("Live Test authentication flow - Decodo-exclusive", () => {
     process.env.KFS_AUTOMATION_AUTHORIZED = "false";
     process.env.KFS_TOKEN_POOL_WARM_MIN = "1";
     process.env.KFS_MINT_MIN_INTERVAL_MS = "0";
+    // Pin the mint ladder to the Decodo rung this suite actually mocks.
+    process.env.KFS_MINT_IMPERSONATE = "off";
+    process.env.KFS_MINT_DIRECT = "off";
+    // Any direct egress attempt is a local, deterministic failure — never a
+    // live network call whose outcome depends on a provider's bot wall.
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
+      throw new Error(`direct egress forbidden in this suite: ${String(url).slice(0, 80)}`);
+    }));
     scanner = await import("../../server/scanner");
     process.env.KFS_AUTOMATION_AUTHORIZED = "true";
   });
