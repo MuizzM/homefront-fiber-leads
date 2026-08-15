@@ -76,8 +76,8 @@ export type Activity = {
   scenarioId?: string;
   /** For kind "branching": the tree id. */
   branchId?: string;
-  /** For kind "fiber_101": which half of Fiber 101 this activity opens. */
-  fiberSection?: "journey" | "glossary";
+  /** For kind "fiber_101": which part of Fiber 101 this activity opens. */
+  fiberSection?: "journey" | "glossary" | "simple";
   /** Minimum score to count as passed, where the activity produces one. */
   passScore?: number;
 };
@@ -643,6 +643,7 @@ export const PATH_STAGES: readonly PathStage[] = [
     outcome: "You can explain what fiber is, and what it does not do, without reading anything.",
     activities: [
       { id: "act-product-card", kind: "reference", title: "What fiber actually is", detail: "The technology, in words a homeowner uses.", minutes: 3, cardId: "product-what-fiber-is" },
+      { id: "act-fiber-simple", kind: "fiber_101", title: "Fiber, in their words", detail: "The benefits they feel, cable compared honestly, why neighbors switch, and the gig translator.", minutes: 5, fiberSection: "simple" },
       { id: "act-fiber-journey", kind: "fiber_101", title: "How fiber gets to the house", detail: "The six-step trip from the hut to the wall, with the analogy for each step.", minutes: 4, fiberSection: "journey" },
       { id: "act-upload-card", kind: "reference", title: "Why upload is the number that matters", detail: "The one specification most households have never checked.", minutes: 3, cardId: "product-upload-explained" },
       { id: "act-install-card", kind: "reference", title: "What the install involves", detail: "The answer behind most stalls.", minutes: 2, cardId: "product-install" },

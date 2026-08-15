@@ -7,7 +7,8 @@
 // deterministic so a whole crew sees the same line on the same day.
 import { describe, expect, it } from "vitest";
 import {
-  FIBER_GLOSSARY, GLOSSARY_CATEGORIES, GLOSSARY_CATEGORY_TITLES, UNDERGROUND_JOURNEY,
+  CABLE_VS_FIBER, FIBER_GLOSSARY, GLOSSARY_CATEGORIES, GLOSSARY_CATEGORY_TITLES,
+  SAY_IT_SIMPLE, UNDERGROUND_JOURNEY, WHY_FIBER, WHY_PEOPLE_SWITCH,
   getGlossaryTerm, glossaryIn, searchGlossary,
 } from "../../shared/academyFiberBasics";
 import { ACADEMY_QUOTES, quoteForDay, quoteIndexFor } from "../../shared/academyQuotes";
@@ -41,7 +42,9 @@ describe("the glossary", () => {
   });
 
   it("quotes no prices or speeds, because those belong to the offer catalog", () => {
-    const body = JSON.stringify([FIBER_GLOSSARY, UNDERGROUND_JOURNEY]);
+    const body = JSON.stringify([
+      FIBER_GLOSSARY, UNDERGROUND_JOURNEY, WHY_FIBER, CABLE_VS_FIBER, WHY_PEOPLE_SWITCH, SAY_IT_SIMPLE,
+    ]);
     expect(body).not.toMatch(/\$\s?\d/);
     expect(body).not.toMatch(/\d+\s?(mbps|gbps)/i);
   });
@@ -52,6 +55,54 @@ describe("the glossary", () => {
     expect(searchGlossary("glass").map((t) => t.id)).toContain("term-fiber");
     expect(searchGlossary("")).toHaveLength(FIBER_GLOSSARY.length);
     expect(searchGlossary("zzzqqq")).toHaveLength(0);
+  });
+});
+
+describe("fiber, in their words", () => {
+  it("gives every benefit a felt outcome and a porch line, never a spec", () => {
+    for (const w of WHY_FIBER) {
+      expect(w.benefit.trim().length, w.id).toBeGreaterThan(0);
+      expect(w.feel.length, w.id).toBeGreaterThan(50);
+      expect(w.sayIt.length, w.id).toBeGreaterThan(40);
+    }
+    const ids = WHY_FIBER.map((w) => w.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("keeps the cable comparison honest: every row carries a customer-checkable fact", () => {
+    for (const row of CABLE_VS_FIBER) {
+      expect(row.question.trim().length, row.id).toBeGreaterThan(0);
+      expect(row.cable.length, row.id).toBeGreaterThan(40);
+      expect(row.fiber.length, row.id).toBeGreaterThan(40);
+      expect(row.check.length, row.id).toBeGreaterThan(20);
+    }
+    // The comparison concedes cable's real strength rather than swiping at it.
+    const downloadRow = CABLE_VS_FIBER.find((r) => r.id === "vs-download")!;
+    expect(downloadRow.cable.toLowerCase()).toContain("genuinely");
+  });
+
+  it("ends the switch list with who should not switch", () => {
+    expect(WHY_PEOPLE_SWITCH.length).toBeGreaterThanOrEqual(5);
+    const last = WHY_PEOPLE_SWITCH.at(-1)!;
+    expect(last.id).toBe("switch-not");
+    expect(last.story.toLowerCase()).toContain("happy");
+    for (const s of WHY_PEOPLE_SWITCH) {
+      expect(s.reason.trim().length, s.id).toBeGreaterThan(0);
+      expect(s.story.length, s.id).toBeGreaterThan(50);
+    }
+  });
+
+  it("translates the jargon a rep actually says, and the simple version stays simple", () => {
+    const jargon = SAY_IT_SIMPLE.map((t) => t.jargon.toLowerCase());
+    for (const required of ["a gig", "mbps", "symmetrical", "upload"]) {
+      expect(jargon.some((j) => j.includes(required)), required).toBe(true);
+    }
+    for (const t of SAY_IT_SIMPLE) {
+      expect(t.theyHear.trim().length, t.id).toBeGreaterThan(0);
+      expect(t.sayInstead.length, t.id).toBeGreaterThan(40);
+      // The replacement must not lean on the unit words it exists to replace.
+      expect(t.sayInstead.toLowerCase(), t.id).not.toMatch(/\bmbps\b|\bgbps\b|megabit|gigabit/);
+    }
   });
 });
 

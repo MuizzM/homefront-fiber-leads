@@ -26,7 +26,10 @@ import {
 import { OBJECTION_KEYS } from "../../shared/trainingObjections";
 import { getTrainingLesson } from "../../shared/trainingContent";
 import { ACADEMY_QUOTES } from "../../shared/academyQuotes";
-import { FIBER_GLOSSARY, UNDERGROUND_JOURNEY } from "../../shared/academyFiberBasics";
+import {
+  CABLE_VS_FIBER, FIBER_GLOSSARY, SAY_IT_SIMPLE, UNDERGROUND_JOURNEY,
+  WHY_FIBER, WHY_PEOPLE_SWITCH,
+} from "../../shared/academyFiberBasics";
 
 /** Everything a rep can read, as one string, for the copy-rule sweeps. */
 const ALL_COPY = JSON.stringify([
@@ -34,6 +37,7 @@ const ALL_COPY = JSON.stringify([
   BRANCH_TREES, PITCH_BLOCKS, REFERENCE_CARDS, CERTIFICATIONS,
   TECHNIQUE_NOTES, TECHNIQUE_LABELS, SIGNAL_LABELS,
   ACADEMY_QUOTES, FIBER_GLOSSARY, UNDERGROUND_JOURNEY,
+  WHY_FIBER, CABLE_VS_FIBER, WHY_PEOPLE_SWITCH, SAY_IT_SIMPLE,
 ]);
 
 describe("house copy rules", () => {

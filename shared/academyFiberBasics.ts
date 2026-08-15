@@ -274,6 +274,233 @@ export function searchGlossary(query: string): GlossaryTerm[] {
   );
 }
 
+// ── Fiber, in their words ─────────────────────────────────────────────────────
+// The part of the job that is not vocabulary: what fiber IS to a homeowner,
+// what it changes about their evening, how it compares to the cable they have,
+// why neighbors actually switch, and how to say all of it without a single
+// spec. Nobody buys megabits. They buy the call that stops freezing.
+//
+// HONESTY IS LOAD-BEARING HERE TOO
+//   Every comparison row carries the thing the customer can check themselves,
+//   the switch list ends with who should NOT switch, and nothing quotes a
+//   price or a speed figure, because those live in the offer catalog.
+
+export type WhyFiberCard = {
+  id: string;
+  /** The benefit, in homeowner words. */
+  benefit: string;
+  /** What actually changes in their week. */
+  feel: string;
+  /** The porch line, usable verbatim. */
+  sayIt: string;
+};
+
+export const WHY_FIBER: readonly WhyFiberCard[] = [
+  {
+    id: "why-everyone-online",
+    benefit: "Everyone online at once",
+    feel:
+      "The evening pile-up is the problem most households actually have: shows, calls, games and homework all landing on the line at the same hour, and everything getting a little worse.",
+    sayIt:
+      "When everybody gets home and gets on at once, nobody's show, call or game has to wait for the house to catch up.",
+  },
+  {
+    id: "why-both-directions",
+    benefit: "Your side of the call works",
+    feel:
+      "Everything a household sends out, a face on a call, a voice, homework turned in, photos backing up, squeezes through the narrow half of a cable line. Fiber gives sending the same room as receiving.",
+    sayIt:
+      "It is not just what comes into the house. What you send out, your face and your voice on a call, gets the same full lane.",
+  },
+  {
+    id: "why-steady",
+    benefit: "Steady when it matters",
+    feel:
+      "Peak speed on a quiet afternoon is a brochure number. The hours a household cares about are weeknight evenings, and steadiness through those hours is what fiber is for.",
+    sayIt:
+      "The number that matters is not the fastest it ever goes. It is what you get at eight on a weeknight, and that is where fiber holds.",
+  },
+  {
+    id: "why-own-line",
+    benefit: "The last stretch is yours",
+    feel:
+      "The drop from the street serves one address. Nothing a neighbor does on their line happens on yours.",
+    sayIt: "From the street to your wall, the line carries your house and nobody else's.",
+  },
+  {
+    id: "why-built-ahead",
+    benefit: "Built past what you need",
+    feel:
+      "The glass in the ground carries far more than any home uses today. When faster service comes, it arrives by changing the equipment at the ends, not by digging the yard again.",
+    sayIt:
+      "This is the last line that needs to go in. When things get faster later, the glass already handles it.",
+  },
+];
+
+export type CableVsFiberRow = {
+  id: string;
+  /** The question as the homeowner would ask it. */
+  question: string;
+  /** What is honestly true of cable. Never a swipe. */
+  cable: string;
+  /** What is honestly true of fiber. */
+  fiber: string;
+  /** The thing the customer can verify without trusting the rep. */
+  check: string;
+};
+
+export const CABLE_VS_FIBER: readonly CableVsFiberRow[] = [
+  {
+    id: "vs-download",
+    question: "Isn't cable already fast?",
+    cable:
+      "Genuinely, yes. Modern cable download speeds are fast, and a rep who suggests otherwise loses the conversation to a speed test.",
+    fiber:
+      "The difference is not the download brochure number. It is the other direction, and what happens to the line in the evening.",
+    check: "Their own speed test on a weeknight evening, next to the plan they pay for.",
+  },
+  {
+    id: "vs-upload",
+    question: "So what is actually different?",
+    cable:
+      "Cable is built wide into the house and narrow back out. Upload is a small fraction of download, by design, and most people have never looked at that number.",
+    fiber:
+      "Fiber runs the same speed in both directions, so calls, backups and everything else the house sends out get a full lane.",
+    check: "The upload figure printed on their own bill, next to the download figure.",
+  },
+  {
+    id: "vs-evening",
+    question: "Why does it crawl at night?",
+    cable:
+      "The last stretch of a cable line is shared with the neighborhood, so everyone's evening lands on the same wire. The slowdown is real, not imagined.",
+    fiber:
+      "The glass serving the street carries far more than the street can use, so the evening pile-up does not reach the point of hurting.",
+    check: "Whether their slow hours line up with exactly when the street gets home.",
+  },
+  {
+    id: "vs-honest",
+    question: "Is cable ever the right choice?",
+    cable:
+      "If the household is happy, has no evening pain and likes its price, yes. Say so and leave well.",
+    fiber:
+      "Fiber should win on the checkable things: upload, evening steadiness, a private last stretch. It never needs to win by running the other side down.",
+    check: "Everything in this table. Invite them to check it, and mean the invitation.",
+  },
+];
+
+export type SwitchReason = {
+  id: string;
+  reason: string;
+  /** The one-sentence story of how this shows up in a real house. */
+  story: string;
+};
+
+export const WHY_PEOPLE_SWITCH: readonly SwitchReason[] = [
+  {
+    id: "switch-evening",
+    reason: "The slowdown they stopped noticing",
+    story:
+      "Fine at noon, crawling at eight, for so long the household renamed it weather. The switch starts the day someone says it does not have to be.",
+  },
+  {
+    id: "switch-upload",
+    reason: "The day the camera froze",
+    story:
+      "The first video call from the kitchen table is how most houses find out what upload they actually bought.",
+  },
+  {
+    id: "switch-creep",
+    reason: "The bill that grew on its own",
+    story:
+      "The promo ended quietly and the number crept while the service stayed the same. People switch when they notice the creep, not the price.",
+  },
+  {
+    id: "switch-rental",
+    reason: "Rent on a box, forever",
+    story:
+      "Equipment rental is a line on their own bill, every month, for gear they will never own. Adding a year of it out loud is often the whole conversation.",
+  },
+  {
+    id: "switch-first-choice",
+    reason: "The first real choice",
+    story:
+      "On a lot of these streets there was one wired option for twenty years. The build finishing is the first time choosing was possible at all.",
+  },
+  {
+    id: "switch-not",
+    reason: "And who should not switch",
+    story:
+      "A household that is happy, feels no pain and likes its price. Leaving that door well is what earns the callback when any of that changes.",
+  },
+];
+
+export type SimpleTranslation = {
+  id: string;
+  /** The jargon a rep is tempted to say. */
+  jargon: string;
+  /** What the homeowner actually hears when they say it. */
+  theyHear: string;
+  /** The plain version that lands. */
+  sayInstead: string;
+};
+
+export const SAY_IT_SIMPLE: readonly SimpleTranslation[] = [
+  {
+    id: "simple-gig",
+    jargon: "A gig",
+    theyHear: "A number with no feeling attached to it.",
+    sayInstead:
+      "More than your whole house can use at once. Everyone on at the same time, and nobody waiting on anybody.",
+  },
+  {
+    id: "simple-mbps",
+    jargon: "Mbps",
+    theyHear: "Letters. Possibly a typo.",
+    sayInstead:
+      "How wide the pipe is. A show needs a little of it, a call needs it in both directions, and a full house needs width more than it needs a record.",
+  },
+  {
+    id: "simple-bandwidth",
+    jargon: "Bandwidth",
+    theyHear: "A word from a meeting they did not enjoy.",
+    sayInstead: "Lanes on a road, not the speed limit. More lanes means nobody sits in a queue.",
+  },
+  {
+    id: "simple-symmetrical",
+    jargon: "Symmetrical",
+    theyHear: "A shape from geometry class.",
+    sayInstead: "The same speed out as in. Your camera and your voice get what your movies get.",
+  },
+  {
+    id: "simple-upload",
+    jargon: "Upload",
+    theyHear: "Something about files, probably not about them.",
+    sayInstead:
+      "Everything that leaves your house: your face on the call, your voice, the photos quietly backing up. That is the half most plans starve.",
+  },
+  {
+    id: "simple-latency",
+    jargon: "Low latency",
+    theyHear: "More letters.",
+    sayInstead:
+      "Reaction time. It is why a click feels instant or feels late, and why the game feels fair or feels rigged.",
+  },
+  {
+    id: "simple-fiber",
+    jargon: "Fiber optic",
+    theyHear: "A cable brand, or breakfast cereal.",
+    sayInstead:
+      "Glass carrying light. The old lines carry electricity, and electricity fades and picks up noise on the way. Light arrives the way it left.",
+  },
+  {
+    id: "simple-wifi",
+    jargon: "WiFi",
+    theyHear: "The internet itself. To most houses they are the same word.",
+    sayInstead:
+      "The line brings the internet to the house, and WiFi spreads it around inside. Two different jobs, and fixing one does not fix the other. Honest reps keep those two sentences apart.",
+  },
+];
+
 // ── The underground journey ───────────────────────────────────────────────────
 // The physical story, told in the order it happens on a real street. A rep who
 // can walk a homeowner from the hut to the wall in six steps sounds like

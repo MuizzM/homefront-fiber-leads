@@ -127,23 +127,39 @@ export default function PathView({
         </Panel>
       )}
 
-      <div className="space-y-2">
+      {/* The stages as a trail: each ring is a node, the segment between two
+          nodes takes the colour of the stage above it, and the next stage to
+          work carries the one gold marker on the screen. The trail is the
+          learning-path grammar every beginner app uses, in the house palette. */}
+      <div>
         {progress.stages.map((stageProgress, i) => (
-          <StageRow
-            key={stageProgress.stage.id}
-            index={i}
-            stageProgress={stageProgress}
-            onOpen={() => setOpenStageId(stageProgress.stage.id)}
-          />
+          <div key={stageProgress.stage.id}>
+            {i > 0 && (
+              <div
+                aria-hidden="true"
+                className={cn(
+                  "ml-[35px] h-3.5 w-0.5 rounded-full",
+                  progress.stages[i - 1].complete ? "bg-success/50" : "bg-border",
+                )}
+              />
+            )}
+            <StageRow
+              index={i}
+              stageProgress={stageProgress}
+              upNext={progress.resume?.stage.id === stageProgress.stage.id}
+              onOpen={() => setOpenStageId(stageProgress.stage.id)}
+            />
+          </div>
         ))}
       </div>
     </div>
   );
 }
 
-function StageRow({ index, stageProgress, onOpen }: {
+function StageRow({ index, stageProgress, upNext, onOpen }: {
   index: number;
   stageProgress: { stage: PathStage; done: number; total: number; complete: boolean; locked: boolean };
+  upNext: boolean;
   onOpen: () => void;
 }) {
   const { stage, done, total, complete, locked } = stageProgress;
@@ -154,7 +170,7 @@ function StageRow({ index, stageProgress, onOpen }: {
       data-testid={`path-stage-row-${stage.id}`}
       className={cn(
         "flex min-h-12 w-full items-center gap-3 rounded-2xl border bg-card px-4 py-3 text-left transition-colors",
-        complete ? "border-success/30" : "border-border",
+        complete ? "border-success/30" : upNext ? "border-primary/40 bg-primary/[0.03]" : "border-border",
         locked && "opacity-60",
         "hover:bg-secondary/50",
         FOCUS,
@@ -162,8 +178,12 @@ function StageRow({ index, stageProgress, onOpen }: {
     >
       <Ring done={done} total={total} size={40} tone={complete ? "gold" : "primary"} />
       <span className="min-w-0 flex-1">
-        <span className="block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Stage {index + 1}
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Stage {index + 1}
+          </span>
+          {upNext && <Chip tone="gold">Up next</Chip>}
+          {complete && <Chip tone="good">Done</Chip>}
         </span>
         <span className="block text-[14px] font-bold leading-snug text-foreground">{stage.title}</span>
         <span className="block text-xs leading-snug text-muted-foreground">{stage.outcome}</span>

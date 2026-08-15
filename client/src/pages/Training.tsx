@@ -507,7 +507,7 @@ export default function Training() {
         </button>
         <PageHeader
           title="Fiber 101"
-          subtitle="Every term with the analogy that makes it land, and the six-step trip the line makes from the hut to the wall."
+          subtitle="Why fiber wins in plain words, every term with its analogy, and the six-step trip the line makes from the hut to the wall."
         />
         <FiberBasics section="all" />
       </div>
@@ -876,8 +876,8 @@ export default function Training() {
             <span className="min-w-0 flex-1">
               <span className="block text-[15px] font-bold text-foreground">Fiber 101</span>
               <span className="block text-[13px] leading-snug text-muted-foreground">
-                Every term with the analogy that makes it land, and how the line travels underground from the hut to
-                the wall of the house.
+                Why fiber wins in a homeowner's words, cable compared honestly, the gig translator, and the trip the
+                line makes underground to the house.
               </span>
             </span>
             <span aria-hidden="true" className="shrink-0 text-primary">&rsaquo;</span>

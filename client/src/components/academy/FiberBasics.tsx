@@ -22,28 +22,35 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { Chip, Panel, PrimaryButton, QuietButton } from "./primitives";
 import { useActivityAutosave } from "@/lib/useAcademy";
 import {
-  FIBER_GLOSSARY, GLOSSARY_CATEGORIES, GLOSSARY_CATEGORY_TITLES, UNDERGROUND_JOURNEY,
-  searchGlossary, type GlossaryCategory, type GlossaryTerm, type JourneyStep,
+  CABLE_VS_FIBER, FIBER_GLOSSARY, GLOSSARY_CATEGORIES, GLOSSARY_CATEGORY_TITLES,
+  SAY_IT_SIMPLE, UNDERGROUND_JOURNEY, WHY_FIBER, WHY_PEOPLE_SWITCH,
+  searchGlossary, type CableVsFiberRow, type GlossaryCategory, type GlossaryTerm,
+  type JourneyStep, type SimpleTranslation,
 } from "@shared/academyFiberBasics";
 
 export type FiberBasicsState = { pos: number };
 
+type FiberTab = "simple" | "journey" | "glossary";
+
 export default function FiberBasics({
   section, activityId = null, resume = null, onComplete,
 }: {
-  section: "journey" | "glossary" | "all";
+  section: FiberTab | "all";
   activityId?: string | null;
   resume?: FiberBasicsState | null;
   onComplete?: () => void;
 }) {
-  const [tab, setTab] = useState<"journey" | "glossary">(section === "glossary" ? "glossary" : "journey");
+  const [tab, setTab] = useState<FiberTab>(section === "all" ? "simple" : section);
   const guided = !!onComplete;
   const active = section === "all" ? tab : section;
 
   return (
     <div className="space-y-4" data-testid="fiber-basics">
       {section === "all" && (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <QuietButton pressed={tab === "simple"} onClick={() => setTab("simple")} testId="fiber-tab-simple">
+            Why fiber
+          </QuietButton>
           <QuietButton pressed={tab === "journey"} onClick={() => setTab("journey")} testId="fiber-tab-journey">
             The journey
           </QuietButton>
@@ -53,6 +60,11 @@ export default function FiberBasics({
         </div>
       )}
 
+      {active === "simple" && (
+        guided
+          ? <SimpleWalk activityId={activityId} resume={resume} onComplete={onComplete!} />
+          : <SimpleBrowse />
+      )}
       {active === "journey" && (
         guided
           ? <JourneyWalk activityId={activityId} resume={resume} onComplete={onComplete!} />
@@ -63,6 +75,232 @@ export default function FiberBasics({
           ? <GlossaryDrill activityId={activityId} resume={resume} onComplete={onComplete!} />
           : <GlossaryBrowse />
       )}
+    </div>
+  );
+}
+
+// ── Fiber, in their words ─────────────────────────────────────────────────────
+// Guided: one concept per card, the pattern beginner-education apps use
+// because it works: a progress line, one idea, one action. Translator cards
+// keep the house answer-before-reveal mechanic.
+
+type SimpleCard =
+  | { kind: "why"; why: (typeof WHY_FIBER)[number] }
+  | { kind: "vs"; vs: CableVsFiberRow }
+  | { kind: "switch"; s: (typeof WHY_PEOPLE_SWITCH)[number] }
+  | { kind: "translate"; t: SimpleTranslation };
+
+const SIMPLE_DECK: readonly SimpleCard[] = [
+  ...WHY_FIBER.map((why): SimpleCard => ({ kind: "why", why })),
+  ...CABLE_VS_FIBER.map((vs): SimpleCard => ({ kind: "vs", vs })),
+  ...WHY_PEOPLE_SWITCH.map((s): SimpleCard => ({ kind: "switch", s })),
+  ...SAY_IT_SIMPLE.map((t): SimpleCard => ({ kind: "translate", t })),
+];
+
+const SIMPLE_EYEBROWS: Record<SimpleCard["kind"], string> = {
+  why: "The benefit",
+  vs: "Cable, honestly",
+  switch: "Why people switch",
+  translate: "Say it simple",
+};
+
+function SimpleWalk({ activityId, resume, onComplete }: {
+  activityId: string | null;
+  resume: FiberBasicsState | null;
+  onComplete: () => void;
+}) {
+  const clamp = (n: number) => Math.min(Math.max(n, 0), SIMPLE_DECK.length - 1);
+  const [pos, setPos] = useState(() => clamp(resume?.pos ?? 0));
+  const [revealed, setRevealed] = useState(false);
+  useActivityAutosave(activityId, useMemo(() => ({ pos }), [pos]));
+
+  const card = SIMPLE_DECK[pos];
+  const last = pos === SIMPLE_DECK.length - 1;
+  const needsReveal = card.kind === "translate" && !revealed;
+
+  function go(delta: number) {
+    setRevealed(false);
+    setPos((p) => clamp(p + delta));
+  }
+
+  return (
+    <div className="space-y-4" data-testid="fiber-simple-walk">
+      <ProgressLine label={`${SIMPLE_EYEBROWS[card.kind]} · ${pos + 1} of ${SIMPLE_DECK.length}`} done={pos + 1} total={SIMPLE_DECK.length} />
+
+      <div className="rounded-2xl border border-border bg-card p-4" data-testid={`fiber-simple-card-${pos}`}>
+        <Chip tone={card.kind === "translate" ? "info" : "neutral"}>{SIMPLE_EYEBROWS[card.kind]}</Chip>
+
+        {card.kind === "why" && (
+          <div className="mt-2 space-y-3">
+            <h3 className="text-lg font-bold leading-snug tracking-tight text-foreground">{card.why.benefit}</h3>
+            <p className="text-[13px] leading-relaxed text-foreground">{card.why.feel}</p>
+            <SayItPanel text={card.why.sayIt} />
+          </div>
+        )}
+
+        {card.kind === "vs" && (
+          <div className="mt-2 space-y-3">
+            <h3 className="text-lg font-bold leading-snug tracking-tight text-foreground">{card.vs.question}</h3>
+            <VsColumns row={card.vs} />
+            <CheckPanel text={card.vs.check} />
+          </div>
+        )}
+
+        {card.kind === "switch" && (
+          <div className="mt-2 space-y-3">
+            <h3 className="text-lg font-bold leading-snug tracking-tight text-foreground">{card.s.reason}</h3>
+            <p className="text-[13px] leading-relaxed text-foreground">{card.s.story}</p>
+          </div>
+        )}
+
+        {card.kind === "translate" && (
+          <div className="mt-2 space-y-3">
+            <h3 className="text-lg font-bold leading-snug tracking-tight text-foreground">&ldquo;{card.t.jargon}&rdquo;</h3>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              What they hear: {card.t.theyHear}
+            </p>
+            {!revealed ? (
+              <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-3" data-testid="fiber-simple-prompt">
+                <SectionLabel className="text-primary">Your turn first</SectionLabel>
+                <p className="mt-1 text-[13px] leading-relaxed text-foreground">
+                  Say the plain-words version out loud, the one a homeowner would feel. Then check.
+                </p>
+                <div className="mt-3">
+                  <PrimaryButton onClick={() => setRevealed(true)} testId="fiber-simple-reveal">Show the simple version</PrimaryButton>
+                </div>
+              </div>
+            ) : (
+              <SayItPanel text={card.t.sayInstead} />
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <QuietButton onClick={() => go(-1)} disabled={pos === 0} testId="fiber-simple-back">Back</QuietButton>
+        {last ? (
+          !needsReveal && <PrimaryButton onClick={onComplete} testId="fiber-simple-done">I can say all of this</PrimaryButton>
+        ) : (
+          !needsReveal && <PrimaryButton onClick={() => go(1)} testId="fiber-simple-next">Next</PrimaryButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SimpleBrowse() {
+  return (
+    <div className="space-y-6" data-testid="fiber-simple-browse">
+      <section>
+        <SectionLabel className="mb-1.5 px-1">What fiber changes</SectionLabel>
+        <div className="space-y-2">
+          {WHY_FIBER.map((why) => (
+            <div key={why.id} className="rounded-2xl border border-border bg-card p-4" data-testid={`fiber-why-${why.id}`}>
+              <h3 className="text-[15px] font-bold leading-snug tracking-tight text-foreground">{why.benefit}</h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">{why.feel}</p>
+              <SayItPanel text={why.sayIt} className="mt-2" />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <SectionLabel className="mb-1.5 px-1">Cable and fiber, honestly</SectionLabel>
+        <div className="space-y-2">
+          {CABLE_VS_FIBER.map((row) => (
+            <div key={row.id} className="rounded-2xl border border-border bg-card p-4" data-testid={`fiber-vs-${row.id}`}>
+              <h3 className="text-[15px] font-bold leading-snug tracking-tight text-foreground">{row.question}</h3>
+              <VsColumns row={row} className="mt-2.5" />
+              <CheckPanel text={row.check} className="mt-2" />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <SectionLabel className="mb-1.5 px-1">Why people switch</SectionLabel>
+        <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
+          {WHY_PEOPLE_SWITCH.map((s) => (
+            <div key={s.id} className="px-4 py-3" data-testid={`fiber-switch-${s.id}`}>
+              <div className="text-[13px] font-semibold leading-snug text-foreground">{s.reason}</div>
+              <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">{s.story}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <SectionLabel className="mb-1.5 px-1">Say it simple</SectionLabel>
+        <p className="mb-2 px-1 text-xs leading-relaxed text-muted-foreground">
+          Homeowners do not buy gigs. Tap a card to flip the jargon into the sentence that lands.
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {SAY_IT_SIMPLE.map((t) => <TranslateFlipCard key={t.id} t={t} />)}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/** Jargon on the front, the landing sentence on the back. Same 3D flip
+ *  vocabulary as the feature-to-outcome deck, instant under reduced motion. */
+function TranslateFlipCard({ t }: { t: SimpleTranslation }) {
+  const [flipped, setFlipped] = useState(false);
+  return (
+    <div className="hf-flip-scene">
+      <button
+        type="button"
+        aria-pressed={flipped}
+        onClick={() => setFlipped((v) => !v)}
+        data-testid={`fiber-translate-${t.id}`}
+        className={cn("block w-full text-left", FOCUS)}
+      >
+        <div className={cn("hf-flip-inner relative min-h-[150px]", flipped && "is-flipped")}>
+          <div className={cn("hf-flip-face rounded-2xl border border-border bg-card p-4", flipped && "invisible")}>
+            <Chip tone="neutral">They hear</Chip>
+            <p className="mt-2 text-[15px] font-bold leading-snug tracking-tight text-foreground">&ldquo;{t.jargon}&rdquo;</p>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">{t.theyHear}</p>
+            <p className="mt-2 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Tap for the simple version</p>
+          </div>
+          <div className={cn("hf-flip-face hf-flip-back absolute inset-0 rounded-2xl border border-primary/25 bg-primary/[0.06] p-4", !flipped && "invisible")}>
+            <Chip tone="info">Say instead</Chip>
+            <p className="mt-2 text-[13px] leading-relaxed text-foreground">{t.sayInstead}</p>
+          </div>
+        </div>
+      </button>
+    </div>
+  );
+}
+
+function SayItPanel({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={cn("rounded-xl border border-primary/25 bg-primary/[0.06] p-3", className)}>
+      <SectionLabel className="text-primary">At the door</SectionLabel>
+      <p className="mt-1 text-[13px] leading-relaxed text-foreground">{text}</p>
+    </div>
+  );
+}
+
+function CheckPanel({ text, className }: { text: string; className?: string }) {
+  return (
+    <div className={cn("rounded-xl bg-secondary/60 p-3", className)}>
+      <SectionLabel>They can check</SectionLabel>
+      <p className="mt-1 text-[13px] leading-relaxed text-foreground">{text}</p>
+    </div>
+  );
+}
+
+function VsColumns({ row, className }: { row: CableVsFiberRow; className?: string }) {
+  return (
+    <div className={cn("grid gap-2 sm:grid-cols-2", className)}>
+      <div className="rounded-xl border border-border bg-background p-3">
+        <SectionLabel>On cable</SectionLabel>
+        <p className="mt-1 text-[13px] leading-relaxed text-foreground">{row.cable}</p>
+      </div>
+      <div className="rounded-xl border border-primary/25 bg-primary/[0.04] p-3">
+        <SectionLabel className="text-primary">On fiber</SectionLabel>
+        <p className="mt-1 text-[13px] leading-relaxed text-foreground">{row.fiber}</p>
+      </div>
     </div>
   );
 }
