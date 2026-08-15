@@ -1,6 +1,6 @@
 // ── Objection dojo ────────────────────────────────────────────────────────────
 //
-// The ten objections a residential fiber rep actually hears, each as a drill:
+// The objections a residential fiber rep actually hears, each as a drill:
 // read the cue, say your answer OUT LOUD before revealing anything, then compare
 // against the weak / better / excellent ladder and the technique behind it.
 //
@@ -23,7 +23,7 @@ import {
   ACADEMY_OBJECTIONS, ETHICAL_TECHNIQUES, TECHNIQUE_LABELS, TECHNIQUE_NOTES,
   type AcademyObjection,
 } from "@shared/academyObjections";
-import { personasRaising } from "@shared/academyPersonas";
+import { getPersona, personasRaising } from "@shared/academyPersonas";
 import type { PersonaId } from "@shared/academyPersonas";
 
 export default function ObjectionDojo({
@@ -64,7 +64,7 @@ export default function ObjectionDojo({
 
       <div>
         <div className="mb-1.5 flex items-baseline justify-between gap-3 px-1">
-          <SectionLabel>The ten you will actually hear</SectionLabel>
+          <SectionLabel>The ones you will actually hear</SectionLabel>
           <span className="text-xs tabular-nums text-muted-foreground">
             {ACADEMY_OBJECTIONS.filter((o) => completedKeys.has(o.key)).length} of {ACADEMY_OBJECTIONS.length}
           </span>
@@ -142,7 +142,11 @@ function ObjectionDrill({
   onPractise?: (personaId: PersonaId) => void;
 }) {
   const [revealed, setRevealed] = useState(false);
-  const personas = personasRaising((objection.taxonomyKey ?? "not_interested") as any);
+  // Prefer the objection's own choice of sparring partner; fall back to whoever
+  // raises the bridged taxonomy objection in role-play.
+  const raising = personasRaising((objection.taxonomyKey ?? "not_interested") as any);
+  const practicePersona =
+    (objection.practicePersonaId ? getPersona(objection.practicePersonaId) : undefined) ?? raising[0];
 
   return (
     <div className="space-y-4" data-testid={`objection-drill-${objection.key}`}>
@@ -199,9 +203,9 @@ function ObjectionDrill({
             {onComplete && (
               <PrimaryButton onClick={onComplete} testId="objection-complete">Mark this drilled</PrimaryButton>
             )}
-            {onPractise && personas.length > 0 && (
-              <QuietButton onClick={() => onPractise(personas[0].id)} testId="objection-practise">
-                Practise on {personas[0].name}
+            {onPractise && practicePersona && (
+              <QuietButton onClick={() => onPractise(practicePersona.id)} testId="objection-practise">
+                Practise on {practicePersona.name}
               </QuietButton>
             )}
             <QuietButton onClick={onBack} testId="objection-back">Back to the list</QuietButton>

@@ -37,7 +37,9 @@ export type ActivityKind =
   | "branching"
   | "roleplay"
   | "pitch_lab"
-  | "objection_drill";
+  | "objection_drill"
+  | "fiber_101"
+  | "speech_trainer";
 
 export const ACTIVITY_LABELS: Readonly<Record<ActivityKind, string>> = {
   lesson: "Lesson",
@@ -49,6 +51,8 @@ export const ACTIVITY_LABELS: Readonly<Record<ActivityKind, string>> = {
   roleplay: "Role-play",
   pitch_lab: "Pitch Lab",
   objection_drill: "Objection drill",
+  fiber_101: "Fiber 101",
+  speech_trainer: "Speech trainer",
 };
 
 export type Activity = {
@@ -72,6 +76,8 @@ export type Activity = {
   scenarioId?: string;
   /** For kind "branching": the tree id. */
   branchId?: string;
+  /** For kind "fiber_101": which half of Fiber 101 this activity opens. */
+  fiberSection?: "journey" | "glossary";
   /** Minimum score to count as passed, where the activity produces one. */
   passScore?: number;
 };
@@ -237,6 +243,51 @@ export const SCENARIO_SETS: readonly ScenarioSet[] = [
         answerIndex: 1,
         explanation:
           "A card number that exists anywhere other than the approved flow is a breach, including on paper for two minutes and including in a photo you intend to delete. Stopping a customer from reading it aloud is part of the job.",
+      },
+    ],
+  },
+  {
+    id: "scn-underground",
+    title: "The build, at the door",
+    questions: [
+      {
+        situation:
+          "A homeowner points at orange paint and little flags across their lawn and asks, annoyed, whether you people are about to tear up the yard.",
+        options: [
+          "Reassure them the yard will look exactly like it does now when everything is finished.",
+          "Explain the flags mark the utilities already buried there, done before any drilling so the bore can steer around them, and that the machine tunnels underneath rather than trenching through.",
+          "Tell them you are with sales and construction questions are not your department.",
+          "Say the flags mean their address is next on the build schedule.",
+        ],
+        answerIndex: 1,
+        explanation:
+          "The flags are the markout of existing utilities, and explaining that turns a complaint into evidence of care: the crew looked before it drilled. Promising a perfect yard is a claim you cannot back, dodging to another department wastes the easiest trust-building question you will ever get, and the flags say nothing about the schedule.",
+      },
+      {
+        situation:
+          "A customer says fiber sounds fragile: it is glass, and glass breaks. They ask why they should trust it through a storm over the cable line they already have.",
+        options: [
+          "Explain the glass runs inside conduit underground, below weather entirely, while the coax it replaces hangs on poles or ages in older ground lines, and that no powered equipment sits in the field to fail in an outage.",
+          "Tell them fiber is unbreakable and they will never have an outage again.",
+          "Admit glass does break and steer the conversation to price instead.",
+          "Say storms are rare here so it does not matter much either way.",
+        ],
+        answerIndex: 0,
+        explanation:
+          "The honest mechanism is the persuasive one: buried conduit is out of the weather, and a passive network leaves nothing powered outside to fail. Unbreakable and never are on the never-say list for good reason, and abandoning the question concedes a point that was actually yours to win.",
+      },
+      {
+        situation:
+          "A resident says the crew left a wire coiled at a green box near their curb weeks ago and nobody came back. They ask if the build was abandoned.",
+        options: [
+          "Tell them the build is definitely finished and they can order service today.",
+          "Say you have no idea and they should call the company.",
+          "Explain a coil staged at a pedestal is normal, the line waits there until connections are scheduled, and offer to find out the actual status for their address rather than guessing at a date.",
+          "Tell them crews are usually just slow and it will probably get done eventually.",
+        ],
+        answerIndex: 2,
+        explanation:
+          "Staged slack at a pedestal is what a build in progress looks like, and saying so answers the real worry. But the status of one address is a fact you do not hold on the porch, so the credible move is naming what you know and offering to confirm what you do not. Declaring it finished, or guessing at timelines, trades ten seconds of confidence for a callback that starts angry.",
       },
     ],
   },
@@ -592,9 +643,12 @@ export const PATH_STAGES: readonly PathStage[] = [
     outcome: "You can explain what fiber is, and what it does not do, without reading anything.",
     activities: [
       { id: "act-product-card", kind: "reference", title: "What fiber actually is", detail: "The technology, in words a homeowner uses.", minutes: 3, cardId: "product-what-fiber-is" },
+      { id: "act-fiber-journey", kind: "fiber_101", title: "How fiber gets to the house", detail: "The six-step trip from the hut to the wall, with the analogy for each step.", minutes: 4, fiberSection: "journey" },
       { id: "act-upload-card", kind: "reference", title: "Why upload is the number that matters", detail: "The one specification most households have never checked.", minutes: 3, cardId: "product-upload-explained" },
       { id: "act-install-card", kind: "reference", title: "What the install involves", detail: "The answer behind most stalls.", minutes: 2, cardId: "product-install" },
+      { id: "act-fiber-glossary", kind: "fiber_101", title: "Talk the talk", detail: "Every term you will hear, each with the analogy that makes it land.", minutes: 6, fiberSection: "glossary" },
       { id: "act-product-scenario", kind: "scenario", title: "Product judgement", detail: "Three situations where the technically correct answer is also the honest one.", minutes: 4, scenarioId: "scn-product", passScore: 67 },
+      { id: "act-underground-scenario", kind: "scenario", title: "The build, at the door", detail: "Flags in the yard, glass in a storm, and the coil nobody came back for.", minutes: 4, scenarioId: "scn-underground", passScore: 67 },
     ],
   },
   {
@@ -656,6 +710,7 @@ export const PATH_STAGES: readonly PathStage[] = [
     activities: [
       { id: "act-skeleton", kind: "lesson", title: "The pitch skeleton", detail: "Four beats, thirty seconds.", minutes: 6, lessonId: "m3-pitch-skeleton" },
       { id: "act-pitch-lab", kind: "pitch_lab", title: "Build your pitch", detail: "Assemble it, check it, rehearse it.", minutes: 10 },
+      { id: "act-speech-trainer", kind: "speech_trainer", title: "Say it from memory", detail: "Read it, fill the gaps, then deliver it with the script hidden.", minutes: 6 },
       { id: "act-roleplay-remote", kind: "roleplay", title: "Practise on a remote worker", detail: "She has a call in ten minutes and a real upload problem.", minutes: 8, personaId: "remote_worker", passScore: 60 },
     ],
   },
@@ -666,6 +721,7 @@ export const PATH_STAGES: readonly PathStage[] = [
     activities: [
       { id: "act-cable-card", kind: "reference", title: "Cable, compared honestly", detail: "What is real, and what is a swipe.", minutes: 4, cardId: "competitor-cable" },
       { id: "act-wireless-card", kind: "reference", title: "Fixed wireless and satellite", detail: "Where they genuinely win.", minutes: 3, cardId: "competitor-fixed-wireless" },
+      { id: "act-tv-bundle-card", kind: "reference", title: "Breaking the TV bundle", detail: "Layer DIRECTV on the fiber and let their own bill do the comparing.", minutes: 4, cardId: "competitor-tv-bundle" },
       { id: "act-competitor-pivot", kind: "lesson", title: "The competitor pivot", detail: "Answering I already have fiber without calling them wrong.", minutes: 5, lessonId: "m12-competitor-pivot" },
       { id: "act-roleplay-spectrum", kind: "roleplay", title: "Practise on a Spectrum customer", detail: "Content, under contract, quietly annoyed about upload.", minutes: 8, personaId: "spectrum_customer", passScore: 60 },
     ],
@@ -673,9 +729,9 @@ export const PATH_STAGES: readonly PathStage[] = [
   {
     id: "stage-objections",
     title: "Objection handling",
-    outcome: "You have a practised, ethical answer to all ten objections you will actually hear.",
-    // The ten drills are generated from the objection list rather than typed
-    // out, so adding an eleventh objection can never leave a hole in the path.
+    outcome: "You have a practised, ethical answer to every objection you will actually hear.",
+    // The drills are generated from the objection list rather than typed out,
+    // so adding a new objection can never leave a hole in the path.
     activities: [
       ...ACADEMY_OBJECTION_KEYS.map((key, i): Activity => ({
         id: `act-objection-${key}`,
@@ -803,7 +859,7 @@ export const CERTIFICATIONS: readonly Certification[] = [
   {
     id: "cert-objection",
     title: "Objection certified",
-    meaning: "Has a practised, ethical answer to all ten field objections and has held them under pressure.",
+    meaning: "Has a practised, ethical answer to every field objection in the dojo and has held them under pressure.",
     stageIds: ["stage-objections"],
     minRolePlayScore: 65,
   },

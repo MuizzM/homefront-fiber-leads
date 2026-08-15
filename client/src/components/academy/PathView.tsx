@@ -25,6 +25,8 @@ import BranchingConversation, { type BranchingState } from "./BranchingConversat
 import PitchLab, { type PitchLabState } from "./PitchLab";
 import ObjectionDojo from "./ObjectionDojo";
 import FeatureToOutcome from "./FeatureToOutcome";
+import FiberBasics, { type FiberBasicsState } from "./FiberBasics";
+import SpeechTrainer, { type SpeechTrainerState } from "./SpeechTrainer";
 import { useCompleteActivity, useResumeState } from "@/lib/useAcademy";
 import {
   ACTIVITY_LABELS, getBranchTree, getScenarioSet,
@@ -214,6 +216,8 @@ function ActivityRunner({ activity, offers, headline, market, onComplete, onExit
   const timedState = useResumeState<TimedIntroState>(activity.kind === "timed_intro" ? activity.id : null);
   const branchState = useResumeState<BranchingState>(activity.kind === "branching" ? activity.id : null);
   const pitchState = useResumeState<PitchLabState>(activity.kind === "pitch_lab" ? activity.id : null);
+  const fiberState = useResumeState<FiberBasicsState>(activity.kind === "fiber_101" ? activity.id : null);
+  const speechState = useResumeState<SpeechTrainerState>(activity.kind === "speech_trainer" ? activity.id : null);
 
   const header = (
     <div className="space-y-3">
@@ -296,6 +300,34 @@ function ActivityRunner({ activity, offers, headline, market, onComplete, onExit
         <ObjectionDojo
           focusKey={activity.objectionKey}
           completedKeys={new Set()}
+          onComplete={() => onComplete()}
+        />
+      </div>
+    );
+  }
+
+  if (activity.kind === "fiber_101" && activity.fiberSection) {
+    return (
+      <div className="space-y-4">
+        {header}
+        <FiberBasics
+          section={activity.fiberSection}
+          activityId={activity.id}
+          resume={fiberState}
+          onComplete={() => onComplete()}
+        />
+      </div>
+    );
+  }
+
+  if (activity.kind === "speech_trainer") {
+    return (
+      <div className="space-y-4">
+        {header}
+        <SpeechTrainer
+          offer={headline}
+          activityId={activity.id}
+          resume={speechState}
           onComplete={() => onComplete()}
         />
       </div>

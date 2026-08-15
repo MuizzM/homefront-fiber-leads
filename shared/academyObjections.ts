@@ -1,17 +1,20 @@
 // ── Academy objection dojo ────────────────────────────────────────────────────
 //
-// The ten objections a residential fiber rep hears most, each with the ethical
+// The objections a residential fiber rep hears most, each with the ethical
 // technique that answers it, a weak/improved/excellent wording ladder, and the
-// trap that makes the objection worse.
+// trap that makes the objection worse. Ten came from the original field brief;
+// the eleventh, the TV bundle, was added when it kept costing doors that the
+// first ten could not reopen.
 //
 // RELATIONSHIP TO shared/trainingObjections.ts
 //   That file holds the FROZEN 14-key taxonomy the drill-card engine depends on
-//   (its contract test asserts exactly fourteen keys). Two of the objections the
-//   Academy must teach have no key there: being under contract, and how the rep
-//   got the household's information. Rather than break a frozen contract, the
-//   Academy defines its own key union that reuses the taxonomy where it maps and
-//   adds exactly those two. `taxonomyKey` is the bridge, so a drill card and an
-//   Academy lesson can never teach different answers to the same words.
+//   (its contract test asserts exactly fourteen keys). Three of the objections
+//   the Academy must teach have no key there: being under contract, how the rep
+//   got the household's information, and the TV bundle. Rather than break a
+//   frozen contract, the Academy defines its own key union that reuses the
+//   taxonomy where it maps and adds exactly those three. `taxonomyKey` is the
+//   bridge, so a drill card and an Academy lesson can never teach different
+//   answers to the same words.
 //
 // THE TECHNIQUES ARE THE CURRICULUM
 //   Every entry names the technique it teaches, and the technique list is
@@ -21,8 +24,11 @@
 //   is already true, not by manufacturing a deadline.
 
 import { isObjectionKey, type ObjectionKey } from "./trainingObjections";
+import type { PersonaId } from "./academyPersonas";
 
-/** Objection keys the Academy teaches. The first ten are the required set. */
+/** Objection keys the Academy teaches. The first ten are the original field
+ *  brief; tv_bundle is the eleventh, added for households whose TV and
+ *  internet arrive stapled into one bill. */
 export const ACADEMY_OBJECTION_KEYS = [
   "not_interested",
   "under_contract",
@@ -34,6 +40,7 @@ export const ACADEMY_OBJECTION_KEYS = [
   "too_busy",
   "leave_something",
   "data_source",
+  "tv_bundle",
 ] as const;
 
 export type AcademyObjectionKey = (typeof ACADEMY_OBJECTION_KEYS)[number];
@@ -105,6 +112,8 @@ export type AcademyObjection = {
   trap: string;
   /** The question that opens it back up, when there is one. */
   reopener: string | null;
+  /** The persona to practise this on, when the taxonomy bridge cannot say. */
+  practicePersonaId?: PersonaId;
 };
 
 export const ACADEMY_OBJECTIONS: readonly AcademyObjection[] = [
@@ -287,6 +296,25 @@ export const ACADEMY_OBJECTIONS: readonly AcademyObjection[] = [
     },
     trap: "Being vague, joking, or saying it is public record without explaining what you actually hold. Vagueness here reads as evasion and generates complaints.",
     reopener: "Do you want me to note the address so nobody knocks it again?",
+  },
+  {
+    key: "tv_bundle",
+    taxonomyKey: null,
+    cue: "We have TV and internet together in a bundle.",
+    chip: "TV bundle",
+    whatItMeans:
+      "One bill feels simpler, and losing the channels feels like the cost of leaving. Underneath is arithmetic most households have never done: after the promo year, the bundle is often two full prices stapled together, plus box and broadcast fees nobody chose.",
+    techniques: ["active_listening", "honest_loss_aversion", "simplifying_choices"],
+    ladder: {
+      weak: "Nobody really needs cable TV anymore, you can just stream everything.",
+      improved: "That's fair, bundles are convenient. Do you know what the TV half of that bill costs on its own?",
+      excellent:
+        "That makes sense, one bill is simpler, and I'm not going to talk you out of your channels. Two things worth knowing: a bundle is two prices stapled together, and the TV half doesn't have to live on the same wire. Fiber carries the internet, DIRECTV carries the TV on top of it, same channels, same remote habits. If you pull up the bill, we can set the two side by side, and if your bundle genuinely wins, I'll say so and get out of your way.",
+      why: "It protects the thing they are afraid to lose, names the mechanism that unstaples the bill, and commits in advance to conceding if their current deal is really better. The comparison happens on their own statement, which is the only document both of you trust.",
+    },
+    trap: "Quoting DIRECTV pricing from memory, or promising the split beats the bundle before anyone has seen the bill. Numbers come from the current offer sheet, and the bill does the comparing.",
+    reopener: "Do you know what the whole thing runs now that the promo is over? That number is on the bill, and it surprises most people.",
+    practicePersonaId: "spectrum_customer",
   },
 ];
 

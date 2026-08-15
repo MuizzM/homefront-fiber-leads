@@ -238,7 +238,7 @@ const DIMENSION_REMEDY: Readonly<Record<ScoreDimension, { text: string; activity
   listening: { text: "Practise labeling: name their concern out loud before you answer it.", activityId: "act-branch-price" },
   empathy: { text: "Work the objection drills. Every one starts with acknowledgement.", activityId: "act-objection-bad_experience" },
   benefitAlignment: { text: "Read the archetypes lesson again, then role-play the persona you scored worst against.", activityId: "act-archetypes" },
-  objectionHandling: { text: "Run the ten objection drills back to back.", activityId: "act-objection-not_interested" },
+  objectionHandling: { text: "Run the objection drills back to back.", activityId: "act-objection-not_interested" },
   accuracy: { text: "Open today's offer card before every shift and quote nothing else.", activityId: "act-claims-card" },
   compliance: { text: "Re-read the never-say list and the compliance scenarios.", activityId: "act-never-say" },
   closing: { text: "Practise the two-slot ask, and the respectful exit that is also a close.", activityId: "act-two-day" },

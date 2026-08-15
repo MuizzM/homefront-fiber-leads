@@ -25,12 +25,15 @@ import {
 } from "../../shared/academyReference";
 import { OBJECTION_KEYS } from "../../shared/trainingObjections";
 import { getTrainingLesson } from "../../shared/trainingContent";
+import { ACADEMY_QUOTES } from "../../shared/academyQuotes";
+import { FIBER_GLOSSARY, UNDERGROUND_JOURNEY } from "../../shared/academyFiberBasics";
 
 /** Everything a rep can read, as one string, for the copy-rule sweeps. */
 const ALL_COPY = JSON.stringify([
   ACADEMY_OBJECTIONS, ACADEMY_PERSONAS, PATH_STAGES, SCENARIO_SETS,
   BRANCH_TREES, PITCH_BLOCKS, REFERENCE_CARDS, CERTIFICATIONS,
   TECHNIQUE_NOTES, TECHNIQUE_LABELS, SIGNAL_LABELS,
+  ACADEMY_QUOTES, FIBER_GLOSSARY, UNDERGROUND_JOURNEY,
 ]);
 
 describe("house copy rules", () => {
@@ -47,26 +50,45 @@ describe("house copy rules", () => {
   });
 });
 
-describe("the ten objections", () => {
-  it("covers exactly the ten the field brief names", () => {
+describe("the objections", () => {
+  it("covers the ten the field brief names, plus the TV bundle", () => {
     expect([...ACADEMY_OBJECTION_KEYS]).toEqual([
       "not_interested", "under_contract", "competitor_fiber", "bad_experience",
       "price", "spouse", "renter", "too_busy", "leave_something", "data_source",
+      "tv_bundle",
     ]);
-    expect(ACADEMY_OBJECTIONS).toHaveLength(10);
+    expect(ACADEMY_OBJECTIONS).toHaveLength(11);
   });
 
   it("keeps the frozen drill taxonomy untouched, and bridges to it where it maps", () => {
     // The CE-3 taxonomy is frozen at fourteen keys by its own contract test.
-    // The Academy adds its two extra objections in its OWN union rather than
+    // The Academy adds its three extra objections in its OWN union rather than
     // appending to that list, and every bridge it claims must be real.
     expect(OBJECTION_KEYS).toHaveLength(14);
     for (const objection of taxonomyBackedObjections()) {
       expect(OBJECTION_KEYS, objection.key).toContain(objection.taxonomyKey!);
     }
-    // The two the taxonomy has no key for own themselves.
+    // The three the taxonomy has no key for own themselves.
     expect(getAcademyObjection("under_contract")!.taxonomyKey).toBeNull();
     expect(getAcademyObjection("data_source")!.taxonomyKey).toBeNull();
+    expect(getAcademyObjection("tv_bundle")!.taxonomyKey).toBeNull();
+  });
+
+  it("names a real persona wherever an objection picks its own sparring partner", () => {
+    for (const o of ACADEMY_OBJECTIONS) {
+      if (o.practicePersonaId) expect(getPersona(o.practicePersonaId), o.key).toBeTruthy();
+    }
+    // The TV bundle has no taxonomy bridge, so it must pick one explicitly.
+    expect(getAcademyObjection("tv_bundle")!.practicePersonaId).toBeTruthy();
+  });
+
+  it("teaches the bundle honestly: the bill decides, not the rep", () => {
+    const bundle = getAcademyObjection("tv_bundle")!;
+    expect(bundle.ladder.excellent.toLowerCase()).toContain("directv");
+    // The excellent line commits to conceding when the bundle wins.
+    expect(bundle.ladder.excellent.toLowerCase()).toContain("if your bundle genuinely wins");
+    // The trap forbids quoting DIRECTV numbers from memory.
+    expect(bundle.trap.toLowerCase()).toContain("offer sheet");
   });
 
   it("gives every objection a full ladder, a trap and at least one technique", () => {
@@ -191,6 +213,7 @@ describe("the path", () => {
       if (a.branchId) expect(getBranchTree(a.branchId), a.id).toBeTruthy();
       if (a.personaId) expect(getPersona(a.personaId), a.id).toBeTruthy();
       if (a.objectionKey) expect(getAcademyObjection(a.objectionKey), a.id).toBeTruthy();
+      if (a.kind === "fiber_101") expect(a.fiberSection, a.id).toBeTruthy();
     }
   });
 
@@ -203,7 +226,7 @@ describe("the path", () => {
     expect(TOTAL_PATH_MINUTES).toBeGreaterThan(60);
   });
 
-  it("drills all ten objections in the objection stage", () => {
+  it("drills every objection in the objection stage", () => {
     const stage = PATH_STAGES.find((s) => s.id === "stage-objections")!;
     const drilled = stage.activities.filter((a) => a.kind === "objection_drill").map((a) => a.objectionKey);
     expect(drilled).toEqual([...ACADEMY_OBJECTION_KEYS]);

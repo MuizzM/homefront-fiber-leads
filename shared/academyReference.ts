@@ -152,6 +152,20 @@ export const REFERENCE_CARDS: readonly ReferenceCard[] = [
     ],
     keywords: ["fixed wireless", "5g", "t-mobile", "verizon", "satellite", "starlink"],
   },
+  {
+    id: "competitor-tv-bundle",
+    category: "competitor",
+    title: "Breaking the TV bundle with DIRECTV",
+    summary: "The unbundle method: split the bill, layer the TV, let their statement decide.",
+    points: [
+      "Why bundles hold: one bill feels simpler, and people fear losing their channels more than they notice the price. Both feelings are legitimate. Answer them, do not mock them.",
+      "The mechanism: a bundle is two services stapled into one price. The internet half moves to fiber. The TV half moves to DIRECTV, which layers on top of the fiber line by stream or by dish, so leaving the cable company does not mean leaving live TV, sports or the DVR habit.",
+      "The method, in order: ask for the current bill. Find the real total after the promo, including box rentals and the fee lines under the plan price, like broadcast and regional sports surcharges. Set fiber plus the current DIRECTV offer beside that total. Then say which side won, even when it is theirs.",
+      "Quote DIRECTV from the current offer sheet only. TV packages, channel lineups and promotions change often, and a channel promise you cannot verify is a cancellation waiting to happen. If they care about one specific channel, look it up on the current lineup together instead of guessing.",
+      "The commitment that makes it work: if the bundle genuinely wins on their statement, say so and leave well. Reps who concede honestly get the callback when the bundle's promo expires, and bundle promos always expire.",
+    ],
+    keywords: ["bundle", "directv", "tv", "channels", "sports", "dvr", "unbundle", "broadcast fee", "cable box"],
+  },
 
   // ── Compliance ──────────────────────────────────────────────────────────────
   {

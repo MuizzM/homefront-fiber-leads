@@ -42,10 +42,13 @@ import PathView from "@/components/academy/PathView";
 import PitchLab from "@/components/academy/PitchLab";
 import ObjectionDojo from "@/components/academy/ObjectionDojo";
 import ReferenceLibrary from "@/components/academy/ReferenceLibrary";
+import FiberBasics from "@/components/academy/FiberBasics";
+import SpeechTrainer from "@/components/academy/SpeechTrainer";
 import { useAcademyOffers, useAcademyProgress, useCompleteActivity } from "@/lib/useAcademy";
 import { ACADEMY_OBJECTIONS } from "@shared/academyObjections";
 import { TOTAL_PATH_MINUTES } from "@shared/academyPath";
-import { openAssignments } from "@shared/academyProgress";
+import { openAssignments, type CertificationStatus } from "@shared/academyProgress";
+import { ACADEMY_QUOTES, quoteIndexFor } from "@shared/academyQuotes";
 import type { PersonaId } from "@shared/academyPersonas";
 import {
   TRAINING_MODULES, TRAINING_LESSONS, TOTAL_TRAINING_LESSONS,
@@ -64,6 +67,24 @@ type ProgressPayload = { totalLessons: number; completed: ProgressRow[] };
 const PROGRESS_KEY = ["/api/training/progress"];
 
 type SectionId = "path" | "practice" | "pitch" | "objections" | "reference" | "library" | "team";
+
+// ── The road to field ready ───────────────────────────────────────────────────
+// The four certifications, in order, are the level ladder a new rep climbs.
+// Levels are names for the rep's own milestones, never a comparison to anyone.
+const LEVEL_LABELS: Readonly<Record<string, string>> = {
+  "cert-door-ready": "Door ready",
+  "cert-conversation": "Conversation certified",
+  "cert-objection": "Objection certified",
+  "cert-full": "Field ready",
+};
+
+function levelName(certs: CertificationStatus[]): string {
+  let name = "Day one";
+  for (const c of certs) {
+    if (c.earned) name = LEVEL_LABELS[c.certification.id] ?? c.certification.title;
+  }
+  return name;
+}
 
 /** The lesson after this one in curriculum order, or undefined at the end. */
 function nextTrainingLesson(lessonId: string): TrainingLesson | undefined {
@@ -290,6 +311,9 @@ export default function Training() {
   const [rolePlayPersona, setRolePlayPersona] = useState<PersonaId | "any" | null>(null);
   const [rehearsalScript, setRehearsalScript] = useState<string | null>(null);
   const [focusCardId, setFocusCardId] = useState<string | null>(null);
+  const [showFiber101, setShowFiber101] = useState(false);
+  const [showSpeechTrainer, setShowSpeechTrainer] = useState(false);
+  const [quoteOffset, setQuoteOffset] = useState(0);
 
   const canSeeTeam = ["team_lead", "manager", "admin", "super_admin"].includes(user?.role ?? "rep");
   const canManage = ["admin", "super_admin", "manager"].includes(user?.role ?? "rep");
@@ -301,7 +325,7 @@ export default function Training() {
   // the new view paints at the top rather than mid-quiz.
   useLayoutEffect(() => {
     document.querySelector(".app-route-stage")?.scrollTo({ top: 0 });
-  }, [openLessonId, showFullRun, section, rolePlayPersona, rehearsalScript]);
+  }, [openLessonId, showFullRun, section, rolePlayPersona, rehearsalScript, showFiber101, showSpeechTrainer]);
 
   // ── Lesson progress (unchanged contract) ────────────────────────────────────
   const { data, isLoading, isError, refetch } = useQuery<ProgressPayload>({
@@ -470,6 +494,54 @@ export default function Training() {
     );
   }
 
+  if (showFiber101) {
+    return (
+      <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
+        <button
+          type="button"
+          onClick={() => setShowFiber101(false)}
+          data-testid="fiber-101-back"
+          className={cn("-ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted-foreground hover:text-foreground", FOCUS)}
+        >
+          <span aria-hidden="true">&lsaquo;</span> Back
+        </button>
+        <PageHeader
+          title="Fiber 101"
+          subtitle="Every term with the analogy that makes it land, and the six-step trip the line makes from the hut to the wall."
+        />
+        <FiberBasics section="all" />
+      </div>
+    );
+  }
+
+  if (showSpeechTrainer) {
+    return (
+      <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
+        <button
+          type="button"
+          onClick={() => setShowSpeechTrainer(false)}
+          data-testid="speech-trainer-back"
+          className={cn("-ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted-foreground hover:text-foreground", FOCUS)}
+        >
+          <span aria-hidden="true">&lsaquo;</span> Back
+        </button>
+        <PageHeader
+          title="Say it from memory"
+          subtitle="Read it, fill the gaps, then deliver it with the script hidden. Everything stays on your device."
+        />
+        <SpeechTrainer
+          offer={offers.data?.headline ?? null}
+          onComplete={() => {
+            // Finishing here satisfies the same path activity, so the path and
+            // the practice tab never disagree about what is done.
+            completeActivity.mutate({ activityId: "act-speech-trainer" });
+            setShowSpeechTrainer(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   // ── The tab ─────────────────────────────────────────────────────────────────
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
@@ -544,7 +616,76 @@ export default function Training() {
               </QuietButton>
             </div>
           )}
+
+          {/* The road to field ready: the four certifications as a ladder, the
+              next objective in plain words, and one tap back into the work. */}
+          {academy.data && academy.data.certifications.length > 0 && (
+            <div className="mt-4 border-t border-border pt-3.5" data-testid="field-ready-ladder">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <SectionLabel>Road to field ready</SectionLabel>
+                <span className="text-[13px] font-bold text-foreground" data-testid="field-ready-level">
+                  {levelName(academy.data.certifications)}
+                </span>
+              </div>
+              <div className="mt-2 flex gap-1" aria-hidden="true">
+                {academy.data.certifications.map((c) => (
+                  <div
+                    key={c.certification.id}
+                    className={cn(
+                      "h-1.5 flex-1 rounded-full transition-colors duration-500",
+                      c.earned ? "bg-success" : "bg-secondary",
+                    )}
+                  />
+                ))}
+              </div>
+              {(() => {
+                const next = academy.data!.certifications.find((c) => !c.earned);
+                return next ? (
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground" data-testid="field-ready-next">
+                    Next: <span className="font-semibold text-foreground">{next.certification.title}</span>
+                    {next.remaining[0] ? <>. {next.remaining[0]}</> : null}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs leading-relaxed text-success" data-testid="field-ready-next">
+                    Every certification earned. You are field ready.
+                  </p>
+                );
+              })()}
+              {academy.data.path.resume && (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <PrimaryButton
+                    onClick={() => setSection("path")}
+                    testId="hero-continue"
+                  >
+                    Continue: {academy.data.path.resume.activity.title}
+                  </PrimaryButton>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    about {academy.data.path.resume.activity.minutes} min
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* One line a day on the trait that decides this job. Deterministic, so
+            the whole crew sees the same line and it survives a huddle. */}
+        <Panel testId="daily-quote">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <SectionLabel>Today's mindset</SectionLabel>
+              <blockquote className="mt-1.5 text-[15px] font-semibold leading-relaxed text-foreground">
+                &ldquo;{ACADEMY_QUOTES[(quoteIndexFor(new Date()) + quoteOffset) % ACADEMY_QUOTES.length].text}&rdquo;
+              </blockquote>
+              <p className="mt-1 text-xs text-muted-foreground" data-testid="daily-quote-attribution">
+                {ACADEMY_QUOTES[(quoteIndexFor(new Date()) + quoteOffset) % ACADEMY_QUOTES.length].attribution ?? "Field notes"}
+              </p>
+            </div>
+            <QuietButton onClick={() => setQuoteOffset((n) => n + 1)} testId="daily-quote-next" className="shrink-0">
+              Another
+            </QuietButton>
+          </div>
+        </Panel>
 
         {/* Certifications and assignments. Only when there is something to say. */}
         {academy.data && (
@@ -659,6 +800,25 @@ export default function Training() {
             <span aria-hidden="true" className="shrink-0 text-muted-foreground/50">&rsaquo;</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowSpeechTrainer(true)}
+            data-testid="open-speech-trainer"
+            className={cn(
+              "flex w-full items-center gap-4 rounded-2xl border border-border bg-card p-4 text-left transition-colors hover:bg-secondary/50",
+              FOCUS,
+            )}
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-bold text-foreground">Memorize your pitch</span>
+              <span className="block text-[13px] leading-snug text-muted-foreground">
+                Read it, fill the gaps, then say it with the script hidden while the four beats are checked on your
+                device.
+              </span>
+            </span>
+            <span aria-hidden="true" className="shrink-0 text-muted-foreground/50">&rsaquo;</span>
+          </button>
+
           {pitchSupported && (
             <button
               type="button"
@@ -702,25 +862,47 @@ export default function Training() {
       )}
 
       {section === "reference" && (
-        offers.isLoading ? <PanelSkeleton rows={4} />
-          : offers.isError ? (
-            <ErrorPanel
-              title="The reference library didn't load"
-              description="Offers and competitor figures could not be fetched. Do not quote numbers from memory."
-              onRetry={() => offers.refetch()}
-            />
-          ) : (
-            <ReferenceLibrary
-              offers={offers.data?.offers ?? []}
-              expired={offers.data?.expired ?? []}
-              competitors={offers.data?.competitors ?? []}
-              day={offers.data?.day ?? ""}
-              market={offers.data?.market ?? null}
-              readCardIds={readCardIds}
-              focusCardId={focusCardId}
-              onCloseCard={() => setFocusCardId(null)}
-            />
-          )
+        <div className="space-y-4">
+          {/* Fiber 101 needs no offers, so it is reachable even offline. */}
+          <button
+            type="button"
+            onClick={() => setShowFiber101(true)}
+            data-testid="open-fiber-101"
+            className={cn(
+              "flex w-full items-center gap-4 rounded-2xl border border-primary/30 bg-primary/[0.08] p-4 text-left transition-colors hover:bg-primary/[0.14]",
+              FOCUS,
+            )}
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-bold text-foreground">Fiber 101</span>
+              <span className="block text-[13px] leading-snug text-muted-foreground">
+                Every term with the analogy that makes it land, and how the line travels underground from the hut to
+                the wall of the house.
+              </span>
+            </span>
+            <span aria-hidden="true" className="shrink-0 text-primary">&rsaquo;</span>
+          </button>
+
+          {offers.isLoading ? <PanelSkeleton rows={4} />
+            : offers.isError ? (
+              <ErrorPanel
+                title="The reference library didn't load"
+                description="Offers and competitor figures could not be fetched. Do not quote numbers from memory."
+                onRetry={() => offers.refetch()}
+              />
+            ) : (
+              <ReferenceLibrary
+                offers={offers.data?.offers ?? []}
+                expired={offers.data?.expired ?? []}
+                competitors={offers.data?.competitors ?? []}
+                day={offers.data?.day ?? ""}
+                market={offers.data?.market ?? null}
+                readCardIds={readCardIds}
+                focusCardId={focusCardId}
+                onCloseCard={() => setFocusCardId(null)}
+              />
+            )}
+        </div>
       )}
 
       {section === "library" && (
