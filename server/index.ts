@@ -1016,6 +1016,14 @@ app.use((req, res, next) => {
       .then((m) => m.startVendorOrderImportWorker())
       .catch((e: any) => console.warn("[vendor-order-worker] not started:", e?.message));
   }
+  // The Commission File import worker: same placement, same reasons, its own
+  // kill switch. Commission files are small, but the no-imports-on-the-HTTP-
+  // thread rule is not sized to the file. Kill-switch: COMMISSION_FILE_WORKER=off.
+  if (process.env.COMMISSION_FILE_WORKER !== "off") {
+    void import("./commissionFileImportWorker")
+      .then((m) => m.startCommissionFileImportWorker())
+      .catch((e: any) => console.warn("[commission-file-worker] not started:", e?.message));
+  }
   // Alert-outbox janitor — supersede the runaway pending backlog (1.25M rows
   // observed) down to the cap, chunked with yields so it can never block /api.
   // Control worker only (one writer), deferred past the health gate. Kill-switch:

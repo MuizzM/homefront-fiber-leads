@@ -191,6 +191,34 @@ boundary for shape, size, and magic bytes matching the declared type; anything
 else is ignored, preserving the three-level fallback (tenant mark → bundled mark →
 type-set text) because a missing image must never cost a rep their statement.
 
+## Provider-paid truth (PerfectVision Commission File)
+
+A second money record exists BESIDE this engine and never inside it: the
+PerfectVision **Commission File** import
+([`server/commissionFileStore.ts`](../server/commissionFileStore.ts), pure
+vocabulary in [`shared/commissionSource.ts`](../shared/commissionSource.ts),
+runbook in
+[`docs/integrations/perfectvision-submitted-orders-recovery.md`](integrations/perfectvision-submitted-orders-recovery.md)).
+It records what the PROVIDER paid the dealership per order line - pending,
+paid, chargeback, weekly payout totals - into `commission_file_lines` and
+`vendor_order_commission_links`, where the order-status plane's screens and
+the recovery engine's paid-block read it.
+
+The boundary is one-directional and deliberate:
+
+- Nothing in that plane books a sale, prices a statement, approves an
+  adjustment, or moves a payout. The single write it makes into this engine's
+  tables is stamping `customer_account_number` onto a `commission_sales` row a
+  human explicitly confirmed in its review queue - an identity, never money.
+- Nothing in this engine reads provider-paid truth into a calculation. What a
+  rep earns is this document's tier math; what Windstream paid the dealership
+  is evidence for a human reconciliation, and a discrepancy between the two is
+  a conversation, not an automatic re-price.
+
+If a future feature wants "only pay reps once the provider paid us", that is a
+new qualification basis DECIDED here, reading the link table as one input -
+not the commission file writing into statements.
+
 ## Migrations
 
 Additive and idempotent. Base tables come from `drizzle-kit push` (schema.ts); the

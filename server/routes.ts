@@ -171,6 +171,7 @@ import { registerKineticBuildRoutes } from "./kineticBuildRoutes";
 import { registerTrainingEngineRoutes, payRampBonus } from "./trainingEngine";
 import { registerAcademyRoutes } from "./academyRoutes";
 import { registerVendorOrderRoutes } from "./vendorOrderRoutes";
+import { registerCommissionFileRoutes } from "./commissionFileRoutes";
 import { registerGuardedActionRoutes } from "./guardedActionRoutes";
 import { registerAddressPointRoutes } from "./addressPointRoutes";
 
@@ -1382,6 +1383,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // gated, so an organization that has never uploaded a report sees an empty
   // screen rather than a missing one.
   registerVendorOrderRoutes(app, { requireAuth, requireCapability });
+  // The Commission File plane (PerfectVision provider-paid truth). Safe to
+  // register unconditionally for the same reason: uploads are capability-
+  // gated, there is no automated retrieval at all, and until a file is
+  // imported the plane is empty tables behind an admin screen.
+  registerCommissionFileRoutes(app, { requireAuth, requireCapability });
 
   // The guarded-action gate: the approval queue and undo journal in front of
   // dangerous writes. Registered unconditionally and inert by default - every

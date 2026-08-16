@@ -10,6 +10,7 @@ import { runLiveOpsMigrations as ensureLiveOpsSchema } from "./liveOpsMigrations
 import { runRepMetricsMigrations as ensureRepMetricsSchema } from "./repMetricsMigrations";
 import { attachShiftAndDwell, markRepDayDirty } from "./repMetricsStore";
 import { runVendorOrderMigrations as ensureVendorOrderSchema } from "./vendorOrderMigrations";
+import { runCommissionFileMigrations as ensureCommissionFileSchema } from "./commissionFileMigrations";
 import { runGuardedActionMigrations as ensureGuardedActionSchema } from "./guardedActionMigrations";
 import { recordTransition } from "./fiberTransitions";
 import {
@@ -2989,6 +2990,16 @@ export function runMigrations() {
   try {
     ensureVendorOrderSchema();
   } catch (e: any) { console.warn("[migration] vendor order schema:", e?.message); }
+
+  // The Commission File plane: provider-paid truth beside the order plane
+  // above. Own module and transaction on the same terms, and non-fatal the
+  // same way: a missing table here means an empty import screen and a
+  // commission panel that keeps saying "no commission record yet" - money
+  // never moves on this plane's say-so, so nothing unsafe can follow from
+  // its absence.
+  try {
+    ensureCommissionFileSchema();
+  } catch (e: any) { console.warn("[migration] commission file schema:", e?.message); }
 
   // The guarded-action gate: policy, the request queue, and the append-only
   // transition log behind it.

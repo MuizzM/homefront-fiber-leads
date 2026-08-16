@@ -4,7 +4,9 @@ Status: manual import is complete and usable. Scheduled delivery (the automated
 path, as a push) is built and ships dark: it needs the delivery secret, the
 sync flag, and an enabled scheduled_export connection, and the flag stays off
 until PerfectVision authorizes automated delivery in writing. Automated
-messaging is dark under its own flag. Last reviewed 2026-08-16.
+messaging is dark under its own flag. The Commission File plane (provider-paid
+truth, the writer of `vendor_order_commission_links`) is built - see
+"Commission integration" below. Last reviewed 2026-08-16.
 
 This document describes engineering controls, not legal advice. Messaging law is
 fact- and jurisdiction-specific. The same posture `docs/CALLING_COMPLIANCE.md`
@@ -332,7 +334,8 @@ documents, failed installation, canceled-order recovery, final follow-up.
 
 ## Commission integration
 
-An order and a commission are linked by external order or transaction ID.
+An order and a commission are linked by external order or transaction ID, and
+by the Windstream account number once a human has confirmed it (below).
 
 - `installed` from this plane advances the CRM funnel and closes a recovery
   case. It never means a commission was earned or paid.
@@ -344,6 +347,79 @@ An order and a commission are linked by external order or transaction ID.
 The sequence a report can show end to end: order source -> submitted ->
 installed -> paid, and separately for recovered orders: case created -> outreach
 -> recovered -> installed -> paid.
+
+### The Commission File plane
+
+Built and live in code (2026-08-16). Source: the **Commission File** page under
+My Account on the PerfectVision dealer site (https://www.perfect-vision.com,
+dealer HF336) - an HTML table with a date-range filter, exported or captured as
+CSV. Like the orders report there is no fetch path and never will be; an
+operator exports the page and uploads it. Unlike the orders report the columns
+are FIXED (the vendor renders the page, nobody composes it), so there is no
+per-organization mapping screen: headers bind by name, tolerant of case and
+spacing only, and a file whose headers changed is refused with the missing
+names spelled out.
+
+```
+Commission File export (CSV/XLSX, uploaded by an admin)
+  -> parse + normalize  server/providers/perfectVisionCommissionFile.ts,
+                        shared/commissionSource.ts
+  -> line state         server/commissionFileStore.ts  -> commission_file_lines
+                        (identity: account + document + product + category,
+                         NEWEST upload date wins; older restatements are
+                         evidence in commission_file_rows, never a regression)
+  -> match              server/commissionMatching.ts
+  -> money              vendor_order_commission_links (this plane is that
+                        table's one writer; one link per line, upserted, so a
+                        line restated Open -> Closed updates its link rather
+                        than stacking amounts; chargebacks land negative on
+                        the SAME order)
+```
+
+Upload at `POST /api/commission-imports` (multer in-memory, checksum dedupe
+with an explicit override, encrypted at rest under the same
+`VENDOR_ORDER_ENCRYPTION_KEY`, processed by `commissionFileImportWorker` -
+kill-switch `COMMISSION_FILE_WORKER=off`). Preview without importing at
+`POST /api/commission-imports/preview`. The review queue lives at
+`GET /api/commission-imports/exceptions/list` with resolve and rematch beside
+it. Capabilities are borrowed from the order screens - `order.import.manage`
+uploads, `order.match.resolve` works the queue - because it is the same class
+of provider evidence handled by the same people.
+
+**The join, and why it goes through people.** The commission file carries NO
+Chuzo order number, and the orders report carries no account number, so on
+first contact the two planes share no machine identity. The ladder is:
+
+| Confidence | Rule | Result |
+| --- | --- | --- |
+| 1.00 | Account number equals `vendor_orders.account_key` | Matched. Money attaches. |
+| 0.95 | Account number equals `commission_sales.customer_account_number` | Matched. Money attaches. |
+| 0.75 | Customer name + act/deact date near the sale's own dates | Review. NO money. |
+
+Money never attaches below matched-at-full-confidence. A name-and-dates fit
+waits in the review queue; two candidates is a refusal. Confirming a line
+stamps the Windstream account number onto the sale AND the vendor order and
+then sweeps the account's other lines (the fiber plan, the security add-on,
+tech support all share one account and document), so one human decision
+settles the account and every later file matches it at the top rung by
+itself. The intended shape is exactly that: the FIRST file lands almost
+entirely with a human, and the second file almost entirely without one.
+
+**Row shapes worth knowing** (all present in the captured fixture
+`tests/fixtures/perfectvision/commission-file-2026-07-17_2026-08-16.csv`):
+negative amounts render as `($45.00)` and thousands as `"$2,405.00"`; a batch
+`Payment` row with empty account, document and agent is the weekly payout
+total (recorded, category `payment_batch`, never an exception); an all-caps
+`PAYMENT` row with an account is a manual spiff whose customer name exists
+only inside the Comments string (`WI: NAME - PRODUCT/ACTV`); a `/FCHB` comment
+suffix marks a first chargeback.
+
+**What it deliberately does not do.** It never books a sale, prices a
+statement, or moves a payout - `server/commissionService.ts` owns what a rep
+is paid, and this plane records what the provider paid the dealership beside
+it (see docs/COMMISSIONS.md, "Provider-paid truth"). Its only write into the
+internal ledger is stamping `customer_account_number` onto a sale a human
+confirmed.
 
 ## Automated retrieval
 
@@ -573,8 +649,12 @@ writes no event, so a deliberate re-import is free.
 ## Tests
 
 ```bash
-DATA_DIR=$(mktemp -d) npm test -- tests/unit/order-status-source.test.ts tests/unit/order-column-mapping.test.ts tests/unit/order-recovery-policy.test.ts tests/unit/contact-consent-gate.test.ts tests/unit/order-recovery-templates.test.ts tests/unit/xlsx-reader.test.ts tests/integration/vendor-order-import.test.ts tests/integration/vendor-order-scheduled-delivery.test.ts tests/integration/order-recovery-messaging.test.ts
+DATA_DIR=$(mktemp -d) npm test -- tests/unit/order-status-source.test.ts tests/unit/order-column-mapping.test.ts tests/unit/order-recovery-policy.test.ts tests/unit/contact-consent-gate.test.ts tests/unit/order-recovery-templates.test.ts tests/unit/xlsx-reader.test.ts tests/integration/vendor-order-import.test.ts tests/integration/vendor-order-scheduled-delivery.test.ts tests/integration/order-recovery-messaging.test.ts tests/integration/commission-file-import.test.ts
 ```
+
+The commission suite runs against the real captured Commission File export in
+`tests/fixtures/perfectvision/`, so the parser's claims about parenthesized
+negatives, batch totals and manual spiffs are pinned to actual vendor output.
 
 A pristine `DATA_DIR` matters: the development `data.db` is large enough to make
 timing-sensitive tests fail.
