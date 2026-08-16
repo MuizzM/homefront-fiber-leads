@@ -29,10 +29,16 @@
  *   · a final `-- dump-complete` line. A stream that ends without it (SSH cut,
  *     OOM-kill, crash) MUST be treated as no backup at all.
  *
- * Refuses virtual tables (FTS etc.): their shadow tables need writable_schema
- * tricks this deliberately does not do. The schema has none today; if one
- * appears, this fails loudly rather than uploading a backup that cannot
- * restore. Generated columns are handled (excluded from INSERT column lists).
+ * Virtual tables: R-tree modules (rtree/rtree_i32 — address_points_rtree since
+ * the county E911 import) are dumped as their CREATE VIRTUAL TABLE statement
+ * plus INSERTs of the virtual table's own rows; the module-managed shadow
+ * tables (<name>_node/_rowid/_parent) are OMITTED because executing that DDL +
+ * those INSERTs on restore recreates and repopulates them. Restore-side
+ * sqlite3 needs SQLITE_ENABLE_RTREE, which the app image, Debian/Ubuntu and
+ * macOS system builds all have. Every other virtual table module (FTS etc.)
+ * still fails loudly rather than uploading a backup that cannot restore: their
+ * shadow tables need writable_schema tricks this deliberately does not do.
+ * Generated columns are handled (excluded from INSERT column lists).
  */
 const path = require("node:path");
 
@@ -71,12 +77,36 @@ async function main() {
     .prepare(`SELECT name, type, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid`)
     .all();
 
+  // Virtual tables: R-tree modules only. An rtree's payload lives in shadow
+  // tables (<name>_node/_rowid/_parent) that the module itself recreates and
+  // repopulates when the restore executes the CREATE VIRTUAL TABLE and the
+  // INSERTs, so the dump carries the virtual table's DDL and rows and must
+  // OMIT the shadows — dumping them too would double-create on restore, and
+  // node/parent contents are an artifact of insert order anyway (the rebuilt
+  // tree answers queries identically without matching byte-for-byte).
   const virtual = master.filter((r) => r.type === "table" && /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(r.sql));
-  if (virtual.length) {
-    throw new Error(`virtual tables present (${virtual.map((v) => v.name).join(", ")}) — dumper does not support their shadow tables; extend it before backing up`);
+  const unsupported = virtual.filter((v) => !/\bUSING\s+rtree(?:_i32)?\s*\(/i.test(v.sql));
+  if (unsupported.length) {
+    throw new Error(`virtual tables present (${unsupported.map((v) => v.name).join(", ")}) — dumper only supports rtree virtual tables; extend it before backing up`);
+  }
+  const shadow = new Set(virtual.flatMap((v) => [`${v.name}_node`, `${v.name}_rowid`, `${v.name}_parent`]));
+
+  // Cross-check against SQLite's own bookkeeping: every shadow table IT knows
+  // of must be one this dump deliberately skips. A mismatch means a module
+  // whose shadows would be dumped raw and double-create on restore — refuse.
+  let reportedShadows = [];
+  try {
+    reportedShadows = db.prepare(`SELECT name FROM pragma_table_list('main') WHERE type='shadow'`).pluck().all();
+  } catch {
+    // pragma_table_list needs SQLite >= 3.37; without it the rtree-only
+    // module allowlist above already guarantees the shadow set.
+  }
+  const surprise = reportedShadows.filter((n) => !shadow.has(n));
+  if (surprise.length) {
+    throw new Error(`shadow tables outside the rtree naming scheme (${surprise.join(", ")}) — extend the dumper before backing up`);
   }
 
-  const tables = master.filter((r) => r.type === "table");
+  const tables = master.filter((r) => r.type === "table" && !shadow.has(r.name));
   const counts = [];
 
   await out("PRAGMA foreign_keys=OFF;");
