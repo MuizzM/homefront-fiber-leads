@@ -20,7 +20,8 @@
 // any log line this file writes. The raw uploaded file is downloadable by one
 // capability and one only, and the download is audited.
 
-import type { Express, Request, Response } from "express";
+import express, { type Express, type Request, type Response } from "express";
+import crypto from "node:crypto";
 import multer from "multer";
 import { storage } from "./storage";
 import { rawDb } from "./db";
@@ -34,8 +35,9 @@ import { looksLikeXlsx } from "./xlsx";
 import { matchVendorOrder } from "./orderMatching";
 import { evaluateOneOrder, evaluateTenantRecovery, orderFunnel } from "./orderRecoveryEngine";
 import {
-  MAX_IMPORT_ROWS, ProviderError, SOURCE_REPORT_NAME, SOURCE_REPORT_URL,
+  MAX_IMPORT_ROWS, ProviderError, SCHEDULED_DELIVERY_PATH, SOURCE_REPORT_NAME, SOURCE_REPORT_URL,
   getOrderStatusProvider, listOrderStatusProviders, orderSyncEnabled, recoveryMessagingEnabled,
+  scheduledDeliveryConfigured,
 } from "./providers/perfectVisionSubmittedOrders";
 import {
   approveTemplateChecked, buildDraft, handleInboundSms, processUnsubscribe, sendOutreach,
@@ -119,12 +121,14 @@ export function registerVendorOrderRoutes(app: Express, deps: Deps): void {
         providers: listOrderStatusProviders(),
         reportName: SOURCE_REPORT_NAME,
         sourceUrl: SOURCE_REPORT_URL,
-        // The two flags an admin needs to see on the screen, so "why is the
+        // The flags an admin needs to see on the screen, so "why is the
         // sync button greyed out" never needs a support ticket.
         flags: {
           orderSyncEnabled: orderSyncEnabled(),
           recoveryMessagingEnabled: recoveryMessagingEnabled(),
+          scheduledDeliveryConfigured: scheduledDeliveryConfigured(),
         },
+        scheduledDeliveryPath: SCHEDULED_DELIVERY_PATH,
         encryptionReady: store.orderPayloadEncryptionReady(),
         maxRows: MAX_IMPORT_ROWS,
         maxFileBytes: MAX_SOURCE_FILE_BYTES,
@@ -350,6 +354,112 @@ export function registerVendorOrderRoutes(app: Express, deps: Deps): void {
       // keeps a 40,000-row file off the request thread.
       res.status(202).json({ importId, totalRows: parsed.rows.length, status: "pending" });
     });
+
+  /**
+   * Scheduled report delivery - the automated path, as a PUSH.
+   *
+   * UNAUTHENTICATED by necessity - a report subscription bridge posts here on
+   * a schedule, not a person - so like the inbound SMS webhook it is
+   * shared-secret gated and answers 404 until the secret exists. It can only
+   * ever do what a manual upload by an admin could: queue a file for the
+   * import worker under the org's own saved mapping. It reads nothing back,
+   * and it cannot touch a mapping, a connection, or another org.
+   *
+   * Three server-side switches all have to agree before a byte is accepted:
+   * ORDER_REPORT_DELIVERY_SECRET authenticates the deliverer, and the sync
+   * flag plus an ENABLED scheduled_export connection record that PerfectVision
+   * authorized the delivery for this dealer. The org an import lands in comes
+   * from that connection state, never from the request.
+   *
+   * The body is the report file itself, raw bytes. Not multipart and not
+   * MIME: whatever receives the subscription email extracts the attachment
+   * and posts it, so a vendor email's structure never becomes this process's
+   * parsing problem.
+   */
+  app.post(SCHEDULED_DELIVERY_PATH, rawReportBodyOnce, async (req: Request, res: Response) => {
+    const presented = String(req.headers["x-webhook-secret"] ?? "");
+    const secret = process.env.ORDER_REPORT_DELIVERY_SECRET ?? "";
+    if (!scheduledDeliveryConfigured() || !timingSafeEqualStr(secret, presented)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    if (!orderSyncEnabled()) {
+      return res.status(403).json({ error: "Automated order sync is disabled on this server." });
+    }
+
+    const accepting = store.listEnabledScheduledConnections();
+    if (accepting.length === 0) {
+      return res.status(403).json({ error: "No organization has an enabled scheduled report delivery." });
+    }
+    let organizationId: number;
+    if (accepting.length === 1) {
+      organizationId = Number(accepting[0].tenant_id);
+    } else {
+      const wanted = Number(req.headers["x-organization-id"]);
+      if (!accepting.some((c) => Number(c.tenant_id) === wanted)) {
+        return res.status(400).json({
+          error: "More than one organization accepts scheduled deliveries. Send x-organization-id naming one of them.",
+        });
+      }
+      organizationId = wanted;
+    }
+
+    const mapping = store.getActiveMapping(organizationId);
+    if (!mapping) {
+      return res.status(409).json({ error: "No saved column mapping. Run one import manually first; saving the mapping there is what teaches this endpoint how to read the report." });
+    }
+
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      return res.status(400).json({ error: "Send the report file as the raw request body (text/csv or application/octet-stream)." });
+    }
+
+    const checksum = sha256Hex(body);
+    const duplicate = store.findImportByChecksum(organizationId, checksum);
+    if (duplicate) {
+      // A subscription re-delivering an unchanged report is a normal day, and
+      // a machine cannot answer a confirm dialog. Idempotent success, naming
+      // the earlier import so the deliverer's log tells the whole story.
+      return res.json({ ok: true, duplicate: true, importId: duplicate.id });
+    }
+
+    const fileName = sanitizeFilename(req.headers["x-report-filename"] ?? "scheduled-report.csv");
+    let parsed;
+    try {
+      parsed = await parseUpload({ buffer: body, originalname: fileName });
+    } catch (e: any) {
+      return res.status(400).json({ error: safeProviderMessage(e) });
+    }
+    if (parsed.rows.length === 0) return res.status(400).json({ error: "This file has no data rows." });
+
+    const storageKey = storeSourceFile(organizationId, checksum, body);
+    const importId = store.createImport({
+      tenantId: organizationId,
+      sourceUrl: store.getConnection(organizationId)?.source_url ?? SOURCE_REPORT_URL,
+      importMode: "scheduled_export",
+      reportPeriodStart: null,
+      reportPeriodEnd: null,
+      sourceFileName: fileName,
+      sourceFileChecksum: checksum,
+      sourceFileStorageKey: storageKey,
+      mappingVersion: mapping.version,
+      importedByUserId: null,
+      totalRows: parsed.rows.length,
+    });
+    if (!storageKey && !stageImportContent(importId, body)) {
+      store.setImportStatus(importId, "failed", "The server is busy processing other imports. Try again in a minute.");
+      return res.status(503).json({ error: "The server is busy processing other imports. Try again in a minute." });
+    }
+
+    recordAdminAudit({
+      ...auditContext(req),
+      tenantId: organizationId,
+      action: "order_import.scheduled_delivery.received",
+      targetType: "vendor_order_import", targetId: String(importId),
+      after: { rows: parsed.rows.length, fileName, checksum },
+    });
+
+    res.status(202).json({ importId, totalRows: parsed.rows.length, status: "pending" });
+  });
 
   app.get("/api/order-imports", requireAuth, requireCapability("order.import.manage"),
     (req: Request, res: Response) => {
@@ -976,7 +1086,34 @@ function uploadOnce(req: Request, res: Response, next: any) {
   });
 }
 
-async function parseUpload(file: Express.Multer.File) {
+/** The scheduled-delivery body: the file itself, whatever its content type.
+ *  Route-scoped for the same reason discoveryUploadBodyParser is - an
+ *  app-level 25 MB parser would buffer anonymous POSTs everywhere. If the
+ *  global JSON parser already consumed the body (a caller mislabeled the file
+ *  as application/json), req.body is not a Buffer and the handler answers
+ *  with the contract instead of a parse error. */
+const rawReportBody = express.raw({ type: () => true, limit: MAX_SOURCE_FILE_BYTES });
+function rawReportBodyOnce(req: Request, res: Response, next: any) {
+  rawReportBody(req, res, (err: any) => {
+    if (!err) return next();
+    const tooBig = err?.type === "entity.too.large" || err?.status === 413;
+    return res.status(tooBig ? 413 : 400).json({
+      error: tooBig
+        ? `That file is larger than ${Math.round(MAX_SOURCE_FILE_BYTES / (1024 * 1024))} MB. Split the report by date range.`
+        : "That delivery could not be read.",
+    });
+  });
+}
+
+/** Equal length and equal bytes, in constant time. A plain !== on a secret
+ *  leaks its prefix length to a timing probe. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
+
+async function parseUpload(file: { buffer: Buffer; originalname?: string }) {
   const provider = getOrderStatusProvider("perfectvision_submitted_orders");
   return provider.parseOrderReport({
     report: {

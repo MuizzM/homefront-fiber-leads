@@ -22,12 +22,18 @@
 //
 //   • MANUAL UPLOAD is the supported path, and it is complete. An admin exports
 //     the report from the portal themselves and uploads the CSV or XLSX.
-//   • fetchOrderReport refuses unless PERFECTVISION_ORDER_SYNC_ENABLED is
-//     explicitly "true" AND the connection is in an authorized automated mode.
-//     Even then, there is no scraping branch to reach - the automated modes are
-//     an official export endpoint, an SFTP drop, or a scheduled report email,
-//     and each one is wired only once PerfectVision has authorized it in
-//     writing for that dealer.
+//   • SCHEDULED DELIVERY is the supported automated path, and it is a PUSH:
+//     the portal's own report subscription (or a delivery PerfectVision sets
+//     up) sends the export out, a bridge posts the bytes to
+//     /api/order-imports/scheduled-delivery, and the same pipeline runs. This
+//     process never holds a portal credential and never opens a connection to
+//     PerfectVision. Three server-side switches gate it: the delivery secret,
+//     PERFECTVISION_ORDER_SYNC_ENABLED, and an enabled scheduled_export
+//     connection - the last two are the record that PerfectVision authorized
+//     the delivery in writing for this dealer.
+//   • fetchOrderReport - the PULL path - refuses unconditionally. There is no
+//     scraping branch to reach, and no SFTP or API client is written on the
+//     assumption that one will be allowed.
 //   • Nothing here ever runs in a request handler, and nothing here ever
 //     returns provider HTML, headers, cookies or tokens to a caller.
 //
@@ -77,6 +83,18 @@ export function orderSyncEnabled(): boolean {
 export function recoveryMessagingEnabled(): boolean {
   return process.env.PERFECTVISION_ORDER_RECOVERY_MESSAGING_ENABLED === "true";
 }
+
+/** Whether the inbound scheduled-delivery endpoint can authenticate anyone.
+ *  Under 16 characters counts as unconfigured rather than weakly configured:
+ *  the endpoint answers 404, and the connection test says why. */
+export function scheduledDeliveryConfigured(): boolean {
+  const secret = process.env.ORDER_REPORT_DELIVERY_SECRET;
+  return typeof secret === "string" && secret.length >= 16;
+}
+
+/** Where a delivery bridge posts the report file. Exported so the admin screen
+ *  and the connection test describe one path, not two spellings of it. */
+export const SCHEDULED_DELIVERY_PATH = "/api/order-imports/scheduled-delivery";
 
 /** Modes that would mean an automated pull. Manual upload is not one of them,
  *  which is why an org left on the default can never trip the sync path. */
@@ -131,21 +149,47 @@ class PerfectVisionSubmittedOrdersByProgramProvider implements OrderStatusSource
         capabilities: { canFetchReport: false, canParseUpload: true },
       };
     }
+    if (connection.mode === "scheduled_export") {
+      if (!scheduledDeliveryConfigured()) {
+        return {
+          ok: false,
+          message: "Scheduled delivery needs a shared secret. Set ORDER_REPORT_DELIVERY_SECRET (at least 16 characters) on the server; until then the delivery endpoint answers 404.",
+          checkedAt: new Date(),
+          capabilities: { canFetchReport: false, canParseUpload: true },
+        };
+      }
+      if (!connection.enabled) {
+        return {
+          ok: false,
+          message: "Scheduled delivery is configured but this connection is disabled. Enable it to start accepting deliveries.",
+          checkedAt: new Date(),
+          capabilities: { canFetchReport: false, canParseUpload: true },
+        };
+      }
+      return {
+        ok: true,
+        message: `Scheduled delivery is ready. Deliveries POST the report file to ${SCHEDULED_DELIVERY_PATH} with the shared secret; each one lands in the import history below like a manual upload.`,
+        checkedAt: new Date(),
+        capabilities: { canFetchReport: false, canParseUpload: true },
+      };
+    }
     return {
       ok: false,
-      message: "Automated retrieval is enabled but no authorized delivery is configured. Add an approved export endpoint, an SFTP drop, or a scheduled report delivery before turning this on.",
+      message: "No SFTP or API delivery is implemented. The supported automated path is a scheduled report delivery - switch the connection to that mode once PerfectVision authorizes one.",
       checkedAt: new Date(),
       capabilities: { canFetchReport: false, canParseUpload: true },
     };
   }
 
   /**
-   * The automated path. It refuses, on purpose, and in three separate places.
+   * The PULL path. It refuses, on purpose, and in three separate places.
    *
-   * When PerfectVision authorizes a delivery for a dealer, the implementation
-   * goes in the branch below - an official export endpoint, an SFTP fetch, or
-   * a mailbox poll. None of them is a browser session, and none of them is
-   * written here on the assumption that it will be allowed.
+   * The automated path that exists is a PUSH: a scheduled report delivery
+   * posts the file to the inbound endpoint, and no code in this process ever
+   * opens a connection to PerfectVision. An SFTP fetch or an official export
+   * API would be implemented here if PerfectVision ever offers one in
+   * writing; neither is written on the assumption that it will be allowed,
+   * and a browser session never will be.
    */
   async fetchOrderReport(input: FetchOrderReportInput): Promise<RawOrderReport[]> {
     if (!orderSyncEnabled()) {
@@ -162,7 +206,7 @@ class PerfectVisionSubmittedOrdersByProgramProvider implements OrderStatusSource
       throw new ProviderError("This connection is disabled.");
     }
     throw new ProviderError(
-      "No authorized PerfectVision delivery is configured. Automated retrieval requires written authorization from PerfectVision and an approved export endpoint, SFTP drop, or scheduled report delivery.",
+      "This server never fetches from PerfectVision. The automated path is a scheduled report delivery that posts the export to the inbound delivery endpoint.",
     );
   }
 

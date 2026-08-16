@@ -1,8 +1,10 @@
 # PerfectVision submitted orders and order recovery
 
-Status: manual import is complete and usable. Automated retrieval and automated
-messaging are both dark and stay dark until specific authorizations exist. Last
-reviewed 2026-08-11.
+Status: manual import is complete and usable. Scheduled delivery (the automated
+path, as a push) is built and ships dark: it needs the delivery secret, the
+sync flag, and an enabled scheduled_export connection, and the flag stays off
+until PerfectVision authorizes automated delivery in writing. Automated
+messaging is dark under its own flag. Last reviewed 2026-08-16.
 
 This document describes engineering controls, not legal advice. Messaging law is
 fact- and jurisdiction-specific. The same posture `docs/CALLING_COMPLIANCE.md`
@@ -37,7 +39,8 @@ portal (report id `00O5f000008aWTiEAM`).
 ## Architecture
 
 ```
-POE report export (CSV/XLSX, uploaded by an admin)
+POE report export (CSV/XLSX, uploaded by an admin,
+                   or POSTed by a scheduled delivery)
   -> parse            server/providers/perfectVisionSubmittedOrders.ts
   -> normalize        shared/orderColumnMapping.ts, shared/orderStatusSource.ts
   -> match            server/orderMatching.ts        -> commission_sales
@@ -347,23 +350,131 @@ installed -> paid, and separately for recovered orders: case created -> outreach
 `PERFECTVISION_ORDER_SYNC_ENABLED=false`, and it should stay that way until
 PerfectVision has authorized automated delivery for this dealer in writing.
 
-The provider has **no scraping path**. The POE report is an authenticated
-Salesforce Experience Cloud page, and driving it server-side would mean storing a
-dealer's portal password, replaying their session cookie and CSRF token, and
-parsing HTML the vendor may restructure without notice. That is
-credential-sharing against a vendor system, it is the kind of automated access a
-portal's terms typically prohibit, and it produces an integration that breaks
-silently and looks like a compromised account while it does.
+The provider has **no scraping path**, and never will. The POE report is an
+authenticated Salesforce Experience Cloud page, and driving it server-side
+would mean storing a dealer's portal password, replaying their session cookie
+and CSRF token, and parsing HTML the vendor may restructure without notice.
+That is credential-sharing against a vendor system, it is the kind of automated
+access a portal's terms typically prohibit, and it produces an integration that
+breaks silently and looks like a compromised account while it does.
+`fetchOrderReport` - the pull path - still refuses unconditionally.
 
-So `fetchOrderReport` refuses in three places: the flag, the connection mode,
-and the absence of an authorized delivery. Turning the flag on without
-configuring an approved export endpoint, SFTP drop, or scheduled report delivery
-changes nothing except the error message.
+What exists instead is a **push**: scheduled delivery. The report leaves the
+portal by a mechanism the vendor itself provides (a Salesforce report
+subscription that emails the export on a schedule, or a delivery PerfectVision
+sets up), a bridge extracts the file, and posts the bytes to this server. No
+process of ours ever holds a portal credential or opens a connection to
+PerfectVision.
 
-**To enable it later:** obtain written authorization, configure the delivery,
-implement it in the marked branch of
-`server/providers/perfectVisionSubmittedOrders.ts`, set the connection mode, and
-only then set the flag. Record the authorization reference on the connection.
+### The delivery endpoint
+
+```
+POST /api/order-imports/scheduled-delivery
+x-webhook-secret:    ORDER_REPORT_DELIVERY_SECRET   (required; without it the route answers 404)
+x-report-filename:   optional file name for the import history
+x-organization-id:   required only when MORE THAN ONE org has an enabled scheduled delivery
+content-type:        text/csv or application/octet-stream
+body:                the report file itself, raw bytes (CSV or XLSX; sniffed)
+```
+
+Three server-side switches all have to agree before a byte is accepted, and
+each is independently a kill switch:
+
+1. `ORDER_REPORT_DELIVERY_SECRET` (16+ characters) - authenticates the
+   deliverer. Unset or short, the endpoint does not exist (404).
+2. `PERFECTVISION_ORDER_SYNC_ENABLED=true` - the operator's record that
+   PerfectVision authorized automated delivery. Keep the authorization
+   reference with the connection.
+3. An **enabled** connection in **scheduled_export** mode - the per-org opt-in,
+   set from Governance -> Order Imports ("Turn on scheduled delivery"). The org
+   a delivery lands in is resolved from this state, never from the request.
+
+A delivery then follows exactly the manual-upload pipeline: the org's saved
+mapping (409 if none exists yet - run one import by hand first), the same size
+and row caps, the same worker, the same matching and recovery evaluation, the
+same import history and audit trail (`order_import.scheduled_delivery.received`).
+Responses: 202 accepted with the import id; 200 with `duplicate: true` when the
+identical file was already imported (a subscription re-sending an unchanged
+report is a normal day, so this is success, not an error); 400 malformed body;
+413 too large.
+
+The "Check readiness" button on Governance -> Order Imports runs the connection
+test and states, in order, which of the three switches is not satisfied.
+
+### Getting the report to the endpoint
+
+**Preferred: the portal's own report subscription.** Signed in to the POE
+portal, open Total Submitted Orders by Program and look for Subscribe (on
+Lightning reports it lives on the report actions menu). Schedule it daily,
+attach the results as a .csv file, and address it to the delivery mailbox. Two
+cautions: Salesforce caps attached report files at roughly 15,000 rows, so keep
+the report's date filter to a rolling window (30 to 60 days) rather than
+all-time - a rolling window re-delivered daily is the intended shape, since
+unchanged rows are free and changed rows update in place. And if the Subscribe
+action is not exposed to a partner login, ask the PerfectVision account rep to
+schedule the delivery from their side - that conversation is also the natural
+place to obtain the written authorization the flag requires.
+
+**The bridge: mailbox to endpoint.** Any email pipe works; the contract is only
+"extract the attachment, POST the bytes". With Cloudflare Email Routing (this
+org already runs its marketing DNS on Cloudflare) the whole bridge is one Email
+Worker on a routed address such as `poe-reports@homefrontsolutionsllc.com`:
+
+```js
+// Cloudflare Email Worker. Route: poe-reports@<domain> -> this worker.
+// Vars: CRM_DELIVERY_URL, ORDER_REPORT_DELIVERY_SECRET (secret), ALLOWED_SENDERS.
+import PostalMime from "postal-mime";
+
+export default {
+  async email(message, env) {
+    const allowed = (env.ALLOWED_SENDERS ?? "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+    const from = String(message.from ?? "").toLowerCase();
+    if (allowed.length && !allowed.some((a) => from.endsWith(a))) {
+      message.setReject("Sender not allowed");
+      return;
+    }
+    const email = await PostalMime.parse(message.raw);
+    const report = (email.attachments ?? []).find((a) =>
+      /\.(csv|xlsx)$/i.test(a.filename ?? "") || /text\/csv|spreadsheetml/.test(a.mimeType ?? ""));
+    if (!report) return; // a subscription email with no attachment is ignored
+    const res = await fetch(env.CRM_DELIVERY_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/octet-stream",
+        "x-webhook-secret": env.ORDER_REPORT_DELIVERY_SECRET,
+        "x-report-filename": report.filename ?? "report.csv",
+      },
+      body: report.content,
+    });
+    if (res.status !== 202 && res.status !== 200) {
+      console.log("poe delivery failed", res.status, await res.text());
+    }
+  },
+};
+```
+
+Restrict `ALLOWED_SENDERS` to the sending domain of the subscription mail (for
+a Salesforce subscription that is typically the org's Salesforce sender or
+PerfectVision's own domain - read one real message before pinning it).
+
+**Fallback: any scheduler that can run curl.** Wherever the export file already
+lands (an SFTP drop, a synced folder), this is the entire integration:
+
+```bash
+curl -sS -X POST "https://portal.homefrontsolutionsllc.com/api/order-imports/scheduled-delivery" \
+  -H "x-webhook-secret: $ORDER_REPORT_DELIVERY_SECRET" \
+  -H "x-report-filename: total-submitted-orders.csv" \
+  -H "content-type: text/csv" \
+  --data-binary @report.csv
+```
+
+**To enable end to end:** obtain the written authorization, set
+`ORDER_REPORT_DELIVERY_SECRET` and `PERFECTVISION_ORDER_SYNC_ENABLED=true` on
+the server, turn on scheduled delivery for the org on Governance -> Order
+Imports, configure the subscription and the bridge, then watch the first
+delivery land in the import history. The first import must still be done by
+hand - deliveries refuse until a saved mapping exists, because the mapping
+screen is where a human confirms what each column means.
 
 ## Operations
 
@@ -381,6 +492,7 @@ VENDOR_ORDER_ENCRYPTION_KEY=
 VENDOR_CONTACT_HASH_KEY=
 PUBLIC_BASE_URL=
 RECOVERY_SMS_WEBHOOK_SECRET=
+ORDER_REPORT_DELIVERY_SECRET=   # 16+ chars; unset, the delivery endpoint answers 404
 ```
 
 Without `VENDOR_ORDER_ENCRYPTION_KEY` the pipeline still runs, but the uploaded
@@ -456,7 +568,7 @@ writes no event, so a deliberate re-import is free.
 ## Tests
 
 ```bash
-DATA_DIR=$(mktemp -d) npm test -- tests/unit/order-status-source.test.ts tests/unit/order-column-mapping.test.ts tests/unit/order-recovery-policy.test.ts tests/unit/contact-consent-gate.test.ts tests/unit/order-recovery-templates.test.ts tests/unit/xlsx-reader.test.ts tests/integration/vendor-order-import.test.ts tests/integration/order-recovery-messaging.test.ts
+DATA_DIR=$(mktemp -d) npm test -- tests/unit/order-status-source.test.ts tests/unit/order-column-mapping.test.ts tests/unit/order-recovery-policy.test.ts tests/unit/contact-consent-gate.test.ts tests/unit/order-recovery-templates.test.ts tests/unit/xlsx-reader.test.ts tests/integration/vendor-order-import.test.ts tests/integration/vendor-order-scheduled-delivery.test.ts tests/integration/order-recovery-messaging.test.ts
 ```
 
 A pristine `DATA_DIR` matters: the development `data.db` is large enough to make

@@ -273,6 +273,19 @@ export function upsertConnection(input: {
   );
 }
 
+/** Organizations whose connection is an ENABLED scheduled report delivery.
+ *  The inbound delivery endpoint resolves its tenant from this set - the
+ *  deliverer holds a shared secret, not a session, so the org an import lands
+ *  in must come from state an admin explicitly configured, never from an
+ *  unauthenticated request body. */
+export function listEnabledScheduledConnections(provider = PROVIDER): { tenant_id: number }[] {
+  return rawDb.prepare(`
+    SELECT tenant_id FROM vendor_order_connections
+     WHERE provider = ? AND mode = 'scheduled_export' AND enabled = 1
+     ORDER BY tenant_id
+  `).all(provider) as { tenant_id: number }[];
+}
+
 export function recordConnectionTest(tenantId: number, provider: string, ok: boolean, message: string): void {
   rawDb.prepare(`
     UPDATE vendor_order_connections SET last_test_at = ?, last_test_ok = ?, last_test_message = ?, updated_at = ?

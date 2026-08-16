@@ -94,9 +94,46 @@ export default function OrderImports() {
 
   const meta = useQuery<{
     reportName: string; sourceUrl: string;
-    flags: { orderSyncEnabled: boolean; recoveryMessagingEnabled: boolean };
+    flags: { orderSyncEnabled: boolean; recoveryMessagingEnabled: boolean; scheduledDeliveryConfigured: boolean };
+    scheduledDeliveryPath: string;
     encryptionReady: boolean; maxRows: number; maxFileBytes: number;
   }>({ queryKey: ["/api/order-imports/providers"] });
+
+  const connection = useQuery<{
+    connection: { mode: string; enabled: boolean; label: string } | null;
+    lastTest?: { at: string | null; ok: boolean; message: string | null };
+  }>({ queryKey: ["/api/order-imports/connection"] });
+
+  const [readiness, setReadiness] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const setDelivery = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const res = await apiRequest("PUT", "/api/order-imports/connection", {
+        label: meta.data?.reportName ?? "PerfectVision report",
+        mode: enabled ? "scheduled_export" : "manual_upload",
+        enabled,
+      });
+      return res.json();
+    },
+    onSuccess: (_data, enabled) => {
+      toast({ title: enabled ? "Scheduled delivery turned on" : "Back to manual upload" });
+      setReadiness(null);
+      void queryClient.invalidateQueries({ queryKey: ["/api/order-imports/connection"] });
+    },
+    onError: (e: any) => toast({ title: "The connection was not changed", description: e?.message, variant: "destructive" }),
+  });
+
+  const checkReadiness = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/order-imports/connection/test", {});
+      return (await res.json()) as { ok: boolean; message: string };
+    },
+    onSuccess: (data) => {
+      setReadiness({ ok: data.ok, message: data.message });
+      void queryClient.invalidateQueries({ queryKey: ["/api/order-imports/connection"] });
+    },
+    onError: (e: any) => toast({ title: "The check did not run", description: e?.message, variant: "destructive" }),
+  });
 
   const saved = useQuery<{ mapping: OrderColumnMapping; version: number; savedAt: string | null }>({
     queryKey: ["/api/order-imports/mapping"],
@@ -196,6 +233,68 @@ export default function OrderImports() {
               <p className="rounded-md bg-amber-500/10 px-3 py-2 text-warning" data-testid="encryption-warning">
                 No encryption key is configured on the server, so uploaded files and original row data are not kept.
                 Imports still work. Ask an administrator to set VENDOR_ORDER_ENCRYPTION_KEY to retain them.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Scheduled delivery ───────────────────────────────────────────── */}
+      {meta.data && (
+        <Card className="mb-4" data-testid="scheduled-delivery-card">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-base">Scheduled delivery</CardTitle>
+            {(() => {
+              const conn = connection.data?.connection;
+              const live = !!conn && conn.mode === "scheduled_export" && conn.enabled
+                && meta.data.flags.orderSyncEnabled && meta.data.flags.scheduledDeliveryConfigured;
+              const armed = !!conn && conn.mode === "scheduled_export" && conn.enabled;
+              return (
+                <Badge className={live ? "bg-emerald-500/15 text-success" : "bg-muted text-muted-foreground"} data-testid="delivery-state">
+                  {live ? "Receiving" : armed ? "Waiting on the server" : "Off"}
+                </Badge>
+              );
+            })()}
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              Instead of exporting the report by hand every day, the portal's own report subscription can email it out
+              on a schedule, and a delivery bridge posts the file to{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-xs">{meta.data.scheduledDeliveryPath}</code>. Each
+              delivery lands in the import history below exactly like a manual upload, under the same saved mapping.
+            </p>
+            <ul className="space-y-1 text-muted-foreground">
+              <li>
+                {meta.data.flags.orderSyncEnabled ? "The server sync flag is on." : "The server sync flag is off. It stays off until PerfectVision authorizes automated delivery for this dealer."}
+              </li>
+              <li>
+                {meta.data.flags.scheduledDeliveryConfigured ? "The delivery secret is configured." : "No delivery secret is set. Ask an administrator to set ORDER_REPORT_DELIVERY_SECRET on the server."}
+              </li>
+              <li>
+                {saved.data?.savedAt ? "A column mapping is saved." : "No column mapping is saved yet. Run one import manually first - saving the mapping there teaches deliveries how to read the report."}
+              </li>
+            </ul>
+            <div className="flex flex-wrap items-center gap-2">
+              {connection.data?.connection?.mode === "scheduled_export" && connection.data.connection.enabled ? (
+                <Button variant="outline" size="sm" data-testid="delivery-off"
+                  disabled={setDelivery.isPending} onClick={() => setDelivery.mutate(false)}>
+                  Turn off scheduled delivery
+                </Button>
+              ) : (
+                <Button size="sm" data-testid="delivery-on"
+                  disabled={setDelivery.isPending} onClick={() => setDelivery.mutate(true)}>
+                  Turn on scheduled delivery
+                </Button>
+              )}
+              <Button variant="outline" size="sm" data-testid="delivery-check"
+                disabled={checkReadiness.isPending} onClick={() => checkReadiness.mutate()}>
+                Check readiness
+              </Button>
+            </div>
+            {readiness && (
+              <p className={`rounded-md px-3 py-2 ${readiness.ok ? "bg-emerald-500/10 text-success" : "bg-amber-500/10 text-warning"}`}
+                data-testid="delivery-readiness">
+                {readiness.message}
               </p>
             )}
           </CardContent>
