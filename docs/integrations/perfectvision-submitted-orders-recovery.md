@@ -495,11 +495,16 @@ RECOVERY_SMS_WEBHOOK_SECRET=
 ORDER_REPORT_DELIVERY_SECRET=   # 16+ chars; unset, the delivery endpoint answers 404
 ```
 
-Without `VENDOR_ORDER_ENCRYPTION_KEY` the pipeline still runs, but the uploaded
-file is not stored and the original row data is not retained. The import record
-says so, and the admin screen shows a banner. That is deliberate: writing a
-provider report's customer data to disk in the clear because an env var was
-missing is not a degraded mode.
+Without `VENDOR_ORDER_ENCRYPTION_KEY` the uploaded file is not stored and the
+original row data is not retained. The import record says so, and the admin
+screen shows a banner. That is deliberate: writing a provider report's customer
+data to disk in the clear because an env var was missing is not a degraded
+mode. In a SINGLE-process deployment the import still runs from memory; in
+production the upload's in-memory buffer and the worker that claims the job are
+not guaranteed to share a process, and every import fails with "the uploaded
+file is no longer available" (observed 2026-08-16). Treat the key as REQUIRED
+in production - the `Host env keys (production)` workflow generates it on the
+box and restarts the app.
 
 ### Permissions
 

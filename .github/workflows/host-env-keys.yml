@@ -1,0 +1,128 @@
+name: Host env keys (production)
+
+# Generates the vendor-order secret keys ON the production host and appends
+# them to /srv/homefront/.env, then recreates the app container so the new
+# environment is live. The values are created with openssl on the box and are
+# never echoed, never leave the host, and never pass through GitHub.
+#
+# Why this exists: without VENDOR_ORDER_ENCRYPTION_KEY an uploaded order
+# report is held in one process's memory only, and the import worker that
+# claims the job cannot read it - the import fails with "the uploaded file is
+# no longer available" (first observed in production 2026-08-16). The key
+# makes uploads durable on the shared volume, which every topology can read.
+#
+# Idempotent: a key that already exists in .env is left exactly as it is, so
+# re-running this workflow can never rotate a live key by accident.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type "generate" to confirm (the app container restarts briefly)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-env-keys
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: Generate missing keys and restart the app
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Refuse without explicit confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "generate" ]; then
+            echo 'Refusing: the confirm input must be exactly "generate".' >&2
+            exit 1
+          fi
+
+      - name: Generate keys on the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=12 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
+          set -euo pipefail
+          cd /srv/homefront
+          umask 077
+          touch .env
+
+          ADDED=""
+          for KEY in VENDOR_ORDER_ENCRYPTION_KEY VENDOR_CONTACT_HASH_KEY ORDER_REPORT_DELIVERY_SECRET; do
+            if ! grep -q "^${KEY}=" .env; then
+              printf '%s=%s\n' "$KEY" "$(openssl rand -hex 32)" >> .env
+              ADDED="$ADDED $KEY"
+            fi
+          done
+
+          if [ -z "$ADDED" ]; then
+            echo "Every key already exists in .env - nothing changed, no restart."
+            exit 0
+          fi
+          echo "Added:${ADDED} (values generated on this host, not shown)"
+
+          TAG="$(cat .deployed-tag 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            RUNNING="$(docker ps --filter 'ancestor=homefront-app' --format '{{.Image}}' | head -n1)"
+            TAG="${RUNNING##*:}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Could not determine the running image tag - refusing to guess" >&2
+            exit 1
+          fi
+
+          APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+            up -d --force-recreate --no-deps app </dev/null
+
+          # Prove the app process can actually see the keys, without printing them.
+          for i in $(seq 1 30); do
+            if APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+                exec -T app sh -c '[ -n "$VENDOR_ORDER_ENCRYPTION_KEY" ] && [ -n "$VENDOR_CONTACT_HASH_KEY" ] && [ -n "$ORDER_REPORT_DELIVERY_SECRET" ]' </dev/null; then
+              echo "App container recreated; all three keys are visible to the app."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "App container did not come back with the keys visible" >&2
+          exit 1
+          REMOTE
