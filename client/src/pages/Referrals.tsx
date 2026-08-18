@@ -8,7 +8,7 @@
 
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { ApiError, apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -165,13 +165,33 @@ function ReferralHero() {
 function MyLinkCard() {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
-  const { data: link, isLoading, isError, refetch } = useQuery<MyLink>({
+  const { data: link, isLoading, isError, error, refetch } = useQuery<MyLink>({
     queryKey: ["/api/referrals/my-link"],
     queryFn: () => get<MyLink>("/api/referrals/my-link"),
   });
 
   if (isLoading) return <Skeleton className="h-40 w-full" />;
   if (isError) {
+    // Owner/admin logins are valid without a field-rep profile. The API
+    // deliberately refuses to mint a money-bearing referral code until the
+    // login is linked to one, so render that expected account state as setup
+    // guidance rather than telling the operator the portal is broken.
+    if (error instanceof ApiError && error.code === "NO_REP") {
+      return (
+        <Card data-testid="referral-link-unlinked">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Personal referral link unavailable</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>This administrator login is not linked to a field-rep profile, so it cannot receive referral credit.</p>
+            <p>Link the login to the correct person in Team management only if this account should earn referral rewards.</p>
+            <a href="#/team" className="inline-flex min-h-11 items-center font-semibold text-primary underline underline-offset-4">
+              Open Team management
+            </a>
+          </CardContent>
+        </Card>
+      );
+    }
     // Returning null here deleted the whole "Refer a rep" card on a network
     // blip — the rep had no link and no explanation.
     return (

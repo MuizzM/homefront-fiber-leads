@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { ApiError, queryRetryDelay, shouldRetryQuery } from "../../client/src/lib/queryClient";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError, apiRequest, queryRetryDelay, shouldRetryQuery } from "../../client/src/lib/queryClient";
 
 const originalOnline = Object.getOwnPropertyDescriptor(globalThis.navigator ?? {}, "onLine");
+const originalFetch = globalThis.fetch;
 
 function setOnline(value: boolean) {
   if (typeof navigator === "undefined") return;
@@ -9,12 +10,27 @@ function setOnline(value: boolean) {
 }
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   if (typeof navigator === "undefined") return;
   if (originalOnline) Object.defineProperty(navigator, "onLine", originalOnline);
   else delete (navigator as any).onLine;
 });
 
 describe("mobile-safe query retry policy", () => {
+  it("preserves a structured API error code for precise recovery UI", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: "No team member is linked to this login", code: "NO_REP" }),
+      { status: 400, headers: { "content-type": "application/json", "x-request-id": "req-no-rep" } },
+    ));
+
+    await expect(apiRequest("GET", "/api/test-no-rep")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 400,
+      code: "NO_REP",
+      requestId: "req-no-rep",
+    });
+  });
+
   it("retries transient server, timeout, and throttle responses only twice", () => {
     setOnline(true);
     for (const status of [408, 425, 429, 500, 503]) {
