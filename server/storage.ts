@@ -14,7 +14,7 @@ import { runCommissionFileMigrations as ensureCommissionFileSchema } from "./com
 import { runGuardedActionMigrations as ensureGuardedActionSchema } from "./guardedActionMigrations";
 import { recordTransition } from "./fiberTransitions";
 import {
-  leads, fiberChecks, teamMembers, knockLog,
+  leads, scanTargets, fiberChecks, teamMembers, knockLog,
   users, sessions, otpCodes, territories, repApplications,
   territoryRequests, locationPings, clockSessions,
   commissions, commissionRates, activityLog, tenants,
@@ -306,6 +306,21 @@ export type LeadDeleteResult =
   | { deleted: false; reason: "not_found" }
   | { deleted: false; reason: "has_history"; knocks: number; commissions: number; photos: number };
 
+export type LeadListSort = "created_desc" | "scanned_desc";
+export type LeadListOptions = {
+  status?: string;
+  zip?: string;
+  city?: string;
+  state?: string;
+  assignedRepId?: number | "unassigned";
+  fiberStatus?: string;
+  /** ISO timestamp. When set, only rows backed by scan evidence at/after it are returned. */
+  scannedSince?: string;
+  sort?: LeadListSort;
+  limit: number;
+  offset: number;
+};
+
 // What a set-based territory lead write actually did.
 //
 //  changed — the TRUE changed-row count (SQLite's .changes), which is what the
@@ -340,7 +355,7 @@ export interface IStorage {
   getLeadsPage(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
+    opts: LeadListOptions,
   ): { rows: LeadListRow[]; total: number };
   getLeadById(id: number): Lead | undefined;
   findLeadByAddress(tenantId: number | null, address: string, city: string, state: string, zip: string): Lead | undefined;
@@ -368,8 +383,8 @@ export interface IStorage {
     query: string,
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
-  ): { rows: Lead[]; total: number };
+    opts: LeadListOptions,
+  ): { rows: LeadListRow[]; total: number };
   // ── Fiber checks ───────────────────────────────────────────────────────────
   createFiberCheck(check: InsertFiberCheck): FiberCheck;
   getRecentChecks(limit?: number, tenantId?: number): FiberCheck[];
@@ -3557,6 +3572,14 @@ export function orgTimezoneFor(tenantId: number | undefined | null): string {
 // (deploymentNotes, freshSources), briefing and enrichment fields — ride only
 // on /api/leads/:id, which the detail drawer already fetches. Cuts both the
 // hydration and the response-sanitizer clone roughly 3x per page.
+// A scan-backed lead points at its canonical scan_target. `fresh_confirmed_at`
+// is the safe legacy fallback for older projected rows whose source link was
+// not retained. Keep this as one SQL expression so filtering, sorting, and the
+// value rendered by the client can never disagree about what "last scanned"
+// means.
+const LEAD_SCAN_AT_SQL = sql<string | null>`coalesce(${scanTargets.lastScannedAt}, ${leads.freshConfirmedAt})`;
+const LEAD_SCAN_EPOCH_SQL = sql<number | null>`julianday(${LEAD_SCAN_AT_SQL})`;
+
 const LEAD_LIST_COLUMNS = {
   id: leads.id, address: leads.address, city: leads.city, state: leads.state, zip: leads.zip,
   lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus, fiberStatus: leads.fiberStatus,
@@ -3565,13 +3588,16 @@ const LEAD_LIST_COLUMNS = {
   contactName: leads.contactName, contactEmail: leads.contactEmail, notes: leads.notes,
   ownerName: leads.ownerName, ownerEmail: leads.ownerEmail,
   isNewFiber: leads.isNewFiber, maxDownloadMbps: leads.maxDownloadMbps, dfAddressId: leads.dfAddressId,
+  lastScannedAt: LEAD_SCAN_AT_SQL.as("lastScannedAt"),
   createdAt: leads.createdAt, updatedAt: leads.updatedAt,
 };
 export type LeadListRow = Pick<Lead,
   "id" | "address" | "city" | "state" | "zip" | "lat" | "lng" | "leadStatus" | "fiberStatus" |
   "lastOutcome" | "leadScore" | "assignedRepId" | "assignedAt" | "assignmentSource" |
   "contactName" | "contactEmail" | "notes" | "ownerName" | "ownerEmail" |
-  "isNewFiber" | "maxDownloadMbps" | "dfAddressId" | "createdAt" | "updatedAt">;
+  "isNewFiber" | "maxDownloadMbps" | "dfAddressId" | "createdAt" | "updatedAt"> & {
+  lastScannedAt: string | null;
+};
 
 export class Storage implements IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
@@ -3897,7 +3923,7 @@ export class Storage implements IStorage {
   getLeadsPage(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
+    opts: LeadListOptions,
   ): { rows: LeadListRow[]; total: number } {
     const conditions = [];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
@@ -3913,12 +3939,22 @@ export class Storage implements IStorage {
     if (opts.zip) conditions.push(eq(leads.zip, opts.zip));
     if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
     if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
+    if (opts.scannedSince) conditions.push(sql`${LEAD_SCAN_EPOCH_SQL} >= julianday(${opts.scannedSince})`);
     const where = conditions.length === 0 ? undefined
       : conditions.length === 1 ? conditions[0] : and(...conditions);
-    const listQ = db.select(LEAD_LIST_COLUMNS).from(leads);
+    const listQ = db.select(LEAD_LIST_COLUMNS).from(leads)
+      .leftJoin(scanTargets, eq(leads.sourceScanTargetId, scanTargets.id));
+    const order = opts.sort === "scanned_desc"
+      ? [sql`${LEAD_SCAN_EPOCH_SQL} IS NULL`, desc(LEAD_SCAN_EPOCH_SQL), desc(leads.createdAt)]
+      : [desc(leads.createdAt)];
     const rows = (where ? listQ.where(where) : listQ)
-      .orderBy(desc(leads.createdAt)).limit(opts.limit).offset(opts.offset).all();
-    const countQ = db.select({ c: sql<number>`count(*)` }).from(leads);
+      .orderBy(...order).limit(opts.limit).offset(opts.offset).all();
+    // The default list count is on every page load and needs no scan join.
+    // Add that indexed PK join only when the recency predicate actually uses it.
+    const countQ = opts.scannedSince
+      ? db.select({ c: sql<number>`count(*)` }).from(leads)
+          .leftJoin(scanTargets, eq(leads.sourceScanTargetId, scanTargets.id))
+      : db.select({ c: sql<number>`count(*)` }).from(leads);
     const total = Number((where ? countQ.where(where) : countQ).get()?.c ?? 0);
     return { rows, total };
   }
@@ -4268,8 +4304,8 @@ export class Storage implements IStorage {
     query: string,
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
-  ): { rows: Lead[]; total: number } {
+    opts: LeadListOptions,
+  ): { rows: LeadListRow[]; total: number } {
     // Escape LIKE wildcards in user input — a bare "%" must not match the table.
     const safe = query.replace(/[\\%_]/g, m => "\\" + m);
     const pat = `%${safe}%`;
@@ -4290,10 +4326,19 @@ export class Storage implements IStorage {
     // if non-ASCII city names ever land, store a folded column instead.
     if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
     if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
+    if (opts.scannedSince) conditions.push(sql`${LEAD_SCAN_EPOCH_SQL} >= julianday(${opts.scannedSince})`);
     const where = conditions.length === 1 ? conditions[0] : and(...conditions);
-    const rows = db.select().from(leads).where(where)
-      .orderBy(desc(leads.createdAt)).limit(opts.limit).offset(opts.offset).all();
-    const total = Number(db.select({ c: sql<number>`count(*)` }).from(leads).where(where).get()?.c ?? 0);
+    const order = opts.sort === "scanned_desc"
+      ? [sql`${LEAD_SCAN_EPOCH_SQL} IS NULL`, desc(LEAD_SCAN_EPOCH_SQL), desc(leads.createdAt)]
+      : [desc(leads.createdAt)];
+    const rows = db.select(LEAD_LIST_COLUMNS).from(leads)
+      .leftJoin(scanTargets, eq(leads.sourceScanTargetId, scanTargets.id))
+      .where(where).orderBy(...order).limit(opts.limit).offset(opts.offset).all();
+    const countQ = opts.scannedSince
+      ? db.select({ c: sql<number>`count(*)` }).from(leads)
+          .leftJoin(scanTargets, eq(leads.sourceScanTargetId, scanTargets.id))
+      : db.select({ c: sql<number>`count(*)` }).from(leads);
+    const total = Number(countQ.where(where).get()?.c ?? 0);
     return { rows, total };
   }
 

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import {
   LEADS_LIST_DEFAULTS, leadMatchesListFilters, leadsListKey, upsertLeadIntoLists,
-  type LeadsListFilters,
+  leadsListSearchParams, type LeadsListFilters,
 } from "../../client/src/lib/leadsListQuery";
 
 const baseLead = (over: Record<string, unknown> = {}) => ({
@@ -47,11 +47,32 @@ describe("leadMatchesListFilters mirrors the server's view rules", () => {
     expect(leadMatchesListFilters(baseLead(), filters({ fiber: "new_fiber" }))).toBe(false);
     expect(leadMatchesListFilters(baseLead(), filters({ fiber: "no_service" }))).toBe(true);
   });
+  it("recent-scan windows exclude unscanned and stale rows", () => {
+    expect(leadMatchesListFilters(baseLead(), filters({ scanWindow: "24h" }))).toBe(false);
+    expect(leadMatchesListFilters(baseLead({ lastScannedAt: new Date().toISOString() }), filters({ scanWindow: "24h" }))).toBe(true);
+    expect(leadMatchesListFilters(baseLead({ lastScannedAt: new Date(Date.now() - 8 * 86_400_000).toISOString() }), filters({ scanWindow: "7d" }))).toBe(false);
+  });
   it("search is a case-insensitive contains over address/city/zip/contact", () => {
     expect(leadMatchesListFilters(baseLead(), filters({ search: "pine" }))).toBe(true);
     expect(leadMatchesListFilters(baseLead(), filters({ search: "29349" }))).toBe(true);
     expect(leadMatchesListFilters(baseLead(), filters({ search: "dana" }))).toBe(true);
     expect(leadMatchesListFilters(baseLead(), filters({ search: "elm ave" }))).toBe(false);
+  });
+});
+
+describe("lead-list scan query contract", () => {
+  it("keys scan filters and sends only non-default scan parameters", () => {
+    const recent = filters({ scanWindow: "7d", sort: "scanned_desc", page: 2 });
+    expect(leadsListKey(recent)).toContain("7d");
+    expect(leadsListKey(recent)).toContain("scanned_desc");
+    const params = new URLSearchParams(leadsListSearchParams(recent));
+    expect(params.get("scanWindow")).toBe("7d");
+    expect(params.get("sort")).toBe("scanned_desc");
+    expect(params.get("offset")).toBe("200");
+
+    const defaults = new URLSearchParams(leadsListSearchParams(LEADS_LIST_DEFAULTS));
+    expect(defaults.has("scanWindow")).toBe(false);
+    expect(defaults.has("sort")).toBe(false);
   });
 });
 

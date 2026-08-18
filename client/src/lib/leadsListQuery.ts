@@ -26,6 +26,8 @@ export type LeadsListFilters = {
   state: string;
   rep: string;
   fiber: string;
+  scanWindow: "all" | "24h" | "7d" | "30d";
+  sort: "created_desc" | "scanned_desc";
   page: number;
 };
 
@@ -37,13 +39,16 @@ export const LEADS_LIST_DEFAULTS: LeadsListFilters = {
   state: "all",
   rep: "all",
   fiber: "all",
+  scanWindow: "all",
+  sort: "created_desc",
   page: 0,
 };
 
-export type LeadsListResponse = { leads: Lead[]; total: number; limit: number; offset: number };
+export type LeadListItem = Lead & { lastScannedAt?: string | null };
+export type LeadsListResponse = { leads: LeadListItem[]; total: number; limit: number; offset: number };
 
 export type LeadsListKey = readonly [
-  "/api/leads", string, string, string, string, string, string, number,
+  "/api/leads", string, string, string, string, string, string, string, string, number,
 ];
 
 export function leadsListKey(filters: LeadsListFilters): LeadsListKey {
@@ -55,6 +60,8 @@ export function leadsListKey(filters: LeadsListFilters): LeadsListKey {
     filters.state,
     filters.rep,
     filters.fiber,
+    filters.scanWindow,
+    filters.sort,
     filters.page,
   ] as const;
 }
@@ -77,8 +84,13 @@ export function isLeadsListKey(queryKey: unknown): boolean {
 /** A cached list key, decoded back into the filters that built it. */
 export function parseLeadsListKey(queryKey: unknown): LeadsListFilters | null {
   if (!isLeadsListKey(queryKey)) return null;
-  const [, search, status, city, state, rep, fiber, page] = queryKey as LeadsListKey;
-  return { search, status, city, state, rep, fiber, page };
+  const [, search, status, city, state, rep, fiber, scanWindow, sort, page] = queryKey as LeadsListKey;
+  return {
+    search, status, city, state, rep, fiber,
+    scanWindow: scanWindow as LeadsListFilters["scanWindow"],
+    sort: sort as LeadsListFilters["sort"],
+    page,
+  };
 }
 
 /**
@@ -100,13 +112,18 @@ export function parseLeadsListKey(queryKey: unknown): LeadsListFilters | null {
  */
 export function leadMatchesListFilters(
   lead: Pick<Lead, "leadStatus" | "city" | "state" | "zip" | "address"> &
-    Partial<Pick<Lead, "contactName" | "assignedRepId" | "fiberStatus">>,
+    Partial<Pick<Lead, "contactName" | "assignedRepId" | "fiberStatus">> & { lastScannedAt?: string | null },
   filters: Omit<LeadsListFilters, "page">,
 ): boolean {
   if (filters.status !== "all" && lead.leadStatus !== filters.status) return false;
   if (filters.city !== "all" && (lead.city ?? "").toLowerCase() !== filters.city.toLowerCase()) return false;
   if (filters.state !== "all" && (lead.state ?? "").toLowerCase() !== filters.state.toLowerCase()) return false;
   if (filters.fiber !== "all" && lead.fiberStatus !== filters.fiber) return false;
+  if (filters.scanWindow !== "all") {
+    const days = filters.scanWindow === "24h" ? 1 : filters.scanWindow === "7d" ? 7 : 30;
+    const scannedAt = lead.lastScannedAt ? Date.parse(lead.lastScannedAt) : NaN;
+    if (!Number.isFinite(scannedAt) || scannedAt < Date.now() - days * 86_400_000) return false;
+  }
   if (filters.rep !== "all") {
     if (filters.rep === "unassigned") {
       if (lead.assignedRepId != null) return false;
@@ -168,7 +185,7 @@ export function upsertLeadIntoLists(
         ...data,
         leads: data.leads.map(l => (l.id === lead.id ? lead : l)),
       });
-    } else if (filters.page === 0) {
+    } else if (filters.page === 0 && filters.sort === "created_desc") {
       qc.setQueryData<LeadsListResponse>(key, {
         ...data,
         leads: [lead, ...data.leads],
@@ -197,6 +214,8 @@ export function leadsListSearchParams(filters: LeadsListFilters): string {
   if (filters.state !== "all") params.set("state", filters.state);
   if (filters.rep !== "all") params.set("assignedRepId", filters.rep);
   if (filters.fiber !== "all") params.set("fiberStatus", filters.fiber);
+  if (filters.scanWindow !== "all") params.set("scanWindow", filters.scanWindow);
+  if (filters.sort !== "created_desc") params.set("sort", filters.sort);
   params.set("limit", String(LEADS_PAGE_SIZE));
   params.set("offset", String(filters.page * LEADS_PAGE_SIZE));
   return params.toString();

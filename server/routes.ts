@@ -2774,7 +2774,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   app.get("/api/leads", requireAuth, (req, res) => {
-    const { search, limit, offset, status, zip, city, state, assignedRepId, fiberStatus } = req.query;
+    const { search, limit, offset, status, zip, city, state, assignedRepId, fiberStatus, sort, scanWindow } = req.query;
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     // Reps only see leads assigned to them; managers/admins see all
@@ -2786,6 +2786,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const limN = Number(limit), offN = Number(offset);
     const lim = Number.isFinite(limN) && limN > 0 ? Math.min(Math.floor(limN), 500) : 200;
     const off = Number.isFinite(offN) && offN > 0 ? Math.floor(offN) : 0;
+    const sortMode = sort === "scanned_desc" ? "scanned_desc" as const : "created_desc" as const;
+    const scanDays = scanWindow === "24h" ? 1 : scanWindow === "7d" ? 7 : scanWindow === "30d" ? 30 : null;
 
     const filterOpts = {
       status: status && status !== "all" ? String(status) : undefined,
@@ -2796,6 +2798,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         ? "unassigned" as const
         : (assignedRepId && Number.isInteger(Number(assignedRepId)) && Number(assignedRepId) > 0 ? Number(assignedRepId) : undefined),
       fiberStatus: fiberStatus && fiberStatus !== "all" ? String(fiberStatus) : undefined,
+      scannedSince: scanDays == null ? undefined : new Date(Date.now() - scanDays * 86_400_000).toISOString(),
+      sort: sortMode,
       limit: lim, offset: off,
     };
 
