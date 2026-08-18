@@ -5,7 +5,7 @@
 // entry anywhere: not the sidebar, not the More sheet. Reachable only by typed
 // URL. These tests pin their presence for a rep, and pin the flip side: roles
 // whose capabilities exclude a surface never see a dead link to it.
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
@@ -53,5 +53,19 @@ describe("field nav reachability", () => {
     renderLayout("calling_rep");
     expect(screen.queryByTestId("nav-mileage")).toBeNull();
     expect(screen.queryByTestId("nav-referrals")).toBeNull();
+  });
+
+  it("collapses long sections but lets keyboard and pointer users reopen them", () => {
+    window.history.replaceState(null, "", "#/today");
+    renderLayout("rep");
+    const fieldToggle = screen.getByTestId("nav-group-field");
+    const fieldGroup = document.getElementById(fieldToggle.getAttribute("aria-controls")!);
+
+    expect(fieldToggle).toHaveAttribute("aria-expanded", "false");
+    expect(fieldGroup).toHaveAttribute("hidden");
+
+    fireEvent.click(fieldToggle);
+    expect(fieldToggle).toHaveAttribute("aria-expanded", "true");
+    expect(fieldGroup).not.toHaveAttribute("hidden");
   });
 });

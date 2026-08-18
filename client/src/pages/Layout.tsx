@@ -42,6 +42,7 @@ import {
   BarChart3,
   Lightbulb,
   FileBarChart,
+  ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -174,6 +175,16 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r, u) => !!u?.isSuperAdmin, group: "Admin" },
 ];
 
+function navItemIsActive(href: string, location: string): boolean {
+  if (href === "/") return location === "/";
+  if (href === "/today") return location === "/today";
+  if (href === "/calling") return location === href || location.startsWith("/calling/lead/");
+  if (href === "/metrics/my") return location === href || location === "/metrics";
+  if (href === "/leads") return location === href || location.startsWith("/lead/");
+  if (href === "/areas") return location === href || location.startsWith("/areas/");
+  return location === href;
+}
+
 // ── Role badge for sidebar footer ─────────────────────────────────────────────
 function RoleBadge({ role }: { role: string }) {
   // One treatment for every role. Each entry used to carry its own hue (admin
@@ -214,6 +225,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
+    const activeGroup = NAV_ITEMS.find(item => navItemIsActive(item.href, location))?.group;
+    return activeGroup && activeGroup !== "Core" ? { [activeGroup]: true } : {};
+  });
   const moreSheetRef = useRef<HTMLDivElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
   const { user, logout } = useAuth();
@@ -343,6 +358,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     .filter(item => item.show(role, user ?? undefined))
     .filter(item => !gated || gateOpenPath(item.href))
     .filter(item => item.href !== "/action-approvals" || actionGateLive);
+  const currentNavGroup = visibleNav.find(item => navItemIsActive(item.href, location))?.group;
+
+  useEffect(() => {
+    if (!currentNavGroup || currentNavGroup === "Core") return;
+    setExpandedGroups(groups => groups[currentNavGroup]
+      ? groups
+      : { ...groups, [currentNavGroup]: true });
+  }, [currentNavGroup]);
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -379,24 +402,33 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             });
             return groups.map(group => {
               const items = visibleNav.filter(item => (item.group ?? "Other") === group);
+              const groupOpen = group === "Core" || expandedGroups[group] === true;
+              const groupId = `desktop-nav-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
               return (
                 <div key={group} className="mb-1">
-                  <div className="px-3 pt-3 pb-1 text-2xs font-semibold uppercase tracking-widest text-muted-foreground/50">
-                    {group}
-                  </div>
+                  {group === "Core" ? (
+                    <div className="px-3 pt-3 pb-1 text-2xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+                      {group}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-expanded={groupOpen}
+                      aria-controls={groupId}
+                      onClick={() => setExpandedGroups(current => ({ ...current, [group]: !groupOpen }))}
+                      className="group flex min-h-9 w-full items-center rounded-lg px-3 pt-3 pb-1 text-left text-2xs font-semibold uppercase tracking-widest text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      data-testid={`nav-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+                    >
+                      <span className="flex-1">{group}</span>
+                      <ChevronDown
+                        aria-hidden="true"
+                        className={cn("h-3.5 w-3.5 transition-transform", groupOpen && "rotate-180")}
+                      />
+                    </button>
+                  )}
+                  <div id={groupId} hidden={!groupOpen}>
                   {items.map(({ href, label, icon: Icon }) => {
-                    // "/" also lights on /today (App redirects rep home there);
-                    // "/calling" stays lit inside a lead workspace.
-                    const isActive = href === "/"
-                      ? location === "/" || location === "/today"
-                      : href === "/calling"
-                        ? location === href || location.startsWith("/calling/lead/")
-                        // The bare /metrics path resolves to the first tab the
-                        // caller may see, which for a rep is My Metrics. Light
-                        // that entry rather than leaving the whole group dark.
-                        : href === "/metrics/my"
-                          ? location === href || location === "/metrics"
-                          : location === href;
+                    const isActive = navItemIsActive(href, location);
                     const badgeCount =
                       href === "/messages" ? chatUnread
                       : canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount
@@ -427,6 +459,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       </Link>
                     );
                   })}
+                  </div>
                 </div>
               );
             });

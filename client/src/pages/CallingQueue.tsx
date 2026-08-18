@@ -342,7 +342,7 @@ export default function CallingQueue() {
   }, [callbacksQuery.data]);
 
   return (
-    <CallingChrome>
+    <CallingChrome pageTitle>
       <div className="flex-1 space-y-5 px-4 pb-24 pt-4 md:px-6 md:pb-8">
         {/* Layout-first: the tab frame renders immediately and each section
             carries its own small loading state. The whole-page CallingPageSkeleton

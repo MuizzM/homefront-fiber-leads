@@ -67,9 +67,9 @@ export default function KineticScanner() {
           <div className="flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
             
             <div>
-              <h1 className="text-xl font-bold tracking-tight">
+              <h2 className="text-xl font-bold tracking-tight">
                 Kinetic Evidence Scanner
-              </h1>
+              </h2>
               <p className="text-xs text-muted-foreground">
                 Offline evidence registry and corroboration · separate from the
                 live Decodo pipeline
