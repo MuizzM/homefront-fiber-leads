@@ -23,6 +23,6 @@ describe("overnight city scan monitoring", () => {
   });
 
   it("never exposes another tenant's in-memory scan through the state heartbeat", () => {
-    expect(routes).toContain("stateTenantId == null || j.tenantId === stateTenantId");
+    expect(routes).toContain("canReadScanJob(stateUser, j)");
   });
 });
