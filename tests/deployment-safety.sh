@@ -52,8 +52,13 @@ grep -q 'flock' scripts/backup-offline.sh || fail "scheduled backup can collide 
 if grep -qE '^\s*timeout 1800 env BACKUP_QUIESCENT=1' scripts/deploy.sh; then
   fail "the release still takes its backup inside the downtime window"
 fi
-grep -q 'lb_try_duration' Caddyfile || fail "Caddy does not hold requests through a cutover (hard errors during releases)"
-grep -q 'health_uri' Caddyfile || fail "Caddy upstream health checks missing"
+CADDYFILE="deploy/caddy/Caddyfile"
+grep -q 'lb_try_duration' "$CADDYFILE" || fail "Caddy does not hold requests through a cutover (hard errors during releases)"
+grep -q 'health_uri' "$CADDYFILE" || fail "Caddy upstream health checks missing"
+grep -q './deploy/caddy:/etc/caddy:ro' docker-compose.production.yml || fail "Caddy config is not directory-mounted (single-file binds can retain stale inodes)"
+grep -q 'caddy:2 validate --config /etc/caddy/Caddyfile' scripts/deploy.sh || fail "deploy does not preflight the Caddy config"
+grep -q 'caddy reload --config /etc/caddy/Caddyfile' scripts/deploy.sh || fail "deploy does not reload Caddy"
+grep -q 'public unsafe-method gate OK' scripts/deploy.sh || fail "deploy does not verify unsafe methods at the public edge"
 grep -q 'pragma("wal_checkpoint(TRUNCATE)")' scripts/deploy.sh || fail "offline window lacks a real WAL-checkpoint pragma"
 if grep -q 'VACUUM INTO' scripts/deploy.sh; then
   fail "deploy must not take an online vacuum snapshot (disk-hungry; wedged production deploys)"

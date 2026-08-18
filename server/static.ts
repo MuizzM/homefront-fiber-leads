@@ -11,7 +11,7 @@ import path from "node:path";
 // JS 108.5 KB gzip -> 93.8 KB brotli, CSS 26.5 -> 21.0), and the server does no
 // compression work at all for the assets it serves most.
 //
-// It also un-breaks the proxy. The Caddyfile declares `encode zstd gzip`, but a
+// It also un-breaks the proxy. deploy/caddy/Caddyfile declares `encode zstd gzip`, but a
 // proxy will not re-encode a response that already carries Content-Encoding —
 // so while the app gzipped everything itself, Caddy's encoder was dead weight.
 const PRECOMPRESSED = /\.(js|css|svg|json|webmanifest|txt)$/;

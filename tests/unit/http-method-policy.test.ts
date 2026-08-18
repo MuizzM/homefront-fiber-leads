@@ -25,8 +25,18 @@ describe("portal HTTP method policy", () => {
   });
 
   it("rejects unsafe methods at the Caddy edge too", () => {
-    const caddy = fs.readFileSync(path.resolve(__dirname, "../../Caddyfile"), "utf8");
+    const caddy = fs.readFileSync(path.resolve(__dirname, "../../deploy/caddy/Caddyfile"), "utf8");
     expect(caddy).toMatch(/@unsafe_methods\s+method\s+TRACE\s+TRACK\s+CONNECT/);
     expect(caddy).toMatch(/respond\s+@unsafe_methods\s+405/);
+  });
+
+  it("deploys and verifies the edge policy instead of leaving a stale bind mount", () => {
+    const compose = fs.readFileSync(path.resolve(__dirname, "../../docker-compose.production.yml"), "utf8");
+    const deploy = fs.readFileSync(path.resolve(__dirname, "../../scripts/deploy.sh"), "utf8");
+    expect(compose).toContain("./deploy/caddy:/etc/caddy:ro");
+    expect(deploy).toContain("caddy:2 validate --config /etc/caddy/Caddyfile");
+    expect(deploy).toContain("caddy reload --config /etc/caddy/Caddyfile");
+    expect(deploy).toContain("TRACE TRACK CONNECT");
+    expect(deploy).toContain('expected 405');
   });
 });

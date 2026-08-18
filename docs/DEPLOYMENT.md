@@ -183,7 +183,7 @@ sampler or a restart always FAILS OPEN (never a sticky halt). Watch
    production workflow also rejects any requested SHA not reachable from that
    branch.
 6. Wire Sentry + an uptime monitor (§7).
-7. Enable HSTS only after HTTPS is verified (Caddyfile note + helmet).
+7. Enable HSTS only after HTTPS is verified (`deploy/caddy/Caddyfile` note + helmet).
 8. **Marketing site "Portal" tab** (separate codebase — `homefrontsolutionsllc.com`,
    NOT this repo): point its Portal nav link to
    `https://portal.homefrontsolutionsllc.com`. Do this only AFTER the portal's

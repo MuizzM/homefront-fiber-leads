@@ -513,7 +513,11 @@ services:
       - "443:443"
       - "443:443/udp"          # HTTP/3
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mount the directory, not a single file. Git may replace a tracked file's
+      # inode during checkout; a file-level bind mount can then keep serving the
+      # old inode forever. A directory bind follows the new Caddyfile dentry, so
+      # deploy.sh can validate and atomically reload the checked-out config.
+      - ./deploy/caddy:/etc/caddy:ro
       - caddy-data:/data        # ACME certs + keys (persist across restarts)
       - caddy-config:/config
     networks: [internal]

@@ -36,7 +36,7 @@ describe("live portal UI audit regressions", () => {
   });
 
   it("aligns the reverse-proxy referrer policy with the application", () => {
-    const caddy = read("Caddyfile");
+    const caddy = read("deploy/caddy/Caddyfile");
     expect(caddy).toMatch(/Referrer-Policy\s+no-referrer/);
     expect(caddy).not.toMatch(/Referrer-Policy\s+strict-origin-when-cross-origin/);
   });

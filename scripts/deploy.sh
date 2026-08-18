@@ -100,6 +100,14 @@ fi
 
 echo "[deploy] target=$NEW_TAG  previous=${PREV_TAG:-none}"
 
+# Validate the exact checked-out edge configuration before building or touching
+# production. The live Caddy container cannot be trusted for this check: older
+# releases mounted one file and could retain a stale inode across git checkout.
+echo "[deploy] validate Caddy configuration…"
+docker run --rm \
+  --volume "$PWD/deploy/caddy:/etc/caddy:ro" \
+  caddy:2 validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
 # Remove every release tag of our two image repos EXCEPT the ones passed as
 # arguments, then dangling layers. Best-effort — never fails the deploy.
 prune_release_images() {
@@ -289,8 +297,19 @@ while [ "$attempts_left" -gt 0 ]; do
 done
 
 if [ "$ok" = "1" ]; then
-  echo "${PREV_TAG:-}" > .previous-tag
-  echo "$NEW_TAG" > .deployed-tag
+  # Compose does not recreate a service merely because a bind-mounted file's
+  # contents changed. Reload Caddy on EVERY release so repository hardening and
+  # header changes become live with the app. Caddy reload is atomic: an invalid
+  # config leaves the prior configuration serving, while the preflight above
+  # makes that failure unlikely. Treat any reload error as a failed release.
+  echo "[deploy] reload Caddy configuration…"
+  if ! APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" exec -T caddy \
+      caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+    echo "[deploy] Caddy reload failed — rolling the app back; previous edge config remains active" >&2
+    recover_to_previous || true
+    exit 1
+  fi
+
   echo "[deploy] HEALTHY — $NEW_TAG is live. (previous kept: ${PREV_TAG:-none})"
   # Container health ≠ the user path. Probe the public edge (Caddy → app) as a
   # WARNING only: a cert renewal or edge hiccup must not trigger a rollback of
@@ -301,6 +320,28 @@ if [ "$ok" = "1" ]; then
   else
     echo "[deploy] public edge OK ($PUBLIC_HEALTH_URL)"
   fi
+  # Security release gate: these methods are unused by the portal and must be
+  # rejected at the public edge. This catches a stale/unreloaded Caddy config,
+  # which an ordinary GET health probe cannot detect.
+  PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://portal.homefrontsolutionsllc.com/}"
+  unsafe_method_gate_ok=1
+  for unsafe_method in TRACE TRACK CONNECT; do
+    method_status="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -X "$unsafe_method" "$PUBLIC_BASE_URL" || true)"
+    if [ "$method_status" != "405" ]; then
+      echo "[deploy] SECURITY GATE FAILED: $unsafe_method returned ${method_status:-no-status}, expected 405" >&2
+      unsafe_method_gate_ok=0
+    fi
+  done
+  if [ "$unsafe_method_gate_ok" != "1" ]; then
+    recover_to_previous || true
+    exit 1
+  fi
+  echo "[deploy] public unsafe-method gate OK (TRACE/TRACK/CONNECT → 405)"
+  # Record the release only after BOTH the app health gate and the public edge
+  # security gate pass. Otherwise the next deploy would trust a failed release
+  # as the known-good rollback target.
+  echo "${PREV_TAG:-}" > .previous-tag
+  echo "$NEW_TAG" > .deployed-tag
   # Post-deploy disk hygiene: keep ONLY the live image and the rollback image;
   # delete older release tags, dangling layers, and trim the build cache.
   # Best-effort — never fail the deploy.

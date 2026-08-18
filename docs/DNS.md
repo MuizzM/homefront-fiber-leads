@@ -39,8 +39,8 @@ these — apex mail routing and subdomain web hosting are independent.
   HTTP-01 challenge fails.
 - **HTTP→HTTPS redirect** is automatic in Caddy.
 - **HSTS** — leave disabled until you've confirmed HTTPS works end-to-end, then
-  enable it in the Caddyfile (and/or keep the app's helmet HSTS). See the
-  Caddyfile note.
+  enable it in `deploy/caddy/Caddyfile` (and/or keep the app's helmet HSTS).
+  See the note in that file.
 
 ## Verify (after adding the A record)
 
