@@ -307,6 +307,9 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
           </div>
         ))}
       </div>
+      <p className="px-1 text-[12px] text-muted-foreground">
+        Fresh leads here are completed sweep classifications. Provisional detections on Fresh Now are not assignable until corroborated.
+      </p>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">GA, NC &amp; SC statewide sweeps</div>
         {sweeps.length === 0 ? (
@@ -315,7 +318,11 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
           <div key={s.id} className="flex items-center gap-3 border-b border-border/60 px-4 py-3 last:border-0">
             <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/15 text-[12px] font-bold text-primary">{s.state}</span>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-medium text-foreground">{s.currentCity ? `Scanning ${s.currentCity}` : s.status}</div>
+              <div className="truncate text-[13px] font-medium text-foreground">
+                {s.status === "running"
+                  ? (s.currentCity ? `Scanning ${s.currentCity}` : "Scanning")
+                  : (s.status === "done" ? `Completed ${s.state}` : s.status)}
+              </div>
               <div className="text-[11px] text-muted-foreground">{s.citiesCompleted}/{s.citiesTotal} cities · {s.checked} checked · {s.freshLeads} fresh</div>
             </div>
             <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${s.status === "running" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>{s.status}</span>

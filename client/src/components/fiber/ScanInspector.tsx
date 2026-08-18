@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { summarizeScanYield } from "@/lib/scanYield";
 
 // The pipeline the admin watches each address move through. Order matters — it
 // drives the progress rail and "blocked stage" detection.
@@ -176,6 +177,7 @@ export default function ScanInspector() {
     }
     return rows.size ? c : (counters ?? c);
   }, [rows, counters]);
+  const yieldSummary = useMemo(() => summarizeScanYield(liveCounters), [liveCounters]);
 
   // 1s tick so relative times + blocked-stage detection stay live — but ONLY
   // while there is something live to keep honest, and only while the tab is on
@@ -286,6 +288,24 @@ export default function ScanInspector() {
       <div className="text-[11px] text-muted-foreground">
         Invariant: {liveCounters.checked} + {liveCounters.queued} + {liveCounters.checking} + {liveCounters.retrying} + {liveCounters.unresolved} = {liveCounters.checked + liveCounters.queued + liveCounters.checking + liveCounters.retrying + liveCounters.unresolved} (found {liveCounters.found})
       </div>
+
+      {liveCounters.found > 0 && (
+        <div
+          role={yieldSummary.tone === "degraded" ? "alert" : "status"}
+          data-testid="scan-yield-health"
+          className={`rounded-xl border px-3 py-2.5 text-[12px] ${
+            yieldSummary.tone === "degraded"
+              ? "border-destructive/25 bg-destructive/[0.08] text-destructive"
+              : yieldSummary.tone === "attention"
+                ? "border-warning/25 bg-warning/[0.08] text-warning"
+                : "border-border bg-card text-muted-foreground"
+          }`}
+        >
+          <span className="font-semibold">{yieldSummary.title}.</span>{" "}
+          {yieldSummary.completedPercent}% classified · {yieldSummary.unresolvedPercent}% unresolved.
+          {yieldSummary.tone === "degraded" && " Review blocked rows and latency before adding more scan volume."}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-wrap gap-2">

@@ -25,6 +25,7 @@ import {
   sessionScopedKey,
 } from "./limiters";
 import { BLOCKED_RESPONSE_FIELDS, scrubSecretText } from "./secretScrub";
+import { safeRequestId } from "./requestId";
 
 // ── Multi-core scan cluster ────────────────────────────────────────────────────
 // The scan pipeline is single-threaded JavaScript (synchronous better-sqlite3 +
@@ -341,6 +342,9 @@ app.use((_req, res, next) => {
   // Extra hardening headers not covered by Helmet defaults
   res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+  // Set this in the final hardening layer as well as Helmet so later middleware
+  // and deployment drift cannot silently loosen referrer disclosure.
+  res.setHeader("Referrer-Policy", "no-referrer");
   next();
 });
 
@@ -364,10 +368,10 @@ const CSRF_EXEMPT = new Set([
   "/api/payouts/webhook/stripe", // Stripe Connect webhook — HMAC-signed, not a session
 ]);
 // ── Request ID — one correlation id per request, echoed to the client and used
-// in every server log line so a failure can be traced end to end. Honors an
-// upstream x-request-id (from a load balancer) or mints a fresh UUID.
+// in every server log line so a failure can be traced end to end. Honors a
+// bounded, header-safe upstream x-request-id or mints a fresh UUID.
 app.use((req, res, next) => {
-  const rid = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+  const rid = safeRequestId(req.headers["x-request-id"]);
   (req as any).id = rid;
   res.setHeader("x-request-id", rid);
   next();

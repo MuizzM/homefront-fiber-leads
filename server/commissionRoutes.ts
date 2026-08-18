@@ -114,7 +114,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   const { requireCapability } = deps;
   const uid = (req: Request) => (req as any).user?.id ?? null;
   const tid = (req: Request) => (req as any).user?.tenantId as number;
-  const rid = (req: Request) => (req.headers["x-request-id"] as string) || undefined;
+  const rid = (req: Request) => ((req as any).id as string | undefined);
 
   // ── Org config ──────────────────────────────────────────────────────────────
   app.get("/api/commission/config", requireCapability("commission.read.team"), (req, res) => {
