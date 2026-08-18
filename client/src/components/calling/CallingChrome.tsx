@@ -3,7 +3,7 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { cn } from "@/lib/utils";
 import { useCan } from "@/lib/capabilities";
 
-export function CallingChrome({ children }: { children: React.ReactNode }) {
+export function CallingChrome({ children, pageTitle = false }: { children: React.ReactNode; pageTitle?: boolean }) {
   const [location] = useHashLocation();
   const canReadQueue = useCan("calling.queue.read");
   const tabs = [
@@ -19,7 +19,11 @@ export function CallingChrome({ children }: { children: React.ReactNode }) {
         <div className="flex h-14 items-center gap-3">
           
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[15px] font-semibold tracking-tight">Calling</div>
+            {pageTitle ? (
+              <h1 className="truncate text-xl font-bold tracking-tight">Calling</h1>
+            ) : (
+              <div className="truncate text-[15px] font-semibold tracking-tight">Calling</div>
+            )}
             <div className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
                Manual, gated pilot
             </div>

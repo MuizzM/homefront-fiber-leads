@@ -6928,10 +6928,26 @@ export default function MapView() {
             />
           </div>
 
-          {/* No blocking "loading" overlay while the GL map spins up: the map
-              canvas itself is the initial state, and the snapshot-seeded pins
-              paint on its first styled frame. The only full-cover state left
-              is the unrecoverable missing-token config error below. */}
+          {/* A cold Mapbox boot can take several seconds on field LTE. A plain
+              white canvas looked broken during that gap, so keep the map
+              mounted underneath while a lightweight, honest status panel
+              explains what is happening. It disappears on the first styled
+              frame and never delays map initialization. */}
+          {!mapReady && !noToken && (
+            <div
+              className="absolute inset-0 z-[5] flex items-center justify-center overflow-hidden bg-background px-6"
+              role="status"
+              aria-live="polite"
+              data-testid="map-boot-status"
+            >
+              <div className="absolute inset-0 opacity-45 [background-image:linear-gradient(hsl(var(--border))_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border))_1px,transparent_1px)] [background-size:36px_36px]" aria-hidden="true" />
+              <div className="relative w-full max-w-xs rounded-2xl border border-border bg-card/95 p-5 text-center shadow-xl backdrop-blur">
+                <div className="app-skeleton mx-auto h-11 w-11 rounded-full bg-primary/15" aria-hidden="true" />
+                <p className="mt-3 text-sm font-semibold text-foreground">Preparing your field map</p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Loading the map and your latest assigned doors.</p>
+              </div>
+            </div>
+          )}
           {noToken && (
             <div className="absolute inset-0 flex items-center justify-center bg-card/95 z-10 px-6">
               <div className="text-center max-w-xs">

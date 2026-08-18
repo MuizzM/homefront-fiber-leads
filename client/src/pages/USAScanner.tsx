@@ -280,9 +280,9 @@ export default function USAScanner() {
         <div className="flex items-start gap-3">
           
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground">
+            <h2 className="text-xl font-bold tracking-tight text-foreground">
               USA Fiber Intelligence
-            </h1>
+            </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
               {marketsData
                 ? `FCC BDC coverage · updated ${marketsData.lastUpdated}`

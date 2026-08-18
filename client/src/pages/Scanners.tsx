@@ -51,7 +51,7 @@ export default function Scanners({
           Choose a scan tool
         </h1>
 
-        <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
+        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
           {TABS.map(({ id, label, hint, }) => {
             const active = tab === id;
             return (
@@ -85,7 +85,7 @@ export default function Scanners({
                       }`}
                     />
                   </span>
-                  <span className="mt-0.5 hidden text-xs leading-snug text-muted-foreground sm:block">
+                  <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
                     {hint}
                   </span>
                 </span>

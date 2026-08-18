@@ -144,10 +144,11 @@ describe("no loading / syncing chrome during background map work", () => {
     expect(hint).not.toContain("animate-spin");
   });
 
-  it("no blocking overlay while the GL map spins up - the canvas is the loading state", () => {
-    expect(src).not.toContain("Loading map…");
-    expect(src).not.toContain("{!mapReady && !noToken && (");
-    // The unrecoverable missing-token config error is the only full-cover state.
+  it("explains a cold GL boot instead of showing a blank canvas", () => {
+    expect(src).toContain("{!mapReady && !noToken && (");
+    expect(src).toContain('data-testid="map-boot-status"');
+    expect(src).toContain("Preparing your field map");
+    // The boot status does not replace the recoverable error state.
     expect(src).toContain("{noToken && (");
   });
 

@@ -378,7 +378,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
           </div>
         ) : referrals.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            {scope === "org" ? "No referrals yet." : "Share your link to get started."}
+            {scope === "org" ? "No referrals yet." : "No referral activity yet. New referrals will appear here."}
           </p>
         ) : referrals.map(r => (
           <div key={r.id} className="border-b py-3 last:border-0" data-testid={`referral-row-${r.id}`}>
