@@ -70,6 +70,7 @@ import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenantRead, sameTenantWrite } from "./tenantGuard";
+import { canReadScanJob } from "./scanJobScope";
 import { canActOnMember, canHireRole, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank, branchOwnerOf } from "@shared/teamHierarchy";
 import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, areaGrantedRepIds, parseAreaDeleteRepPolicy, parseAssigneeIds, MAX_ACTIVE_AREAS_PER_REP, MAX_AREA_ASSIGNEES, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, pinDisplayState, type KnockOutcome } from "@shared/knock";
@@ -1609,9 +1610,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Address-scanner state ──────────────────────────────────────────────────
   // Polled every 3s by the CityScanner UI to show live efficiency metrics.
   app.get("/api/scanner/state", requireManager, (_req, res) => {
-    const stateTenantId = (_req as any).user?.tenantId;
+    const stateUser = (_req as any).user;
     const activeJob = Array.from(scanJobs.values()).find(j =>
-      j.status === "running" && (stateTenantId == null || j.tenantId === stateTenantId));
+      j.status === "running" && canReadScanJob(stateUser, j));
     const providerQueue = getAddressScanQueueStatus();
     const lastActivityAt = Math.max(_scanWorkerState.lastHeartbeat, providerQueue.lastActivityAt);
     const secondsSinceHeartbeat = Math.floor((Date.now() - lastActivityAt) / 1000);
