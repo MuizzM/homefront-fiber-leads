@@ -34,6 +34,14 @@ export function localDayKey(iso: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+export function formatSessionDateRange(clockedIn: string, clockedOut: string | null): string {
+  const start = new Date(clockedIn);
+  const end = clockedOut ? new Date(clockedOut) : null;
+  const format = (date: Date) => date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  if (!end || localDayKey(clockedIn) === localDayKey(end.toISOString())) return format(start);
+  return `${format(start)} to ${format(end)}`;
+}
+
 function ElapsedTimer({ startTime }: { startTime: string }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -236,7 +244,7 @@ export default function ClockIn() {
                     </div>
                     <Badge
                       className={`${needsReview ? "bg-warning/[0.08] text-warning" : "bg-success/10 text-success"} border-transparent rounded-full text-xs flex items-center gap-1.5`}
-                      title={needsReview ? "This session is unusually long and should be reviewed before payroll is finalized." : undefined}
+                      title={needsReview ? "This session is unusually long and should be reviewed before commission or bonus records are finalized." : undefined}
                     >
                       <span className={`w-1 h-1 rounded-full ${needsReview ? "bg-warning" : "bg-success"}`} />
                       {needsReview ? "Review time" : "Active"}
@@ -281,7 +289,7 @@ export default function ClockIn() {
                       {isManager && <p className="text-[11px] uppercase tracking-wide text-primary font-medium">{s.repName ?? `Rep #${s.repId}`}</p>}
                       {/* Date from the timestamp, not the label: new Date("YYYY-MM-DD")
                           parses as UTC midnight and shows YESTERDAY in US timezones. */}
-                      <p className="text-sm text-foreground">{new Date(s.clockedIn).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
+                      <p className="text-sm text-foreground">{formatSessionDateRange(s.clockedIn, s.clockedOut)}</p>
                       <p className="text-xs text-muted-foreground tabular-nums">
                         {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                         {" to "}
@@ -290,7 +298,7 @@ export default function ClockIn() {
                     </div>
                     <Badge
                       className={`${needsReview ? "bg-warning/[0.08] text-warning" : "bg-secondary text-muted-foreground"} border-transparent rounded-full text-xs tabular-nums`}
-                      title={needsReview ? "Unusually long session; review the source time before payroll is finalized." : undefined}
+                      title={needsReview ? "Unusually long session; review the source time before commission or bonus records are finalized." : undefined}
                     >
                       {formatDuration(s.durationMinutes ?? 0)}{needsReview ? " · Review" : ""}
                     </Badge>

@@ -23,4 +23,10 @@ describe("portal HTTP method policy", () => {
     expect(methodPolicy).toBeGreaterThan(-1);
     expect(csrf).toBeGreaterThan(methodPolicy);
   });
+
+  it("rejects unsafe methods at the Caddy edge too", () => {
+    const caddy = fs.readFileSync(path.resolve(__dirname, "../../Caddyfile"), "utf8");
+    expect(caddy).toMatch(/@unsafe_methods\s+method\s+TRACE\s+TRACK\s+CONNECT/);
+    expect(caddy).toMatch(/respond\s+@unsafe_methods\s+405/);
+  });
 });

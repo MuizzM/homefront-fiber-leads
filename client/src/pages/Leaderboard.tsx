@@ -34,8 +34,12 @@ const RANK_COLORS = [
   "text-muted-foreground", // 3rd
 ];
 
-function conversionRate(contacts: number, sales: number) {
-  if (contacts === 0) return "0%";
+export function conversionRate(contacts: number, sales: number) {
+  // Imported/verified sales can exist without a matching logged contact. That
+  // is a reconciliation gap, not a 700% conversion rate. Never manufacture a
+  // persuasive percentage from an impossible funnel; flag it for review.
+  if (sales > contacts) return "Review";
+  if (contacts === 0) return sales === 0 ? "0%" : "Review";
   return `${Math.round((sales / contacts) * 100)}%`;
 }
 
@@ -103,6 +107,11 @@ export default function Leaderboard() {
           <p className="text-[11px] text-muted-foreground/80 mt-0.5" data-testid="leaderboard-counting-rule">
             Only doors still marked sold count - corrected or reversed sales drop off automatically.
           </p>
+          {board.some(entry => entry.sales > entry.contacts) && !isLoading && !isError && (
+            <p className="mt-1 text-[11px] font-medium text-warning" role="status" data-testid="leaderboard-data-review">
+              Some verified sales are missing a matching logged contact. Their conversion rate is marked Review until reconciled.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 pt-1" aria-label="Live, updates every 30 seconds">
           <span className="relative flex h-2 w-2">
@@ -264,7 +273,11 @@ export default function Leaderboard() {
                   <Metric icon={DoorOpen} val={entry.knocks} label="Knocks" />
                   <Metric icon={PhoneCall} val={entry.contacts} label="Contacts" />
                   <Metric icon={CalendarCheck} val={entry.callbacks} label="Callbacks" />
-                  <Metric val={conversionRate(entry.contacts, entry.sales)} label="Conv." />
+                  <Metric
+                    val={conversionRate(entry.contacts, entry.sales)}
+                    label="Conv."
+                    title={entry.sales > entry.contacts ? "Verified sales exceed logged contacts; reconcile the activity before using a conversion rate." : undefined}
+                  />
                 </div>
 
                 {/* Primary metric - sales, big + tabular */}
@@ -291,12 +304,12 @@ export default function Leaderboard() {
 }
 
 function Metric({
-  icon: Icon, val, label
+  icon: Icon, val, label, title
 }: {
-  icon?: React.ElementType; val: React.ReactNode; label: string;
+  icon?: React.ElementType; val: React.ReactNode; label: string; title?: string;
 }) {
   return (
-    <div className="flex flex-col items-end min-w-[44px]">
+    <div className="flex flex-col items-end min-w-[44px]" title={title}>
       <div className="flex items-center gap-1 text-sm font-semibold tabular-nums text-foreground">
         {Icon && null}
         {val}

@@ -289,7 +289,7 @@ export default function Today() {
           <button onClick={() => clockIn.mutate()} disabled={clockIn.isPending} data-testid="today-clock-in"
             className={`mt-3 w-full flex items-center gap-3 rounded-xl bg-card border border-border px-4 py-3 text-left active:scale-[.99] transition-transform disabled:opacity-60 hover:border-primary/30 ${FOCUS}`}>
             
-            <span className="flex-1"><span className="block text-[14px] font-semibold text-foreground">Clock in to start</span><span className="block text-[12px] text-muted-foreground">Your hours count toward payroll</span></span>
+            <span className="flex-1"><span className="block text-[14px] font-semibold text-foreground">Clock in to start</span><span className="block text-[12px] text-muted-foreground">Records field activity; this is not hourly pay</span></span>
             {clockIn.isPending ? <RefreshCw className="w-4 h-4 text-muted-foreground animate-spin" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" aria-hidden="true" />}
           </button>
         )}
@@ -437,7 +437,7 @@ export default function Today() {
                 value={typeof earn?.spiffCents === "number" ? usd(earn.spiffCents) : null} />
             </div>
             <Link href="/my-commission" className={`group mt-2 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3.5 active:scale-[.99] transition-transform hover:border-success/25 ${FOCUS}`} data-testid="today-pay">
-              <span className="flex-1 min-w-0 text-[14px] font-semibold text-foreground">View your weekly pay statement</span>
+              <span className="flex-1 min-w-0 text-[14px] font-semibold text-foreground">View your weekly commission statement</span>
               <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
             </Link>
           </div>

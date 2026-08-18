@@ -85,12 +85,16 @@ function documentsPayload(over: Partial<typeof ENVELOPE> | null = {}) {
 
 let signError: string | null = null;
 let declineError: string | null = null;
+let w9Ready = false;
+let bankLast4: string | null = null;
 /** Lets one test serve a different agreement body than the shared fixture. */
 let contentOverride: any = null;
 
 function mockApi(payload: any) {
   apiRequest.mockImplementation((method: string, url: string, body?: any) => {
     if (url === "/api/onboarding/documents/me") return Promise.resolve({ json: () => Promise.resolve(payload) });
+    if (url === "/api/me/w9") return Promise.resolve({ ok: w9Ready, json: () => Promise.resolve({ submitted: w9Ready }) });
+    if (url === "/api/me/bank") return Promise.resolve({ ok: bankLast4 != null, json: () => Promise.resolve({ last4: bankLast4 }) });
     if (url.endsWith("/content")) return Promise.resolve({ json: () => Promise.resolve(contentOverride ?? CONTENT) });
     if (url.endsWith("/sign")) {
       if (signError) return Promise.reject(new Error(signError));
@@ -149,6 +153,8 @@ beforeEach(() => {
   toast.mockReset();
   signError = null;
   declineError = null;
+  w9Ready = false;
+  bankLast4 = null;
   contentOverride = null;
 });
 
@@ -322,5 +328,26 @@ describe("My Documents - the signing ceremony", () => {
     const line = await screen.findByTestId("completed-pdf-sha-independent_contractor");
     expect(line.textContent).toContain(PDF_SHA);
     expect(line.textContent).toContain("SHA-256");
+  });
+
+  it("does not claim onboarding is complete when agreements are signed but payout setup is missing", async () => {
+    const payload = documentsPayload({ status: "completed", completedAt: "2026-07-13T12:00:00.000Z", completedPdfSha256: PDF_SHA });
+    payload.progress = { completed: 1, total: 1 };
+    renderPage(payload);
+    expect(await screen.findByTestId("payout-setup-incomplete")).toHaveTextContent(/payout setup remains/i);
+    expect(screen.queryByTestId("all-signed-banner")).toBeNull();
+    expect(screen.getByText("1 of 2 requirements complete")).toBeInTheDocument();
+  });
+
+  it("marks onboarding complete only when agreements, W-9, and bank details are all ready", async () => {
+    w9Ready = true;
+    bankLast4 = "4242";
+    const payload = documentsPayload({ status: "completed", completedAt: "2026-07-13T12:00:00.000Z", completedPdfSha256: PDF_SHA });
+    payload.progress = { completed: 1, total: 1 };
+    renderPage(payload);
+    const banner = await screen.findByTestId("all-signed-banner");
+    expect(banner).toHaveTextContent(/onboarding requirements are complete/i);
+    expect(screen.getByText("2 of 2 requirements complete")).toBeInTheDocument();
+    expect(screen.queryByTestId("payout-setup-incomplete")).toBeNull();
   });
 });

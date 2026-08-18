@@ -8,6 +8,13 @@
 portal.homefrontsolutionsllc.com {
 	encode zstd gzip
 
+	# TRACE/TRACK are diagnostic legacy methods and CONNECT is a proxy-tunnel
+	# method. The portal uses none of them. Refuse them at the edge so they never
+	# reach Express or fall through to the SPA; the application repeats the same
+	# policy as defense in depth when it is reached without Caddy.
+	@unsafe_methods method TRACE TRACK CONNECT
+	respond @unsafe_methods 405
+
 	# NEAR-ZERO-DOWNTIME CUTOVER. Without retry, the moment the app container
 	# stops during a release Caddy fails the request outright — reps saw hard
 	# connection errors for the length of the swap (measured: a multi-minute

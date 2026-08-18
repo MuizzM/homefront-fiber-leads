@@ -68,4 +68,15 @@ describe("Leaderboard defaults", () => {
     expect(me.textContent).toContain("Your rank");
     expect(me.textContent).toContain("#2 of 2");
   });
+
+  it("flags impossible conversion data instead of displaying a percentage over 100", async () => {
+    renderBoard([{
+      rep: { id: 9, name: "Rae Rep", role: "rep" },
+      knocks: 14, contacts: 1, callbacks: 0, sales: 7,
+    }]);
+    const me = await screen.findByTestId("leaderboard-me");
+    expect(me.textContent).toContain("Review");
+    expect(me.textContent).not.toContain("700%");
+    expect(screen.getByTestId("leaderboard-data-review").textContent).toMatch(/missing a matching logged contact/i);
+  });
 });

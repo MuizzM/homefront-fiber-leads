@@ -422,7 +422,17 @@ export default function MyDocuments() {
   const w9Filed = !!w9.data?.submitted;
   const taxReady = w9Filed && !!bank.data?.last4;
 
-  const percentage = data?.progress.total ? Math.round((data.progress.completed / data.progress.total) * 100) : 0;
+  // Onboarding is not complete merely because the four agreements are signed.
+  // W-9 + payout details are a fifth required step and the page itself says no
+  // commission can be released without it, so the banner and progress meter
+  // must use the same complete definition.
+  const agreementTotal = data?.progress.total ?? 0;
+  const agreementCompleted = data?.progress.completed ?? 0;
+  const agreementsComplete = agreementTotal > 0 && agreementCompleted === agreementTotal;
+  const requirementsTotal = agreementTotal + 1;
+  const requirementsCompleted = agreementCompleted + (taxReady ? 1 : 0);
+  const onboardingComplete = agreementsComplete && taxReady;
+  const percentage = requirementsTotal ? Math.round((requirementsCompleted / requirementsTotal) * 100) : 0;
   const nextDocument = data?.documents.find(document =>
     document.envelope?.status === "sent" || document.envelope?.status === "delivered"
   );
@@ -457,22 +467,32 @@ export default function MyDocuments() {
               </Button>
             </section>
           )}
-          {percentage === 100 && (
+          {onboardingComplete && (
             <section
               className="hf-shine relative overflow-hidden rounded-2xl border border-success/25 bg-success/[0.08] p-4 flex items-center gap-3"
-              aria-label="All agreements signed"
+              aria-label="Onboarding requirements complete"
               data-testid="all-signed-banner"
             >
               
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-foreground">Every agreement is signed - you're field-ready.</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">Your executed PDFs live below, hash-verified, whenever you need them.</p>
+                <p className="text-sm font-semibold text-foreground">Your onboarding requirements are complete.</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Every agreement, your W-9, and your payout account are on file.</p>
               </div>
             </section>
           )}
+          {agreementsComplete && !taxReady && (
+            <section
+              className="rounded-2xl border border-warning/25 bg-warning/[0.08] p-4"
+              aria-label="Payout setup incomplete"
+              data-testid="payout-setup-incomplete"
+            >
+              <p className="text-sm font-semibold text-foreground">Agreements signed - payout setup remains.</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">Complete your W-9 and direct-deposit details before a commission payout can be released.</p>
+            </section>
+          )}
           <section className="rounded-2xl bg-card border border-border p-4" aria-label="Onboarding progress">
-            <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${percentage === 100 ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
-            <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${percentage === 100 ? "bg-success" : "bg-primary"}`} style={{ width: `${percentage}%` }} /></div>
+            <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{requirementsCompleted} of {requirementsTotal} requirements complete</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${onboardingComplete ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
+            <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className={`h-full rounded-full transition-all duration-500 ${onboardingComplete ? "bg-success" : "bg-primary"}`} style={{ width: `${percentage}%` }} /></div>
           </section>
           <section className="rounded-2xl bg-card border border-border overflow-hidden"><div className="divide-y divide-border">
             {/* The W-9 is onboarding paperwork the company requires before it can

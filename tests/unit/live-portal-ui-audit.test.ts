@@ -51,5 +51,18 @@ describe("live portal UI audit regressions", () => {
     const clock = read("client/src/pages/ClockIn.tsx");
     expect(clock).toContain('needsReview ? "Review time" : "Active"');
     expect(clock).toContain('needsReview ? " · Review" : ""');
+    expect(clock).toContain("formatSessionDateRange(s.clockedIn, s.clockedOut)");
+    expect(clock).not.toContain("before payroll is finalized");
+  });
+
+  it("keeps contractor compensation wording and rep empty states accurate", () => {
+    const today = read("client/src/pages/Today.tsx");
+    expect(today).toContain("Records field activity; this is not hourly pay");
+    expect(today).toContain("View your weekly commission statement");
+    expect(today).not.toContain("Your hours count toward payroll");
+
+    const leads = read("client/src/pages/Leads.tsx");
+    expect(leads).toContain('isRep ? "No leads assigned yet"');
+    expect(leads).toContain("Ask your team lead for a territory. Assigned doors will appear here and on the Field Map.");
   });
 });

@@ -39,7 +39,7 @@ interface WeekResponse {
       nextTierRateCents: number | null; nextTierProjectedCommissionCents: number | null;
     } | null;
   } | null;
-  bounds?: { localWeekLabel: string } | null;
+  bounds?: { localWeekLabel: string; weekStartUtc?: string; nextWeekStartUtc?: string } | null;
   structure?: { structure: "FLAT" | "TIERED"; flatRateCents: number | null; tiers: Tier[]; planName: string; acceptedAt: string | null } | null;
   sales?: WeekSale[];
   adjustments?: Array<{ id: number; amount_cents: number; reason: string; type: string; approved_at: string | null }>;
@@ -112,6 +112,16 @@ export default function MyCommission() {
     queryFn: () => apiRequest("GET", `/api/commission/statements?repId=${myRepId}`).then(r => r.json()),
     enabled: myRepId != null,
   });
+  // The history endpoint includes the active statement. This page already
+  // renders that statement as "This week", so showing it again under "Past
+  // weeks" creates a false duplicate. Filter by both immutable id and week
+  // start for compatibility with older rows that may omit one field.
+  const currentStatementId = data?.statement?.id;
+  const currentWeekStart = data?.statement?.week_start_utc ?? data?.bounds?.weekStartUtc;
+  const pastHistory = isLoading ? [] : history.filter((statement: any) =>
+    statement.id !== currentStatementId
+      && (!currentWeekStart || statement.week_start_utc !== currentWeekStart),
+  );
 
   return (
     <div className="w-full max-w-3xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6">
@@ -231,18 +241,18 @@ export default function MyCommission() {
           </button>
         </section>
       )}
-      {history.length > 0 && (
+      {pastHistory.length > 0 && (
         <section className="rounded-xl bg-card border border-border overflow-hidden">
           <header className="px-4 py-3 border-b border-border flex items-center gap-2">
             
             <span className="text-sm font-semibold tracking-tight text-foreground">Past weeks</span>
             {/* Count matches what's on screen — never a number larger than the list. */}
             <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
-              {history.length > 8 ? `last 8 of ${history.length}` : history.length}
+              {pastHistory.length > 8 ? `last 8 of ${pastHistory.length}` : pastHistory.length}
             </span>
           </header>
           <div className="divide-y divide-border">
-            {history.slice(0, 8).map((s: any) => (
+            {pastHistory.slice(0, 8).map((s: any) => (
               <div key={s.id} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`row-week-${s.id}`}>
                 <div className="min-w-0">
                   <div className="text-sm text-foreground truncate">{s.local_week_label}</div>
@@ -736,7 +746,13 @@ function WeekView({ data }: { data: WeekResponse }) {
   const tiers = structure?.tiers ?? [];
   // Money state - real statement status, falling back to a live projection.
   const stateKey = (stmt?.status ?? (data.locked ? "FINALIZED" : "OPEN")) as string;
-  const state = WEEK_STATE[stateKey] ?? WEEK_STATE.OPEN;
+  const weekStillOpen = data.bounds?.nextWeekStartUtc
+    ? Date.now() < Date.parse(data.bounds.nextWeekStartUtc)
+    : false;
+  const finalizedEarly = stateKey === "FINALIZED" && weekStillOpen;
+  const state = finalizedEarly
+    ? { label: "Finalized early", cls: "bg-warning/10 text-warning", icon: "lock" as const }
+    : WEEK_STATE[stateKey] ?? WEEK_STATE.OPEN;
   // The rate a rep earns on their FIRST sale (never render "$0 per sale").
   const entryRateCents = isTiered ? (tiers[0]?.rateCents ?? 15000) : (structure?.flatRateCents ?? 0);
 
@@ -768,7 +784,12 @@ function WeekView({ data }: { data: WeekResponse }) {
               : <>{count} qualified sale{count === 1 ? "" : "s"} · {usd(rateCents)} per sale{isTiered && comp?.tierLabel ? ` · ${comp.tierLabel}` : ""}</>}
           </div>
           {stateKey === "OPEN" && (
-            <div className="mt-1 text-[11px] text-muted-foreground">This is a live projection - it can still change until the week closes Sunday night.</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">This is a live projection - it can still change until the scheduled week close.</div>
+          )}
+          {finalizedEarly && (
+            <div className="mt-2 rounded-lg border border-warning/25 bg-warning/[0.08] px-3 py-2 text-[11px] text-foreground" role="status" data-testid="finalized-early-warning">
+              This statement was locked before the scheduled week close. New sales will not change it; ask your manager to review the early finalization if it was not intentional.
+            </div>
           )}
           {/* THE number a rep is really asking for: what lands in their pocket
               after the tenant's chargeback reserve. Stated in the hero - not
@@ -789,14 +810,14 @@ function WeekView({ data }: { data: WeekResponse }) {
         <div className="grid grid-cols-3 divide-x divide-border border-t border-border">
           <MetricCell label="Qualified" value={String(count)} />
           <MetricCell label="Per sale" value={usd(count === 0 ? entryRateCents : rateCents)} accent />
-          <MetricCell label="Base pay" value={usd(grossCents)} />
+          <MetricCell label="Gross commission" value={usd(grossCents)} />
         </div>
 
         {/* Adjustments - a deduction is NEVER an unexplained number */}
         {(data.adjustments?.length ?? 0) > 0 && (
           <div className="border-t border-border p-4 space-y-1.5" data-testid="hero-adjustments">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Base pay ({count} × {usd(rateCents || entryRateCents)})</span>
+              <span className="text-muted-foreground">Gross commission ({count} × {usd(rateCents || entryRateCents)})</span>
               <span className="tabular-nums text-foreground">{usd(grossCents)}</span>
             </div>
             {data.adjustments!.map(a => (

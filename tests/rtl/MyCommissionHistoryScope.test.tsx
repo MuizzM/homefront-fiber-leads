@@ -39,10 +39,10 @@ function stmt(id: number, label: string) {
   };
 }
 
-function renderPage(history: any[] | Error) {
+function renderPage(history: any[] | Error, current: any = WEEK) {
   apiRequest.mockImplementation((...args: any[]) => {
     const url = args.find(a => typeof a === "string" && a.startsWith("/")) ?? "";
-    if (url.includes("me/current")) return Promise.resolve({ json: () => Promise.resolve(WEEK) });
+    if (url.includes("me/current")) return Promise.resolve({ json: () => Promise.resolve(current) });
     if (url.includes("/api/commission/statements")) {
       if (history instanceof Error) return Promise.reject(history);
       return Promise.resolve({ json: () => Promise.resolve(history) });
@@ -76,6 +76,23 @@ describe("past weeks scope + honesty", () => {
   it("shows the plain count when nothing is truncated", async () => {
     renderPage([stmt(1, "Jul 27 - Aug 2"), stmt(2, "Jul 20 - Jul 26")]);
     await waitFor(() => expect(screen.getAllByTestId(/^row-week-/).length).toBe(2));
+  });
+
+  it("does not repeat the current statement under Past weeks", async () => {
+    const current = {
+      ...WEEK,
+      noPlan: false,
+      statement: { id: 44, status: "OPEN", week_start_utc: "2026-08-17T04:00:00.000Z", qualified_sale_count: 0, rate_cents: 15000, final_commission_cents: 0, gross_commission_cents: 0 },
+      structure: { structure: "FLAT", flatRateCents: 15000, tiers: [], planName: "Flat", acceptedAt: "2026-08-01T00:00:00Z" },
+      bounds: { localWeekLabel: "Aug 17 - Aug 23, 2026", weekStartUtc: "2026-08-17T04:00:00.000Z" },
+    };
+    renderPage([
+      { ...stmt(44, "Aug 17 - Aug 23, 2026"), week_start_utc: "2026-08-17T04:00:00.000Z" },
+      { ...stmt(43, "Aug 10 - Aug 16, 2026"), week_start_utc: "2026-08-10T04:00:00.000Z" },
+    ], current);
+    await waitFor(() => expect(screen.getAllByTestId(/^row-week-/).length).toBe(1));
+    expect(screen.queryByTestId("row-week-44")).toBeNull();
+    expect(screen.getByTestId("row-week-43")).toBeInTheDocument();
   });
 
   it("a failed history fetch says so with a retry - the section must not silently vanish", async () => {

@@ -19,7 +19,7 @@ vi.mock("@/lib/queryClient", () => ({
 }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
-import ClockIn, { localDayKey } from "../../client/src/pages/ClockIn";
+import ClockIn, { formatSessionDateRange, localDayKey } from "../../client/src/pages/ClockIn";
 
 // A CLOSED session (no live timer → no intervals in the test).
 function session(over: Record<string, any> = {}) {
@@ -62,6 +62,11 @@ describe("Field Hours day bucketing", () => {
     // A timestamp's key must match how a rep reads their own calendar.
     const d = new Date(2026, 2, 5, 9, 30); // March 5, local
     expect(localDayKey(d.toISOString())).toBe("2026-03-05");
+  });
+
+  it("shows both dates when a recorded session crosses calendar days", () => {
+    expect(formatSessionDateRange("2026-07-30T06:50:00.000Z", "2026-08-04T22:22:00.000Z"))
+      .toMatch(/Jul 30 to .*Aug 4/);
   });
 
   it("Today's hours trust the clock-in timestamp, never the server's UTC date label", async () => {

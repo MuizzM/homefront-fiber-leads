@@ -128,6 +128,7 @@ describe("the ramp bonus card", () => {
     expect((await screen.findByTestId("ramp-completion-award")).textContent).toBe("$100");
     expect(screen.getByTestId("ramp-completion-headline").textContent).toContain("51 lessons left");
     expect(screen.getByTestId("ramp-completion").textContent).toContain("40 of 91 lessons");
+    expect(screen.getByTestId("ramp-training-count-explainer").textContent).toMatch(/Academy Path groups lessons and practice/i);
   });
 
   it("marks the finishing bonus earned once it is paid", async () => {

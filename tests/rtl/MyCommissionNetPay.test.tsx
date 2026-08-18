@@ -84,4 +84,25 @@ describe("net pay after holdback, in the hero", () => {
     await waitFor(() => expect(screen.getByTestId("text-week-commission")).toBeTruthy());
     expect(screen.queryByTestId("hero-net-pay")).toBeNull();
   });
+
+  it("labels an early-locked current week honestly and calls sales pay commission", async () => {
+    renderPage(weekPayload({
+      statement: {
+        id: 9, status: "FINALIZED", qualified_sale_count: 6, rate_cents: 17500,
+        gross_commission_cents: 105000, final_commission_cents: 105000,
+        week_start_utc: "2026-08-17T04:00:00.000Z",
+      },
+      computation: null,
+      locked: true,
+      bounds: {
+        localWeekLabel: "Aug 17 - Aug 23, 2026",
+        weekStartUtc: "2026-08-17T04:00:00.000Z",
+        nextWeekStartUtc: "2999-08-24T04:00:00.000Z",
+      },
+    }));
+    expect(await screen.findByTestId("week-state")).toHaveTextContent("Finalized early");
+    expect(screen.getByTestId("finalized-early-warning")).toHaveTextContent(/locked before the scheduled week close/i);
+    expect(screen.getByText("Gross commission")).toBeInTheDocument();
+    expect(screen.queryByText("Base pay")).toBeNull();
+  });
 });

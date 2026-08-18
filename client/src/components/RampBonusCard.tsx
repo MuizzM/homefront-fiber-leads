@@ -14,6 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { usd } from "@shared/moneyFormat";
+import { TOTAL_ACTIVITIES } from "@shared/academyPath";
 
 export interface RampCardData {
   visible: boolean;
@@ -130,6 +131,9 @@ export function RampBonusCard() {
                 </div>
                 <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
                   {c.lessonsCompleted} of {c.lessonsTotal} lessons
+                </p>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground" data-testid="ramp-training-count-explainer">
+                  This bonus counts the complete {c.lessonsTotal}-lesson library. The Academy Path groups lessons and practice into {TOTAL_ACTIVITIES} activities, so its progress total is different.
                 </p>
               </div>
             </div>
