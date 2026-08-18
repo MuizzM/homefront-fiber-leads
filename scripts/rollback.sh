@@ -29,9 +29,13 @@ if ! APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" up -d app; then
 fi
 
 echo "[rollback] health check…"
-attempts_left=20
+# Use dockerd's already-computed health verdict, exactly as deploy.sh does.
+# Starting this application can legitimately exceed one minute under load;
+# the former 20 x 3s exec-based probe falsely declared a healthy recovery dead.
+attempts_left=100
 while [ "$attempts_left" -gt 0 ]; do
-  if APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" exec -T app node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
+  APP_CONTAINER="$(APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" ps -q app || true)"
+  if [ -n "$APP_CONTAINER" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$APP_CONTAINER" 2>/dev/null)" = "healthy" ]; then
     echo "$TAG" > .deployed-tag
     echo "[rollback] HEALTHY — $TAG is live"; exit 0
   fi

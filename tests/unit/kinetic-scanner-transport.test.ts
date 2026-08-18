@@ -10,6 +10,7 @@ vi.mock("../../server/proxy-fetch", () => ({
   rotateProxySession,
   getProxySessionId: () => "decodo-s1",
   isProxyConnected: () => true,
+  proxyUrlFromEnv: () => "http://redacted@proxy",
   getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100, sessionId: "decodo-s1" }),
 }));
 vi.mock("../../server/distributedProviderCoordinator", () => {
@@ -57,6 +58,11 @@ describe("Kinetic scanner transport hardening", () => {
     process.env.KFS_AUTOMATION_AUTHORIZED = "false";
     process.env.KFS_TOKEN_POOL_WARM_MIN = "1";
     process.env.KFS_MINT_MIN_INTERVAL_MS = "0"; // no inter-mint spacing in tests
+    // This suite owns a mocked Decodo transport. Keep unrelated direct and
+    // curl-impersonate fallback ladders out of the test so a missing local
+    // binary cannot consume the five-second case budget before the mock runs.
+    process.env.KFS_MINT_IMPERSONATE = "off";
+    process.env.KFS_MINT_DIRECT = "off";
     scanner = await import("../../server/scanner");
     process.env.KFS_AUTOMATION_AUTHORIZED = "true";
   });

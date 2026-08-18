@@ -28,6 +28,8 @@ describe("portal HTTP method policy", () => {
     const caddy = fs.readFileSync(path.resolve(__dirname, "../../deploy/caddy/Caddyfile"), "utf8");
     expect(caddy).toMatch(/@unsafe_methods\s+method\s+TRACE\s+TRACK\s+CONNECT/);
     expect(caddy).toMatch(/respond\s+@unsafe_methods\s+405/);
+    expect(caddy).toMatch(/https:\/\/\s*\{[\s\S]*?@unsafe_methods\s+method\s+TRACE\s+TRACK\s+CONNECT/);
+    expect(caddy).toMatch(/https:\/\/\s*\{[\s\S]*?respond\s+421[\s\S]*?\}/);
   });
 
   it("deploys and verifies the edge policy instead of leaving a stale bind mount", () => {
@@ -38,5 +40,6 @@ describe("portal HTTP method policy", () => {
     expect(deploy).toContain("caddy reload --config /etc/caddy/Caddyfile");
     expect(deploy).toContain("TRACE TRACK CONNECT");
     expect(deploy).toContain('expected 405');
+    expect(deploy).toContain("healthy app remains live; edge policy needs operator attention");
   });
 });

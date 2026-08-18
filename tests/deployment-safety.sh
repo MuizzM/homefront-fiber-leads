@@ -59,6 +59,10 @@ grep -q './deploy/caddy:/etc/caddy:ro' docker-compose.production.yml || fail "Ca
 grep -q 'caddy:2 caddy validate --config /etc/caddy/Caddyfile' scripts/deploy.sh || fail "deploy does not preflight the Caddy config with the production image's executable"
 grep -q 'caddy reload --config /etc/caddy/Caddyfile' scripts/deploy.sh || fail "deploy does not reload Caddy"
 grep -q 'public unsafe-method gate OK' scripts/deploy.sh || fail "deploy does not verify unsafe methods at the public edge"
+grep -q '^https:// {' "$CADDYFILE" || fail "Caddy lacks a fail-closed HTTPS authority catch-all"
+grep -q 'respond 421' "$CADDYFILE" || fail "unexpected HTTPS authorities are not rejected"
+grep -q 'attempts_left=100' scripts/rollback.sh || fail "rollback health grace is shorter than production startup"
+grep -q 'State.Health.Status' scripts/rollback.sh || fail "rollback does not use dockerd health status"
 grep -q 'pragma("wal_checkpoint(TRUNCATE)")' scripts/deploy.sh || fail "offline window lacks a real WAL-checkpoint pragma"
 if grep -q 'VACUUM INTO' scripts/deploy.sh; then
   fail "deploy must not take an online vacuum snapshot (disk-hungry; wedged production deploys)"

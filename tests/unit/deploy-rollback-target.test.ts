@@ -101,4 +101,21 @@ describe("the recovery path is wired to the chooser", () => {
     expect(src).not.toMatch(/scripts\/rollback\.sh\s+"\$PREV_TAG"/);
     expect(src).toMatch(/recover_to_previous/);
   });
+
+  it("does not roll back a healthy app for an edge-policy probe failure", () => {
+    const src = readFileSync(DEPLOY_SH, "utf8");
+    const failure = src.slice(
+      src.indexOf('if [ "$unsafe_method_gate_ok" != "1" ]'),
+      src.indexOf('echo "[deploy] public unsafe-method gate OK'),
+    );
+    expect(failure).toContain("record_healthy_app_release");
+    expect(failure).not.toContain("recover_to_previous");
+  });
+
+  it("gives rollback the same dockerd health grace as a deploy", () => {
+    const rollback = readFileSync(join(__dirname, "..", "..", "scripts", "rollback.sh"), "utf8");
+    expect(rollback).toContain("attempts_left=100");
+    expect(rollback).toContain(".State.Health.Status");
+    expect(rollback).not.toContain("exec -T app node -e");
+  });
 });

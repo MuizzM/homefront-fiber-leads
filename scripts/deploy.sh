@@ -264,6 +264,16 @@ recover_to_previous() {
   return 1
 }
 
+# Once the replacement app itself has passed dockerd's health gate, keep the
+# release bookkeeping aligned with the image that is actually running. An edge
+# reload/probe failure is important and still fails the workflow, but rolling
+# back a healthy app cannot repair Caddy and can turn an edge alert into an
+# avoidable outage. .previous-tag remains the known-good app rollback target.
+record_healthy_app_release() {
+  echo "${PREV_TAG:-}" > .previous-tag
+  echo "$NEW_TAG" > .deployed-tag
+}
+
 # 5) Roll out (Caddy waits for app healthy via depends_on).
 echo "[deploy] up…"
 if ! APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" up -d; then
@@ -305,8 +315,8 @@ if [ "$ok" = "1" ]; then
   echo "[deploy] reload Caddy configuration…"
   if ! APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" exec -T caddy \
       caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
-    echo "[deploy] Caddy reload failed — rolling the app back; previous edge config remains active" >&2
-    recover_to_previous || true
+    echo "[deploy] Caddy reload failed — healthy app remains live; previous edge config remains active" >&2
+    record_healthy_app_release
     exit 1
   fi
 
@@ -333,15 +343,15 @@ if [ "$ok" = "1" ]; then
     fi
   done
   if [ "$unsafe_method_gate_ok" != "1" ]; then
-    recover_to_previous || true
+    echo "[deploy] healthy app remains live; edge policy needs operator attention" >&2
+    record_healthy_app_release
     exit 1
   fi
   echo "[deploy] public unsafe-method gate OK (TRACE/TRACK/CONNECT → 405)"
-  # Record the release only after BOTH the app health gate and the public edge
-  # security gate pass. Otherwise the next deploy would trust a failed release
-  # as the known-good rollback target.
-  echo "${PREV_TAG:-}" > .previous-tag
-  echo "$NEW_TAG" > .deployed-tag
+  # The app image is already recorded as running once it passes its own health
+  # gate; reaching here additionally certifies the public edge policy and makes
+  # the release eligible for ordinary post-deploy pruning.
+  record_healthy_app_release
   # Post-deploy disk hygiene: keep ONLY the live image and the rollback image;
   # delete older release tags, dangling layers, and trim the build cache.
   # Best-effort — never fail the deploy.

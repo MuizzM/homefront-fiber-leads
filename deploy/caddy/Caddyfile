@@ -62,6 +62,17 @@ portal.homefrontsolutionsllc.com {
 	}
 }
 
+# Fail closed when an HTTPS request reaches this server with a missing,
+# malformed, or unexpected authority. In particular, HTTP/2 CONNECT can carry
+# an authority that does not select the named portal site; without a catch-all,
+# Caddy's empty default route can answer 200 before the portal policy runs.
+# Normal portal traffic continues to use the more-specific site block above.
+https:// {
+	@unsafe_methods method TRACE TRACK CONNECT
+	respond @unsafe_methods 405
+	respond 421
+}
+
 # ── Optional: split the API onto its own host ────────────────────────────────
 # The app serves the API and SPA from ONE process, so a separate api. host is
 # NOT required. Uncomment only if you later split them; it proxies the same app.
