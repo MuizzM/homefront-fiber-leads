@@ -9,7 +9,7 @@ import {
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { Users, Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, AlertTriangle, CheckCircle2, ArrowUpRight, CircleDot } from "lucide-react";
+import { Users, Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, AlertTriangle, CheckCircle2, ArrowUpRight, CircleDot, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +31,7 @@ import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
 import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
 import { leadStateLabel } from "@/lib/leadDisplay";
+import { queueLeadMapTarget } from "@/lib/leadMapNavigation";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -780,7 +781,7 @@ function EnterpriseKpi({ label, value, helper, warning = false }: {
 
 const LeadTableRow = memo(function LeadTableRow({
   lead, assignedName, onboardingStage, canAssign, canEdit, canDelete, canOpenCalling,
-  onOpen, onAssign, onEdit, onDelete,
+  onOpen, onMap, onAssign, onEdit, onDelete,
 }: {
   lead: Lead;
   assignedName: string;
@@ -791,6 +792,7 @@ const LeadTableRow = memo(function LeadTableRow({
   canDelete: boolean;
   canOpenCalling: boolean;
   onOpen: (lead: Lead) => void;
+  onMap: (lead: Lead) => void;
   onAssign: (lead: Lead) => void;
   onEdit: (lead: Lead) => void;
   onDelete: (id: number) => void;
@@ -803,7 +805,7 @@ const LeadTableRow = memo(function LeadTableRow({
   const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
   return (
     <tr data-testid={`card-lead-${lead.id}`} className={`group hover:bg-muted/35 transition-colors${saving ? " opacity-70" : ""}`}>
-      <td className="px-4 py-3"><button onClick={() => !saving && onOpen(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+      <td className="px-4 py-3"><button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
       <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
@@ -817,6 +819,7 @@ const LeadTableRow = memo(function LeadTableRow({
           </div>
         ) : (
         <div className="flex items-center justify-end gap-0.5">
+          <button onClick={() => onMap(lead)} title="Show on Field Map" aria-label={`Show ${lead.address} on field map`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><MapPin className="w-3.5 h-3.5" aria-hidden="true" /></button>
           {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
           {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
           <button onClick={() => onOpen(lead)} title="Open details" aria-label={`Open details for ${lead.address}`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" /></button>
@@ -834,10 +837,11 @@ const LeadTableRow = memo(function LeadTableRow({
   );
 });
 
-const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOpen }: {
+const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOpen, onMap }: {
   lead: Lead;
   canOpenCalling: boolean;
   onOpen: (lead: Lead) => void;
+  onMap: (lead: Lead) => void;
 }) {
   const directions = lead.lat != null && lead.lng != null
     ? `https://www.google.com/maps/dir/?api=1&destination=${lead.lat},${lead.lng}`
@@ -848,7 +852,7 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
   const saving = lead.id < 0;
   return (
     <article className={`render-lazy px-4 py-4${saving ? " opacity-70" : ""}`} data-testid={`mobile-lead-${lead.id}`}>
-      <button onClick={() => !saving && onOpen(lead)} className="w-full text-left">
+      <button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="w-full text-left">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
@@ -871,8 +875,9 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
           <RefreshCw className="h-3.5 w-3.5 animate-spin" />Saving…
         </div>
       ) : (
-      <div className="mt-3 grid grid-cols-3 gap-2">
+      <div className="mt-3 grid grid-cols-4 gap-2">
         <button onClick={() => onOpen(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5">Open</button>
+        <button onClick={() => onMap(lead)} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Map</button>
         {canOpenCalling ? <Link href={`/calling/lead/${lead.id}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Calling</Link> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5">Protected</span>}
         <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Route</a>
       </div>
@@ -1211,6 +1216,10 @@ export default function Leads() {
   // across a keystroke or a dialog toggle. setState functions are already
   // stable; these just give them a row-shaped signature.
   const openLead = useCallback((lead: Lead) => setIntelLead(lead), []);
+  const openLeadOnMap = useCallback((lead: Lead) => {
+    queueLeadMapTarget({ leadId: lead.id, lat: lead.lat ?? undefined, lng: lead.lng ?? undefined });
+    navigate("/map");
+  }, [navigate]);
   const openAssign = useCallback((lead: Lead) => setAssignLead(lead), []);
   const openEdit = useCallback((lead: Lead) => setEditLead(lead), []);
   const openDelete = useCallback((id: number) => setDeleteId(id), []);
@@ -1322,6 +1331,7 @@ export default function Leads() {
                     canDelete={canDelete}
                     canOpenCalling={canOpenCalling}
                     onOpen={openLead}
+                    onMap={openLeadOnMap}
                     onAssign={openAssign}
                     onEdit={openEdit}
                     onDelete={openDelete}
@@ -1333,7 +1343,7 @@ export default function Leads() {
         ) : (
           <div className="divide-y divide-border">
             {filtered.map(lead => (
-              <LeadMobileCard key={lead.id} lead={lead} canOpenCalling={canOpenCalling} onOpen={openLead} />
+              <LeadMobileCard key={lead.id} lead={lead} canOpenCalling={canOpenCalling} onOpen={openLead} onMap={openLeadOnMap} />
             ))}
           </div>
         )}

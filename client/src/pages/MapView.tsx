@@ -193,6 +193,7 @@ import { MapLensNotice } from "@/components/map/MapLensNotice";
 import { MapSettingsSheet } from "@/components/map/MapSettingsSheet";
 import { MapLegend } from "@/components/map/MapLegend";
 import { FOCUS } from "@/lib/a11y";
+import { takeLeadMapTarget, type LeadMapTarget } from "@/lib/leadMapNavigation";
 
 // ── Control-rail button grammar — ONE uniform rounded-square style for every
 //    top-left map control (SalesRabbit rail). Active = solid primary.
@@ -940,6 +941,9 @@ export default function MapView() {
 
   // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
+  // Leads hands the kept-alive map a tab-scoped, one-use target before routing
+  // here. Hold it until the GL map is ready so a cold map open cannot lose it.
+  const pendingMapLeadTargetRef = useRef<LeadMapTarget | null>(null);
   // Live peek height the open lead card measures + publishes — re-pads the map
   // camera when the sheet's real content height lands (varies per lead).
   const [sheetPeekPx, setSheetPeekPx] = useState<number | null>(null);
@@ -5519,9 +5523,9 @@ export default function MapView() {
     [geocoding, toast, canSubmitScan],
   );
 
-  const flyToLead = useCallback((lead: MapPin) => {
+  const flyToLead = useCallback((lead: Pick<MapPin, "id" | "lat" | "lng">) => {
     const map = mapRef.current;
-    if (!map || !lead.lat || !lead.lng) return;
+    if (!map || lead.lat == null || lead.lng == null || !Number.isFinite(lead.lat) || !Number.isFinite(lead.lng)) return;
     if (!(lead.id > 0)) return; // temp optimistic pin — selection waits for the reconcile
     const target: [number, number] = [lead.lng, lead.lat];
     suspendFollowCameraRef.current();
@@ -5541,6 +5545,28 @@ export default function MapView() {
       essential: true,
     });
   }, []);
+
+  // Leads → Field Map handoff. Keep the route itself at `/map` so the existing
+  // keep-alive stage stays warm; the selected customer id/coordinates never
+  // appear in browser history. Opening the map selects the real lead, flies to
+  // its stored rooftop, and opens the same knock/details sheet as a pin tap.
+  useEffect(() => {
+    if (!tabActive) return;
+    const target = pendingMapLeadTargetRef.current ?? takeLeadMapTarget();
+    if (!target) return;
+    pendingMapLeadTargetRef.current = target;
+    setSelectedLeadId(target.leadId);
+    if (!mapReady) return;
+
+    const cached = leadById.get(target.leadId);
+    const mappable = cached?.lat != null && cached?.lng != null
+      ? cached
+      : target.lat != null && target.lng != null
+        ? { id: target.leadId, lat: target.lat, lng: target.lng }
+        : null;
+    if (mappable) flyToLead(mappable);
+    pendingMapLeadTargetRef.current = null;
+  }, [tabActive, mapReady, leadById, flyToLead]);
 
   // ── Existing-lead surfacing (phantom-duplicate fix) ────────────────────────
   // POST /api/leads answers a duplicate address with {existed:true, visibility}.
