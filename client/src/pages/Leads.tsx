@@ -4,8 +4,9 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryClie
 import { apiRequest } from "@/lib/queryClient";
 import {
   LEADS_PAGE_SIZE, isLeadsListKey, leadMatchesListFilters, leadsListQueryOptions,
-  upsertLeadIntoLists, type LeadsListResponse,
+  upsertLeadIntoLists, type LeadListItem, type LeadsListResponse,
 } from "@/lib/leadsListQuery";
+import { WATCHLIST_QUERY, type WatchlistItem } from "@/components/fiber/ComingSoonWatchlist";
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -783,7 +784,7 @@ const LeadTableRow = memo(function LeadTableRow({
   lead, assignedName, onboardingStage, canAssign, canEdit, canDelete, canOpenCalling,
   onOpen, onMap, onAssign, onEdit, onDelete,
 }: {
-  lead: Lead;
+  lead: LeadListItem;
   assignedName: string;
   /** Onboarding stage of this row's assigned rep, if any — resolved by the page. */
   onboardingStage?: string;
@@ -809,7 +810,7 @@ const LeadTableRow = memo(function LeadTableRow({
       <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
-      <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
+      <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100 · {lead.lastScannedAt ? `scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "no scan timestamp"}</div></td>
       <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-destructive" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
       <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
       <td className="px-3 py-3">
@@ -838,7 +839,7 @@ const LeadTableRow = memo(function LeadTableRow({
 });
 
 const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOpen, onMap }: {
-  lead: Lead;
+  lead: LeadListItem;
   canOpenCalling: boolean;
   onOpen: (lead: Lead) => void;
   onMap: (lead: Lead) => void;
@@ -857,6 +858,7 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
             <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground">{lead.city}, {lead.state} {lead.zip}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{lead.lastScannedAt ? `Scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "No scan timestamp"}</div>
           </div>
           {/* leadStateLabel, NOT the raw lookup: "already a customer" is stored
               as not_interested + lastOutcome, and the raw label showed those
@@ -893,6 +895,8 @@ export default function Leads() {
   const [filterState, setFilterState] = useState("all");
   const [filterRep, setFilterRep] = useState("all");
   const [filterFiber, setFilterFiber] = useState("all");
+  const [scanWindow, setScanWindow] = useState<"all" | "24h" | "7d" | "30d">("all");
+  const [sortMode, setSortMode] = useState<"created_desc" | "scanned_desc">("created_desc");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
@@ -931,6 +935,8 @@ export default function Leads() {
       state: filterState,
       rep: filterRep,
       fiber: filterFiber,
+      scanWindow,
+      sort: sortMode,
       page,
     }),
     staleTime: 30000,
@@ -967,6 +973,13 @@ export default function Leads() {
     staleTime: 30_000,
   });
   const bs = leadStats?.byStatus ?? {};
+  const canSeeScanOps = user?.role === "admin" || user?.role === "manager";
+  const { data: comingSoonWatchlist } = useQuery<WatchlistItem[] | null>({
+    ...WATCHLIST_QUERY,
+    enabled: canSeeScanOps,
+  });
+  const activeComingSoon = (comingSoonWatchlist ?? []).filter(item => item.status === "active" || item.status == null);
+  const hotComingSoon = activeComingSoon.filter(item => item.urgency === "hot").length;
 
   // Distinct states + cities for the dropdowns (cities scoped to the chosen
   // state). Memoised: this is a Set-dedup + sort over every facet row, and it
@@ -1059,7 +1072,8 @@ export default function Leads() {
       // server confirms, and a failure hands the intact form back.
       const view = {
         search: debouncedSearch, status: filterStatus, city: filterCity,
-        state: filterState, rep: filterRep, fiber: filterFiber, page,
+        state: filterState, rep: filterRep, fiber: filterFiber,
+        scanWindow, sort: sortMode, page,
       };
       return { snapshots, tempId, view, gen: dialogGen.current };
     },
@@ -1189,13 +1203,15 @@ export default function Leads() {
   const handleCityChange = (c: string) => { setFilterCity(c); setPage(0); };
   const handleRepChange = (r: string) => { setFilterRep(r); setPage(0); };
   const handleFiberChange = (f: string) => { setFilterFiber(f); setPage(0); };
+  const handleScanWindowChange = (window: "all" | "24h" | "7d" | "30d") => { setScanWindow(window); setPage(0); };
+  const handleSortChange = (sort: "created_desc" | "scanned_desc") => { setSortMode(sort); setPage(0); };
 
   // Active-filter summary — surfaced as dismissible chips so a rep always sees
   // (and can one-tap clear) what's narrowing the list. Pure view over existing
   // filter state; every clear routes through the same setters as the controls.
-  const activeFilters = search.trim() !== "" || filterStatus !== "all" || filterState !== "all" || filterCity !== "all" || filterRep !== "all" || filterFiber !== "all";
+  const activeFilters = search.trim() !== "" || filterStatus !== "all" || filterState !== "all" || filterCity !== "all" || filterRep !== "all" || filterFiber !== "all" || scanWindow !== "all";
   const clearAllFilters = () => {
-    setSearch(""); setFilterStatus("all"); setFilterState("all"); setFilterCity("all"); setFilterRep("all"); setFilterFiber("all"); setPage(0);
+    setSearch(""); setFilterStatus("all"); setFilterState("all"); setFilterCity("all"); setFilterRep("all"); setFilterFiber("all"); setScanWindow("all"); setSortMode("created_desc"); setPage(0);
     setMobileFiltersOpen(false);
   };
 
@@ -1210,7 +1226,9 @@ export default function Leads() {
       ?? (lead.assignedRepId ? `Rep #${lead.assignedRepId}` : "Unassigned"),
     [nameByRepId],
   );
-  const fiberStatuses = Object.keys(leadStats?.byFiberStatus ?? {}).sort();
+  const fiberStatuses = Array.from(new Set([
+    "new_fiber", "coming_soon", ...Object.keys(leadStats?.byFiberStatus ?? {}),
+  ])).sort();
 
   // Row callbacks are hoisted so the memoised rows below keep identical props
   // across a keystroke or a dialog toggle. setState functions are already
@@ -1260,6 +1278,28 @@ export default function Leads() {
         <EnterpriseKpi label="Stale" value={statsError ? null : leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-destructive" warning={!statsError && (leadStats?.stale ?? 0) > 0} />
       </div>
 
+      {canSeeScanOps && (
+        <section className="rounded-xl border border-border bg-card px-4 py-3" data-testid="lead-scan-intelligence">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-primary">Scan intelligence</div>
+              <p className="mt-1 text-xs text-muted-foreground">Work the newest verified neighborhoods first; coming-soon doors stay on their recheck watch until they become orderable.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" className="h-9" data-testid="quick-recent-scans" onClick={() => { handleScanWindowChange("24h"); handleSortChange("scanned_desc"); }}>
+                Scanned in 24h
+              </Button>
+              <Button variant="outline" size="sm" className="h-9" data-testid="quick-fresh-neighborhoods" onClick={() => { handleFiberChange("new_fiber"); handleScanWindowChange("7d"); handleSortChange("scanned_desc"); }}>
+                Fresh neighborhoods
+              </Button>
+              <Button variant="outline" size="sm" className="h-9" onClick={() => navigate("/fiber")}>
+                Coming soon {activeComingSoon.length}{hotComingSoon > 0 ? ` · ${hotComingSoon} hot` : ""}
+              </Button>
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
         <div className="px-4 py-3.5 border-b border-border flex items-center justify-between gap-3">
           <div>
@@ -1277,11 +1317,13 @@ export default function Leads() {
               {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
             </div>
             <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-11 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2">Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
-            <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 lg:flex gap-2`}>
+            <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 lg:flex lg:flex-wrap gap-2`}>
               {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
               <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
               <Select value={filterCity} onValueChange={handleCityChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-city"><SelectValue placeholder="Territory" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="all">All territories</SelectItem>{cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
               <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber states</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>
+              <Select value={scanWindow} onValueChange={value => handleScanWindowChange(value as typeof scanWindow)}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-scan-window"><SelectValue placeholder="Scan age" /></SelectTrigger><SelectContent><SelectItem value="all">Any scan age</SelectItem><SelectItem value="24h">Scanned in 24h</SelectItem><SelectItem value="7d">Scanned in 7 days</SelectItem><SelectItem value="30d">Scanned in 30 days</SelectItem></SelectContent></Select>
+              <Select value={sortMode} onValueChange={value => handleSortChange(value as typeof sortMode)}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]" data-testid="sort-leads"><SelectValue placeholder="Sort leads" /></SelectTrigger><SelectContent><SelectItem value="created_desc">Newest added</SelectItem><SelectItem value="scanned_desc">Newest scanned</SelectItem></SelectContent></Select>
             </div>
           </div>
 

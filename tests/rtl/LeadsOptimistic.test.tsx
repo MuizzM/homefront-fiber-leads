@@ -153,6 +153,23 @@ describe("Leads open on the Field Map", () => {
   });
 });
 
+describe("Leads scan intelligence filters", () => {
+  it("switches to authoritative newest-scan ordering and a 24-hour window", async () => {
+    renderLeads([lead(1, { lastScannedAt: "2026-08-18T12:00:00.000Z" })]);
+    await screen.findByTestId("card-lead-1");
+
+    fireEvent.click(screen.getByTestId("quick-recent-scans"));
+
+    await waitFor(() => {
+      const urls = apiRequest.mock.calls
+        .filter(([method, url]) => method === "GET" && String(url).startsWith("/api/leads?"))
+        .map(([, url]) => String(url));
+      expect(urls.some(url => url.includes("scanWindow=24h") && url.includes("sort=scanned_desc"))).toBe(true);
+    });
+    expect(screen.getByText(/scanned today/i)).toBeTruthy();
+  });
+});
+
 describe("Leads delete is optimistic", () => {
   it("removes the row and closes the dialog BEFORE the server responds", async () => {
     renderLeads([lead(1), lead(2)]);

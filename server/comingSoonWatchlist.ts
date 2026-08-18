@@ -331,6 +331,7 @@ export function registerComingSoonRoutes(app: Express, deps: ComingSoonRouteDeps
     const statusFilter = ["active", "promoted", "expired"].includes(String(req.query.status))
       ? String(req.query.status) : null;
     const now = Date.now();
+    const hotCities = hotCitySet();
     const rows = rawDb.prepare(
       `SELECT w.id, w.scan_target_id AS scanTargetId, w.first_seen_at AS firstSeenAt,
               w.last_checked_at AS lastCheckedAt, w.estimated_completion, w.source,
@@ -348,7 +349,13 @@ export function registerComingSoonRoutes(app: Express, deps: ComingSoonRouteDeps
       estimatedCompletion: r.estimated_completion,
       source: r.source, confidence: r.confidence, clusterId: r.clusterId,
       status: r.status,
-      urgency: urgencyOf({ estimated_completion: r.estimated_completion, source: r.source, first_seen_at: r.firstSeenAt }, now),
+      urgency: urgencyOf({
+        estimated_completion: r.estimated_completion,
+        source: r.source,
+        city: r.city,
+        state: r.state,
+        first_seen_at: r.firstSeenAt,
+      }, now, hotCities),
     }));
     // Active first, then hot > soon > watch, then nearest completion, then oldest watch.
     const statusRank: Record<string, number> = { active: 0, promoted: 1, expired: 2 };

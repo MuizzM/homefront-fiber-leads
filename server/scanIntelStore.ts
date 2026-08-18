@@ -225,6 +225,16 @@ export function createScanRun(r: {
   ).run({ id: r.id, tenantId: r.tenantId, kind: r.kind, label: r.label, city: r.city ?? null, state: r.state ?? null, bbox: r.bbox ?? null, budget: r.budget, createdBy: r.createdBy ?? null });
 }
 
+/**
+ * Reconcile a newly-created run with the rows enqueue dedup actually accepted.
+ * This is called before dispatch, so the persisted budget, API response, cost
+ * estimate, and worker completion condition all describe the same work.
+ */
+export function setScanRunBudget(runId: string, budget: number): void {
+  const safe = Math.max(0, Math.floor(Number(budget) || 0));
+  rawDb.prepare(`UPDATE scan_runs SET budget=? WHERE id=? AND status='running'`).run(safe, runId);
+}
+
 // Queue backpressure is applied at the GENERATION side (clusterExpansion pauses new
 // expansion when the backlog is large) — NOT at enqueue. Gating here is unsafe: the run
 // is already created, so deferring its targets leaves a zombie run that drains straight
