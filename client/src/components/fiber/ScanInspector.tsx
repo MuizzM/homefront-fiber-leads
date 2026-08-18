@@ -4,6 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { summarizeScanYield } from "@/lib/scanYield";
+import { classifyScanIssue, scanIssueLabel } from "@/lib/scanIssue";
 
 // The pipeline the admin watches each address move through. Order matters — it
 // drives the progress rail and "blocked stage" detection.
@@ -192,6 +193,16 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
     return rows.size ? c : (counters ?? c);
   }, [rows, counters]);
   const yieldSummary = useMemo(() => summarizeScanYield(liveCounters), [liveCounters]);
+  const issueBreakdown = useMemo(() => {
+    const out = { addressCorrections: 0, authRetries: 0, otherProviderIssues: 0 };
+    for (const row of rows.values()) {
+      const kind = classifyScanIssue(row);
+      if (kind === "address_correction") out.addressCorrections++;
+      else if (kind === "auth_retry") out.authRetries++;
+      else if (kind === "provider_issue") out.otherProviderIssues++;
+    }
+    return out;
+  }, [rows]);
 
   // 1s tick so relative times + blocked-stage detection stay live — but ONLY
   // while there is something live to keep honest, and only while the tab is on
@@ -308,6 +319,13 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
       <div className="text-[11px] text-muted-foreground">
         Invariant: {liveCounters.checked} + {liveCounters.queued} + {liveCounters.checking} + {liveCounters.retrying} + {liveCounters.unresolved} = {liveCounters.checked + liveCounters.queued + liveCounters.checking + liveCounters.retrying + liveCounters.unresolved} (found {liveCounters.found})
       </div>
+      {(issueBreakdown.addressCorrections > 0 || issueBreakdown.authRetries > 0 || issueBreakdown.otherProviderIssues > 0) && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-xl border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground" data-testid="scan-issue-breakdown">
+          <span><b className="text-warning">{issueBreakdown.addressCorrections}</b> address corrections (HTTP 200, not proxy failures)</span>
+          <span><b className="text-warning">{issueBreakdown.authRetries}</b> session retries (401/403)</span>
+          <span><b className="text-foreground">{issueBreakdown.otherProviderIssues}</b> other provider issues</span>
+        </div>
+      )}
 
       {liveCounters.found > 0 && (
         <div
@@ -394,6 +412,8 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
         {sortedRows.map((r) => {
           const stale = !TERMINAL.has(r.stage) && STALLABLE.has(r.stage) && Date.now() - r.updatedAt > BLOCKED_MS;
           const isOpen = expanded === r.addressKey;
+          const issueKind = classifyScanIssue(r);
+          const issueLabel = scanIssueLabel(issueKind);
           return (
             <div key={r.addressKey} className="border-b border-border/60 last:border-0">
               <button onClick={() => openTimeline(r.addressKey)} className={`${TABLE_COLS} w-full px-4 py-2.5 text-left hover:bg-secondary/40`} data-testid={`insp-row-${r.addressKey}`}>
@@ -405,9 +425,9 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
                   <div className="truncate pl-5 text-[11px] text-muted-foreground">{[r.city, r.state, r.zip].filter(Boolean).join(" ")} · {r.source}{r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</div>
                 </div>
                 <div className="flex min-w-0 flex-col items-start gap-0.5">
-                  <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stale ? "bg-destructive/10 text-destructive border-destructive/25" : STAGE_TONE[r.stage] ?? "bg-muted text-muted-foreground border-border"}`}>
+                  <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stale ? "bg-destructive/10 text-destructive border-destructive/25" : issueKind === "address_correction" ? "bg-warning/10 text-warning border-warning/25" : STAGE_TONE[r.stage] ?? "bg-muted text-muted-foreground border-border"}`}>
                     {stale ? null : r.stage === "classified" ? null : null}
-                    {stale ? `Blocked at ${STAGE_LABEL[r.stage] ?? r.stage}` : STAGE_LABEL[r.stage] ?? r.stage}
+                    {stale ? `Blocked at ${STAGE_LABEL[r.stage] ?? r.stage}` : issueLabel ?? STAGE_LABEL[r.stage] ?? r.stage}
                   </span>
                   {r.classification && <span className="pl-0.5 text-2xs text-muted-foreground">{r.classification}</span>}
                 </div>
@@ -427,9 +447,11 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
                   >correlation: {r.addressKey}</button>
                   {timeline.length === 0 ? <div className="text-[12px] text-muted-foreground">Loading timeline…</div> : (
                     <ol className="space-y-1.5">
-                      {timeline.map((t) => (
+                      {timeline.map((t) => {
+                        const timelineIssue = classifyScanIssue(t);
+                        return (
                         <li key={t.id} className="flex items-start gap-2 text-[12px]">
-                          <span className={`mt-0.5 inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-2xs font-semibold ${STAGE_TONE[t.stage] ?? "bg-muted text-muted-foreground border-border"}`}>{STAGE_LABEL[t.stage] ?? t.stage}</span>
+                          <span className={`mt-0.5 inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-2xs font-semibold ${timelineIssue === "address_correction" ? "bg-warning/10 text-warning border-warning/25" : STAGE_TONE[t.stage] ?? "bg-muted text-muted-foreground border-border"}`}>{scanIssueLabel(timelineIssue) ?? STAGE_LABEL[t.stage] ?? t.stage}</span>
                           <div className="min-w-0 flex-1">
                             <span className="text-muted-foreground">
                               {new Date(t.tsEpoch).toLocaleTimeString()} ·
@@ -439,7 +461,8 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
                             {(t.retryReason || t.detail) && <span className="text-foreground/80"> {t.retryReason || t.detail}</span>}
                           </div>
                         </li>
-                      ))}
+                        );
+                      })}
                     </ol>
                   )}
                 </div>
