@@ -32,6 +32,7 @@ interface ScanJobStatus {
   id: string; city: string; zip: string;
   status: "running" | "done" | "error";
   total: number; done: number;
+  resultCount?: number;
   results: ScanRow[];
   summary: {
     new_fiber: number; tenured_fiber: number; existing_fiber: number;
@@ -98,10 +99,16 @@ export default function CityScanner() {
   // SSE stream ref
   const abortRef = useRef<AbortController | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeJobIdRef = useRef<string | null>(null);
+  const streamCursorRef = useRef(0);
+  const reattachingJobRef = useRef<string | null>(null);
+  const connectSseStreamRef = useRef<(id: string, since?: number) => Promise<void>>(async () => {});
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  // Poll scanner state every 3s while scanning.
+  // Keep a low-frequency idle heartbeat too. A city job runs on the server, so
+  // closing/reloading this tab must not make an overnight scan look stopped.
   const { data: scannerState } = useQuery<{
     isRunning: boolean;
     checksPerSec: number;
@@ -119,8 +126,8 @@ export default function CityScanner() {
   }>({
     queryKey: ["/api/scanner/state"],
     queryFn: async () => (await apiRequest("GET", "/api/scanner/state")).json(),
-    refetchInterval: scanning ? 3000 : false,
-    enabled: scanning,
+    refetchInterval: scanning ? 3000 : 15000,
+    enabled: true,
   });
 
   // Persistent address-pool stats (harvest-once, re-scan-for-free engine)
@@ -135,6 +142,8 @@ export default function CityScanner() {
     abortRef.current?.abort();
     abortRef.current = null;
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+    activeJobIdRef.current = null;
   }, []);
 
   // Same as USAScanner: Scanners.tsx swaps these panels conditionally, so a tab
@@ -143,13 +152,16 @@ export default function CityScanner() {
   useEffect(() => stopAll, [stopAll]);
 
   // SSE stream connection — streams results in real time
-  const connectSseStream = useCallback(async (id: string) => {
+  const connectSseStream = useCallback(async (id: string, since = streamCursorRef.current) => {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+    const cursor = Math.max(0, Math.floor(Number(since) || 0));
+    streamCursorRef.current = cursor;
+    let reconnectAfterMs = 1500;
     // See USAScanner: the window.__sessionId fallback is gone deliberately.
     const sessionId = getStoredSessionId() ?? "";
     try {
-      const resp = await fetch(`${_API_BASE}/api/scan/stream/${id}`, {
+      const resp = await fetch(`${_API_BASE}/api/scan/stream/${id}?since=${cursor}`, {
         headers: { "x-session-id": sessionId, "x-csrf-token": sessionId },
         signal: ctrl.signal,
       });
@@ -188,6 +200,7 @@ export default function CityScanner() {
       const flushResults = () => {
         if (resultBatch.length === 0) return;
         const rows = resultBatch.splice(0);
+        streamCursorRef.current += rows.length;
         setJobStatus(prev => prev ? { ...prev, results: prev.results.concat(rows) } : null);
       };
 
@@ -214,6 +227,7 @@ export default function CityScanner() {
                 } : null);
               } else if (eventType === "done") {
                 flushResults(); // final GET below may fail — never drop streamed rows
+                activeJobIdRef.current = null;
                 setScanning(false); setDone(true);
                 qc.invalidateQueries({ queryKey: ["/api/leads"] });
                 qc.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -225,6 +239,8 @@ export default function CityScanner() {
                     description: finalStatus.summary.unverified > 0 ? `${finalStatus.summary.unverified} address${finalStatus.summary.unverified === 1 ? " needs" : "es need"} a recheck` : "Every address received a conclusive answer",
                   });
                 } catch {}
+              } else if (eventType === "reconnect") {
+                reconnectAfterMs = Math.min(10_000, Math.max(500, Number(payload.reconnectAfterMs) || 1500));
               }
             } catch {}
             eventType = "";
@@ -235,7 +251,58 @@ export default function CityScanner() {
     } catch (e: any) {
       if (e.name !== "AbortError") console.warn("SSE error:", e.message);
     }
+    // Streams intentionally expire server-side to bound socket use. Resume from
+    // the exact result cursor instead of replaying a whole city or silently
+    // losing overnight updates. stopAll() clears the active id and this timer.
+    if (!ctrl.signal.aborted && activeJobIdRef.current === id) {
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        if (activeJobIdRef.current === id) {
+          void connectSseStreamRef.current(id, streamCursorRef.current);
+        }
+      }, reconnectAfterMs);
+    }
   }, [qc, toast]);
+
+  useEffect(() => {
+    connectSseStreamRef.current = connectSseStream;
+  }, [connectSseStream]);
+
+  // Rehydrate the server-owned job after a reload/tab change. The status GET
+  // supplies the historical rows once; the SSE `since` cursor then carries only
+  // new rows, avoiding duplicate cards and O(total) replay on every reconnect.
+  useEffect(() => {
+    const active = scannerState?.activeJob;
+    if (!active || scanning || jobId || reattachingJobRef.current === active.id) return;
+    reattachingJobRef.current = active.id;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status: ScanJobStatus = await (await apiRequest("GET", `/api/scan/${active.id}`)).json();
+        if (cancelled || status.status !== "running") return;
+        const resultCount = Math.max(0, Number(status.resultCount ?? status.results.length) || 0);
+        activeJobIdRef.current = active.id;
+        streamCursorRef.current = resultCount;
+        setJobId(active.id);
+        setJobStatus(status);
+        setScanning(true);
+        setDone(false);
+        const cityState = status.city.match(/^(.+),\s*([A-Z]{2})$/);
+        if (cityState) { setCityInput(cityState[1]); setStateInput(cityState[2]); }
+        toast({
+          title: "Reconnected to active scan",
+          description: `${status.city} · ${status.done.toLocaleString()} of ${status.total.toLocaleString()} checked`,
+        });
+        void connectSseStream(active.id, resultCount);
+      } catch {
+        // A job can finish between the state heartbeat and this GET. The next
+        // idle heartbeat will discover whatever is still active.
+      } finally {
+        if (reattachingJobRef.current === active.id) reattachingJobRef.current = null;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [scannerState?.activeJob, scanning, jobId, connectSseStream, toast]);
 
   // Step 1: Pull addresses from Overpass
   const pullAddresses = useCallback(async () => {
@@ -276,6 +343,8 @@ export default function CityScanner() {
       const body: any = { city: cityInput.trim(), state: stateInput.trim() };
 
       const { jobId: newJobId, total, city: cityLabel } = await (await apiRequest("POST", "/api/scan/start-city", body)).json();
+      activeJobIdRef.current = newJobId;
+      streamCursorRef.current = 0;
       setJobId(newJobId);
       setJobStatus({
         id: newJobId, city: cityLabel, zip: "",
@@ -309,6 +378,8 @@ export default function CityScanner() {
         toast({ title: data.message || "Nothing to re-scan yet", description: "Run a city scan first to build the address pool." });
         return;
       }
+      activeJobIdRef.current = data.jobId;
+      streamCursorRef.current = 0;
       setJobId(data.jobId);
       setJobStatus({
         id: data.jobId, city: "Address pool re-scan", zip: "",

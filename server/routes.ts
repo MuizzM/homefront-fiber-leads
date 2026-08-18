@@ -1609,7 +1609,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Address-scanner state ──────────────────────────────────────────────────
   // Polled every 3s by the CityScanner UI to show live efficiency metrics.
   app.get("/api/scanner/state", requireManager, (_req, res) => {
-    const activeJob = Array.from(scanJobs.values()).find(j => j.status === "running");
+    const stateTenantId = (_req as any).user?.tenantId;
+    const activeJob = Array.from(scanJobs.values()).find(j =>
+      j.status === "running" && (stateTenantId == null || j.tenantId === stateTenantId));
     const providerQueue = getAddressScanQueueStatus();
     const lastActivityAt = Math.max(_scanWorkerState.lastHeartbeat, providerQueue.lastActivityAt);
     const secondsSinceHeartbeat = Math.floor((Date.now() - lastActivityAt) / 1000);
@@ -5040,7 +5042,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }, scanSseCaps.options.maxDurationMs);
     maxLifeTimer.unref?.();
 
-    let lastSent = 0;
+    // Cursor-aware reconnect: a long overnight stream is intentionally closed
+    // after scanSseCaps.maxDurationMs. The client resumes from its last received
+    // row instead of replaying the full cumulative result array every 30 minutes.
+    const requestedSince = Math.max(0, Math.floor(Number(req.query.since) || 0));
+    let lastSent = Math.min(requestedSince, job.results.length);
     function sendState() {
       const r = job!;
       const newResults = r.results.slice(lastSent);
