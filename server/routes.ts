@@ -4405,7 +4405,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Planning targets are city-level; every fresh/knock output below is sourced
   // exclusively from time-stamped address-level transitions.
   const marketQuerySchema = z.object({
-    state: z.enum(["NC", "SC"]).optional(),
+    state: z.enum(["NC", "SC", "GA"]).optional(),
     priority: z.enum(["critical", "high", "medium", "low"]).optional(),
     eligibility: z.enum(["verified", "unverified", "all"]).default("verified"),
     due: z.enum(["true", "false"]).optional(),
@@ -4433,7 +4433,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
   const citySweepSchema = z.object({
-    city: z.string().trim().min(2).max(120), state: z.enum(["NC", "SC"]),
+    city: z.string().trim().min(2).max(120), state: z.enum(["NC", "SC", "GA"]),
     maxChecks: z.number().int().min(1).max(100_000).optional(),
   });
   const addressSearchSchema = z.object({
@@ -4455,7 +4455,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // These MUST be registered before GET /api/sweeps/:id so "/state" isn't parsed
   // as a sweep id. Active-priority only: no deferral/nightly path exists here. ──
   const stateSweepSchema = z.object({
-    state: z.enum(["NC", "SC"]),
+    state: z.enum(["NC", "SC", "GA"]),
     maxChecksPerCity: z.coerce.number().int().min(1).max(100_000).optional(),
   });
 

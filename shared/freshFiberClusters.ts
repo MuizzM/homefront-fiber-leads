@@ -4,7 +4,7 @@ export interface FreshFiberPoint {
   id: number;
   address: string;
   city: string;
-  state: "NC" | "SC";
+  state: "NC" | "SC" | "GA";
   zip?: string | null;
   lat: number;
   lng: number;
@@ -20,7 +20,7 @@ export interface FreshFiberPoint {
 export interface FreshFiberCluster {
   id: string;
   city: string;
-  state: "NC" | "SC";
+  state: "NC" | "SC" | "GA";
   centroid: { lat: number; lng: number };
   density: number;
   confirmed: number;

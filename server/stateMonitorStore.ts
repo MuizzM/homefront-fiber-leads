@@ -108,7 +108,7 @@ export function syncMarketState(): number {
   return result.changes;
 }
 
-export function listMarkets(filters: { state?: "NC" | "SC"; priority?: string; due?: boolean; eligibility?: "verified" | "unverified" | "all"; limit?: number } = {}) {
+export function listMarkets(filters: { state?: "NC" | "SC" | "GA"; priority?: string; due?: boolean; eligibility?: "verified" | "unverified" | "all"; limit?: number } = {}) {
   const where: string[] = ["1=1"];
   const args: any[] = [];
   if (filters.state) { where.push("m.state=?"); args.push(filters.state); }

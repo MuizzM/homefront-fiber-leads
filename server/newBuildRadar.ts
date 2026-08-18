@@ -1,6 +1,7 @@
 // ── New Build Radar ───────────────────────────────────────────────────────────
-// Continuously watches free NC/SC sources (NC OneMap authoritative address points
-// + SC county E911/GIS address layers + OSM Overpass newer:) for newly-appearing
+// Continuously watches free NC/SC/GA sources (NC OneMap authoritative address points
+// + SC county E911/GIS address layers + OSM Overpass newer:, incl. north-GA tiles)
+// for newly-appearing
 // addresses and buildings, dedups them
 // against a durable inventory (preserving every source + detection date), monitors
 // ADDRESSLESS new buildings until an address appears, detects construction
@@ -42,8 +43,14 @@ const NC_COUNTIES = [
   "VANCE","WAKE","WARREN","WASHINGTON","WATAUGA","WAYNE","WILKES","WILSON","YADKIN","YANCEY",
 ];
 
-// Coarse Overpass tiles [s,w,n,e] covering NC (west→east) and SC. Used for OSM
-// observed new builds + addressless monitoring, and for SC (no authoritative feed).
+// Coarse Overpass tiles [s,w,n,e] covering NC (west→east), SC, and the north-GA
+// Kinetic ILEC territory. Used for OSM observed new builds + addressless
+// monitoring, and — for SC and GA, which have no wired authoritative address
+// feed — as the only new-build source until an open county endpoint appears.
+// GA: two tiles cover the confirmed Dalton/Whitfield fiber market and the
+// surrounding north-GA legacy territory (the catalog's GA footprint). The
+// projector already mints GA leads (`state IN ('GA','NC','SC')`), so a GA new
+// build that flips to NEW FIBER + billingStatus=N publishes exactly like NC/SC.
 const OVERPASS_TILES: OverpassArea[] = [
   { key: "nc-w", state: "NC", county: null, bbox: [35.0, -84.4, 36.6, -81.0] },
   { key: "nc-c", state: "NC", county: null, bbox: [34.8, -81.0, 36.6, -79.0] },
@@ -51,6 +58,10 @@ const OVERPASS_TILES: OverpassArea[] = [
   { key: "sc-up", state: "SC", county: null, bbox: [34.0, -83.4, 35.2, -81.0] },
   { key: "sc-mid", state: "SC", county: null, bbox: [33.0, -81.6, 34.6, -79.6] },
   { key: "sc-low", state: "SC", county: null, bbox: [32.0, -81.4, 33.6, -78.9] },
+  // North-west GA: Dalton/Whitfield (confirmed fresh-fiber build zone) + NW corner.
+  { key: "ga-nw", state: "GA", county: null, bbox: [34.2, -85.6, 35.0, -84.4] },
+  // North-east GA: the rest of the north-GA Kinetic ILEC belt toward the SC line.
+  { key: "ga-ne", state: "GA", county: null, bbox: [34.0, -84.4, 35.0, -82.9] },
 ];
 
 // Known coverage GAPS to surface honestly (requirement: expose missing datasets).
@@ -64,6 +75,7 @@ const KNOWN_GAPS: Array<{ state: string; source: string; scope: string; note: st
   { state: "SC", source: "sc_cherokee_gis", scope: "Cherokee county", note: "Cherokee County (Gaffney) publishes parcels only via qPublic/Schneider (no public ArcGIS REST) - OSM Overpass only until an open endpoint appears" },
   { state: "SC", source: "sc_union_gis", scope: "Union county", note: "Union County SC publishes maps only via WTH GIS viewer (no public ArcGIS REST) - OSM Overpass only until an open endpoint appears" },
   { state: "NC", source: "county_permits", scope: "residential permits", note: "County residential-permit feeds (NC and SC) are fragmented and not uniformly published as open APIs - not wired; new construction is detected via authoritative new address points + OSM new buildings instead" },
+  { state: "GA", source: "ga_gis", scope: "GA statewide", note: "No authoritative statewide/county GA address FeatureServer is wired (GA GIO publishes a statewide address point layer under separate access; north-GA county E911 endpoints not yet live-probed) - GA new-build coverage is OSM Overpass only (ga-nw, ga-ne tiles) until an open endpoint is verified and added, exactly like the SC per-county gaps above" },
 ];
 
 let _ready = false;

@@ -179,7 +179,7 @@ describe("planner statistics + placeholder integrity", () => {
     expect(rollups.yieldRollupsReady()).toBe(true);
   });
 
-  it("the rollup scorer's SQL placeholders exactly match its bound parameters (12: 4 CTE tenants + 4 watch cuts + tenant + 2 states + limit)", () => {
+  it("the rollup scorer's SQL placeholders exactly match its bound parameters (13: 4 CTE tenants + 4 watch cuts + tenant + 3 states + limit)", () => {
     let captured = "";
     const orig = rawDb.prepare.bind(rawDb);
     (rawDb as any).prepare = (sql: string) => {
@@ -192,14 +192,17 @@ describe("planner statistics + placeholder integrity", () => {
       (rawDb as any).prepare = orig;
     }
     expect(captured).not.toBe("");
-    expect((captured.match(/\?/g) || []).length).toBe(12);
+    // 13 = 4 CTE tenants + 4 watch cuts + tenant + 3 focus states (nc,sc,ga) + limit.
+    // The state count tracks FRESH_HARVEST_STATES (default nc,sc,ga); GA was added
+    // so the harvester covers the full Kinetic footprint the projector mints from.
+    expect((captured.match(/\?/g) || []).length).toBe(13);
     // AFFINITY REGRESSION (8.8-minute prod cycles): the temp signal tables
     // must be TYPED — an untyped CREATE TABLE AS gives no affinity, SQLite
     // cannot SEEK a REAL probe into the index, and every cell join degrades
     // to a per-outer-row index SCAN. With rows present (this fixture seeds
     // leads), the plan must SEARCH the cell tables, never SCAN them.
     const plan = rawDb.prepare("EXPLAIN QUERY PLAN " + captured)
-      .all(...new Array(12).fill(1)).map((r: any) => r.detail).join(" | ");
+      .all(...new Array(13).fill(1)).map((r: any) => r.detail).join(" | ");
     expect(plan).toContain("SEARCH fc");
     expect(plan).not.toMatch(/SCAN fc USING INDEX/);
     expect(plan).not.toMatch(/SCAN rc USING INDEX/);

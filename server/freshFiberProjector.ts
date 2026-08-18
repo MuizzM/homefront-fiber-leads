@@ -11,7 +11,7 @@ interface ProjectionCandidate {
   id: number;
   address: string;
   city: string;
-  state: "NC" | "SC";
+  state: "NC" | "SC" | "GA";
   zip: string;
   lat: number | null;
   lng: number | null;

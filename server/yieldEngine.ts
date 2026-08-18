@@ -86,7 +86,12 @@ const ANF_QUIET_DAYS = Math.max(1, Math.floor(Number(process.env.ADDRESS_NOT_FOU
 const ANF_GIVEUP = 3; // mirrors shared/scanPolicy INCONCLUSIVE_GIVEUP
 const NOT_PARKED_ANF = `NOT ${anfParkedSql("s", ANF_QUIET_DAYS)}`;
 
-const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc")
+// Default NC + SC + GA — the full Kinetic build footprint the operator works.
+// This MUST match the KEEPWARM statewide feeder (index.ts) and the fresh-lead
+// projector (freshFiberProjector.ts: `state IN ('GA','NC','SC')`): a narrower
+// default here silently starved every GA target of yield-engine budget while
+// the projector stood ready to mint GA leads, so GA scanned to zero checks.
+const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc,ga")
   .split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
 const STATE_IN = FOCUS_STATES.map(() => "?").join(",");
 const stateArgs = () => [...FOCUS_STATES];

@@ -48,7 +48,7 @@
  * hits, and calls-per-fresh-lead — the true cost of a lead, visible in logs.
  *
  * FRESH_HARVEST=off disables; FRESH_HARVEST_BUDGET (default 4000/cycle),
- * FRESH_HARVEST_INTERVAL_MIN (default 15), FRESH_HARVEST_STATES (default nc,sc).
+ * FRESH_HARVEST_INTERVAL_MIN (default 15), FRESH_HARVEST_STATES (default nc,sc,ga).
  */
 import { rawDb } from "./db";
 import { startTargetRun } from "./scanService";
@@ -70,8 +70,11 @@ const TIER_E2_STALE_DAYS = Math.max(1, Number(process.env.EXPANSION_RESCAN_DAYS)
 const CELL_PRIOR_SCANS = Math.max(1, Number(process.env.FRESH_HARVEST_CELL_PRIOR) || 12);
 
 // State focus: only these states get harvest budget (FRESH_HARVEST_STATES,
-// default NC + SC — the Kinetic build footprint). Frontier scanning is off.
-const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc")
+// default NC + SC + GA — the Kinetic build footprint). Frontier scanning is off.
+// Keep this default in lockstep with the KEEPWARM feeder (index.ts) and the
+// fresh-lead projector (`state IN ('GA','NC','SC')`); a narrower list here gives
+// GA zero harvest budget even though the projector will mint GA leads.
+const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc,ga")
   .split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
 const STATE_IN = FOCUS_STATES.map(() => "?").join(",");
 const stateArgs = () => [...FOCUS_STATES];
