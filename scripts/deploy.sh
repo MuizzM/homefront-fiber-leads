@@ -106,7 +106,7 @@ echo "[deploy] target=$NEW_TAG  previous=${PREV_TAG:-none}"
 echo "[deploy] validate Caddy configuration…"
 docker run --rm \
   --volume "$PWD/deploy/caddy:/etc/caddy:ro" \
-  caddy:2 validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
 # Remove every release tag of our two image repos EXCEPT the ones passed as
 # arguments, then dangling layers. Best-effort — never fails the deploy.

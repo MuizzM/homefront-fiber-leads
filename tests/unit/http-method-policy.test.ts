@@ -34,7 +34,7 @@ describe("portal HTTP method policy", () => {
     const compose = fs.readFileSync(path.resolve(__dirname, "../../docker-compose.production.yml"), "utf8");
     const deploy = fs.readFileSync(path.resolve(__dirname, "../../scripts/deploy.sh"), "utf8");
     expect(compose).toContain("./deploy/caddy:/etc/caddy:ro");
-    expect(deploy).toContain("caddy:2 validate --config /etc/caddy/Caddyfile");
+    expect(deploy).toContain("caddy:2 caddy validate --config /etc/caddy/Caddyfile");
     expect(deploy).toContain("caddy reload --config /etc/caddy/Caddyfile");
     expect(deploy).toContain("TRACE TRACK CONNECT");
     expect(deploy).toContain('expected 405');
