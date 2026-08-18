@@ -79,7 +79,7 @@ export const kineticScannerApi = {
   refreshContacts: (id: number) =>
     post<any>(`/api/kinetic-scanner/addresses/${id}/contacts/refresh`),
   convert: (id: number) =>
-    post<any>(`/api/kinetic-scanner/addresses/${id}/convert-lead`),
+    post<{ leadId: number }>(`/api/kinetic-scanner/addresses/${id}/convert-lead`),
   async downloadExport() {
     const response = await fetch("/api/kinetic-scanner/export", {
       headers: { "x-session-id": getStoredSessionId() ?? "" },

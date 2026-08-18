@@ -198,6 +198,7 @@ export default function Today() {
 
   return (
     <div className="min-h-full bg-background pb-24">
+      <h1 className="sr-only">Today</h1>
       <div className="mx-auto w-full max-w-lg px-4 pt-5">
         {/* ── ABOVE EVERYTHING: how the phone reaches them, and what it said ──
             Both of these were built and mounted NOWHERE — the install animation

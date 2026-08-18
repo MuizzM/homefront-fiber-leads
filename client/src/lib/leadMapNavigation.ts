@@ -75,3 +75,18 @@ export function takeLeadMapTarget(
     return null;
   }
 }
+
+/**
+ * Shared one-tap field workflow for every lead-producing surface. Coordinates
+ * stay out of the URL and the map route stays stable so its kept-alive Mapbox
+ * stage can select the lead, fly to its rooftop, and open the field sheet.
+ */
+export function openLeadOnFieldMap(
+  target: LeadMapTarget,
+  navigate: (path: string) => void,
+  store: SessionStore | null = browserSessionStore(),
+): boolean {
+  const queued = queueLeadMapTarget(target, store);
+  navigate("/map");
+  return queued;
+}

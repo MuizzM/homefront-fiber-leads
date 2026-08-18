@@ -1,10 +1,11 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Zap, Clock, Layers, Hammer } from "lucide-react";
+import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
 // The Scan Inspector is heavy (SSE stream + live table) and admin-only, so it is
 // code-split and only mounted when the Coverage tab is opened by an admin.
@@ -24,10 +25,10 @@ import ComingSoonWatchlist, { WATCHLIST_QUERY, type WatchlistItem } from "@/comp
 type TabKey = "fresh" | "coming" | "newbuilds" | "coverage";
 interface FirstSeenLive {
   windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
-  addresses: Array<{ id: number; address: string; city: string; firstSeenLiveAt: string; confidence: string; leadId?: number | null; carrier?: string }>;
+  addresses: Array<{ id: number; address: string; city: string; state: string; zip?: string | null; lat: number; lng: number; firstSeenLiveAt: string; confidence: string; leadId?: number | null; carrier?: string }>;
 }
 interface StateSweep {
-  id: string; state: "NC" | "SC" | "GA"; status: string; currentCity: string | null;
+  id: string; state: "FL" | "GA" | "IA" | "KY" | "NC" | "SC"; status: string; currentCity: string | null;
   citiesTotal: number; citiesCompleted: number; discovered?: number; checked: number;
   freshLeads: number; comingSoon: number; pending?: number; unresolved: number;
 }
@@ -81,7 +82,7 @@ export default function FiberIntelligence() {
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-4 pb-6 pt-4 sm:px-6">
       <header className="mb-3">
         <h1 className="text-xl font-bold tracking-tight text-foreground">Fiber Intelligence</h1>
-        <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC - one workspace.</p>
+        <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across FL, GA, IA, KY, NC &amp; SC - one workspace.</p>
       </header>
 
       <div className="relative sticky top-0 z-10 -mx-4 mb-4 sm:-mx-6">
@@ -145,7 +146,7 @@ interface FiberChanges {
   count: number; wentLive: number; copperUpgrades: number; comingSoon: number;
   rows: Array<{
     id: number; scanTargetId: number; kind: "went_live" | "copper_upgrade" | "coming_soon" | "lost_fiber";
-    address: string; city: string; state: string; leadId: number | null; at: string;
+    address: string; city: string; state: string; lat: number | null; lng: number | null; leadId: number | null; at: string;
   }>;
 }
 
@@ -157,6 +158,7 @@ const KIND_STYLE: Record<string, { label: string; cls: string }> = {
 };
 
 function FreshNow() {
+  const [, navigate] = useLocation();
   const [hours, setHours] = useState<24 | 168>(24);
   const { data, isLoading, isError } = useQuery<FirstSeenLive>({
     queryKey: ["/api/scan/first-seen-live", hours],
@@ -226,8 +228,8 @@ function FreshNow() {
                   {a.carrier === "frontier" && <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-destructive">Frontier</span>}
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
                   {a.leadId != null
-                    ? <Link href={`/lead/${a.leadId}`} className="inline-flex min-h-11 md:min-h-8 shrink-0 items-center rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
-                    : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary">Map</Link>}
+                    ? <button type="button" onClick={() => openLeadOnFieldMap({ leadId: a.leadId!, lat: a.lat, lng: a.lng }, navigate)} aria-label={`Open ${a.address}, ${a.city} on the Field Map`} className="inline-flex min-h-11 md:min-h-8 shrink-0 items-center rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open in field</button>
+                    : <span className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground">Not assignable</span>}
                 </div>
               ))}
             </div>
@@ -256,7 +258,7 @@ function FreshNow() {
                   <div className="text-[11px] text-muted-foreground">{fmtTime(c.at)}</div>
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${KIND_STYLE[c.kind]?.cls ?? ""}`}>{KIND_STYLE[c.kind]?.label ?? c.kind}</span>
-                {c.leadId != null && <Link href={`/lead/${c.leadId}`} className="inline-flex min-h-11 md:min-h-8 shrink-0 items-center rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>}
+                {c.leadId != null && <button type="button" onClick={() => openLeadOnFieldMap({ leadId: c.leadId!, lat: c.lat ?? undefined, lng: c.lng ?? undefined }, navigate)} aria-label={`Open ${c.address}, ${c.city} on the Field Map`} className="inline-flex min-h-11 md:min-h-8 shrink-0 items-center rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open in field</button>}
               </div>
             ))}
           </div>
@@ -407,7 +409,7 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
       )}
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {scopeLabel ? "Background statewide sweeps — excluded from market totals" : "GA, NC & SC statewide sweeps"}
+          {scopeLabel ? "Background statewide sweeps — excluded from market totals" : "FL, GA, IA, KY, NC & SC statewide sweeps"}
         </div>
         {sweeps.length === 0 ? (
           <div className="px-4 py-8 text-center text-[13px] text-muted-foreground">No active sweep. The statewide sweep resumes on each deploy and continues in the background.</div>

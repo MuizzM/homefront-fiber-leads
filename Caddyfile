@@ -30,7 +30,9 @@ portal.homefrontsolutionsllc.com {
 	# headers via helmet (authoritative); these are belt-and-suspenders.
 	header {
 		X-Content-Type-Options   nosniff
-		Referrer-Policy          strict-origin-when-cross-origin
+		# Match the application policy: this private CRM never needs to disclose
+		# an internal route or origin in outbound Referer headers.
+		Referrer-Policy          no-referrer
 		X-Frame-Options          DENY
 		-Server                                 # don't advertise the server
 		# HSTS: enable ONLY after HTTPS is verified end-to-end (per spec). The app's

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +10,7 @@ import { useTabActive } from "@/lib/tabActivity";
 import { X, ChevronRight } from "lucide-react";
 import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
 import { KpiTile, type KpiTone } from "@/components/KpiTile";
+import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
 // Only the fields the tiles below actually render — the endpoint stopped
 // computing the rest (leads.total/sold, knocks.total, fieldHours) because
@@ -111,7 +113,7 @@ interface LeaderRow {
 }
 interface FirstSeenLive {
   windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
-  addresses: { id: number; address: string; city: string; firstSeenLiveAt: string; leadId: number | null; confidence: "cross_verified" | "single_source_provisional" }[];
+  addresses: { id: number; address: string; city: string; state: string; lat: number; lng: number; firstSeenLiveAt: string; leadId: number | null; confidence: "cross_verified" | "single_source_provisional" }[];
 }
 interface RepActivity {
   rep: { id: number; name: string; role: string };
@@ -182,6 +184,7 @@ function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => voi
 
 export default function Dashboard() {
   const { user } = useAuth();
+  const [, navigate] = useLocation();
   // Keep-alive: hidden dashboard stops polling; staleTime revalidates on return.
   const tabActive = useTabActive();
   const isRep = user?.role === "rep";
@@ -385,13 +388,9 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="divide-y divide-border overflow-hidden rounded-2xl border border-warning/15 bg-card">
-              {newFiber.addresses.slice(0, 5).map(a => (
-                <a
-                  key={a.id}
-                  href={a.leadId ? `#/leads?id=${a.leadId}` : "#/city-scan"}
-                  className="group flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-secondary/60 active:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  data-testid={`new-fiber-row-${a.id}`}
-                >
+              {newFiber.addresses.slice(0, 5).map(a => {
+                const rowClass = "group flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/60 active:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+                const contents = <>
                   <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-warning" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
@@ -404,8 +403,24 @@ export default function Dashboard() {
                     {a.confidence === "cross_verified" ? "Cross-verified" : "Provisional"}
                   </span>
                   <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
-                </a>
-              ))}
+                </>;
+                return a.leadId != null ? (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => openLeadOnFieldMap({ leadId: a.leadId!, lat: a.lat, lng: a.lng }, navigate)}
+                    className={rowClass}
+                    aria-label={`Open ${a.address}, ${a.city} on the Field Map`}
+                    data-testid={`new-fiber-row-${a.id}`}
+                  >
+                    {contents}
+                  </button>
+                ) : (
+                  <Link key={a.id} href="/fiber" className={rowClass} data-testid={`new-fiber-row-${a.id}`}>
+                    {contents}
+                  </Link>
+                );
+              })}
               {newFiber.count > 5 && (
                 <div className="px-4 py-2 text-[11px] text-muted-foreground">+{newFiber.count - 5} more in the last 24h</div>
               )}

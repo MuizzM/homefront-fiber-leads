@@ -4,9 +4,12 @@ import { structuredLog } from "./structuredLog";
 
 export type KineticMarketStatus = "verified_served" | "verified_expanding" | "verified_legacy_service" | "unverified";
 
+export const KINETIC_MONITORED_STATES = ["FL", "GA", "IA", "KY", "NC", "SC"] as const;
+export type KineticMonitoredState = typeof KINETIC_MONITORED_STATES[number];
+
 export interface KineticMarketCatalogEntry {
   city: string;
-  state: "NC" | "SC" | "GA";
+  state: KineticMonitoredState;
   county: string;
   status: Exclude<KineticMarketStatus, "unverified">;
   serviceTier: "fiber" | "other_high_speed" | "announced_expansion";
@@ -19,6 +22,9 @@ export interface KineticMarketCatalogEntry {
 }
 
 export const KINETIC_DIRECTORY_URLS = {
+  FL: "https://www.gokinetic.com/locations/fl",
+  IA: "https://www.gokinetic.com/locations/ia",
+  KY: "https://www.gokinetic.com/locations/ky",
   NC: "https://www.gokinetic.com/locations/nc",
   SC: "https://www.gokinetic.com/locations/sc",
   GA: "https://www.gokinetic.com/locations/ga",
@@ -115,6 +121,23 @@ const GA_LEGACY_SERVICE: Record<string, string> = {
 
 const EXPANDING_GA = new Set(["dalton"]);
 
+// Official carrier location pages in and around Live Oak. These entries make
+// Florida a first-class monitored market instead of a one-off City Scanner
+// input. A city listing establishes where to inventory; only address-level,
+// cross-verified prior-dark → live evidence can create a promoted lead.
+const FL_FIBER: Record<string, string> = {
+  Branford: "Suwannee",
+  "Dowling Park": "Suwannee",
+  Jasper: "Hamilton",
+  "Lake City": "Columbia",
+  "Live Oak": "Suwannee",
+  Mayo: "Lafayette",
+  McAlpin: "Suwannee",
+  "O'Brien": "Suwannee",
+  Wellborn: "Suwannee",
+  "White Springs": "Hamilton|Columbia",
+};
+
 // COPPER-SWITCH WATCH: legacy "other high-speed" towns are Kinetic ILEC copper
 // territory — the exact places where the next copper→fiber switch-on mints a
 // whole town of Fresh Leads at once. A 336h (2-week) revisit was far too slow
@@ -129,6 +152,7 @@ const COPPER_WATCH_HOURS = Math.max(6, Math.floor(Number(process.env.COPPER_WATC
 const COPPER_TRANSITION_HOT_NC = new Set(["bear creek", "goldston", "moncure"]);
 
 export const KINETIC_MARKET_CATALOG: KineticMarketCatalogEntry[] = [
+  ...Object.entries(FL_FIBER).map(([city, county]) => makeEntry(city, "FL", county)),
   ...Object.entries(GA_FIBER).map(([city, county]) => makeEntry(city, "GA", county)),
   ...Object.entries(GA_LEGACY_SERVICE).map(([city, county]) => makeLegacyEntry(city, "GA", county)),
   ...Object.entries(NC_FIBER).map(([city, county]) => makeEntry(city, "NC", county)),
@@ -143,7 +167,7 @@ export const KINETIC_MARKET_CATALOG: KineticMarketCatalogEntry[] = [
   { ...makeEntry("Hemby Bridge", "NC", "Union"), directoryVerified: false, serviceTier: "announced_expansion" },
 ];
 
-function makeEntry(city: string, state: "NC" | "SC" | "GA", county: string): KineticMarketCatalogEntry {
+function makeEntry(city: string, state: KineticMonitoredState, county: string): KineticMarketCatalogEntry {
   const expanding = (state === "NC" && EXPANDING_NC.has(normalizePlace(city)))
     || (state === "GA" && EXPANDING_GA.has(normalizePlace(city)));
   return {
@@ -161,7 +185,7 @@ function makeEntry(city: string, state: "NC" | "SC" | "GA", county: string): Kin
   };
 }
 
-function makeLegacyEntry(city: string, state: "NC" | "SC" | "GA", county: string): KineticMarketCatalogEntry {
+function makeLegacyEntry(city: string, state: KineticMonitoredState, county: string): KineticMarketCatalogEntry {
   const hot = state === "NC" && COPPER_TRANSITION_HOT_NC.has(normalizePlace(city));
   return {
     city, state, county, status: "verified_legacy_service", serviceTier: "other_high_speed",
@@ -251,9 +275,10 @@ export function applyAuthoritativeMarketCatalog(): { verified: number; expanding
 /** Continuous refresh of carrier-owned location indexes. New entries
  * become eligible; a missing entry is never silently removed because a partial
  * publisher response must not erase coverage. */
-export async function refreshKineticLocationDirectory(force = false): Promise<{ status: string; seen: number; added: number }> {
-  let seen = 0, added = 0;
-  for (const state of ["NC", "SC", "GA"] as const) {
+export async function refreshKineticLocationDirectory(force = false): Promise<{ status: string; seen: number; added: number; failed: number; errors: string[] }> {
+  let seen = 0, added = 0, failed = 0;
+  const errors: string[] = [];
+  for (const state of KINETIC_MONITORED_STATES) {
     const url = KINETIC_DIRECTORY_URLS[state];
     const prior = rawDb.prepare(`SELECT * FROM monitor_source_polls WHERE source_url=?`).get(url) as any;
     if (!force && prior?.next_poll_at && parseSqliteTime(prior.next_poll_at) > Date.now()) continue;
@@ -270,7 +295,9 @@ export async function refreshKineticLocationDirectory(force = false): Promise<{ 
       const html = await response.text();
       const fiberNames = extractFiberLocationNames(html, state);
       const names = extractAllKineticLocationNames(html, state);
-      if (fiberNames.length < (state === "NC" ? 40 : state === "SC" ? 5 : 1) || names.length < (state === "NC" ? 70 : state === "SC" ? 12 : 3)) {
+      const minimumFiber = state === "NC" ? 40 : state === "SC" ? 5 : state === "IA" || state === "KY" ? 100 : 1;
+      const minimumTotal = state === "NC" ? 70 : state === "SC" ? 12 : state === "IA" || state === "KY" ? 120 : 3;
+      if (fiberNames.length < minimumFiber || names.length < minimumTotal) {
         throw new Error(`partial directory response (${fiberNames.length} fiber / ${names.length} total markets)`);
       }
       const fiberKeys = new Set(fiberNames.map((name) => normalizePlace(canonicalDirectoryName(name))));
@@ -299,13 +326,14 @@ export async function refreshKineticLocationDirectory(force = false): Promise<{ 
     } catch (error: any) {
       recordDirectoryPoll(url, null, "failed", error.message, "+1 day");
       structuredLog("state_monitor.directory_poll_failed", { state, sourceUrl: url, error: error.message });
-      throw new Error(`KINETIC_DIRECTORY_REFRESH_FAILED: ${state}: ${error.message}`);
+      failed += 1;
+      errors.push(`${state}: ${error.message}`);
     }
   }
-  return { status: "ok", seen, added };
+  return { status: failed ? "partial" : "ok", seen, added, failed, errors };
 }
 
-export function extractFiberLocationNames(html: string, state: "NC" | "SC" | "GA"): string[] {
+export function extractFiberLocationNames(html: string, state: KineticMonitoredState): string[] {
   const start = html.search(/where we currently offer Kinetic Fiber Internet/i);
   const end = html.search(/Kinetic Fiber internet plans|don.t see your city/i);
   const section = start >= 0 ? html.slice(start, end > start ? end : undefined) : "";
@@ -318,7 +346,7 @@ export function extractFiberLocationNames(html: string, state: "NC" | "SC" | "GA
   return [...names];
 }
 
-export function extractAllKineticLocationNames(html: string, state: "NC" | "SC" | "GA"): string[] {
+export function extractAllKineticLocationNames(html: string, state: KineticMonitoredState): string[] {
   const names = new Set<string>();
   const re = new RegExp(`<a\\b[^>]*href=["'][^"']*/locations/${state.toLowerCase()}/[^"']+["'][^>]*>([\\s\\S]*?)<\\/a>`, "gi");
   for (const match of html.matchAll(re)) {
@@ -328,7 +356,7 @@ export function extractAllKineticLocationNames(html: string, state: "NC" | "SC" 
   return [...names];
 }
 
-function upsertDirectoryDiscovery(city: string, state: "NC" | "SC" | "GA", url: string, fiberListed: boolean) {
+function upsertDirectoryDiscovery(city: string, state: KineticMonitoredState, url: string, fiberListed: boolean) {
   const canonical = canonicalDirectoryName(city);
   const status: Exclude<KineticMarketStatus, "unverified" | "verified_expanding"> = fiberListed ? "verified_served" : "verified_legacy_service";
   const existing = rawDb.prepare(`SELECT id FROM state_fiber_markets WHERE state=? AND lower(city)=lower(?)`).get(state, canonical) as any;

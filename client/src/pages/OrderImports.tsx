@@ -309,6 +309,7 @@ export default function OrderImports() {
             <Input
               ref={fileInput}
               type="file"
+              aria-label="Choose a PerfectVision order export"
               accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="max-w-sm"
               data-testid="import-file-input"
@@ -610,7 +611,8 @@ function ExceptionCard({ row }: { row: ExceptionRow }) {
       {row.exceptionReason && <p className="mt-2 text-xs text-warning">{row.exceptionReason}</p>}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Input
-          className="h-8 w-32"
+          aria-label="Sale ID to link this order"
+          className="h-11 w-32 md:h-8"
           placeholder="Sale ID"
           value={saleId}
           data-testid={`exception-sale-${row.id}`}
@@ -618,18 +620,20 @@ function ExceptionCard({ row }: { row: ExceptionRow }) {
         />
         <Button
           size="sm"
+          className="min-h-11 md:min-h-9"
           data-testid={`exception-link-${row.id}`}
           disabled={!saleId || resolve.isPending}
           onClick={() => resolve.mutate({ decision: "link", saleId: Number(saleId) })}
         >
           Link to this sale
         </Button>
-        <Button size="sm" variant="outline" disabled={rematch.isPending} onClick={() => rematch.mutate()}>
+        <Button size="sm" variant="outline" className="min-h-11 md:min-h-9" disabled={rematch.isPending} onClick={() => rematch.mutate()}>
           Re-check
         </Button>
         <Button
           size="sm"
           variant="ghost"
+          className="min-h-11 md:min-h-9"
           disabled={resolve.isPending}
           onClick={() => resolve.mutate({ decision: "ignore" })}
         >

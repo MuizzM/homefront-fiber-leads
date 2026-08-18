@@ -8,6 +8,7 @@ import { opportunityRank } from "@shared/opportunitySegment";
 import { toCsv, syncMarketState } from "./stateMonitorStore";
 import { structuredLog } from "./structuredLog";
 import { flushFreshOpportunityAlerts } from "./stateMonitorScheduler";
+import { KINETIC_MONITORED_STATES, type KineticMonitoredState } from "./kineticMarketCatalog";
 
 const active = new Set<string>();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,7 +49,7 @@ async function normalizeHarvestRows<T extends object>(
 // provider rate stays governed by the scheduler + 403/429 backoff (correctness).
 const MAX_SWEEP_CHECKS = () => Number.MAX_SAFE_INTEGER;
 
-export interface StartSweepInput { tenantId: number; city: string; state: "NC" | "SC" | "GA"; maxChecks?: number; createdBy?: number | null; }
+export interface StartSweepInput { tenantId: number; city: string; state: KineticMonitoredState; maxChecks?: number; createdBy?: number | null; }
 export interface StartAddressSweepInput { tenantId: number; query: string; radiusMeters: number; maxChecks?: number; createdBy?: number | null; }
 
 export function startCitySweep(input: StartSweepInput) {
@@ -100,9 +101,12 @@ export async function searchAddressArea(input: { tenantId: number; query: string
   const hit = matches[0], lat = Number(hit.lat), lng = Number(hit.lon);
   const isoState = String(hit.address?.["ISO3166-2-lvl4"] ?? hit.address?.["ISO3166-2-lvl3"] ?? "");
   const stateName = String(hit.address?.state ?? "").toLowerCase();
-  const state = String(hit.address?.state_code ?? isoState.split("-").pop() ?? "").toUpperCase()
-    || (stateName === "north carolina" ? "NC" : stateName === "south carolina" ? "SC" : stateName === "georgia" ? "GA" : "");
-  if (!(["NC", "SC", "GA"].includes(state))) throw new Error("OUTSIDE_SUPPORTED_STATES");
+  const fallbackState = ({
+    florida: "FL", georgia: "GA", iowa: "IA", kentucky: "KY",
+    "north carolina": "NC", "south carolina": "SC",
+  } as Record<string, KineticMonitoredState>)[stateName] ?? "";
+  const state = String(hit.address?.state_code ?? isoState.split("-").pop() ?? "").toUpperCase() || fallbackState;
+  if (!(KINETIC_MONITORED_STATES as readonly string[]).includes(state)) throw new Error("OUTSIDE_SUPPORTED_STATES");
   const city = hit.address?.city ?? hit.address?.town ?? hit.address?.village ?? hit.address?.municipality ?? "";
   const latDelta = input.radiusMeters / 111_320;
   const lngDelta = input.radiusMeters / (111_320 * Math.cos(lat * Math.PI / 180));
@@ -220,7 +224,7 @@ const reArmTimers = new Map<string, ReturnType<typeof setTimeout>>();
  * the idempotent startStateSweep. Returns the plan so callers/tests can assert it.
  */
 export function scheduleStateSweepReArm(
-  parent: { tenant_id: number; state: "NC" | "SC" | "GA"; created_by: number | null; max_checks_per_city: number | null },
+  parent: { tenant_id: number; state: KineticMonitoredState; created_by: number | null; max_checks_per_city: number | null },
   start: (input: StartStateSweepInput) => unknown = startStateSweep,
 ): ReArmPlan {
   const plan = planStateSweepReArm();
@@ -252,7 +256,7 @@ export function __clearReArmTimers() {
   reArmTimers.clear();
 }
 
-export interface StartStateSweepInput { tenantId: number; state: "NC" | "SC" | "GA"; createdBy?: number | null; maxChecksPerCity?: number; }
+export interface StartStateSweepInput { tenantId: number; state: KineticMonitoredState; createdBy?: number | null; maxChecksPerCity?: number; }
 
 /**
  * Every scan-eligible market in the state's catalog, de-duped case-insensitively
@@ -271,7 +275,7 @@ export interface StartStateSweepInput { tenantId: number; state: "NC" | "SC" | "
  *   6. city ASC            — stable alphabetical tiebreak (fully deterministic)
  * This mirrors the idx_state_markets_due / idx_state_markets_state_priority indexes.
  */
-export function stateCities(state: "NC" | "SC" | "GA"): string[] {
+export function stateCities(state: KineticMonitoredState): string[] {
   const rows = rawDb.prepare(
     `SELECT city FROM state_fiber_markets
       WHERE state=? AND auto_scan_eligible=1
@@ -315,7 +319,7 @@ export function startStateSweep(input: StartStateSweepInput) {
 }
 
 // ── Single-lane gate: one statewide city-loop at a time ───────────────────────
-// A deploy starts NC+SC+GA at once (index.ts) — three runStateSweep drivers, each
+// A deploy starts all monitored states at once (index.ts) — one driver per state,
 // its own city loop. Run concurrently that is 3× the OSM harvest + scan load on
 // the single event-loop thread the deploy health-gate is probing on boot — exactly
 // the burst that starved /api and rolled the release back. Serialize the drivers:
@@ -336,7 +340,7 @@ export function __resetStateSweepLane() { stateSweepLane = Promise.resolve(); }
 
 async function runStateSweep(id: string) {
   // Dedup a driver for THIS sweep, then queue behind the single lane so a boot
-  // that started NC+SC+GA never runs three heavy city loops simultaneously.
+// that started every state never runs multiple heavy city loops simultaneously.
   if (activeState.has(id)) return; activeState.add(id);
   return enqueueStateSweepLane(() => driveStateSweep(id)).finally(() => activeState.delete(id));
 }

@@ -33,10 +33,10 @@ beforeAll(async () => {
 
 describe("state monitoring evidence store", () => {
   it("seeds every official market with the intended critical, weekly, and change-watch cadence tiers", () => {
-    // 161 = 132 NC/SC + 29 GA (Dalton active build + north-GA ILEC legacy watch);
+    // 171 = 132 NC/SC + 29 GA + 10 official Live Oak-area FL fiber markets;
     // Dalton is the 14th critical/expanding market.
     expect(monitor.seedStateMarkets("/definitely/missing-market-catalog.csv")).toMatchObject({
-      verifiedMarkets: 161, expandingMarkets: 14, syntheticMarkets: 161,
+      verifiedMarkets: 171, expandingMarkets: 14, syntheticMarkets: 171,
     });
     const tiers = rawDb.prepare(`SELECT priority_class AS priorityClass,cadence_hours AS cadenceHours,COUNT(*) AS count
       FROM state_fiber_markets GROUP BY priority_class,cadence_hours ORDER BY cadence_hours,priority_class`).all();
@@ -47,7 +47,7 @@ describe("state monitoring evidence store", () => {
       // so a copper→fiber switch-on is caught within days, not weeks.
       { priorityClass: "low", cadenceHours: 24, count: 3 },
       { priorityClass: "low", cadenceHours: 72, count: 94 },
-      { priorityClass: "medium", cadenceHours: 168, count: 50 },
+      { priorityClass: "medium", cadenceHours: 168, count: 60 },
     ]);
   });
 
@@ -93,5 +93,34 @@ describe("state monitoring evidence store", () => {
     expect(() => monitor.recordCorroboration(TENANT, [{
       scanTargetId: 999_999, source: "field_verification", observedAt: new Date().toISOString(), availability: "available",
     }])).toThrow(/SCAN_TARGET_NOT_FOUND/);
+  });
+
+  it("includes Florida targets in Fresh Now monitoring", () => {
+    const id = Number(rawDb.prepare(`INSERT INTO scan_targets
+      (address,city,state,zip,lat,lng,tenant_id,last_is_new_fiber,last_scanned_at,first_seen_live_at,first_seen_fiber_at,last_fiber_available,source,last_customer_segment,last_customer_confidence)
+      VALUES (?,?,?,?,?,?,?,1,datetime('now'),datetime('now'),datetime('now'),1,'test','new_opportunity','medium')`)
+      .run("100 Pine Ave", "Live Oak", "FL", "32064", 30.2960, -82.9840, TENANT).lastInsertRowid);
+    expect(monitor.freshPoints(TENANT, 30)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id, city: "Live Oak", state: "FL" }),
+    ]));
+  });
+
+  it("accepts Iowa and Kentucky in the durable market and fresh-point stores", () => {
+    for (const [state, city, zip, lat, lng] of [
+      ["IA", "Ottumwa", "52501", 41.0160, -92.4083],
+      ["KY", "Somerset", "42501", 37.0920, -84.6041],
+    ] as const) {
+      rawDb.prepare(`INSERT INTO state_fiber_markets
+        (state,place_fips,city,legal_name,population,priority_class,priority_score,priority_reasons,cadence_hours,source_vintage)
+        VALUES (?,?,?,?,0,'medium',65,'[]',168,'test')`).run(state, `test-${state}`, city, city);
+      rawDb.prepare(`INSERT INTO scan_targets
+        (address,city,state,zip,lat,lng,tenant_id,last_is_new_fiber,last_scanned_at,first_seen_live_at,first_seen_fiber_at,last_fiber_available,source,last_customer_segment,last_customer_confidence)
+        VALUES (?,?,?,?,?,?,?,1,datetime('now'),datetime('now'),datetime('now'),1,'test','new_opportunity','medium')`)
+        .run("100 Fiber Way", city, state, zip, lat, lng, TENANT);
+    }
+    expect(monitor.freshPoints(TENANT, 30)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ city: "Ottumwa", state: "IA" }),
+      expect.objectContaining({ city: "Somerset", state: "KY" }),
+    ]));
   });
 });

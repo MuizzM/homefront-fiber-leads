@@ -32,7 +32,7 @@ import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
 import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
 import { leadStateLabel } from "@/lib/leadDisplay";
-import { queueLeadMapTarget } from "@/lib/leadMapNavigation";
+import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -1235,8 +1235,7 @@ export default function Leads() {
   // stable; these just give them a row-shaped signature.
   const openLead = useCallback((lead: Lead) => setIntelLead(lead), []);
   const openLeadOnMap = useCallback((lead: Lead) => {
-    queueLeadMapTarget({ leadId: lead.id, lat: lead.lat ?? undefined, lng: lead.lng ?? undefined });
-    navigate("/map");
+    openLeadOnFieldMap({ leadId: lead.id, lat: lead.lat ?? undefined, lng: lead.lng ?? undefined }, navigate);
   }, [navigate]);
   const openAssign = useCallback((lead: Lead) => setAssignLead(lead), []);
   const openEdit = useCallback((lead: Lead) => setEditLead(lead), []);
@@ -1313,7 +1312,7 @@ export default function Leads() {
           <div className="flex flex-col lg:flex-row gap-2.5">
             <div className="relative flex-1 min-w-[240px]">
               
-              <Input value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-11 lg:h-9" data-testid="input-search-leads" />
+              <Input aria-label="Search leads" value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-11 lg:h-9" data-testid="input-search-leads" />
               {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
             </div>
             <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-11 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2">Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>

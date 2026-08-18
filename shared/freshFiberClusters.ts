@@ -4,7 +4,8 @@ export interface FreshFiberPoint {
   id: number;
   address: string;
   city: string;
-  state: "NC" | "SC";
+  /** Two-letter state code; monitoring currently includes FL, GA, IA, KY, NC, and SC. */
+  state: string;
   zip?: string | null;
   lat: number;
   lng: number;
@@ -20,7 +21,7 @@ export interface FreshFiberPoint {
 export interface FreshFiberCluster {
   id: string;
   city: string;
-  state: "NC" | "SC";
+  state: string;
   centroid: { lat: number; lng: number };
   density: number;
   confirmed: number;

@@ -11,7 +11,7 @@
 // time.
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -126,7 +126,7 @@ export default function OrderMessaging() {
               <p className="text-muted-foreground">Messages are not being sent because:</p>
               <ul className="space-y-1" data-testid="sending-blockers">
                 {blockers.map((b) => (
-                  <li key={b} className="rounded-md bg-amber-500/10 px-3 py-2 text-warning">{b}</li>
+                  <li key={b} className="break-words rounded-md bg-amber-500/10 px-3 py-2 text-warning [overflow-wrap:anywhere]">{b}</li>
                 ))}
               </ul>
             </>
@@ -176,8 +176,9 @@ export default function OrderMessaging() {
                 <Field label="Email sender" value={config.emailSenderIdentity} onChange={(v) => patch({ emailSenderIdentity: v })} testId="email-sender" />
                 <Field label="Email reply-to" value={config.emailReplyTo} onChange={(v) => patch({ emailReplyTo: v })} />
                 <div className="space-y-1 sm:col-span-2">
-                  <Label className="text-xs">Company mailing address (required in every email)</Label>
+                  <Label htmlFor="recovery-company-mailing-address" className="text-xs">Company mailing address (required in every email)</Label>
                   <Textarea
+                    id="recovery-company-mailing-address"
                     rows={2}
                     value={config.companyMailingAddress ?? ""}
                     data-testid="mailing-address"
@@ -404,7 +405,7 @@ function ToggleRow({ label, help, checked, onChange, testId }: {
         <p className="text-sm font-medium">{label}</p>
         <p className="text-xs text-muted-foreground">{help}</p>
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} data-testid={testId} />
+      <Switch aria-label={label} checked={checked} onCheckedChange={onChange} data-testid={testId} />
     </div>
   );
 }
@@ -412,10 +413,11 @@ function ToggleRow({ label, help, checked, onChange, testId }: {
 function Field({ label, value, onChange, testId }: {
   label: string; value: string | null; onChange: (v: string) => void; testId?: string;
 }) {
+  const id = useId();
   return (
     <div className="space-y-1">
-      <Label className="text-xs">{label}</Label>
-      <Input value={value ?? ""} onChange={(e) => onChange(e.target.value)} data-testid={testId} />
+      <Label htmlFor={id} className="text-xs">{label}</Label>
+      <Input id={id} value={value ?? ""} onChange={(e) => onChange(e.target.value)} data-testid={testId} />
     </div>
   );
 }
@@ -423,10 +425,12 @@ function Field({ label, value, onChange, testId }: {
 function NumberField({ label, value, onChange, testId }: {
   label: string; value: number; onChange: (v: number) => void; testId?: string;
 }) {
+  const id = useId();
   return (
     <div className="space-y-1">
-      <Label className="text-xs">{label}</Label>
+      <Label htmlFor={id} className="text-xs">{label}</Label>
       <Input
+        id={id}
         type="number"
         min={0}
         value={String(value)}
@@ -440,10 +444,12 @@ function NumberField({ label, value, onChange, testId }: {
 function ListField({ label, help, value, onChange, testId }: {
   label: string; help: string; value: string[]; onChange: (v: string[]) => void; testId?: string;
 }) {
+  const id = useId();
   return (
     <div className="space-y-1">
-      <Label className="text-xs">{label}</Label>
+      <Label htmlFor={id} className="text-xs">{label}</Label>
       <Textarea
+        id={id}
         rows={3}
         value={value.join("\n")}
         data-testid={testId}

@@ -498,8 +498,9 @@ export default function CityScanner() {
             </div>
             <div className="flex gap-3 flex-wrap">
               <div className="flex-1 min-w-[200px]">
-                <label className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5 block">City Name</label>
+                <label htmlFor="city-scanner-city" className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5 block">City Name</label>
                 <Input
+                  id="city-scanner-city"
                   data-testid="input-city"
                   placeholder="e.g. Rockwell, Charlotte, Concord..."
                   value={cityInput}
@@ -510,8 +511,9 @@ export default function CityScanner() {
                 />
               </div>
               <div className="w-24">
-                <label className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5 block">State</label>
+                <label htmlFor="city-scanner-state" className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5 block">State</label>
                 <select
+                  id="city-scanner-state"
                   data-testid="select-state"
                   value={stateInput}
                   onChange={e => setStateInput(e.target.value)}

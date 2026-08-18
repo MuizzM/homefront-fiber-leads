@@ -748,7 +748,7 @@ export default function Applications() {
       <div className="grid min-h-[620px] gap-4 xl:grid-cols-[minmax(420px,0.9fr)_minmax(560px,1.25fr)]">
         <section className="overflow-hidden rounded-2xl border border-border bg-card" aria-label="Candidate onboarding queue">
           <div className="border-b border-border p-3">
-            <div className="relative"><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search candidates" className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-primary" /></div>
+            <div className="relative"><input aria-label="Search candidates" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search candidates" className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-primary" /></div>
             <div className="mt-2 flex gap-1 overflow-x-auto pb-1" aria-label="Pipeline filters">{FILTERS.map(key => <button key={key} onClick={() => setFilter(key)} className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === key ? "bg-primary/[0.12] text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>{key.replace(/_/g, " ")}</button>)}</div>
           </div>
           <div className="max-h-[720px] overflow-y-auto">

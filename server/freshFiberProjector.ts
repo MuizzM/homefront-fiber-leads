@@ -6,12 +6,13 @@ import { meterQualifiedLead } from "./billingStore";
 import { normalizeKineticAddressKey, kineticLeadKeyOrNull } from "./scanner";
 import { addressIdentityIssues } from "@shared/addressKey";
 import { syncFreshFiberQueue } from "./calling/store";
+import type { KineticMonitoredState } from "./kineticMarketCatalog";
 
 interface ProjectionCandidate {
   id: number;
   address: string;
   city: string;
-  state: "NC" | "SC";
+  state: KineticMonitoredState;
   zip: string;
   lat: number | null;
   lng: number | null;
@@ -113,7 +114,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         SELECT a.id FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.tenant_id=? AND a.conclusive=1
         ORDER BY a.checked_at_epoch DESC,a.id DESC LIMIT 1
       )
-     WHERE s.state IN ('GA','NC','SC') AND s.tenant_id=?
+     WHERE s.state IN ('FL','GA','IA','KY','NC','SC') AND s.tenant_id=?
        -- No historical requirement: a target qualifies on its flip stamp OR on
        -- the CURRENT conclusive answer alone (NEW FIBER + billing N is a Fresh
        -- Lead now - no first_seen_fiber_at, detected flip, or corroboration

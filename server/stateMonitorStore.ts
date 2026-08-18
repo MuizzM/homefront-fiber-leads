@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { rawDb } from "./db";
 import { clusterFreshFiber, type FreshFiberPoint } from "@shared/freshFiberClusters";
-import { applyAuthoritativeMarketCatalog } from "./kineticMarketCatalog";
+import { applyAuthoritativeMarketCatalog, type KineticMonitoredState } from "./kineticMarketCatalog";
 import { projectConfirmedFreshLeads } from "./freshFiberProjector";
 import { isBlankCsvRow, parseCsvRows } from "./csv";
 export { toCsv } from "./csv";
@@ -108,7 +108,7 @@ export function syncMarketState(): number {
   return result.changes;
 }
 
-export function listMarkets(filters: { state?: "NC" | "SC"; priority?: string; due?: boolean; eligibility?: "verified" | "unverified" | "all"; limit?: number } = {}) {
+export function listMarkets(filters: { state?: KineticMonitoredState; priority?: string; due?: boolean; eligibility?: "verified" | "unverified" | "all"; limit?: number } = {}) {
   const where: string[] = ["1=1"];
   const args: any[] = [];
   if (filters.state) { where.push("m.state=?"); args.push(filters.state); }
@@ -193,7 +193,7 @@ export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
        AND datetime(c.observed_at) >= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'-7 days')
        AND datetime(c.observed_at) <= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'+31 days')
        AND datetime(c.observed_at) <= datetime('now','+5 minutes')
-     WHERE s.state IN ('GA','NC','SC')
+     WHERE s.state IN ('FL','GA','IA','KY','NC','SC')
        -- A historical flip remains in the audit ledger, but it must disappear
        -- from current opportunity/knock surfaces as soon as Kinetic regresses.
        AND s.last_fiber_available=1
@@ -214,7 +214,7 @@ export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
 }
 
 export function monitoringSummary(tenantId: number, days = 7) {
-  const tracked = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE state IN ('GA','NC','SC') AND tenant_id=?`).get(tenantId) as any;
+  const tracked = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE state IN ('FL','GA','IA','KY','NC','SC') AND tenant_id=?`).get(tenantId) as any;
   const fresh = freshPoints(tenantId, days);
   const clusters = clusterFreshFiber(fresh);
   const markets = rawDb.prepare(`SELECT COUNT(*) n,

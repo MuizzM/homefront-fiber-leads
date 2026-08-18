@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DENSITY_RADIUS_M,
+  eligibleNeighborhoodClusterIds,
+  NEIGHBORHOOD_BATCH,
   NEW_BUILD_CONFIDENCE_FACTOR,
   parseDbTime,
   RANK_WEIGHTS,
@@ -142,5 +144,34 @@ describe("scoreLead - composite", () => {
     const hot = scoreLead(base({ freshConfirmedAt: minutesAgo(30) }), NOW).score;
     const stale = scoreLead(base({ freshConfirmedAt: minutesAgo(7 * 1440), assignedRepId: 1 }), NOW).score;
     expect(hot).toBeGreaterThan(stale);
+  });
+});
+
+describe("neighborhood batch eligibility", () => {
+  const cluster = (id: string, total: number, provenFlips: number) =>
+    Array.from({ length: total }, (_, index) => ({
+      clusterId: id,
+      newlyLit: index < provenFlips,
+      nearbyFreshCount: index === 0 ? NEIGHBORHOOD_BATCH.MIN_DENSE_NEIGHBORS : 1,
+    }));
+
+  it("requires a dense cluster with enough proven prior-dark flips", () => {
+    const eligible = eligibleNeighborhoodClusterIds(cluster("live-oak-a", 8, 5));
+    expect(eligible.has("live-oak-a")).toBe(true);
+  });
+
+  it("rejects isolated, weakly-proven, and unclustered hits", () => {
+    const eligible = eligibleNeighborhoodClusterIds([
+      ...cluster("too-small", NEIGHBORHOOD_BATCH.MIN_CLUSTER_SIZE - 1, 7),
+      ...cluster("too-few-flips", 8, NEIGHBORHOOD_BATCH.MIN_PROVEN_FLIPS - 1),
+      ...cluster("too-low-ratio", 10, 5),
+      { clusterId: null, newlyLit: true },
+    ]);
+    expect([...eligible]).toEqual([]);
+  });
+
+  it("rejects a broad expansion group without one dense neighborhood core", () => {
+    const scattered = cluster("spread-across-town", 10, 8).map((lead) => ({ ...lead, nearbyFreshCount: 2 }));
+    expect(eligibleNeighborhoodClusterIds(scattered).has("spread-across-town")).toBe(false);
   });
 });

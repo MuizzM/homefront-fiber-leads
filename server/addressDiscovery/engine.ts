@@ -449,10 +449,10 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true):
   for (const candidate of candidates) {
     work++;
     // The authorized Kinetic qualifier and fresh-lead projector support
-    // GA/NC/SC. Discovery may still inventory a wider map geometry, but
+    // FL/GA/IA/KY/NC/SC. Discovery may still inventory a wider map geometry, but
     // unsupported states never consume a provider request that cannot be
     // published safely.
-    if (!["GA", "NC", "SC"].includes(String(candidate.state).toUpperCase())) {
+    if (!["FL", "GA", "IA", "KY", "NC", "SC"].includes(String(candidate.state).toUpperCase())) {
       createQualificationCheck({
         tenantId: job.tenantId,
         jobId: job.id,
@@ -818,4 +818,3 @@ export function startDiscoveryWorkers(): void {
   }
   wakeDiscoveryWorkers();
 }
-

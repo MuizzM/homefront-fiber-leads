@@ -30,4 +30,14 @@ describe("clusterFreshFiber", () => {
     const other = { ...point(2, 35.8241, -80.2534), city: "Thomasville" };
     expect(clusterFreshFiber([point(1, 35.8240, -80.2534), other])).toHaveLength(2);
   });
+
+  it("clusters Florida fiber points instead of excluding their state type", () => {
+    const florida = [
+      { ...point(10, 30.2960, -82.9840), city: "Live Oak", state: "FL" },
+      { ...point(11, 30.2962, -82.9841), city: "Live Oak", state: "FL" },
+    ];
+    expect(clusterFreshFiber(florida, { radiusMeters: 250 })[0]).toMatchObject({
+      city: "Live Oak", state: "FL", density: 2,
+    });
+  });
 });

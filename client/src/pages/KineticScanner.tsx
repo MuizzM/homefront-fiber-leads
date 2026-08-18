@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Database, Gauge, History, Loader2, Map as MapIcon, RefreshCw, ShieldCheck, Zap } from "lucide-react";
 import {
@@ -9,6 +10,7 @@ import { KineticScannerMap } from "@/components/kinetic/KineticScannerMap";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { summarizeEvidenceWorker } from "@/lib/scanYield";
+import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
 type Tab =
   | "dashboard"
@@ -686,6 +688,7 @@ function EvidenceCenter() {
 }
 
 function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
+  const [, navigate] = useLocation();
   const [search, setSearch] = useState(""),
     [state, setState] = useState(""),
     [filter, setFilter] = useState("all"),
@@ -821,12 +824,25 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
                           : " - "}
                       </td>
                       <td className="px-3 py-3">
-                        <button
-                          onClick={() => onOpen(a.id)}
-                          className="h-9 rounded-lg border border-border px-3 font-semibold"
-                        >
-                          Details
-                        </button>
+                        <div className="flex gap-2">
+                          {a.leadId != null && (
+                            <button
+                              type="button"
+                              onClick={() => openLeadOnFieldMap({ leadId: a.leadId!, lat: a.latitude ?? undefined, lng: a.longitude ?? undefined }, navigate)}
+                              aria-label={`Open ${a.address ?? "this lead"} on the Field Map`}
+                              className="h-9 rounded-lg bg-primary px-3 font-semibold text-primary-foreground"
+                            >
+                              Field
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onOpen(a.id)}
+                            className="h-9 rounded-lg border border-border px-3 font-semibold"
+                          >
+                            Details
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1009,6 +1025,7 @@ function Jobs() {
 function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   const qc = useQueryClient(),
     { toast } = useToast(),
+    [, navigate] = useLocation(),
     { data, isLoading } = useQuery({
       queryKey: ["kinetic-detail", id],
       queryFn: () => kineticScannerApi.detail(id),
@@ -1017,15 +1034,24 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
     try {
       if (type === "recheck") await kineticScannerApi.recheck(id);
       if (type === "contacts") await kineticScannerApi.refreshContacts(id);
-      if (type === "convert") await kineticScannerApi.convert(id);
+      if (type === "convert") {
+        const address = data?.address;
+        const existingLeadId = Number(address?.leadId);
+        const leadId = Number.isSafeInteger(existingLeadId) && existingLeadId > 0
+          ? existingLeadId
+          : (await kineticScannerApi.convert(id)).leadId;
+        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+        openLeadOnFieldMap({
+          leadId,
+          lat: address?.latitude ?? undefined,
+          lng: address?.longitude ?? undefined,
+        }, navigate);
+        onClose();
+        return;
+      }
       await qc.invalidateQueries({ queryKey: ["kinetic-detail", id] });
       toast({
-        title:
-          type === "convert"
-            ? "Converted to lead"
-            : type === "contacts"
-              ? "Contacts refreshed"
-              : "Recheck queued",
+        title: type === "contacts" ? "Contacts refreshed" : "Recheck queued",
       });
     } catch (e: any) {
       toast({
@@ -1108,7 +1134,7 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
                 onClick={() => void act("convert")}
                 className="col-span-2 h-11 rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90"
               >
-                Convert to lead
+                {data?.address?.leadId ? "Open in field" : "Convert and open in field"}
               </button>
             </div>
             <h3 className="mt-6 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

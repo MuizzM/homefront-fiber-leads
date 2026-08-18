@@ -1,6 +1,6 @@
 /**
  * USA Market Scanner
- * Uses carrier-owned NC/SC directory evidence to show WHERE Kinetic is served
+ * Uses carrier-owned state-directory evidence to show WHERE Kinetic is served
  * or expanding. Address-level checks remain the only availability truth.
  * Click any market to scan it immediately. Leads auto-saved to map.
  */

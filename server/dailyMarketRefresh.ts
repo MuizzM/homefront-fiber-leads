@@ -12,6 +12,7 @@ import { getCityAddresses } from "./overpass";
 import * as scanService from "./scanService";
 import { structuredLog } from "./structuredLog";
 import { MAX_CHECKS_PER_RUN } from "@shared/scanEconomics";
+import { KINETIC_MONITORED_STATES, type KineticMonitoredState } from "./kineticMarketCatalog";
 
 export interface DailyRefreshStatus {
   running: boolean;
@@ -40,7 +41,7 @@ let active = false;
 export function getDailyRefreshStatus(): DailyRefreshStatus { return { ...status }; }
 
 /** Confirmed cities for a state — the saved markets; we never re-approve them. */
-function confirmedCities(state: "NC" | "SC" | "GA"): string[] {
+function confirmedCities(state: KineticMonitoredState): string[] {
   const rows = rawDb.prepare(
     `SELECT city FROM state_fiber_markets WHERE state=? AND auto_scan_eligible=1 ORDER BY city`,
   ).all(state) as Array<{ city: string }>;
@@ -56,11 +57,9 @@ function confirmedCities(state: "NC" | "SC" | "GA"): string[] {
 export async function runDailyMarketRefresh(tenantId: number): Promise<DailyRefreshStatus> {
   if (active) return getDailyRefreshStatus();
   active = true;
-  const cities = [
-    ...confirmedCities("NC").map((c) => ({ city: c, state: "NC" as const })),
-    ...confirmedCities("SC").map((c) => ({ city: c, state: "SC" as const })),
-    ...confirmedCities("GA").map((c) => ({ city: c, state: "GA" as const })),
-  ];
+  const cities = KINETIC_MONITORED_STATES.flatMap((state) =>
+    confirmedCities(state).map((city) => ({ city, state })),
+  );
   Object.assign(status, {
     running: true, startedAt: new Date().toISOString(), completedAt: null,
     citiesTotal: cities.length, citiesRefreshed: 0, currentCity: null,

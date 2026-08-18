@@ -6559,6 +6559,7 @@ export default function MapView() {
       className="flex flex-col relative"
       style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
     >
+      <h1 className="sr-only">Field map</h1>
       {/* ── FULL-BLEED MAP (owner spec): no toolbar for ANY role. The rep
              filter lives in the legend panel; Assign Area + Scan Area live on
              the control rail; banners FLOAT over the map (the page root is
@@ -6597,10 +6598,10 @@ export default function MapView() {
               <button onClick={() => { setLiveTestOpen(false); setLtResult(null); }} className="ml-auto grid h-11 w-11 place-items-center rounded-full text-white/60 hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button>
             </div>
             <div className="grid grid-cols-[1fr_1fr_44px_72px] gap-1.5">
-              <input value={ltAddr.address} onChange={e => setLtAddr({ ...ltAddr, address: e.target.value })} placeholder="123 Main St" className="h-11 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-              <input value={ltAddr.city} onChange={e => setLtAddr({ ...ltAddr, city: e.target.value })} placeholder="City" className="h-11 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-              <input value={ltAddr.state} onChange={e => setLtAddr({ ...ltAddr, state: e.target.value.toUpperCase().slice(0, 2) })} placeholder="NC" className="h-11 rounded-lg bg-white/10 px-1 text-center text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-              <input value={ltAddr.zip} onChange={e => setLtAddr({ ...ltAddr, zip: e.target.value })} placeholder="ZIP" className="h-11 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input aria-label="Street address" value={ltAddr.address} onChange={e => setLtAddr({ ...ltAddr, address: e.target.value })} placeholder="123 Main St" className="h-11 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input aria-label="City" value={ltAddr.city} onChange={e => setLtAddr({ ...ltAddr, city: e.target.value })} placeholder="City" className="h-11 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input aria-label="State" value={ltAddr.state} onChange={e => setLtAddr({ ...ltAddr, state: e.target.value.toUpperCase().slice(0, 2) })} placeholder="NC" className="h-11 rounded-lg bg-white/10 px-1 text-center text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input aria-label="ZIP code" value={ltAddr.zip} onChange={e => setLtAddr({ ...ltAddr, zip: e.target.value })} placeholder="ZIP" className="h-11 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
             </div>
             <button disabled={ltRunning || ltAddr.address.trim().length < 3} onClick={() => void runLiveTest()} data-testid="live-test-run" className="h-11 rounded-lg bg-emerald-500 text-[13px] font-bold text-[#04241f] transition hover:bg-emerald-400 disabled:opacity-50">
               {ltRunning ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "Run Live Test (fresh mint · no cache)"}

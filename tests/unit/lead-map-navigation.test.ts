@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  openLeadOnFieldMap,
   queueLeadMapTarget,
   takeLeadMapTarget,
 } from "../../client/src/lib/leadMapNavigation";
@@ -37,14 +38,40 @@ describe("lead list to Field Map navigation", () => {
     expect(takeLeadMapTarget(store)).toBeNull();
   });
 
+  it("opens the stable Field Map route with a one-use rooftop target", () => {
+    const store = memoryStore();
+    const navigations: string[] = [];
+    expect(openLeadOnFieldMap(
+      { leadId: 88, lat: 35.9557, lng: -80.0053 },
+      (path) => navigations.push(path),
+      store,
+    )).toBe(true);
+    expect(navigations).toEqual(["/map"]);
+    expect(takeLeadMapTarget(store)).toEqual({ leadId: 88, lat: 35.9557, lng: -80.0053 });
+  });
+
   it("wires Leads to the kept-alive map and MapView to the one-use target", () => {
     const root = process.cwd();
     const leads = readFileSync(join(root, "client/src/pages/Leads.tsx"), "utf8");
     const map = readFileSync(join(root, "client/src/pages/MapView.tsx"), "utf8");
-    expect(leads).toContain("queueLeadMapTarget({ leadId: lead.id");
-    expect(leads).toContain('navigate("/map")');
+    expect(leads).toContain("openLeadOnFieldMap({ leadId: lead.id");
     expect(map).toContain("takeLeadMapTarget()");
     expect(map).toContain("setSelectedLeadId(target.leadId)");
     expect(map).toContain("if (mappable) flyToLead(mappable)");
+  });
+
+  it("routes every scanner/fresh-lead surface to the rooftop handoff", () => {
+    const root = process.cwd();
+    const dashboard = readFileSync(join(root, "client/src/pages/Dashboard.tsx"), "utf8");
+    const fiber = readFileSync(join(root, "client/src/pages/FiberIntelligence.tsx"), "utf8");
+    const ranked = readFileSync(join(root, "client/src/components/fiber/RankedLeads.tsx"), "utf8");
+    const scanner = readFileSync(join(root, "client/src/pages/KineticScanner.tsx"), "utf8");
+
+    expect(dashboard).not.toContain("#/leads?id=");
+    expect(dashboard).toContain("openLeadOnFieldMap({ leadId: a.leadId!");
+    expect(fiber.match(/openLeadOnFieldMap\(/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(ranked).toContain("openLeadOnFieldMap({");
+    expect(scanner.match(/openLeadOnFieldMap\(/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(scanner).toContain("Convert and open in field");
   });
 });

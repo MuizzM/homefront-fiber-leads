@@ -9,6 +9,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { TrackingIndicator } from "@/components/liveops/TrackingIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { elapsedShiftMinutes, isSuspiciousShiftDuration } from "@/lib/shiftDuration";
 import { useEffect, useState } from "react";
 
 interface ClockSession {
@@ -222,20 +223,27 @@ export default function ClockIn() {
           </CardHeader>
           <CardContent className="p-0">
             <div className="divide-y divide-border">
-              {activeSessions.map(s => (
-                <div key={s.id} className="px-5 py-3.5 flex items-center justify-between" data-testid={`active-session-${s.id}`}>
-                  <div className="flex items-center gap-3">
-                    <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                    <div>
-                      <p className="text-sm text-foreground font-medium">{s.repName ?? `Rep #${s.repId}`}</p>
-                      <p className="text-xs text-muted-foreground">Since {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</p>
+              {activeSessions.map(s => {
+                const needsReview = isSuspiciousShiftDuration(elapsedShiftMinutes(s.clockedIn));
+                return (
+                  <div key={s.id} className="px-5 py-3.5 flex items-center justify-between gap-3" data-testid={`active-session-${s.id}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                      <div>
+                        <p className="text-sm text-foreground font-medium">{s.repName ?? `Rep #${s.repId}`}</p>
+                        <p className="text-xs text-muted-foreground">Since {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</p>
+                      </div>
                     </div>
+                    <Badge
+                      className={`${needsReview ? "bg-warning/[0.08] text-warning" : "bg-success/10 text-success"} border-transparent rounded-full text-xs flex items-center gap-1.5`}
+                      title={needsReview ? "This session is unusually long and should be reviewed before payroll is finalized." : undefined}
+                    >
+                      <span className={`w-1 h-1 rounded-full ${needsReview ? "bg-warning" : "bg-success"}`} />
+                      {needsReview ? "Review time" : "Active"}
+                    </Badge>
                   </div>
-                  <Badge className="bg-success/10 text-success border-transparent rounded-full text-xs flex items-center gap-1.5">
-                    <span className="w-1 h-1 rounded-full bg-success" /> Active
-                  </Badge>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -265,24 +273,30 @@ export default function ClockIn() {
             <p className="text-sm text-muted-foreground p-5">No sessions yet</p>
           ) : (
             <div className="divide-y divide-border max-h-80 overflow-y-auto">
-              {sessions.filter(s => s.clockedOut).slice(0, 30).map(s => (
-                <div key={s.id} className="px-5 py-3.5 flex items-center justify-between" data-testid={`session-history-${s.id}`}>
-                  <div>
-                    {isManager && <p className="text-[11px] uppercase tracking-wide text-primary font-medium">{s.repName ?? `Rep #${s.repId}`}</p>}
-                    {/* Date from the timestamp, not the label: new Date("YYYY-MM-DD")
-                        parses as UTC midnight and shows YESTERDAY in US timezones. */}
-                    <p className="text-sm text-foreground">{new Date(s.clockedIn).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
-                    <p className="text-xs text-muted-foreground tabular-nums">
-                      {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-                      {" to "}
-                      {s.clockedOut ? new Date(s.clockedOut).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : " - "}
-                    </p>
+              {sessions.filter(s => s.clockedOut).slice(0, 30).map(s => {
+                const needsReview = isSuspiciousShiftDuration(s.durationMinutes);
+                return (
+                  <div key={s.id} className="px-5 py-3.5 flex items-center justify-between gap-3" data-testid={`session-history-${s.id}`}>
+                    <div>
+                      {isManager && <p className="text-[11px] uppercase tracking-wide text-primary font-medium">{s.repName ?? `Rep #${s.repId}`}</p>}
+                      {/* Date from the timestamp, not the label: new Date("YYYY-MM-DD")
+                          parses as UTC midnight and shows YESTERDAY in US timezones. */}
+                      <p className="text-sm text-foreground">{new Date(s.clockedIn).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
+                      <p className="text-xs text-muted-foreground tabular-nums">
+                        {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+                        {" to "}
+                        {s.clockedOut ? new Date(s.clockedOut).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : " - "}
+                      </p>
+                    </div>
+                    <Badge
+                      className={`${needsReview ? "bg-warning/[0.08] text-warning" : "bg-secondary text-muted-foreground"} border-transparent rounded-full text-xs tabular-nums`}
+                      title={needsReview ? "Unusually long session; review the source time before payroll is finalized." : undefined}
+                    >
+                      {formatDuration(s.durationMinutes ?? 0)}{needsReview ? " · Review" : ""}
+                    </Badge>
                   </div>
-                  <Badge className="bg-secondary text-muted-foreground border-transparent rounded-full text-xs tabular-nums">
-                    {formatDuration(s.durationMinutes ?? 0)}
-                  </Badge>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>

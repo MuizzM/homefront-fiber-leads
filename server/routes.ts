@@ -256,7 +256,7 @@ import {
 import { clusterFreshFiber } from "@shared/freshFiberClusters";
 import { flushFreshOpportunityAlerts, getStateMonitorStatus, runStateMonitorTick, startStateMonitorScheduler } from "./stateMonitorScheduler";
 import { announcementSourceStatus, pollAnnouncementsIfDue } from "./announcementWatcher";
-import { CATALOG_OBSERVED_AT, KINETIC_DIRECTORY_URLS, refreshKineticLocationDirectory } from "./kineticMarketCatalog";
+import { CATALOG_OBSERVED_AT, KINETIC_DIRECTORY_URLS, KINETIC_MONITORED_STATES, refreshKineticLocationDirectory } from "./kineticMarketCatalog";
 import * as sweepService from "./sweepService";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
@@ -1575,7 +1575,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
 
-  // ── Evidence-backed NC/SC Kinetic market catalog ───────────────────────────
+  // ── Evidence-backed multi-state Kinetic market catalog ─────────────────────
   // Never publish fabricated passings or generalize address availability from a
   // city. This is a planning/scheduling catalog; only address-level checks can
   // produce availability evidence and only cross-verified flips produce leads.
@@ -1591,7 +1591,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     res.json({
       lastUpdated: CATALOG_OBSERVED_AT,
-      source: "Kinetic official NC/SC fiber and other-high-speed location directories",
+      source: "Kinetic official FL/GA/IA/KY/NC/SC fiber and other-high-speed location directories",
       sourceUrls: KINETIC_DIRECTORY_URLS,
       totalNewPassings: null,
       markets: rows.map((market) => ({
@@ -4402,11 +4402,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // and run/control budgeted scans (admin only — every check spends proxy money).
   const tid = (req: any) => req.user?.tenantId ?? getDefaultTenantId();
 
-  // ═══ NC/SC KINETIC STATE MONITOR ═══════════════════════════════════════════
+  // ═══ FL/GA/IA/KY/NC/SC KINETIC STATE MONITOR ═══════════════════════════════
   // Planning targets are city-level; every fresh/knock output below is sourced
   // exclusively from time-stamped address-level transitions.
   const marketQuerySchema = z.object({
-    state: z.enum(["NC", "SC"]).optional(),
+    state: z.enum(KINETIC_MONITORED_STATES).optional(),
     priority: z.enum(["critical", "high", "medium", "low"]).optional(),
     eligibility: z.enum(["verified", "unverified", "all"]).default("verified"),
     due: z.enum(["true", "false"]).optional(),
@@ -4434,7 +4434,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
   const citySweepSchema = z.object({
-    city: z.string().trim().min(2).max(120), state: z.enum(["NC", "SC"]),
+    city: z.string().trim().min(2).max(120), state: z.enum(KINETIC_MONITORED_STATES),
     maxChecks: z.number().int().min(1).max(100_000).optional(),
   });
   const addressSearchSchema = z.object({
@@ -4456,7 +4456,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // These MUST be registered before GET /api/sweeps/:id so "/state" isn't parsed
   // as a sweep id. Active-priority only: no deferral/nightly path exists here. ──
   const stateSweepSchema = z.object({
-    state: z.enum(["NC", "SC"]),
+    state: z.enum(KINETIC_MONITORED_STATES),
     maxChecksPerCity: z.coerce.number().int().min(1).max(100_000).optional(),
   });
 

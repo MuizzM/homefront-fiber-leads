@@ -26,6 +26,7 @@ import {
 } from "./limiters";
 import { BLOCKED_RESPONSE_FIELDS, scrubSecretText } from "./secretScrub";
 import { safeRequestId } from "./requestId";
+import { isUnsafeHttpMethod, PORTAL_ALLOWED_METHODS } from "./httpMethodPolicy";
 
 // ── Multi-core scan cluster ────────────────────────────────────────────────────
 // The scan pipeline is single-threaded JavaScript (synchronous better-sqlite3 +
@@ -375,6 +376,16 @@ app.use((req, res, next) => {
   (req as any).id = rid;
   res.setHeader("x-request-id", rid);
   next();
+});
+
+// TRACE/TRACK have no portal use and must never fall through to index.html.
+// CONNECT is likewise a proxy method, not an application method. Reject all
+// three after security/request-id headers are installed so even the refusal is
+// hardened and traceable.
+app.use((req, res, next) => {
+  if (!isUnsafeHttpMethod(req.method)) return next();
+  res.setHeader("Allow", PORTAL_ALLOWED_METHODS);
+  return res.status(405).json({ error: "Method not allowed." });
 });
 
 app.use((req, res, next) => {
@@ -1072,7 +1083,14 @@ app.use((req, res, next) => {
         const { getDefaultTenantId } = await import("./storage");
         const tenantId = getDefaultTenantId();
         if (tenantId == null) throw new Error("no default tenant yet");
-        for (const state of ["NC", "SC", "GA"] as const) {
+        const { KINETIC_MONITORED_STATES, refreshKineticLocationDirectory } = await import("./kineticMarketCatalog");
+        // Refresh the carrier-owned directories before boot sweeps so IA/KY
+        // receive their full official city inventory without a hardcoded copy.
+        try { await refreshKineticLocationDirectory(false); }
+        catch (directoryError: any) {
+          structuredLog("state_sweep.directory_refresh_failed", { error: directoryError?.message ?? String(directoryError) }, "warn");
+        }
+        for (const state of KINETIC_MONITORED_STATES) {
           const sweep = startStateSweep({ tenantId, state });
           structuredLog("state_sweep.deploy_start", {
             state, stateSweepId: sweep.id,
@@ -1202,7 +1220,7 @@ app.use((req, res, next) => {
           }
           if (pairs.length) structuredLog("fresh_lead.link_backfill", { tenantId: tid, candidatePairs: pairs.length, linkedByAddress: addrLinked });
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
-          const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('GA','NC','SC')
+          const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('FL','GA','IA','KY','NC','SC')
             AND last_fiber_status='new_fiber' AND last_billing_status='N' AND converted_to_lead_id IS NULL`).all(tid).map((r: any) => Number(r.id));
           let created = 0, linkedProj = 0, chunksFailed = 0;
           // Chunk so each projection transaction is small and the event loop breathes.
@@ -1704,7 +1722,7 @@ app.use((req, res, next) => {
   }
 
   // DAILY FULL-MARKET SCAN — built-in worker: every day, re-discover addresses in
-  // every confirmed GA/NC/SC market and live-check the new ones, so we are FIRST
+  // every confirmed FL/GA/IA/KY/NC/SC market and live-check the new ones, so we are FIRST
   // to find fresh fiber. Set DAILY_MARKET_REFRESH=off to disable.
   if (process.env.DAILY_MARKET_REFRESH !== "off") {
     const runDaily = async () => {

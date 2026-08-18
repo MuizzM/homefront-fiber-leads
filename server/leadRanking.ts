@@ -59,6 +59,53 @@ export const RANKING_POOL_MAX = 3000;
 export const DEFAULT_LIMIT = 100;
 export const MAX_LIMIT = 500;
 
+/**
+ * The rep-facing neighborhood lens is intentionally strict. Individual hits
+ * remain in the audit ledger, but a cluster is promoted only when it looks like
+ * a real recent build activation rather than one old-service address that was
+ * discovered late.
+ */
+export const NEIGHBORHOOD_BATCH = {
+  MIN_CLUSTER_SIZE: 8,
+  MIN_PROVEN_FLIPS: 5,
+  MIN_PROVEN_FLIP_RATIO: 0.6,
+  // At least one address must sit inside a true 800 m neighborhood pocket,
+  // not merely share a broad expansion id with scattered doors across town.
+  MIN_DENSE_NEIGHBORS: 7,
+  MAX_AGE_DAYS: 7,
+} as const;
+
+export type LeadRankingMode = "all" | "neighborhood";
+
+export interface NeighborhoodClusterCandidate {
+  clusterId: string | null;
+  newlyLit: boolean;
+  nearbyFreshCount?: number;
+}
+
+/** Pure eligibility gate used by the ranked endpoint and regression tests. */
+export function eligibleNeighborhoodClusterIds(
+  candidates: NeighborhoodClusterCandidate[],
+  rules = NEIGHBORHOOD_BATCH,
+): Set<string> {
+  const counts = new Map<string, { total: number; provenFlips: number; denseCore: boolean }>();
+  for (const candidate of candidates) {
+    if (!candidate.clusterId) continue;
+    const count = counts.get(candidate.clusterId) ?? { total: 0, provenFlips: 0, denseCore: false };
+    count.total += 1;
+    if (candidate.newlyLit) count.provenFlips += 1;
+    if ((candidate.nearbyFreshCount ?? 0) >= rules.MIN_DENSE_NEIGHBORS) count.denseCore = true;
+    counts.set(candidate.clusterId, count);
+  }
+
+  return new Set([...counts.entries()]
+    .filter(([, count]) => count.total >= rules.MIN_CLUSTER_SIZE
+      && count.provenFlips >= rules.MIN_PROVEN_FLIPS
+      && count.provenFlips / count.total >= rules.MIN_PROVEN_FLIP_RATIO
+      && count.denseCore)
+    .map(([clusterId]) => clusterId));
+}
+
 // ── Pure scoring ──────────────────────────────────────────────────────────────
 export interface LeadRankSignals {
   /** leads.fresh_confirmed_at — ISO or SQLite "YYYY-MM-DD HH:MM:SS" (UTC). */
@@ -290,12 +337,18 @@ export function rankLeads(
   limit: number,
   nowMs: number = Date.now(),
   scope?: number | number[],
+  mode: LeadRankingMode = "all",
 ): RankedLead[] {
   ensureIndexes();
   // 'now_active' = the address already signed with Kinetic (billing active) — never
   // point a rep at a door that already converted.
   const clauses = ["fresh_confirmed_at IS NOT NULL", "lead_status NOT IN ('sold','not_interested','now_active')"];
   const params: unknown[] = [];
+  if (mode === "neighborhood") {
+    clauses.push("fresh_confidence = 'cross_verified'");
+    clauses.push("datetime(fresh_confirmed_at) >= datetime(?)");
+    params.push(new Date(nowMs - NEIGHBORHOOD_BATCH.MAX_AGE_DAYS * 86_400_000).toISOString());
+  }
   if (tenantId != null) { clauses.push("tenant_id = ?"); params.push(tenantId); } // getLeadsForMap scoping idiom
   // Visibility scope — the SAME idiom /api/leads composes:
   // a scoped caller (rep → self, team_lead → their team) sees only leads whose
@@ -338,7 +391,25 @@ export function rankLeads(
     if (cid) clusterSizes.set(cid, (clusterSizes.get(cid) ?? 0) + 1);
   }
 
-  const scored = pool.map((lead) => {
+  const isProvenNewlyLit = (lead: PoolLead): boolean => {
+    const tid = lead.source_scan_target_id;
+    const dark = tid != null ? priorDark.get(tid) : undefined;
+    const freshEpoch = parseDbTime(lead.fresh_confirmed_at);
+    return Boolean(dark && (dark.firstBadEpoch == null || freshEpoch == null || dark.firstBadEpoch < freshEpoch));
+  };
+  const eligibleClusters = mode === "neighborhood"
+    ? eligibleNeighborhoodClusterIds(pool.map((lead) => ({
+      clusterId: clusterIds.get(lead.id) ?? null,
+      newlyLit: isProvenNewlyLit(lead),
+      nearbyFreshCount: density.get(lead.id) ?? 0,
+    })))
+    : null;
+
+  const scored = pool.filter((lead) => {
+    if (!eligibleClusters) return true;
+    const clusterId = clusterIds.get(lead.id);
+    return clusterId != null && eligibleClusters.has(clusterId);
+  }).map((lead) => {
     const tid = lead.source_scan_target_id;
     const dark = tid != null ? priorDark.get(tid) : undefined;
     const freshEpoch = parseDbTime(lead.fresh_confirmed_at);
@@ -418,18 +489,24 @@ export function registerLeadRankingRoutes(app: Express, deps: LeadRankingRouteDe
   const requireAuth = deps.requireAuth ?? localRequireAuth;
   const visibilityScope = deps.visibilityScope ?? localVisibilityScope;
 
-  // GET /api/leads/ranked?limit=100 — rep-facing: any authenticated field user.
+  // GET /api/leads/ranked?limit=100&mode=neighborhood — rep-facing: any
+  // authenticated field user. Neighborhood mode hides isolated/provisional hits.
   // Tenant-scoped read; no diagnostics, tokens, or proxy internals in the payload.
   app.get("/api/leads/ranked", requireAuth, (req: any, res: Response) => {
     try {
       const rawLimit = Number(req.query.limit);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.floor(rawLimit), 1), MAX_LIMIT) : DEFAULT_LIMIT;
+      const rawMode = String(req.query.mode ?? "all");
+      if (rawMode !== "all" && rawMode !== "neighborhood") {
+        return res.status(400).json({ error: "mode must be all or neighborhood" });
+      }
+      const mode = rawMode as LeadRankingMode;
       const tenantId = req.user?.tenantId ?? getDefaultTenantId() ?? undefined;
       // Same visibility scope as every other list endpoint: a rep ranks only
       // their own book, a team_lead only their team's — never the whole org.
       const scope = visibilityScope(req.user);
-      const leads = rankLeads(tenantId ?? undefined, limit, Date.now(), scope);
-      res.json({ count: leads.length, limit, generatedAt: new Date().toISOString(), leads });
+      const leads = rankLeads(tenantId ?? undefined, limit, Date.now(), scope, mode);
+      res.json({ count: leads.length, limit, mode, generatedAt: new Date().toISOString(), leads });
     } catch (e: any) {
       // Error hygiene: SQL/detail stays in the server log, never on the wire.
       console.error("[leads/ranked] failed:", e instanceof Error ? e.message : e);

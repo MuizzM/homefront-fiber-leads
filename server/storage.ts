@@ -1587,12 +1587,12 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_rep_applications_invite
        ON rep_applications(invite_id) WHERE invite_id IS NOT NULL`,
 
-    // Complete NC/SC incorporated-place target inventory. This is planning
+    // Carrier-verified FL/GA/IA/KY/NC/SC market target inventory. This is planning
     // metadata only: it never substitutes city-level claims for address-level
     // availability. The address pool + observations remain the ground truth.
     `CREATE TABLE IF NOT EXISTS state_fiber_markets (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
-       state TEXT NOT NULL CHECK(state IN ('GA','NC','SC')),
+       state TEXT NOT NULL CHECK(state IN ('FL','GA','IA','KY','NC','SC')),
        place_fips TEXT NOT NULL,
        city TEXT NOT NULL,
        legal_name TEXT NOT NULL,
@@ -1673,7 +1673,7 @@ export function runMigrations() {
        source_url TEXT NOT NULL,
        title TEXT NOT NULL,
        published_at TEXT,
-       state TEXT CHECK(state IN ('GA','NC','SC')),
+       state TEXT CHECK(state IN ('FL','GA','IA','KY','NC','SC')),
        locations_json TEXT NOT NULL DEFAULT '[]',
        content_hash TEXT NOT NULL UNIQUE,
        last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -2822,25 +2822,47 @@ export function runMigrations() {
     }
   } catch (e: any) { console.warn("Migration warning (install-hold adoption):", e?.message); }
 
-  // CHECK-constraint migration: tables created with state IN ('NC','SC') reject GA
-  // rows, and SQLite can't alter a CHECK — rebuild any such table in place. The
+  // CHECK-constraint migration: older tables reject newer monitored states,
+  // and SQLite can't alter a CHECK — rebuild any such table in place. The
   // new CREATE above is a no-op for existing DBs, so detect the old constraint
   // from sqlite_master and swap the table under a copy.
   for (const table of ["state_fiber_markets", "market_announcements"]) {
     try {
       const row = raw.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`).get(table) as any;
-      if (row?.sql && row.sql.includes("CHECK(state IN ('NC','SC'))")) {
-        const newSql = row.sql.replaceAll("CHECK(state IN ('NC','SC'))", "CHECK(state IN ('GA','NC','SC'))")
-          .replace(`CREATE TABLE ${table}`, `CREATE TABLE ${table}_ga`);
-        raw.transaction(() => {
-          raw.exec(newSql);
-          raw.exec(`INSERT INTO ${table}_ga SELECT * FROM ${table}`);
-          raw.exec(`DROP TABLE ${table}`);
-          raw.exec(`ALTER TABLE ${table}_ga RENAME TO ${table}`);
-        })();
-        console.log(`[migration] ${table}: rebuilt with GA in state CHECK`);
+      const stateCheck = /CHECK\s*\(\s*state\s+IN\s*\([^)]*\)\s*\)/i;
+      const targetStateCheck = "CHECK(state IN ('FL','GA','IA','KY','NC','SC'))";
+      if (row?.sql && stateCheck.test(row.sql) && !row.sql.includes(targetStateCheck)) {
+        const replacementTable = `${table}_six_states`;
+        const newSql = row.sql
+          .replace(stateCheck, targetStateCheck)
+          .replace(`CREATE TABLE ${table}`, `CREATE TABLE ${replacementTable}`);
+        // A parent-table rebuild with foreign_keys=ON can cascade-delete its
+        // evidence rows when the old table is dropped. Disable enforcement only
+        // for this atomic schema copy, restore it immediately, then verify.
+        const foreignKeysWereOn = Number((raw.pragma("foreign_keys", { simple: true }) as number) ?? 0) === 1;
+        if (foreignKeysWereOn) raw.pragma("foreign_keys = OFF");
+        try {
+          raw.transaction(() => {
+            raw.exec(newSql);
+            raw.exec(`INSERT INTO ${replacementTable} SELECT * FROM ${table}`);
+            raw.exec(`DROP TABLE ${table}`);
+            raw.exec(`ALTER TABLE ${replacementTable} RENAME TO ${table}`);
+          })();
+        } finally {
+          if (foreignKeysWereOn) raw.pragma("foreign_keys = ON");
+        }
+        if (table === "state_fiber_markets") {
+          raw.exec(`CREATE INDEX IF NOT EXISTS idx_state_markets_due ON state_fiber_markets(next_scan_at, priority_score DESC)`);
+          raw.exec(`CREATE INDEX IF NOT EXISTS idx_state_markets_state_priority ON state_fiber_markets(state, priority_class, priority_score DESC)`);
+          raw.exec(`CREATE INDEX IF NOT EXISTS idx_state_markets_eligible_due ON state_fiber_markets(auto_scan_eligible, next_scan_at, priority_score DESC)`);
+        } else {
+          raw.exec(`CREATE INDEX IF NOT EXISTS idx_market_announcements_state ON market_announcements(state, published_at DESC)`);
+        }
+        const fkProblems = raw.pragma("foreign_key_check") as unknown[];
+        if (fkProblems.length) throw new Error(`foreign_key_check failed after ${table} rebuild`);
+        console.log(`[migration] ${table}: rebuilt with FL/GA/IA/KY/NC/SC state CHECK`);
       }
-    } catch (e: any) { console.warn(`Migration warning (${table} GA CHECK):`, e.message); }
+    } catch (e: any) { console.warn(`Migration warning (${table} state CHECK):`, e.message); }
   }
   // scan_targets UNIQUE(address) → UNIQUE(address, city, state). Dedups the
   // case/whitespace address variants first, so the new unique index can build.
