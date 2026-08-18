@@ -17,7 +17,10 @@ jobs:
   quality:
     name: Type-check, test, build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The complete suite now contains 6,700+ tests and takes about 14 minutes
+    # on the hosted runner before the production build begins. Keep every gate,
+    # but leave enough headroom for normal runner variance and the final build.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
