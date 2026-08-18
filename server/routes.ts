@@ -3401,11 +3401,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     correlationId: e.addressKey,
     ts: typeof e.tsEpoch === "number" ? new Date(e.tsEpoch).toISOString() : undefined,
   });
+  const inspectorScope = (req: any) => {
+    const city = typeof req.query.city === "string" ? req.query.city.trim().slice(0, 120) : "";
+    const stateRaw = typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : "";
+    const state = /^[A-Z]{2}$/.test(stateRaw) ? stateRaw : "";
+    const runId = typeof req.query.runId === "string" ? req.query.runId.trim().slice(0, 160) : "";
+    return { city: city || null, state: state || null, runId: runId || null };
+  };
+  const eventMatchesInspectorScope = (evt: any, scope: ReturnType<typeof inspectorScope>) =>
+    (!scope.runId || evt.runId === scope.runId)
+    && (!scope.city || String(evt.city ?? "").trim().toLowerCase() === scope.city.toLowerCase())
+    && (!scope.state || String(evt.state ?? "").trim().toUpperCase() === scope.state);
   app.get("/api/scan/inspector", requireAdmin, (req, res) => {
-    const runId = typeof req.query.runId === "string" ? req.query.runId : null;
+    const scope = inspectorScope(req);
     const limit = Math.min(500, Math.max(10, Number(req.query.limit) || 200));
-    const snap = getInspectorSnapshot({ runId, limit });
-    res.json({ ...snap, rows: (snap.rows as any[])?.map(withCorrelation) ?? snap.rows, health: inspectorHealth() });
+    const snap = getInspectorSnapshot({ ...scope, limit });
+    res.json({ ...snap, scope, rows: (snap.rows as any[])?.map(withCorrelation) ?? snap.rows, health: inspectorHealth() });
   });
 
   app.get("/api/scan/inspector/timeline/:key", requireAdmin, (req, res) => {
@@ -3414,6 +3425,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // SSE — streams each stage event as it happens. Never polls static counters.
   app.get("/api/scan/inspector/stream", requireAdmin, (req, res) => {
+    const scope = inspectorScope(req);
     res.set({
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
@@ -3426,8 +3438,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
     // Initial snapshot so a fresh/refreshed client paints immediately.
-    send("snapshot", { ...getInspectorSnapshot({ limit: 200 }), health: inspectorHealth() });
-    const unsub = onScanEvent((evt) => send("stage", evt));
+    send("snapshot", { ...getInspectorSnapshot({ ...scope, limit: 200 }), scope, health: inspectorHealth() });
+    const unsub = onScanEvent((evt) => {
+      if (eventMatchesInspectorScope(evt, scope)) send("stage", withCorrelation(evt));
+    });
     // Heartbeat + periodic health so "blocked stage" detection has a clock and the
     // Decodo/token status stays live even when no address is moving.
     const hb = setInterval(() => {
@@ -4689,7 +4703,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // Run list (recent budgeted scans, with real measured cost). Manager+ (read).
   app.get("/api/scan/runs", requireManager, (req: any, res) => {
-    res.json({ runs: scanSvc.getRuns(tid(req)) });
+    const city = typeof req.query.city === "string" ? req.query.city.trim().slice(0, 120) : null;
+    const stateRaw = typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : null;
+    const state = stateRaw && /^[A-Z]{2}$/.test(stateRaw) ? stateRaw : null;
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+    res.json({ runs: scanSvc.getRuns(tid(req), { city, state, limit }) });
   });
 
   // Change feed — "what changed since yesterday". Combines the first-to-market

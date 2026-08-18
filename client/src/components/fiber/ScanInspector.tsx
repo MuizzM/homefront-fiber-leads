@@ -39,6 +39,11 @@ interface Row {
   tokenSuffix: string | null; retryReason: string | null; classification: string | null;
   detail: string | null; startedAt: number; updatedAt: number;
 }
+interface ScanInspectorProps {
+  city?: string;
+  state?: string;
+  scopeLabel?: string;
+}
 interface Health {
   decodoConnected: boolean; proxySessionId: string; tokenReady: boolean; tokenExpiresIn: number | null;
   tokenPool: { ready: number; size: number }; paused: boolean;
@@ -77,7 +82,7 @@ function rel(ts: number): string {
 const TABLE_COLS = "grid grid-cols-[minmax(0,1fr)_10.5rem_5.5rem_4.5rem] items-center gap-3";
 const TABLE_MIN_W = "min-w-[34rem]";
 
-export default function ScanInspector() {
+export default function ScanInspector({ city, state, scopeLabel }: ScanInspectorProps) {
   const { sessionId } = useAuth();
   const { toast } = useToast();
   const [rows, setRows] = useState<Map<string, Row>>(new Map());
@@ -90,6 +95,8 @@ export default function ScanInspector() {
   const abortRef = useRef<AbortController | null>(null);
 
   const applyEvent = useCallback((e: Ev) => {
+    if (city && String(e.city ?? "").trim().toLowerCase() !== city.trim().toLowerCase()) return;
+    if (state && String(e.state ?? "").trim().toUpperCase() !== state.trim().toUpperCase()) return;
     setRows((prev) => {
       const next = new Map(prev);
       const cur = next.get(e.addressKey);
@@ -109,7 +116,7 @@ export default function ScanInspector() {
       }
       return next;
     });
-  }, []);
+  }, [city, state]);
 
   // Live SSE via fetch (EventSource can't send the x-session-id auth header).
   useEffect(() => {
@@ -119,7 +126,10 @@ export default function ScanInspector() {
     abortRef.current = ctrl;
     (async () => {
       try {
-        const res = await fetch("/api/scan/inspector/stream", {
+        const params = new URLSearchParams();
+        if (city) params.set("city", city);
+        if (state) params.set("state", state);
+        const res = await fetch(`/api/scan/inspector/stream${params.size ? `?${params.toString()}` : ""}`, {
           headers: { "x-session-id": sessionId },
           signal: ctrl.signal,
         });
@@ -160,7 +170,7 @@ export default function ScanInspector() {
       } catch { /* aborted or network */ } finally { if (!closed) setConnected(false); }
     })();
     return () => { closed = true; ctrl.abort(); };
-  }, [sessionId, applyEvent]);
+  }, [sessionId, applyEvent, city, state]);
 
   // Recompute counters from live rows so the accounting invariant always holds:
   // found = checked + queued + checking + retrying + unresolved.
@@ -258,6 +268,12 @@ export default function ScanInspector() {
 
   return (
     <div className="space-y-4" data-testid="scan-inspector">
+      {scopeLabel && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/25 bg-primary/[0.06] px-3 py-2 text-[12px]">
+          <span className="font-semibold text-foreground">Showing {scopeLabel} only</span>
+          <span className="text-muted-foreground">Rows and counters exclude every other market.</span>
+        </div>
+      )}
       {/* Health + connection */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-success/25 bg-success/[0.08] text-success" : "border-warning/25 bg-warning/[0.08] text-warning"}`}>
@@ -311,6 +327,9 @@ export default function ScanInspector() {
         </div>
       )}
 
+      {/* Controls are intentionally global: the shared provider queue does not
+          support a truthful per-city pause. Make that blast radius explicit. */}
+      {scopeLabel && <div className="text-[11px] font-semibold text-warning">All-market controls below affect every running scan, not only {scopeLabel}.</div>}
       {/* Controls */}
       <div className="flex flex-wrap gap-2">
         {health?.paused
@@ -367,7 +386,9 @@ export default function ScanInspector() {
         </div>
         {sortedRows.length === 0 && (
           <div className="px-4 py-8 text-center text-[13px] text-muted-foreground">
-            No addresses in flight. Start a scan (Field Map, city, or statewide) - rows appear here in real time.
+            {scopeLabel
+              ? `No ${scopeLabel} addresses are present in the recent live window.`
+              : "No addresses in flight. Start a scan (Field Map, city, or statewide) - rows appear here in real time."}
           </div>
         )}
         {sortedRows.map((r) => {

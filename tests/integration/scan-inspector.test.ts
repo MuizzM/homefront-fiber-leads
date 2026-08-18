@@ -53,6 +53,25 @@ describe("Scan Inspector event store", () => {
     expect(snap.counters.newNow).toBe(1); // fresh_fiber classification
   });
 
+  it("scopes rows and counters to one city and state at the data boundary", () => {
+    emitLifecycle("scope|concord", "10 Union St", "classified", "fresh_fiber");
+    const t = Date.now();
+    bus.emitStage({
+      addressKey: "scope|ga", address: "20 Peach St", city: "Ball Ground", state: "GA", zip: "30107",
+      runId: "run_test", source: "field", attempt: 1, stage: "error", status: "error", tsEpoch: t,
+    });
+
+    // The helper emits Inman rows, so add an explicit Concord lifecycle and
+    // verify neither the Inman nor Georgia rows leak into the market snapshot.
+    const base = { addressKey: "scope|concord-explicit", address: "30 Cabarrus Ave", city: "Concord", state: "NC", zip: "28025", runId: "run_concord", source: "market", attempt: 1 } as const;
+    bus.emitStage({ ...base, stage: "queued", status: "info", tsEpoch: t + 1 });
+    bus.emitStage({ ...base, stage: "classified", status: "ok", classification: "fresh_fiber", tsEpoch: t + 2 });
+
+    const snap = events.getInspectorSnapshot({ city: " concord ", state: "nc", limit: 50 });
+    expect(snap.rows.map((r) => r.addressKey)).toEqual(["scope|concord-explicit"]);
+    expect(snap.counters).toMatchObject({ found: 1, checked: 1, newNow: 1, unresolved: 0 });
+  });
+
   it("returns the per-address stage timeline in order", () => {
     const tl = events.getAddressTimeline("k|fresh", 20);
     expect(tl.map((e) => e.stage)).toEqual(["queued", "minting", "token_ready", "searching", "parsing", "classified"]);

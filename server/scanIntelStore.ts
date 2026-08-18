@@ -506,12 +506,19 @@ export function getRun(runId: string, tenantId: number): ScanRunRow | undefined 
   );
 }
 
-export function listRuns(tenantId: number, limit = 20): ScanRunRow[] {
+export function listRuns(
+  tenantId: number,
+  limit = 20,
+  scope: { city?: string | null; state?: string | null } = {},
+): ScanRunRow[] {
   ensureReopenColumn();
+  const clauses = ["tenant_id=@tenantId"];
+  if (scope.city) clauses.push("lower(trim(city))=lower(trim(@city))");
+  if (scope.state) clauses.push("upper(trim(state))=upper(trim(@state))");
   return all<ScanRunRow>(
     `SELECT ${RUN_COLS}
-       FROM scan_runs WHERE tenant_id=? ORDER BY started_at DESC LIMIT ?`,
-    tenantId, limit,
+       FROM scan_runs WHERE ${clauses.join(" AND ")} ORDER BY started_at DESC LIMIT @limit`,
+    { tenantId, city: scope.city ?? null, state: scope.state ?? null, limit: Math.min(200, Math.max(1, limit)) },
   );
 }
 
