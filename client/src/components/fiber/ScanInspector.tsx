@@ -19,6 +19,10 @@ const STAGE_LABEL: Record<string, string> = {
   retry: "Retry (auth)", blocked: "Throttled", bad_request: "Bad request", error: "Error",
 };
 const TERMINAL = new Set(["classified", "blocked", "bad_request", "error", "retry"]);
+// Queue wait is normal backpressure under a large city/state scan. Only stages
+// that already hold active provider/persistence work can truly stall; calling a
+// queued row "Blocked" after ten seconds created hundreds of false alarms.
+const STALLABLE = new Set(["minting", "token_ready", "searching", "parsing", "saving"]);
 const BLOCKED_MS = 10_000; // no progress for 10s on a non-terminal stage → surface it
 
 interface Ev {
@@ -367,7 +371,7 @@ export default function ScanInspector() {
           </div>
         )}
         {sortedRows.map((r) => {
-          const stale = !TERMINAL.has(r.stage) && Date.now() - r.updatedAt > BLOCKED_MS;
+          const stale = !TERMINAL.has(r.stage) && STALLABLE.has(r.stage) && Date.now() - r.updatedAt > BLOCKED_MS;
           const isOpen = expanded === r.addressKey;
           return (
             <div key={r.addressKey} className="border-b border-border/60 last:border-0">

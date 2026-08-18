@@ -264,6 +264,11 @@ export function getInspectorSnapshot(opts: { limit?: number; runId?: string | nu
 
 export function getAddressTimeline(addressKey: string, limit = 60): Array<ScanStageEvent & { id: number }> {
   ensureSchema();
+  // Match getInspectorSnapshot's freshness guarantee. An operator commonly
+  // expands a row immediately after its terminal SSE event; without this flush,
+  // the timeline endpoint can omit the last buffered Saving/Classified stages
+  // for up to FLUSH_MS and appear to contradict the live row.
+  if (BATCH_ENABLED && _buf.length) { try { flushScanEvents(); } catch { /* best-effort */ } }
   const rows = rawDb.prepare(
     `SELECT * FROM scan_events WHERE address_key = ? ORDER BY id ASC LIMIT ?`,
   ).all(addressKey, Math.min(200, limit)) as any[];

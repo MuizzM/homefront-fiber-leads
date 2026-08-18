@@ -542,6 +542,10 @@ export interface ScanResult {
   apiSource: "kinetic_live" | "knowledge_base" | "failed";
   blocked: boolean; // true ONLY for a 403 throttle — a typed back-pressure signal (NOT a no-service); consumers must never regex `notes` to detect this
   notes: string;
+  /** Provider request duration only. Kept separate from queue/admission time so
+   *  the Scan Inspector never reports an 80-second queue wait as an 80-second
+   *  Kinetic response. Optional for non-Kinetic/replay checkers. */
+  providerLatencyMs?: number | null;
   rawResponse?: any;
 
   // Lead Scoring
@@ -887,6 +891,7 @@ async function scanAddressDirect(
     addressCatalogDate: null, householdSegmentType: null, billingStatus: null,
     exchangeId: null, dfAddressId: null, accessId: null, serviceKey: null,
     confidence: "LOW", apiSource: "failed", blocked: false, notes: "",
+    providerLatencyMs: null,
     leadTag: null, leadScore: 0,
   };
 
@@ -944,6 +949,7 @@ async function scanAddressDirect(
       signal: AbortSignal.timeout(5_000),
     });
     const searchMs = Date.now() - searchStart;
+    base.providerLatencyMs = searchMs;
 
     // ── One shared error contract — NO in-loop retry, cooldown, backoff, or halt.
     //    TRANSIENT errors return a `blocked` result so the worker requeues the
@@ -1307,6 +1313,7 @@ async function scanAddressDirect(
     // egress collapsed throughput 728→15 searches/5m until rotation.
     void rotateProxySession(`search transient: ${String(err?.message ?? err).slice(0, 40)}`);
     base.apiSource = "failed";
+    base.providerLatencyMs = Date.now() - searchStart;
     base.fiberStatus = "unknown";
     base.confidence = "LOW";
     base.blocked = true;
