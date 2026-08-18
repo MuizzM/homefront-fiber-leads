@@ -165,8 +165,11 @@ export function getRunStatus(runId: string, tenantId: number) {
   };
 }
 
-export function getRuns(tenantId: number): Array<ReturnType<typeof decorateRun>> {
-  return listRuns(tenantId).map(decorateRun);
+export function getRuns(
+  tenantId: number,
+  scope: { city?: string | null; state?: string | null; limit?: number } = {},
+): Array<ReturnType<typeof decorateRun>> {
+  return listRuns(tenantId, scope.limit ?? 20, scope).map(decorateRun);
 }
 function decorateRun(run: ScanRunRow) {
   return { ...run, costUsd: bytesToUsd(run.estBytes, costRate()), active: isRunActive(run.id), pct: run.budget > 0 ? Math.round(((run.verified + run.failed) / run.budget) * 100) : 0 };

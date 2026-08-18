@@ -28,8 +28,9 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
-import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS } from "@shared/knock";
+import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
+import { leadStateLabel } from "@/lib/leadDisplay";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -45,14 +46,6 @@ const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_inter
 // the enrichment of whatever lead happened to be open.
 function invalidateLeadLists(qc: QueryClient): void {
   void qc.invalidateQueries({ predicate: query => isLeadsListKey(query.queryKey) });
-}
-
-// Display label for a lead row honoring the lastOutcome disambiguator —
-// "already a customer" is STORED as not_interested + lastOutcome=already_customer,
-// and raw STATUS_LABEL[leadStatus] rendered it as "Not Interested" (field report).
-function leadStateLabel(lead: { leadStatus: string; lastOutcome?: string | null }): string {
-  try { return STATE_LABELS[pinDisplayState({ leadStatus: lead.leadStatus, visited: true, lastOutcome: lead.lastOutcome ?? null })]; }
-  catch { return STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus; }
 }
 
 const STATUS_LABEL: Record<string, string> = {

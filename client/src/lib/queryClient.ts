@@ -27,9 +27,21 @@ export class ApiError extends Error {
     message: string,
     public readonly requestId: string | null,
     public readonly retryAfterMs: number | null,
+    public readonly code: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
+  }
+}
+
+function responseCode(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && typeof parsed.code === "string"
+      ? parsed.code
+      : null;
+  } catch {
+    return null;
   }
 }
 
@@ -74,6 +86,7 @@ async function throwIfResNotOk(res: Response) {
       responseMessage(res.status, text, res.statusText || "Request failed"),
       res.headers.get("x-request-id"),
       retryAfterMs(res),
+      responseCode(text),
     );
   }
 }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -30,6 +30,16 @@ interface StateSweep {
   id: string; state: "NC" | "SC" | "GA"; status: string; currentCity: string | null;
   citiesTotal: number; citiesCompleted: number; discovered?: number; checked: number;
   freshLeads: number; comingSoon: number; pending?: number; unresolved: number;
+}
+interface MarketCoverageCard {
+  city: string; state: string; poolSize: number; verified: number; leads: number;
+  verifiedNewFiber: number; unworkedLeads: number; newlyLive: number;
+}
+interface MarketCoverageResponse { markets: MarketCoverageCard[] }
+interface MarketRunSummary {
+  id: string; label: string; city: string | null; state: string | null; budget: number;
+  verified: number; newFiber: number; newlyLive: number; failed: number; status: string;
+  costUsd: number; active: boolean; startedAt: string; completedAt: string | null;
 }
 
 function fmtTime(iso: string): string {
@@ -290,32 +300,126 @@ function ComingSoon() {
 // ── Coverage — how far the machine has swept, plus (admin only) the live Scan
 // Inspector folded in at the bottom: one tab for "is the pipeline healthy". ──
 function Coverage({ isAdmin }: { isAdmin: boolean }) {
+  // Concord is the current operating focus. The selector keeps this reusable
+  // for the next market without falling back to the misleading global stream.
+  const [marketKey, setMarketKey] = useState("Concord|NC");
   const { data } = useQuery<{ sweeps: StateSweep[] }>({
     queryKey: ["/api/sweeps/state"],
     queryFn: () => apiRequest("GET", "/api/sweeps/state").then((r) => r.json()),
     refetchInterval: 15000,
   });
+  const { data: marketData, isLoading: marketsLoading } = useQuery<MarketCoverageResponse>({
+    queryKey: ["/api/scan/markets"],
+    queryFn: () => apiRequest("GET", "/api/scan/markets").then((r) => r.json()),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
   const sweeps = data?.sweeps ?? [];
   const sum = (k: keyof StateSweep) => sweeps.reduce((n, s) => n + (Number(s[k]) || 0), 0);
+  const [scopeCity, scopeState] = marketKey === "all" ? [null, null] : marketKey.split("|");
+  const marketOptions = useMemo(() => {
+    const byKey = new Map<string, { city: string; state: string }>();
+    byKey.set("Concord|NC", { city: "Concord", state: "NC" });
+    for (const market of marketData?.markets ?? []) byKey.set(`${market.city}|${market.state}`, market);
+    return [...byKey.values()].sort((a, b) => {
+      if (a.city === "Concord" && a.state === "NC") return -1;
+      if (b.city === "Concord" && b.state === "NC") return 1;
+      return a.state.localeCompare(b.state) || a.city.localeCompare(b.city);
+    });
+  }, [marketData]);
+  const selectedMarket = scopeCity && scopeState
+    ? marketData?.markets.find((m) => m.city.toLowerCase() === scopeCity.toLowerCase() && m.state.toUpperCase() === scopeState.toUpperCase()) ?? null
+    : null;
+  const scopeLabel = scopeCity && scopeState ? `${scopeCity}, ${scopeState}` : null;
+  const runsPath = scopeCity && scopeState
+    ? `/api/scan/runs?city=${encodeURIComponent(scopeCity)}&state=${encodeURIComponent(scopeState)}&limit=10`
+    : "/api/scan/runs?limit=10";
+  const { data: runData } = useQuery<{ runs: MarketRunSummary[] }>({
+    queryKey: ["/api/scan/runs", scopeCity, scopeState],
+    queryFn: () => apiRequest("GET", runsPath).then((r) => r.json()),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+    enabled: !!scopeLabel,
+  });
+  const latestRun = runData?.runs?.[0] ?? null;
+  const scopedStats: Array<[string, number | string]> = selectedMarket
+    ? [
+        ["Discovered", selectedMarket.poolSize],
+        ["Checked", selectedMarket.verified],
+        ["Fresh leads", selectedMarket.leads],
+        ["Unchecked", Math.max(0, selectedMarket.poolSize - selectedMarket.verified)],
+      ]
+    : marketsLoading
+      ? [["Discovered", "—"], ["Checked", "—"], ["Fresh leads", "—"], ["Unchecked", "—"]]
+      : [["Discovered", 0], ["Checked", 0], ["Fresh leads", 0], ["Unchecked", 0]];
+  const stats: Array<[string, number | string]> = scopeLabel
+    ? scopedStats
+    : [["Discovered", sum("discovered")], ["Checked", sum("checked")], ["Fresh leads", sum("freshLeads")], ["Unresolved", sum("unresolved")]];
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border bg-card px-4 py-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Market focus</div>
+          <div className="mt-0.5 text-[13px] text-foreground">Coverage, run progress, and live rows use the same market.</div>
+        </div>
+        <select
+          value={marketKey}
+          onChange={(e) => setMarketKey(e.target.value)}
+          aria-label="Coverage market"
+          data-testid="coverage-market"
+          className="h-10 min-w-48 rounded-lg border border-border bg-background px-3 text-[13px] font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <option value="all">All statewide activity</option>
+          {marketOptions.map((m) => <option key={`${m.city}|${m.state}`} value={`${m.city}|${m.state}`}>{m.city}, {m.state}</option>)}
+        </select>
+      </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {[["Discovered", sum("discovered")], ["Checked", sum("checked")], ["Fresh leads", sum("freshLeads")], ["Unresolved", sum("unresolved")]].map(([l, v]) => (
+        {stats.map(([l, v]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
-            <div className="text-[20px] font-bold leading-none tabular-nums text-foreground">{v as number}</div>
+            <div className="text-[20px] font-bold leading-none tabular-nums text-foreground">{typeof v === "number" ? v.toLocaleString() : v}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
           </div>
         ))}
       </div>
+      <p className="px-1 text-[12px] text-muted-foreground">
+        {scopeLabel
+          ? `${scopeLabel} totals come from that market's durable address inventory. Fresh leads are confirmed; provisional detections are not counted.`
+          : "Fresh leads here are completed sweep classifications. Provisional detections on Fresh Now are not assignable until corroborated."}
+      </p>
+      {scopeLabel && (
+        <div className="rounded-2xl border border-border bg-card px-4 py-3" data-testid="coverage-market-run">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest {scopeLabel} scan</div>
+              <div className="mt-1 text-[13px] font-medium text-foreground">{latestRun?.label ?? "No scan run recorded for this market"}</div>
+            </div>
+            {latestRun && <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${latestRun.status === "running" || latestRun.active ? "bg-success/10 text-success" : latestRun.status === "error" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>{latestRun.active ? "running" : latestRun.status}</span>}
+          </div>
+          {latestRun && (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <span><b className="text-foreground">{latestRun.verified.toLocaleString()}</b> checked of {latestRun.budget.toLocaleString()}</span>
+              <span><b className="text-success">{latestRun.newFiber.toLocaleString()}</b> fresh</span>
+              <span><b className="text-warning">{latestRun.failed.toLocaleString()}</b> failed</span>
+              <span><b className="text-foreground">${Number(latestRun.costUsd ?? 0).toFixed(2)}</b> measured proxy cost</span>
+            </div>
+          )}
+        </div>
+      )}
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
-        <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">GA, NC &amp; SC statewide sweeps</div>
+        <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {scopeLabel ? "Background statewide sweeps — excluded from market totals" : "GA, NC & SC statewide sweeps"}
+        </div>
         {sweeps.length === 0 ? (
           <div className="px-4 py-8 text-center text-[13px] text-muted-foreground">No active sweep. The statewide sweep resumes on each deploy and continues in the background.</div>
         ) : sweeps.map((s) => (
           <div key={s.id} className="flex items-center gap-3 border-b border-border/60 px-4 py-3 last:border-0">
             <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/15 text-[12px] font-bold text-primary">{s.state}</span>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-medium text-foreground">{s.currentCity ? `Scanning ${s.currentCity}` : s.status}</div>
+              <div className="truncate text-[13px] font-medium text-foreground">
+                {s.status === "running"
+                  ? (s.currentCity ? `Scanning ${s.currentCity}` : "Scanning")
+                  : (s.status === "done" ? `Completed ${s.state}` : s.status)}
+              </div>
               <div className="text-[11px] text-muted-foreground">{s.citiesCompleted}/{s.citiesTotal} cities · {s.checked} checked · {s.freshLeads} fresh</div>
             </div>
             <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${s.status === "running" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>{s.status}</span>
@@ -326,9 +430,9 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
 
       {isAdmin && (
         <div className="space-y-2 pt-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations - live scan inspector</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations - live {scopeLabel ?? "all-market"} scan inspector</div>
           <Suspense fallback={<Skeleton className="h-64 w-full rounded-2xl" />}>
-            <ScanInspector />
+            <ScanInspector city={scopeCity ?? undefined} state={scopeState ?? undefined} scopeLabel={scopeLabel ?? undefined} />
           </Suspense>
         </div>
       )}

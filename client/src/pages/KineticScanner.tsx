@@ -8,6 +8,7 @@ import {
 import { KineticScannerMap } from "@/components/kinetic/KineticScannerMap";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { summarizeEvidenceWorker } from "@/lib/scanYield";
 
 type Tab =
   | "dashboard"
@@ -70,8 +71,8 @@ export default function KineticScanner() {
                 Kinetic Evidence Scanner
               </h1>
               <p className="text-xs text-muted-foreground">
-                Evidence-backed serviceability intelligence · no assumed private
-                API
+                Offline evidence registry and corroboration · separate from the
+                live Decodo pipeline
               </p>
             </div>
             <div
@@ -201,6 +202,11 @@ function Dashboard({
             record a manual verification. Live qualification remains off until a
             permitted adapter and exact contract are registered.
           </p>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            For live provider checks and Decodo transport health, use Fiber
+            Intelligence → Coverage. Results shown here are evidence rechecks,
+            not the live Decodo queue.
+          </p>
           <button
             onClick={onEvidence}
             className="mt-4 h-11 w-full rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90"
@@ -244,6 +250,7 @@ function Worker({
   onControl: (a: "stop" | "start") => void;
 }) {
   const running = worker?.status === "running";
+  const yieldSummary = summarizeEvidenceWorker(worker);
   return (
     <article className="rounded-2xl border border-border bg-card p-4 text-foreground">
       <div className="flex items-center">
@@ -266,15 +273,18 @@ function Worker({
           className={`h-full rounded-full bg-primary ${running ? "w-full animate-pulse" : "w-0"}`}
         />
       </div>
-      <div className="mt-4 grid grid-cols-4 gap-1">
+      <div className="mt-4 grid grid-cols-2 gap-1 sm:grid-cols-5">
         {[
           ["Checked", worker?.checked],
-          ["Found", worker?.found],
+          ["Successful", yieldSummary.successful],
+          ["Transitions", worker?.found],
           ["Live", worker?.live],
-          ["Errors", worker?.errors],
+          ["Errors", `${fmt(worker?.errors)} (${yieldSummary.errorPercent}%)`],
         ].map(([label, value]) => (
           <div key={label as string} className="rounded-lg bg-secondary/50 p-2">
-            <div className="text-sm font-bold">{fmt(value)}</div>
+            <div className="text-sm font-bold">
+              {typeof value === "string" ? value : fmt(value)}
+            </div>
             <div className="text-2xs uppercase text-muted-foreground">
               {label}
             </div>

@@ -504,6 +504,19 @@ export async function runScanWorker(
               tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
               payload: { category: "provider_exception", attempt },
             });
+            // If persistence failed after the engine emitted `saving`, make the
+            // latest inspector state terminal. Otherwise a recovered/requeued
+            // target looks permanently stuck at Saving even though the worker
+            // already handled the exception.
+            emitStage({
+              addressKey: normalizeKineticAddressKey(t.address, t.city, t.state, t.zip),
+              address: t.address, city: t.city, state: t.state, zip: t.zip,
+              runId, source: run.kind, stage: "error", status: "error", attempt,
+              latencyMs: Date.now() - checkStartedAt,
+              retryReason: "worker/persistence exception - address requeued",
+              detail: message.slice(0, 160),
+              tsEpoch: Date.now(),
+            });
           }
         }),
       );
@@ -643,6 +656,22 @@ function applyCheck(
   // non-answers (blocked / apiSource='failed') are requeued by the worker and
   // never reach here — a temporary failure is retry history, never a finalized
   // "unresolved" and never a "no".
+  const inspectorBase = {
+    addressKey: normalizeKineticAddressKey(t.address, t.city, t.state, t.zip),
+    address: t.address, city: t.city, state: t.state, zip: t.zip,
+    runId, source: "run", attempt: 1,
+  } as const;
+  // Correct lifecycle order: the scanner has parsed a conclusive response; the
+  // engine is about to persist it. A second terminal `classified` event is
+  // emitted only after every required write/finalization below succeeds.
+  emitStage({
+    ...inspectorBase,
+    stage: "saving", status: "info",
+    classification: result.fiberStatus,
+    detail: `persisting conclusive snapshot · ${result.fiberStatus}`,
+    tsEpoch: Date.now(),
+  });
+
   const snapshot = getTargetSnapshot(t.targetId);
   const customer = classifyCustomerOpportunity(result);
   const fiberTransition = classifyFiberAvailabilityTransition(
@@ -802,6 +831,15 @@ function applyCheck(
       newlyLive: fiberTransition.fresh,
     },
   });
+  emitStage({
+    ...inspectorBase,
+    stage: "classified", status: "ok",
+    httpStatus: 200,
+    latencyMs: result.providerLatencyMs ?? latencyMs,
+    classification: result.fiberStatus,
+    detail: `snapshot saved · ${result.fiberStatus}`,
+    tsEpoch: Date.now(),
+  });
 }
 
 function legacyAvailabilityStatus(
@@ -907,19 +945,6 @@ function persistSnapshot(
     latencyMs,
     orIgnore: true,
   });
-  // Inspector: the conclusive snapshot has been persisted for this address.
-  try {
-    emitStage({
-      addressKey: normalizeKineticAddressKey(t.address, t.city, t.state, t.zip),
-      address: t.address, city: t.city, state: t.state, zip: t.zip,
-      runId, source: "run", stage: "saving",
-      status: checkFailed ? "error" : "ok",
-      attempt: 1, latencyMs,
-      classification: checkFailed ? null : result.fiberStatus,
-      detail: checkFailed ? `not saved as conclusive - ${result.blocked ? "blocked/retry" : "unresolved"}` : `snapshot saved · ${result.fiberStatus}`,
-      tsEpoch: Date.now(),
-    });
-  } catch { /* telemetry best-effort */ }
 }
 
 function finish(run: ScanRunRow, status: string): void {

@@ -76,7 +76,7 @@ function MetricStrip({ items, loading }: {
   );
 }
 
-function actionLabel(action: string) {
+export function actionLabel(action: string) {
   const map: Record<string, string> = {
     "rep.clocked_in": "Clocked in",
     "rep.clocked_out": "Clocked out",
@@ -87,7 +87,9 @@ function actionLabel(action: string) {
     "commission.paid": "Commission paid",
     "territory.assigned": "Territory assigned",
   };
-  return map[action] ?? action.replace(/\./g, " ");
+  const fallback = action.replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!fallback) return "Activity";
+  return map[action] ?? `${fallback.charAt(0).toUpperCase()}${fallback.slice(1)}`;
 }
 
 // Tint the activity-feed avatar by event family so the log scans at a glance.

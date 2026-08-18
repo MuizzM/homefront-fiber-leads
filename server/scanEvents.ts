@@ -211,7 +211,29 @@ function bucketOf(stage: ScanStage): keyof Omit<InspectorCounters, "found" | "ne
   return "queued";
 }
 
-export function getInspectorSnapshot(opts: { limit?: number; runId?: string | null } = {}): {
+export interface InspectorScope {
+  runId?: string | null;
+  city?: string | null;
+  state?: string | null;
+}
+
+function inspectorWhere(scope: InspectorScope, alias = ""): { sql: string; params: Record<string, string | null> } {
+  const prefix = alias ? `${alias}.` : "";
+  const clauses: string[] = [];
+  if (scope.runId) clauses.push(`${prefix}run_id = @runId`);
+  if (scope.city) clauses.push(`lower(trim(${prefix}city)) = lower(trim(@city))`);
+  if (scope.state) clauses.push(`upper(trim(${prefix}state)) = upper(trim(@state))`);
+  return {
+    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    params: {
+      runId: scope.runId ?? null,
+      city: scope.city ?? null,
+      state: scope.state ?? null,
+    },
+  };
+}
+
+export function getInspectorSnapshot(opts: { limit?: number } & InspectorScope = {}): {
   rows: InspectorRow[]; counters: InspectorCounters; sessionRotations: number | null;
 } {
   ensureSchema();
@@ -219,22 +241,25 @@ export function getInspectorSnapshot(opts: { limit?: number; runId?: string | nu
   // the moment it's read (the timer flush is up to FLUSH_MS behind).
   if (BATCH_ENABLED && _buf.length) { try { flushScanEvents(); } catch { /* best-effort */ } }
   const limit = Math.min(500, Math.max(10, opts.limit ?? 200));
-  // Latest event per address (optionally scoped to a run), newest first.
-  const where = opts.runId ? `WHERE run_id = @runId` : ``;
+  // Latest event per address, optionally scoped to one run or market. Market
+  // filtering happens in SQL (and again on the live SSE relay) so an operator
+  // looking at Concord never receives or counts rows from another city.
+  const where = inspectorWhere(opts);
   const latest = rawDb.prepare(`
     SELECT e.* FROM scan_events e
     JOIN (
-      SELECT address_key, MAX(id) AS mid FROM scan_events ${where} GROUP BY address_key
+      SELECT address_key, MAX(id) AS mid FROM scan_events ${where.sql} GROUP BY address_key
     ) m ON m.mid = e.id
     ORDER BY e.id DESC
     LIMIT @limit
-  `).all({ limit, runId: opts.runId ?? null }) as any[];
+  `).all({ limit, ...where.params }) as any[];
 
   // First-seen ts per address (for "started at" + duration).
+  const firstWhere = inspectorWhere(opts, "scan_events");
   const rows: InspectorRow[] = latest.map((e) => {
     const first = rawDb.prepare(
-      `SELECT MIN(ts_epoch) f FROM scan_events WHERE address_key = ?`,
-    ).get(e.address_key) as { f: number };
+      `SELECT MIN(ts_epoch) f FROM scan_events ${firstWhere.sql}${firstWhere.sql ? " AND" : " WHERE"} address_key = @addressKey`,
+    ).get({ addressKey: e.address_key, ...firstWhere.params }) as { f: number };
     return {
       addressKey: e.address_key,
       address: e.address, city: e.city, state: e.state, zip: e.zip,
@@ -264,6 +289,11 @@ export function getInspectorSnapshot(opts: { limit?: number; runId?: string | nu
 
 export function getAddressTimeline(addressKey: string, limit = 60): Array<ScanStageEvent & { id: number }> {
   ensureSchema();
+  // Match getInspectorSnapshot's freshness guarantee. An operator commonly
+  // expands a row immediately after its terminal SSE event; without this flush,
+  // the timeline endpoint can omit the last buffered Saving/Classified stages
+  // for up to FLUSH_MS and appear to contradict the live row.
+  if (BATCH_ENABLED && _buf.length) { try { flushScanEvents(); } catch { /* best-effort */ } }
   const rows = rawDb.prepare(
     `SELECT * FROM scan_events WHERE address_key = ? ORDER BY id ASC LIMIT ?`,
   ).all(addressKey, Math.min(200, limit)) as any[];

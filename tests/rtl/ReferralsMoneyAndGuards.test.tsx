@@ -15,6 +15,15 @@ const apiRequest = vi.fn();
 vi.mock("@/lib/queryClient", () => ({
   apiRequest: (...a: any[]) => apiRequest(...a),
   queryClient: { invalidateQueries: vi.fn() },
+  ApiError: class ApiError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+      public requestId: string | null,
+      public retryAfterMs: number | null,
+      public code: string | null = null,
+    ) { super(message); }
+  },
 }));
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ user: { id: 1, name: "Ada Admin", role: "admin", teamMemberId: 1 } }),
@@ -24,6 +33,7 @@ vi.mock("@/lib/capabilities", () => ({
 }));
 
 import Referrals from "../../client/src/pages/Referrals";
+import { ApiError } from "@/lib/queryClient";
 
 function referral(over: Record<string, any> = {}) {
   return {
@@ -68,6 +78,31 @@ function renderPage(rows: any[]) {
 beforeEach(() => apiRequest.mockReset());
 
 describe("referral pipeline money + status labels", () => {
+  it("explains an intentionally unlinked administrator instead of showing a broken-page error", async () => {
+    mockEndpoints([]);
+    apiRequest.mockImplementation((...args: any[]) => {
+      const url = args.find(a => typeof a === "string" && a.startsWith("/")) ?? "";
+      if (url === "/api/referrals/my-link") {
+        return Promise.reject(new ApiError(
+          400,
+          "400: No team member is linked to this login",
+          "req-referral",
+          null,
+          "NO_REP",
+        ));
+      }
+      if (url.startsWith("/api/referrals/my-status")) return Promise.resolve({ json: () => Promise.resolve(null) });
+      if (url.startsWith("/api/referrals/settings")) return Promise.resolve({ ok: true, json: () => Promise.resolve(SETTINGS) });
+      if (url.startsWith("/api/referrals")) return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><Referrals /></QueryClientProvider>);
+    expect(await screen.findByTestId("referral-link-unlinked")).toHaveTextContent(/not linked to a field-rep profile/i);
+    expect(screen.queryByText(/couldn't load your referral link/i)).toBeNull();
+    expect(screen.getByRole("link", { name: /open team management/i })).toHaveAttribute("href", "#/team");
+  });
+
   it("renders human status labels, not raw enums", async () => {
     renderPage([referral()]);
     await waitFor(() => expect(screen.getAllByText("Pending approval").length).toBeGreaterThan(0));
