@@ -35,6 +35,7 @@ vi.mock("wouter", () => ({
 }));
 
 import Leads from "../../client/src/pages/Leads";
+import { takeLeadMapTarget } from "../../client/src/lib/leadMapNavigation";
 
 function lead(id: number, over: Record<string, any> = {}) {
   return {
@@ -139,7 +140,18 @@ async function confirmDeleteOf(id: number) {
   fireEvent.click(await screen.findByTestId("btn-confirm-delete"));
 }
 
-beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); navigate.mockReset(); pendingListGet = false; settleListGet = null; });
+beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); navigate.mockReset(); sessionStorage.clear(); pendingListGet = false; settleListGet = null; });
+
+describe("Leads open on the Field Map", () => {
+  it("hands the selected lead and its rooftop to the map before navigating", async () => {
+    renderLeads([lead(1, { lat: 35.9557, lng: -80.0053 })]);
+
+    fireEvent.click(await screen.findByTestId("lead-map-1"));
+
+    expect(navigate).toHaveBeenCalledWith("/map");
+    expect(takeLeadMapTarget()).toEqual({ leadId: 1, lat: 35.9557, lng: -80.0053 });
+  });
+});
 
 describe("Leads delete is optimistic", () => {
   it("removes the row and closes the dialog BEFORE the server responds", async () => {
