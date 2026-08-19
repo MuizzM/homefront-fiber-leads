@@ -155,7 +155,7 @@ describe("Leads open on the Field Map", () => {
 
 describe("Leads scan intelligence filters", () => {
   it("switches to authoritative newest-scan ordering and a 24-hour window", async () => {
-    renderLeads([lead(1, { lastScannedAt: "2026-08-18T12:00:00.000Z" })]);
+    renderLeads([lead(1, { lastScannedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() })]);
     await screen.findByTestId("card-lead-1");
 
     fireEvent.click(screen.getByTestId("quick-recent-scans"));
