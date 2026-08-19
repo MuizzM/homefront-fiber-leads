@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate agent harness
+        run: python3 scripts/validate-agent-harness.py
+
       - name: Deployment safety checks
         run: bash tests/deployment-safety.sh
 

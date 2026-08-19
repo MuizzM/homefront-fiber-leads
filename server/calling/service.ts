@@ -52,10 +52,11 @@ function inImmediateTransaction<T>(work: () => T): T {
 }
 
 function timeZoneFor(candidate: CallingCandidate, fallback: string): { zone: string | null; confidence: "high" | "medium" | "low" | "unknown" } {
-  // NC and SC are wholly Eastern for this product's authorized launch market.
-  // Split-time-zone states require a geospatial timezone resolver before they
-  // can become callable; a tenant default alone is intentionally insufficient.
-  if (["NC", "SC"].includes(candidate.state.toUpperCase())) return { zone: "America/New_York", confidence: "high" };
+  // NC, SC and GA are each wholly Eastern for this product's authorized launch
+  // market. Split-time-zone states require a geospatial timezone resolver before
+  // they can become callable; a tenant default alone is intentionally
+  // insufficient. GA qualifies under the same wholly-Eastern rule as NC/SC.
+  if (["NC", "SC", "GA"].includes(candidate.state.toUpperCase())) return { zone: "America/New_York", confidence: "high" };
   return fallback ? { zone: fallback, confidence: "low" } : { zone: null, confidence: "unknown" };
 }
 
@@ -77,7 +78,7 @@ function effectiveRulePolicy(ruleVersion: any, candidate: CallingCandidate, prof
   const config = ruleVersion?.config && typeof ruleVersion.config === "object" ? ruleVersion.config : {};
   const states = Array.isArray(config.allowedStates)
     ? config.allowedStates.filter((value: unknown): value is string => typeof value === "string" && /^[A-Z]{2}$/.test(value))
-    : ["NC", "SC"];
+    : ["NC", "SC", "GA"];
   const blockedLineTypes = Array.isArray(config.blockedLineTypes)
     ? config.blockedLineTypes.filter((value: unknown): value is string => typeof value === "string") : [];
   const configuredWindow = config.stateCallingWindows?.[candidate.state.toUpperCase()];

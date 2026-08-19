@@ -109,12 +109,17 @@ describe("Kinetic scanner transport hardening", () => {
   it("treats a 403 as a transient block (no halt): invalidates token, re-mints, keeps scanning, never a no-fiber", async () => {
     // Mint succeeds; the search always 403s. A 403 invalidates the leased token,
     // so the next address re-mints a fresh one and tries again — never wedged.
+    rotateProxySession.mockClear();
     proxyFetch.mockImplementation(async (url: string) => {
       if (url.includes("/api/v1/auth/session")) return json(200, { access_token: "fresh", expires_in: 2_100 });
       return json(403, {});
     });
     const first = await scanner.scanAddress("403 Stop Court", "Lexington", "NC", "27292", { source: "manual" });
     expect(first).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
+    // Owner directive — when the bot wall hits, SWITCH THE DECODO IP: a search
+    // 403 rotates the Decodo session (fresh residential IP) so the requeued
+    // retry leaves the walled IP behind.
+    expect(rotateProxySession).toHaveBeenCalled();
     // Not wedged: the next address re-mints + calls the provider again (no operator
     // reset needed) and also comes back blocked, not no-fiber.
     const before = proxyFetch.mock.calls.length;
@@ -122,6 +127,41 @@ describe("Kinetic scanner transport hardening", () => {
     expect(second).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
     expect(proxyFetch.mock.calls.length).toBeGreaterThan(before);
     expect(scanner.getAddressScanQueueStatus()).not.toHaveProperty("halted");
+  });
+
+  it("mint bot-wall: switches the Decodo IP on 403 and retries, succeeding on a fresh residential session", async () => {
+    // Owner directive — when the token-mint bot wall hits, rotate to a fresh
+    // Decodo IP and retry (bounded by KFS_MINT_MAX_ROTATIONS) instead of giving
+    // up after one try. Skip the impersonate + direct rungs so the mint funnels
+    // through the Decodo rung this test observes.
+    const prevImp = process.env.KFS_MINT_IMPERSONATE;
+    const prevDirect = process.env.KFS_MINT_DIRECT;
+    const prevRot = process.env.KFS_MINT_MAX_ROTATIONS;
+    process.env.KFS_MINT_IMPERSONATE = "off";
+    process.env.KFS_MINT_DIRECT = "off";
+    process.env.KFS_MINT_MAX_ROTATIONS = "3";
+    scanner.__resetTokenTransportStateForTests();
+    rotateProxySession.mockClear();
+    let mints = 0;
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/api/v1/auth/session")) {
+        mints++;
+        // The wall blocks the first two residential IPs; a fresh IP clears it.
+        return mints < 3 ? json(403, {}) : json(200, { access_token: "fresh-on-ip-3", expires_in: 2_100 });
+      }
+      return json(200, noService);
+    });
+    try {
+      const token = await scanner.forceFreshTokenFromApi();
+      expect(token).toBe("fresh-on-ip-3");
+      expect(mints).toBe(3);                                  // walled twice, minted on the 3rd IP
+      expect(rotateProxySession).toHaveBeenCalledTimes(2);    // one IP switch before each retry
+    } finally {
+      process.env.KFS_MINT_IMPERSONATE = prevImp;
+      process.env.KFS_MINT_DIRECT = prevDirect;
+      process.env.KFS_MINT_MAX_ROTATIONS = prevRot;
+      scanner.__resetTokenTransportStateForTests();
+    }
   });
 
   it("345 James Allgood Dr flows through the SHARED scanAddress path as fresh fiber (copper override ignored)", async () => {

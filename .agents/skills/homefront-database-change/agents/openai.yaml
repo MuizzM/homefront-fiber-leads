@@ -1,0 +1,6 @@
+interface:
+  display_name: "Homefront Database Change"
+  short_description: "Safe migrations, tenant queries, and recovery"
+  default_prompt: "Use $homefront-database-change to plan and validate this persistence change."
+policy:
+  allow_implicit_invocation: true

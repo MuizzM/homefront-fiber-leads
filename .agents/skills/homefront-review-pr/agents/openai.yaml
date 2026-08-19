@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Homefront PR"
+  short_description: "Parallel review of Homefront pull requests"
+  default_prompt: "Use $homefront-review-pr to review this branch against the default branch."
+policy:
+  allow_implicit_invocation: true

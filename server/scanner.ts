@@ -260,18 +260,32 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
       // fall through to the Decodo path on ANY direct failure
     }
   }
-  try {
-    return await mintViaDecodo();
-  } catch (err) {
-    const message = String((err as any)?.message ?? err);
-    structuredLog("scan.token.mint_failed", { transport: "decodo", error: message.slice(0, 120) }, "warn");
-    if (isAuthDenialMessage(message)) {
-      // Fresh authorized Decodo session (new residential IP), then retry once.
-      await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
+  // Decodo rung: on a bot-wall auth denial (401/403) the remedy is a FRESH
+  // residential IP, not a wait — a rotated Decodo session commonly clears the
+  // wall (verified live: a freshly-built dispatcher gets a new IP and returns
+  // 201). So when the wall hits, SWITCH THE DECODO IP and retry, up to
+  // KFS_MINT_MAX_ROTATIONS fresh IPs, before deferring to the pool's next tick
+  // (which is itself paced by the fleet-shared 403-storm backoff, so this can
+  // never become a hot loop). Bounded so a Kinetic-wide wall can't spin, and
+  // gated to auth denials ONLY: a non-JSON challenge or a Decodo-down transport
+  // error fails closed WITHOUT rotating — this scanner never rotates to evade a
+  // CAPTCHA/challenge. Set KFS_MINT_MAX_ROTATIONS=1 to restore the prior
+  // single-retry behavior, or 0 to disable IP switching on the mint path.
+  const maxMintRotations = Math.max(0, Math.floor(Number(process.env.KFS_MINT_MAX_ROTATIONS ?? 3)) || 0);
+  let lastMintErr: unknown;
+  for (let attempt = 0; ; attempt++) {
+    try {
       return await mintViaDecodo();
+    } catch (err) {
+      lastMintErr = err;
+      const message = String((err as any)?.message ?? err);
+      structuredLog("scan.token.mint_failed", { transport: "decodo", attempt, error: message.slice(0, 120) }, "warn");
+      if (!isAuthDenialMessage(message) || attempt >= maxMintRotations) break;
+      // Fresh authorized Decodo session (new residential IP), then retry.
+      await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
     }
-    throw err; // fail closed (Decodo down / transient) — pool self-heals next tick
   }
+  throw lastMintErr; // fail closed — pool self-heals next tick under the fleet backoff
 }
 
 // ── Global mint gate — serialize mints, never pace them ──────────────────────
