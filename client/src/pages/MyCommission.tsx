@@ -4,9 +4,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { usd } from "@/lib/money";
-import { CheckCircle2, Printer, Clock, XCircle, RotateCcw, Loader2, Check } from "lucide-react";
+import { CheckCircle2, Printer, Clock, XCircle, RotateCcw, Loader2, Check, UserRoundX, CircleDollarSign } from "lucide-react";
 import { CommissionStatement } from "@/components/CommissionStatement";
 import { OverrideStatusPill } from "@/components/DownlineSheet";
+import { EmptyState } from "@/components/EmptyState";
+import { PageHeader } from "@/components/ui/page-scaffold";
+import { Skeleton } from "@/components/ui/skeleton";
 import { calculateRetroactiveCommission } from "@shared/commissionTiers";
 import { rankProgress, type Rank } from "@shared/commissionRanks";
 import type { MyOverrideWeekResponse } from "@shared/commissionOverrides";
@@ -125,35 +128,29 @@ export default function MyCommission() {
 
   return (
     <div className="w-full max-w-3xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-foreground">My commission</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {data?.bounds?.localWeekLabel ? `Week of ${data.bounds.localWeekLabel}` : "This week's earnings"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {!isLoading && data?.statement?.id && !data.noPlan && !data.noRepProfile && (
+      <PageHeader
+        title="My commission"
+        subtitle={data?.bounds?.localWeekLabel ? `Week of ${data.bounds.localWeekLabel}` : "This week's earnings"}
+        actions={
+          !isLoading && data?.statement?.id && !data.noPlan && !data.noRepProfile ? (
             <button
               type="button"
               onClick={() => setStmtId(Number(data.statement.id))}
               data-testid="open-statement"
-              className="inline-flex items-center gap-1.5 h-10 px-3 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-border bg-secondary px-3 text-sm font-semibold text-foreground transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-               Statement
+              Statement
             </button>
-          )}
-          
-        </div>
-      </div>
+          ) : undefined
+        }
+      />
 
       {stmtId != null && <CommissionStatement statementId={stmtId} onClose={() => setStmtId(null)} />}
 
       {isLoading && (
         <div className="space-y-4" role="status" aria-busy="true" aria-label="Loading your commission">
-          <div className="h-40 rounded-xl bg-card border border-border animate-pulse" />
-          <div className="h-24 rounded-xl bg-card border border-border animate-pulse" />
+          <Skeleton className="h-40 w-full rounded-2xl" />
+          <Skeleton className="h-24 w-full rounded-2xl" />
         </div>
       )}
 
@@ -162,7 +159,7 @@ export default function MyCommission() {
           <div className="text-sm font-semibold text-foreground">Couldn't load your commission</div>
           <div className="text-sm text-muted-foreground mt-1">Check your connection and try again - your money data is safe.</div>
           <button onClick={() => refetch()}
-            className="mt-4 inline-flex items-center justify-center h-10 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
+            className="mt-4 inline-flex min-h-11 items-center justify-center rounded-lg border border-border bg-secondary px-4 text-sm font-semibold text-foreground transition-transform active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             Retry
           </button>
         </div>
@@ -170,17 +167,17 @@ export default function MyCommission() {
 
       {!isLoading && data?.noRepProfile && (
         <EmptyState
-          icon={null}
+          icon={UserRoundX}
           title="No rep profile linked yet"
-          body="Your login isn't linked to a sales profile. Ask your manager to finish your onboarding - then your weekly commission shows up here."
+          description="Your login isn't linked to a sales profile. Ask your manager to finish your onboarding; then your weekly commission will appear here."
         />
       )}
 
       {!isLoading && data?.noPlan && (
         <EmptyState
-          icon={null}
+          icon={CircleDollarSign}
           title="No commission plan assigned"
-          body="You don't have a commission structure assigned for this week yet. Your manager can set you up on a flat or tiered plan from the Team page."
+          description="You don't have a commission structure assigned for this week yet. Your manager can assign a flat or tiered plan from the Team page."
         />
       )}
 
@@ -1051,18 +1048,6 @@ function StatusPill({ status }: { status: string }) {
     <span className={`inline-flex items-center gap-1 text-2xs font-semibold px-1.5 py-0.5 rounded-full ${map[status] || "bg-muted text-muted-foreground"}`}>
       <span className="w-1 h-1 rounded-full bg-current" />{status?.toLowerCase()}
     </span>
-  );
-}
-
-function EmptyState({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
-  return (
-    <div className="rounded-xl bg-card border border-border p-8 text-center">
-      <div className="w-12 h-12 rounded-xl bg-muted/60 border border-border flex items-center justify-center mx-auto mb-3">
-        {icon}
-      </div>
-      <p className="text-sm font-semibold tracking-tight text-foreground">{title}</p>
-      <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto leading-relaxed">{body}</p>
-    </div>
   );
 }
 

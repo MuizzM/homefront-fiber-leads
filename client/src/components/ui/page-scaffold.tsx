@@ -37,9 +37,9 @@ export function PageHeader({ title, subtitle, actions, className }: {
     <div className={cn("flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-start sm:gap-4", className)} data-testid="page-header">
       <div className="min-w-0">
         <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
-          <span className="truncate">{title}</span>
+          <span className="min-w-0 break-words text-balance">{title}</span>
         </h1>
-        {subtitle && <div className="mt-1 max-w-3xl text-sm leading-5 text-muted-foreground">{subtitle}</div>}
+        {subtitle && <div className="mt-1 max-w-3xl text-pretty text-sm leading-5 text-muted-foreground [overflow-wrap:anywhere]">{subtitle}</div>}
       </div>
       {actions && <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:justify-end sm:pt-0.5">{actions}</div>}
     </div>
@@ -71,7 +71,7 @@ export function StatDelta({ tone, children }: { tone: "up" | "down" | "neutral";
     neutral: "bg-secondary text-muted-foreground",
   } as const;
   return (
-    <span className={cn("inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold", tones[tone])}>
+    <span className={cn("inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-2xs font-semibold", tones[tone])}>
       {children}
     </span>
   );
@@ -108,7 +108,7 @@ export function StatTile({ label, value, delta, accent = false, className, testI
       )}
     >
       <div className="flex items-center gap-1.5">
-        <span className="truncate text-xs font-medium text-muted-foreground">{label}</span>
+        <span className="line-clamp-2 text-xs font-medium leading-4 text-muted-foreground">{label}</span>
       </div>
       <div className="mt-1 flex items-baseline gap-1.5">
         <span className={cn("text-xl font-bold tabular-nums leading-none tracking-tight", accent ? "text-primary" : "text-foreground")}>
@@ -158,8 +158,8 @@ export function ListRow({ title, description, trailing, onClick, className, test
       )}
     >
       <span className="min-w-0 flex-1">
-        <span className="block line-clamp-1 text-[13px] font-semibold text-foreground">{title}</span>
-        {description && <span className="mt-0.5 block line-clamp-2 text-xs leading-4 text-muted-foreground">{description}</span>}
+        <span className="block line-clamp-2 break-words text-sm-minus font-semibold text-foreground [overflow-wrap:anywhere]">{title}</span>
+        {description && <span className="mt-0.5 block line-clamp-2 text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]">{description}</span>}
       </span>
       {trailing && <span className="flex shrink-0 items-center gap-2">{trailing}</span>}
     </Tag>

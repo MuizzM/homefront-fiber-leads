@@ -194,6 +194,10 @@ describe("the section strip is a real tablist", () => {
 
   it("moves between sections with the arrow keys", () => {
     const onChange = vi.fn();
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
     render(
       <SectionTabs
         tabs={[{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }]}
@@ -202,10 +206,15 @@ describe("the section strip is a real tablist", () => {
       />,
     );
     const list = screen.getByRole("tablist");
+    const [first, second] = screen.getAllByRole("tab");
+    first.focus();
     fireEvent.keyDown(list, { key: "ArrowRight" });
     expect(onChange).toHaveBeenCalledWith("b");
+    expect(second).toHaveFocus();
     fireEvent.keyDown(list, { key: "ArrowLeft" });
     expect(onChange).toHaveBeenCalledWith("c"); // wraps
+    expect(first).toHaveAttribute("aria-controls", "academy-section-panel");
+    raf.mockRestore();
   });
 
   it("opens a section from the keyboard", async () => {

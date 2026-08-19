@@ -13,6 +13,7 @@
 // mislead somebody into thinking they lost access to something they had.
 
 import { useRoute, useLocation } from "wouter";
+import { useRef } from "react";
 import { PageHeader } from "@/components/ui/page-scaffold";
 import { useCan } from "@/lib/capabilities";
 import { useAuth } from "@/lib/auth";
@@ -44,6 +45,7 @@ export const METRICS_TABS: MetricsTab[] = [
 export default function Metrics() {
   const [, params] = useRoute("/metrics/:tab");
   const [, navigate] = useLocation();
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const { user } = useAuth();
   const role = user?.role;
 
@@ -78,16 +80,37 @@ export default function Metrics() {
       <PageHeader title="Metrics" subtitle={active.subtitle} />
 
       {tabs.length > 1 && (
-        <div className="-mx-4 mt-4 flex gap-1 overflow-x-auto px-4 pb-1 md:-mx-6 md:px-6"
-             role="tablist" aria-label="Metrics sections">
-          {tabs.map((t) => (
+        <div
+          className="-mx-4 mt-4 flex snap-x snap-proximity gap-1 overflow-x-auto px-4 pb-1 [overscroll-behavior-inline:contain] md:-mx-6 md:px-6"
+          role="tablist"
+          aria-label="Metrics sections"
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+            event.preventDefault();
+            const current = tabs.findIndex(tab => tab.key === active.key);
+            const next = event.key === "ArrowRight"
+              ? (current + 1) % tabs.length
+              : (current - 1 + tabs.length) % tabs.length;
+            navigate(`/metrics/${tabs[next].key}`);
+            requestAnimationFrame(() => {
+              const nextTab = tabRefs.current[next];
+              nextTab?.focus();
+              nextTab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            });
+          }}
+        >
+          {tabs.map((t, index) => (
             <button
               key={t.key}
               type="button"
               role="tab"
+              id={`metrics-tab-${t.key}`}
+              aria-controls="metrics-panel"
               aria-selected={t.key === active.key}
+              tabIndex={t.key === active.key ? 0 : -1}
+              ref={(element) => { tabRefs.current[index] = element; }}
               onClick={() => navigate(`/metrics/${t.key}`)}
-              className={`shrink-0 rounded-full px-3.5 py-2 text-[13px] font-semibold transition-colors ${
+              className={`min-h-11 shrink-0 snap-start rounded-full px-3.5 py-2 text-sm-minus font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                 t.key === active.key
                   ? "bg-primary text-primary-foreground"
                   : "bg-secondary text-muted-foreground hover:text-foreground"
@@ -100,7 +123,13 @@ export default function Metrics() {
         </div>
       )}
 
-      <div className="mt-5">
+      <div
+        id="metrics-panel"
+        role="tabpanel"
+        aria-labelledby={`metrics-tab-${active.key}`}
+        tabIndex={0}
+        className="mt-5 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
         {active.key === "my" && <MyMetrics />}
         {active.key === "team" && <TeamMetrics />}
         {active.key === "territory" && <TerritoryMetrics />}

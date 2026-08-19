@@ -64,15 +64,14 @@ interface Insight {
 
 export function PeriodChips({ value, onChange }: { value: PeriodKey; onChange: (p: PeriodKey) => void }) {
   return (
-    <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Period">
+    <div className="-mx-1 flex snap-x snap-proximity gap-1.5 overflow-x-auto px-1 pb-1 [overscroll-behavior-inline:contain]" role="group" aria-label="Metrics period">
       {PERIODS.map((p) => (
         <button
           key={p.key}
           type="button"
-          role="tab"
-          aria-selected={value === p.key}
+          aria-pressed={value === p.key}
           onClick={() => onChange(p.key)}
-          className={`shrink-0 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+          className={`min-h-11 shrink-0 snap-start rounded-full px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             value === p.key
               ? "bg-primary text-primary-foreground"
               : "bg-secondary text-muted-foreground hover:text-foreground"

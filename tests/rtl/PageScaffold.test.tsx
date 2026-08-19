@@ -100,6 +100,12 @@ describe("PageHeader", () => {
     expect(screen.getByTestId("page-header").className).toContain("sm:flex-row");
     expect(screen.getByText("Filter").parentElement?.className).toContain("flex-wrap");
   });
+
+  it("lets long titles and subtitles wrap instead of hiding their meaning", () => {
+    render(<PageHeader title="A very long operational workspace title" subtitle="A long route or identifier can-wrap-without-breaking-the-screen" />);
+    expect(screen.getByText("A very long operational workspace title").className).toContain("break-words");
+    expect(screen.getByText(/A long route/).className).toContain("overflow-wrap:anywhere");
+  });
 });
 
 describe("SectionLabel", () => {

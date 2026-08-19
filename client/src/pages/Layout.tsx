@@ -375,6 +375,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     .filter(item => !gated || isTrainingGateOpenClientPath(item.href))
     .filter(item => item.href !== "/action-approvals" || actionGateLive);
   const currentNavGroup = visibleNav.find(item => navItemIsActive(item.href, location))?.group;
+  const mobilePrimaryHrefs = new Set(["/", "/today", "/leads", "/map", "/my-commission"]);
+  const mobileMoreGroups = visibleNav
+    .filter(item => !mobilePrimaryHrefs.has(item.href))
+    .reduce<{ group: string; items: NavItem[] }[]>((groups, item) => {
+      const group = item.group ?? "Other";
+      const existing = groups.find(entry => entry.group === group);
+      if (existing) existing.items.push(item);
+      else groups.push({ group, items: [item] });
+      return groups;
+    }, []);
+  const navBadgeCount = (href: string) =>
+    href === "/messages" ? chatUnread
+    : canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount
+    : href === "/action-approvals" ? pendingActionCount
+    : 0;
 
   useEffect(() => {
     if (!currentNavGroup || currentNavGroup === "Core") return;
@@ -384,7 +399,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [currentNavGroup]);
 
   return (
-    <div className="flex h-screen h-dvh overflow-hidden bg-background">
+    <div className="flex h-dvh overflow-hidden bg-background">
       <a
         href="#main-content"
         onClick={(event) => {
@@ -456,11 +471,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <div id={groupId} hidden={!groupOpen}>
                   {items.map(({ href, label, icon: Icon }) => {
                     const isActive = navItemIsActive(href, location);
-                    const badgeCount =
-                      href === "/messages" ? chatUnread
-                      : canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount
-                      : href === "/action-approvals" ? pendingActionCount
-                      : 0;
+                    const badgeCount = navBadgeCount(href);
                     return (
                       <Link
                         key={href}
@@ -573,7 +584,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <div className="truncate text-2xs text-muted-foreground">{orgName}</div>
             )}
           </div>
-          <button type="button" aria-label="Open account menu" aria-expanded={moreOpen} aria-controls="mobile-more-sheet"
+          <button type="button" aria-label={`Open navigation and account for ${user?.name ?? "your profile"}`} aria-expanded={moreOpen} aria-controls="mobile-more-sheet"
             onClick={() => { setMobileOpen(false); setMoreOpen(true); }}
             className={`tap-expand grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold ring-2 ring-border ${AVATAR}`}>
             {user?.name?.slice(0, 2).toUpperCase()}
@@ -624,27 +635,60 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="px-4 pb-4">
-              <div className="grid grid-cols-2 gap-2">
-                {visibleNav
-                  .filter(item => !["/", "/today", "/leads", "/map", "/my-commission"].includes(item.href))
-                  .map(({ href, label, icon: Icon }) => (
-                    <Link key={href} href={href} onClick={() => setMoreOpen(false)} {...navIntentHandlers(href)} className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-border bg-background/55 px-3.5 py-3 text-left active:scale-[.98] transition hover:border-primary/25">
-                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary"><Icon className="h-[19px] w-[19px]" /></span>
-                      <span className="min-w-0 text-[13px] font-semibold leading-tight text-foreground">{label}</span>
-                    </Link>
-                  ))}
+              <div className="space-y-5">
+                {mobileMoreGroups.map(({ group, items }) => {
+                  const groupId = `mobile-more-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+                  return (
+                    <section key={group} aria-labelledby={groupId}>
+                      <h2 id={groupId} className="mb-2 px-1 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                        {group}
+                      </h2>
+                      <div className="grid grid-cols-2 gap-2">
+                        {items.map(({ href, label, icon: Icon }) => {
+                          const isActive = navItemIsActive(href, location);
+                          const badgeCount = navBadgeCount(href);
+                          return (
+                            <Link
+                              key={href}
+                              href={href}
+                              onClick={() => setMoreOpen(false)}
+                              aria-current={isActive ? "page" : undefined}
+                              {...navIntentHandlers(href)}
+                              className={cn(
+                                "relative flex min-h-[68px] min-w-0 items-center gap-3 rounded-2xl border px-3.5 py-3 text-left transition-[transform,border-color,background-color] active:scale-[.98]",
+                                isActive
+                                  ? "border-primary/30 bg-primary/[0.09]"
+                                  : "border-border bg-background/55 hover:border-primary/25 hover:bg-secondary/40",
+                              )}
+                            >
+                              <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-secondary", isActive ? "text-primary" : "text-muted-foreground")}>
+                                <Icon className="h-[19px] w-[19px]" aria-hidden="true" />
+                              </span>
+                              <span className="min-w-0 flex-1 break-words text-sm-minus font-semibold leading-tight text-foreground [overflow-wrap:anywhere]">{label}</span>
+                              {badgeCount > 0 && (
+                                <span className="absolute right-2 top-2 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-warning px-1 text-2xs font-bold text-background">
+                                  {badgeCount > 9 ? "9+" : badgeCount}
+                                </span>
+                              )}
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
               </div>
 
-              <div className="mt-3 overflow-hidden rounded-2xl border border-border bg-background/45">
-                <Link href="/profile" onClick={() => setMoreOpen(false)} className="flex min-h-12 items-center gap-3 px-4 text-[13px] font-medium text-foreground hover:bg-secondary/60">
-                  <UserIcon className="h-4 w-4 text-muted-foreground" /><span className="flex-1">Profile and account</span>
+              <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-background/45">
+                <Link href="/profile" onClick={() => setMoreOpen(false)} className="flex min-h-12 items-center gap-3 px-4 text-sm-minus font-medium text-foreground hover:bg-secondary/60">
+                  <UserIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" /><span className="flex-1">Profile and account</span>
                 </Link>
-                <button type="button" onClick={toggle} className="flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-[13px] font-medium text-foreground hover:bg-secondary/60">
-                  {theme === "dark" ? <Sun className="h-4 w-4 text-muted-foreground" /> : <Moon className="h-4 w-4 text-muted-foreground" />}
+                <button type="button" onClick={toggle} className="flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-sm-minus font-medium text-foreground hover:bg-secondary/60">
+                  {theme === "dark" ? <Sun className="h-4 w-4 text-muted-foreground" aria-hidden="true" /> : <Moon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />}
                   <span className="flex-1">Switch to {theme === "dark" ? "light" : "dark"} mode</span>
                 </button>
-                <button type="button" onClick={() => { setMoreOpen(false); void logout(); }} className="flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-[13px] font-medium text-red-500 hover:bg-red-500/5">
-                  <LogOut className="h-4 w-4" /><span className="flex-1">Sign out</span>
+                <button type="button" onClick={() => { setMoreOpen(false); void logout(); }} className="flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-sm-minus font-medium text-destructive hover:bg-destructive/5">
+                  <LogOut className="h-4 w-4" aria-hidden="true" /><span className="flex-1">Sign out</span>
                 </button>
               </div>
             </div>

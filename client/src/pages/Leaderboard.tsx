@@ -124,7 +124,11 @@ export default function Leaderboard() {
 
       {/* Date-range filter — preset segments + custom From–To */}
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter ranking by date range">
-        <div className="no-scrollbar inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-xl border border-border bg-secondary/60 p-1 md:rounded-lg md:p-0.5">
+        <div
+          className="no-scrollbar inline-flex max-w-full snap-x snap-proximity items-center gap-0.5 overflow-x-auto rounded-xl border border-border bg-secondary/60 p-1 [overscroll-behavior-inline:contain] md:rounded-lg md:p-0.5"
+          tabIndex={0}
+          aria-label="Date range presets; scroll for more options"
+        >
           {PRESETS.map((p) => (
             <button
               key={p.key}
@@ -132,7 +136,7 @@ export default function Leaderboard() {
               onClick={() => setRange(p.key)}
               aria-pressed={range === p.key}
               data-testid={`range-${p.key}`}
-              className={`whitespace-nowrap px-2.5 h-11 md:h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
+              className={`snap-start whitespace-nowrap px-2.5 h-11 md:h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
                 range === p.key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -144,7 +148,7 @@ export default function Leaderboard() {
             onClick={() => setRange("custom")}
             aria-pressed={range === "custom"}
             data-testid="range-custom"
-            className={`whitespace-nowrap inline-flex items-center gap-1 px-2.5 h-11 md:h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
+            className={`snap-start whitespace-nowrap inline-flex items-center gap-1 px-2.5 h-11 md:h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
               range === "custom" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
             }`}
           >

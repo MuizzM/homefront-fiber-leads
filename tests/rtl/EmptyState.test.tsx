@@ -16,6 +16,9 @@ describe("EmptyState", () => {
     );
     const root = screen.getByTestId("demo-empty");
     expect(root).toHaveAttribute("role", "status"); // announced to assistive tech
+    const icon = screen.getByTestId("demo-empty-icon");
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon.querySelector("svg")).not.toBeNull();
     expect(screen.getByText("Nothing here yet")).toBeInTheDocument();
     expect(screen.getByText("Add your first item to get started.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add item" })).toBeInTheDocument();

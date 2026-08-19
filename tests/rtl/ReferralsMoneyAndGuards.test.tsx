@@ -109,6 +109,15 @@ describe("referral pipeline money + status labels", () => {
     expect(screen.queryByText("REWARD_PENDING")).toBeNull();
   });
 
+  it("keeps the complete referral URL selectable without wrapping the card", async () => {
+    renderPage([]);
+    const field = await screen.findByRole("textbox", { name: "Personal referral link" });
+    expect(field).toHaveAttribute("readonly");
+    expect(field).toHaveValue("http://localhost/join?ref=TESTCODE");
+    expect(field.className).toContain("min-w-0");
+    expect(screen.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
+  });
+
   it("keeps the sign on negative amounts", async () => {
     renderPage([referral({ id: 8, status: "CLAWED_BACK", rewardAmountCents: -15000 })]);
     await waitFor(() => expect(screen.getAllByText("Reversed").length).toBeGreaterThan(0));

@@ -192,7 +192,7 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
               className={`${popped === href ? "tab-icon-pop " : ""}${primary
                 ? `grid h-11 w-11 place-items-center rounded-full border-4 border-card shadow-lg transition-colors ${active ? "bg-primary text-primary-foreground" : "bg-foreground text-background"}`
                 : `grid h-7 w-11 place-items-center rounded-full transition-colors ${active ? "text-primary" : "text-muted-foreground"}`}`}>
-              <Icon className={primary ? "w-5 h-5" : "w-[19px] h-[19px]"} strokeWidth={active ? 2.4 : 2} />
+              <Icon aria-hidden="true" className={primary ? "w-5 h-5" : "w-[19px] h-[19px]"} strokeWidth={active ? 2.4 : 2} />
             </span>
             <span className={`text-2xs font-semibold transition-colors ${active ? "text-primary" : "text-muted-foreground"}`}>
               {label}
@@ -211,7 +211,7 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
         className="relative flex flex-col items-center justify-center gap-0.5 active:scale-[.94] transition-transform"
       >
         <span className={`relative grid h-7 w-11 place-items-center rounded-2xl transition-colors ${moreOpen ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}>
-          <Menu className="w-[19px] h-[19px]" />
+          <Menu className="w-[19px] h-[19px]" aria-hidden="true" />
           {moreDot && (
             <span
               data-testid="tab-more-dot"

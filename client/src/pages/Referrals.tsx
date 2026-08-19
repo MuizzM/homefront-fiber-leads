@@ -240,18 +240,23 @@ function MyLinkCard() {
           </p>
         )}
 
-        <div className="flex items-center gap-2">
-          {/* break-all, not truncate: the unbroken URL's min-content width was
-              propagating up the flex chain and widening the ENTIRE page past a
-              375px viewport (a truncated flex item still contributes its full
-              nowrap width to the container's min-content). Wrapping keeps the
-              whole link visible AND lets the card shrink to any screen. */}
-          <code className="min-w-0 flex-1 break-all rounded-md bg-muted px-3 py-2 text-xs" data-testid="referral-url">
-            {link.url}
-          </code>
-          <Button size="sm" variant="outline" onClick={copy} data-testid="referral-copy">
+        <div className="flex min-w-0 items-center gap-2">
+          {/* A readonly field keeps the long URL on one calm line without
+              hiding it: focus selects the complete value, so manual copy still
+              works when clipboard permission is denied. `min-w-0` is what lets
+              the field shrink instead of widening a 375px viewport. */}
+          <input
+            type="url"
+            readOnly
+            value={link.url}
+            onFocus={(event) => event.currentTarget.select()}
+            aria-label="Personal referral link"
+            className="min-h-11 min-w-0 flex-1 rounded-xl border border-border bg-muted px-3 font-mono text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="referral-url"
+          />
+          <Button className="shrink-0" size="sm" variant="outline" onClick={copy} data-testid="referral-copy">
             {copied ? <Check className="h-4 w-4" /> : null}
-            <span className="ml-2">{copied ? "Copied" : "Copy"}</span>
+            <span>{copied ? "Copied" : "Copy link"}</span>
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">

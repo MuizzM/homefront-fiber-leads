@@ -60,4 +60,32 @@ describe("portal UI and accessibility contracts", () => {
     expect(scanner).toContain("bg-primary/10 text-primary");
     expect(scanner).not.toContain("border-b-2");
   });
+
+  it("keeps metrics tabs touch-sized, focusable, and connected to one panel", () => {
+    const metrics = read("client/src/pages/Metrics.tsx");
+    expect(metrics).toContain('role="tablist"');
+    expect(metrics).toContain('aria-controls="metrics-panel"');
+    expect(metrics).toContain('role="tabpanel"');
+    expect(metrics).toContain("min-h-11");
+
+    const periods = read("client/src/components/metrics/MyMetrics.tsx");
+    expect(periods).toContain('role="group"');
+    expect(periods).toContain("aria-pressed={value === p.key}");
+  });
+
+  it("keeps commission states on the shared page, empty-state, and skeleton system", () => {
+    const commission = read("client/src/pages/MyCommission.tsx");
+    expect(commission).toContain('import { EmptyState } from "@/components/EmptyState"');
+    expect(commission).toContain('import { PageHeader } from "@/components/ui/page-scaffold"');
+    expect(commission).toContain('import { Skeleton } from "@/components/ui/skeleton"');
+    expect(commission).not.toContain("function EmptyState(");
+    expect(commission).not.toContain("animate-pulse");
+  });
+
+  it("uses the dynamic viewport and hides decorative shell icons", () => {
+    const layout = read("client/src/pages/Layout.tsx");
+    expect(layout).toContain('className="flex h-dvh overflow-hidden bg-background"');
+    expect(layout).not.toContain('className="flex h-screen h-dvh');
+    expect(layout).toContain('<LogOut className="h-4 w-4" aria-hidden="true"');
+  });
 });

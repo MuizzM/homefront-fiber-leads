@@ -5,7 +5,7 @@
 // entry anywhere: not the sidebar, not the More sheet. Reachable only by typed
 // URL. These tests pin their presence for a rep, and pin the flip side: roles
 // whose capabilities exclude a surface never see a dead link to it.
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
@@ -77,6 +77,17 @@ describe("field nav reachability", () => {
     fireEvent.click(fieldToggle);
     expect(fieldToggle).toHaveAttribute("aria-expanded", "true");
     expect(fieldGroup).not.toHaveAttribute("hidden");
+  });
+
+  it("groups the mobile More destinations and marks the current page", () => {
+    window.history.replaceState(null, "", "#/leaderboard");
+    renderLayout("rep");
+
+    fireEvent.click(screen.getByRole("button", { name: /open navigation and account/i }));
+    const dialog = screen.getByRole("dialog", { name: "More navigation" });
+    expect(within(dialog).getByRole("heading", { name: "Field" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: "Leaderboard" })).toHaveAttribute("aria-current", "page");
+    expect(within(dialog).getByRole("link", { name: "Profile and account" })).toBeInTheDocument();
   });
 });
 

@@ -44,13 +44,12 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div className="flex flex-1 items-center justify-center bg-background p-5" style={{ minHeight: 0 }}>
-          <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 text-center shadow-sm">
-            
-            <div className="text-[18px] font-semibold tracking-tight text-foreground">This screen needs a refresh</div>
-            <p className="mx-auto mt-2 max-w-xs text-[13px] leading-relaxed text-muted-foreground">
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 text-center shadow-sm" role="alert">
+            <div className="text-lg font-semibold text-balance text-foreground">This screen needs a refresh</div>
+            <p className="mx-auto mt-2 max-w-xs text-pretty text-sm-minus leading-relaxed text-muted-foreground">
               Your saved field work is safe. Reload this screen, or return home and keep working.
             </p>
-            {this.state.incidentId && <p className="mt-3 text-[11px] font-medium text-muted-foreground">Support code {this.state.incidentId}</p>}
+            {this.state.incidentId && <p className="mt-3 text-2xs font-medium text-muted-foreground">Support code {this.state.incidentId}</p>}
             {import.meta.env.DEV && (
               <details className="mt-4 rounded-xl bg-background p-3 text-left text-xs text-muted-foreground">
                 <summary className="cursor-pointer font-medium">Developer details</summary>

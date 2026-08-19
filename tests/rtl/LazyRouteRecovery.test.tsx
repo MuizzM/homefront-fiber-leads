@@ -55,6 +55,7 @@ describe("lazyRoute", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /reload screen/i })).toBeInTheDocument(),
     );
+    expect(screen.getByRole("alert")).toHaveTextContent(/saved field work is safe/i);
     expect(reload).not.toHaveBeenCalled();
   });
 });

@@ -739,6 +739,13 @@ export default function Training() {
         <SectionTabs tabs={tabs} value={section} onChange={setSection} />
       </div>
 
+      <div
+        id="academy-section-panel"
+        role="tabpanel"
+        aria-labelledby={`academy-tab-${section}`}
+        tabIndex={0}
+        className="space-y-5 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
       {/* ── Sections ─────────────────────────────────────────────────────────── */}
       {section === "path" && (
         academy.isLoading ? <PanelSkeleton rows={5} />
@@ -978,6 +985,7 @@ export default function Training() {
           market is under Reference.
         </p>
       )}
+      </div>
     </div>
   );
 }

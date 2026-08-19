@@ -23,7 +23,8 @@ const TONES: Record<Tone, { tile: string; icon: string; ring: string }> = {
 };
 
 export function EmptyState({
-    title,
+  icon: Icon,
+  title,
   description,
   action,
   tone = "neutral",
@@ -50,10 +51,16 @@ export function EmptyState({
         bordered ? `rounded-2xl border ${t.ring} ${tone === "positive" ? "bg-success/[0.06]" : "bg-card"}` : ""
       } ${className}`}
     >
-      
-      <h3 className="mt-3.5 text-[15px] font-semibold text-foreground">{title}</h3>
+      <span
+        aria-hidden="true"
+        className={`grid h-11 w-11 place-items-center rounded-xl border ${t.tile} ${t.icon} ${t.ring}`}
+        data-testid={testId ? `${testId}-icon` : undefined}
+      >
+        <Icon className="h-5 w-5" />
+      </span>
+      <h3 className="mt-4 text-base font-semibold text-foreground">{title}</h3>
       {description && (
-        <p className="mt-1 max-w-xs text-[13px] leading-relaxed text-muted-foreground">{description}</p>
+        <p className="mt-1 max-w-xs text-pretty text-sm-minus leading-relaxed text-muted-foreground">{description}</p>
       )}
       {action && <div className="mt-4">{action}</div>}
     </div>

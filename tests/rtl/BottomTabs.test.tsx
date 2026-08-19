@@ -64,6 +64,7 @@ describe("the liquid floating bar", () => {
     render(<BottomTabs role="rep" />);
     for (const id of ["tab-today", "tab-leads", "tab-map", "tab-pay", "tab-more"]) {
       expect(screen.getByTestId(id)).toBeInTheDocument();
+      expect(screen.getByTestId(id).querySelector("svg")).toHaveAttribute("aria-hidden", "true");
     }
   });
 

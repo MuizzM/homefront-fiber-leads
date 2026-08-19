@@ -9,7 +9,7 @@
 // paints gold as a surface behind text, which is the mistake the token comments
 // in index.css exist to prevent.
 
-import { type ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
@@ -267,17 +267,19 @@ export function DoneDot({ done }: { done: boolean }) {
 }
 
 /** Horizontal scroll strip of section tabs. Keyboard-navigable as a tablist. */
-export function SectionTabs<T extends string>({ tabs, value, onChange, testIdPrefix }: {
+export function SectionTabs<T extends string>({ tabs, value, onChange, testIdPrefix, panelId = "academy-section-panel" }: {
   tabs: { id: T; label: string; badge?: number }[];
   value: T;
   onChange: (id: T) => void;
   testIdPrefix?: string;
+  panelId?: string;
 }) {
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   return (
     <div
       role="tablist"
       aria-label="Academy sections"
-      className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 md:mx-0 md:px-0"
+      className="-mx-4 flex snap-x snap-proximity gap-1.5 overflow-x-auto px-4 pb-1 [overscroll-behavior-inline:contain] md:mx-0 md:px-0"
       style={{ scrollbarWidth: "none" }}
       onKeyDown={(e) => {
         const i = tabs.findIndex((t) => t.id === value);
@@ -285,6 +287,11 @@ export function SectionTabs<T extends string>({ tabs, value, onChange, testIdPre
           e.preventDefault();
           const next = e.key === "ArrowRight" ? (i + 1) % tabs.length : (i - 1 + tabs.length) % tabs.length;
           onChange(tabs[next].id);
+          requestAnimationFrame(() => {
+            const nextTab = tabRefs.current[next];
+            nextTab?.focus();
+            nextTab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+          });
         }
       }}
     >
@@ -295,12 +302,15 @@ export function SectionTabs<T extends string>({ tabs, value, onChange, testIdPre
             key={tab.id}
             role="tab"
             type="button"
+            id={`academy-tab-${tab.id}`}
+            aria-controls={panelId}
             aria-selected={active}
             tabIndex={active ? 0 : -1}
+            ref={(element) => { tabRefs.current[tabs.findIndex(item => item.id === tab.id)] = element; }}
             onClick={() => onChange(tab.id)}
             data-testid={`${testIdPrefix ?? "academy-tab"}-${tab.id}`}
             className={cn(
-              "inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-[13px] font-semibold transition-colors",
+              "inline-flex min-h-11 shrink-0 snap-start items-center gap-1.5 rounded-xl border px-3.5 text-sm-minus font-semibold transition-colors",
               active
                 ? "border-primary/40 bg-primary/[0.09] text-primary"
                 : "border-border bg-card text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
