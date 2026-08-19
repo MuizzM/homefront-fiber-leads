@@ -1,0 +1,6 @@
+interface:
+  display_name: "Verify Homefront Change"
+  short_description: "Run the correct Homefront quality gates"
+  default_prompt: "Use $homefront-verify-change to validate my current change and report the evidence."
+policy:
+  allow_implicit_invocation: true

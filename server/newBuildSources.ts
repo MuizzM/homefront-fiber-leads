@@ -1,6 +1,8 @@
 // ── New Build Radar — data sources ────────────────────────────────────────────
-// Pluggable, FREE-ONLY incremental sources for newly-appearing NC/SC addresses and
-// buildings. NEVER uses Mapbox (billing-incident history) or the Decodo proxy —
+// Pluggable, FREE-ONLY incremental sources for newly-appearing NC/SC/GA addresses
+// and buildings (NC/SC have authoritative feeds; GA is OSM-Overpass-only for now,
+// tracked as a coverage GAP). NEVER uses Mapbox (billing-incident history) or the
+// Decodo proxy —
 // these are public government / OSM datasets fetched direct. Each source is
 // incremental: it returns only records that appeared since the last cursor, so a
 // tick surfaces genuine NEW builds, not the whole county.
@@ -29,7 +31,7 @@ export interface NewBuildCandidate {
   sourceRecordId: string;         // stable id within the source (objectid / osm id)
   address: string | null;         // null = addressless building (monitored)
   city: string | null;
-  state: "NC" | "SC";
+  state: "NC" | "SC" | "GA";
   zip: string | null;
   county: string | null;
   lat: number | null;
@@ -265,7 +267,7 @@ export async function pollScCountyAddresses(
 }
 
 // ── OSM Overpass (NC + SC, incremental via newer:) ────────────────────────────
-export interface OverpassArea { key: string; state: "NC" | "SC"; county: string | null; bbox: [number, number, number, number]; } // [s,w,n,e]
+export interface OverpassArea { key: string; state: "NC" | "SC" | "GA"; county: string | null; bbox: [number, number, number, number]; } // [s,w,n,e]
 
 function parseOverpassElements(elements: any[], area: OverpassArea, now: number): NewBuildCandidate[] {
   const out: NewBuildCandidate[] = [];

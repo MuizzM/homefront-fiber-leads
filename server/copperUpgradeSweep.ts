@@ -38,9 +38,11 @@ export function runCopperUpgradeSweep(tenantId: number): { queued: number } {
   // so a bare replay/test DB sweeps everything exactly as before.
   registerFootprintSqlFunctions();
   warmFootprintGate();
-  // Kinetic-only NC/SC scope. Column-defensive like the footprint gate: a bare
-  // replay/test DB without the carrier column sweeps everything as before.
-  const kineticOnly = hasCarrierColumn() ? `AND COALESCE(carrier,'kinetic')='kinetic' AND upper(state) IN ('NC','SC')` : "";
+  // Kinetic-only NC/SC/GA scope — the full Kinetic footprint (GA has ~30 legacy
+  // copper towns that can flip to fiber, exactly what this sweep is meant to
+  // catch). Column-defensive like the footprint gate: a bare replay/test DB
+  // without the carrier column sweeps everything as before.
+  const kineticOnly = hasCarrierColumn() ? `AND COALESCE(carrier,'kinetic')='kinetic' AND upper(state) IN ('NC','SC','GA')` : "";
   const rows = rawDb.prepare(
     `SELECT id FROM scan_targets
      WHERE tenant_id=? AND converted_to_lead_id IS NULL

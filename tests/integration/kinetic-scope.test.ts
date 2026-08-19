@@ -3,10 +3,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Kinetic-only NC/SC delivery scope: frontier-carrier leads and out-of-state
-// fresh leads are SUPPRESSED (status flip + lead_events audit, reversible,
-// never deleted) and leave the rep map; sold/now_active are never touched;
-// frontier scan targets are never selected by the yield engine.
+// Kinetic-only NC/SC/GA delivery scope: frontier-carrier leads and
+// out-of-footprint fresh leads (anything outside NC/SC/GA) are SUPPRESSED
+// (status flip + lead_events audit, reversible, never deleted) and leave the
+// rep map; GA is IN scope (the Dalton build) and is never suppressed;
+// sold/now_active are never touched; frontier scan targets are never selected
+// by the yield engine.
 
 let rawDb: import("better-sqlite3").Database;
 let storage: typeof import("../../server/storage").storage;
@@ -33,29 +35,32 @@ beforeAll(async () => {
 });
 
 describe("scope suppression backfill", () => {
-  it("suppresses frontier + out-of-state fresh leads, preserves records + audit, never touches sold", () => {
+  it("suppresses frontier + out-of-footprint fresh leads, keeps GA in scope, preserves records + audit, never touches sold", () => {
     const frontier = seedLead({ address: "1 Frontier Way", carrier: "frontier" });
-    const ga = seedLead({ address: "2 Georgia Dr", state: "GA" });
+    const va = seedLead({ address: "2 Virginia Dr", state: "VA" });       // outside NC/SC/GA -> suppressed
     const soldFrontier = seedLead({ address: "3 Sold Frontier Ct", carrier: "frontier", status: "sold" });
     const kineticNc = seedLead({ address: "4 Kinetic NC St" });
-    const manualGa = seedLead({ address: "5 Manual GA Ave", state: "GA", tag: "manual" });
+    const gaFresh = seedLead({ address: "5 Dalton GA Way", state: "GA" }); // GA IS in delivery scope
+    const manualVa = seedLead({ address: "6 Manual VA Ave", state: "VA", tag: "manual" }); // non-fresh tag -> untouched
     runMigrations(); // re-run: backfill is idempotent, suppresses the new rows
 
     const st = (id: number) => (rawDb.prepare(`SELECT lead_status s FROM leads WHERE id=?`).get(id) as any).s;
     expect(st(frontier)).toBe("scope_suppressed");
-    expect(st(ga)).toBe("scope_suppressed");
+    expect(st(va)).toBe("scope_suppressed");          // out-of-footprint fresh lead
     expect(st(soldFrontier)).toBe("sold");            // never touch closed business
     expect(st(kineticNc)).toBe("prospect");           // in-scope untouched
-    expect(st(manualGa)).toBe("manual" === "manual" ? "prospect" : "prospect"); // rep-created non-pipeline lead untouched
+    expect(st(gaFresh)).toBe("prospect");             // GA is in scope now — never suppressed
+    expect(st(manualVa)).toBe("prospect");            // rep-created non-pipeline lead untouched even out of footprint
 
     // Records preserved + audit trail written (reversal data).
     const evt = rawDb.prepare(`SELECT detail FROM lead_events WHERE lead_id=? ORDER BY id DESC LIMIT 1`).get(frontier) as any;
     expect(evt.detail).toContain("frontier carrier");
-    // Off the rep map; kinetic NC pin still there.
+    // Off the rep map; kinetic NC + GA pins still there.
     const pins = storage.getLeadsForMap(TENANT).map((p: any) => String(p.address));
     expect(pins.join("|")).not.toContain("1 Frontier Way");
-    expect(pins.join("|")).not.toContain("2 Georgia Dr");
+    expect(pins.join("|")).not.toContain("2 Virginia Dr");
     expect(pins.join("|")).toContain("4 Kinetic NC St");
+    expect(pins.join("|")).toContain("5 Dalton GA Way"); // GA lead delivered to the map
   });
 
   it("is idempotent - a second run suppresses nothing new", () => {

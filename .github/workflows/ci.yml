@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate agent harness
+        run: node scripts/validate-agent-harness.mjs
+
       - name: Deployment safety checks
         run: bash tests/deployment-safety.sh
 
