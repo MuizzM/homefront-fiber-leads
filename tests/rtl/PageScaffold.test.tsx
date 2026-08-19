@@ -79,6 +79,12 @@ describe("ListRow - the Linear grammar", () => {
     rerender(<ListRow title="A" testId="row" />);
     expect(screen.getByTestId("row").tagName).toBe("DIV");
   });
+
+  it("keeps clickable rows keyboard-visible and lets descriptions wrap", () => {
+    render(<ListRow title="A" description="Useful decision context" onClick={() => {}} testId="row" />);
+    expect(screen.getByTestId("row").className).toContain("focus-visible:ring-2");
+    expect(screen.getByText("Useful decision context").className).toContain("line-clamp-2");
+  });
 });
 
 describe("PageHeader", () => {
@@ -86,6 +92,13 @@ describe("PageHeader", () => {
     render(<PageHeader title="Leaderboard" subtitle="Ranked by sales" />);
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByText("Ranked by sales")).toBeInTheDocument();
+  });
+
+  it("stacks actions on narrow screens and restores a compact row above them", () => {
+    render(<PageHeader title="Leads" actions={<button type="button">Filter</button>} />);
+    expect(screen.getByTestId("page-header").className).toContain("flex-col");
+    expect(screen.getByTestId("page-header").className).toContain("sm:flex-row");
+    expect(screen.getByText("Filter").parentElement?.className).toContain("flex-wrap");
   });
 });
 

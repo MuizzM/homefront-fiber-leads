@@ -16,7 +16,15 @@ import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronRight } from "lucide-react";
+import {
+  BadgeDollarSign,
+  CheckCircle2,
+  ChevronRight,
+  FileCheck2,
+  GraduationCap,
+  LockKeyhole,
+  UserRound,
+} from "lucide-react";
 import { TRAINING_GATE_LOCKED_LABELS } from "@shared/trainingGate";
 
 export interface GateStatus {
@@ -43,8 +51,10 @@ export function TrainingLock() {
 
   if (isLoading) {
     return (
-      <div className="mx-auto w-full max-w-lg p-4 pt-8" data-testid="training-lock-loading">
-        <Skeleton className="h-[320px] w-full rounded-2xl" />
+      <div className="app-canvas flex-1 overflow-y-auto" data-testid="training-lock-loading">
+        <div className="mx-auto w-full max-w-5xl p-4 py-8 sm:p-6 lg:py-12">
+          <Skeleton className="h-[430px] w-full rounded-2xl" />
+        </div>
       </div>
     );
   }
@@ -52,62 +62,102 @@ export function TrainingLock() {
 
   const p = data.progress;
   return (
-    <div className="mx-auto w-full max-w-lg space-y-4 p-4 pt-8 pb-24" data-testid="training-lock">
-      <Card className="overflow-hidden rounded-2xl border border-border bg-card">
-        <CardContent className="p-6 text-center">
-          
+    <div className="app-canvas flex-1 overflow-y-auto" data-testid="training-lock">
+      <div className="mx-auto w-full max-w-5xl space-y-4 p-4 py-8 pb-24 sm:p-6 lg:py-12">
+        <Card className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+          <CardContent className="grid p-0 md:grid-cols-[minmax(0,1.2fr)_minmax(290px,0.8fr)]">
+            <section className="p-6 sm:p-8 lg:p-10" aria-labelledby="training-lock-title">
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/[0.08] px-3 py-1.5 text-xs font-semibold text-primary">
+                <GraduationCap className="h-4 w-4" aria-hidden="true" />
+                Rep workspace
+              </div>
 
-          <h1 className="mt-4 text-xl font-bold tracking-tight text-foreground">
-            Finish training to unlock the app
-          </h1>
+              <h1 id="training-lock-title" className="mt-5 text-xl font-bold tracking-tight text-foreground">
+                Finish training to unlock your field tools
+              </h1>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                Your workspace is ready. Complete the required lessons to open the map,
+                leads, performance, and pay tools used in the field.
+              </p>
 
-          {/* The number. This is the whole screen — everything else is context. */}
-          <p className="mt-1 text-[15px] font-semibold text-foreground" data-testid="lock-headline">
-            {p.headline}
-          </p>
+              <div className="mt-7 flex items-end justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Training progress</p>
+                  <p className="mt-1 text-[15px] font-semibold text-foreground" data-testid="lock-headline">{p.headline}</p>
+                </div>
+                <span className="text-4xl font-bold tabular-nums tracking-tight text-primary" aria-hidden="true">{p.pct}%</span>
+              </div>
+              <div className="mt-3">
+                <div
+                  className="h-2.5 w-full overflow-hidden rounded-full bg-secondary"
+                  role="progressbar"
+                  aria-label="Required training progress"
+                  aria-valuemin={0}
+                  aria-valuemax={p.required}
+                  aria-valuenow={p.completed}
+                  aria-valuetext={`${p.completed} of ${p.required} lessons complete`}
+                >
+                  <div className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+                       style={{ width: `${p.pct}%` }} data-testid="lock-bar" />
+                </div>
+                <p className="mt-2 text-[13px] tabular-nums text-muted-foreground" data-testid="lock-count">
+                  {p.completed} of {p.required} lessons complete
+                </p>
+              </div>
 
-          <div className="mt-4">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-              <div className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
-                   style={{ width: `${p.pct}%` }} data-testid="lock-bar" />
+              <Link href="/training" data-testid="lock-cta"
+                className={cn(
+                  "mt-6 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm transition-[background-color,box-shadow] hover:shadow-md sm:w-auto",
+                  FOCUS,
+                )}>
+                {p.completed > 0 ? "Continue training" : "Start training"}
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </Link>
+            </section>
+
+            <aside className="border-t border-border bg-secondary/40 p-6 sm:p-8 md:border-l md:border-t-0" aria-labelledby="training-unlocks-title">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <LockKeyhole className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <h2 id="training-unlocks-title" className="mt-4 text-base font-bold text-foreground">What you unlock</h2>
+              <p className="mt-1 text-sm leading-5 text-muted-foreground">Finish the required path once to open your daily workspace.</p>
+              <ul className="mt-5 space-y-3" data-testid="lock-unlocks">
+                {TRAINING_GATE_LOCKED_LABELS.map(label => (
+                  <li key={label} className="flex items-start gap-2.5 text-[13px] leading-5 text-foreground">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    <span>{label}</span>
+                  </li>
+                ))}
+              </ul>
+            </aside>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border border-border bg-card shadow-sm">
+          <CardContent className="p-4 sm:p-5">
+            <div className="mb-3 px-1">
+              <h2 className="text-sm font-bold text-foreground">Available while you train</h2>
+              <p className="mt-0.5 text-xs leading-5 text-muted-foreground">Keep onboarding moving without waiting for the rest of the app to unlock.</p>
             </div>
-            <p className="mt-1.5 text-[13px] tabular-nums text-muted-foreground" data-testid="lock-count">
-              {p.completed} of {p.required} lessons complete
-            </p>
-          </div>
-
-          <Link href="/training" data-testid="lock-cta"
-            className={cn(
-              "mt-5 inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground",
-              FOCUS,
-            )}>
-            {p.completed > 0 ? "Continue training" : "Start training"}
-            <ChevronRight className="h-4 w-4" aria-hidden="true" />
-          </Link>
-        </CardContent>
-      </Card>
-
-      {/* Name what is waiting. A rep who can see the prize finishes; a blank app
-          just looks broken. */}
-      <Card className="rounded-2xl border border-border bg-card">
-        <CardContent className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Unlocks when you finish
-          </p>
-          <ul className="mt-2 space-y-1.5" data-testid="lock-unlocks">
-            {TRAINING_GATE_LOCKED_LABELS.map(label => (
-              <li key={label} className="flex items-center gap-2 text-[13px] text-foreground">
-                
-                {label}
-              </li>
-            ))}
-          </ul>
-          <p className="mt-3 text-[12px] text-muted-foreground">
-            Your profile and onboarding paperwork stay open, so you can finish your W-9 and
-            documents while you work through the lessons.
-          </p>
-        </CardContent>
-      </Card>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {[
+                { href: "/profile", label: "Profile", detail: "Check your contact details", Icon: UserRound },
+                { href: "/my-documents", label: "My documents", detail: "Review onboarding paperwork", Icon: FileCheck2 },
+                { href: "/tax-and-pay", label: "Tax & pay", detail: "Complete required pay setup", Icon: BadgeDollarSign },
+              ].map(({ href, label, detail, Icon }) => (
+                <Link key={href} href={href} className={cn("group flex min-h-16 items-center gap-3 rounded-xl border border-border bg-background/70 p-3 transition-[background-color,border-color] hover:border-primary/30 hover:bg-primary/[0.04]", FOCUS)}>
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary"><Icon className="h-[18px] w-[18px]" aria-hidden="true" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-semibold text-foreground">{label}</span>
+                    <span className="block text-xs leading-4 text-muted-foreground">{detail}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" aria-hidden="true" />
+                </Link>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

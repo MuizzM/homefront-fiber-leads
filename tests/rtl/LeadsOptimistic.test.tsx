@@ -166,7 +166,9 @@ describe("Leads scan intelligence filters", () => {
         .map(([, url]) => String(url));
       expect(urls.some(url => url.includes("scanWindow=24h") && url.includes("sort=scanned_desc"))).toBe(true);
     });
-    expect(await screen.findByText(/scanned today/i)).toBeTruthy();
+    // The filter is a rolling 24-hour window, not the local calendar day.
+    // Keep the visible label as precise as the authoritative query contract.
+    expect(screen.getByTestId("filter-scan-window")).toHaveTextContent("Scanned in 24h");
   });
 });
 

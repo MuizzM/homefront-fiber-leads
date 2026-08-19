@@ -384,18 +384,29 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [currentNavGroup]);
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
+    <div className="flex h-screen h-dvh overflow-hidden bg-background">
+      <a
+        href="#main-content"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+        className="fixed left-3 top-3 z-[100] -translate-y-20 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg transition-transform focus:translate-y-0 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+      >
+        Skip to main content
+      </a>
       {/* Sidebar */}
       <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 w-[min(88vw,360px)] md:w-60 bg-card border-r border-border flex flex-col transition-transform duration-200 ease-out motion-reduce:duration-0",
+        "fixed inset-y-0 left-0 z-50 flex w-[min(88vw,360px)] flex-col border-r border-border bg-card/95 transition-transform duration-200 ease-out motion-reduce:duration-0 md:w-[264px]",
         "md:relative md:translate-x-0",
         mobileOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         {/* Wordmark — logo mark removed per owner; text-only brand */}
-        <div className="flex min-h-16 items-center gap-2.5 border-b border-border px-5 py-4 pt-[max(1rem,env(safe-area-inset-top))]">
+        <div className="flex min-h-[72px] items-center gap-2.5 border-b border-border px-5 py-4 pt-[max(1rem,env(safe-area-inset-top))]">
           <div className="leading-tight">
-            <div className="text-sm font-bold text-foreground">Home Front</div>
-            <div className="text-[11px] font-medium tracking-wide text-primary">SOLUTIONS</div>
+            <div className="text-[15px] font-bold tracking-tight text-foreground">Home Front</div>
+            <div className="text-[11px] font-semibold tracking-[0.14em] text-primary">SOLUTIONS</div>
+            <div className="mt-1 text-2xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Field operations</div>
           </div>
           <button
             type="button"
@@ -423,7 +434,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               return (
                 <div key={group} className="mb-1">
                   {group === "Core" ? (
-                    <div className="px-3 pt-3 pb-1 text-2xs font-semibold uppercase tracking-widest text-muted-foreground/70">
+                    <div className="px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                       {group}
                     </div>
                   ) : (
@@ -432,7 +443,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       aria-expanded={groupOpen}
                       aria-controls={groupId}
                       onClick={() => setExpandedGroups(current => ({ ...current, [group]: !groupOpen }))}
-                      className="group flex min-h-9 w-full items-center rounded-lg px-3 pt-3 pb-1 text-left text-2xs font-semibold uppercase tracking-widest text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      className="group flex min-h-10 w-full items-center rounded-lg px-3 pb-1 pt-3 text-left text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                       data-testid={`nav-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
                     >
                       <span className="flex-1">{group}</span>
@@ -457,15 +468,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         onClick={() => setMobileOpen(false)}
                         {...navIntentHandlers(href)}
                         className={cn(
-                          "relative flex min-h-11 md:min-h-0 items-center gap-3 rounded-xl md:rounded-lg px-3 py-2.5 md:py-2 text-[14px] md:text-[13px] font-medium transition-colors",
+                          "relative flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition-[color,background-color,box-shadow] md:min-h-10 md:rounded-lg md:py-2",
                           isActive
-                            ? "bg-primary/[0.12] text-foreground"
+                            ? "bg-primary/[0.12] font-semibold text-foreground shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.12)]"
                             : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
                         )}
                         data-testid={`nav-${label.toLowerCase().replace(/\s/g, "-")}`}
                       >
                         {isActive && <span aria-hidden className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary" />}
-                        <Icon className={cn("w-[18px] h-[18px] md:w-4 md:h-4 flex-shrink-0", isActive && "text-primary")} />
+                        <Icon aria-hidden="true" className={cn("w-[18px] h-[18px] md:w-4 md:h-4 flex-shrink-0", isActive && "text-primary")} />
                         <span className="flex-1">{label}</span>
                         {badgeCount > 0 && (
                           <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-2xs font-bold text-black flex items-center justify-center px-1">
@@ -510,16 +521,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               </div>
             </Link>
             <button
+              type="button"
               onClick={toggle}
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               data-testid="button-theme-toggle"
               className="grid h-11 w-11 md:h-9 md:w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
               {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
             </button>
             <button
+              type="button"
               onClick={() => logout()}
               title="Sign out"
+              aria-label="Sign out"
               data-testid="button-logout"
               className="grid h-11 w-11 md:h-9 md:w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
@@ -573,7 +588,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
-        <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <main id="main-content" tabIndex={-1} className={`flex-1 overflow-hidden outline-none ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {lockThisPage ? <TrainingLock /> : children}
         </main>
         {!onMap && !onCalling && !gated && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} moreDot={(canManage && pendingTerritoryCount > 0) || chatUnread > 0} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}

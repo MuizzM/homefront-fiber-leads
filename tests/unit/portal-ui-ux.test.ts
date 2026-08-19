@@ -38,4 +38,11 @@ describe("portal UI and accessibility contracts", () => {
     expect(layout).toContain("aria-controls={groupId}");
     expect(layout).toContain("hidden={!groupOpen}");
   });
+
+  it("keeps shared controls explicit about focus, errors, and pointer affordance", () => {
+    expect(read("client/src/components/ui/button.tsx")).toContain("cursor-pointer");
+    expect(read("client/src/components/ui/button.tsx")).toContain("focus-visible:ring-offset-2");
+    expect(read("client/src/components/ui/input.tsx")).toContain("aria-[invalid=true]:border-destructive");
+    expect(read("client/src/components/ui/textarea.tsx")).toContain("aria-[invalid=true]:border-destructive");
+  });
 });

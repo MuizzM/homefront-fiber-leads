@@ -34,14 +34,14 @@ export function PageHeader({ title, subtitle, actions, className }: {
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-start justify-between gap-4", className)} data-testid="page-header">
+    <div className={cn("flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-start sm:gap-4", className)} data-testid="page-header">
       <div className="min-w-0">
         <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
           <span className="truncate">{title}</span>
         </h1>
-        {subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}
+        {subtitle && <div className="mt-1 max-w-3xl text-sm leading-5 text-muted-foreground">{subtitle}</div>}
       </div>
-      {actions && <div className="flex shrink-0 items-center gap-1.5 pt-1">{actions}</div>}
+      {actions && <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:justify-end sm:pt-0.5">{actions}</div>}
     </div>
   );
 }
@@ -50,7 +50,7 @@ export function PageHeader({ title, subtitle, actions, className }: {
  *  without competing with the numbers inside it. */
 export function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("text-[11px] font-semibold uppercase tracking-wide text-muted-foreground", className)}>
+    <div className={cn("text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground", className)}>
       {children}
     </div>
   );
@@ -108,7 +108,7 @@ export function StatTile({ label, value, delta, accent = false, className, testI
       )}
     >
       <div className="flex items-center gap-1.5">
-        <span className="truncate text-[11px] font-medium text-muted-foreground">{label}</span>
+        <span className="truncate text-xs font-medium text-muted-foreground">{label}</span>
       </div>
       <div className="mt-1 flex items-baseline gap-1.5">
         <span className={cn("text-xl font-bold tabular-nums leading-none tracking-tight", accent ? "text-primary" : "text-foreground")}>
@@ -153,13 +153,13 @@ export function ListRow({ title, description, trailing, onClick, className, test
       data-testid={testId}
       className={cn(
         "flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left",
-        onClick && "transition-colors hover:bg-secondary/50 active:bg-secondary/70",
+        onClick && "cursor-pointer transition-colors hover:bg-secondary/50 active:bg-secondary/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
         className,
       )}
     >
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-semibold text-foreground">{title}</span>
-        {description && <span className="block truncate text-xs text-muted-foreground">{description}</span>}
+        <span className="block line-clamp-1 text-[13px] font-semibold text-foreground">{title}</span>
+        {description && <span className="mt-0.5 block line-clamp-2 text-xs leading-4 text-muted-foreground">{description}</span>}
       </span>
       {trailing && <span className="flex shrink-0 items-center gap-2">{trailing}</span>}
     </Tag>

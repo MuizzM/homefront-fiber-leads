@@ -43,6 +43,16 @@ function renderLayout(role: string) {
 }
 
 describe("field nav reachability", () => {
+  it("offers a hash-router-safe keyboard shortcut to the main workspace", () => {
+    renderLayout("rep");
+    const skip = screen.getByRole("link", { name: "Skip to main content" });
+    const main = document.getElementById("main-content");
+
+    expect(main).toHaveAttribute("tabindex", "-1");
+    fireEvent.click(skip);
+    expect(main).toHaveFocus();
+  });
+
   it("a rep can reach Mileage and Referrals from the nav", () => {
     renderLayout("rep");
     expect(screen.getByTestId("nav-mileage")).toBeTruthy();
