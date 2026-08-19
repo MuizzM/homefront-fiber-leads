@@ -163,15 +163,19 @@ describe("My Documents - the signing ceremony", () => {
     renderPage();
     await openSigningDialog();
 
-    expect(screen.getByRole("tab", { name: "Full agreement" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Full agreement" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("signing-document-scroll")).toBeVisible();
     expect(screen.queryByTestId("agreement-pdf-review")).toBeNull();
     expect(screen.getByText(/Step 1 of 2/i)).toBeInTheDocument();
     expect(screen.getByText(/Step 2 of 2/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Original PDF" }));
+    fireEvent.click(screen.getByRole("button", { name: "Original PDF" }));
     expect(screen.getByTestId("agreement-pdf-review")).toBeInTheDocument();
     expect(screen.getByText(/To unlock signing, review the/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("signature-panel")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("signing-view-text"));
+    expect(screen.getByTestId("signature-panel")).toBeInTheDocument();
   });
 
   it("keeps signing disabled until the agreement is read, every consent is ticked, and a name is typed", async () => {
@@ -239,6 +243,8 @@ describe("My Documents - the signing ceremony", () => {
       title: "Signature not completed",
       variant: "destructive",
     })));
+    expect(screen.getByRole("alert")).toHaveTextContent("Type your full name exactly as Jordan Rep");
+    expect(screen.getByTestId("typed-signature")).toHaveAttribute("aria-describedby", "signature-error");
     // The client does NOT decide the match — it sent the keystrokes verbatim.
     const signCall = apiRequest.mock.calls.find(call => String(call[1]).endsWith("/sign"));
     expect(signCall?.[2]).toMatchObject({ typedName: "J. Rep", documentSha256: CONTENT_SHA, intentToSign: true });
@@ -268,6 +274,7 @@ describe("My Documents - the signing ceremony", () => {
     renderPage();
     await openSigningDialog();
     fireEvent.click(screen.getByText("Decline"));
+    expect(screen.getByLabelText("Reason for declining")).toBe(screen.getByTestId("decline-reason"));
     const confirm = screen.getByText("Confirm decline").closest("button") as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     fireEvent.change(screen.getByTestId("decline-reason"), { target: { value: "x" } });

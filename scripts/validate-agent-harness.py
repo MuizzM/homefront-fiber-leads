@@ -19,6 +19,7 @@ EXPECTED_SKILLS = {
     "homefront-scanner-safety",
     "homefront-database-change",
     "impeccable",
+    "ui-skills-root",
 }
 SKILL_FRONTMATTER_FIELDS = {
     "impeccable": ["name", "description", "version"],

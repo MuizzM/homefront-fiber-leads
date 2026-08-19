@@ -73,9 +73,9 @@ function StatusPill({ status }: { status: OnboardingDocumentStatus }) {
 
 function LegalCheckbox({ checked, onChange, children, testId }: { checked: boolean; onChange: (checked: boolean) => void; children: React.ReactNode; testId: string }) {
   return (
-    <label className="flex items-start gap-3 rounded-xl border border-border bg-secondary/20 px-3.5 py-3 cursor-pointer hover:border-primary/40">
+    <label className="flex min-h-11 items-start gap-3 rounded-xl border border-border bg-secondary/20 px-3.5 py-3 cursor-pointer hover:border-primary/40">
       <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} className="mt-0.5 h-5 w-5 rounded accent-primary" data-testid={testId} />
-      <span className="text-xs leading-relaxed text-foreground">{children}</span>
+      <span className="text-sm leading-relaxed text-foreground">{children}</span>
     </label>
   );
 }
@@ -215,16 +215,15 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
         {content.data && snapshot && (
           <>
-            <div className="flex items-center gap-1.5 border-b border-border px-5 py-2 flex-shrink-0" role="tablist" aria-label="Document view">
+            <div className="flex items-center gap-1.5 border-b border-border px-5 py-2 flex-shrink-0" role="group" aria-label="Document view">
               {([["text", "Full agreement"], ["pdf", "Original PDF"]] as const).map(([mode, label]) => (
                 <button
                   key={mode}
                   type="button"
-                  role="tab"
-                  aria-selected={viewMode === mode}
+                  aria-pressed={viewMode === mode}
                   onClick={() => setViewMode(mode)}
                   data-testid={`signing-view-${mode}`}
-                  className={`h-8 px-3 rounded-lg text-xs font-semibold transition-colors ${viewMode === mode ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`min-h-11 px-3 rounded-lg text-sm font-semibold transition-colors ${viewMode === mode ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   {label}
                 </button>
@@ -236,7 +235,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
             {viewMode === "pdf" && (
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="border-b border-info/20 bg-info/[0.07] px-5 py-2 text-xs text-foreground">
+                <div className="border-b border-info/20 bg-info/[0.07] px-5 py-2 text-sm text-foreground">
                   This is the exact paginated review copy. To unlock signing, review the <button type="button" className="font-semibold text-primary underline underline-offset-2" onClick={() => setViewMode("text")}>Full agreement</button> through its final section.
                 </div>
                 <PdfReviewPane
@@ -259,14 +258,14 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                   aria-valuenow={readProgress}
                   aria-label="Agreement reading progress"
                 >
-                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${readProgress}%` }} />
+                  <div className="h-full origin-left rounded-full bg-primary transition-transform motion-reduce:transition-none" style={{ transform: `scaleX(${readProgress / 100})` }} />
                 </div>
                 <p className="text-2xs text-muted-foreground mt-1" aria-live="polite">
                   Section {Math.min(sectionIndex + 1, Math.max(snapshotSectionCount, 1))} of {Math.max(snapshotSectionCount, 1)}
                   {readToEnd ? " - you reached the end" : ""}
                 </p>
               </div>
-              <Button variant="outline" size="sm" className="h-8 flex-shrink-0 text-xs" onClick={jumpToEnd} data-testid="skip-to-agreement-end">
+              <Button variant="outline" size="sm" className="min-h-11 flex-shrink-0 text-sm" onClick={jumpToEnd} data-testid="skip-to-agreement-end">
                 Jump to final section
               </Button>
             </div>
@@ -294,8 +293,8 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                   {snapshot.sections.map((section, sectionPosition) => (
                     <section key={section.heading} ref={element => { sectionRefs.current[sectionPosition] = element; }}>
                       <h3 className="text-[15px] font-bold text-slate-900">{section.heading}</h3>
-                      {section.paragraphs.map((paragraph, index) => <p key={index} className="mt-2 text-[13px] leading-6">{paragraph}</p>)}
-                      {!!section.bullets?.length && <ul className="mt-2 list-disc space-y-1.5 pl-5">{section.bullets.map(bullet => <li key={bullet} className="text-[13px] leading-5">{bullet}</li>)}</ul>}
+                      {section.paragraphs.map((paragraph, index) => <p key={index} className="mt-2 text-[15px] leading-7">{paragraph}</p>)}
+                      {!!section.bullets?.length && <ul className="mt-2 list-disc space-y-1.5 pl-5">{section.bullets.map(bullet => <li key={bullet} className="text-[15px] leading-6">{bullet}</li>)}</ul>}
                       {/* The rate table, rendered here too. A table that exists
                           only in the PDF would mean the document a rep scrolls
                           before signing is not the document they sign. */}
@@ -322,7 +321,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                 </div>
                 <section className="mt-7 pt-5 border-t border-slate-200" ref={element => { sectionRefs.current[snapshot.sections.length] = element; }}>
                   <h3 className="text-sm font-bold text-slate-900">{content.data.disclosure.title}</h3>
-                  {content.data.disclosure.paragraphs.map(paragraph => <p key={paragraph} className="text-xs leading-5 mt-2 text-slate-600">{paragraph}</p>)}
+                  {content.data.disclosure.paragraphs.map(paragraph => <p key={paragraph} className="text-sm leading-6 mt-2 text-slate-600">{paragraph}</p>)}
                 </section>
                 <div
                   ref={endRef}
@@ -335,7 +334,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
               </div>
             </div>
 
-            <div className="max-h-[44vh] flex-shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-4 sm:px-6" data-testid="signature-panel">
+            {viewMode === "text" && <div className="max-h-[44vh] flex-shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-4 sm:px-6" data-testid="signature-panel">
               <div className="mx-auto mb-3 max-w-2xl">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">Step 2 of 2 · Confirm and sign</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">Your signature applies only to the exact document hash shown above. Nothing is signed until you press the final button.</p>
@@ -355,8 +354,9 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                     <label htmlFor="typed-signature" className="text-[11px] font-semibold text-muted-foreground">
                       Type your full legal name exactly as it appears on your agreement
                     </label>
-                    <Input id="typed-signature" value={typedName} onChange={event => setTypedName(event.target.value)} placeholder="Type your full legal name" className="mt-1.5 h-11 font-medium" autoComplete="off" data-testid="typed-signature" />
+                    <Input id="typed-signature" value={typedName} onChange={event => setTypedName(event.target.value)} placeholder="Type your full legal name" className="mt-1.5 h-11 font-medium" autoComplete="off" aria-describedby={sign.isError ? "signature-error" : undefined} data-testid="typed-signature" />
                   </div>
+                  {sign.isError && <p id="signature-error" role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{sign.error instanceof Error ? sign.error.message : "The signature could not be completed. Check your details and try again."}</p>}
                   <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-1">
                     <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeclining(true)}> Decline</Button>
                     <Button disabled={!ready || sign.isPending} onClick={() => sign.mutate()} className="h-11 bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="complete-signature">
@@ -367,11 +367,14 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
               ) : (
                 <div className="space-y-3 max-w-2xl mx-auto">
                   <div><p className="text-sm font-semibold">Decline this agreement?</p><p className="text-xs text-muted-foreground mt-1">Your manager will be notified. No electronic signature will be created.</p></div>
-                  <Textarea value={declineReason} onChange={event => setDeclineReason(event.target.value)} placeholder="Brief reason for declining" className="min-h-20" data-testid="decline-reason" />
+                  <label htmlFor="decline-reason" className="text-sm font-semibold text-foreground">Reason for declining</label>
+                  <Textarea id="decline-reason" value={declineReason} onChange={event => setDeclineReason(event.target.value)} placeholder="Brief reason for declining" className="min-h-20" aria-describedby={decline.isError ? "decline-error" : "decline-help"} data-testid="decline-reason" />
+                  <p id="decline-help" className="text-xs text-muted-foreground">Explain what needs to be corrected or clarified before you can sign.</p>
+                  {decline.isError && <p id="decline-error" role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{decline.error instanceof Error ? decline.error.message : "The agreement could not be declined. Try again."}</p>}
                   <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setDeclining(false)}>Back</Button><Button variant="destructive" disabled={declineReason.trim().length < 2 || decline.isPending} onClick={() => decline.mutate()}>{decline.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Confirm decline</Button></div>
                 </div>
               )}
-            </div>
+            </div>}
           </>
         )}
       </DialogContent>
@@ -432,8 +435,7 @@ export default function MyDocuments() {
   return (
     <div className="hf-stagger p-4 sm:p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-5">
       <header>
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Rep onboarding</div>
-        <h1 className="text-xl font-bold tracking-tight text-foreground mt-0.5 flex items-center gap-2"> My documents</h1>
+        <h1 className="text-balance text-xl font-bold tracking-tight text-foreground">My documents</h1>
         <p className="text-sm text-muted-foreground mt-1">Review, sign, and download your agreements with Home Front Sign.</p>
       </header>
 
@@ -451,7 +453,7 @@ export default function MyDocuments() {
                 <div className="min-w-0 flex-1">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">Next step</div>
                   <div className="mt-0.5 text-[15px] font-semibold text-foreground">Sign {nextDocument.label}</div>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Review the agreement and confirm your consent to keep onboarding moving.</p>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">Review the agreement and confirm your consent to keep onboarding moving.</p>
                 </div>
               </div>
               <Button className="mt-4 w-full" onClick={() => setActiveRecord(nextDocument.envelope)}>
@@ -521,11 +523,11 @@ export default function MyDocuments() {
               const actionable = record && (record.status === "sent" || record.status === "delivered");
               return <article key={document.type} className="render-lazy p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid={`onboarding-document-${document.type}`}>
                 <div className="flex items-start gap-3 min-w-0 flex-1"><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-destructive mt-1">{record.failureReason}</p>}{record?.status === "completed" && record.completedPdfSha256 && <p className="text-2xs text-muted-foreground font-mono mt-1.5 break-all" data-testid={`completed-pdf-sha-${document.type}`}><span className="font-sans font-semibold">Signed PDF SHA-256</span> {record.completedPdfSha256}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"> Waiting for your manager</p>}</div></div>
-                <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="h-9 bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="h-9 border-border" onClick={() => download(document)}> Signed PDF</Button>}</div>
+                <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="min-h-11 bg-primary text-primary-foreground hover:bg-primary/90" aria-label={`Review and sign ${document.label}`} onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="min-h-11 border-border" aria-label={`Download signed PDF for ${document.label}`} onClick={() => download(document)}> Signed PDF</Button>}</div>
               </article>;
             })}
           </div></section>
-          <div className="rounded-xl bg-secondary/30 border border-border px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground"> Home Front Sign binds your authenticated account and explicit consent to the exact SHA-256 document hash. Resend delivers invitations and completed copies.</div>
+          <div className="rounded-xl bg-secondary/30 border border-border px-4 py-3 flex items-start gap-2 text-sm leading-relaxed text-muted-foreground"> Home Front Sign binds your authenticated account and explicit consent to the exact SHA-256 document hash. Resend delivers invitations and completed copies.</div>
         </>
       )}
       <SigningDialog record={activeRecord} onClose={() => setActiveRecord(null)} />

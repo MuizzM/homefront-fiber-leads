@@ -55,6 +55,7 @@ Never weaken, skip, or delete a quality gate merely to make CI green.
 
 - Use `$homefront-verify-change` after code or harness changes.
 - Use `$impeccable` for explicit frontend design, critique, audit, polish, responsive, or UI hardening work.
+- Use `$ui-skills-root` before UI work when a narrower accessibility, metadata, motion, or baseline craft skill should be selected through the UI Skills registry.
 - Use `$homefront-review-pr` for cross-cutting PR review.
 - Use `$homefront-scanner-safety` for Kinetic/Decodo, market discovery, fresh-fiber, new-build, or scan-budget work.
 - Use `$homefront-database-change` for schema, migration, backup, restore, or tenant-scoped persistence work.

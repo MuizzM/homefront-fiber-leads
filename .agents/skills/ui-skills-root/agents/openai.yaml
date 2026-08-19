@@ -1,0 +1,6 @@
+interface:
+  display_name: UI Skills Router
+  short_description: Select the smallest relevant UI craft skill before frontend work.
+  default_prompt: Use $ui-skills-root to select focused UI guidance, then improve this Home Front interface.
+policy:
+  allow_implicit_invocation: true
