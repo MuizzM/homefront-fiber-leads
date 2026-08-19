@@ -159,6 +159,21 @@ beforeEach(() => {
 });
 
 describe("My Documents - the signing ceremony", () => {
+  it("opens the complete readable agreement first and makes the original PDF an explicit second view", async () => {
+    renderPage();
+    await openSigningDialog();
+
+    expect(screen.getByRole("tab", { name: "Full agreement" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("signing-document-scroll")).toBeVisible();
+    expect(screen.queryByTestId("agreement-pdf-review")).toBeNull();
+    expect(screen.getByText(/Step 1 of 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/Step 2 of 2/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Original PDF" }));
+    expect(screen.getByTestId("agreement-pdf-review")).toBeInTheDocument();
+    expect(screen.getByText(/To unlock signing, review the/i)).toBeInTheDocument();
+  });
+
   it("keeps signing disabled until the agreement is read, every consent is ticked, and a name is typed", async () => {
     renderPage();
     await openSigningDialog();

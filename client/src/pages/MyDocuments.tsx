@@ -3,10 +3,11 @@ import { Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { PdfReviewPane, prefetchPdf } from "@/components/PdfReviewPane";
+import { PdfReviewPane } from "@/components/PdfReviewPane";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -86,11 +87,10 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
   const endRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Array<HTMLElement | null>>([]);
   const [readToEnd, setReadToEnd] = useState(false);
-  // The rep reviews the REAL agreement PDF by default — the same document the
-  // executed copy is rendered from, paginated exactly as it will be filed. The
-  // text version stays one tap away because an <object> PDF is opaque to screen
-  // readers, so the accessible path must not be the PDF.
-  const [viewMode, setViewMode] = useState<"pdf" | "text">("pdf");
+  // Open on the complete readable agreement. Native embedded PDF viewers are
+  // slow or black-screen on some phones and are opaque to assistive tech; the
+  // exact review-copy PDF remains one tap away as a verification surface.
+  const [viewMode, setViewMode] = useState<"pdf" | "text">("text");
   const [readProgress, setReadProgress] = useState(0);
   const [sectionIndex, setSectionIndex] = useState(0);
   const [consent, setConsent] = useState(false);
@@ -116,6 +116,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
     setReadToEnd(false);
     setReadProgress(0);
     setSectionIndex(0);
+    setViewMode("text");
     setConsent(false);
     setAcknowledge(false);
     setIntent(false);
@@ -198,13 +199,15 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
   return (
     <Dialog open={!!record} onOpenChange={open => !open && onClose()}>
-      <DialogContent className="bg-card border-border text-foreground max-w-3xl h-[92vh] sm:h-[88vh] p-0 overflow-hidden flex flex-col">
+      <DialogContent className="bg-card border-border text-foreground w-[calc(100vw-1rem)] max-w-5xl h-[96dvh] sm:h-[92dvh] p-0 overflow-hidden flex flex-col">
         <DialogHeader className="px-5 pt-5 pb-3 border-b border-border flex-shrink-0">
-          <DialogTitle className="text-base flex items-center gap-2 pr-8">
-            
-            {snapshot?.title || "Loading agreement"}
-          </DialogTitle>
-          {content.data && <p className="text-2xs text-muted-foreground font-mono mt-1">Document SHA-256 {content.data.contentSha256}</p>}
+          <div className="pr-9">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">Step 1 of 2 · Review the complete document</p>
+            <DialogTitle className="mt-1 text-lg leading-tight">
+              {snapshot?.title || "Opening your agreement…"}
+            </DialogTitle>
+          </div>
+          {content.data && <p className="mt-1 break-all font-mono text-2xs text-muted-foreground"><span className="font-sans font-semibold">Exact document SHA-256</span> {content.data.contentSha256}</p>}
         </DialogHeader>
 
         {content.isLoading && <div className="flex-1 p-5 space-y-3" role="status" aria-busy="true" aria-label="Loading agreement"><div className="h-7 bg-secondary rounded animate-pulse" /><div className="h-52 bg-secondary/60 rounded animate-pulse" /></div>}
@@ -213,7 +216,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
         {content.data && snapshot && (
           <>
             <div className="flex items-center gap-1.5 border-b border-border px-5 py-2 flex-shrink-0" role="tablist" aria-label="Document view">
-              {([["pdf", "Document"], ["text", "Text version"]] as const).map(([mode, label]) => (
+              {([["text", "Full agreement"], ["pdf", "Original PDF"]] as const).map(([mode, label]) => (
                 <button
                   key={mode}
                   type="button"
@@ -226,24 +229,24 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                   {label}
                 </button>
               ))}
-              <span className="ml-auto text-2xs text-muted-foreground">
-                {viewMode === "pdf" ? "The full agreement, exactly as it will be filed" : "Screen-reader friendly"}
+              <span className="ml-auto hidden text-2xs text-muted-foreground sm:inline">
+                {viewMode === "pdf" ? "Paginated review copy" : "Complete, readable, and accessible"}
               </span>
             </div>
 
             {viewMode === "pdf" && (
-              <PdfReviewPane
-                url={`/api/onboarding/documents/${record!.id}/preview.pdf`}
-                openBeaconUrl={`/api/onboarding/documents/${record!.id}/preview-opened`}
-                fileName={`${snapshot.title.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}-review.pdf`}
-                title={`${snapshot.title} - full document`}
-                testId="agreement-pdf-review"
-                // Loading the complete document IS the review surface: the rep
-                // can scroll, zoom and page through every clause natively. The
-                // acknowledgment checkbox below remains the attestation — this
-                // only unblocks it, it does not stand in for it.
-                onLoaded={() => { setReadToEnd(true); setReadProgress(100); }}
-              />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="border-b border-info/20 bg-info/[0.07] px-5 py-2 text-xs text-foreground">
+                  This is the exact paginated review copy. To unlock signing, review the <button type="button" className="font-semibold text-primary underline underline-offset-2" onClick={() => setViewMode("text")}>Full agreement</button> through its final section.
+                </div>
+                <PdfReviewPane
+                  url={`/api/onboarding/documents/${record!.id}/preview.pdf`}
+                  openBeaconUrl={`/api/onboarding/documents/${record!.id}/preview-opened`}
+                  fileName={`${snapshot.title.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}-review.pdf`}
+                  title={`${snapshot.title} - full document`}
+                  testId="agreement-pdf-review"
+                />
+              </div>
             )}
 
             <div className={`flex items-center gap-3 border-b border-border px-5 py-2.5 flex-shrink-0 ${viewMode === "pdf" ? "hidden" : ""}`} data-testid="reading-progress">
@@ -264,13 +267,13 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                 </p>
               </div>
               <Button variant="outline" size="sm" className="h-8 flex-shrink-0 text-xs" onClick={jumpToEnd} data-testid="skip-to-agreement-end">
-                Skip to the end
+                Jump to final section
               </Button>
             </div>
 
             <div
               ref={scrollRef}
-              className={`flex-1 overflow-y-auto px-5 sm:px-7 py-5 ${viewMode === "pdf" ? "hidden" : ""}`}
+              className={`flex-1 min-h-0 overflow-y-auto bg-slate-100 px-3 py-4 sm:px-7 sm:py-5 ${viewMode === "pdf" ? "hidden" : ""}`}
               tabIndex={0}
               role="document"
               aria-label={`${snapshot.title} agreement text`}
@@ -290,9 +293,9 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                 <div className="space-y-5">
                   {snapshot.sections.map((section, sectionPosition) => (
                     <section key={section.heading} ref={element => { sectionRefs.current[sectionPosition] = element; }}>
-                      <h3 className="text-sm font-bold text-slate-900">{section.heading}</h3>
-                      {section.paragraphs.map((paragraph, index) => <p key={index} className="text-xs leading-6 mt-2">{paragraph}</p>)}
-                      {!!section.bullets?.length && <ul className="list-disc pl-5 mt-2 space-y-1.5">{section.bullets.map(bullet => <li key={bullet} className="text-xs leading-5">{bullet}</li>)}</ul>}
+                      <h3 className="text-[15px] font-bold text-slate-900">{section.heading}</h3>
+                      {section.paragraphs.map((paragraph, index) => <p key={index} className="mt-2 text-[13px] leading-6">{paragraph}</p>)}
+                      {!!section.bullets?.length && <ul className="mt-2 list-disc space-y-1.5 pl-5">{section.bullets.map(bullet => <li key={bullet} className="text-[13px] leading-5">{bullet}</li>)}</ul>}
                       {/* The rate table, rendered here too. A table that exists
                           only in the PDF would mean the document a rep scrolls
                           before signing is not the document they sign. */}
@@ -332,8 +335,12 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
               </div>
             </div>
 
-            <div className="border-t border-border bg-card px-4 sm:px-6 py-4 max-h-[46vh] overflow-y-auto flex-shrink-0" data-testid="signature-panel">
-              {!readToEnd && <div className="rounded-lg bg-warning/[0.08] border border-warning/25 px-3 py-2 text-xs text-warning mb-3">Scroll through the complete agreement before signing, or use “Skip to the end”.</div>}
+            <div className="max-h-[44vh] flex-shrink-0 overflow-y-auto border-t border-border bg-card px-4 py-4 sm:px-6" data-testid="signature-panel">
+              <div className="mx-auto mb-3 max-w-2xl">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">Step 2 of 2 · Confirm and sign</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">Your signature applies only to the exact document hash shown above. Nothing is signed until you press the final button.</p>
+              </div>
+              {!readToEnd && <div className="mx-auto mb-3 max-w-2xl rounded-lg border border-warning/25 bg-warning/[0.08] px-3 py-2 text-xs text-warning">Scroll through the complete agreement before signing, or use “Jump to final section”.</div>}
               {!declining ? (
                 <div className="space-y-2.5 max-w-2xl mx-auto">
                   <LegalCheckbox checked={consent} onChange={setConsent} testId="esign-consent">I consent to receive and sign this agreement electronically, understand I may request a free paper copy, and confirm I can access this electronic record.</LegalCheckbox>
@@ -353,7 +360,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                   <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-1">
                     <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeclining(true)}> Decline</Button>
                     <Button disabled={!ready || sign.isPending} onClick={() => sign.mutate()} className="h-11 bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="complete-signature">
-                      {sign.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Sign agreement
+                      {sign.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Sign this agreement
                     </Button>
                   </div>
                 </div>
@@ -374,27 +381,12 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
 export default function MyDocuments() {
   const { toast } = useToast();
+  const { user, logout } = useAuth();
   const [activeRecord, setActiveRecord] = useState<SigningRecord | null>(null);
   const query = useQuery<DocumentsResponse>({
     queryKey: ["/api/onboarding/documents/me"],
     queryFn: () => apiRequest("GET", "/api/onboarding/documents/me").then(response => response.json()),
   });
-
-  // Warm the PDF bytes for whatever the signer is about to open, while they are
-  // still looking at the list — the signing dialog then opens onto a rendered
-  // document instead of a spinner. PDF ONLY, and via the warm=1 variant that
-  // writes no audit row: GET /content is deliberately NOT prefetched, because
-  // that endpoint IS the view-evidence recorder (markDocumentViewed, the
-  // hash-chained document_viewed event) and pre-firing it would both fabricate
-  // opens and, via the shared query cache, swallow the real one.
-  useEffect(() => {
-    const actionable = (query.data?.documents ?? []).filter(
-      document => document.envelope && (document.envelope.status === "sent" || document.envelope.status === "delivered"),
-    );
-    for (const document of actionable) {
-      prefetchPdf(`/api/onboarding/documents/${document.envelope!.id}/preview.pdf`);
-    }
-  }, [query.data]);
 
   const download = async (document: DocumentItem) => {
     if (!document.envelope) return;
@@ -447,7 +439,7 @@ export default function MyDocuments() {
 
       {query.isLoading && <div className="h-40 rounded-2xl bg-card border border-border animate-pulse" role="status" aria-busy="true" aria-label="Loading your documents" />}
       {query.isError && <div className="rounded-2xl bg-card border border-destructive/25 p-6 text-center"><p className="text-sm font-semibold">Couldn’t load your documents</p><Button variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>Try again</Button></div>}
-      {data?.noRepProfile && <div className="rounded-2xl bg-card border border-warning/25 p-5 flex items-start gap-3"><div><p className="text-sm font-semibold">No rep profile linked</p><p className="text-xs text-muted-foreground mt-1">Ask your manager to link your login to your team profile.</p></div></div>}
+      {data?.noRepProfile && <div className="rounded-2xl border border-warning/25 bg-card p-5" data-testid="document-account-mismatch"><p className="text-sm font-semibold">This signing link is for a rep account</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">You are currently signed in as {user?.email || "another account"}. Sign out, then use the email address that received the onboarding message. No document has been opened or signed.</p><Button className="mt-4 w-full sm:w-auto" variant="outline" onClick={() => logout()} data-testid="switch-document-account">Sign out and switch account</Button></div>}
       {data && !data.noRepProfile && !data.configured && <div className="rounded-2xl bg-card border border-warning/25 p-4 flex items-start gap-3"><div><p className="text-sm font-semibold">Onboarding email is temporarily unavailable</p><p className="text-xs text-muted-foreground mt-1">Existing agreements remain available to review, sign, and download. Your manager cannot issue new ones until Resend is connected.</p></div></div>}
 
       {data && !data.noRepProfile && (

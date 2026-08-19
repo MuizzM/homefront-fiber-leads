@@ -9532,10 +9532,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       fieldSize: 100 * 1024,       // 100 KB per text field
     },
     fileFilter: (_req, file, cb) => {
-      const allowed = [".jpg", ".jpeg", ".png", ".pdf", ".webp"];
+      // Identity review accepts images only. A PDF can be any document with a
+      // `%PDF-` header (our live QA run accepted a blank W-9 as "ID"), while a
+      // photographed licence keeps the review surface narrow and visible.
+      const allowed = [".jpg", ".jpeg", ".png", ".webp"];
       const ext = path.extname(file.originalname).toLowerCase();
       if (allowed.includes(ext)) cb(null, true);
-      else cb(new Error("Only JPG, PNG, PDF files allowed"));
+      else cb(new Error("Only JPG, PNG or WebP images are allowed"));
     },
   });
 
@@ -9693,16 +9696,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
   }
   const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const onboardingUpload = upload.fields([
+    { name: "headshot", maxCount: 1 },
+    { name: "license", maxCount: 1 },
+  ]);
+  const runOnboardingUpload = (req: Request, res: Response, next: NextFunction) =>
+    onboardingUpload(req as any, res as any, (error: any) => {
+      if (!error) return next();
+      const tooBig = error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE";
+      return res.status(tooBig ? 413 : 400).json({ error: error.message || "Application upload rejected" });
+    });
 
   // POST /api/onboarding/apply — public, accepts multipart.
   // Rate-limited (5/hour/IP) BEFORE multer so over-limit requests never write files.
   app.post(
     "/api/onboarding/apply",
     onboardingLimiter,
-    upload.fields([
-      { name: "headshot", maxCount: 1 },
-      { name: "license", maxCount: 1 },
-    ]),
+    runOnboardingUpload,
     (req, res) => {
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { fullName, email, phone, city, zip, state, hasSalesExperience,
@@ -9717,10 +9727,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
       // Validate types/format/length — reject malformed or oversized input
       const strOk = (v: unknown, max: number) => typeof v === "string" && v.length > 0 && v.length <= max;
+      const cleanCity = typeof city === "string" ? city.trim() : "";
+      const cleanZip = typeof zip === "string" ? zip.trim() : "";
+      const cleanState = typeof state === "string" && state.trim() ? state.trim().toUpperCase() : "NC";
+      const phoneDigits = typeof phone === "string" ? phone.replace(/\D/g, "") : "";
+      const placeholderCity = /^(?:qa(?:\s+test)?|test|fake|asdf|n\/?a|none)$/i.test(cleanCity);
       if (typeof email !== "string" || email.length > 254 || !EMAIL_RE.test(email) ||
-          !strOk(fullName, 120) || !strOk(phone, 40) || !strOk(city, 120) || !strOk(zip, 20)) {
+          !strOk(fullName, 120) || !strOk(phone, 40) || !strOk(city, 120) || !strOk(zip, 20) ||
+          phoneDigits.length !== 10 || !/^[A-Za-z][A-Za-z .'-]*$/.test(cleanCity) || placeholderCity ||
+          !/^\d{5}(?:-\d{4})?$/.test(cleanZip) || cleanZip === "00000" || !/^[A-Z]{2}$/.test(cleanState)) {
         cleanupUploads(files);
-        return res.status(400).json({ error: "Invalid or oversized field values." });
+        return res.status(400).json({ error: "Enter a valid name, email, 10-digit phone number, city, state, and ZIP code." });
       }
       if (applicationSource === "careers" && consent !== "true" && consent !== true) {
         cleanupUploads(files);
@@ -9729,17 +9746,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
       const headshotFile = files?.headshot?.[0];
       const licenseFile = files?.license?.[0];
-      // SEC-B: validate what the files ARE (magic bytes), not what they're
-      // named — headshot must be a real image, license an image or real PDF.
-      for (const f of [headshotFile, licenseFile]) {
-        if (f && !uploadKindAllowed(f.path, ["jpeg", "png", "webp", "pdf"])) {
-          cleanupUploads(files);
-          return res.status(415).json({ error: "Uploaded file content is not a valid JPEG, PNG, WebP or PDF." });
-        }
-      }
-      if (headshotFile && sniffUploadedFile(headshotFile.path) === "pdf") {
+      if (applicationSource === "public_join" && (!headshotFile || !licenseFile)) {
         cleanupUploads(files);
-        return res.status(415).json({ error: "Headshot must be a photo (JPEG, PNG or WebP), not a PDF." });
+        return res.status(400).json({ error: "A headshot and a readable photo of your driver’s license or government ID are required." });
+      }
+      if (applicationSource === "public_join" && hasReliableTransportation !== "true" && hasReliableTransportation !== true) {
+        cleanupUploads(files);
+        return res.status(400).json({ error: "Reliable transportation is required for this field-sales opportunity." });
+      }
+      // SEC-B: validate what the files ARE (magic bytes), not what they're
+      // named — both the headshot and identity document must be real images.
+      for (const f of [headshotFile, licenseFile]) {
+        if (f && !uploadKindAllowed(f.path, ["jpeg", "png", "webp"])) {
+          cleanupUploads(files);
+          return res.status(415).json({ error: "Uploaded file content is not a valid JPEG, PNG, or WebP image." });
+        }
       }
       // Ad attribution the careers site appends to every application (which
       // campaign the applicant clicked, plus Meta's click/browser ids). Named
@@ -9774,7 +9795,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       let app2: any;
       try {
         app2 = submitPublicApplication({
-          fullName, email, phone, city, zip, state: state || "NC",
+          fullName, email, phone, city: cleanCity, zip: cleanZip, state: cleanState,
           hasSalesExperience: hasSalesExperience === "true" || hasSalesExperience === true,
           salesExperienceDetails: typeof salesExperienceDetails === "string" ? salesExperienceDetails.slice(0, 4_000) : null,
           // The rep-referral code from a shared link. Distinct from
@@ -10561,6 +10582,45 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const account = application.email ? storage.getUserByEmail(application.email) : undefined;
     return { application, tenantId, repId: account?.teamMemberId ?? null };
   }
+
+  // Review the two files the applicant supplied before approval. They remain
+  // outside the generic /uploads static route and are streamed only after an
+  // admin session and tenant ownership are both verified. Every open is
+  // recorded because a government-ID image is sensitive applicant PII.
+  app.get("/api/onboarding/applications/:id/files/:kind", requireAdmin, (req: Request, res: Response) => {
+    const ctx = loadHrApplication(req, res);
+    if (!ctx) return;
+    const kind = String(req.params.kind ?? "");
+    if (kind !== "headshot" && kind !== "license") return res.status(404).json({ error: "Application file not found" });
+    const stored = kind === "headshot" ? ctx.application.headshotPath : ctx.application.licensePath;
+    if (typeof stored !== "string" || !stored) return res.status(404).json({ error: "Application file not found" });
+
+    const expectedDir = kind === "headshot" ? headshotsDir : licensesDir;
+    const relative = stored.replace(/^\/?uploads\//, "").replace(/^\//, "");
+    const file = path.resolve(uploadsDir, relative);
+    if (!file.startsWith(expectedDir + path.sep) || !fs.existsSync(file)) {
+      return res.status(404).json({ error: "Application file not found" });
+    }
+    const detected = sniffUploadedFile(file);
+    if (!detected || (kind === "headshot" && detected === "pdf")) {
+      return res.status(415).json({ error: "Application file could not be displayed safely" });
+    }
+    const contentTypes = {
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      // Legacy applications may contain PDFs. New submissions are image-only,
+      // but existing records still need to be reviewable rather than silently
+      // approved without seeing what was supplied.
+      pdf: "application/pdf",
+    } as const;
+    storage.logActivity((req as any).user?.id, "onboarding.application_file.viewed", "rep_application", Number(ctx.application.id), { kind }, req.ip);
+    res.setHeader("Content-Type", contentTypes[detected]);
+    res.setHeader("Content-Disposition", `inline; filename="applicant-${kind}.${detected === "jpeg" ? "jpg" : detected}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.sendFile(file);
+  });
 
   // PATCH one gate's status / provider / vendor case id / notes.
   app.patch("/api/onboarding/applications/:id/hr/:kind", requireManager, (req: Request, res: Response) => {

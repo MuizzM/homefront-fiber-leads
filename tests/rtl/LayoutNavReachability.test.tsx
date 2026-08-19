@@ -21,7 +21,7 @@ vi.mock("@/lib/queryClient", () => ({
   queryClient: { invalidateQueries: vi.fn() },
 }));
 
-import Layout from "../../client/src/pages/Layout";
+import Layout, { isTrainingGateOpenClientPath } from "../../client/src/pages/Layout";
 
 function renderLayout(role: string) {
   mockRole = role;
@@ -68,4 +68,24 @@ describe("field nav reachability", () => {
     expect(fieldToggle).toHaveAttribute("aria-expanded", "true");
     expect(fieldGroup).not.toHaveAttribute("hidden");
   });
+});
+
+describe("training gate client routes", () => {
+  it.each([
+    "/training",
+    "/training/",
+    "#/training",
+    "#/training/lesson-one",
+    "/training?from=email",
+    "/profile",
+    "/my-documents",
+    "/tax-and-pay",
+  ])("keeps %s reachable while a rep is gated", path => {
+    expect(isTrainingGateOpenClientPath(path)).toBe(true);
+  });
+
+  it.each(["/leads", "/fiber", "/scanner-tools", "/users", "#/leaderboard"])(
+    "keeps %s locked until training is complete",
+    path => expect(isTrainingGateOpenClientPath(path)).toBe(false),
+  );
 });

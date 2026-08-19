@@ -115,8 +115,9 @@ export function PdfReviewPane({
             disabled={!blobUrl}
             data-testid={`${testId}-open`}
             className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-border text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
+            aria-label={`Open full document: ${title}`}
           >
-             Open
+             Open full document
           </button>
           <button
             type="button"
@@ -124,8 +125,9 @@ export function PdfReviewPane({
             disabled={!blobUrl}
             data-testid={`${testId}-download`}
             className={`inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border border-border text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
+            aria-label={`Download PDF: ${title}`}
           >
-             Save
+             Download PDF
           </button>
         </div>
       </div>
@@ -168,7 +170,7 @@ export function PdfReviewPane({
               <div className="text-center max-w-xs">
                 
                 <p className="text-sm font-semibold text-slate-800 mt-2">This browser can't display PDFs inline</p>
-                <p className="text-xs text-slate-600 mt-1">Use <strong>Open</strong> or <strong>Save</strong> above to read the full document.</p>
+                <p className="text-xs text-slate-600 mt-1">Use <strong>Open full document</strong> or <strong>Download PDF</strong> above to read every page.</p>
               </div>
             </div>
           </object>

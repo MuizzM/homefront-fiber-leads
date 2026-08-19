@@ -80,7 +80,8 @@ describe("scan hardening wiring", () => {
 
   it("photo uploads validate magic bytes after multer", () => {
     expect(routesSrc).toContain('uploadKindAllowed(req.file.path, ["jpeg", "png", "webp"])');
-    expect(routesSrc).toContain('uploadKindAllowed(f.path, ["jpeg", "png", "webp", "pdf"])');
+    expect(routesSrc).toContain('uploadKindAllowed(f.path, ["jpeg", "png", "webp"])');
+    expect(routesSrc).not.toContain('uploadKindAllowed(f.path, ["jpeg", "png", "webp", "pdf"])');
   });
 });
 

@@ -189,7 +189,7 @@ async function sendInvitation(input: { email: string; name: string; count: numbe
     html: emailShell("Your onboarding documents are ready", `
       <p style="margin:0 0 18px">Hi ${escapeHtml(input.name)}, ${input.count} agreement${input.count === 1 ? " is" : "s are"} ready for your review and signature.</p>
       <p style="margin:0 0 20px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Review and sign documents</a></p>
-      <p style="margin:0;font-size:12px;color:#8a97a4">For your protection, sign in with your Home Front account. The portal records your consent and preserves the exact document you sign.</p>`),
+      <p style="margin:0;font-size:12px;color:#8a97a4">For your protection, sign in with the same email address that received this message. If another Home Front account is already open on the device, sign it out first. The portal records your consent and preserves the exact document you sign.</p>`),
   });
 }
 
@@ -220,7 +220,7 @@ export async function sendOnboardingWelcome(input: {
       <p style="margin:0 0 16px">Hi ${escapeHtml(input.name)}, your application has been <strong>approved</strong>.</p>
       <p style="margin:0 0 20px">Sign in to review and complete your onboarding documents:</p>
       <p style="margin:0 0 20px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Sign in to get started</a></p>
-      <p style="margin:0;font-size:12px;color:#8a97a4">On the sign-in screen, enter this email and tap &ldquo;Send code&rdquo; - a one-time sign-in code will arrive that expires in 10 minutes.</p>`),
+      <p style="margin:0;font-size:12px;color:#8a97a4">If another Home Front account is already open on this device, sign it out first. On the sign-in screen, enter this email and tap &ldquo;Send code&rdquo; - a one-time sign-in code will arrive that expires in 10 minutes.</p>`),
   });
 }
 

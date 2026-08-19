@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Apply — Home Front Solutions</title>
-<meta name="description" content="Apply to join Home Front Solutions' field sales team. Uncapped commission, paid certification, and a clear path from rep to area manager.">
+<meta name="description" content="Apply for a commission-only 1099 independent-contractor field sales opportunity with Home Front Solutions. Review the role terms before submitting.">
 <meta name="robots" content="noindex">
 <link rel="icon" type="image/png" href="/hfs-logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -264,6 +264,13 @@
   }
   .result-cta:hover { background: var(--teal-deep); }
 
+  .role-disclosure {
+    margin: 16px 0 22px; padding: 14px 16px; border-radius: 12px;
+    border: 1px solid rgba(46,127,124,.25); background: var(--teal-tint);
+    color: var(--ink); font-size: 13px; line-height: 1.55;
+  }
+  .role-disclosure strong { display: block; margin-bottom: 3px; color: var(--teal-deep); }
+
   footer { background: var(--ink); color: rgba(255,255,255,.5); text-align: center; padding: 24px; font-size: 12.5px; }
   footer a { color: rgba(255,255,255,.75); text-decoration: none; }
 
@@ -290,11 +297,11 @@
   <div class="hero-inner">
     <div class="hero-eyebrow rise d1"><span class="dot"></span>Now hiring field sales reps</div>
     <h1 class="rise d2">A real career, <em>door by door.</em></h1>
-    <p class="rise d3">Uncapped commission paid weekly, paid certification before your first door, and a clear path from rep to team lead to area manager.</p>
+    <p class="rise d3">A commission-only 1099 field-sales opportunity with the classification, compensation terms, and territory confirmed in writing before fieldwork.</p>
     <div class="hero-stats rise d4">
-      <div class="hero-stat"><div class="hero-stat-num">$150K+</div><div class="hero-stat-label">Top rep, year one</div></div>
-      <div class="hero-stat"><div class="hero-stat-num">5-day</div><div class="hero-stat-label">Paid certification</div></div>
-      <div class="hero-stat"><div class="hero-stat-num">Weekly</div><div class="hero-stat-label">Commission payouts</div></div>
+      <div class="hero-stat"><div class="hero-stat-num">1099</div><div class="hero-stat-label">Independent contractor</div></div>
+      <div class="hero-stat"><div class="hero-stat-num">Commission</div><div class="hero-stat-label">No guaranteed earnings</div></div>
+      <div class="hero-stat"><div class="hero-stat-num">Written</div><div class="hero-stat-label">Terms before fieldwork</div></div>
     </div>
   </div>
 </section>
@@ -308,7 +315,7 @@
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg>
       </span>
       <div class="result-title">Application received</div>
-      <div class="result-msg">Thanks for applying to Home Front Solutions. A real person reviews every application — we'll be in touch within one to two business days.</div>
+      <div class="result-msg">Thanks for applying to Home Front Solutions. Recruiting will review your information and contact you if the current opportunity and territory are a fit.</div>
       <a href="https://www.homefrontsolutionsllc.com/careers" class="result-cta">Back to careers →</a>
     </div>
 
@@ -324,8 +331,12 @@
 
     <!-- Form -->
     <form id="applyForm" novalidate>
-      <h1 class="form-title">Apply to join the team</h1>
-      <p class="form-subtitle">About 3 minutes. Every application is reviewed by a person — no bots, no automated rejection.</p>
+      <h2 class="form-title">Apply to join the team</h2>
+      <p class="form-subtitle">Review each section carefully. You can stop at any time before submitting.</p>
+      <div class="role-disclosure" role="note" aria-label="Important role terms">
+        <strong>Important role terms</strong>
+        This is a commission-only 1099 independent-contractor field-sales opportunity. There is no hourly wage, salary, or guaranteed earnings. You provide your own transportation and ordinary work equipment. Your exact territory and written compensation terms must be confirmed before training or fieldwork begins.
+      </div>
       <div class="steps" aria-hidden="true">
         <span class="step-bar on" id="s1"></span><span class="step-bar" id="s2"></span>
         <span class="step-bar" id="s3"></span><span class="step-bar" id="s4"></span>
@@ -356,7 +367,7 @@
           <div class="field">
             <label for="city">City <span class="req">*</span></label>
             <input type="text" id="city" name="city" placeholder="Charlotte" autocomplete="address-level2" autocapitalize="words" aria-describedby="city-err">
-            <div class="err" id="city-err">Please enter your city</div>
+            <div class="err" id="city-err">Please enter a real city name</div>
           </div>
           <div class="field">
             <label for="zip">ZIP code <span class="req">*</span></label>
@@ -400,8 +411,8 @@
             <button type="button" id="transportNo" aria-pressed="false">No</button>
           </div>
           <input type="hidden" id="hasTransport" name="hasReliableTransportation" value="">
-          <div class="err" id="transport-err">Please tell us whether you have reliable transportation</div>
-          <div class="hint">Reps drive to their assigned territory daily — a dependable vehicle matters.</div>
+          <div class="err" id="transport-err">Reliable transportation is required for this field role</div>
+          <div class="hint">This role requires a dependable way to reach the confirmed territory at your own expense.</div>
         </div>
       </fieldset>
 
@@ -422,10 +433,10 @@
           <div class="field">
             <label for="licenseFile">Driver's license or ID <span class="req">*</span></label>
             <div class="upload" id="licenseArea">
-              <input type="file" id="licenseFile" name="license" accept="image/jpeg,image/png,image/webp,application/pdf" aria-describedby="license-err">
+              <input type="file" id="licenseFile" name="license" accept="image/jpeg,image/png,image/webp" aria-describedby="license-err">
               <span class="u-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="11" r="1.8"/><path d="M13 9 h5 M13 12.5 h5 M6 16 h12"/></svg></span>
               <div class="u-text">Upload license / ID</div>
-              <div class="u-sub">JPG, PNG or PDF</div>
+              <div class="u-sub">JPG, PNG or WebP · front visible and readable</div>
               <div class="u-file" id="licenseName"></div>
             </div>
             <div class="err" id="license-err">Please upload your license or ID</div>
@@ -462,8 +473,8 @@
 
       <p class="legal">
         By submitting you agree to our
-        <a href="https://www.homefrontsolutionsllc.com" target="_blank" rel="noopener">privacy policy</a>.
-        We never sell your information. Your license/ID is used for identity verification only and stored securely.
+        <a href="https://www.homefrontsolutionsllc.com/privacy/" target="_blank" rel="noopener">privacy policy</a>.
+        We never sell applicant information. Your license/ID is used for identity review and is available only to authorized reviewers. Do not upload Social Security, tax, or banking documents here.
       </p>
     </form>
   </div>
@@ -554,7 +565,7 @@ function setTransport(hasIt) {
   $("hasTransport").value = hasIt ? "true" : "false";
   $("transportYes").setAttribute("aria-pressed", String(hasIt));
   $("transportNo").setAttribute("aria-pressed", String(!hasIt));
-  showErr("transport", false);
+  showErr("transport", hasIt ? false : "Reliable transportation is required for this field role");
   updateSteps();
 }
 $("transportYes").addEventListener("click", () => setTransport(true));
@@ -580,6 +591,12 @@ function setupUpload(inputId, areaId, nameId, errId) {
       input.value = ""; area.classList.remove("has"); nameEl.textContent = "";
       showErr(errId, "That file is over 10 MB — please choose a smaller one"); return;
     }
+    const imageType = f && ["image/jpeg", "image/png", "image/webp"].includes((f.type || "").toLowerCase());
+    const imageName = f && /\.(jpe?g|png|webp)$/i.test(f.name || "");
+    if (f && !imageType && !imageName) {
+      input.value = ""; area.classList.remove("has"); nameEl.textContent = "";
+      showErr(errId, "Choose a JPG, PNG, or WebP image"); return;
+    }
     if (f) { area.classList.add("has"); nameEl.textContent = "✓ " + f.name; showErr(errId, false); }
     else { area.classList.remove("has"); nameEl.textContent = ""; }
   });
@@ -597,13 +614,14 @@ function showErr(id, msgOrShow) {
   if (input) input.setAttribute("aria-invalid", show ? "true" : "false");
 }
 const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(v);
+const isPlaceholderCity = (v) => /^(?:qa(?:\s+test)?|test|fake|asdf|n\/?a|none)$/i.test(v.trim());
 function checkField(id) {
   const v = ($(id).value || "").trim();
   if (id === "fullName") return v.length >= 2 || (showErr(id, true), false);
   if (id === "email")    return isEmail(v) || (showErr(id, true), false);
   if (id === "phone")    return v.replace(/\D/g,"").length === 10 || (showErr(id, true), false);
-  if (id === "city")     return v.length >= 2 || (showErr(id, true), false);
-  if (id === "zip")      return /^\d{5}$/.test(v) || (showErr(id, true), false);
+  if (id === "city")     return (v.length >= 2 && /^[A-Za-z][A-Za-z .'-]*$/.test(v) && !isPlaceholderCity(v)) || (showErr(id, true), false);
+  if (id === "zip")      return (/^\d{5}$/.test(v) && v !== "00000") || (showErr(id, true), false);
   showErr(id, false); return true;
 }
 ["fullName","email","phone","city","zip"].forEach(id => {
@@ -616,10 +634,12 @@ function updateSteps() {
   const s1 = ["fullName","email","phone","city","zip"].every(id => {
     const v = ($(id).value||"").trim();
     if (id==="email") return isEmail(v); if (id==="phone") return v.replace(/\D/g,"").length===10;
-    if (id==="zip") return /^\d{5}$/.test(v); return v.length>=2;
+    if (id==="zip") return /^\d{5}$/.test(v) && v !== "00000";
+    if (id==="city") return v.length >= 2 && !isPlaceholderCity(v);
+    return v.length>=2;
   });
   const s2 = document.querySelectorAll("input[name='carriers']:checked").length > 0;
-  const s3 = $("hasTransport").value !== "";
+  const s3 = $("hasTransport").value === "true";
   const s4 = !!$("headshotFile").files[0] && !!$("licenseFile").files[0];
   [["s1",s1],["s2",s2],["s3",s3],["s4",s4]].forEach(([id,on]) => $(id).classList.toggle("on", on));
 }
@@ -631,7 +651,7 @@ function validate() {
   ["fullName","email","phone","city","zip"].forEach(id => { if (!checkField(id)) ok = false; });
   const carriers = document.querySelectorAll("input[name='carriers']:checked").length;
   $("carriers-err").classList.toggle("show", carriers === 0); if (carriers === 0) ok = false;
-  if ($("hasTransport").value === "") { showErr("transport", true); ok = false; } else showErr("transport", false);
+  if ($("hasTransport").value !== "true") { showErr("transport", "Reliable transportation is required for this field role"); ok = false; } else showErr("transport", false);
   if (!$("headshotFile").files[0]) { showErr("headshot", true); ok = false; } else showErr("headshot", false);
   if (!$("licenseFile").files[0]) { showErr("license", true); ok = false; } else showErr("license", false);
   return ok;
@@ -683,6 +703,7 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
     }
   } catch (err) {
     document.getElementById("applyForm").style.display = "none";
+    $("errorMsg").textContent = err && err.message ? err.message : "We couldn't submit your application. Please review your information and try again.";
     $("errorCard").classList.add("show");
     window.scrollTo({ top: 0, behavior: "smooth" });
   } finally {

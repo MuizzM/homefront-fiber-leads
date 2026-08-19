@@ -171,6 +171,76 @@ function BadgePhoto({ applicationId, cacheKey, alt }: { applicationId: number; c
   return <img src={url} alt={alt} className="h-16 w-16 shrink-0 rounded-lg object-cover" />;
 }
 
+function ApplicantFileReview({
+  applicationId,
+  kind,
+  label,
+  present,
+}: {
+  applicationId: number;
+  kind: "headshot" | "license";
+  label: string;
+  present: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [file, setFile] = useState<{ url: string; type: string } | null>(null);
+
+  useEffect(() => () => { if (file?.url) URL.revokeObjectURL(file.url); }, [file?.url]);
+
+  const openReview = async () => {
+    if (!present) return;
+    if (file) { setExpanded(current => !current); return; }
+    setLoading(true);
+    setError("");
+    try {
+      const response = await apiRequest("GET", `/api/onboarding/applications/${applicationId}/files/${kind}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      setFile({ url, type: blob.type || response.headers.get("content-type") || "application/octet-stream" });
+      setExpanded(true);
+    } catch (requestError: any) {
+      setError(requestError?.message || `Could not open ${label.toLowerCase()}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border bg-secondary/25 p-3" data-testid={`applicant-file-${kind}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold text-foreground">{label}</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">{present ? "Supplied by applicant · review before approval" : "Not supplied"}</p>
+        </div>
+        <button
+          type="button"
+          onClick={openReview}
+          disabled={!present || loading}
+          className="inline-flex h-9 shrink-0 items-center rounded-lg border border-border bg-background px-3 text-xs font-semibold text-foreground hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid={`review-applicant-${kind}`}
+          aria-expanded={expanded}
+        >
+          {loading ? "Opening…" : expanded ? "Hide" : "Review"}
+        </button>
+      </div>
+      {error && <p className="mt-2 text-xs text-destructive" role="alert">{error}</p>}
+      {expanded && file && (
+        <div className="mt-3 overflow-hidden rounded-lg border border-border bg-slate-100" data-testid={`applicant-${kind}-viewer`}>
+          <div className="flex items-center justify-between gap-2 border-b border-border bg-background px-3 py-2">
+            <span className="text-[11px] font-semibold text-foreground">Verify that the name, face, and document are readable.</span>
+            <button type="button" onClick={() => window.open(file.url, "_blank", "noopener,noreferrer")} className="text-[11px] font-semibold text-primary underline underline-offset-2">Open full size</button>
+          </div>
+          {file.type === "application/pdf"
+            ? <object data={file.url} type="application/pdf" title={`${label} supplied by applicant`} className="h-96 w-full"><p className="p-4 text-xs text-slate-700">This legacy PDF cannot be displayed here. Use Open full size.</p></object>
+            : <img src={file.url} alt={`${label} supplied by applicant`} className="max-h-96 w-full object-contain" />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Applications() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -794,6 +864,8 @@ export default function Applications() {
               {selected.invite && <div className="rounded-xl border border-border p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">{selected.milestones.applied ? "Invitation delivery" : "Private application link"}</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.applied ? `Application received ${formatDate(selected.timeline[1]?.at)}` : `Expires ${formatDate(selected.invite.expiresAt)}`} · {selected.invite.deliveryAttempts} delivery attempt{selected.invite.deliveryAttempts === 1 ? "" : "s"}</p></div>{!selected.milestones.applied && <div className="flex gap-2"><button onClick={() => copySecureLink(selected)} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary" data-testid="copy-secure-invite">{copiedKey === selected.key ? <Check className="h-3.5 w-3.5 text-success" /> : null}Copy</button>{["invited", "failed"].includes(selected.stage) && selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "invite", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground">Resend</button>}</div>}</div>{selected.invite.failureReason && <p className="mt-2 rounded-lg bg-destructive/[0.08] px-3 py-2 text-xs text-destructive">{selected.invite.failureReason}</p>}</div>}
 
               {selected.application && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">Application review</h3><span className="text-[11px] text-muted-foreground">Applied {formatDate(selected.application.createdAt)}</span></div><div className="mb-2 flex flex-wrap gap-2 text-2xs font-semibold uppercase tracking-wide"><span className="rounded-full bg-primary/10 px-2 py-1 text-primary">{selected.source === "careers" ? "Website careers" : selected.source === "invited" ? "Private invite" : "Public join link"}</span>{selected.desiredRole && <span className="rounded-full bg-secondary px-2 py-1 text-muted-foreground">{selected.desiredRole}</span>}</div><div className="grid gap-2 text-xs sm:grid-cols-2"><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Phone</span><div className="mt-0.5 font-medium text-foreground">{selected.application.phone}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Territory</span><div className="mt-0.5 font-medium text-foreground">{selected.application.city}, {selected.application.state} {selected.application.zip}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Carriers</span><div className="mt-0.5 font-medium text-foreground">{selected.application.preferredCarriers}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Sales experience</span><div className="mt-0.5 font-medium text-foreground">{selected.application.hasSalesExperience ? "Yes" : "No"}</div></div><div className="rounded-lg bg-secondary/50 p-3"><span className="text-muted-foreground">Reliable transportation</span><div className={`mt-0.5 font-medium ${selected.application.hasReliableTransportation === false ? "text-warning" : "text-foreground"}`}>{selected.application.hasReliableTransportation == null ? "Not asked" : selected.application.hasReliableTransportation ? "Yes" : "No"}</div></div>{selected.application.channel && <div className="rounded-lg bg-secondary/50 p-3" title={selected.application.attribution ? selected.application.attribution.replace(/[{}"]/g, "").split(",").join("\n") : undefined}><span className="text-muted-foreground">Ad channel</span><div className="mt-0.5 font-medium text-foreground">{selected.application.channel}</div></div>}</div>{selected.application.salesExperienceDetails && <p className="mt-2 rounded-lg bg-secondary/50 p-3 text-xs text-muted-foreground">{selected.application.salesExperienceDetails}</p>}
+                {selected.applicationId && canReview && <div className="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Applicant identity files"><ApplicantFileReview applicationId={selected.applicationId} kind="headshot" label="Headshot" present={!!selected.application.headshotPath} /><ApplicantFileReview applicationId={selected.applicationId} kind="license" label="Driver’s license or government ID" present={!!selected.application.licensePath} /></div>}
+                {selected.applicationId && !canReview && (selected.application.headshotPath || selected.application.licensePath) && <p className="mt-3 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-[11px] text-muted-foreground">Identity files are restricted to the administrator responsible for the approval decision.</p>}
                 {selected.stage === "under_review" && canReview && <div className="mt-4 border-t border-border pt-4" data-testid="review-comp-terms">
                 <div className="mb-4" data-testid="review-hierarchy">
                   <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Role &amp; upline (what this approval creates)</h4>

@@ -220,6 +220,25 @@ function RoleBadge({ role }: { role: string }) {
 // carrying white text at 2.8:1.
 const AVATAR = "bg-primary text-primary-foreground";
 
+/**
+ * Routes a training-gated rep must still be able to use.
+ *
+ * Hash routers normally hand Layout a clean `/training` path, but old service
+ * workers and direct links have also surfaced `#/training`, query strings, and
+ * trailing slashes. Normalize all of those before applying the gate so the
+ * screen that tells a rep to start training can never lock the training screen
+ * itself.
+ */
+export function isTrainingGateOpenClientPath(value: string): boolean {
+  let path = String(value ?? "").trim();
+  if (path.startsWith("#")) path = path.slice(1);
+  path = path.split(/[?#]/, 1)[0] || "/";
+  if (!path.startsWith("/")) path = `/${path}`;
+  path = path.replace(/\/+$/, "") || "/";
+  return path === "/training" || path.startsWith("/training/") ||
+    path === "/profile" || path === "/my-documents" || path === "/tax-and-pay";
+}
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
@@ -245,10 +264,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // Reachable while gated. Kept in step with TRAINING_GATE_ALLOWED_PREFIXES on
   // the server: training itself, plus the account and paperwork lanes, because
   // a rep who cannot open their own W-9 can never finish onboarding at all.
-  const gateOpenPath = (path: string) =>
-    path === "/training" || path.startsWith("/training/") ||
-    path === "/profile" || path === "/my-documents" || path === "/tax-and-pay";
-  const lockThisPage = gated && !gateOpenPath(location);
+  const lockThisPage = gated && !isTrainingGateOpenClientPath(location);
   // The Field Map is FULL-BLEED for every role: no mobile header, no bottom
   // tabs, no padding — the map itself carries a floating menu button that
   // fires "hfs:open-menu" to open the sidebar drawer.
@@ -356,7 +372,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const visibleNav = NAV_ITEMS
     .filter(item => item.show(role, user ?? undefined))
-    .filter(item => !gated || gateOpenPath(item.href))
+    .filter(item => !gated || isTrainingGateOpenClientPath(item.href))
     .filter(item => item.href !== "/action-approvals" || actionGateLive);
   const currentNavGroup = visibleNav.find(item => navItemIsActive(item.href, location))?.group;
 
