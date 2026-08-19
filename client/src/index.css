@@ -767,11 +767,11 @@
 
    1. .liquid-active-pill — the ONE in-glass active pill. BottomTabs measures
       the active tab's icon capsule (refs + ResizeObserver) and moves the pill
-      with translate3d; this class supplies the spring: 380ms with a
-      cubic-bezier back-out that overshoots ~6% then settles — the iOS "pop".
+      with translate3d; this class supplies a 320ms ease-out-quint glide that
+      decelerates cleanly without overshooting its destination.
       Snaps (inline transition-duration: 0s) on first paint and on resize.
-   2. tab-icon-pop — the tapped destination's icon scales 1 → 1.15 → 1 over
-      250ms on the same spring curve. Class is re-keyed per tab change.
+   2. tab-icon-pop — the tapped destination's icon scales 1 → 1.08 → 1 over
+      220ms on the same smooth curve. Class is re-keyed per tab change.
    3. liquid-bar-rise — the bar's one-time entrance: rise 12px + fade, 250ms
       ease-out. Run-once is enforced in the component (module flag), so route
       changes within tabs never replay it.
@@ -799,7 +799,7 @@
     opacity: 0;                       /* hidden until positioned / no active tab */
     pointer-events: none;
     will-change: transform;
-    transition: transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
                 opacity 200ms ease;
   }
   /* Light mode: the white top-highlight reads as haze on a light lozenge —
@@ -809,7 +809,7 @@
     box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.08);
   }
   .tab-icon-pop {
-    animation: tab-icon-pop 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    animation: tab-icon-pop 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .liquid-bar-enter {
     animation: liquid-bar-rise 250ms ease-out;
@@ -817,7 +817,7 @@
 }
 @keyframes tab-icon-pop {
   0%   { transform: scale(1); }
-  45%  { transform: scale(1.15); }
+  45%  { transform: scale(1.08); }
   100% { transform: scale(1); }
 }
 @keyframes liquid-bar-rise {

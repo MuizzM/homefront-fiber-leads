@@ -45,4 +45,19 @@ describe("portal UI and accessibility contracts", () => {
     expect(read("client/src/components/ui/input.tsx")).toContain("aria-[invalid=true]:border-destructive");
     expect(read("client/src/components/ui/textarea.tsx")).toContain("aria-[invalid=true]:border-destructive");
   });
+
+  it("keeps notifications touch-sized, named, and visually balanced", () => {
+    const toast = read("client/src/components/ui/toast.tsx");
+    expect(toast).toContain('aria-label="Dismiss notification"');
+    expect(toast).toContain("h-11 w-11");
+    expect(toast).toContain("min-h-11");
+    expect(toast).not.toContain("border-l-2");
+  });
+
+  it("uses touch-sized segmented scanner tabs instead of rounded underline tabs", () => {
+    const scanner = read("client/src/pages/KineticScanner.tsx");
+    expect(scanner).toContain("h-11 shrink-0");
+    expect(scanner).toContain("bg-primary/10 text-primary");
+    expect(scanner).not.toContain("border-b-2");
+  });
 });

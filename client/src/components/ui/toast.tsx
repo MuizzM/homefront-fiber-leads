@@ -23,16 +23,17 @@ const ToastViewport = React.forwardRef<
 ))
 ToastViewport.displayName = ToastPrimitives.Viewport.displayName
 
-// Compact, quiet surface: card background, hairline border, slim severity
-// accent on the left edge (set per-severity by the Toaster) — never a loud
-// fill. In/out is a short (~150ms) GPU-composited transform + fade.
+// Compact, quiet surface: card background and one consistent hairline border.
+// Destructive feedback uses a restrained surface tint plus a complete border,
+// rather than the heavy one-sided accent common in generated dashboards.
+// In/out is a short (~150ms) GPU-composited transform + fade.
 const toastVariants = cva(
-  "group pointer-events-auto relative flex w-full items-center justify-between gap-3 overflow-hidden rounded-xl border border-border border-l-2 border-l-transparent bg-card text-card-foreground p-3 pr-8 shadow-sm transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=open]:duration-150 data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-2 data-[state=open]:sm:slide-in-from-top-0 data-[state=open]:sm:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:duration-150 data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[swipe=end]:animate-out data-[swipe=end]:slide-out-to-right-full motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none",
+  "group pointer-events-auto relative flex w-full items-center justify-between gap-3 overflow-hidden rounded-xl border border-border bg-card text-card-foreground p-3 pr-12 shadow-sm transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=open]:duration-150 data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-2 data-[state=open]:sm:slide-in-from-top-0 data-[state=open]:sm:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:duration-150 data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[swipe=end]:animate-out data-[swipe=end]:slide-out-to-right-full motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none",
   {
     variants: {
       variant: {
         default: "",
-        destructive: "destructive group border-l-destructive",
+        destructive: "destructive group border-destructive/30 bg-destructive/[0.06]",
       },
     },
     defaultVariants: {
@@ -63,7 +64,7 @@ const ToastAction = React.forwardRef<
   <ToastPrimitives.Action
     ref={ref}
     className={cn(
-      "inline-flex h-7 shrink-0 items-center justify-center rounded-md border bg-transparent px-2.5 text-xs font-medium ring-offset-background transition-colors hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+      "inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent px-3 text-xs font-medium ring-offset-background transition-colors hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
       className
     )}
     {...props}
@@ -78,13 +79,14 @@ const ToastClose = React.forwardRef<
   <ToastPrimitives.Close
     ref={ref}
     className={cn(
-      "absolute right-2 top-2 rounded-md p-1 text-muted-foreground/70 transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring",
+      "absolute right-0.5 top-0.5 inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-secondary hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-inset",
       className
     )}
+    aria-label="Dismiss notification"
     toast-close=""
     {...props}
   >
-    <X className="h-4 w-4" />
+    <X aria-hidden="true" className="h-4 w-4" />
   </ToastPrimitives.Close>
 ))
 ToastClose.displayName = ToastPrimitives.Close.displayName

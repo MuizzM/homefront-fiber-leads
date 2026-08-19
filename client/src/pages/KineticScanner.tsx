@@ -90,7 +90,7 @@ export default function KineticScanner() {
           </div>
           <nav
             role="tablist"
-            className="flex items-center overflow-x-auto border-t border-border px-2"
+            className="flex items-center gap-1 overflow-x-auto border-t border-border p-1.5"
             aria-label="Kinetic Scanner sections"
           >
             {tabs.map(([id, label]) => (
@@ -99,7 +99,7 @@ export default function KineticScanner() {
                 role="tab"
                 aria-selected={tab === id}
                 onClick={() => setTab(id)}
-                className={`relative flex h-10 shrink-0 items-center gap-1.5 rounded-t border-b-2 px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tab === id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                className={`relative flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tab === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
               >
                 
                 {label}

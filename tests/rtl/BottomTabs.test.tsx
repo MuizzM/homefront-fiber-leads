@@ -135,13 +135,13 @@ describe("liquid motion: the sliding active pill", () => {
     expect(pill.style.opacity).toBe("0");
   });
 
-  it("uses the spring overshoot curve and keeps a reduced-motion guard (source pins)", () => {
-    // The glide is the iOS pop: 380ms with a back-out bezier that overshoots.
-    expect(css).toMatch(/\.liquid-active-pill\s*\{[^}]*transform 380ms cubic-bezier\(0\.34, 1\.56, 0\.64, 1\)/);
+  it("uses smooth deceleration without overshoot and keeps a reduced-motion guard (source pins)", () => {
+    // The glide settles cleanly on its destination with an ease-out-quint curve.
+    expect(css).toMatch(/\.liquid-active-pill\s*\{[^}]*transform 320ms cubic-bezier\(0\.22, 1, 0\.36, 1\)/);
     // Explicit reduced-motion guard collapses pill glide, icon pop, entrance.
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.liquid-active-pill \{ transition: none; \}\s*\.tab-icon-pop, \.liquid-bar-enter \{ animation: none; \}/);
-    // Icon pop keyframes: 1 → 1.15 → 1.
-    expect(css).toMatch(/@keyframes tab-icon-pop[\s\S]*?scale\(1\.15\)/);
+    // Icon feedback is subtle: 1 → 1.08 → 1.
+    expect(css).toMatch(/@keyframes tab-icon-pop[\s\S]*?scale\(1\.08\)/);
     // Entrance: rise ~12px + fade.
     expect(css).toMatch(/@keyframes liquid-bar-rise[\s\S]*?translateY\(12px\)/);
   });

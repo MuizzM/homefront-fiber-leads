@@ -152,9 +152,9 @@ function hrTone(checkpoint: HrCheckpoint) {
   return "text-muted-foreground bg-secondary border-border";
 }
 
-// Badge photo is served through an authed, tenant-walled endpoint; an <img src>
-// can't carry the session header, so fetch it as a blob (same pattern as the
-// door-photo AuthedImg in PropertyDetail).
+// Badge photo is served through an authed, tenant-walled endpoint; a native
+// image request can't carry the session header, so fetch it as a blob (the same
+// pattern used by the door-photo AuthedImg in PropertyDetail).
 function BadgePhoto({ applicationId, cacheKey, alt }: { applicationId: number; cacheKey: string; alt: string }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {

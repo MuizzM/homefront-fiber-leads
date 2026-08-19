@@ -378,9 +378,9 @@ function SummaryBanded({ lead, canOpenCalling, onLog }: SummaryProps) {
 }
 
 // ── Photos — field evidence on this door ──────────────────────────────────────
-// Auth is header-based (x-session-id), which a plain <img src> can't carry, so
-// AuthedImg fetches the file as a blob through the authed endpoint and renders
-// an object URL. Capture uses the native camera sheet (input capture) — zero
+// Auth is header-based (x-session-id), which a native image request can't
+// carry, so AuthedImg fetches the file as a blob through the authenticated
+// endpoint and renders an object URL. Capture uses the camera sheet — zero
 // typing. Uploads need a connection; offline the tile disables with a hint.
 interface LeadPhotoRow { id: number; createdAt: string; takenBy: string | null }
 

@@ -18,6 +18,10 @@ EXPECTED_SKILLS = {
     "homefront-review-pr",
     "homefront-scanner-safety",
     "homefront-database-change",
+    "impeccable",
+}
+SKILL_FRONTMATTER_FIELDS = {
+    "impeccable": ["name", "description", "version"],
 }
 failures: list[str] = []
 
@@ -93,14 +97,21 @@ for skill_name in EXPECTED_SKILLS:
         failures.append(f"{skill_name}/SKILL.md has invalid frontmatter")
         continue
     fields = re.findall(r"^([a-z_]+):\s*(.*)$", match.group(1), re.MULTILINE)
-    if [key for key, _ in fields] != ["name", "description"]:
-        failures.append(f"{skill_name}/SKILL.md frontmatter must contain only name and description")
+    expected_fields = SKILL_FRONTMATTER_FIELDS.get(skill_name, ["name", "description"])
+    if [key for key, _ in fields] != expected_fields:
+        failures.append(
+            f"{skill_name}/SKILL.md frontmatter must contain "
+            + ", ".join(expected_fields)
+            + " in that order"
+        )
         continue
     values = dict(fields)
     if values["name"] != skill_name:
         failures.append(f"{skill_name}/SKILL.md name must match its directory")
     if len(values["description"].strip()) < 40:
         failures.append(f"{skill_name}/SKILL.md needs a specific trigger description")
+    if "version" in expected_fields and not re.fullmatch(r"\d+\.\d+\.\d+", values.get("version", "")):
+        failures.append(f"{skill_name}/SKILL.md version must be semantic x.y.z")
     if "TODO" in source:
         failures.append(f"{skill_name}/SKILL.md contains TODO")
     if f"${skill_name}" not in agents_md:

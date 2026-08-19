@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-08-19T18:52:47.052Z",
+        "reason": "Home Front self-hosted brand font"
+      }
+    ]
+  }
+}
