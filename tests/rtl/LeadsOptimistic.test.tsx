@@ -166,7 +166,7 @@ describe("Leads scan intelligence filters", () => {
         .map(([, url]) => String(url));
       expect(urls.some(url => url.includes("scanWindow=24h") && url.includes("sort=scanned_desc"))).toBe(true);
     });
-    expect(screen.getByText(/scanned today/i)).toBeTruthy();
+    expect(await screen.findByText(/scanned today/i)).toBeTruthy();
   });
 });
 
