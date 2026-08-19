@@ -4,7 +4,7 @@ set -euo pipefail
 mode="${1:-focused}"
 if [[ $# -gt 0 ]]; then shift; fi
 
-node scripts/validate-agent-harness.mjs
+python3 scripts/validate-agent-harness.py
 
 if [[ "$mode" == "harness" ]]; then
   exit 0

@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate agent harness
-        run: node scripts/validate-agent-harness.mjs
+        run: python3 scripts/validate-agent-harness.py
 
       - name: Deployment safety checks
         run: bash tests/deployment-safety.sh

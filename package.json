@@ -19,7 +19,7 @@
     "calling:dnc:sign": "tsx script/sign-dnc-import.ts",
     "markets:refresh": "tsx script/build-state-markets.ts",
     "scanner:load-test": "tsx script/load-test-authorized-scanner.ts",
-    "harness:check": "node scripts/validate-agent-harness.mjs"
+    "harness:check": "python3 scripts/validate-agent-harness.py"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
