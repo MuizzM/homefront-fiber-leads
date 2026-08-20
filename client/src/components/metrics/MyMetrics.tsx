@@ -69,14 +69,14 @@ interface Insight {
 
 export function PeriodChips({ value, onChange }: { value: PeriodKey; onChange: (p: PeriodKey) => void }) {
   return (
-    <div className="no-scrollbar -mx-4 flex snap-x snap-mandatory gap-1.5 overflow-x-auto px-4 pb-1 [overscroll-behavior-inline:contain] sm:mx-0 sm:flex-wrap sm:px-0" role="group" aria-label="Metrics period">
+    <div className="grid grid-cols-3 gap-1.5 sm:flex sm:flex-wrap" role="group" aria-label="Metrics period">
       {PERIODS.map((p) => (
         <button
           key={p.key}
           type="button"
           aria-pressed={value === p.key}
           onClick={() => onChange(p.key)}
-          className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          className={`min-h-11 min-w-0 w-full rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-auto sm:px-3 ${
             value === p.key
               ? "bg-primary text-primary-foreground"
               : "bg-secondary text-muted-foreground hover:text-foreground"

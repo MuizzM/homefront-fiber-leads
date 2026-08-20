@@ -181,6 +181,19 @@ describe("accessible names", () => {
 });
 
 describe("the section strip is a real tablist", () => {
+  it("shows the bounded section set as a phone grid instead of a clipped rail", () => {
+    render(
+      <SectionTabs
+        tabs={[{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }]}
+        value="a"
+        onChange={() => {}}
+      />,
+    );
+    const list = screen.getByRole("tablist");
+    expect(list).toHaveClass("grid", "grid-cols-2", "sm:grid-cols-3", "md:flex");
+    expect(list).not.toHaveClass("overflow-x-auto");
+  });
+
   it("marks exactly one tab selected and takes it out of the tab order when not", async () => {
     mockApi();
     renderPage();
@@ -275,11 +288,12 @@ describe("mobile layout", () => {
     expect(String(container!.className)).not.toMatch(/\bw-\[\d+px\]/);
   });
 
-  it("scrolls the tab strip horizontally rather than wrapping it off screen", async () => {
+  it("keeps the bounded tab set visible without a hidden horizontal rail", async () => {
     mockApi();
     renderPage();
     const strip = await screen.findByRole("tablist");
-    expect(String(strip.className)).toContain("overflow-x-auto");
+    expect(strip).toHaveClass("grid", "grid-cols-2", "sm:grid-cols-3", "md:flex");
+    expect(strip).not.toHaveClass("overflow-x-auto");
   });
 
   it("stacks the offer editor fields two-up rather than in a fixed-width row", () => {

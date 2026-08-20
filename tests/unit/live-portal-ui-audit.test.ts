@@ -64,5 +64,9 @@ describe("live portal UI audit regressions", () => {
     const leads = read("client/src/pages/Leads.tsx");
     expect(leads).toContain('isRep ? "No leads assigned yet"');
     expect(leads).toContain("Ask your team lead for a territory. Assigned doors will appear here and on the Field Map.");
+
+    const chat = read("client/src/components/ChatThreads.tsx");
+    expect(chat).toContain("No direct or crew conversations yet. Use The floor above, or start a new conversation.");
+    expect(chat).not.toContain("No conversations yet. Start one");
   });
 });

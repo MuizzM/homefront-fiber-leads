@@ -42,6 +42,12 @@ export function formatSessionDateRange(clockedIn: string, clockedOut: string | n
   return `${format(start)} to ${format(end)}`;
 }
 
+function countedSessionMinutes(session: ClockSession, nowMs: number): number {
+  if (session.durationMinutes != null) return Math.max(0, session.durationMinutes);
+  if (session.clockedOut) return 0;
+  return Math.max(0, Math.floor((nowMs - new Date(session.clockedIn).getTime()) / 60_000));
+}
+
 function ElapsedTimer({ startTime }: { startTime: string }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -78,6 +84,17 @@ export default function ClockIn() {
     refetchInterval: 30000,
   });
 
+  // Closed sessions receive a persisted duration from the server. An active
+  // session does not, so refresh the summary clock while it is running instead
+  // of presenting an authoritative-looking 0m until clock-out.
+  const hasActiveSession = sessions.some(session => !session.clockedOut);
+  const [summaryNowMs, setSummaryNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasActiveSession) return;
+    const id = setInterval(() => setSummaryNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, [hasActiveSession]);
+
   const clockInMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/clock/in", {}).then(r => r.json()),
     onSuccess: () => {
@@ -99,13 +116,14 @@ export default function ClockIn() {
   });
 
   const todaySessions = sessions.filter(s => localDayKey(s.clockedIn) === today);
-  const todayMinutes = todaySessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+  const todayMinutes = todaySessions.reduce((sum, s) => sum + countedSessionMinutes(s, summaryNowMs), 0);
   const activeSessions = sessions.filter(s => !s.clockedOut);
+  const completedSessions = sessions.filter(s => s.clockedOut).slice(0, 30);
 
   // Week total — a rolling 7-day window on the clock-in timestamp.
   const weekAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const weekSessions = sessions.filter(s => new Date(s.clockedIn).getTime() >= weekAgoMs);
-  const weekMinutes = weekSessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
+  const weekMinutes = weekSessions.reduce((sum, s) => sum + countedSessionMinutes(s, summaryNowMs), 0);
 
   const isOnClock = !!clockStatus?.clockedIn;
 
@@ -277,11 +295,15 @@ export default function ClockIn() {
               bordered={false}
               className="p-5"
             />
-          ) : sessions.length === 0 ? (
-            <p className="text-sm text-muted-foreground p-5">No sessions yet</p>
+          ) : completedSessions.length === 0 ? (
+            <p className="text-sm text-muted-foreground p-5">
+              {hasActiveSession
+                ? "No completed sessions yet. Your current shift will appear here after you clock out."
+                : "No completed sessions yet."}
+            </p>
           ) : (
             <div className="divide-y divide-border max-h-80 overflow-y-auto">
-              {sessions.filter(s => s.clockedOut).slice(0, 30).map(s => {
+              {completedSessions.map(s => {
                 const needsReview = isSuspiciousShiftDuration(s.durationMinutes);
                 return (
                   <div key={s.id} className="px-5 py-3.5 flex items-center justify-between gap-3" data-testid={`session-history-${s.id}`}>

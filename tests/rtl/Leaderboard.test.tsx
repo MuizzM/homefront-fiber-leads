@@ -3,7 +3,7 @@
 // The board defaults to TODAY (the shift a rep is actually running), fetches
 // through ?range=today, and marks the Today segment pressed. Loading renders
 // skeleton rows in the board's real shape — never a bare "Loading..." line.
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -47,6 +47,14 @@ describe("Leaderboard defaults", () => {
     expect(screen.getByTestId("range-all").getAttribute("aria-pressed")).toBe("false");
     // And the data actually came from the today range.
     expect(fetched.some(u => u.includes("range=today"))).toBe(true);
+  });
+
+  it("shows every date preset in a bounded phone grid", async () => {
+    renderBoard([]);
+    const presets = await screen.findByLabelText("Date range presets");
+    expect(presets).toHaveClass("grid", "grid-cols-3", "md:inline-flex");
+    expect(presets).not.toHaveClass("overflow-x-auto");
+    expect(within(presets).getAllByRole("button")).toHaveLength(6);
   });
 
   it("shows skeleton rows while loading, not a text placeholder", () => {

@@ -162,6 +162,14 @@ describe("Today - the rep's home", () => {
     expect(within(cell("Doors left")).getByText("2")).toBeTruthy();
   });
 
+  it("keeps all four glance actions visible in a bounded phone grid", async () => {
+    renderToday();
+    const grid = (await screen.findByTestId("today-glance")).firstElementChild!;
+    expect(grid).toHaveClass("grid", "grid-cols-2", "sm:grid-cols-4");
+    expect(grid).not.toHaveClass("overflow-x-auto");
+    expect(within(grid as HTMLElement).getAllByRole("link")).toHaveLength(4);
+  });
+
   it("progress bar reports doors worked as an accessible value", async () => {
     // 6 done, 2 open -> 6/(6+2) = 75%.
     renderToday({ pins: [pin({ id: 1 }), pin({ id: 2 })] });
