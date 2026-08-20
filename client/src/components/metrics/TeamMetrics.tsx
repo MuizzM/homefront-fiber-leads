@@ -20,9 +20,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
-import { MetricCard, CountCard, formatMetric } from "./MetricCard";
+import { MetricCard, CountCard } from "./MetricCard";
 import { ChartFrame, FunnelChart, BarChart } from "./charts";
 import { PeriodChips, PERIODS, type PeriodKey } from "./MyMetrics";
+import {
+  CommissionSourceNotice,
+  METRICS_REFETCH_MS,
+  MetricsErrorState,
+} from "./MetricsDataState";
 import {
   buildFunnel, formatDuration, formatRate,
   type DerivedMetrics, type RepDailyFacts,
@@ -99,8 +104,9 @@ export function TeamMetrics() {
   });
   const [openRep, setOpenRep] = useState<number | null>(null);
 
-  const { data, isLoading } = useQuery<TeamResponse>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<TeamResponse>({
     queryKey: [`/api/metrics/team?period=${period}`],
+    refetchInterval: METRICS_REFETCH_MS,
   });
 
   const rows = useMemo(() => {
@@ -124,6 +130,15 @@ export function TeamMetrics() {
 
   if (isLoading) return <Skeleton className="h-64 rounded-2xl" />;
 
+  if (isError || !data) {
+    return (
+      <div className="space-y-5">
+        <PeriodChips value={period} onChange={setPeriod} />
+        <MetricsErrorState onRetry={() => { void refetch(); }} retrying={isFetching} />
+      </div>
+    );
+  }
+
   const k = data?.kpis;
 
   return (
@@ -145,15 +160,13 @@ export function TeamMetrics() {
           <MetricCard metricKey="submissionRate" value={k?.metrics.submissionRate ?? null} />
           <MetricCard metricKey="installRate" value={k?.metrics.installRate ?? null} />
           <MetricCard metricKey="utilizationRate" value={k?.metrics.utilizationRate ?? null} />
-          <CountCard label="Follow-ups open" value={k?.facts.followUps ?? 0} tone="warning" />
+          <CountCard label="Follow-ups created" value={k?.facts.followUps ?? 0} tone="warning" />
           <CountCard label="Submitted orders" value={k?.facts.submittedOrders ?? 0} tone="success" />
           <CountCard label="Installed" value={k?.facts.installedOrders ?? 0} tone="success" />
-          <CountCard label="Estimated pay"
-                     value={formatMetric("estimatedCommissionCents", k?.facts.estimatedCommissionCents ?? null)} />
-          <CountCard label="Paid"
-                     value={formatMetric("paidCommissionCents", k?.facts.paidCommissionCents ?? null)} tone="success" />
         </div>
       </section>
+
+      <CommissionSourceNotice manager />
 
       <section>
         <SectionLabel className="mb-2 px-1">Reps</SectionLabel>
@@ -250,8 +263,9 @@ function RepDrilldown({ repId, period, onClose }: {
   const [noteBody, setNoteBody] = useState("");
   const [shareWithRep, setShareWithRep] = useState(false);
 
-  const { data, isLoading } = useQuery<RepDetail>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<RepDetail>({
     queryKey: [`/api/metrics/rep/${repId}?period=${period}`],
+    refetchInterval: METRICS_REFETCH_MS,
   });
 
   const addNote = useMutation({
@@ -284,6 +298,14 @@ function RepDrilldown({ repId, period, onClose }: {
       <div className="relative max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-t-2xl border border-border bg-background p-4 sm:rounded-2xl">
         {isLoading ? (
           <Skeleton className="h-64 rounded-2xl" />
+        ) : isError || !data ? (
+          <MetricsErrorState
+            title="Couldn't load representative details"
+            description="This representative's numbers are hidden until the detail request succeeds."
+            onRetry={() => { void refetch(); }}
+            retrying={isFetching}
+            testId="rep-detail-error"
+          />
         ) : (
           <>
             <div className="mb-4 flex items-start justify-between gap-3">
@@ -301,7 +323,7 @@ function RepDrilldown({ repId, period, onClose }: {
               <MetricCard metricKey="utilizationRate" value={data?.metrics.utilizationRate ?? null} />
               <MetricCard metricKey="medianSecondsBetweenDoors" value={data?.metrics.medianSecondsBetweenDoors ?? null} />
               <MetricCard metricKey="activeSeconds" value={data?.facts.activeSeconds ?? null} />
-              <MetricCard metricKey="callbackCompletionRate" value={data?.metrics.callbackCompletionRate ?? null} />
+              <CountCard label="Callbacks completed" value={data?.facts.followUpsCompleted ?? 0} />
               <MetricCard metricKey="installRate" value={data?.metrics.installRate ?? null} />
             </div>
 

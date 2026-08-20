@@ -104,10 +104,30 @@ describe("Central Mark attribution", () => {
   it("is idempotent - a double-tapped mark with the same key writes ONE event", async () => {
     const lead = seedLead({ assignedRepId: null });
     const body = { outcome: "sold", idempotencyKey: "cm-dup-1" };
-    await central(lead, fx.manager.session, body);
-    await central(lead, fx.manager.session, body);              // replay
+    const first = await central(lead, fx.manager.session, body);
+    expect(first.status).toBe(200);
+    const afterFirst = rawDb.prepare("SELECT updated_at AS updatedAt FROM leads WHERE id = ?").get(lead) as any;
+    const auditAfterFirst = (rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM activity_log WHERE action = 'lead.central_disposition' AND entity_id = ?",
+    ).get(lead) as any).n;
+
+    const replay = await central(lead, fx.manager.session, body);
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).deduped).toBe(true);
     const rows = await hist(lead, fx.manager.session);
     expect(rows.filter((r: any) => r.type === "status_change").length).toBe(1);
+    expect(rawDb.prepare("SELECT updated_at AS updatedAt FROM leads WHERE id = ?").get(lead)).toEqual(afterFirst);
+    expect((rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM activity_log WHERE action = 'lead.central_disposition' AND entity_id = ?",
+    ).get(lead) as any).n).toBe(auditAfterFirst);
+  });
+
+  it("rejects reuse of one command key for a different outcome", async () => {
+    const lead = seedLead({ assignedRepId: null });
+    await central(lead, fx.manager.session, { outcome: "not_home", idempotencyKey: "cm-conflict-1" });
+    const conflict = await central(lead, fx.manager.session, { outcome: "sold", idempotencyKey: "cm-conflict-1" });
+    expect(conflict.status).toBe(409);
+    expect(storage.getLeadById(lead).lastOutcome).toBe("not_home");
   });
 
   it("two managers marking are two 'Central Admin' events, never a name collision", async () => {

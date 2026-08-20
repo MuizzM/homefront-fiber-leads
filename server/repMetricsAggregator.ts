@@ -29,7 +29,9 @@ import {
   clearDirtyDay,
   dirtyDayCount,
   localDateString,
+  markHourlyRollupUnavailable,
   markRepDayDirty,
+  markMissingHourlyRollupsDirty,
   readDailyRows,
   recomputeRepDay,
   tenantTimezone,
@@ -89,6 +91,9 @@ export async function runRollupSlice(chunk = CHUNK): Promise<number> {
   rollupRunning = true;
   let written = 0;
   try {
+    // Existing daily summaries predate hour buckets. Seed only one bounded
+    // chunk per tick so deployment cannot turn a backfill into foreground load.
+    markMissingHourlyRollupsDirty(chunk);
     const days = claimDirtyDays(chunk);
     for (const day of days) {
       try {
@@ -100,6 +105,7 @@ export async function runRollupSlice(chunk = CHUNK): Promise<number> {
         // be retried forever at the head of an oldest-first queue and block
         // every day behind it - the failure mode is a stalled rollup for the
         // whole org, which is far worse than one stale rep-day.
+        markHourlyRollupUnavailable(day);
         clearDirtyDay(day);
         structuredLog("rep_metrics.day_failed", {
           tenantId: day.tenantId, repId: day.repId, date: day.metricDate,

@@ -69,6 +69,12 @@ describe("central mark is optimistic - recolor before the round-trip", () => {
     expect(successArm).toContain("lastOutcomeAt: updated.lastOutcomeAt");
     expect(successArm).toContain("lastOutcome: updated.lastOutcome");
   });
+
+  it("reuses one idempotency key until the whole central command succeeds", () => {
+    expect(body).toContain("centralCommandKeysRef.current.get(commandSlot)");
+    expect(body).toContain("{ outcome, idempotencyKey }");
+    expect(body).toContain("centralCommandKeysRef.current.delete(commandSlot)");
+  });
 });
 
 describe("delete lead is optimistic - pin vanishes before the round-trip", () => {

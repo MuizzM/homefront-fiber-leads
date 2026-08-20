@@ -522,6 +522,10 @@ export interface DailyComputeInput {
   orders: OrderInput;
   /** Doors this rep already knocked BEFORE today, for revisit detection. */
   previouslyKnockedLeadIds?: ReadonlySet<number>;
+  /** Doors with a non-superseded callback due by this day. */
+  previouslyBookedLeadIds?: ReadonlySet<number>;
+  /** Organization-local date for due-date comparisons (`YYYY-MM-DD`). */
+  metricDate?: string;
   nowMs: number;
 }
 
@@ -538,9 +542,10 @@ export function computeDailyFacts(input: DailyComputeInput): RepDailyFacts {
   let noAnswer = 0, notInterested = 0, revisits = 0;
   let dwellTotal = 0, dwellSamples = 0;
   const previously = input.previouslyKnockedLeadIds ?? new Set<number>();
+  const booked = new Set(input.previouslyBookedLeadIds ?? []);
   const seenToday = new Set<number>();
 
-  for (const e of events) {
+  for (const e of [...events].sort((a, b) => a.atMs - b.atMs)) {
     distinctDoors.add(e.leadId);
     if (isVerified(e.verification)) distinctVerified.add(e.leadId);
     if (e.dwellSeconds != null && Number.isFinite(e.dwellSeconds) && e.dwellSeconds >= 0) {
@@ -559,15 +564,25 @@ export function computeDailyFacts(input: DailyComputeInput): RepDailyFacts {
     if (isContact(e)) contacts++;
     else noAnswer++;
     if (isInterested(e)) interested++;
-    if (isAppointment(e)) appointments++;
+    const appointment = isAppointment(e);
+    if (appointment) appointments++;
     if (e.outcome === "not_interested" || e.outcome === "already_customer") notInterested++;
     if (e.outcome === "not_home") { /* already counted in noAnswer */ }
     // A door is COMPLETE for this pass once it carries a worked outcome.
     if (e.outcome !== "not_home" && e.outcome !== "prospect") distinctCompleted.add(e.leadId);
-    // An appointment is COMPLETED when the rep returned on/after the booked day
-    // and logged a fresh outcome. Detected by the revisit above landing on a
-    // door that had a callback date; counted conservatively.
-    if (previously.has(e.leadId) && !isAppointment(e) && isContact(e)) appointmentsCompleted++;
+    // Completion requires an actual prior callback booking, not merely any
+    // earlier knock on the door. Count one completion per booked door even if
+    // the rep logs more than one follow-on contact that day.
+    if (booked.has(e.leadId) && !appointment && isContact(e)) {
+      appointmentsCompleted++;
+      booked.delete(e.leadId);
+    }
+    // A same-day booking can become eligible for a later return only when its
+    // persisted due date is this local day (or earlier).
+    const callbackDate = e.callbackDate?.slice(0, 10);
+    if (appointment && callbackDate && (!input.metricDate || callbackDate <= input.metricDate)) {
+      booked.add(e.leadId);
+    }
   }
 
   const pace = computePace(events, shifts, nowMs);
@@ -679,6 +694,32 @@ export function aggregateFacts(days: readonly RepDailyFacts[]): RepDailyFacts {
   return out;
 }
 
+/**
+ * Fold the already-periodized facts for several reps into one team fact row.
+ *
+ * `aggregateFacts` deliberately takes the latest stock snapshot when its input
+ * is several DAYS for one rep. At the team boundary those same stocks describe
+ * different inventories, so they must SUM: rep A's 100 eligible doors and rep
+ * B's 50 are 150 team doors, not whichever rep happened to be iterated last.
+ * Flow counts still use the ordinary additive fold and the team's oldest
+ * assignment age is the maximum non-null per-rep age.
+ */
+export function aggregateTeamFacts(reps: readonly RepDailyFacts[]): RepDailyFacts {
+  const out = aggregateFacts(reps);
+  if (reps.length === 0) return out;
+
+  out.assignedDoors = reps.reduce((sum, r) => sum + (Number(r.assignedDoors) || 0), 0);
+  out.eligibleDoors = reps.reduce((sum, r) => sum + (Number(r.eligibleDoors) || 0), 0);
+  out.everWorkedDoors = reps.reduce((sum, r) => sum + (Number(r.everWorkedDoors) || 0), 0);
+  out.freshAssigned = reps.reduce((sum, r) => sum + (Number(r.freshAssigned) || 0), 0);
+
+  const ages = reps
+    .map((r) => r.assignmentAgeSeconds)
+    .filter((v): v is number => v != null && Number.isFinite(v));
+  out.assignmentAgeSeconds = ages.length > 0 ? Math.max(...ages) : null;
+  return out;
+}
+
 export function emptyFacts(): RepDailyFacts {
   return {
     assignedDoors: 0, eligibleDoors: 0, doorsAttempted: 0, doorsVisited: 0,
@@ -756,7 +797,10 @@ export function deriveMetrics(
     contactRate: rate(f.contacts, f.doorsAttempted),
     interestRate: rate(f.interestedLeads, f.contacts),
     appointmentRate: rate(f.appointments, f.contacts),
-    appointmentCompletionRate: rate(f.appointmentsCompleted, f.appointments),
+    // Created-in-period appointments and completed-in-period appointments are
+    // not the same cohort. Until the rollup persists a due-period denominator,
+    // exposing a percentage can exceed 100% and is less honest than unavailable.
+    appointmentCompletionRate: null,
     submissionRate: rate(f.submittedOrders, f.doorsAttempted),
     closeRate: rate(f.submittedOrders, f.contacts),
     installRate: rate(f.installedOrders, f.submittedOrders),
@@ -764,7 +808,7 @@ export function deriveMetrics(
     cancellationRate: rate(f.canceledOrders, f.submittedOrders),
     chargebackRate: rate(f.chargebacks, basis === "paid" ? f.paidOrders : f.submittedOrders),
     followUpConversionRate: rate(f.ordersFromFollowUp, f.followUpsCompleted),
-    callbackCompletionRate: rate(f.followUpsCompleted, f.followUps),
+    callbackCompletionRate: null,
     // Utilization is a STOCK: doors ever worked over doors eligible. Using the
     // day's attempts here would report a rep who finished their area yesterday
     // as 0% utilized today, which is the reading that gets territory reclaimed
@@ -921,7 +965,8 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   },
   callbackCompletionRate: {
     label: "Callback completion", direction: "up", unit: "rate",
-    formula: "Follow-ups completed ÷ follow-ups created.",
+    formula: "Unavailable until a due-period callback cohort is persisted.",
+    note: "Created and completed activity counts remain visible separately; they are not divided across mismatched cohorts.",
   },
   utilizationRate: {
     label: "Territory utilization", direction: "up", unit: "rate",

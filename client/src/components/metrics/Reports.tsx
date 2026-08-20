@@ -1,6 +1,6 @@
 // ── Reports — org-wide yield by carrier, product, program and team ───────────
 //
-// The owner/admin question this answers is "where does installed revenue come
+// The owner/admin question this answers is "where do installed orders come
 // from", which is a different question from "how is this rep doing" and lives
 // on its own tab for that reason.
 //
@@ -19,12 +19,17 @@ import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { PeriodChips, type PeriodKey } from "./MyMetrics";
+import {
+  CommissionSourceNotice,
+  METRICS_REFETCH_MS,
+  MetricsErrorState,
+} from "./MetricsDataState";
 import { formatRate, rate } from "@shared/repMetrics";
 
 interface DimensionRow { label: string; submitted: number; installed: number; canceled: number }
 interface TeamRow {
   label: string; doorsAttempted: number; contacts: number;
-  submitted: number; installed: number; paidCents: number;
+  submitted: number; installed: number;
 }
 
 interface ReportsResponse {
@@ -39,11 +44,21 @@ interface ReportsResponse {
 
 export function Reports() {
   const [period, setPeriod] = useState<PeriodKey>("month");
-  const { data, isLoading } = useQuery<ReportsResponse>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<ReportsResponse>({
     queryKey: [`/api/metrics/reports?period=${period}`],
+    refetchInterval: METRICS_REFETCH_MS,
   });
 
   if (isLoading) return <Skeleton className="h-64 rounded-2xl" />;
+
+  if (isError || !data) {
+    return (
+      <div className="space-y-5">
+        <PeriodChips value={period} onChange={setPeriod} />
+        <MetricsErrorState onRetry={() => { void refetch(); }} retrying={isFetching} />
+      </div>
+    );
+  }
 
   const g = data?.groups;
   const providerEmpty =
@@ -57,6 +72,8 @@ export function Reports() {
         <SectionLabel className="mb-2 px-1">Yield by team</SectionLabel>
         <TeamTable rows={g?.team ?? []} />
       </section>
+
+      <CommissionSourceNotice manager />
 
       {providerEmpty ? (
         <section>
@@ -122,7 +139,7 @@ function TeamTable({ rows }: { rows: readonly TeamRow[] }) {
       <table className="w-full min-w-[600px] text-left text-[12px]">
         <thead>
           <tr className="border-b border-border">
-            {["Team", "Doors", "Contacts", "Submitted", "Installed", "Install rate", "Paid"].map((h, i) => (
+            {["Team", "Doors", "Contacts", "Submitted", "Installed", "Install rate"].map((h, i) => (
               <th key={h} scope="col"
                   className={`px-3 py-2.5 font-semibold text-muted-foreground ${i > 0 ? "text-right" : ""}`}>
                 {h}
@@ -139,9 +156,6 @@ function TeamTable({ rows }: { rows: readonly TeamRow[] }) {
               <td className="px-3 py-2.5 text-right tabular-nums">{(r.submitted ?? 0).toLocaleString()}</td>
               <td className="px-3 py-2.5 text-right tabular-nums">{(r.installed ?? 0).toLocaleString()}</td>
               <td className="px-3 py-2.5 text-right tabular-nums">{formatRate(rate(r.installed ?? 0, r.submitted ?? 0))}</td>
-              <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-gold-text">
-                ${Math.round((r.paidCents ?? 0) / 100).toLocaleString()}
-              </td>
             </tr>
           ))}
         </tbody>

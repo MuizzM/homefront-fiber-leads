@@ -45,12 +45,13 @@ export async function mintSession(
 }
 
 /**
- * The app reads its session from window.name (not localStorage), so we set it
- * via an init script that runs before every navigation.
+ * The app persists its session in localStorage with a bounded client deadline.
+ * Seed both values before every navigation so the test exercises the same
+ * authenticated boot path as a real returning browser session.
  */
 export async function loginAs(page: Page, sessionId: string) {
-  await page.addInitScript((sid) => {
-    // eslint-disable-next-line no-restricted-globals
-    window.name = JSON.stringify({ sid });
-  }, sessionId);
+  await page.addInitScript(({ sid, lifetimeMs }) => {
+    window.localStorage.setItem("hfs.sid", sid);
+    window.localStorage.setItem("hfs.sid.until", String(Date.now() + lifetimeMs));
+  }, { sid: sessionId, lifetimeMs: 6 * 24 * 60 * 60 * 1000 });
 }

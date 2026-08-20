@@ -22,7 +22,12 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { MetricCard, CountCard, formatMetric } from "./MetricCard";
 import { ActivityCalendar, BarChart, ChartFrame, FunnelChart, LineChart } from "./charts";
 import { FieldModeCard } from "./FieldMode";
-import { formatDuration, formatRate, type DerivedMetrics, type FunnelStage, type RepDailyFacts } from "@shared/repMetrics";
+import {
+  CommissionSourceNotice,
+  METRICS_REFETCH_MS,
+  MetricsErrorState,
+} from "./MetricsDataState";
+import { formatDuration, type DerivedMetrics, type FunnelStage, type RepDailyFacts } from "@shared/repMetrics";
 import type { TeamBaseline } from "@shared/coachingInsights";
 
 export const PERIODS = [
@@ -88,17 +93,39 @@ export function PeriodChips({ value, onChange }: { value: PeriodKey; onChange: (
 export function MyMetrics() {
   const [period, setPeriod] = useState<PeriodKey>("today");
 
-  const { data, isLoading } = useQuery<MeResponse>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<MeResponse>({
     queryKey: [`/api/metrics/me?period=${period}`],
+    refetchInterval: METRICS_REFETCH_MS,
   });
-  const { data: hourly } = useQuery<{ hours: { hour: number; doors: number; contacts: number; sales: number }[] }>({
+  const {
+    data: hourly,
+    isError: isHourlyError,
+    isFetching: isHourlyFetching,
+    refetch: refetchHourly,
+  } = useQuery<{ hours: { hour: number; doors: number; contacts: number; sales: number }[] }>({
     queryKey: [`/api/metrics/me/hourly?period=${period}`],
+    refetchInterval: METRICS_REFETCH_MS,
   });
-  const { data: insightData } = useQuery<{ insights: Insight[] }>({
+  const {
+    data: insightData,
+    isError: isInsightsError,
+    isFetching: isInsightsFetching,
+    refetch: refetchInsights,
+  } = useQuery<{ insights: Insight[] }>({
     queryKey: ["/api/metrics/insights/me"],
+    refetchInterval: METRICS_REFETCH_MS,
   });
 
   if (isLoading) return <LoadingSkeleton />;
+
+  if (isError || !data) {
+    return (
+      <div className="space-y-5">
+        <PeriodChips value={period} onChange={setPeriod} />
+        <MetricsErrorState onRetry={() => { void refetch(); }} retrying={isFetching} />
+      </div>
+    );
+  }
 
   if (data && !data.hasSeat) {
     return (
@@ -165,20 +192,28 @@ export function MyMetrics() {
           <CountCard label="Contacts" value={facts?.contacts ?? 0} tone="primary" />
           <CountCard label="Interested" value={facts?.interestedLeads ?? 0} />
           <CountCard label="Appointments" value={facts?.appointments ?? 0} />
-          <CountCard label="Follow-ups due" value={facts?.followUps ?? 0} tone="warning" />
+          <CountCard label="Follow-ups created" value={facts?.followUps ?? 0} tone="warning" />
           <CountCard label="Submitted" value={facts?.submittedOrders ?? 0} tone="success" />
           <CountCard label="Installed" value={facts?.installedOrders ?? 0} tone="success" />
           <CountCard label="Doors remaining" value={metrics?.untouchedAssignedDoors ?? 0} />
           <CountCard label="Distance" value={formatMetric("distanceMeters", facts?.distanceMeters ?? null)} />
-          <CountCard label="Estimated pay"
-                     value={formatMetric("estimatedCommissionCents", facts?.estimatedCommissionCents ?? null)} />
-          <CountCard label="Paid"
-                     value={formatMetric("paidCommissionCents", facts?.paidCommissionCents ?? null)} tone="success" />
         </div>
       </section>
 
+      <CommissionSourceNotice />
+
       {/* ── Coaching ─────────────────────────────────────────────────────── */}
-      <CoachingPanel insights={insightData?.insights ?? []} />
+      {isInsightsError ? (
+        <MetricsErrorState
+          title="Couldn't load coaching insights"
+          description="Performance metrics are still available, but coaching insights could not be refreshed."
+          onRetry={() => { void refetchInsights(); }}
+          retrying={isInsightsFetching}
+          testId="coaching-insights-error"
+        />
+      ) : (
+        <CoachingPanel insights={insightData?.insights ?? []} />
+      )}
 
       {/* ── Charts ───────────────────────────────────────────────────────── */}
       <div className="grid gap-3 lg:grid-cols-2">
@@ -189,14 +224,24 @@ export function MyMetrics() {
 
         <ChartFrame title="Door activity by hour"
                     hint="Gold marks the doors where somebody answered.">
-          <BarChart
-            data={(hourly?.hours ?? []).map((h) => ({
-              label: `${h.hour}`,
-              value: h.doors,
-              secondary: h.contacts,
-            }))}
-            emptyLabel="No doors logged in this period"
-          />
+          {isHourlyError ? (
+            <MetricsErrorState
+              title="Couldn't load hourly activity"
+              description="The hourly chart is hidden until its data can be loaded."
+              onRetry={() => { void refetchHourly(); }}
+              retrying={isHourlyFetching}
+              testId="hourly-metrics-error"
+            />
+          ) : (
+            <BarChart
+              data={(hourly?.hours ?? []).map((h) => ({
+                label: `${h.hour}`,
+                value: h.doors,
+                secondary: h.contacts,
+              }))}
+              emptyLabel="No doors logged in this period"
+            />
+          )}
         </ChartFrame>
 
         <ChartFrame title="Doors and contacts by day">
@@ -226,20 +271,16 @@ export function MyMetrics() {
           <ActivityCalendar days={daily.map((d) => ({ date: d.metricDate, value: d.doorsAttempted }))} />
         </ChartFrame>
 
-        <ChartFrame title="Follow-up completion"
-                    hint="Booked returns worked, against booked returns created.">
-          <div className="space-y-2">
-            <div className="flex items-baseline justify-between">
-              <span className="text-2xl font-bold tabular-nums text-foreground">
-                {formatRate(metrics?.callbackCompletionRate ?? null)}
-              </span>
-              <span className="text-[11px] text-muted-foreground">
-                {facts?.followUpsCompleted ?? 0} of {facts?.followUps ?? 0}
-              </span>
+        <ChartFrame title="Follow-up activity"
+                    hint="Created and completed are separate period counts, not a cohort percentage.">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-[11px] text-muted-foreground">Created</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{facts?.followUps ?? 0}</p>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-secondary">
-              <div className="h-full rounded-full bg-success"
-                   style={{ width: `${Math.round((metrics?.callbackCompletionRate ?? 0) * 100)}%` }} />
+            <div>
+              <p className="text-[11px] text-muted-foreground">Completed</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{facts?.followUpsCompleted ?? 0}</p>
             </div>
           </div>
         </ChartFrame>

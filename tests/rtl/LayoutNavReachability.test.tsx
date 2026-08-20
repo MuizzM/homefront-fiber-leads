@@ -5,7 +5,7 @@
 // entry anywhere: not the sidebar, not the More sheet. Reachable only by typed
 // URL. These tests pin their presence for a rep, and pin the flip side: roles
 // whose capabilities exclude a surface never see a dead link to it.
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
@@ -43,6 +43,25 @@ function renderLayout(role: string) {
 }
 
 describe("field nav reachability", () => {
+  it("removes the closed phone drawer from focus and the accessibility tree", async () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    try {
+      renderLayout("rep");
+      const sidebar = document.querySelector("aside");
+      await waitFor(() => {
+        expect(sidebar).toHaveAttribute("aria-hidden", "true");
+        expect(sidebar).toHaveAttribute("inert");
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Open navigation menu" }));
+      expect(sidebar).not.toHaveAttribute("aria-hidden");
+      expect(sidebar).not.toHaveAttribute("inert");
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: previousWidth });
+    }
+  });
+
   it("offers a hash-router-safe keyboard shortcut to the main workspace", () => {
     renderLayout("rep");
     const skip = screen.getByRole("link", { name: "Skip to main content" });

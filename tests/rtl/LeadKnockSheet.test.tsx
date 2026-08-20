@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LeadKnockSheet } from "@/components/LeadKnockSheet";
 import { FIELD_OUTCOMES } from "@shared/knock";
+import { STATUS_CONFIG } from "@shared/statusConfig";
+import { outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -218,6 +220,24 @@ describe("<LeadKnockSheet /> - three-level model", () => {
 });
 
 describe("<LeadKnockSheet /> - unified outcomes grid", () => {
+  it("keeps tablet content clear of the persistent sidebar", () => {
+    renderSheet();
+    expect(screen.getByTestId("knock-sheet").className).toContain("md:left-[264px]");
+  });
+
+  it("uses the dark-sheet status override and readable ink for filled outcomes", () => {
+    renderSheet();
+    expect(screen.getByTestId("knock-outcome-sold")).toHaveStyle({
+      color: STATUS_CONFIG.sold.onDark,
+    });
+    expect(screen.getByTestId("knock-outcome-prospect")).toHaveStyle({
+      color: outcomeFillTextColor(STATUS_CONFIG.prospect.color),
+    });
+    expect(outcomeFillTextColor(STATUS_CONFIG.prospect.color)).toBe("#07111B");
+    expect(outcomeFillTextColor(STATUS_CONFIG.interested.color)).toBe("#07111B");
+    expect(screen.getByTestId("knock-outcome-interested").querySelector("svg")).not.toBeNull();
+  });
+
   it("ONE grid holds every disposition: primary four lead, the rest follow, fixed order", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
@@ -697,8 +717,8 @@ describe("<LeadKnockSheet /> - perceived latency: instant open, instant close", 
 });
 
 describe("<LeadKnockSheet /> - do-not-knock banner", () => {
-  it("renders a prominent alert at the top of the body when the lead is flagged", () => {
-    renderSheet({ lead: baseLead({ doNotKnock: 1 }) }); // server sends 0/1
+  it("renders a prominent alert and blocks every field outcome when the lead is flagged", async () => {
+    const { props } = renderSheet({ lead: baseLead({ doNotKnock: 1 }) }); // server sends 0/1
     const banner = screen.getByTestId("dnk-banner");
     expect(banner).toHaveAttribute("role", "alert");
     expect(banner).toHaveTextContent("Do not knock - resident asked us not to return");
@@ -706,6 +726,12 @@ describe("<LeadKnockSheet /> - do-not-knock banner", () => {
     // meaning; it used to be spelled `rose`, a raw palette step chosen against
     // the old dark default that landed near 2:1 on the light one.
     expect(banner.className).toMatch(/\bborder-destructive|bg-destructive|text-destructive\b/);
+    for (const outcome of FIELD_OUTCOMES) {
+      expect(screen.getByTestId(`knock-outcome-${outcome.key}`)).toBeDisabled();
+    }
+    expect(screen.getByText(/outcome logging is blocked/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-outcome-sold"));
+    expect(props.onKnock).not.toHaveBeenCalled();
   });
 
   it("no banner when the flag is absent, falsy, or null (server rollout in flight)", () => {
@@ -718,6 +744,24 @@ describe("<LeadKnockSheet /> - do-not-knock banner", () => {
 });
 
 describe("<LeadKnockSheet /> - chrome and lifecycle", () => {
+  it("focuses the modeless sheet, restores the trigger on close, and keeps quick actions scrollable", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open lead";
+    document.body.appendChild(trigger);
+    trigger.focus();
+    try {
+      const { rerenderSheet } = renderSheet();
+      const sheet = screen.getByTestId("knock-sheet");
+      await waitFor(() => expect(sheet).toHaveFocus());
+      expect(screen.getByTestId("knock-sheet-body").className).toContain("overflow-y-auto");
+
+      rerenderSheet({ lead: null });
+      await waitFor(() => expect(trigger).toHaveFocus());
+    } finally {
+      trigger.remove();
+    }
+  });
+
   it("the assign row is capability-gated OFF for reps (fail-closed without lead.assign)", async () => {
     renderSheet(); // test auth context has no user → useCan fails closed
     await openDetails();

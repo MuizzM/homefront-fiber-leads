@@ -1074,7 +1074,12 @@ function GetPaidSection() {
       });
   }, [qc]);
 
-  const { data: account } = useQuery<PayoutAccount>({
+  const {
+    data: account,
+    isError: isAccountError,
+    isFetching: isAccountFetching,
+    refetch: refetchAccount,
+  } = useQuery<PayoutAccount>({
     queryKey: ["/api/payouts/account"],
     queryFn: () => apiRequest("GET", "/api/payouts/account").then(r => r.json()),
   });
@@ -1088,13 +1093,47 @@ function GetPaidSection() {
     onError: (e: any) => toast({ title: "Payouts aren't ready yet", description: e?.message ?? "Please try again shortly.", variant: "destructive" }),
   });
 
+  if (isAccountError) {
+    return (
+      <section className="space-y-3" data-testid="get-paid">
+        <div className="flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Get paid
+        </div>
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/25 bg-destructive/[0.06] p-4"
+          data-testid="payout-account-error"
+        >
+          <p className="text-sm font-semibold text-foreground">Couldn't load payout account</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            Payout readiness and bank status are hidden until this check succeeds. No payout action is available right now.
+          </p>
+          <button
+            type="button"
+            onClick={() => { void refetchAccount(); }}
+            disabled={isAccountFetching}
+            className="mt-4 inline-flex min-h-11 items-center justify-center rounded-lg border border-border bg-background px-4 text-sm font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="payout-account-retry"
+          >
+            {isAccountFetching ? "Trying again…" : "Try again"}
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   // Feature dark until Stripe is configured server-side → render nothing extra.
   if (!account || !account.enabled) return null;
 
-  const isReady = account.onboardingStatus === "enabled";
+  // Fail closed: a status label alone is not enough to promise that Stripe can
+  // actually send money. All three server signals must agree.
+  const isReady = account.onboardingStatus === "enabled"
+    && account.payoutsEnabled
+    && account.detailsSubmitted;
   const connectLabel =
     account.onboardingStatus === "restricted" ? "Reconnect payout account"
     : account.onboardingStatus === "pending" ? "Continue setup"
+    : account.onboardingStatus === "enabled" ? "Finish payout setup"
     : "Connect payout account";
 
   return (

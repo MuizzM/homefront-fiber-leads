@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateFacts,
+  aggregateTeamFacts,
   buildFunnel,
   computeDailyFacts,
   computeDistance,
@@ -293,6 +294,49 @@ describe("daily facts", () => {
     expect(isAppointment({ outcome: "follow_up", callbackDate: null })).toBe(false);
   });
 
+  it("completes only a real prior callback, once, including a due same-day booking", () => {
+    const base = {
+      shifts: [], points: [], assignment: ASSIGNMENT, orders: ORDERS,
+      metricDate: "2026-08-11", nowMs: at(18, 0),
+    };
+
+    const ordinaryRevisit = computeDailyFacts({
+      ...base,
+      events: [door(9, 0, { leadId: 1, outcome: "interested", wasHome: true })],
+      previouslyKnockedLeadIds: new Set([1]),
+    });
+    expect(ordinaryRevisit.appointmentsCompleted).toBe(0);
+
+    const priorCallback = computeDailyFacts({
+      ...base,
+      events: [
+        door(9, 0, { leadId: 2, outcome: "interested", wasHome: true }),
+        door(10, 0, { leadId: 2, outcome: "sold", wasHome: true }),
+      ],
+      previouslyBookedLeadIds: new Set([2]),
+    });
+    expect(priorCallback.appointmentsCompleted).toBe(1);
+
+    const sameDayCallback = computeDailyFacts({
+      ...base,
+      events: [
+        door(9, 0, { leadId: 3, outcome: "follow_up", wasHome: true, callbackDate: "2026-08-11" }),
+        door(11, 0, { leadId: 3, outcome: "sold", wasHome: true }),
+      ],
+    });
+    expect(sameDayCallback.appointments).toBe(1);
+    expect(sameDayCallback.appointmentsCompleted).toBe(1);
+  });
+
+  it("keeps completion percentages unavailable until a due-period cohort exists", () => {
+    const metrics = deriveMetrics({
+      ...emptyFacts(), followUps: 1, followUpsCompleted: 3,
+      appointments: 1, appointmentsCompleted: 2,
+    });
+    expect(metrics.callbackCompletionRate).toBeNull();
+    expect(metrics.appointmentCompletionRate).toBeNull();
+  });
+
   it("only counts a door as verified when the fix placed the rep there", () => {
     const f = computeDailyFacts({
       events: [
@@ -346,6 +390,27 @@ describe("aggregation across days", () => {
     expect(folded.assignedDoors).toBe(80);
     expect(folded.eligibleDoors).toBe(75);
     expect(folded.everWorkedDoors).toBe(30);
+  });
+
+  it("sums each rep's latest stock snapshot for team utilization", () => {
+    const team = aggregateTeamFacts([
+      day({
+        assignedDoors: 220, eligibleDoors: 200, everWorkedDoors: 60,
+        freshAssigned: 30, doorsAttempted: 60, assignmentAgeSeconds: 3_600,
+      }),
+      day({
+        assignedDoors: 430, eligibleDoors: 400, everWorkedDoors: 40,
+        freshAssigned: 50, doorsAttempted: 40, assignmentAgeSeconds: 7_200,
+      }),
+    ]);
+
+    expect(team.assignedDoors).toBe(650);
+    expect(team.eligibleDoors).toBe(600);
+    expect(team.everWorkedDoors).toBe(100);
+    expect(team.freshAssigned).toBe(80);
+    expect(team.doorsAttempted).toBe(100);
+    expect(team.assignmentAgeSeconds).toBe(7_200);
+    expect(deriveMetrics(team).utilizationRate).toBeCloseTo(1 / 6, 5);
   });
 
   it("keeps the longest inactive period as a maximum, not a sum", () => {

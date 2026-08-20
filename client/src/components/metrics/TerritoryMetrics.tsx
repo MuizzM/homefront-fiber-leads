@@ -24,6 +24,7 @@ import { SectionLabel } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
 import { CountCard } from "./MetricCard";
+import { METRICS_REFETCH_MS, MetricsErrorState } from "./MetricsDataState";
 import { formatRate } from "@shared/repMetrics";
 import {
   TERRITORY_STATUS_TONE,
@@ -53,8 +54,9 @@ export function TerritoryMetrics() {
   const [statusFilter, setStatusFilter] = useState<TerritoryStatus | "all">("all");
   const [openId, setOpenId] = useState<number | null>(null);
 
-  const { data, isLoading } = useQuery<{ rows: TerritoryRow[] }>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<{ rows: TerritoryRow[] }>({
     queryKey: ["/api/metrics/territories"],
+    refetchInterval: METRICS_REFETCH_MS,
   });
 
   const rows = data?.rows ?? [];
@@ -70,6 +72,10 @@ export function TerritoryMetrics() {
   }, [rows]);
 
   if (isLoading) return <Skeleton className="h-64 rounded-2xl" />;
+
+  if (isError || !data) {
+    return <MetricsErrorState onRetry={() => { void refetch(); }} retrying={isFetching} />;
+  }
 
   const totals = rows.reduce((acc, r) => ({
     eligible: acc.eligible + r.facts.eligibleDoors,

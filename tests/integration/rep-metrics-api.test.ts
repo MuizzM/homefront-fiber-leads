@@ -21,6 +21,7 @@ let server: Server;
 let baseUrl: string;
 let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: import("better-sqlite3").Database;
+let recomputeRepDay: (tenantId: number, repId: number, metricDate: string, nowMs?: number) => unknown;
 
 const realFetch = globalThis.fetch.bind(globalThis);
 
@@ -57,7 +58,9 @@ beforeAll(async () => {
   storage = storageModule.storage;
   ({ rawDb } = await import("../../server/db"));
   const { registerRoutes } = await import("../../server/routes");
-  const { localDateString, tenantTimezone } = await import("../../server/repMetricsStore");
+  const metricsStore = await import("../../server/repMetricsStore");
+  const { localDateString, tenantTimezone } = metricsStore;
+  recomputeRepDay = metricsStore.recomputeRepDay;
   // Tenant 1 is the org under test; its timezone is what "today" means here.
   TODAY = localDateString(Date.now(), tenantTimezone(1));
 
@@ -106,17 +109,27 @@ beforeAll(async () => {
   foreignManagerSession = mkUser("Foreign Manager", "fm-metrics@example.com", "manager", 2, foreignManagerMember);
 
   // Rollup rows so the reads have something to scope.
-  const insertDay = (tenantId: number, repId: number, doors: number, contacts: number) =>
+  const insertDay = (
+    tenantId: number,
+    repId: number,
+    doors: number,
+    contacts: number,
+    stocks: { assigned: number; eligible: number; worked: number; fresh: number },
+  ) =>
     rawDb.prepare(
       `INSERT INTO rep_daily_metrics (tenant_id, rep_id, metric_date, doors_attempted, doors_visited,
-         verified_doors, contacts, submitted_orders, active_seconds, eligible_doors, ever_worked_doors)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(tenantId, repId, TODAY, doors, doors, doors, contacts, 1, 8 * 3600, 200, doors);
+         verified_doors, contacts, submitted_orders, active_seconds, assigned_doors, eligible_doors,
+         ever_worked_doors, fresh_assigned)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      tenantId, repId, TODAY, doors, doors, doors, contacts, 1, 8 * 3600,
+      stocks.assigned, stocks.eligible, stocks.worked, stocks.fresh,
+    );
 
-  insertDay(1, repA1Rep, 60, 15);
-  insertDay(1, repA2Rep, 40, 12);
-  insertDay(1, repB1Rep, 55, 20);
-  insertDay(2, foreignRep, 99, 33);
+  insertDay(1, repA1Rep, 60, 15, { assigned: 220, eligible: 200, worked: 60, fresh: 30 });
+  insertDay(1, repA2Rep, 40, 12, { assigned: 430, eligible: 400, worked: 40, fresh: 50 });
+  insertDay(1, repB1Rep, 55, 20, { assigned: 300, eligible: 250, worked: 55, fresh: 20 });
+  insertDay(2, foreignRep, 99, 33, { assigned: 500, eligible: 450, worked: 99, fresh: 70 });
 
   // An insight on each rep, so the coaching endpoints have rows to scope.
   const insight = (tenantId: number, repId: number, title: string) =>
@@ -166,6 +179,35 @@ function request(path: string, sessionId?: string, init: RequestInit = {}) {
       ...(init.headers ?? {}),
     },
   });
+}
+
+let hourlyLeadSeq = 0;
+function insertHourlyKnock(
+  knockedAt: string,
+  options: { outcome?: string; wasHome?: boolean; superseded?: boolean } = {},
+) {
+  const outcome = options.outcome ?? "not_home";
+  const lead = storage.createLead({
+    address: `${++hourlyLeadSeq} Hourly Metrics Way`,
+    city: "High Point",
+    state: "NC",
+    zip: "27263",
+    fiberStatus: "fiber",
+    leadStatus: outcome === "sold" ? "sold" : "prospect",
+    tenantId: 1,
+  } as any);
+  rawDb.prepare(`
+    INSERT INTO knock_log
+      (lead_id, rep_id, tenant_id, knocked_at, was_home, outcome, pass_number, superseded)
+    VALUES (?, ?, 1, ?, ?, ?, 1, ?)
+  `).run(
+    lead.id,
+    repA1Rep,
+    knockedAt,
+    options.wasHome ? 1 : 0,
+    outcome,
+    options.superseded ? 1 : 0,
+  );
 }
 
 const METRIC_PATHS = [
@@ -232,6 +274,115 @@ describe("a rep sees only themselves", () => {
   });
 });
 
+// ── Hourly rollup ───────────────────────────────────────────────────────────
+
+describe("hourly activity uses the org's local clock", () => {
+  it("reads the asynchronous rollup instead of aggregating raw knocks on request", async () => {
+    const metricDate = "2026-08-15";
+    insertHourlyKnock("2026-08-15T16:00:00.000Z", { wasHome: true }); // noon EDT
+
+    let res = await request(
+      `/api/metrics/me/hourly?from=${metricDate}&to=${metricDate}`,
+      repA1Session,
+    );
+    expect((await res.json()).hours).toEqual([]);
+
+    recomputeRepDay(1, repA1Rep, metricDate, Date.parse("2026-08-16T12:00:00.000Z"));
+    res = await request(
+      `/api/metrics/me/hourly?from=${metricDate}&to=${metricDate}`,
+      repA1Session,
+    );
+    expect((await res.json()).hours).toEqual([
+      { hour: 12, doors: 1, contacts: 1, sales: 0 },
+    ]);
+  });
+
+  it("uses America/New_York local-day bounds across UTC midnight", async () => {
+    const metricDate = "2026-08-18";
+    insertHourlyKnock("2026-08-18T03:30:00.000Z"); // Aug 17 23:30 EDT: outside
+    insertHourlyKnock("2026-08-19T01:30:00.000Z"); // Aug 18 21:30 EDT: inside
+    insertHourlyKnock("2026-08-19T04:00:00.000Z"); // Aug 19 00:00 EDT: exclusive end
+    recomputeRepDay(1, repA1Rep, metricDate, Date.parse("2026-08-20T00:00:00.000Z"));
+
+    const res = await request(
+      `/api/metrics/me/hourly?from=${metricDate}&to=${metricDate}`,
+      repA1Session,
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).hours).toEqual([
+      { hour: 21, doors: 1, contacts: 0, sales: 0 },
+    ]);
+  });
+
+  it("uses DST-aware local hours on spring-forward and fall-back days", async () => {
+    insertHourlyKnock("2026-03-08T06:30:00.000Z", { wasHome: true }); // 01:30 EST
+    insertHourlyKnock("2026-03-08T07:30:00.000Z", { wasHome: true }); // 03:30 EDT
+    recomputeRepDay(1, repA1Rep, "2026-03-08", Date.parse("2026-03-09T12:00:00.000Z"));
+
+    let res = await request(
+      "/api/metrics/me/hourly?from=2026-03-08&to=2026-03-08",
+      repA1Session,
+    );
+    expect((await res.json()).hours).toEqual([
+      { hour: 1, doors: 1, contacts: 1, sales: 0 },
+      { hour: 3, doors: 1, contacts: 1, sales: 0 },
+    ]);
+
+    insertHourlyKnock("2026-11-01T05:30:00.000Z", { wasHome: true }); // 01:30 EDT
+    insertHourlyKnock("2026-11-01T06:30:00.000Z", { wasHome: true }); // 01:30 EST
+    recomputeRepDay(1, repA1Rep, "2026-11-01", Date.parse("2026-11-02T12:00:00.000Z"));
+
+    res = await request(
+      "/api/metrics/me/hourly?from=2026-11-01&to=2026-11-01",
+      repA1Session,
+    );
+    expect((await res.json()).hours).toEqual([
+      { hour: 1, doors: 2, contacts: 2, sales: 0 },
+    ]);
+  });
+
+  it("keeps superseded attempts but excludes their losing contact and sale outcomes", async () => {
+    const metricDate = "2026-08-16";
+    insertHourlyKnock("2026-08-16T18:00:00.000Z", {
+      outcome: "sold", wasHome: true,
+    });
+    insertHourlyKnock("2026-08-16T18:15:00.000Z", {
+      outcome: "sold", wasHome: true, superseded: true,
+    });
+    insertHourlyKnock("2026-08-16T18:30:00.000Z", {
+      outcome: "not_home", wasHome: false,
+    });
+    recomputeRepDay(1, repA1Rep, metricDate, Date.parse("2026-08-17T12:00:00.000Z"));
+
+    const res = await request(
+      `/api/metrics/me/hourly?from=${metricDate}&to=${metricDate}`,
+      repA1Session,
+    );
+    expect((await res.json()).hours).toEqual([
+      { hour: 14, doors: 3, contacts: 1, sales: 1 },
+    ]);
+  });
+});
+
+describe("order activity uses the org's local calendar date", () => {
+  it("counts a date-only sold commission on its intended local day", () => {
+    const metricDate = "2026-08-14";
+    rawDb.prepare(`
+      INSERT INTO commissions (tenant_id, rep_id, amount, status, sale_date)
+      VALUES (1, ?, 100, 'pending', ?)
+    `).run(repA2Rep, metricDate);
+
+    recomputeRepDay(1, repA2Rep, metricDate, Date.parse("2026-08-15T12:00:00.000Z"));
+    const row = rawDb.prepare(`
+      SELECT submitted_orders AS submittedOrders
+        FROM rep_daily_metrics
+       WHERE tenant_id = 1 AND rep_id = ? AND metric_date = ?
+    `).get(repA2Rep, metricDate) as any;
+
+    expect(row.submittedOrders).toBe(1);
+  });
+});
+
 // ── Supervisor scope ─────────────────────────────────────────────────────────
 
 describe("supervisor scope", () => {
@@ -243,6 +394,18 @@ describe("supervisor scope", () => {
     expect(ids).toContain(repA1Rep);
     expect(ids).toContain(repA2Rep);
     expect(ids).not.toContain(repB1Rep);
+  });
+
+  it("sums two reps' unequal stock snapshots for team utilization", async () => {
+    const res = await request("/api/metrics/team", leadASession);
+    expect(res.status).toBe(200);
+    const { kpis } = await res.json();
+
+    expect(kpis.facts.assignedDoors).toBe(650);
+    expect(kpis.facts.eligibleDoors).toBe(600);
+    expect(kpis.facts.everWorkedDoors).toBe(100);
+    expect(kpis.facts.freshAssigned).toBe(80);
+    expect(kpis.metrics.utilizationRate).toBeCloseTo(1 / 6, 5);
   });
 
   it("gives a manager their own branch and not another manager's", async () => {

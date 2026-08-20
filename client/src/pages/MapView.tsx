@@ -6091,6 +6091,7 @@ export default function MapView() {
   // CENTRAL MARK (owner ask 2026-07-26): managers mark an outcome on behalf of
   // the central team — no rep credit, no commission. Optimistic pin recolor,
   // same imperative paint path as a rep knock.
+  const centralCommandKeysRef = useRef(new Map<string, string>());
   const handleCentralMark = useCallback(
     async (outcome: KnockOutcome): Promise<boolean> => {
       const lead = selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
@@ -6132,9 +6133,17 @@ export default function MapView() {
       // corner of the screen on every door. The revert below still speaks -
       // a pin snapping BACK is the one outcome the map cannot explain.
       try { navigator.vibrate?.(10); } catch { /* */ }
+      const commandSlot = `${lead.id}:${outcome}`;
+      let idempotencyKey = centralCommandKeysRef.current.get(commandSlot);
+      if (!idempotencyKey) {
+        idempotencyKey = globalThis.crypto?.randomUUID?.()
+          ?? `central-${lead.id}-${outcome}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        centralCommandKeysRef.current.set(commandSlot, idempotencyKey);
+      }
       try {
-        const res = await apiRequest("POST", `/api/leads/${lead.id}/central-disposition`, { outcome });
+        const res = await apiRequest("POST", `/api/leads/${lead.id}/central-disposition`, { outcome, idempotencyKey });
         const updated = await res.json();
+        centralCommandKeysRef.current.delete(commandSlot);
         // Reconcile: the server is authoritative on leadStatus (CAS ordering
         // can pick a different winner than the local table).
         const serverDs = pinDisplayState({ leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome });

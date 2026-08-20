@@ -24,7 +24,7 @@
 // the card to Peek. Nothing was removed — only reorganized into the levels.
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Check, X, DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone, UserCheck, type LucideIcon } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
@@ -43,6 +43,7 @@ import { QuickBody } from "@/components/lead-sheet/QuickBody";
 import { DetailsBody } from "@/components/lead-sheet/DetailsBody";
 import { relativeTime, prefersReducedMotion, shortRepName, MUTED, BODY_TEXT } from "@/components/lead-sheet/utils";
 import { isFccReportedLead } from "@/lib/leadSourceFilter";
+import { useToast } from "@/hooks/use-toast";
 import type { HistoryRow, LeadDetail, TeamMember } from "@/components/lead-sheet/types";
 
 // The three snap levels. "quick" is the default open state.
@@ -193,6 +194,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const headerRef = useRef<HTMLDivElement>(null);      // compact header (drag region + measured)
   const quickBodyRef = useRef<HTMLDivElement>(null);   // quick-actions body (measured)
   const mainRef = useRef<HTMLDivElement>(null);        // quick+details content (inert in peek)
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
 
   // ── Geometry: measure sheet + safe area + the two collapsed levels so snaps
   // are numeric AND the map camera padding tracks the real sheet lip ──────────
@@ -408,6 +410,28 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     return () => window.removeEventListener("keydown", onKey);
   }, [lead, onClose]);
 
+  // Keep this modeless so the map remains interactive, but establish a clear
+  // keyboard/screen-reader entry and return path for pin and list selection.
+  const sheetOpen = Boolean(lead);
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const active = document.activeElement;
+    restoreFocusRef.current = active instanceof HTMLElement ? active : null;
+    const raf = requestAnimationFrame(() => {
+      // A fast user may already have moved into Notes or another control before
+      // this frame. Never steal that newer focus just to announce the shell.
+      if (document.activeElement === active || document.activeElement === document.body) {
+        sheetRef.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      const trigger = restoreFocusRef.current;
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+      restoreFocusRef.current = null;
+    };
+  }, [sheetOpen]);
+
   // In Peek the quick/details content is translated off-screen: pull it out of
   // the tab order and the accessibility tree so focus never lands on invisible
   // controls (inert via DOM API — React 18 doesn't own the attribute yet).
@@ -450,25 +474,54 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const canAssignLead = useCan("lead.assign");
   const canOpenCalling = useCan("calling.lead.read");
   const qc = useQueryClient();
+  const { toast } = useToast();
   const teamQuery = useQuery<TeamMember[]>({
     queryKey: ["/api/team"],
     enabled: canAssignLead && !!lead,
     staleTime: 5 * 60_000,
   });
+  const assignLeadMutation = useMutation({
+    mutationFn: ({ leadId, repId }: { leadId: number; repId: number | null }) =>
+      apiRequest("POST", `/api/leads/${leadId}/assign`, { repId }),
+    onMutate: ({ leadId, repId }) => {
+      const pins = qc.getQueryData<any>(["/api/leads/map"])?.pins as Array<{ id: number; assignedRepId?: number | null }> | undefined;
+      const previousAssignedRepId = pins?.find((pin) => pin.id === leadId)?.assignedRepId ?? null;
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        if (!old?.pins) return old;
+        return { ...old, pins: old.pins.map((p: any) => (p.id === leadId ? { ...p, assignedRepId: repId } : p)) };
+      });
+      return { previousAssignedRepId };
+    },
+    onSuccess: (_response, { leadId }) => {
+      qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/history`] });
+      qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}`] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+    },
+    onError: (error: any, { leadId, repId }, context) => {
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        if (!old?.pins) return old;
+        return {
+          ...old,
+          pins: old.pins.map((p: any) => (
+            p.id === leadId && p.assignedRepId === repId
+              ? { ...p, assignedRepId: context?.previousAssignedRepId ?? null }
+              : p
+          )),
+        };
+      });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      toast({
+        title: "Assignment wasn't saved",
+        description: String(error?.message ?? "Try again."),
+        variant: "destructive",
+      });
+    },
+  });
   const assignLead = (repId: number | null) => {
-    const id = renderedLead?.id;
-    if (!id) return;
-    // Optimistic pin/card update, then the capability-gated endpoint.
-    qc.setQueryData(["/api/leads/map"], (old: any) => {
-      if (!old?.pins) return old;
-      return { ...old, pins: old.pins.map((p: any) => (p.id === id ? { ...p, assignedRepId: repId } : p)) };
-    });
-    apiRequest("POST", `/api/leads/${id}/assign`, { repId })
-      .then(() => {
-        qc.invalidateQueries({ queryKey: [`/api/leads/${id}/history`] }); // assignment event
-        qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      })
-      .catch(() => { qc.invalidateQueries({ queryKey: ["/api/leads/map"] }); });
+    const leadId = renderedLead?.id;
+    if (!leadId || assignLeadMutation.isPending) return;
+    assignLeadMutation.mutate({ leadId, repId });
   };
 
   const historyQuery = useQuery<HistoryRow[]>({
@@ -742,6 +795,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       data-snap={docked ? "docked" : snap}
       role="dialog"
       aria-label={renderedLead.address}
+      tabIndex={-1}
       className={[
         // glass-sheet: the liquid-glass bottom-sheet surface (18px blur budget,
         // ink fill, specular top hairline, token shadow) — see index.css. Solid
@@ -749,7 +803,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         "glass-sheet fixed z-40 flex flex-col will-change-transform",
         docked
           ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
-          : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[24px] border-t border-white/10",
+          // Layout's persistent sidebar begins at Tailwind's md breakpoint,
+          // while the card does not dock until lg. Keep the tablet sheet inside
+          // the map workspace instead of hiding its address/actions underneath
+          // the 264px sidebar.
+          : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[24px] border-t border-white/10 md:left-[264px] md:right-0",
         // 200ms transform-only (GPU) — never transition-all, never >=300ms.
         dragging ? "" : "transition-transform duration-200",
         // Close is instant for the MAP: the moment `lead` clears, the exit
@@ -921,9 +979,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             lead id: only the quick block below crossfades, so History never
             remounts (and never flashes) on a card swap. */}
         <div
+          data-testid="knock-sheet-body"
           className={[
             "flex-1 min-h-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
-            detailsShown ? "overflow-y-auto overscroll-contain" : "overflow-hidden",
+            // Quick content can exceed 85dvh on a short/landscape phone. The
+            // drag regions live above this body, so scrolling keeps every
+            // outcome and note reachable without stealing the sheet gesture.
+            !peekShown ? "overflow-y-auto overscroll-contain" : "overflow-hidden",
           ].join(" ")}
         >
           {/* Quick Actions — the default working level. Keyed on lead id so it
@@ -953,6 +1015,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               activeOutcome={activeOutcome}
               flashKey={flashKey}
               onStatusTap={handleStatusTap}
+              outcomesDisabled={Boolean(renderedLead.doNotKnock)}
               recent={recent}
               notes={notesCard}
             />
@@ -983,6 +1046,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             assignedRepId={renderedLead.assignedRepId}
             team={teamQuery.data ?? []}
             onAssign={assignLead}
+            assigning={assignLeadMutation.isPending}
             canOpenCalling={canOpenCalling}
             leadId={renderedLead.id}
             canManage={canManage}

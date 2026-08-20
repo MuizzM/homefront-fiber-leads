@@ -51,6 +51,7 @@ export interface DetailsBodyProps {
   assignedRepId?: number | null;
   team: TeamMember[];
   onAssign: (repId: number | null) => void;
+  assigning?: boolean;
   // Deep actions: the gated Calling-workspace link and ADMIN actions (owner ask
   // 2026-07-26: central mark with no rep credit, delete with two-tap confirm).
   canOpenCalling: boolean;
@@ -69,7 +70,7 @@ export interface DetailsBodyProps {
 
 export function DetailsBody(props: DetailsBodyProps): JSX.Element {
   const {
-    hidden, docked, detail, canAssignLead, assignedRepId, team, onAssign,
+    hidden, docked, detail, canAssignLead, assignedRepId, team, onAssign, assigning = false,
     canOpenCalling, leadId, canManage, onCentralMark, onDelete,
     centralMode, deleteArmed, onToggleCentral, onDeleteTap,
     history, historyLoading,
@@ -91,14 +92,17 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           <select
             value={assignedRepId ?? ""}
             onChange={e => onAssign(e.target.value ? Number(e.target.value) : null)}
+            disabled={assigning}
+            aria-busy={assigning}
             data-testid="card-assign-select"
-            className="flex-1 h-11 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60"
+            className="flex-1 h-11 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60 disabled:cursor-wait disabled:opacity-60"
           >
             <option value="" className="text-slate-900">Unassigned</option>
             {team.filter(m => m.active).map(m => (
               <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
             ))}
           </select>
+          {assigning && <span className="sr-only" role="status">Saving assignment</span>}
         </div>
       )}
 

@@ -20,12 +20,14 @@
 // knock_log. That separation is the whole reason the rollup table exists.
 
 import { rawDb } from "./db";
-import { localWallToUtcMs, localYmdParts } from "@shared/workweek";
+import { localHourIn, localWallToUtcMs, localYmdParts } from "@shared/workweek";
 import { polygonCovers } from "@shared/geo";
 import { territoryHeldByAny } from "@shared/territory";
 import {
   computeDailyFacts,
   emptyFacts,
+  isContact,
+  isSale,
   type AssignmentInput,
   type DoorEventInput,
   type OrderInput,
@@ -256,7 +258,7 @@ function loadAssignment(repId: number): AssignmentInput {
  * and has to be correct rather than a stub: a submitted order IS a sold knock
  * that minted a commission, and a paid order is one whose commission was paid.
  */
-function loadOrders(repId: number, startMs: number, endMs: number): OrderInput {
+function loadOrders(repId: number, startMs: number, endMs: number, metricDate: string): OrderInput {
   const lo = sqlTs(startMs), hi = sqlTs(endMs);
 
   const commission = rawDb.prepare(`
@@ -268,9 +270,14 @@ function loadOrders(repId: number, startMs: number, endMs: number): OrderInput {
       SUM(CASE WHEN status = 'paid'      THEN COALESCE(amount,0) * 100 ELSE 0 END)             AS paidCents
     FROM commissions
     WHERE rep_id = ?
-      AND replace(sale_date,'T',' ') >= ?
-      AND replace(sale_date,'T',' ') <  ?
-  `).get(repId, lo, hi) as any;
+      AND (
+        (length(trim(sale_date)) = 10 AND trim(sale_date) = ?)
+        OR
+        (length(trim(sale_date)) > 10
+          AND replace(sale_date,'T',' ') >= ?
+          AND replace(sale_date,'T',' ') <  ?)
+      )
+  `).get(repId, metricDate, lo, hi) as any;
 
   // The provider feed, when it has rows for this rep and day. Preferred over
   // the commission fallback because it carries the real lifecycle - accepted,
@@ -304,17 +311,21 @@ function loadOrders(repId: number, startMs: number, endMs: number): OrderInput {
 
   const completed = rawDb.prepare(`
     SELECT COUNT(DISTINCT k.lead_id) AS completed,
-           SUM(CASE WHEN k.outcome = 'sold' THEN 1 ELSE 0 END) AS converted
+           COUNT(DISTINCT CASE WHEN k.outcome = 'sold' THEN k.lead_id END) AS converted
       FROM knock_log k
      WHERE k.rep_id = ?
        AND replace(k.knocked_at,'T',' ') >= ? AND replace(k.knocked_at,'T',' ') < ?
+       AND COALESCE(k.superseded,0) = 0
+       AND NOT (k.callback_date IS NOT NULL AND k.outcome IN ('follow_up','callback'))
        AND EXISTS (
          SELECT 1 FROM knock_log p
           WHERE p.lead_id = k.lead_id AND p.rep_id = k.rep_id
             AND p.callback_date IS NOT NULL
+            AND COALESCE(p.superseded,0) = 0
+            AND date(replace(p.callback_date,'T',' ')) <= ?
             AND replace(p.knocked_at,'T',' ') < replace(k.knocked_at,'T',' ')
        )
-  `).get(repId, lo, hi) as any;
+  `).get(repId, lo, hi, metricDate) as any;
 
   return {
     submittedOrders: useVendor ? Number(vendor.submitted ?? 0) : Number(commission?.submitted ?? 0),
@@ -360,6 +371,33 @@ function loadPreviouslyKnocked(
          AND lead_id IN (${slice.map(() => "?").join(",")})
          AND replace(knocked_at,'T',' ') < ?
     `).all(repId, ...slice, sqlTs(startMs)) as any[];
+    for (const r of rows) out.add(Number(r.id));
+  }
+  return out;
+}
+
+/** Callback doors due by this local day, used only for appointment completion. */
+function loadPreviouslyBookedCallbacks(
+  repId: number,
+  startMs: number,
+  metricDate: string,
+  leadIds: readonly number[],
+): ReadonlySet<number> {
+  if (leadIds.length === 0) return new Set();
+  const out = new Set<number>();
+  const CHUNK = 400;
+  for (let i = 0; i < leadIds.length; i += CHUNK) {
+    const slice = leadIds.slice(i, i + CHUNK);
+    const rows = rawDb.prepare(`
+      SELECT DISTINCT lead_id AS id
+        FROM knock_log
+       WHERE rep_id = ?
+         AND lead_id IN (${slice.map(() => "?").join(",")})
+         AND callback_date IS NOT NULL
+         AND COALESCE(superseded,0) = 0
+         AND date(replace(callback_date,'T',' ')) <= ?
+         AND replace(knocked_at,'T',' ') < ?
+    `).all(repId, ...slice, metricDate, sqlTs(startMs)) as any[];
     for (const r of rows) out.add(Number(r.id));
   }
   return out;
@@ -421,17 +459,79 @@ export function recomputeRepDay(
   const points = loadTrackPoints(repId, startMs, endMs);
   markTerritory(repId, points);
   const assignment = loadAssignment(repId);
-  const orders = loadOrders(repId, startMs, endMs);
+  const orders = loadOrders(repId, startMs, endMs, metricDate);
   const previouslyKnockedLeadIds = loadPreviouslyKnocked(
     repId, startMs, [...new Set(events.map((e) => e.leadId))],
   );
+  const previouslyBookedLeadIds = loadPreviouslyBookedCallbacks(
+    repId, startMs, metricDate, [...new Set(events.map((e) => e.leadId))],
+  );
 
   const facts = computeDailyFacts({
-    events, shifts, points, assignment, orders, previouslyKnockedLeadIds, nowMs,
+    events, shifts, points, assignment, orders, previouslyKnockedLeadIds,
+    previouslyBookedLeadIds, metricDate, nowMs,
   });
 
-  writeDailyFacts(tenantId, repId, metricDate, timezone, facts);
+  // Both views of the rep-day advance together. The request path reads these
+  // persisted summaries only; it never scans or groups knock_log.
+  rawDb.transaction(() => {
+    writeDailyFacts(tenantId, repId, metricDate, timezone, facts);
+    writeHourlyFacts(tenantId, repId, metricDate, timezone, events);
+  })();
   return facts;
+}
+
+export interface HourlyMetricBucket {
+  hour: number;
+  doors: number;
+  contacts: number;
+  sales: number;
+}
+
+interface HourlyDayState {
+  version: 1;
+  timezone: string;
+  hours: HourlyMetricBucket[];
+  unavailable?: boolean;
+}
+
+const hourlyStateKey = (tenantId: number, repId: number, metricDate: string) =>
+  `rep-hourly:v1:${tenantId}:${repId}:${metricDate}`;
+
+/** Persist one local day's hour buckets as part of the async rep-day rollup. */
+function writeHourlyFacts(
+  tenantId: number,
+  repId: number,
+  metricDate: string,
+  timezone: string,
+  events: readonly DoorEventInput[],
+): void {
+  const buckets = Array.from({ length: 24 }, (_, hour): HourlyMetricBucket => ({
+    hour, doors: 0, contacts: 0, sales: 0,
+  }));
+
+  for (const event of events) {
+    const bucket = buckets[localHourIn(event.atMs, timezone)];
+    // A superseded offline row remains a real attempt, matching
+    // computeDailyFacts, but its losing outcome contributes no contact or sale.
+    bucket.doors++;
+    if (event.superseded) continue;
+    if (isContact(event)) bucket.contacts++;
+    if (isSale(event)) bucket.sales++;
+  }
+
+  const value: HourlyDayState = {
+    version: 1,
+    timezone,
+    hours: buckets.filter((b) => b.doors > 0 || b.contacts > 0 || b.sales > 0),
+  };
+  rawDb.prepare(`
+    INSERT INTO rep_metrics_state (k, v, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(k) DO UPDATE SET
+      v = excluded.v,
+      updated_at = datetime('now')
+  `).run(hourlyStateKey(tenantId, repId, metricDate), JSON.stringify(value));
 }
 
 function writeDailyFacts(
@@ -640,6 +740,52 @@ export function dirtyDayCount(): number {
   } catch { return 0; }
 }
 
+/**
+ * Gradually backfill hourly snapshots for rep-days created before that summary
+ * existed. This only queues bounded background work from the already-indexed
+ * daily rollup; it does not inspect raw knocks and never runs from a request.
+ */
+export function markMissingHourlyRollupsDirty(limit: number): number {
+  const bounded = Math.max(0, Math.min(500, Math.trunc(limit)));
+  if (bounded === 0) return 0;
+  try {
+    const result = rawDb.prepare(`
+      INSERT OR IGNORE INTO rep_metrics_dirty_days (tenant_id, rep_id, metric_date)
+      SELECT d.tenant_id, d.rep_id, d.metric_date
+        FROM rep_daily_metrics d
+       WHERE NOT EXISTS (
+         SELECT 1
+           FROM rep_metrics_state s
+          WHERE s.k = 'rep-hourly:v1:' || d.tenant_id || ':' || d.rep_id || ':' || d.metric_date
+       )
+       ORDER BY d.metric_date DESC
+       LIMIT ?
+    `).run(bounded);
+    return Number(result.changes ?? 0);
+  } catch { return 0; }
+}
+
+/**
+ * Stop a deterministic legacy-day failure from being re-enqueued forever by
+ * the hourly backfill. A later real write still marks the day dirty normally
+ * and gets another chance to replace this empty sentinel with valid buckets.
+ */
+export function markHourlyRollupUnavailable(day: DirtyDay): void {
+  try {
+    const value: HourlyDayState = {
+      version: 1,
+      timezone: tenantTimezone(day.tenantId),
+      hours: [],
+      unavailable: true,
+    };
+    rawDb.prepare(`
+      INSERT INTO rep_metrics_state (k, v, updated_at)
+      VALUES (?, ?, datetime('now'))
+      ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = datetime('now')
+    `).run(hourlyStateKey(day.tenantId, day.repId, day.metricDate), JSON.stringify(value));
+  } catch { /* the existing failure path remains best-effort */ }
+}
+
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 export interface DailyRow extends RepDailyFacts {
@@ -727,6 +873,52 @@ export function readDailyRows(
 /** One rep's rows, unaggregated - the trend charts read this. */
 export function readRepRows(tenantId: number, repId: number, from: string, to: string): DailyRow[] {
   return readDailyRows(tenantId, [repId], from, to);
+}
+
+/**
+ * Read and combine persisted hour buckets for one authenticated rep and period.
+ * Keys are generated exclusively from the server-resolved tenant and roster
+ * seat. The caller cannot supply either scope component.
+ */
+export function readHourlyMetrics(
+  tenantId: number,
+  repId: number,
+  from: string,
+  to: string,
+  timezone: string,
+): HourlyMetricBucket[] {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) return [];
+
+  const keys: string[] = [];
+  for (let cursor = start; cursor <= end && keys.length < 401; cursor += 86_400_000) {
+    keys.push(hourlyStateKey(tenantId, repId, new Date(cursor).toISOString().slice(0, 10)));
+  }
+  if (keys.length === 0) return [];
+
+  const rows = rawDb.prepare(`
+    SELECT v FROM rep_metrics_state
+     WHERE k IN (${keys.map(() => "?").join(",")})
+  `).all(...keys) as Array<{ v: string }>;
+
+  const totals = Array.from({ length: 24 }, (_, hour): HourlyMetricBucket => ({
+    hour, doors: 0, contacts: 0, sales: 0,
+  }));
+  for (const row of rows) {
+    try {
+      const state = JSON.parse(row.v) as Partial<HourlyDayState>;
+      if (state.version !== 1 || state.timezone !== timezone || !Array.isArray(state.hours)) continue;
+      for (const raw of state.hours) {
+        const hour = Number(raw?.hour);
+        if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
+        totals[hour].doors += Math.max(0, Number(raw?.doors) || 0);
+        totals[hour].contacts += Math.max(0, Number(raw?.contacts) || 0);
+        totals[hour].sales += Math.max(0, Number(raw?.sales) || 0);
+      }
+    } catch { /* corrupt optional summary: omit it until the backfill rewrites it */ }
+  }
+  return totals.filter((b) => b.doors > 0 || b.contacts > 0 || b.sales > 0);
 }
 
 /** Fold a rep's rows into one fact row per rep. */

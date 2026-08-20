@@ -15,6 +15,7 @@ export interface QuickBodyProps {
   activeOutcome: KnockOutcome | null;
   flashKey: KnockOutcome | null;
   onStatusTap: (key: KnockOutcome) => void;
+  outcomesDisabled?: boolean;
   // Recent-activity line
   recent: { label: string; who: string | null; time: string } | null;
   // Notes composer (owned by the shell — same model as before, flat section)
@@ -36,7 +37,7 @@ const primaryUtilBtn =
 export function QuickBody(props: QuickBodyProps): JSX.Element {
   const {
     directionsHref, phone, copiedAddr, onCopyAddress,
-    outcomes, iconMap, activeOutcome, flashKey, onStatusTap,
+    outcomes, iconMap, activeOutcome, flashKey, onStatusTap, outcomesDisabled = false,
     recent, notes,
   } = props;
 
@@ -90,9 +91,15 @@ export function QuickBody(props: QuickBodyProps): JSX.Element {
             flashing={flashKey === o.key}
             onTap={onStatusTap}
             variant="grid"
+            disabled={outcomesDisabled}
           />
         ))}
       </div>
+      {outcomesDisabled && (
+        <p className="mt-2 text-[12px] font-semibold text-destructive" role="status">
+          Outcome logging is blocked for this address.
+        </p>
+      )}
 
       {/* Recent-activity line: the last thing that happened at this door. */}
       {recent && (

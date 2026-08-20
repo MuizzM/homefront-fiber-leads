@@ -32,12 +32,14 @@ import { liveOpsScope, repInLiveOpsScope, type ScopeMember } from "./liveOpsScop
 import {
   localDateString,
   readDailyRows,
+  readHourlyMetrics,
   tenantTimezone,
   parseTs,
   type DailyRow,
 } from "./repMetricsStore";
 import {
   aggregateFacts,
+  aggregateTeamFacts,
   buildFunnel,
   deriveMetrics,
   emptyFacts,
@@ -230,20 +232,11 @@ export function registerRepMetricsRoutes(app: Express, deps: Deps) {
   app.get("/api/metrics/me/hourly", requireAuth, requireCapability("dashboard.read.self"),
     (req: Request, res: Response) => {
       const repId = myRepId(req);
-      if (repId == null) return res.json({ hours: [] });
-      const { from, to } = periodOf(req);
+      const tenantId = tid(req);
+      if (repId == null || tenantId == null) return res.json({ hours: [] });
+      const { from, to, timezone } = periodOf(req);
       try {
-        const rows = rawDb.prepare(`
-          SELECT CAST(strftime('%H', replace(knocked_at,'T',' ')) AS INTEGER) AS hour,
-                 COUNT(*) AS doors,
-                 SUM(CASE WHEN was_home = 1 THEN 1 ELSE 0 END) AS contacts,
-                 SUM(CASE WHEN outcome = 'sold' THEN 1 ELSE 0 END) AS sales
-            FROM knock_log
-           WHERE rep_id = ?
-             AND date(replace(knocked_at,'T',' ')) BETWEEN ? AND ?
-           GROUP BY hour ORDER BY hour
-        `).all(repId, from, to) as any[];
-        res.json({ hours: rows });
+        res.json({ hours: readHourlyMetrics(tenantId, repId, from, to, timezone) });
       } catch { res.json({ hours: [] }); }
     });
 
@@ -319,7 +312,7 @@ export function registerRepMetricsRoutes(app: Express, deps: Deps) {
 
       // Team KPIs are recomputed from SUMMED facts, never averaged from the row
       // rates above - the same rule the shared module enforces per rep.
-      const teamFacts = aggregateFacts([...folded.values()].map((f) => f as DailyRow));
+      const teamFacts = aggregateTeamFacts([...folded.values()]);
       const contributing = rows.filter((r) => r.facts.doorsAttempted > 0).map((r) => ({ metrics: r.metrics }));
 
       res.json({

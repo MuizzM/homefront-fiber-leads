@@ -6551,6 +6551,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     if (!isKnockOutcome(req.body?.outcome)) return res.status(400).json({ error: "invalid outcome" });
     const outcome = req.body.outcome as KnockOutcome;
+    const idemKey = typeof req.body?.idempotencyKey === "string" && req.body.idempotencyKey.trim()
+      ? String(req.body.idempotencyKey).slice(0, 120) : null;
+    if (idemKey) {
+      const prior = rawDb.prepare(
+        "SELECT detail FROM lead_events WHERE lead_id = ? AND idem_key = ? LIMIT 1",
+      ).get(lead.id, idemKey) as { detail?: string } | undefined;
+      if (prior) {
+        let priorOutcome: string | null = null;
+        try { priorOutcome = JSON.parse(String(prior.detail ?? "{}"))?.outcome ?? null; } catch { /* malformed legacy detail */ }
+        if (priorOutcome && priorOutcome !== outcome) {
+          return res.status(409).json({ error: "Idempotency key already used for another outcome" });
+        }
+        // Whole-command replay: do not restamp the lead, duplicate the audit,
+        // or emit another event after a response was lost in transit.
+        return res.json({ ...lead, central: true, deduped: true });
+      }
+    }
     const newStatus = OUTCOME_TO_STATUS[outcome];
     const prevStatus = lead.leadStatus ?? null;
     const at = new Date().toISOString();
@@ -6574,8 +6591,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // client-supplied key so a double-tap / offline replay is one row, and the
     // display name is never derived from a rep id, cache, prior event, or fallback.
     try {
-      const idemKey = typeof req.body?.idempotencyKey === "string" && req.body.idempotencyKey.trim()
-        ? String(req.body.idempotencyKey).slice(0, 120) : null;
       storage.recordLeadStatusEvent({
         leadId: lead.id, displayActor: "Central Admin", source: "central",
         outcome, newStatus, prevStatus,
@@ -6614,6 +6629,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
       // Reps can only log knocks on leads assigned to them
       if (!repCanAccessLead(_knu, _knl)) return res.status(404).json({ error: "Not found" });
+      // Compliance hard stop: once an authorized user has marked this address
+      // do-not-knock, the field disposition path must not create even an
+      // append-only knock. Keep this before idempotent replay too: that branch
+      // can heal status and money side effects for an earlier partial write,
+      // which would still mutate a door whose current state forbids field work.
+      // Tenant/visibility checks deliberately run first so this response never
+      // reveals a foreign address's compliance state.
+      if (_knl.doNotKnock) {
+        return res.status(409).json({
+          error: "This address is marked do not knock. No outcome was recorded.",
+          code: "LEAD_DO_NOT_KNOCK",
+        });
+      }
     }
     // Idempotency: the offline queue retries with the same clientId after a lost
     // response. If we've already logged this knock, return the existing row and

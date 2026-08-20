@@ -54,6 +54,7 @@ import { useAuth } from "@/lib/auth";
 import { navIntentHandlers } from "@/lib/routePrefetch";
 import { TrainingLock, useTrainingGate } from "@/components/TrainingLock";
 import { useTheme } from "@/hooks/use-theme";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { can, type Role as AppRole } from "@shared/capabilities";
 import { can as roleCan } from "@shared/permissions";
 
@@ -242,6 +243,7 @@ export function isTrainingGateOpenClientPath(value: string): boolean {
 // ── Layout ────────────────────────────────────────────────────────────────────
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
+  const isMobile = useIsMobile();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
@@ -411,7 +413,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         Skip to main content
       </a>
       {/* Sidebar */}
-      <aside className={cn(
+      <aside
+        aria-hidden={isMobile && !mobileOpen ? true : undefined}
+        // A translated off-canvas drawer is still focusable and exposed to
+        // assistive technology. `inert` closes both paths while the phone nav
+        // is visually hidden; desktop navigation remains fully interactive.
+        {...(isMobile && !mobileOpen ? { inert: "" } : {})}
+        className={cn(
         "fixed inset-y-0 left-0 z-50 flex w-[min(88vw,360px)] flex-col border-r border-border bg-card/95 transition-transform duration-200 ease-out motion-reduce:duration-0 md:w-[264px]",
         "md:relative md:translate-x-0",
         mobileOpen ? "translate-x-0" : "-translate-x-full"

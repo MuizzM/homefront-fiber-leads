@@ -5,6 +5,7 @@
 //  C4  bulk-status stamps recency (a stale knock loses the CAS afterwards)
 //  C5  POST /api/commissions on an existing pending returns {existed:true}, not a phantom create
 //  C6  commission summary excludes 'superseded' rows
+//  C7  do-not-knock is a server-side hard stop before every field side effect
 import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -391,5 +392,57 @@ describe("Central mark appears in History", () => {
     const fresh = storage.getLeadById(lead.id);
     expect(fresh.leadStatus).toBe("prospect");       // not_home is non-terminal
     expect(fresh.lastOutcome).toBe("not_home");
+  });
+});
+
+describe("C7 - do-not-knock is a server-side hard stop", () => {
+  it("rejects a sold knock before status, metrics, money, or audit side effects", async () => {
+    const lead = makeLead(1, rep1.memberId);
+    storage.updateLead(lead.id, { doNotKnock: true }, 1);
+
+    const leadBefore = rawDb.prepare(
+      "SELECT lead_status, last_outcome, last_outcome_at, updated_at FROM leads WHERE id = ?",
+    ).get(lead.id) as any;
+    const dirtyBefore = (rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM rep_metrics_dirty_days WHERE rep_id = ?",
+    ).get(rep1.memberId) as any).n;
+    const activityBefore = (rawDb.prepare("SELECT COUNT(*) AS n FROM activity_log").get() as any).n;
+    const eventsBefore = (rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM lead_events WHERE lead_id = ?",
+    ).get(lead.id) as any).n;
+
+    const res = await request(`/api/leads/${lead.id}/knock`, rep1.session, {
+      method: "POST",
+      body: JSON.stringify({
+        outcome: "sold",
+        knockedAt: new Date().toISOString(),
+        clientId: `dnk-hard-stop-${lead.id}`,
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "This address is marked do not knock. No outcome was recorded.",
+      code: "LEAD_DO_NOT_KNOCK",
+    });
+
+    expect(rawDb.prepare(
+      "SELECT lead_status, last_outcome, last_outcome_at, updated_at FROM leads WHERE id = ?",
+    ).get(lead.id)).toEqual(leadBefore);
+    expect((rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM knock_log WHERE lead_id = ?",
+    ).get(lead.id) as any).n).toBe(0);
+    expect((rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM rep_metrics_dirty_days WHERE rep_id = ?",
+    ).get(rep1.memberId) as any).n).toBe(dirtyBefore);
+    expect((rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM commission_sales WHERE lead_id = ?",
+    ).get(lead.id) as any).n).toBe(0);
+    expect((rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM commissions WHERE lead_id = ?",
+    ).get(lead.id) as any).n).toBe(0);
+    expect((rawDb.prepare(
+      "SELECT COUNT(*) AS n FROM lead_events WHERE lead_id = ?",
+    ).get(lead.id) as any).n).toBe(eventsBefore);
+    expect((rawDb.prepare("SELECT COUNT(*) AS n FROM activity_log").get() as any).n).toBe(activityBefore);
   });
 });
