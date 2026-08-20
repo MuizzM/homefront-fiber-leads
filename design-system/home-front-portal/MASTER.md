@@ -49,6 +49,8 @@ Use semantic HSL tokens only; do not hardcode colors in page components.
 - Dense supporting text may use 13px. The absolute legibility floor is 11px and
   is reserved for non-essential metadata.
 - Use tabular figures for money, progress, durations, and comparable metrics.
+- Use sentence case for section labels. Reserve uppercase tracking for the
+  official wordmark and compact status codes, not routine page structure.
 - Prefer wrapping to truncation. If truncation is unavoidable, preserve a way
   for pointer and keyboard users to reach the full value.
 

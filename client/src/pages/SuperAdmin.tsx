@@ -72,30 +72,30 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
 
   return (
     <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <Label className="text-xs text-muted-foreground">Company Name *</Label>
-          <Input value={form.companyName} onChange={e => {
+          <Label htmlFor="tenant-company-name" className="text-xs text-muted-foreground">Company Name *</Label>
+          <Input id="tenant-company-name" required value={form.companyName} onChange={e => {
             set("companyName", e.target.value);
             if (!initial) set("slug", e.target.value.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-"));
           }} placeholder="Acme Fiber LLC" className="bg-secondary border-input text-sm mt-1" />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">URL Slug *</Label>
-          <Input value={form.slug} onChange={e => set("slug", e.target.value)} placeholder="acme-fiber"
+          <Label htmlFor="tenant-slug" className="text-xs text-muted-foreground">URL Slug *</Label>
+          <Input id="tenant-slug" required value={form.slug} onChange={e => set("slug", e.target.value)} placeholder="acme-fiber"
             className="bg-secondary border-input text-sm mt-1 font-mono" />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <Label className="text-xs text-muted-foreground">Owner Name *</Label>
-          <Input value={form.ownerName} onChange={e => set("ownerName", e.target.value)}
+          <Label htmlFor="tenant-owner-name" className="text-xs text-muted-foreground">Owner Name *</Label>
+          <Input id="tenant-owner-name" required value={form.ownerName} onChange={e => set("ownerName", e.target.value)}
             placeholder="John Smith" className="bg-secondary border-input text-sm mt-1" />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">Owner Email *</Label>
-          <Input type="email" value={form.ownerEmail} onChange={e => set("ownerEmail", e.target.value)}
+          <Label htmlFor="tenant-owner-email" className="text-xs text-muted-foreground">Owner Email *</Label>
+          <Input id="tenant-owner-email" required type="email" value={form.ownerEmail} onChange={e => set("ownerEmail", e.target.value)}
             placeholder="john@acme.com" className="bg-secondary border-input text-sm mt-1" />
         </div>
       </div>
@@ -103,32 +103,32 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
       <Separator className="bg-border/50" />
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">White-Label Branding</p>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <Label className="text-xs text-muted-foreground">Brand Name (shown in app)</Label>
-          <Input value={form.brandName} onChange={e => set("brandName", e.target.value)}
+          <Label htmlFor="tenant-brand-name" className="text-xs text-muted-foreground">Brand Name (shown in app)</Label>
+          <Input id="tenant-brand-name" required value={form.brandName} onChange={e => set("brandName", e.target.value)}
             placeholder="Acme Fiber" className="bg-secondary border-input text-sm mt-1" />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">Tagline</Label>
-          <Input value={form.tagline} onChange={e => set("tagline", e.target.value)}
+          <Label htmlFor="tenant-tagline" className="text-xs text-muted-foreground">Tagline</Label>
+          <Input id="tenant-tagline" value={form.tagline} onChange={e => set("tagline", e.target.value)}
             placeholder="Field Sales Intelligence" className="bg-secondary border-input text-sm mt-1" />
         </div>
       </div>
 
       <div className="flex items-center gap-3">
         <div className="flex-1">
-          <Label className="text-xs text-muted-foreground">Brand Color</Label>
+          <Label htmlFor="tenant-brand-color-text" className="text-xs text-muted-foreground">Brand Color</Label>
           <div className="flex gap-2 mt-1">
             <input type="color" value={form.brandColor} onChange={e => set("brandColor", e.target.value)}
               className="w-9 h-9 rounded border border-input bg-secondary cursor-pointer" />
-            <Input value={form.brandColor} onChange={e => set("brandColor", e.target.value)}
+            <Input id="tenant-brand-color-text" value={form.brandColor} onChange={e => set("brandColor", e.target.value)}
               className="bg-secondary border-input text-sm font-mono flex-1" />
           </div>
         </div>
         <div style={{ width: 80 }}>
-          <Label className="text-xs text-muted-foreground">Max Reps</Label>
-          <Input type="number" value={form.maxReps} onChange={e => set("maxReps", Number(e.target.value))}
+          <Label htmlFor="tenant-max-reps" className="text-xs text-muted-foreground">Max Reps</Label>
+          <Input id="tenant-max-reps" type="number" value={form.maxReps} onChange={e => set("maxReps", Number(e.target.value))}
             className="bg-secondary border-input text-sm mt-1" min={1} />
         </div>
       </div>
@@ -136,14 +136,14 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
       <Separator className="bg-border/50" />
       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Billing</p>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
-          <Label className="text-xs text-muted-foreground">Plan</Label>
+          <Label htmlFor="tenant-plan" className="text-xs text-muted-foreground">Plan</Label>
           <Select value={form.plan} onValueChange={v => {
             set("plan", v);
             set("monthlyFee", PLAN_PRICES[v] || 0);
           }}>
-            <SelectTrigger className="bg-secondary border-input text-sm mt-1 h-9">
+            <SelectTrigger id="tenant-plan" className="bg-secondary border-input text-sm mt-1">
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
@@ -155,21 +155,21 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
           </Select>
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">Monthly Fee ($)</Label>
-          <Input type="number" value={form.monthlyFee} onChange={e => set("monthlyFee", Number(e.target.value))}
+          <Label htmlFor="tenant-monthly-fee" className="text-xs text-muted-foreground">Monthly Fee ($)</Label>
+          <Input id="tenant-monthly-fee" type="number" value={form.monthlyFee} onChange={e => set("monthlyFee", Number(e.target.value))}
             className="bg-secondary border-input text-sm mt-1" min={0} />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">Your Cut (%)</Label>
-          <Input type="number" value={Math.round(form.revenueSharePct * 100)}
+          <Label htmlFor="tenant-revenue-share" className="text-xs text-muted-foreground">Your Cut (%)</Label>
+          <Input id="tenant-revenue-share" type="number" value={Math.round(form.revenueSharePct * 100)}
             onChange={e => set("revenueSharePct", Number(e.target.value) / 100)}
             className="bg-secondary border-input text-sm mt-1" min={0} max={100} />
         </div>
       </div>
 
       <div>
-        <Label className="text-xs text-muted-foreground">Notes</Label>
-        <Textarea value={form.notes} onChange={e => set("notes", e.target.value)}
+        <Label htmlFor="tenant-notes" className="text-xs text-muted-foreground">Notes</Label>
+        <Textarea id="tenant-notes" value={form.notes} onChange={e => set("notes", e.target.value)}
           placeholder="Internal notes about this client..." rows={2}
           className="bg-secondary border-input text-sm mt-1 resize-none" />
       </div>

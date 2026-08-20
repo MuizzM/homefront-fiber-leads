@@ -67,10 +67,10 @@ export function MetricCard({
 
   return (
     <div
-      className={`grid grid-cols-[1fr_auto] items-start gap-x-2 rounded-2xl border border-border p-3.5 ${accent ? "bg-secondary" : "bg-card"}`}
+      className={`grid grid-cols-[1fr_auto] items-start gap-x-2 rounded-xl border border-border p-3.5 ${accent ? "bg-secondary" : "bg-card"}`}
       data-testid={`metric-${metricKey}`}
     >
-      <span className="truncate text-[11px] font-medium text-muted-foreground">
+      <span className="min-w-0 text-pretty text-[11px] font-medium leading-snug text-muted-foreground">
         {def?.label ?? metricKey}
       </span>
       {/* A button, not a hover target: this is a phone-first product and a
@@ -83,7 +83,7 @@ export function MetricCard({
           onClick={() => setWhyOpen((v) => !v)}
           aria-expanded={whyOpen}
           aria-label={`How ${def?.label ?? metricKey} is calculated`}
-          className="grid h-5 w-5 shrink-0 place-items-center rounded-full border border-border text-2xs font-bold text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+          className="-m-3 grid size-11 shrink-0 place-items-center rounded-full text-2xs font-bold text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-testid={`why-${metricKey}`}
         >
           ?
@@ -128,7 +128,7 @@ export function CountCard({ label, value, tone = "neutral" }: {
     neutral: "bg-border", primary: "bg-primary", success: "bg-success", warning: "bg-warning",
   }[tone];
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-border bg-card px-3.5 pb-3 pt-3.5"
+    <div className="relative overflow-hidden rounded-xl border border-border bg-card px-3.5 pb-3 pt-3.5"
          data-testid={`count-${String(label).toLowerCase().replace(/\s/g, "-")}`}>
       <span className={`absolute inset-x-0 top-0 h-[3px] ${rail}`} aria-hidden="true" />
       <div className="text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground">{value}</div>

@@ -46,7 +46,6 @@ export default function LoginActivity() {
     staleTime: 30_000, retry: 1,
   });
 
-  const loading = summaryQuery.isLoading || feedQuery.isLoading;
   const failed = summaryQuery.isError || feedQuery.isError;
 
   return (
@@ -75,7 +74,7 @@ export default function LoginActivity() {
         <div className="border-b border-border px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           By email {summaryQuery.data ? `(${summaryQuery.data.summary.length})` : ""}
         </div>
-        {loading ? (
+        {summaryQuery.isLoading ? (
           <div className="space-y-2 p-4">{[0,1,2].map(i => <div key={i} className="app-skeleton h-10 rounded-lg" />)}</div>
         ) : summaryQuery.isError ? (
           /* The page already prints a "couldn't load the audit trail" banner
@@ -111,8 +110,13 @@ export default function LoginActivity() {
         <div className="border-b border-border px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Recent attempts {feedQuery.data ? `(${feedQuery.data.attempts.length})` : ""}
         </div>
-        {loading ? (
+        {feedQuery.isLoading ? (
           <div className="space-y-2 p-4">{[0,1,2,3].map(i => <div key={i} className="app-skeleton h-8 rounded-lg" />)}</div>
+        ) : feedQuery.isError ? (
+          <div className="flex items-center justify-between gap-3 p-4" data-testid="login-activity-feed-unknown">
+            <p className="text-xs text-muted-foreground">Recent sign-in attempts are unavailable.</p>
+            <button type="button" className="min-h-11 rounded-lg border border-border px-3 text-xs font-semibold" onClick={() => void feedQuery.refetch()}>Retry</button>
+          </div>
         ) : (feedQuery.data?.attempts.length ?? 0) === 0 ? (
           <p className="p-4 text-xs text-muted-foreground">Nothing yet.</p>
         ) : (

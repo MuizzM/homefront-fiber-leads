@@ -338,26 +338,6 @@ export default function Today() {
           )}
         </div>
 
-        {/* The live SPIFF, above the route. A rep opens this screen to decide
-            whether today is a grind or a coast — the contest they can still win
-            in the next two hours belongs in that decision, not three taps away
-            on the Spiffs tab. Renders nothing when nothing is running. */}
-        {/* ONE live thing, not four.
-            This used to render MomentumOffer + CampaignStrip + MilestoneCard +
-            DoorDropCard unconditionally — roughly 440px of incentive cards
-            stacked under the header and stat block, which on a 390x740 phone
-            pushed the route, follow-ups and everything below it off the screen.
-            Five systems can each produce a card; rendering all of them at once
-            turns the home screen into a slot machine, and a slot machine gets
-            read like one.
-            shared/liveSlot.ts picks the single highest-priority live item —
-            urgency divided by reachability, started beats unstarted — and
-            collapses the rest to one tappable line. */}
-        <div className="mt-4 empty:mt-0" data-testid="today-campaign">
-          <LiveSlot items={liveItems} />
-          <WarmupStrip />
-        </div>
-
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop).
             On a failed fetch, say the count is unknown rather than implying zero. */}
         {followupsQ.isError && (
@@ -400,6 +380,14 @@ export default function Today() {
               onOpen={() => navigate(`/lead/${route.hero!.id}`)}
               onSkip={() => { setSkip(s => new Set(s).add(route.hero!.id)); toast({ title: "Door skipped" }); }} />
           )}
+        </div>
+
+        {/* Incentives and coaching support the route; they no longer displace
+            the next-door task below the first mobile viewport. The selector
+            still guarantees one live offer rather than a stack of promos. */}
+        <div className="mt-4 empty:mt-0" data-testid="today-campaign">
+          <LiveSlot items={liveItems} />
+          <WarmupStrip />
         </div>
 
         {!loading && route.rest.length > 0 && (

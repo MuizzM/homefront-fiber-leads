@@ -69,14 +69,14 @@ interface Insight {
 
 export function PeriodChips({ value, onChange }: { value: PeriodKey; onChange: (p: PeriodKey) => void }) {
   return (
-    <div className="-mx-1 flex snap-x snap-proximity gap-1.5 overflow-x-auto px-1 pb-1 [overscroll-behavior-inline:contain]" role="group" aria-label="Metrics period">
+    <div className="no-scrollbar -mx-4 flex snap-x snap-mandatory gap-1.5 overflow-x-auto px-4 pb-1 [overscroll-behavior-inline:contain] sm:mx-0 sm:flex-wrap sm:px-0" role="group" aria-label="Metrics period">
       {PERIODS.map((p) => (
         <button
           key={p.key}
           type="button"
           aria-pressed={value === p.key}
           onClick={() => onChange(p.key)}
-          className={`min-h-11 shrink-0 snap-start rounded-full px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+          className={`min-h-11 shrink-0 snap-start rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             value === p.key
               ? "bg-primary text-primary-foreground"
               : "bg-secondary text-muted-foreground hover:text-foreground"
@@ -186,7 +186,7 @@ export function MyMetrics() {
       {/* ── Field scorecard ──────────────────────────────────────────────── */}
       <section>
         <SectionLabel className="mb-2 px-1">Field scorecard</SectionLabel>
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <CountCard label="Doors attempted" value={facts?.doorsAttempted ?? 0} tone="primary" />
           <CountCard label="Verified doors" value={facts?.verifiedDoors ?? 0} />
           <CountCard label="Contacts" value={facts?.contacts ?? 0} tone="primary" />

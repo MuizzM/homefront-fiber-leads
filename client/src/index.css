@@ -926,12 +926,9 @@
 }
 @keyframes hf-puck-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
-/* Login page — soft brand glow behind the centered card, built from theme
-   tokens so it tracks light/dark instead of hard-coded hex. */
+/* Login page — one quiet canvas. The form owns the task; decoration does not. */
 .login-backdrop {
-  background:
-    radial-gradient(640px 340px at 50% 30%, hsl(var(--primary) / 0.08), transparent 70%),
-    hsl(var(--background));
+  background: hsl(var(--background));
 }
 
 /* ── Print isolation for the commission statement ─────────────────────────────

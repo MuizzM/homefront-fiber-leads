@@ -135,19 +135,19 @@ export default function Login() {
 
   const buttonClasses =
     "flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-primary-foreground " +
-    "shadow-lg shadow-primary/20 transition-colors hover:bg-primary/90 " +
+    "transition-colors hover:bg-primary/90 " +
     "disabled:pointer-events-none disabled:opacity-50 " +
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card";
 
   return (
-    <div className="login-backdrop min-h-screen flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
+    <div className="login-backdrop flex min-h-dvh items-center justify-center px-5 py-10">
+      <main className="w-full max-w-[400px]">
 
         {/* Card — refined layered elevation + a hairline ring so it reads as a
             crisp raised surface on both the dark ink and light grounds. */}
-        <div className="rounded-2xl border border-border bg-card p-8 shadow-xl shadow-black/25 ring-1 ring-border/50">
+        <div className="rounded-2xl border border-border bg-card px-6 py-8 sm:px-8">
           {/* Brand */}
-          <div className="mb-8 text-center">
+          <div className="mb-7 text-center">
             {/* This is the LCP element of every unauthenticated load, and the
                 session id lives in sessionStorage — so a PWA relaunch lands
                 here too. It used to point at hfs-logo-full.png: 420x512 and
@@ -161,14 +161,14 @@ export default function Login() {
             <img
               src="/hfs-logo-login.webp"
               alt="Home Front Solutions"
-              className="mx-auto mb-5 h-20 w-auto object-contain"
+              className="mx-auto mb-5 h-16 w-auto object-contain"
               width={200}
               height={244}
               fetchPriority="high"
               decoding="async"
             />
-            <h1 className="text-[1.35rem] font-semibold tracking-tight text-foreground">Home Front Solutions</h1>
-            <p className="mt-1.5 text-sm text-muted-foreground">Field Sales Intelligence</p>
+            <h1 className="text-balance text-2xl font-semibold tracking-tight text-foreground">Sign in</h1>
+            <p className="mt-2 text-pretty text-sm text-muted-foreground">Use your Home Front work email to continue.</p>
           </div>
 
           {/* Step: email entry */}
@@ -276,7 +276,7 @@ export default function Login() {
         <p className="mt-6 text-center text-xs text-muted-foreground/70">
           © {new Date().getFullYear()} Home Front Solutions
         </p>
-      </div>
+      </main>
 
       {/* The install ask belongs on THIS side of the door. PushSetupCard makes
           the same case on Today, but a rep only reaches Today after signing in,

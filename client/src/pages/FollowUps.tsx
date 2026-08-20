@@ -197,17 +197,17 @@ function Row({ f, today, overdue, onOpen, onLog }: { f: FollowUp; today: string;
         <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: STATE_COLORS[st] }} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[14px] font-semibold text-foreground truncate">{f.address}</span>
+            <span className="line-clamp-2 text-[14px] font-semibold leading-snug text-foreground">{f.address}</span>
             {hot && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-destructive bg-destructive/10 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5">Hot</span>}
             {!hot && newFiber && null}
           </div>
-          <div className="text-[12px] text-muted-foreground truncate flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
             <span className={`inline-flex items-center gap-1 ${overdue ? "text-destructive font-medium" : ""}`}>
               {fmtDay(f.callbackDate, today)}{time ? ` · ${time}` : ""}
             </span>
-            {f.contactName ? <span className="truncate">· {f.contactName}</span> : null}
+            {f.contactName ? <span className="break-words">· {f.contactName}</span> : null}
           </div>
-          {f.notes ? <div className="text-[11.5px] text-muted-foreground/80 truncate mt-0.5 flex items-center gap-1">{f.notes}</div> : null}
+          {f.notes ? <div className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-muted-foreground/80">{f.notes}</div> : null}
         </div>
         <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
       </button>

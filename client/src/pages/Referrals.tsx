@@ -568,18 +568,18 @@ function LiabilityCard({ settings }: { settings: Settings }) {
            Programme liability
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid grid-cols-3 gap-4 text-center">
-        <div>
+      <CardContent className="grid grid-cols-1 divide-y divide-border text-left sm:grid-cols-3 sm:divide-x sm:divide-y-0 sm:text-center">
+        <div className="py-3 sm:px-3 sm:py-0">
           <p className="text-xs text-muted-foreground">In progress</p>
           <p className="text-lg font-semibold tabular-nums" data-testid="referral-liability-inprogress">{l.inProgress}</p>
           <p className="text-[11px] text-muted-foreground">referrals working</p>
         </div>
-        <div>
+        <div className="py-3 sm:px-3 sm:py-0">
           <p className="text-xs text-muted-foreground">Qualified, holding</p>
           <p className="text-lg font-semibold tabular-nums" data-testid="referral-liability-pending">{money(l.pendingCents)}</p>
           <p className="text-[11px] text-muted-foreground">may still claw back</p>
         </div>
-        <div>
+        <div className="py-3 sm:px-3 sm:py-0">
           <p className="text-xs text-muted-foreground">Approved</p>
           <p className="text-lg font-semibold tabular-nums" data-testid="referral-liability-approved">{money(l.approvedCents)}</p>
           <p className="text-[11px] text-muted-foreground">owed now</p>

@@ -594,7 +594,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <button type="button" aria-label={`Open navigation and account for ${user?.name ?? "your profile"}`} aria-expanded={moreOpen} aria-controls="mobile-more-sheet"
             onClick={() => { setMobileOpen(false); setMoreOpen(true); }}
-            className={`tap-expand grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold ring-2 ring-border ${AVATAR}`}>
+            className={`grid size-11 shrink-0 place-items-center rounded-full text-[11px] font-bold ring-2 ring-border ${AVATAR}`}>
             {user?.name?.slice(0, 2).toUpperCase()}
           </button>
         </header>
