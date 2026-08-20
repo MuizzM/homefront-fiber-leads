@@ -146,3 +146,12 @@ all 6,864 repository tests, `npm run build`, `git diff --check`, and the
 Impeccable detector with zero findings in changed UI files. Publication and
 production deployment were explicitly authorized afterward and are now in
 progress through the repository's protected workflow.
+
+PR #157 merged those UI changes into `rep-knocking-workflow` at
+`d6eb2c43e88940837e5e0651bef4addd341a0df1`. The first production cutover
+safely auto-rolled back: the new container's former health window expired at
+about 4m37s, while the restored known-good release needed about 4m48s to become
+healthy against the 18.8 GB production database. This is a deployment health
+race rather than evidence of a UI regression. Production remains healthy on
+`b448017e1e9f3d5a33acb97dedb459df0be68ccf`; publication is not complete until
+the measured health-window fix passes CI and the protected deploy succeeds.

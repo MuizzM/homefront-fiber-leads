@@ -30,9 +30,9 @@ fi
 
 echo "[rollback] health check…"
 # Use dockerd's already-computed health verdict, exactly as deploy.sh does.
-# Starting this application can legitimately exceed one minute under load;
-# the former 20 x 3s exec-based probe falsely declared a healthy recovery dead.
-attempts_left=100
+# Keep the recovery gate aligned with deploy.sh. The measured known-good
+# production release needed 288s to become healthy on 2026-08-20.
+attempts_left=140
 while [ "$attempts_left" -gt 0 ]; do
   APP_CONTAINER="$(APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" ps -q app || true)"
   if [ -n "$APP_CONTAINER" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$APP_CONTAINER" 2>/dev/null)" = "healthy" ]; then

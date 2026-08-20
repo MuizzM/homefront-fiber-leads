@@ -294,9 +294,10 @@ ok=0
 # exec probes: on a fully-loaded 4-core box the exec fork itself starves and
 # times out while the app is healthy — observed live as two consecutive false
 # health-gate failures + rollbacks (2026-07-23). dockerd probes in-container
-# on its own schedule (start_period 120s) and its status is already computed.
-# ~300s of grace (100 × 3s) to cover start_period + first probes under load.
-attempts_left=100
+# on its own schedule (start_period 300s) and its status is already computed.
+# ~420s of grace (140 × 3s): the measured known-good production release needed
+# 288s on 2026-08-20 while its 18.8 GB database and worker cluster initialized.
+attempts_left=140
 while [ "$attempts_left" -gt 0 ]; do
   APP_CONTAINER_NOW="$(APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" ps -q app || true)"
   if [ -n "$APP_CONTAINER_NOW" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$APP_CONTAINER_NOW" 2>/dev/null)" = "healthy" ]; then

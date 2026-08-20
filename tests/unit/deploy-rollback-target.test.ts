@@ -113,9 +113,16 @@ describe("the recovery path is wired to the chooser", () => {
   });
 
   it("gives rollback the same dockerd health grace as a deploy", () => {
+    const deploy = readFileSync(DEPLOY_SH, "utf8");
     const rollback = readFileSync(join(__dirname, "..", "..", "scripts", "rollback.sh"), "utf8");
-    expect(rollback).toContain("attempts_left=100");
+    expect(deploy).toContain("attempts_left=140");
+    expect(rollback).toContain("attempts_left=140");
     expect(rollback).toContain(".State.Health.Status");
     expect(rollback).not.toContain("exec -T app node -e");
+  });
+
+  it("gives the container enough start period for the measured production bootstrap", () => {
+    const compose = readFileSync(join(__dirname, "..", "..", "docker-compose.production.yml"), "utf8");
+    expect(compose).toContain("start_period: 300s");
   });
 });
