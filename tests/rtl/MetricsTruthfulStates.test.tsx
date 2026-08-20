@@ -1,11 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/capabilities", () => ({ useCan: () => false }));
 vi.mock("@/components/metrics/FieldMode", () => ({ FieldModeCard: () => null }));
 
-import { MyMetrics } from "@/components/metrics/MyMetrics";
+import { MyMetrics, PeriodChips } from "@/components/metrics/MyMetrics";
 import { TeamMetrics } from "@/components/metrics/TeamMetrics";
 import { TerritoryMetrics } from "@/components/metrics/TerritoryMetrics";
 import { Reports } from "@/components/metrics/Reports";
@@ -31,6 +31,14 @@ function renderWithQueries(ui: React.ReactElement, responder: QueryResponder) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Metrics tabs keep failed reads distinct from real zeros", () => {
+  it("keeps every period visible in a bounded phone grid", () => {
+    render(<PeriodChips value="today" onChange={() => {}} />);
+    const periods = screen.getByRole("group", { name: "Metrics period" });
+    expect(periods).toHaveClass("grid", "grid-cols-3", "sm:flex");
+    expect(periods).not.toHaveClass("overflow-x-auto");
+    expect(within(periods).getAllByRole("button")).toHaveLength(5);
+  });
+
   const cases: Array<{
     name: string;
     ui: React.ReactElement;

@@ -295,26 +295,11 @@ export default function Today() {
         )}
 
         {/* ── The glance band ────────────────────────────────────────────────
-            Four numbers in one scrolling row, each one tappable through to the
-            screen that owns it. Three things were wrong with the equal-thirds
-            grid this replaces:
-
-            · Three 25px numbers split a 343px card into thirds, so every label
-              wrapped and the numbers had no room to be the largest thing in
-              their own cell.
-            · The numbers were dead ends. A rep who reads "2 doors left" wants
-              the map; who reads "2 sales" wants the statement. Every cell was
-              inert, and the route to each screen was the tab bar.
-            · Follow-ups owed existed only as a banner below, which vanishes at
-              zero — so "nothing owed" was never a fact a rep could read, only
-              the absence of one.
-
-            A strip gives each number a fixed width no matter how many there
-            are, and the fourth chip clipped at the edge is the affordance that
-            says there is more. Amber is spent here and nowhere else on this
-            screen: follow-ups due is the one figure that is owed TODAY. */}
+            All four facts stay visible at phone width. Each chip is also a
+            route to the screen that owns the number, so no metric is a dead
+            end or hidden behind an undiscoverable horizontal swipe. */}
         <div className="mt-4" data-testid="today-glance">
-          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <GlanceChip to="/leaderboard" label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)}
               tone="text-foreground" accent="bg-primary" error={boardQ.isError} />
             <GlanceChip to="/my-commission" label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)}
@@ -454,7 +439,7 @@ function GlanceChip({ to, label, value, tone, accent, error }: { to: string; lab
     <Link
       href={to}
       data-testid={`glance-${label.toLowerCase().replace(/\s+/g, "-")}`}
-      className={`shrink-0 w-[104px] rounded-2xl border border-border bg-card px-3.5 pt-3 pb-3.5 active:scale-[.97] transition-transform hover:border-primary/25 ${FOCUS}`}
+      className={`min-w-0 w-full rounded-2xl border border-border bg-card px-3.5 pt-3 pb-3.5 active:scale-[.97] transition-transform hover:border-primary/25 ${FOCUS}`}
     >
       <span className={`block w-1.5 h-1.5 rounded-full ${accent}`} aria-hidden="true" />
       {/* A failed query must not render as a real "0" - show an honest dash. */}

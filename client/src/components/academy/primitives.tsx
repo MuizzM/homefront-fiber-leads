@@ -279,8 +279,7 @@ export function SectionTabs<T extends string>({ tabs, value, onChange, testIdPre
     <div
       role="tablist"
       aria-label="Academy sections"
-      className="-mx-4 flex snap-x snap-proximity gap-1.5 overflow-x-auto px-4 pb-1 [overscroll-behavior-inline:contain] md:mx-0 md:px-0"
-      style={{ scrollbarWidth: "none" }}
+      className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:flex"
       onKeyDown={(e) => {
         const i = tabs.findIndex((t) => t.id === value);
         if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
@@ -310,7 +309,7 @@ export function SectionTabs<T extends string>({ tabs, value, onChange, testIdPre
             onClick={() => onChange(tab.id)}
             data-testid={`${testIdPrefix ?? "academy-tab"}-${tab.id}`}
             className={cn(
-              "inline-flex min-h-11 shrink-0 snap-start items-center gap-1.5 rounded-xl border px-3.5 text-sm-minus font-semibold transition-colors",
+              "inline-flex min-h-11 min-w-0 w-full items-center justify-center gap-1.5 rounded-xl border px-3 text-sm-minus font-semibold transition-colors md:w-auto md:px-3.5",
               active
                 ? "border-primary/40 bg-primary/[0.09] text-primary"
                 : "border-border bg-card text-muted-foreground hover:bg-secondary/60 hover:text-foreground",

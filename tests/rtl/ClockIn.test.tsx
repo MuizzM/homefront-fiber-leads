@@ -27,8 +27,10 @@ function session(over: Record<string, any> = {}) {
   return {
     id: over.id ?? 1, repId: 9, userId: 1,
     clockedIn,
-    clockedOut: over.clockedOut ?? new Date(Date.now() - 3600_000).toISOString(),
-    durationMinutes: over.durationMinutes ?? 120,
+    clockedOut: Object.prototype.hasOwnProperty.call(over, "clockedOut")
+      ? over.clockedOut
+      : new Date(Date.now() - 3600_000).toISOString(),
+    durationMinutes: Object.prototype.hasOwnProperty.call(over, "durationMinutes") ? over.durationMinutes : 120,
     notes: null,
     // Deliberately DEFAULT to a wrong (UTC-rolled) label — the UI must ignore it.
     date: over.date ?? localDayKey(new Date(Date.now() + 86_400_000).toISOString()),
@@ -87,6 +89,17 @@ describe("Field Hours day bucketing", () => {
     expect(await within(todayTile).findByText("2h 0m")).toBeTruthy();   // only session 1
     const weekTile = screen.getByText("This week").closest("div")!.parentElement!;
     expect(within(weekTile).getByText("3h 0m")).toBeTruthy();    // both
+  });
+
+  it("includes an active session in live totals and explains why history is empty", async () => {
+    const activeStart = new Date(Date.now() - 75 * 60_000).toISOString();
+    renderClockIn([session({ clockedIn: activeStart, clockedOut: null, durationMinutes: null })], { clockedIn: true });
+
+    const todayTile = (await screen.findByText("Today")).closest("div")!.parentElement!;
+    expect(await within(todayTile).findByText("1h 15m")).toBeTruthy();
+    const weekTile = screen.getByText("This week").closest("div")!.parentElement!;
+    expect(within(weekTile).getByText("1h 15m")).toBeTruthy();
+    expect(screen.getByText(/current shift will appear here after you clock out/i)).toBeTruthy();
   });
 
   it("failed sessions fetch shows dash placeholders and a retry, never 0m", async () => {

@@ -175,7 +175,7 @@ export function ChatThreadList({
 
         {!isLoading && !isError && !threads.length && (
           <p className="px-4 py-6 text-center text-[13px] text-muted-foreground" data-testid="threads-empty">
-            No conversations yet. Start one - a teammate, or a crew.
+            No direct or crew conversations yet. Use The floor above, or start a new conversation.
           </p>
         )}
 
