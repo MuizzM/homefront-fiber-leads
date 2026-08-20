@@ -9,7 +9,7 @@ import { useAuth } from "@/lib/auth";
 import { useTabActive } from "@/lib/tabActivity";
 import { X, ChevronRight } from "lucide-react";
 import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
-import { KpiTile, type KpiTone } from "@/components/KpiTile";
+import { KpiTile } from "@/components/KpiTile";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
 // Only the fields the tiles below actually render — the endpoint stopped
@@ -69,7 +69,7 @@ function MetricStrip({ items, loading }: {
             </div>
             {loading
               ? <Skeleton className="mt-3 h-7 w-16" />
-              : <div className="mt-2 text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground">{m.value}</div>}
+              : <div className="mt-2 text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground">{typeof m.value === "number" ? m.value.toLocaleString("en-US") : m.value}</div>}
             {m.sub && !loading && <div className="mt-1.5 text-[12px] text-muted-foreground">{m.sub}</div>}
           </div>
         );
@@ -120,11 +120,6 @@ interface RepActivity {
   events: { id: number; outcome: string; at: string; address: string | null }[];
 }
 
-// Dashboard field tiles use the shared KPI card (fixed width for the thumb-scroll row).
-function FieldTile(props: { label: string; value: number | string; tone?: KpiTone; loading?: boolean }) {
-  // Fixed width inside the phone rail; full-width cell once the row becomes a grid.
-  return <KpiTile {...props} className="w-[132px] md:w-auto" />;
-}
 
 // Tap-a-rep activity card: recent dispositions with the door + timestamp.
 function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => void }) {
@@ -252,10 +247,10 @@ export default function Dashboard() {
       {/* Header — time-aware, personalized greeting */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-foreground">
+          <h1 className="text-balance text-xl font-bold tracking-tight text-foreground">
             {(() => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; })()}, {user?.name?.split(" ")[0] ?? "there"}
           </h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
+          <p className="mt-0.5 text-pretty text-sm text-muted-foreground">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
             {isRep ? " · Your field summary" : " · Team overview"}
           </p>
@@ -286,11 +281,13 @@ export default function Dashboard() {
             figure the day is scored by. */}
         <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5"
           data-testid="field-tiles">
-          <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? " - "} loading={statsLoading && !stats} tone="neutral" />
-          <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="primary" />
-          <FieldTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="info" />
-          <FieldTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="success" />
-          <FieldTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="warning" />
+          <KpiTile label="Unassigned" value={stats?.leads.unassigned ?? " - "} loading={statsLoading && !stats} tone="neutral" />
+          <KpiTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="primary" />
+          <KpiTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="info" />
+          <KpiTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="success" />
+          {/* Spans the base grid's last row so a five-tile glance doesn't strand
+              an orphan half-cell on phones; one cell again from md up. */}
+          <KpiTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="warning" className="col-span-2 md:col-span-1" />
         </div>
       </section>
 
@@ -317,12 +314,20 @@ export default function Dashboard() {
               ))}
             </div>
           ) : board.length === 0 ? (
-            <div className="rounded-2xl border border-border bg-card px-4 py-5 text-[13px] italic text-muted-foreground">
-              No team activity yet today.
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-5">
+              <span className="text-[13px] italic text-muted-foreground">No team activity yet today.</span>
+              <a href="#/map" className="shrink-0 rounded text-[12px] font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                Open field map
+              </a>
             </div>
           ) : (
           <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
-            {board.map(row => (
+            {/* Today's section sorts by today's work, not lifetime rank, so the
+                reps actually out knocking float above the idle ones instead of
+                the whole roster reading as identical zero rows. */}
+            {[...board].sort((a, b) => (b.salesToday - a.salesToday) || (b.knocksToday - a.knocksToday)).map(row => {
+              const idle = row.knocksToday === 0 && row.salesToday === 0;
+              return (
               <button
                 key={row.rep.id}
                 type="button"
@@ -330,23 +335,26 @@ export default function Dashboard() {
                 data-testid={`rep-row-${row.rep.id}`}
                 className="group flex h-14 w-full items-center gap-3 px-4 text-left transition-colors hover:bg-secondary/50 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[12px] font-bold text-primary">
+                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-bold ${idle ? "bg-secondary text-muted-foreground" : "bg-primary/15 text-primary"}`}>
                   {row.rep.name.slice(0, 2).toUpperCase()}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] font-medium text-foreground">{row.rep.name}</div>
-                  <div className="text-[11px] text-muted-foreground">{row.knocksToday} dispositions today</div>
+                  <div className="text-[11px] text-muted-foreground">{idle ? "No doors yet today" : `${row.knocksToday} disposition${row.knocksToday !== 1 ? "s" : ""} today`}</div>
                 </div>
-                <div className="shrink-0 text-right">
-                  {/* Green is for a win, so a rep on nothing yet does not get
-                      a celebratory zero - and emerald-400 was 1.9:1 on the
-                      light card besides. */}
-                  <div className={`text-[15px] font-bold tabular-nums ${row.salesToday > 0 ? "text-success" : "text-muted-foreground"}`}>{row.salesToday}</div>
-                  <div className="text-2xs text-muted-foreground">sold today</div>
-                </div>
+                {!idle && (
+                  <div className="shrink-0 text-right">
+                    {/* Green is for a win, so a rep on nothing yet does not get
+                        a celebratory zero - and emerald-400 was 1.9:1 on the
+                        light card besides. */}
+                    <div className={`text-[15px] font-bold tabular-nums ${row.salesToday > 0 ? "text-success" : "text-muted-foreground"}`}>{row.salesToday}</div>
+                    <div className="text-2xs text-muted-foreground">sold today</div>
+                  </div>
+                )}
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
               </button>
-            ))}
+              );
+            })}
           </div>
           )}
         </section>
@@ -443,10 +451,10 @@ export default function Dashboard() {
         <MetricStrip
           loading={statsLoading}
           items={[
-            { label: "New fiber leads", value: stats?.leads.newFiber ?? " - ", sub: `${stats?.leads.unassigned ?? 0} unassigned` },
+            { label: "New fiber leads", value: stats?.leads.newFiber ?? " - ", sub: `${(stats?.leads.unassigned ?? 0).toLocaleString("en-US")} unassigned` },
             { label: "Knocks today", value: stats?.knocks.today ?? " - ", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
             { label: "Week sales", value: stats?.knocks.weekSales ?? " - ", sub: "last 7 days" },
-            { label: "Pending payout", value: stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : " - ", sub: `$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid` },
+            { label: "Pending payout", value: stats ? `$${Math.round(stats.revenue.pendingPayout).toLocaleString("en-US")}` : " - ", sub: `$${Math.round(stats?.revenue.totalPaid ?? 0).toLocaleString("en-US")} paid` },
             { label: "Kinetic addresses", value: stats?.kinetic.total ?? " - ", sub: `${stats?.kinetic.live ?? 0} live` },
             { label: "Field hours", value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : " - ", sub: "clocked today" },
           ]}
@@ -459,7 +467,7 @@ export default function Dashboard() {
         <section className="space-y-2.5">
           <h2 className={EYEBROW}>Quick actions</h2>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <a href="#/city-scan" aria-label="City Scan - find new fiber" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <a href="#/city-scan" aria-label="City Scan - find new fiber" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               
               <div>
                 <div className="text-sm font-semibold text-foreground">City Scan</div>
@@ -467,7 +475,7 @@ export default function Dashboard() {
               </div>
               
             </a>
-            <a href="#/leads" aria-label="Leads" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <a href="#/leads" aria-label="Leads" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               
               <div>
                 <div className="text-sm font-semibold text-foreground">Leads</div>
@@ -475,7 +483,7 @@ export default function Dashboard() {
               </div>
               
             </a>
-            <a href="#/team" aria-label="Team" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <a href="#/team" aria-label="Team" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               
               <div>
                 <div className="text-sm font-semibold text-foreground">Team</div>
@@ -483,7 +491,7 @@ export default function Dashboard() {
               </div>
               
             </a>
-            <a href="#/map" aria-label="Field Map" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <a href="#/map" aria-label="Field Map" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               
               <div>
                 <div className="text-sm font-semibold text-foreground">Field Map</div>

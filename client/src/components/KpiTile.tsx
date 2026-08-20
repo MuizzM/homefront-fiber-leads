@@ -47,7 +47,7 @@ export function KpiTile({ label, value, tone = "neutral", className = "", loadin
       <span className={`absolute inset-x-0 top-0 h-[3px] ${RAIL[tone]}`} aria-hidden="true" />
 
       <div className="text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground">
-        {loading ? <Skeleton className="h-6 w-12" /> : value}
+        {loading ? <Skeleton className="h-6 w-12" /> : typeof value === "number" ? value.toLocaleString("en-US") : value}
       </div>
       <div className="text-[11px] text-muted-foreground font-medium mt-1.5">{label}</div>
     </div>

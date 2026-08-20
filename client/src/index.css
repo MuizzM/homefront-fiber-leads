@@ -20,9 +20,21 @@
       background-image: linear-gradient(hsl(var(--foreground) / 0.06), hsl(var(--foreground) / 0.06));
     }
   }
+  /* Press feedback = tint AND a subtle scale: the tint alone reads as a color
+     change, the scale is what makes the surface feel like it moved under the
+     thumb. 0.98 not 0.9 (buttons are shallow, not springy), 150ms strong
+     ease-out on the RELEASE so it snaps back; the press itself is instant
+     because :active applies with no transition delay the user can feel.
+     Transform only — compositor-safe — and the global prefers-reduced-motion
+     block collapses the transition like everything else. */
+  .active-elevate-2 {
+    transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
   .active-elevate-2:active {
     background-image: linear-gradient(hsl(var(--foreground) / 0.10), hsl(var(--foreground) / 0.10));
+    transform: scale(0.98);
   }
+
 }
 
 @layer base {

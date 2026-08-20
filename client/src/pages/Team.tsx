@@ -114,7 +114,7 @@ function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v
               onClick={() => onChange(r.value as RepRole)}
               data-testid={`role-option-${r.value}`}
               aria-checked={selected}
-              className={`w-full text-left rounded-lg border px-3 py-2.5 transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
+              className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
                 selected
                   ? "border-primary bg-primary/10 ring-1 ring-primary/30"
                   : "border-border bg-secondary hover:border-primary/40"
@@ -736,7 +736,7 @@ export default function Team() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Organization</div>
-          <h1 className="mt-0.5 text-xl font-bold tracking-tight text-foreground">Team management</h1>
+          <h1 className="mt-0.5 text-balance text-xl font-bold tracking-tight text-foreground">Team management</h1>
           <p className="text-sm text-muted-foreground mt-1">
             <span className="tabular-nums font-medium text-foreground">{activeCount}</span> active member{activeCount !== 1 ? "s" : ""}
             <span className="mx-1.5 text-muted-foreground">·</span>
@@ -770,7 +770,10 @@ export default function Team() {
             { label: "Callbacks", val: totalCallbacks },
             { label: "Sales", val: totalSales, highlight: true },
           ].map(({ label, val, highlight }) => (
-            <div key={label} className="min-w-0 bg-card px-4 py-3">
+            // Five cells in a 2/3-column hairline grid leave the final slot as a
+            // bare border-colored hole; letting the last cell span it keeps the
+            // strip a full rectangle at every width (one row from md up).
+            <div key={label} className="min-w-0 bg-card px-4 py-3 last:col-span-2 md:last:col-span-1">
               <span className="block truncate text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
               <div className={`text-2xl font-bold tabular-nums mt-1.5 ${highlight ? "text-success" : "text-foreground"}`}>{val.toLocaleString()}</div>
             </div>

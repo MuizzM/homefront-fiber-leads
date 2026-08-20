@@ -10,7 +10,7 @@ import { WATCHLIST_QUERY, type WatchlistItem } from "@/components/fiber/ComingSo
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { Users, Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, AlertTriangle, CheckCircle2, ArrowUpRight, CircleDot, MapPin } from "lucide-react";
+import { Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, ArrowUpRight, Navigation, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -29,9 +29,8 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
-import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState } from "@shared/knock";
+import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS, type PinDisplayState } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
-import { leadStateLabel } from "@/lib/leadDisplay";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -50,6 +49,42 @@ function invalidateLeadLists(qc: QueryClient): void {
   void qc.invalidateQueries({ predicate: query => isLeadsListKey(query.queryKey) });
 }
 
+// Chip classes keyed by the SAME display state that supplies the label, so a
+// door can never wear one status's name in another status's color (a knocked
+// prospect labelled "Not Home" used to render in not-interested red because the
+// color read raw leadStatus while the label read pinDisplayState). Hues follow
+// shared/statusConfig.ts — the canonical map palette: prospect GREEN (the fresh
+// pool), not-home yellow, not-interested red, already-a-customer blue — with
+// each ink darkened per the ink-on-its-own-tint AA rule in
+// docs/DESIGN_SYSTEM.md (-700 on a /10 wash in light, -400 on /15 in dark);
+// follow-up/callback ride --warning (work owed) and sold rides --success.
+const STATE_CHIP: Record<PinDisplayState, string> = {
+  unworked:         "bg-green-600/10 text-green-700 dark:bg-green-500/15 dark:text-green-400",
+  not_home:         "bg-yellow-500/10 text-yellow-800 dark:bg-yellow-500/15 dark:text-yellow-400",
+  contacted:        "bg-slate-500/10 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300",
+  interested:       "bg-violet-500/10 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
+  follow_up:        "bg-warning/10 text-warning",
+  callback:         "bg-warning/10 text-warning",
+  sold:             "bg-success/10 text-success",
+  not_interested:   "bg-red-500/10 text-red-700 dark:bg-red-500/15 dark:text-red-400",
+  already_customer: "bg-blue-600/10 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400",
+};
+
+// Label + chip for a lead row honoring the lastOutcome disambiguator —
+// "already a customer" is STORED as not_interested + lastOutcome=already_customer,
+// and raw STATUS_LABEL[leadStatus] rendered it as "Not Interested" (field report).
+// One derivation feeds both halves of the badge so they cannot disagree.
+function leadStateChip(lead: { leadStatus: string; lastOutcome?: string | null }): { label: string; chip: string } {
+  try {
+    // visited from EVIDENCE (lib/leadDisplay's rule), never hard-coded true —
+    // the hard-coded flag labelled every untouched prospect "Contacted".
+    const ds = pinDisplayState({ leadStatus: lead.leadStatus, visited: Boolean(lead.lastOutcome), lastOutcome: lead.lastOutcome ?? null });
+    return { label: STATE_LABELS[ds], chip: STATE_CHIP[ds] };
+  } catch {
+    return { label: STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus, chip: STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground" };
+  }
+}
+
 const STATUS_LABEL: Record<string, string> = {
   prospect: "Prospect",
   contacted: "Contacted",
@@ -59,16 +94,13 @@ const STATUS_LABEL: Record<string, string> = {
   follow_up: "Follow Up",
 };
 
-// ONE status color language — the SALES RABBIT palette, matched to the map's
-// STATE_COLORS / PIN_COLORS so a status looks identical on the list and the map:
-// Prospect RED, Contacted slate, Interested purple, Sold green, Not Interested
-// black/charcoal (dead), Follow-up orange. Each hue uses the LeadCard light/dark
-// pairing (-600 on a /10 tint in light, -400 on /15 in dark) so chips clear AA
-// in BOTH themes; the generic "good" green rides the semantic success token.
+// Fallback ramp keyed by RAW leadStatus — reached only when pinDisplayState
+// throws on a status it doesn't know (see leadStateChip below). The live chip
+// palette is STATE_CHIP, which follows shared/statusConfig.ts; this table's
+// old claim of matching the map was wrong on its face (the map's prospect pin
+// is GREEN #16A34A — red on the map means not interested).
 const STATUS_COLOR: Record<string, string> = {
-  // 4.23:1 measured at -600 on its own /10 tint; -700 lands at 5.66:1. The
-  // hue stays because this ramp is categorical - "prospect" is not a failure.
-  prospect:      "bg-red-500/10 text-red-700 dark:bg-red-500/15 dark:text-red-400",
+  prospect:      "bg-green-600/10 text-green-700 dark:bg-green-500/15 dark:text-green-400",
   contacted:     "bg-slate-500/10 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300",
   interested:    "bg-violet-500/10 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
   sold:          "bg-success/10 text-success",
@@ -517,8 +549,8 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <X className="w-4 h-4" />
           </button>
           <div className="flex items-center gap-2 pr-8">
-            <Badge className={`text-2xs px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
-              {leadStateLabel(current)}
+            <Badge className={`text-2xs px-2 py-0.5 rounded-full border-0 font-semibold ${leadStateChip(current).chip}`}>
+              {leadStateChip(current).label}
             </Badge>
             {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-warning/10 text-warning text-2xs">High priority</Badge>}
           </div>
@@ -748,23 +780,23 @@ const nextAction = (lead: Lead) => {
   // Closed doors ("not interested" and its "already a customer" disambiguation)
   // are non-actionable — labelling them "Review" invited pointless rework.
   try {
-    const ds = pinDisplayState({ leadStatus: lead.leadStatus, visited: true, lastOutcome: lead.lastOutcome ?? null });
+    const ds = pinDisplayState({ leadStatus: lead.leadStatus, visited: Boolean(lead.lastOutcome), lastOutcome: lead.lastOutcome ?? null });
     if (ds === "already_customer" || ds === "not_interested") return { label: "Closed", tone: "text-muted-foreground" };
   } catch { /* unknown status — fall through to Review */ }
   return { label: "Review", tone: "text-muted-foreground" };
 };
 
+// No `icon`/`tone`: same dead weight MetricStrip already shed — both props were
+// accepted, threaded from every call site, and rendered by nothing.
 function EnterpriseKpi({ label, value, helper, warning = false }: {
   label: string;
   /** null = the fetch failed — render an honest em-dash, never a fake 0. */
   value: number | null;
   helper: string;
-  icon: React.ElementType;
-  tone?: string;
   warning?: boolean;
 }) {
   return (
-    <div className={`min-w-[160px] flex-1 rounded-lg border bg-card px-4 py-3.5 ${warning ? "border-amber-500/30" : "border-border"}`}>
+    <div className={`min-w-0 rounded-lg border bg-card px-4 py-3.5 ${warning ? "border-amber-500/30" : "border-border"}`}>
       <div className="flex items-center justify-between gap-3">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
         
@@ -807,7 +839,7 @@ const LeadTableRow = memo(function LeadTableRow({
   return (
     <tr data-testid={`card-lead-${lead.id}`} className={`group hover:bg-muted/35 transition-colors${saving ? " opacity-70" : ""}`}>
       <td className="px-4 py-3"><button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
-      <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
+      <td className="px-3 py-3">{(() => { const s = leadStateChip(lead); return <Badge className={`border-0 text-2xs font-semibold ${s.chip}`}>{s.label}</Badge>; })()}</td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
       <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100 · {lead.lastScannedAt ? `scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "no scan timestamp"}</div></td>
@@ -851,38 +883,41 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
   // Same provisional treatment as the desktop row: a save still in flight is
   // visible but not actionable until the server id exists.
   const saving = lead.id < 0;
+  // Compact two-line row, not a card: the old layout spent ~200px per lead on a
+  // Priority/Activity/Next table that read identically down the whole page plus
+  // a three-button bar, so a rep scrolling 76k leads saw 2-3 at a time. The row
+  // keeps every signal that varies per lead (status, next action, recency, the
+  // HIGH marker) inline and moves the rest behind the tap; Calling and Route
+  // stay as 44px trailing icon buttons so field use loses nothing.
   return (
-    <article className={`render-lazy px-4 py-4${saving ? " opacity-70" : ""}`} data-testid={`mobile-lead-${lead.id}`}>
-      <button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="w-full text-left">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
-            <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground">{lead.city}, {lead.state} {lead.zip}</div>
-            <div className="mt-1 text-[11px] text-muted-foreground">{lead.lastScannedAt ? `Scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "No scan timestamp"}</div>
-          </div>
-          {/* leadStateLabel, NOT the raw lookup: "already a customer" is stored
+    <article className={`render-lazy flex items-center gap-1 py-1.5 pl-4 pr-2 transition-colors active:bg-secondary/50${saving ? " opacity-70" : ""}`} data-testid={`mobile-lead-${lead.id}`}>
+      <button onClick={() => !saving && onOpen(lead)} aria-label={`Open details for ${lead.address}`} className="min-h-tap min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-[14px] font-semibold leading-snug text-foreground">{lead.address}</span>
+          {(lead.leadScore ?? 0) >= 80 && <span className="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-2xs font-bold text-warning">HIGH</span>}
+          {/* leadStateChip, NOT the raw lookup: "already a customer" is stored
               as not_interested + lastOutcome, and the raw label showed those
               doors as "Not Interested" — the exact field-reported bug the
               desktop grid and drawer already fixed. */}
-          <Badge className={`shrink-0 border-0 text-2xs ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge>
+          {(() => { const s = leadStateChip(lead); return <Badge className={`ml-auto shrink-0 border-0 text-2xs ${s.chip}`}>{s.label}</Badge>; })()}
         </div>
-        <div className="mt-3 grid grid-cols-3 rounded-lg border border-border bg-background/45">
-          <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
-          <div className="border-x border-border px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
-          <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
+        <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[12px] text-muted-foreground">
+          <span className="truncate">{lead.city}, {lead.state} {lead.zip}</span>
+          <span aria-hidden="true">·</span>
+          <span className={`shrink-0 font-semibold ${next.tone}`}>{next.label}</span>
+          <span className="ml-auto shrink-0 pl-2 text-[11px]">{formatActivity(lead.updatedAt || lead.createdAt)}</span>
         </div>
       </button>
       {saving ? (
-        <div className="mt-3 h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex w-full items-center justify-center gap-1.5" data-testid={`lead-row-saving-${lead.id}`}>
+        <div className="flex shrink-0 items-center gap-1.5 px-2 text-2xs font-semibold text-muted-foreground" data-testid={`lead-row-saving-${lead.id}`}>
           <RefreshCw className="h-3.5 w-3.5 animate-spin" />Saving…
         </div>
       ) : (
-      <div className="mt-3 grid grid-cols-4 gap-2">
-        <button onClick={() => onOpen(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5">Open</button>
-        <button onClick={() => onMap(lead)} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Map</button>
-        {canOpenCalling ? <Link href={`/calling/lead/${lead.id}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Calling</Link> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5">Protected</span>}
-        <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5">Route</a>
-      </div>
+        <div className="flex shrink-0 items-center">
+          <button onClick={() => onMap(lead)} data-testid={`lead-map-${lead.id}`} title="Show on field map" aria-label={`Show ${lead.address} on field map`} className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><MapPin className="h-4 w-4" aria-hidden="true" /></button>
+          {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label={`Open Calling for ${lead.address}`} className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Phone className="h-4 w-4" aria-hidden="true" /></Link>}
+          <a href={directions} target="_blank" rel="noreferrer" title="Route" aria-label={`Route to ${lead.address}`} className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Navigation className="h-4 w-4" aria-hidden="true" /></a>
+        </div>
       )}
     </article>
   );
@@ -1252,8 +1287,8 @@ export default function Leads() {
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-7 space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-foreground">{isRep ? "My leads" : "Leads command center"}</h1>
-          <p className="text-sm text-muted-foreground mt-1">{isRep ? "Work your assigned doors and keep every follow-up moving." : "Qualify, assign, and move every fiber opportunity forward."}</p>
+          <h1 className="text-balance text-xl font-bold tracking-tight text-foreground">{isRep ? "My leads" : "Leads command center"}</h1>
+          <p className="text-pretty text-sm text-muted-foreground mt-1">{isRep ? "Work your assigned doors and keep every follow-up moving." : "Qualify, assign, and move every fiber opportunity forward."}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => navigate("/map")} className="h-9 border-border text-sm">Field map</Button>
@@ -1268,12 +1303,17 @@ export default function Leads() {
           <div className="px-3 py-3"><dt className="text-2xs font-medium text-muted-foreground">Interested</dt><dd className="mt-1 text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</dd></div>
         </dl>
       )}
-      <div className={`${isRep ? "hidden md:flex" : "flex"} gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`} data-testid="leads-kpi">
-        <EnterpriseKpi label="Total leads" value={statsError ? null : leadStats?.total ?? 0} helper="All active records" icon={Users} />
-        <EnterpriseKpi label="Qualified" value={statsError ? null : leadStats?.qualified ?? 0} helper="Interested or sold" icon={CheckCircle2} tone="text-success" />
-        <EnterpriseKpi label="Assigned" value={statsError ? null : leadStats?.assigned ?? 0} helper="Owned by a field rep" icon={UserCheck} tone="text-violet-600 dark:text-violet-400" />
-        <EnterpriseKpi label="Unassigned" value={statsError ? null : leadStats?.unassigned ?? 0} helper="Requires an owner" icon={CircleDot} tone="text-warning" warning={!statsError && (leadStats?.unassigned ?? 0) > 0} />
-        <EnterpriseKpi label="Stale" value={statsError ? null : leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-destructive" warning={!statsError && (leadStats?.stale ?? 0) > 0} />
+      {/* A grid, not a hidden-scrollbar rail: with the scrollbar suppressed
+          there was no affordance that Unassigned and Stale — the two cards
+          that carry the warnings — even existed off the right edge of a
+          phone. Same glance-row rule as the Dashboard tiles: every number on
+          screen at once. The last cell spans the leftover slot below sm. */}
+      <div className={`${isRep ? "hidden md:grid" : "grid"} grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 [&>*:last-child]:col-span-2 lg:[&>*:last-child]:col-span-1`} data-testid="leads-kpi">
+        <EnterpriseKpi label="Total leads" value={statsError ? null : leadStats?.total ?? 0} helper="All active records" />
+        <EnterpriseKpi label="Qualified" value={statsError ? null : leadStats?.qualified ?? 0} helper="Interested or sold" />
+        <EnterpriseKpi label="Assigned" value={statsError ? null : leadStats?.assigned ?? 0} helper="Owned by a field rep" />
+        <EnterpriseKpi label="Unassigned" value={statsError ? null : leadStats?.unassigned ?? 0} helper="Requires an owner" warning={!statsError && (leadStats?.unassigned ?? 0) > 0} />
+        <EnterpriseKpi label="Stale" value={statsError ? null : leadStats?.stale ?? 0} helper="No activity in 14 days" warning={!statsError && (leadStats?.stale ?? 0) > 0} />
       </div>
 
       {canSeeScanOps && (
@@ -1329,7 +1369,7 @@ export default function Leads() {
             {["all", ...LEAD_STATUSES].map(status => {
               const active = filterStatus === status;
               const count = status === "all" ? (leadStats?.total ?? 0) : (bs[status] ?? 0);
-              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-11 shrink-0 snap-start px-3 text-[12px] lg:h-8 lg:px-2.5 lg:text-2xs rounded-md font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
+              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-11 shrink-0 snap-start px-3 text-[12px] lg:h-8 lg:px-2.5 lg:text-2xs rounded-md font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count.toLocaleString("en-US")}</span></button>;
             })}
             {activeFilters && <button onClick={clearAllFilters} className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-2xs ml-auto font-semibold text-muted-foreground hover:text-foreground whitespace-nowrap">Clear filters</button>}
           </div>
