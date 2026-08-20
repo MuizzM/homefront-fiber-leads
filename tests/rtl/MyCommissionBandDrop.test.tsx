@@ -110,6 +110,43 @@ describe("the band-drop notice", () => {
     expect(row.querySelector(".line-through")).not.toBeNull();
     expect(row).toHaveTextContent("7 Maple St");
   });
+
+  it("labels an install-held qualified sale truthfully instead of saying it counts toward payable commission", async () => {
+    const p = weekPayload();
+    p.sales = [{
+      ...p.sales[0],
+      installHold: true,
+      payableAfter: null,
+      address: "Held Test Door",
+    }];
+    p.computation = {
+      ...p.computation!,
+      qualifiedSaleCount: 0,
+      grossCommissionCents: 0,
+      finalCommissionCents: 0,
+    };
+    renderPage(p);
+
+    const row = await screen.findByTestId("sale-row-1");
+    expect(row).toHaveTextContent("install hold");
+    expect(row).toHaveTextContent("Waiting for installation confirmation");
+    expect(row).not.toHaveTextContent("counts");
+    expect(screen.getByTestId("install-hold-explainer")).toHaveTextContent(/not payable until installation is confirmed/i);
+  });
+
+  it("shows the configured release date for an install-confirmed held sale", async () => {
+    const p = weekPayload();
+    p.sales = [{
+      ...p.sales[0],
+      installHold: true,
+      payableAfter: "2026-09-15T04:00:00.000Z",
+    }];
+    renderPage(p);
+
+    const detail = await screen.findByTestId("install-hold-detail-1");
+    expect(detail).toHaveTextContent("Payable after");
+    expect(detail).not.toHaveTextContent("Waiting for installation confirmation");
+  });
 });
 
 describe("review-confirmed guards", () => {

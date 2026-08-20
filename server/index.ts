@@ -699,6 +699,22 @@ app.use((req, res, next) => {
         if (typeof (repairTimer as any).unref === "function") (repairTimer as any).unref();
       }
     }
+    // Rep metrics belong to the same near-idle primary as the other bounded
+    // rollups. Previously the only start call lived in the worker body below,
+    // guarded by `!IS_CLUSTER_WORKER`. In cluster mode the primary returns
+    // before that body and every child is a cluster worker, so production had
+    // no owner for the dirty-day queue at all. Start exactly one scheduler here;
+    // the single-process branch keeps its existing start further below.
+    let stopPrimaryRepMetrics: (() => void) | null = null;
+    try {
+      const { startRepMetricsWorkers } = await import("./repMetricsAggregator");
+      stopPrimaryRepMetrics = startRepMetricsWorkers();
+    } catch (error) {
+      structuredLog("rep_metrics.start_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+        owner: "cluster-primary",
+      }, "warn");
+    }
     try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
     try { const { runCallingMigrations } = await import("./calling/migrations"); runCallingMigrations(); }
@@ -767,6 +783,7 @@ app.use((req, res, next) => {
     });
     const stopPrimary = (sig: string) => {
       if (primaryDown) return; primaryDown = true;
+      stopPrimaryRepMetrics?.();
       const n = Object.keys(cluster.workers ?? {}).length;
       console.log(`[cluster] ${sig} received - forwarding to ${n} worker(s)`);
       for (const id in cluster.workers) { try { cluster.workers[id]?.kill("SIGTERM"); } catch {} }

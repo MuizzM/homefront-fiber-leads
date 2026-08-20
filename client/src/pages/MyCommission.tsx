@@ -31,6 +31,7 @@ interface Tier { minimumSales: number; maximumSales: number | null; rateCents: n
 interface WeekSale {
   id: number; status: string; sold_at: string; qualified_at: string | null;
   reversed_at: string | null; lead_id: number | null; address: string | null; city: string | null;
+  installHold?: boolean; payableAfter?: string | null;
 }
 interface WeekResponse {
   statement: any | null;
@@ -191,13 +192,14 @@ export default function MyCommission() {
         <WeekView data={data} />
       )}
 
-      {/* What counts - the exact doors behind this week's number */}
+      {/* Sale ledger - includes held/reversed doors so the rep can reconcile why
+          the payable total may be lower than the number of completed sales. */}
       {!isLoading && data && (data.sales?.length ?? 0) > 0 && (
         <section className="rounded-xl bg-card border border-border overflow-hidden" data-testid="week-sales">
           <header className="px-4 py-3 border-b border-border flex items-center gap-2">
             
-            <span className="text-sm font-semibold tracking-tight text-foreground">What counts this week</span>
-            <span className="ml-auto text-[11px] text-muted-foreground">every door behind your number</span>
+            <span className="text-sm font-semibold tracking-tight text-foreground">This week's sales</span>
+            <span className="ml-auto text-[11px] text-muted-foreground">pay status for every door</span>
           </header>
           <div className="divide-y divide-border">
             {data.sales!.map(s => (
@@ -210,11 +212,23 @@ export default function MyCommission() {
                     {new Date(s.qualified_at ?? s.sold_at).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}
                     {s.city ? ` · ${s.city}` : ""}
                   </div>
+                  {s.installHold && (
+                    <div className="mt-0.5 text-[11px] text-warning" data-testid={`install-hold-detail-${s.id}`}>
+                      {s.payableAfter
+                        ? `Payable after ${new Date(s.payableAfter).toLocaleDateString()}`
+                        : "Waiting for installation confirmation"}
+                    </div>
+                  )}
                 </div>
-                <SaleChip status={s.status} />
+                <SaleChip status={s.status} installHold={s.installHold} />
               </div>
             ))}
           </div>
+          {(data.sales ?? []).some(s => s.installHold) && (
+            <div className="px-4 py-2 bg-warning/5 text-[11px] text-muted-foreground border-t border-border" data-testid="install-hold-explainer">
+              Install-held sales are qualified, but they are not payable until installation is confirmed and any configured hold period has ended.
+            </div>
+          )}
           {(data.sales ?? []).some(s => s.status === "REVERSED") && (
             <div className="px-4 py-2 bg-muted/40 text-[11px] text-muted-foreground border-t border-border">
               Reversed doors don't count toward pay. If you think one is wrong, ask your manager to review it.
@@ -951,7 +965,14 @@ function MetricCell({ label, value, accent }: { label: string; value: string; ac
   );
 }
 
-function SaleChip({ status }: { status: string }) {
+function SaleChip({ status, installHold = false }: { status: string; installHold?: boolean }) {
+  if (installHold) {
+    return (
+      <span className="inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap bg-warning/10 text-warning">
+        <span className="w-1 h-1 rounded-full bg-current" />install hold
+      </span>
+    );
+  }
   const map: Record<string, [string, string]> = {
     QUALIFIED: ["counts", "bg-success/10 text-success"],
     PENDING: ["pending", "bg-warning/10 text-warning"],

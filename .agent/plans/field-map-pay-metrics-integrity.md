@@ -12,7 +12,7 @@ Live browser review found the tablet lead sheet hidden beneath the 264 px persis
 
 ## Safety invariants
 
-- Do not mark or otherwise modify a real production lead merely to test the flow.
+- Do not mark or otherwise modify a real production lead merely to test the flow. The owner explicitly identified the selected Concord records as test data on 2026-08-20 and authorized browser-driven dispositions/comments for this regression only.
 - Do not bypass provider controls, run paid scans, rotate proxies, or change scanner/provider behavior.
 - Preserve organization and representative tenant isolation on all reads and writes.
 - Preserve integer-cent, server-authoritative commission calculations and idempotent sale/reversal behavior.
@@ -48,7 +48,11 @@ Live browser review found the tablet lead sheet hidden beneath the 264 px persis
 - [x] 2026-08-20: Completed Milestone 1 map geometry, contrast, icon, DnK, focus, scrolling, and drawer fixes; 77 focused tests pass.
 - [x] 2026-08-20: Completed Milestone 2 error/retry, payout fail-closed, metrics polling, and authoritative-pay-source UI; 78 surrounding tests and type check pass.
 - [x] 2026-08-20: Completed Milestone 3 team/hourly aggregation, date-only commission, callback-cohort, bounded refresh, stable idempotency, DnK hard-stop, and repaired browser-auth coverage.
-- [ ] 2026-08-20: Milestone 4 verification is complete; exact-SHA CI, deployment, and live recheck remain.
+- [x] 2026-08-20: Milestone 4 exact-SHA CI, deployment, and live production recheck completed at `7da2b6a602e1283f6f715d8d65d9c986f80a39f2`.
+- [x] 2026-08-20: Added an isolated full HTTP regression for three lead comments, three sold outcomes, replay deduplication, weekly pay/reserve arithmetic, asynchronous metrics rollup, and one sale correction/reversal. Full verifier passed 534 files / 6,855 tests plus the production build; no production lead was mutated.
+- [x] 2026-08-20: With explicit owner confirmation that the selected records are test data, completed a visible production-browser batch: two Sold, one Interested, one Follow-up, and four distinct saved comments with rep attribution.
+- [x] 2026-08-20: Corrected the two defects exposed by that batch: the cluster primary now owns one Metrics scheduler, and an install-held qualified sale is labeled with its actual hold reason/release state rather than “counts.”
+- [ ] 2026-08-20: Publish the exact SHA and recheck held-sale labeling plus the four-attempt Metrics rollup in the live browser. Focused tests passed 28/28; the full verifier passed 535 files / 6,859 tests and the production build.
 
 ## Decisions
 
@@ -66,6 +70,8 @@ Live browser review found the tablet lead sheet hidden beneath the 264 px persis
 - Authoritative pay arithmetic tests pass; the defect is Metrics presenting values from the legacy `commissions` table.
 - Appointment completion cannot be expressed truthfully as completed-in-period divided by created-in-period; the UI now presents the two counts independently and treats the percentage as unavailable.
 - Date-only commission order dates must compare to the organization metric date, not timestamp boundaries.
+- Production uses `SCAN_WORKERS=auto`. The cluster primary returns before the worker-body startup at `server/index.ts`, while every cluster worker is excluded by `if (!IS_CLUSTER_WORKER)`, so `startRepMetricsWorkers()` has no owner and dirty rep-days remain undrained.
+- Production's install-confirmation policy intentionally keeps a newly qualified sale out of payable commission until release. The API already returns `installHold` and `payableAfter`, but `MyCommission` drops both fields from its type/rendering and labels every `QUALIFIED` sale “counts.”
 
 ## Validation
 
@@ -85,4 +91,4 @@ All milestones are ordinary source changes with no migration. If focused tests f
 
 ## Result
 
-Implementation and local verification are complete. Publication and the post-deploy production recheck are pending.
+Implementation, publication, post-deploy browser validation, and the isolated sold/comment/pay/metrics regression are complete. Production remains at the verified field-map release; the new test is local and uncommitted until publication is explicitly requested.
