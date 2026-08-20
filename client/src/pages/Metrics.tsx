@@ -16,7 +16,6 @@ import { useRoute, useLocation } from "wouter";
 import { useRef } from "react";
 import { PageHeader } from "@/components/ui/page-scaffold";
 import { useCan } from "@/lib/capabilities";
-import { useAuth } from "@/lib/auth";
 import { MyMetrics } from "@/components/metrics/MyMetrics";
 import { TeamMetrics } from "@/components/metrics/TeamMetrics";
 import { TerritoryMetrics } from "@/components/metrics/TerritoryMetrics";
@@ -46,9 +45,6 @@ export default function Metrics() {
   const [, params] = useRoute("/metrics/:tab");
   const [, navigate] = useLocation();
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const { user } = useAuth();
-  const role = user?.role;
-
   // One hook call per tab, unconditionally, in a fixed order - hooks cannot be
   // called from inside a filter callback.
   const allowed: Record<string, boolean> = {
@@ -138,12 +134,6 @@ export default function Metrics() {
         {active.key === "live" && <LiveHandoff />}
       </div>
 
-      <p className="mt-8 text-[11px] leading-relaxed text-muted-foreground">
-        Numbers are rolled up in the background and are typically under a minute old. Rates with no
-        denominator show as a dash rather than zero, because a rep who knocked no doors has no contact
-        rate rather than a bad one. Every metric card explains its own formula behind the question mark.
-        Role: {role}.
-      </p>
     </div>
   );
 }

@@ -110,7 +110,7 @@ export function InstallAppBanner({ className }: { className?: string }) {
           type="button" onClick={dismiss} aria-label="Dismiss"
           data-testid="install-banner-dismiss"
           className={cn(
-            "absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:text-foreground",
+            "absolute right-1 top-1 grid size-11 place-items-center rounded-lg text-muted-foreground hover:text-foreground",
             FOCUS,
           )}
         >

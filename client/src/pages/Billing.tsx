@@ -141,7 +141,7 @@ export default function Billing() {
           <div className="flex items-center gap-2">
             {stripeOn && (
               <button onClick={openPortal} data-testid="manage-billing"
-                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-border text-[12px] font-medium text-foreground hover:bg-secondary">
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-border px-3 text-[12px] font-medium text-foreground hover:bg-secondary md:min-h-9">
                  Manage billing
               </button>
             )}
@@ -318,12 +318,12 @@ function PlanGrid({ plans, current, stripeOn, onChoose }: { plans: Plan[]; curre
               </ul>
               {canCheckout ? (
                 <button onClick={() => onChoose!(p.key)} data-testid={`choose-${p.key}`}
-                  className="mt-3 inline-flex items-center justify-center gap-1 h-8 rounded-lg bg-primary text-primary-foreground text-[12.5px] font-medium hover:bg-primary/90">
+                  className="mt-3 inline-flex min-h-11 items-center justify-center gap-1 rounded-lg bg-primary px-3 text-[12.5px] font-medium text-primary-foreground hover:bg-primary/90 md:min-h-9">
                   Choose {p.name} 
                 </button>
               ) : isEnterprise ? (
                 <a href="mailto:sales@homefrontsolutionsllc.com?subject=Enterprise%20plan"
-                  className="mt-3 inline-flex items-center justify-center h-8 rounded-lg border border-border text-[12.5px] font-medium text-foreground hover:bg-secondary">
+                  className="mt-3 inline-flex min-h-11 items-center justify-center rounded-lg border border-border px-3 text-[12.5px] font-medium text-foreground hover:bg-secondary md:min-h-9">
                   Contact sales
                 </a>
               ) : null}

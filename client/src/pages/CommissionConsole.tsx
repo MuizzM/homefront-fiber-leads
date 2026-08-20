@@ -1064,7 +1064,7 @@ function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean })
 }
 
 function PayoutHistory() {
-  const { data, isLoading, isError } = useQuery<{ payouts: PayoutHistoryRow[] }>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<{ payouts: PayoutHistoryRow[] }>({
     queryKey: ["/api/payouts"],
     queryFn: () => apiRequest("GET", "/api/payouts").then(r => r.json()),
   });
@@ -1079,7 +1079,12 @@ function PayoutHistory() {
       {isLoading ? (
         <div className="p-4"><div className="h-14 rounded-xl bg-secondary/40 animate-pulse" /></div>
       ) : isError ? (
-        <div className="p-5 text-sm text-muted-foreground">Payout history is temporarily unavailable.</div>
+        <div className="flex items-center justify-between gap-3 p-5" role="alert">
+          <span className="text-sm text-muted-foreground">Payout history is temporarily unavailable.</span>
+          <button type="button" onClick={() => void refetch()} disabled={isFetching} className="min-h-11 rounded-lg border border-border px-3 text-sm font-semibold text-foreground disabled:opacity-50">
+            {isFetching ? "Retrying…" : "Retry"}
+          </button>
+        </div>
       ) : rows.length === 0 ? (
         <div className="p-6 text-center text-sm text-muted-foreground">No Stripe payouts have been sent yet.</div>
       ) : (

@@ -1252,7 +1252,6 @@ export default function Leads() {
     <div className="min-h-full bg-background p-4 sm:p-6 lg:p-7 space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary mb-1.5">{isRep ? "Field pipeline" : "Sales operations"}</div>
           <h1 className="text-xl font-bold tracking-tight text-foreground">{isRep ? "My leads" : "Leads command center"}</h1>
           <p className="text-sm text-muted-foreground mt-1">{isRep ? "Work your assigned doors and keep every follow-up moving." : "Qualify, assign, and move every fiber opportunity forward."}</p>
         </div>
@@ -1263,11 +1262,11 @@ export default function Leads() {
       </div>
 
       {isRep && (
-        <div className="grid grid-cols-3 gap-2 md:hidden" data-testid="rep-leads-summary">
-          <div className="rounded-xl border border-border bg-card p-3"><div className="text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Assigned</div></div>
-          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-warning">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
-          <div className="rounded-xl border border-violet-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Interested</div></div>
-        </div>
+        <dl className="grid grid-cols-3 divide-x divide-border rounded-xl border border-border bg-card md:hidden" data-testid="rep-leads-summary">
+          <div className="px-3 py-3"><dt className="text-2xs font-medium text-muted-foreground">Assigned</dt><dd className="mt-1 text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</dd></div>
+          <div className="px-3 py-3"><dt className="text-2xs font-medium text-muted-foreground">Follow-ups</dt><dd className="mt-1 text-xl font-semibold tabular-nums text-warning">{bs.follow_up ?? 0}</dd></div>
+          <div className="px-3 py-3"><dt className="text-2xs font-medium text-muted-foreground">Interested</dt><dd className="mt-1 text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</dd></div>
+        </dl>
       )}
       <div className={`${isRep ? "hidden md:flex" : "flex"} gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`} data-testid="leads-kpi">
         <EnterpriseKpi label="Total leads" value={statsError ? null : leadStats?.total ?? 0} helper="All active records" icon={Users} />
@@ -1326,11 +1325,11 @@ export default function Leads() {
             </div>
           </div>
 
-          <div className="flex items-center gap-1 overflow-x-auto pb-0.5" data-testid="filter-lead-status">
+          <div className="no-scrollbar -mx-4 flex snap-x snap-mandatory items-center gap-1 overflow-x-auto px-4 pb-0.5 lg:mx-0 lg:flex-wrap lg:px-0" data-testid="filter-lead-status">
             {["all", ...LEAD_STATUSES].map(status => {
               const active = filterStatus === status;
               const count = status === "all" ? (leadStats?.total ?? 0) : (bs[status] ?? 0);
-              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-11 px-3 text-[12px] lg:h-7 lg:px-2.5 lg:text-2xs rounded-md font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
+              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-11 shrink-0 snap-start px-3 text-[12px] lg:h-8 lg:px-2.5 lg:text-2xs rounded-md font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
             })}
             {activeFilters && <button onClick={clearAllFilters} className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-2xs ml-auto font-semibold text-muted-foreground hover:text-foreground whitespace-nowrap">Clear filters</button>}
           </div>

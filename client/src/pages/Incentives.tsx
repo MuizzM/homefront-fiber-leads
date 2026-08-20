@@ -219,7 +219,7 @@ function NewAwardReveal({ spiff, onDismiss }: { spiff: SpiffRow; onDismiss: () =
         onClick={onDismiss}
         data-testid="spiff-reveal-dismiss"
         aria-label="Dismiss new bonus"
-        className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-secondary", FOCUS)}
+        className={cn("grid size-11 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-secondary", FOCUS)}
       >
         <X className="h-4 w-4" aria-hidden="true" />
       </button>

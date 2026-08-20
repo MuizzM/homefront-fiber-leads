@@ -67,7 +67,7 @@ describe("ListRow - the Linear grammar", () => {
     );
     expect(screen.getByTestId("row")).toHaveTextContent("Commission");
     expect(screen.getByTestId("row")).toHaveTextContent("Flat per sale, or weekly tiers");
-    expect(screen.getByText("Power tools").className).toContain("uppercase");
+    expect(screen.getByText("Power tools").className).not.toContain("uppercase");
   });
 
   it("is a real button when clickable and a plain div when not", () => {
@@ -109,10 +109,11 @@ describe("PageHeader", () => {
 });
 
 describe("SectionLabel", () => {
-  it("is quiet: small, uppercase, muted", () => {
+  it("is quiet: small, sentence case, muted", () => {
     render(<SectionLabel>Budget</SectionLabel>);
     const el = screen.getByText("Budget");
-    expect(el.className).toContain("uppercase");
+    expect(el.className).not.toContain("uppercase");
+    expect(el.className).not.toContain("tracking-");
     expect(el.className).toContain("text-muted-foreground");
   });
 });

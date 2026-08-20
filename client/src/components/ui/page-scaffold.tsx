@@ -46,11 +46,11 @@ export function PageHeader({ title, subtitle, actions, className }: {
   );
 }
 
-/** Revolut-style section eyebrow: small, quiet, all-caps. Announces a group
- *  without competing with the numbers inside it. */
+/** Quiet section label. Sentence case keeps operational screens readable and
+ *  avoids turning every group title into decorative chrome. */
 export function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground", className)}>
+    <div className={cn("text-xs font-semibold text-muted-foreground", className)}>
       {children}
     </div>
   );

@@ -2,6 +2,7 @@ import { ChevronRight, Moon, Sun } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
+import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 
 const ROLE_LABEL: Record<string, string> = {
   super_admin: "Super Admin", admin: "Admin", manager: "Manager",
@@ -16,34 +17,25 @@ export default function Profile() {
   return (
     <div className="flex-1 overflow-y-auto p-4 pb-24">
       <div className="max-w-lg mx-auto space-y-8">
-        {/* Page title */}
-        <header className="pt-2">
-          <h1 className="text-xl font-bold tracking-tight text-foreground">Settings</h1>
-          <p className="text-[13px] text-muted-foreground mt-1">
-            Manage your account and preferences.
-          </p>
-        </header>
+        <PageHeader className="pt-2" title="Settings" subtitle="Manage your account and preferences." />
 
         {/* ── Account ─────────────────────────────────────────── */}
         <section className="space-y-3">
-          <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-1">
-            Account
-          </h2>
+          <SectionLabel className="px-1">Account</SectionLabel>
           <div className="rounded-2xl bg-card border border-border overflow-hidden">
-            {/* Gradient banner + overlapping avatar — a proper identity header */}
-            <div className="h-16 bg-gradient-to-r from-primary/30 via-primary/[0.12] to-transparent" aria-hidden="true" />
-            <div className="px-5 pb-5 -mt-9">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-success text-white flex items-center justify-center text-xl font-bold ring-4 ring-card shadow-lg">
+            <div className="flex items-center gap-4 px-5 py-5">
+              <div className="grid size-14 shrink-0 place-items-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
                 {user.name?.slice(0, 2).toUpperCase()}
               </div>
-              <div className="mt-3 flex items-center gap-2 flex-wrap">
-                <h3 className="text-[18px] font-bold tracking-tight text-foreground">{user.name}</h3>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/[0.12] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary" aria-hidden="true" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-[18px] font-bold tracking-tight text-foreground">{user.name}</h2>
+                  <span className="inline-flex items-center rounded-full bg-primary/[0.12] px-2.5 py-1 text-[11px] font-semibold text-primary">
                   {ROLE_LABEL[user.role] ?? user.role}
-                </span>
+                  </span>
+                </div>
+                <div className="mt-1 break-all text-[13px] text-muted-foreground">{user.email}</div>
               </div>
-              <div className="text-[13px] text-muted-foreground mt-1 truncate">{user.email}</div>
             </div>
           </div>
         </section>
