@@ -342,7 +342,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const orgTagline = tenantMe?.tenant?.tagline || null;
   const mobileTitle = location === "/today" || location === "/" ? "Today"
     : location === "/map" ? "Field map"
-    : location === "/leads" || location.startsWith("/lead/") ? "My leads"
+    : location === "/leads" || location.startsWith("/lead/") ? (role === "rep" ? "My leads" : "Leads")
     : location === "/my-commission" ? "My pay"
     : location === "/clock" ? "Field hours"
     : location === "/leaderboard" ? "Leaderboard"

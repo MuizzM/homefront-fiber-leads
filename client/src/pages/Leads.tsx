@@ -895,7 +895,13 @@ const LeadTableRow = memo(function LeadTableRow({
       <td className="px-3 py-3">{(() => { const s = leadStateChip(lead); return <Badge className={`border-0 text-2xs font-semibold ${s.chip}`}>{s.label}</Badge>; })()}</td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{titleCaseAddress(lead.city)}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
-      <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100 · {lead.lastScannedAt ? `scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "no scan timestamp"}</div></td>
+      {/* A never-scanned row used to print the raw triple "unknown / Score
+          0/100 · no scan timestamp" - debug output in a table cell. Collapse
+          that one case to a quiet line; any real signal (a speed, a status,
+          a scan time, a nonzero score) keeps the informative pair. */}
+      <td className="px-3 py-3">{!lead.maxDownloadMbps && !lead.lastScannedAt && lead.fiberStatus === "unknown" && !(lead.leadScore ?? 0)
+        ? <div className="text-2xs text-muted-foreground">Not scanned yet</div>
+        : <><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100 · {lead.lastScannedAt ? `scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "no scan timestamp"}</div></>}</td>
       <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-destructive" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
       <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
       <td className="px-3 py-3">
