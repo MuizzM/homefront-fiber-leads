@@ -3,7 +3,7 @@
 // never drift (they already had), and by tests. Colors come from @shared/knock —
 // one palette for buttons, pins, and legend.
 
-import { STATE_COLORS } from "@shared/knock";
+import { STATE_COLORS, haversineMeters } from "@shared/knock";
 import { GLYPH_FONT_BOLD, GLYPH_FONT_REGULAR } from "@/lib/basemapStyles";
 
 // Flat GPU match on the precomputed `ds` feature prop — no nested case logic.
@@ -869,4 +869,62 @@ export function setStreetLabelData(map: any, streets: Array<[number, number, str
 
 export function removeStreetLabelLayer(map: any): void {
   try { if (map?.getLayer?.("hf-streetname")) map.removeLayer("hf-streetname"); } catch { /* gone */ }
+}
+
+// ── Rep→door proximity link ───────────────────────────────────────────────────
+// While a card is open the map draws a dotted guide from the rep's fix to the
+// selected door — the SalesRabbit "proximity indicator", as a quiet overlay on
+// the working map instead of a separate screen. Display only: the knock's
+// GPS evidence and the server's distance verdict are untouched.
+export const REP_LINK_SOURCE = "rep-door-link";
+export const REP_LINK_LAYER = "rep-door-link-line";
+
+/** Don't draw a guide to a door the rep plainly isn't walking to — past ~3 km
+ *  the line is chart junk crossing the whole viewport. */
+export const REP_LINK_MAX_METERS = 3000;
+
+export const REP_LINK_LAYER_SPEC: any = {
+  id: REP_LINK_LAYER,
+  type: "line",
+  source: REP_LINK_SOURCE,
+  layout: { "line-cap": "round" },
+  paint: {
+    // Rounded dashes on a white 55% line — legible on satellite and streets
+    // alike without competing with pins (which draw above this layer).
+    "line-color": "#ffffff",
+    "line-opacity": 0.55,
+    "line-width": 1.75,
+    "line-dasharray": [0.1, 2.2],
+  },
+};
+
+/** LineString feature for the guide, or null when there is nothing honest to
+ *  draw (missing ends, or the pair is beyond REP_LINK_MAX_METERS). Pure. */
+export function repDoorLinkFeature(
+  rep: { lat: number; lng: number } | null | undefined,
+  door: { lat: number | null | undefined; lng: number | null | undefined } | null | undefined,
+): { type: "Feature"; geometry: { type: "LineString"; coordinates: [number, number][] }; properties: {} } | null {
+  if (!rep || door?.lat == null || door?.lng == null) return null;
+  if (![rep.lat, rep.lng, door.lat, door.lng].every(Number.isFinite)) return null;
+  const meters = haversineMeters({ lat: rep.lat, lng: rep.lng }, { lat: door.lat, lng: door.lng });
+  if (meters > REP_LINK_MAX_METERS) return null;
+  return {
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: [[rep.lng, rep.lat], [door.lng, door.lat]] },
+    properties: {},
+  };
+}
+
+/** Push the guide into the map (or clear it with null). Safe on a stale map. */
+export function setRepDoorLink(
+  map: any,
+  feature: ReturnType<typeof repDoorLinkFeature>,
+): void {
+  try {
+    const src = map?.getSource?.(REP_LINK_SOURCE);
+    if (!src?.setData) return;
+    src.setData(feature
+      ? { type: "FeatureCollection", features: [feature] }
+      : { type: "FeatureCollection", features: [] });
+  } catch { /* stale map handle */ }
 }

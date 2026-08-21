@@ -87,6 +87,11 @@ import {
   GRID_TIER_HIDDEN_LAYER_IDS,
   unclusteredOpacityExpr,
   iconOpacityExpr,
+  REP_LINK_SOURCE,
+  REP_LINK_LAYER,
+  REP_LINK_LAYER_SPEC,
+  repDoorLinkFeature,
+  setRepDoorLink,
 } from "@/lib/mapPins";
 import {
   MAP_VIEWPORT_MODE_THRESHOLD,
@@ -312,6 +317,7 @@ const ROCKWELL_CENTER: [number, number] = [-80.41, 35.545];
 const FILTER_STATUS_ORDER: PinDisplayState[] = [
   "unworked",
   "follow_up",
+  "go_back",
   "interested",
   "sold",
   "not_home",
@@ -319,6 +325,10 @@ const FILTER_STATUS_ORDER: PinDisplayState[] = [
   "callback",
   "contacted",
   "already_customer",
+  "competitor",
+  "renter",
+  "moving",
+  "no_soliciting",
 ];
 const FILTERABLE_STATUSES: readonly string[] = FILTER_STATUS_ORDER;
 
@@ -671,6 +681,17 @@ const emptyFeatureCollection = () => ({
  * This is intentionally idempotent because setStyle() removes custom sources.
  */
 function ensureTransientMapLayers(map: any): void {
+  // Rep→door proximity guide — installed FIRST so every later layer (search
+  // halo, scan pins, lead pins) draws above the dotted line.
+  if (!map.getSource(REP_LINK_SOURCE)) {
+    map.addSource(REP_LINK_SOURCE, {
+      type: "geojson",
+      data: emptyFeatureCollection(),
+    });
+  }
+  if (!map.getLayer(REP_LINK_LAYER)) {
+    map.addLayer(REP_LINK_LAYER_SPEC);
+  }
   if (!map.getSource(SEARCH_RESULT_SOURCE)) {
     map.addSource(SEARCH_RESULT_SOURCE, {
       type: "geojson",
@@ -6267,7 +6288,7 @@ export default function MapView() {
   );
 
   const handleKnock = useCallback(
-    (outcome: KnockOutcome): boolean => {
+    (outcome: KnockOutcome, opts?: { callbackDate?: string | null; callbackTime?: string | null }): boolean => {
       const lead =
         selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
       if (!lead) return false;
@@ -6277,11 +6298,15 @@ export default function MapView() {
       // tap replaces the "This lead has no rep assigned" dead end from the
       // field report. Central mark shows its own success/failure toast and
       // updates the same caches the knock path would.
-      if (canManage && resolveCreditedRepId(user, lead.assignedRepId) == null) {
+      // EXCEPT a scheduled follow-up: the appointment lives on the rep knock
+      // row, and silently dropping the date to fit the central path would lie
+      // to the person who just picked it — let logKnock fail with its honest
+      // "no rep assigned" toast instead.
+      if (canManage && !opts?.callbackDate && resolveCreditedRepId(user, lead.assignedRepId) == null) {
         void handleCentralMark(outcome);
         return true;
       }
-      if (!logKnock(lead, outcome)) return false;
+      if (!logKnock(lead, outcome, opts)) return false;
 
       const nextLeadStatus = OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus;
       const nextDisplayState = pinDisplayState({
@@ -6408,6 +6433,31 @@ export default function MapView() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLeadId, mapReady, useSheet, sheetPeekPx]);
+
+  // Rep→door proximity guide: while a card is open, a dotted line links the
+  // rep's fix to the selected door (the card's distance chip reads the same
+  // ~15s-cached fix, so the two agree). One capture per selection — the guide
+  // is orientation ("that house, over there"), not live tracking. Cleared on
+  // deselect, and drawn only when repDoorLinkFeature judges it honest (both
+  // ends known, within its max range).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (selectedLeadId == null) { setRepDoorLink(map, null); return; }
+    const lead = leadById.get(selectedLeadId);
+    if (lead?.lat == null || lead?.lng == null) { setRepDoorLink(map, null); return; }
+    let alive = true;
+    void captureFieldFix(3500).then(fix => {
+      if (!alive) return;
+      const current = mapRef.current;
+      if (!current) return;
+      setRepDoorLink(current, repDoorLinkFeature(
+        fix.repLat != null && fix.repLng != null ? { lat: fix.repLat, lng: fix.repLng } : null,
+        { lat: lead.lat, lng: lead.lng },
+      ));
+    });
+    return () => { alive = false; };
+  }, [selectedLeadId, mapReady, leadById]);
 
   // No resume system — live GPS is the anchor. The rep opens the app where
   // they stand; the blue dot is always on and moves with the device.

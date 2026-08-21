@@ -25,15 +25,18 @@
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Check, X, DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone, UserCheck, type LucideIcon } from "lucide-react";
+import { Copy, Check, X, CalendarPlus, LocateFixed } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
+import { captureFieldFix } from "@/lib/geoFix";
 import {
   FIELD_OUTCOMES, OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
-  type KnockOutcome, type PinDisplayState,
+  haversineMeters, distanceHint, todayISO, DS_TO_OUTCOME,
+  type KnockOutcome,
 } from "@shared/knock";
+import { ICON_MAP } from "@/components/lead-sheet/OutcomeButton";
 import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
 import { normalizeZip5 } from "@shared/addressKey";
 import { LeadContacts } from "@/components/LeadContacts";
@@ -41,6 +44,9 @@ import { leadDisplayName, type TracedPhone } from "@shared/tracerfy";
 import { PeekBar } from "@/components/lead-sheet/PeekBar";
 import { QuickBody } from "@/components/lead-sheet/QuickBody";
 import { DetailsBody } from "@/components/lead-sheet/DetailsBody";
+import { ContactSection } from "@/components/lead-sheet/ContactSection";
+import { QuickLinks } from "@/components/lead-sheet/QuickLinks";
+import { SheetPhotos } from "@/components/lead-sheet/SheetPhotos";
 import { relativeTime, prefersReducedMotion, shortRepName, MUTED, BODY_TEXT } from "@/components/lead-sheet/utils";
 import { isFccReportedLead } from "@/lib/leadSourceFilter";
 import { useToast } from "@/hooks/use-toast";
@@ -72,11 +78,19 @@ export interface SheetLead {
   doNotKnock?: boolean | number | null;
 }
 
+// Schedule payload a disposition can carry — the appointment composer sends
+// the follow-up date/time WITH the knock so one tap persists both (the queue
+// and the server's knock row already carry these columns).
+export interface KnockScheduleOpts {
+  callbackDate?: string | null; // "YYYY-MM-DD" (rep-local calendar date)
+  callbackTime?: string | null; // "HH:mm"
+}
+
 export interface LeadKnockSheetProps {
   lead: SheetLead | null;                 // null → animate out then unmount after 200ms
   // Explicit false means the command was rejected before it could be queued.
   // Void remains accepted for backward-compatible non-map consumers.
-  onKnock: (outcome: KnockOutcome) => boolean | void;
+  onKnock: (outcome: KnockOutcome, opts?: KnockScheduleOpts) => boolean | void;
   // Lead-level notes, persisted inline. Explicit leadId so a pending debounce
   // for the OUTGOING lead can flush during a card swap; returns the save
   // result so the card can render Saving/Saved and merge 409 conflicts.
@@ -97,12 +111,6 @@ export interface LeadKnockSheetProps {
   onDelete?: () => void;
 }
 
-// lucide icon NAME (from OutcomeDef.icon) → component. Pins and card share one
-// palette; this is the one place a name string becomes a rendered glyph.
-const ICON_MAP: Record<string, LucideIcon> = {
-  DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle, UserCheck,
-};
-
 // Tap-vs-drag threshold: header taps must still land.
 const TAP_SLOP_PX = 6;
 // Dragging further than this below the peek position dismisses the sheet.
@@ -110,23 +118,18 @@ const CLOSE_OVERDRAG_PX = 80;
 // Flick faster than this decides snap direction regardless of position.
 const FLICK_VELOCITY = 0.5; // px/ms
 
-// ONE unified outcomes grid: every field disposition in a single 2-col grid,
-// FIXED order (a button never moves under the finger) with the four most
-// likely leading — Not Home | Interested / Sold | Not Interested — and the
-// remaining outcomes (Follow-up, Prospect) following in the same grid. This is
-// exactly FIELD_OUTCOMES, primary-four-first even if the shared list reorders.
+// ONE unified disposition surface, two tiers, FIXED order (a control never
+// moves under the finger): the four most likely reads — Not Home | Interested /
+// Sold | Not Interested — keep the big 2-col grid cells, and EVERY other field
+// disposition renders as a compact status-coded disc in the strip beneath
+// (FU · GB · ACTV · COMP · RENT · MOV · NOSO · LEAD). Both tiers are exactly
+// FIELD_OUTCOMES split by PRIMARY_GRID_KEYS, so a disposition added to the
+// shared list appears here without a sheet change.
 const PRIMARY_GRID_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
-const GRID_OUTCOMES = [
-  ...FIELD_OUTCOMES.filter(o => PRIMARY_GRID_KEYS.includes(o.key)),
-  ...FIELD_OUTCOMES.filter(o => !PRIMARY_GRID_KEYS.includes(o.key)),
-];
-
-// The active outcome mirrors the lead's CURRENT display state.
-const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {
-  unworked: "prospect", not_home: "not_home", interested: "interested",
-  follow_up: "follow_up", callback: "callback", sold: "sold",
-  not_interested: "not_interested",
-};
+const PRIMARY_OUTCOMES = FIELD_OUTCOMES.filter(o => PRIMARY_GRID_KEYS.includes(o.key));
+const STRIP_OUTCOMES = FIELD_OUTCOMES.filter(o => !PRIMARY_GRID_KEYS.includes(o.key));
+// The active outcome mirrors the lead's CURRENT display state — DS_TO_OUTCOME
+// now lives in shared/knock.ts so every disposition surface reads one mirror.
 
 // One responsive card, two homes: bottom sheet under ~1024px, docked right
 // panel above it (same components, same behavior — no forked UI).
@@ -540,13 +543,47 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const [deleteArmed, setDeleteArmed] = useState(false);
   useEffect(() => { setCentralMode(false); setDeleteArmed(false); }, [lead?.id]);
 
-  const handleStatusTap = async (key: KnockOutcome) => {
+  // ── Appointment composer (SalesHub "Set Appointment" parity) ────────────────
+  // A follow-up with a real date/time. Committing logs ONE knock through the
+  // normal offline-queue path with callbackDate/Time attached — the columns,
+  // the queue, and the Follow-ups read model all exist, so this is pure UI.
+  const [apptOpen, setApptOpen] = useState(false);
+  const [apptDate, setApptDate] = useState("");
+  const [apptTime, setApptTime] = useState("");
+  useEffect(() => { setApptOpen(false); setApptDate(""); setApptTime(""); }, [lead?.id]);
+
+  // ── Live proximity (distance from the rep to THIS door) ────────────────────
+  // One fresh fix per card open (captureFieldFix never rejects; ~instant when
+  // the map's geolocate watch has a recent reading via maximumAge). Display
+  // only — the server keeps verifying knock distance with its own evidence.
+  const [repFix, setRepFix] = useState<{ lat: number; lng: number; accuracy: number | null } | null>(null);
+  const [fixState, setFixState] = useState<"idle" | "locating">("idle");
+  const fixLeadRef = useRef<number | null>(null);
+  const requestFix = (id: number) => {
+    fixLeadRef.current = id;
+    setFixState("locating");
+    void captureFieldFix(3500).then(f => {
+      if (fixLeadRef.current !== id) return; // card swapped mid-fix
+      setFixState("idle");
+      setRepFix(f.repLat != null && f.repLng != null
+        ? { lat: f.repLat, lng: f.repLng, accuracy: f.gpsAccuracy }
+        : null);
+    });
+  };
+  useEffect(() => {
+    const id = lead?.id;
+    if (!id) return;
+    requestFix(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lead?.id]);
+
+  const handleStatusTap = async (key: KnockOutcome, opts?: KnockScheduleOpts): Promise<boolean> => {
     const now = Date.now();
-    if (now - tapGuard.current < 350) return; // double-submit guard
+    if (now - tapGuard.current < 350) return false; // double-submit guard
     tapGuard.current = now;
     let accepted = false;
-    if (centralMode && canManage && onCentralMark) {
-      if (statusCommandPendingRef.current) return;
+    if (centralMode && canManage && onCentralMark && !opts) {
+      if (statusCommandPendingRef.current) return false;
       statusCommandPendingRef.current = true;
       // Wait for the server-authoritative command. A failure must not flash,
       // collapse, or disarm the manager workflow as though it had succeeded.
@@ -557,14 +594,18 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       } finally {
         statusCommandPendingRef.current = false;
       }
-      if (!accepted) return;
+      if (!accepted) return false;
       // AUDIT FIX: disarm after one mark — the hint says "next status tap",
       // and an armed manager silently stripped rep credit on later doors.
       setCentralMode(false);
     } else {
-      accepted = onKnock(key) !== false;
+      // A scheduled disposition (the appointment composer) always goes through
+      // the rep knock path — the central endpoint carries no callback columns,
+      // and an appointment is field work, not a central correction. Plain taps
+      // keep the one-arg call shape every existing consumer was written for.
+      accepted = (opts ? onKnock(key, opts) : onKnock(key)) !== false;
     }
-    if (!accepted) return;
+    if (!accepted) return false;
     try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
     // Brief filled + check flash confirms only an accepted command. A rejected
     // manager/rep action stays open so the user can correct assignment/session.
@@ -575,6 +616,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     // Marking is the moment of commitment: confirm, then collapse to Peek so the
     // map (and the freshly recolored pin) is back in view immediately.
     if (!docked) setSnap("peek");
+    return true;
   };
 
   // ── Notes: composer model ────────────────────────────────────────────────────
@@ -715,6 +757,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const detailForLead = detailQuery.data?.id === renderedLead.id ? detailQuery.data : undefined;
   const contactPhones = detailForLead?.phones ?? renderedLead.phones;
   const contactOwnerName = detailForLead?.ownerName ?? renderedLead.ownerName;
+  // "Ask for" prefers the name the RESIDENT gave the rep over the traced/GIS
+  // owner — the door told us who answers it; the trace only guessed.
+  const doorName = detailForLead?.contactName?.trim() || contactOwnerName;
+  // Contact section renders only from a REAL server response — the seeded
+  // placeholder has no contact columns, and an "Add contact" chip that
+  // flickers into values a beat later reads as data loss.
+  const detailSettled = Boolean(detailForLead) && !detailQuery.isPlaceholderData;
   const statusBadge: { text: string; className: string } | null = needsReview
     ? { text: "Needs review", className: "border-warning/35 bg-warning/[0.08] text-warning" }
     : freshFiber
@@ -733,6 +782,129 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
           : snap === "quick"
             ? `translateY(${quickY}px)`
             : `translateY(${peekY}px)`;
+
+  // ── Proximity chip — live distance from the rep to THIS door ───────────────
+  // Rendered only when an honest number exists: door has coordinates, a GPS fix
+  // arrived, and the fix isn't so loose the distance would be fiction. Tap
+  // re-captures. "At door" under 60 m — inside typical lot-width GPS noise.
+  const proximityChip = (() => {
+    if (renderedLead.lat == null || renderedLead.lng == null) return null;
+    if (!repFix) return null;
+    if (repFix.accuracy != null && repFix.accuracy > 200) return null;
+    const d = haversineMeters(
+      { lat: repFix.lat, lng: repFix.lng },
+      { lat: renderedLead.lat, lng: renderedLead.lng },
+    );
+    const atDoor = d <= 60;
+    return (
+      <button
+        type="button"
+        data-testid="knock-proximity"
+        data-dist-m={Math.round(d)}
+        onClick={() => requestFix(renderedLead.id)}
+        aria-label={`${atDoor ? "You are at this door" : `${distanceHint(d)} from this door`} — tap to refresh`}
+        title="Distance from your location"
+        className={[
+          "relative ml-auto h-10 flex items-center gap-1.5 px-3 rounded-full border text-[12px] font-semibold whitespace-nowrap active:scale-95 transition after:absolute after:-inset-1",
+          atDoor
+            ? "bg-success/[0.12] border-success/35 text-success"
+            : "bg-white/[0.05] border-white/[0.10] text-white/65",
+        ].join(" ")}
+      >
+        <LocateFixed aria-hidden="true" className={`w-[14px] h-[14px] ${fixState === "locating" ? "animate-pulse" : ""}`} />
+        {atDoor ? "At door" : distanceHint(d)}
+      </button>
+    );
+  })();
+
+  // ── Appointment composer — a follow-up with a real date on it ──────────────
+  // Collapsed chip → date/time editor. Confirming logs ONE knock (Go Back keeps
+  // its pink pin — it already persists as follow_up; everything else becomes a
+  // Follow-up) with the schedule attached, through the exact offline-queue path
+  // a plain status tap uses. Hidden entirely on do-not-knock doors: an
+  // appointment IS a knock.
+  const apptOutcome: KnockOutcome = activeOutcome === "go_back" ? "go_back" : "follow_up";
+  const commitAppointment = async () => {
+    if (!apptDate) return;
+    const ok = await handleStatusTap(apptOutcome, { callbackDate: apptDate, callbackTime: apptTime || null });
+    if (ok) { setApptOpen(false); setApptDate(""); setApptTime(""); }
+  };
+  const apptInput =
+    "h-11 rounded-xl bg-white/[0.05] border border-white/[0.08] px-3 text-[16px] text-white focus:outline-none focus:border-primary/60";
+  const appointmentCard = Boolean(renderedLead.doNotKnock) ? null : (
+    <div className="mt-3" data-testid="knock-appointment">
+      {!apptOpen ? (
+        <button
+          type="button"
+          data-testid="appt-open"
+          onClick={() => setApptOpen(true)}
+          className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
+        >
+          <CalendarPlus aria-hidden="true" className="w-4 h-4 text-white/60" />
+          Set appointment
+        </button>
+      ) : (
+        <div data-testid="appt-editor" className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
+              Appointment
+            </span>
+            <button
+              type="button"
+              data-testid="appt-cancel"
+              onClick={() => setApptOpen(false)}
+              className="text-[12px] font-semibold text-white/50 hover:text-white/80 transition px-1 -mr-1"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex-1 min-w-[150px]">
+              <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>Date</span>
+              <input
+                type="date"
+                data-testid="appt-date"
+                value={apptDate}
+                min={todayISO()}
+                onChange={e => setApptDate(e.target.value)}
+                className={`${apptInput} w-full`}
+                style={{ colorScheme: "dark" }}
+              />
+            </label>
+            {/* 132px: Chrome's 12-hour value ("06:30 PM" + clock icon) at the
+                16px no-zoom size clips at anything narrower — measured. */}
+            <label className="w-[132px]">
+              <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>
+                Time <span className="normal-case font-normal text-white/35">(optional)</span>
+              </span>
+              <input
+                type="time"
+                data-testid="appt-time"
+                value={apptTime}
+                onChange={e => setApptTime(e.target.value)}
+                className={`${apptInput} w-full`}
+                style={{ colorScheme: "dark" }}
+              />
+            </label>
+            <button
+              type="button"
+              data-testid="appt-save"
+              disabled={!apptDate}
+              onClick={() => { void commitAppointment(); }}
+              // ml-auto: on narrow phones the row wraps and the commit action
+              // right-aligns on its own line instead of dangling bottom-left.
+              className="ml-auto h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[13px] font-semibold active:scale-95 transition disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              Set
+            </button>
+          </div>
+          <p className="mt-2 text-[11.5px] leading-snug" style={{ color: MUTED }}>
+            Saves a {OUTCOME_META[apptOutcome].label} with this date — it lands on your Follow-ups.
+          </p>
+        </div>
+      )}
+    </div>
+  );
 
   // Notes — a FLAT section on the one card surface (no nested card): a slim
   // "+ Add note" chip by default; it expands to the textarea on focus. The
@@ -910,12 +1082,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     <h2 className="min-w-0 text-[19px] leading-[1.15] font-semibold text-white truncate">
                       {renderedLead.address}
                     </h2>
-                    {/* Who to ask for. Only when the trace actually returned a
-                        name — the "Resident at …" fallback would just repeat
-                        the address line above it. */}
-                    {contactOwnerName && contactOwnerName.trim().length >= 2 && (
+                    {/* Who to ask for. Only when a real name exists (resident-
+                        given first, traced second) — the "Resident at …"
+                        fallback would just repeat the address line above it. */}
+                    {doorName && doorName.trim().length >= 2 && (
                       <p className="mt-0.5 truncate text-[13px] font-medium text-white/70" data-testid="knock-owner-name">
-                        Ask for {leadDisplayName(contactOwnerName, renderedLead.address)}
+                        Ask for {leadDisplayName(doorName, renderedLead.address)}
                       </p>
                     )}
                   </div>
@@ -1019,12 +1191,15 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               phone={renderedLead.phone}
               copiedAddr={copiedAddr}
               onCopyAddress={copyAddress}
-              outcomes={GRID_OUTCOMES}
+              primaryOutcomes={PRIMARY_OUTCOMES}
+              stripOutcomes={STRIP_OUTCOMES}
               iconMap={ICON_MAP}
               activeOutcome={activeOutcome}
               flashKey={flashKey}
               onStatusTap={handleStatusTap}
               outcomesDisabled={Boolean(renderedLead.doNotKnock)}
+              proximity={proximityChip}
+              appointment={appointmentCard}
               recent={recent}
               notes={notesCard}
             />
@@ -1051,6 +1226,25 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             hidden={!detailsShown}
             docked={docked}
             detail={detailQuery.data}
+            contact={
+              <ContactSection
+                leadId={renderedLead.id}
+                contactName={detailForLead?.contactName}
+                contactEmail={detailForLead?.contactEmail}
+                ready={detailSettled}
+              />
+            }
+            quickLinks={
+              <QuickLinks
+                address={renderedLead.address}
+                city={renderedLead.city ?? detailForLead?.city}
+                state={renderedLead.state ?? detailForLead?.state}
+                zip={renderedLead.zip ?? detailForLead?.zip}
+                lat={renderedLead.lat}
+                lng={renderedLead.lng}
+              />
+            }
+            photos={<SheetPhotos leadId={renderedLead.id} />}
             canAssignLead={canAssignLead}
             assignedRepId={renderedLead.assignedRepId}
             team={teamQuery.data ?? []}

@@ -9,7 +9,8 @@ import { STATUS_CONFIG } from "./statusConfig";
 export type KnockOutcome =
   | "not_home" | "not_interested" | "interested" | "follow_up"
   | "callback" | "sold" | "prospect" | "needs_verification"
-  | "already_customer";
+  | "already_customer"
+  | "competitor" | "renter" | "moving" | "no_soliciting" | "go_back";
 
 export type LeadStatus =
   | "prospect" | "contacted" | "interested" | "sold" | "not_interested" | "follow_up";
@@ -17,6 +18,7 @@ export type LeadStatus =
 export interface OutcomeDef {
   key: KnockOutcome;
   label: string;          // button label
+  short: string;          // compact code for the disposition strip (LEAD, ACTV, COMP…)
   color: string;          // hex — button tint AND the pin color the tap produces
   leadStatus: LeadStatus; // canonical status the knock sets
   worked: boolean;        // true = door is done for this pass
@@ -34,23 +36,39 @@ export interface OutcomeDef {
 // `color` MUST equal the canonical map status color — the card pill, map pin,
 // legend, and confirm-flash all read the same presentation contract.
 export const OUTCOMES: OutcomeDef[] = [
-  { key: "not_home",           label: STATUS_CONFIG.not_home.label,       color: STATUS_CONFIG.not_home.color,       leadStatus: "prospect",       worked: false, icon: STATUS_CONFIG.not_home.cardIcon },
-  { key: "interested",         label: STATUS_CONFIG.interested.label,     color: STATUS_CONFIG.interested.color,     leadStatus: "interested",     worked: true,  icon: STATUS_CONFIG.interested.cardIcon },
-  { key: "sold",               label: STATUS_CONFIG.sold.label,           color: STATUS_CONFIG.sold.color,           leadStatus: "sold",           worked: true,  icon: STATUS_CONFIG.sold.cardIcon },
-  { key: "not_interested",     label: STATUS_CONFIG.not_interested.label, color: STATUS_CONFIG.not_interested.color, leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.not_interested.cardIcon },
+  { key: "not_home",           label: STATUS_CONFIG.not_home.label,       short: STATUS_CONFIG.not_home.short,       color: STATUS_CONFIG.not_home.color,       leadStatus: "prospect",       worked: false, icon: STATUS_CONFIG.not_home.cardIcon },
+  { key: "interested",         label: STATUS_CONFIG.interested.label,     short: STATUS_CONFIG.interested.short,     color: STATUS_CONFIG.interested.color,     leadStatus: "interested",     worked: true,  icon: STATUS_CONFIG.interested.cardIcon },
+  { key: "sold",               label: STATUS_CONFIG.sold.label,           short: STATUS_CONFIG.sold.short,           color: STATUS_CONFIG.sold.color,           leadStatus: "sold",           worked: true,  icon: STATUS_CONFIG.sold.cardIcon },
+  { key: "not_interested",     label: STATUS_CONFIG.not_interested.label, short: STATUS_CONFIG.not_interested.short, color: STATUS_CONFIG.not_interested.color, leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.not_interested.cardIcon },
+  { key: "follow_up",          label: STATUS_CONFIG.follow_up.label,      short: STATUS_CONFIG.follow_up.short,      color: STATUS_CONFIG.follow_up.color,      leadStatus: "follow_up",      worked: true,  icon: STATUS_CONFIG.follow_up.cardIcon },
+  // Go Back: the "promising door, return later" read. Persists as follow_up
+  // (the callback precedent — no new LeadStatus, no schema ripple) while
+  // lastOutcome keeps the pink rotate pin distinct from the orange clock.
+  { key: "go_back",            label: STATUS_CONFIG.go_back.label,        short: STATUS_CONFIG.go_back.short,        color: STATUS_CONFIG.go_back.color,        leadStatus: "follow_up",      worked: true,  icon: STATUS_CONFIG.go_back.cardIcon },
   // Already a customer: the door is DONE but not hostile. Persists as
   // not_interested (no new LeadStatus, no schema ripple — the callback
   // precedent) while lastOutcome keeps it distinct on the map and card. Going
   // through the normal knock path matters: it wins the outcome CAS, so marking
   // it over an accidental "sold" reverses the commission and, with the
   // latest-knock leaderboard rule, removes the phantom sale from the board.
-  { key: "already_customer",   label: STATUS_CONFIG.already_customer.label,     color: STATUS_CONFIG.already_customer.color,     leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.already_customer.cardIcon },
-  { key: "follow_up",          label: STATUS_CONFIG.follow_up.label,      color: STATUS_CONFIG.follow_up.color,      leadStatus: "follow_up",      worked: true,  icon: STATUS_CONFIG.follow_up.cardIcon },
-  // Callback is an action, not a seventh map status. It persists as follow_up
+  { key: "already_customer",   label: STATUS_CONFIG.already_customer.label,     short: STATUS_CONFIG.already_customer.short,     color: STATUS_CONFIG.already_customer.color,     leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.already_customer.cardIcon },
+  // The four "structurally can't sell today" dispositions. All persist as
+  // not_interested — the already_customer precedent — so the funnel, the
+  // commission CAS (marking one over an accidental "sold" reverses the money
+  // through the normal knock path), and every existing report keep working;
+  // lastOutcome is what tells the pins and cards apart. Distinct dispositions
+  // matter because they target DIFFERENTLY: a competitor street gets a win-back
+  // pass, a renter block gets property-manager outreach, a moving door is a
+  // fresh lead in 60 days, and a no-soliciting door is never knocked again.
+  { key: "competitor",         label: STATUS_CONFIG.competitor.label,     short: STATUS_CONFIG.competitor.short,     color: STATUS_CONFIG.competitor.color,     leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.competitor.cardIcon },
+  { key: "renter",             label: STATUS_CONFIG.renter.label,         short: STATUS_CONFIG.renter.short,         color: STATUS_CONFIG.renter.color,         leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.renter.cardIcon },
+  { key: "moving",             label: STATUS_CONFIG.moving.label,         short: STATUS_CONFIG.moving.short,         color: STATUS_CONFIG.moving.color,         leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.moving.cardIcon },
+  { key: "no_soliciting",      label: STATUS_CONFIG.no_soliciting.label,  short: STATUS_CONFIG.no_soliciting.short,  color: STATUS_CONFIG.no_soliciting.color,  leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.no_soliciting.cardIcon },
+  // Callback is an action, not a canonical map status. It persists as follow_up
   // and shares the orange clock pin while retaining a phone affordance on-card.
-  { key: "callback",           label: "Callback",                         color: STATUS_CONFIG.follow_up.color,      leadStatus: "follow_up",      worked: true,  icon: "Phone" },
-  { key: "prospect",           label: STATUS_CONFIG.prospect.label,       color: STATUS_CONFIG.prospect.color,       leadStatus: "prospect",       worked: false, icon: STATUS_CONFIG.prospect.cardIcon },
-  { key: "needs_verification", label: "Needs Verification", color: "#64748b", leadStatus: "contacted",      worked: true,  icon: "HelpCircle" },
+  { key: "callback",           label: "Callback",                         short: "CB",                               color: STATUS_CONFIG.follow_up.color,      leadStatus: "follow_up",      worked: true,  icon: "Phone" },
+  { key: "prospect",           label: STATUS_CONFIG.prospect.label,       short: STATUS_CONFIG.prospect.short,       color: STATUS_CONFIG.prospect.color,       leadStatus: "prospect",       worked: false, icon: STATUS_CONFIG.prospect.cardIcon },
+  { key: "needs_verification", label: "Needs Verification", short: "NV", color: "#64748b", leadStatus: "contacted",      worked: true,  icon: "HelpCircle" },
 ];
 
 // Actions offered for new field dispositions. Callback remains in OUTCOMES so
@@ -96,10 +114,14 @@ export function deriveWasHome(outcome: KnockOutcome): boolean {
 // (needs_verification only, never offered on the rep card).
 export type PinDisplayState =
   | "unworked" | "not_home" | "contacted" | "interested"
-  | "follow_up" | "callback" | "sold" | "not_interested" | "already_customer";
+  | "follow_up" | "callback" | "sold" | "not_interested" | "already_customer"
+  | "competitor" | "renter" | "moving" | "no_soliciting" | "go_back";
 
-// Canonical six-status field-map palette. Callback aliases Follow-up, while the
-// legacy Contacted state stays slate until it receives a current disposition.
+// Canonical field-map palette. Callback aliases Follow-up, while the legacy
+// Contacted state stays slate until it receives a current disposition. The
+// competition dispositions (competitor/renter/moving/no_soliciting under
+// not_interested; go_back under follow_up) resolve exactly like
+// already_customer/callback: shared stored status, own display state.
 export const STATE_COLORS: Record<PinDisplayState, string> = {
   unworked:       STATUS_CONFIG.prospect.color,
   not_home:       STATUS_CONFIG.not_home.color,
@@ -110,6 +132,11 @@ export const STATE_COLORS: Record<PinDisplayState, string> = {
   sold:           STATUS_CONFIG.sold.color,
   not_interested: STATUS_CONFIG.not_interested.color,
   already_customer: STATUS_CONFIG.already_customer.color,
+  competitor:     STATUS_CONFIG.competitor.color,
+  renter:         STATUS_CONFIG.renter.color,
+  moving:         STATUS_CONFIG.moving.color,
+  no_soliciting:  STATUS_CONFIG.no_soliciting.color,
+  go_back:        STATUS_CONFIG.go_back.color,
 };
 
 // Human labels for the display states — lives HERE beside STATE_COLORS so the
@@ -119,6 +146,30 @@ export const STATE_LABELS: Record<PinDisplayState, string> = {
   interested: STATUS_CONFIG.interested.label, follow_up: STATUS_CONFIG.follow_up.label, callback: "Callback",
   sold: STATUS_CONFIG.sold.label, not_interested: STATUS_CONFIG.not_interested.label,
   already_customer: STATUS_CONFIG.already_customer.label,
+  competitor: STATUS_CONFIG.competitor.label, renter: STATUS_CONFIG.renter.label,
+  moving: STATUS_CONFIG.moving.label, no_soliciting: STATUS_CONFIG.no_soliciting.label,
+  go_back: STATUS_CONFIG.go_back.label,
+};
+
+// The outcomes that share a stored leadStatus and are told apart by
+// lastOutcome. ONE list per stored status, read by pinDisplayState below —
+// adding a disposition to the not_interested family is a one-line change that
+// cannot forget the projection.
+const NOT_INTERESTED_VARIANTS: readonly KnockOutcome[] =
+  ["already_customer", "competitor", "renter", "moving", "no_soliciting"];
+const FOLLOW_UP_VARIANTS: readonly KnockOutcome[] = ["callback", "go_back"];
+
+// Display state → the outcome whose button mirrors it as "pressed". Shared by
+// every disposition surface (map card, Today/PropertyDetail sheet, manager
+// quick-log) so the active-state mirror can never disagree between them.
+// Legacy contacted/needs_verification deliberately have no entry — nothing on
+// a current surface should light up for them.
+export const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {
+  unworked: "prospect", not_home: "not_home", interested: "interested",
+  follow_up: "follow_up", callback: "callback", sold: "sold",
+  not_interested: "not_interested", already_customer: "already_customer",
+  competitor: "competitor", renter: "renter", moving: "moving",
+  no_soliciting: "no_soliciting", go_back: "go_back",
 };
 
 export function pinDisplayState(p: {
@@ -128,11 +179,15 @@ export function pinDisplayState(p: {
     case "sold":           return "sold";
     case "not_interested":
       // Same mechanism as callback under follow_up: the stored status is shared,
-      // the last outcome tells the two apart on every surface.
-      return p.lastOutcome === "already_customer" ? "already_customer" : "not_interested";
+      // the last outcome tells the variants apart on every surface.
+      return (NOT_INTERESTED_VARIANTS as readonly string[]).includes(p.lastOutcome ?? "")
+        ? (p.lastOutcome as PinDisplayState)
+        : "not_interested";
     case "follow_up":
-      // Callback is first-class on the map/card even though it stores follow_up.
-      return p.lastOutcome === "callback" ? "callback" : "follow_up";
+      // Callback/Go Back are first-class on the map/card though they store follow_up.
+      return (FOLLOW_UP_VARIANTS as readonly string[]).includes(p.lastOutcome ?? "")
+        ? (p.lastOutcome as PinDisplayState)
+        : "follow_up";
     case "interested":     return "interested";
     case "contacted":      return "contacted";
     default: // "prospect" — fresh, knocked-not-home, or explicitly reset

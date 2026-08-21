@@ -16,7 +16,7 @@
 // position:fixed) — it reserves its own height, so it can never sit on top of
 // page content, and it pins to the scrollport bottom which already sits above
 // the mobile tab bar (Layout's <main> reserves that space).
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useRoute, useLocation } from "wouter";
 import { apiRequest, apiUpload } from "@/lib/queryClient";
@@ -27,6 +27,8 @@ import { OUTCOME_META, STATE_COLORS, STATE_LABELS, pinDisplayState, type KnockOu
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ErrorState } from "@/components/ErrorState";
+import { AuthedImg } from "@/components/AuthedImg";
+import { PhotoLightbox } from "@/components/PhotoLightbox";
 import { useCan } from "@/lib/capabilities";
 import { ChevronLeft, Zap, Wifi, Building2, User as UserIcon, Mail, AlertTriangle, StickyNote, UserPlus, RefreshCw, WifiOff, CloudUpload } from "lucide-react";
 
@@ -390,28 +392,10 @@ function SummaryBanded({ lead, canOpenCalling, onLog }: SummaryProps) {
 }
 
 // ── Photos — field evidence on this door ──────────────────────────────────────
-// Auth is header-based (x-session-id), which a native image request can't
-// carry, so AuthedImg fetches the file as a blob through the authenticated
-// endpoint and renders an object URL. Capture uses the camera sheet — zero
+// AuthedImg (shared, @/components/AuthedImg) fetches each file as a blob
+// through the authenticated endpoint. Capture uses the camera sheet — zero
 // typing. Uploads need a connection; offline the tile disables with a hint.
 interface LeadPhotoRow { id: number; createdAt: string; takenBy: string | null }
-
-function AuthedImg({ photoId, alt, className, onClick }: { photoId: number; alt: string; className?: string; onClick?: () => void }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let objectUrl: string | null = null;
-    let alive = true;
-    apiRequest("GET", `/api/photos/${photoId}/file`)
-      .then(r => r.blob())
-      .then(b => { if (!alive) return; objectUrl = URL.createObjectURL(b); setUrl(objectUrl); })
-      .catch(() => { if (alive) setFailed(true); });
-    return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [photoId]);
-  if (failed) return null;
-  if (!url) return <Skeleton className={className} />;
-  return <img src={url} alt={alt} className={className} onClick={onClick} loading="lazy" />;
-}
 
 function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
   const qc = useQueryClient();
@@ -480,20 +464,8 @@ function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
         )}
       </div>
 
-      {/* Full-screen viewer — Escape/tap to close, close button auto-focused */}
-      {viewer != null && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Photo viewer" onClick={() => setViewer(null)}>
-          <AuthedImg photoId={viewer} alt="Door photo (full size)" className="max-w-full max-h-full rounded-xl object-contain" />
-          <button
-            autoFocus onClick={() => setViewer(null)}
-            onKeyDown={e => { if (e.key === "Escape") setViewer(null); }}
-            aria-label="Close photo"
-            className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 w-11 h-11 rounded-full bg-black/50 text-white text-2xl leading-none flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-          >
-            ×
-          </button>
-        </div>
-      )}
+      {/* Full-screen viewer — the ONE shared lightbox (Escape/tap to close). */}
+      {viewer != null && <PhotoLightbox photoId={viewer} onClose={() => setViewer(null)} />}
     </div>
   );
 }

@@ -8,9 +8,10 @@ import {
 import { LEAD_MAP_STATUSES, STATUS_CONFIG, toLeadMapStatus } from "../../shared/statusConfig";
 
 describe("canonical lead status pins", () => {
-  it("has exactly the seven statuses and colors", () => {
+  it("has exactly the twelve statuses and colors", () => {
     expect(LEAD_MAP_STATUSES).toEqual([
       "not_home", "interested", "sold", "not_interested", "prospect", "follow_up", "already_customer",
+      "competitor", "renter", "moving", "no_soliciting", "go_back",
     ]);
     expect(STATUS_CONFIG.already_customer.color).toBe("#2563EB");
     expect(STATUS_CONFIG.not_home.color).toBe("#EAB308");
@@ -19,10 +20,16 @@ describe("canonical lead status pins", () => {
     expect(STATUS_CONFIG.not_interested.color).toBe("#EF4444");
     expect(STATUS_CONFIG.prospect.color).toBe("#16A34A");
     expect(STATUS_CONFIG.follow_up.color).toBe("#F97316");
+    // The competition dispositions (SalesHub parity, Aug 2026).
+    expect(STATUS_CONFIG.competitor.color).toBe("#C2410C");
+    expect(STATUS_CONFIG.renter.color).toBe("#78716C");
+    expect(STATUS_CONFIG.moving.color).toBe("#0891B2");
+    expect(STATUS_CONFIG.no_soliciting.color).toBe("#334155");
+    expect(STATUS_CONFIG.go_back.color).toBe("#EC4899");
   });
 
   it("renders every status as a flat circle - identity lives in glyph + color", () => {
-    // SalesRabbit reference: one silhouette, seven glyph/colour identities.
+    // SalesRabbit reference: one silhouette, twelve glyph/colour identities.
     for (const status of LEAD_MAP_STATUSES) {
       expect(STATUS_CONFIG[status].shape).toBe("circle");
       expect(PIN_SVGS[status]).toContain(`r="16" fill="${STATUS_CONFIG[status].color}"`);
@@ -31,7 +38,11 @@ describe("canonical lead status pins", () => {
       const config = STATUS_CONFIG[status];
       return `${config.glyph}/${config.color}`;
     });
-    expect(new Set(tuples).size).toBe(7);
+    expect(new Set(tuples).size).toBe(LEAD_MAP_STATUSES.length);
+    // …and no two statuses share a GLYPH either — the glyph is the identity
+    // that survives sunlight and colour-vision deficiency.
+    const glyphs = LEAD_MAP_STATUSES.map((status) => STATUS_CONFIG[status].glyph);
+    expect(new Set(glyphs).size).toBe(LEAD_MAP_STATUSES.length);
   });
 
   it("keeps Sold and Prospect visibly different under glare", () => {

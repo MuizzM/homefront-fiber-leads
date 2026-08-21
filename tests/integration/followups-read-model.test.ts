@@ -121,6 +121,26 @@ describe("Follow-ups vs lead-level dispositions", () => {
     expect((await followups(fx.repA.session)).some(f => f.leadId === lead)).toBe(true);
   });
 
+  it("a field-map appointment (follow_up/go_back knock WITH a date) keeps its real schedule", async () => {
+    // The appointment composer rides ordinary follow_up / go_back knocks with
+    // callback_date/time attached — the read model must surface the REP'S
+    // chosen schedule, not a date derived from last_outcome_at.
+    for (const outcome of ["follow_up", "go_back"] as const) {
+      const lead = seedLead({ assignedRepId: fx.repA.memberId });
+      const date = tomorrowDate();
+      const at = yesterday();
+      storage.createKnock({
+        leadId: lead, repId: fx.repA.memberId, outcome, wasHome: true, knockedAt: at,
+        callbackDate: date, callbackTime: "18:30",
+      } as any);
+      storage.applyKnockOutcomeCas(lead, "follow_up", outcome, at);
+      const rows = (await followups(fx.repA.session)).filter(f => f.leadId === lead);
+      expect(rows, `${outcome} appointment surfaces exactly once`).toHaveLength(1);
+      expect(rows[0].callbackDate).toBe(date);
+      expect(rows[0].callbackTime).toBe("18:30");
+    }
+  });
+
   it("a reassigned door's follow-up moves to the NEW owner (not the knocker)", async () => {
     const lead = seedLead({ assignedRepId: fx.repA.memberId });
     knockCallback(lead, fx.repA.memberId, yesterday(), tomorrowDate());

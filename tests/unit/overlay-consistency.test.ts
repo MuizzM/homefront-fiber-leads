@@ -27,8 +27,10 @@ function sources(dir: string): string[] {
 
 // The photo lightbox is not a scrim. It is a full-screen viewer whose backdrop
 // is deliberately near-opaque black so nothing of the app tints the image, and
-// it stays black in both themes.
-const LIGHTBOX = "pages/PropertyDetail.tsx";
+// it stays black in both themes. Exactly ONE component may be that viewer —
+// every photo surface (PropertyDetail, the map card) renders it — so the
+// exemption is a single shared file, never a growing list.
+const LIGHTBOX = "components/PhotoLightbox.tsx";
 
 describe("one modal scrim app-wide", () => {
   it("no screen hand-rolls a black scrim", () => {

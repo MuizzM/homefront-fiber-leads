@@ -1,13 +1,29 @@
 // ── OutcomeSheet — the one-tap disposition sheet (shared) ─────────────────────
-// Current field outcomes as big color-coded targets (Sold emphasized) plus an
-// optional note. Used by Today and Property Detail so logging is identical.
+// Used by Today and Property Detail so logging is identical — and now the SAME
+// two-tier surface the map card carries: the four most likely reads as big
+// color-coded cells (Sold emphasized), every other disposition as a compact
+// status-coded disc in one scrollable strip, plus the appointment composer.
+// One disposition vocabulary, one layout grammar, three surfaces.
+//
+// This sheet lives in the THEMED world (shadcn Sheet, semantic tokens), so the
+// discs render on their "card" surface — chrome from --border/--ring, labels
+// from the foreground scale — and hold AA in light and dark alike.
 import { useState, useEffect } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { FIELD_OUTCOMES, pinDisplayState, STATE_COLORS, type KnockOutcome } from "@shared/knock";
-import { X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import {
+  FIELD_OUTCOMES, OUTCOME_META, pinDisplayState, todayISO,
+  STATE_COLORS, DS_TO_OUTCOME, type KnockOutcome,
+} from "@shared/knock";
+import { X, CalendarPlus } from "lucide-react";
+import { OutcomeDisc, ICON_MAP, outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
 import type { LogOpts } from "@/lib/useKnockLogger";
 
-const GRID = FIELD_OUTCOMES;
+const PRIMARY_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
+const PRIMARY = FIELD_OUTCOMES.filter(o => PRIMARY_KEYS.includes(o.key));
+const STRIP = FIELD_OUTCOMES.filter(o => !PRIMARY_KEYS.includes(o.key));
 
 export interface SheetLead {
   id: number; address: string; city?: string | null; zip?: string | null;
@@ -21,18 +37,31 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
 }) {
   const [note, setNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
+  const [apptOpen, setApptOpen] = useState(false);
+  const [apptDate, setApptDate] = useState("");
+  const [apptTime, setApptTime] = useState("");
 
   // Reset every time a new lead opens the sheet.
   useEffect(() => {
-    if (lead) { setNote(""); setNoteOpen(false); }
+    if (lead) { setNote(""); setNoteOpen(false); setApptOpen(false); setApptDate(""); setApptTime(""); }
   }, [lead?.id]);
 
-  const fire = (o: KnockOutcome) => {
+  const ds = lead ? pinDisplayState(lead) : null;
+  const activeOutcome = ds ? (DS_TO_OUTCOME[ds] ?? null) : null;
+
+  const fire = (o: KnockOutcome, schedule?: { callbackDate: string; callbackTime: string | null }) => {
     onLog(o, {
       notes: note.trim() || null,
-      callbackDate: null,
-      callbackTime: null,
+      callbackDate: schedule?.callbackDate ?? null,
+      callbackTime: schedule?.callbackTime ?? null,
     });
+  };
+  // A Go Back door keeps GB when scheduled; everything else becomes Follow-up —
+  // the same rule as the map card, so the pin never changes meaning by surface.
+  const apptOutcome: KnockOutcome = activeOutcome === "go_back" ? "go_back" : "follow_up";
+  const commitAppointment = () => {
+    if (!apptDate) return;
+    fire(apptOutcome, { callbackDate: apptDate, callbackTime: apptTime || null });
   };
 
   return (
@@ -51,25 +80,122 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
               <button onClick={onClose} aria-label="Close" className="w-11 h-11 -mr-2 -mt-2 flex items-center justify-center text-muted-foreground"><X className="w-5 h-5" /></button>
             </div>
 
-            <div className="px-5 pt-4 pb-2 grid grid-cols-2 gap-2.5">
-              {GRID.map(o => {
+            {/* Primary four — the big targets, Sold emphasized (the win). The
+                pressed cell mirrors the door's CURRENT state in place. */}
+            <div className="px-5 pt-4 pb-1 grid grid-cols-2 gap-2.5">
+              {PRIMARY.map(o => {
                 const win = o.key === "sold";
+                const pressed = activeOutcome === o.key;
                 return (
                   <button
                     key={o.key} onClick={() => fire(o.key)} data-testid={`outcome-${o.key}`}
+                    aria-pressed={pressed}
                     className="h-14 rounded-xl font-semibold text-[14px] flex items-center justify-center gap-2 active:scale-95 transition-transform border-2"
-                    style={win
-                      ? { background: o.color, color: "#04120d", borderColor: o.color }
-                      // Text is the always-AA card-foreground; the outcome HUE is carried
-                      // by a saturated dot + border, not the (low-contrast) text color.
+                    // Filled cells (the Sold emphasis, or the pressed mirror of the
+                    // door's current state) pick their ink per-fill — the old
+                    // hard-coded near-black went illegible when Sold's green
+                    // deepened. Unfilled: always-AA card-foreground; the HUE is
+                    // carried by a saturated dot + border, never low-contrast text.
+                    style={win || pressed
+                      ? { background: o.color, color: outcomeFillTextColor(o.color), borderColor: o.color }
                       : { background: `${o.color}1f`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}99` }}
                   >
-                    {win && null}
-                    {!win && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: o.color }} />}
+                    {!win && !pressed && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: o.color }} />}
                     {o.label}
                   </button>
                 );
               })}
+            </div>
+
+            {/* Every other disposition — the compact status-coded strip, same
+                order and testable contract as the map card's. */}
+            <div
+              data-testid="outcome-strip"
+              role="group"
+              aria-label="More dispositions"
+              className="px-5 pt-1 flex gap-1.5 overflow-x-auto overscroll-x-contain snap-x scrollbar-none"
+            >
+              {STRIP.map(o => (
+                <OutcomeDisc
+                  key={o.key}
+                  outcome={o}
+                  icon={ICON_MAP[o.icon]}
+                  active={activeOutcome === o.key}
+                  flashing={false}
+                  onTap={key => fire(key)}
+                  surface="card"
+                />
+              ))}
+            </div>
+
+            {/* Appointment — a follow-up with a real date, exactly the map
+                card's composer in the themed primitives. */}
+            <div className="px-5 pt-3" data-testid="outcome-appointment">
+              {!apptOpen ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  data-testid="outcome-appt-open"
+                  onClick={() => setApptOpen(true)}
+                  className="h-11 rounded-full font-semibold"
+                >
+                  <CalendarPlus aria-hidden="true" className="w-4 h-4 mr-1.5" />
+                  Set appointment
+                </Button>
+              ) : (
+                <div data-testid="outcome-appt-editor" className="rounded-xl border border-border bg-secondary/50 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Appointment</span>
+                    <button
+                      type="button"
+                      data-testid="outcome-appt-cancel"
+                      onClick={() => setApptOpen(false)}
+                      className="text-[12px] font-semibold text-muted-foreground hover:text-foreground transition px-1 -mr-1"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="flex-1 min-w-[150px]">
+                      <Label htmlFor="outcome-appt-date" className="text-[11px] text-muted-foreground">Date</Label>
+                      <Input
+                        id="outcome-appt-date"
+                        type="date"
+                        data-testid="outcome-appt-date"
+                        value={apptDate}
+                        min={todayISO()}
+                        onChange={e => setApptDate(e.target.value)}
+                        className="mt-1 h-11 text-[16px] bg-background border-input"
+                      />
+                    </div>
+                    <div className="w-[132px]">
+                      <Label htmlFor="outcome-appt-time" className="text-[11px] text-muted-foreground">
+                        Time <span className="font-normal opacity-70">(optional)</span>
+                      </Label>
+                      <Input
+                        id="outcome-appt-time"
+                        type="time"
+                        data-testid="outcome-appt-time"
+                        value={apptTime}
+                        onChange={e => setApptTime(e.target.value)}
+                        className="mt-1 h-11 text-[16px] bg-background border-input"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      data-testid="outcome-appt-save"
+                      disabled={!apptDate}
+                      onClick={commitAppointment}
+                      className="ml-auto h-11 font-semibold"
+                    >
+                      Set
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-[11.5px] leading-snug text-muted-foreground">
+                    Saves a {OUTCOME_META[apptOutcome].label} with this date — it lands on your Follow-ups.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">

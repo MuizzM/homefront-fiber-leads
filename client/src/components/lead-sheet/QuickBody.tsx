@@ -1,5 +1,6 @@
+import { useEffect, useRef } from "react";
 import { Phone, Copy, Check, type LucideIcon } from "lucide-react";
-import { OutcomeButton } from "./OutcomeButton";
+import { OutcomeButton, OutcomeDisc } from "./OutcomeButton";
 import { validPhone, MUTED, BODY_TEXT } from "./utils";
 import type { KnockOutcome, OutcomeDef } from "@shared/knock";
 
@@ -8,14 +9,20 @@ export interface QuickBodyProps {
   phone?: string | null;
   copiedAddr: boolean;
   onCopyAddress: () => void;
-  // The ONE outcomes grid — every field disposition, fixed order, primary four
-  // first.
-  outcomes: OutcomeDef[];
+  // The ONE disposition surface, two tiers: the four most likely reads as full
+  // grid cells, every other disposition as a compact disc in the strip below.
+  primaryOutcomes: OutcomeDef[];
+  stripOutcomes: OutcomeDef[];
   iconMap: Record<string, LucideIcon>;
   activeOutcome: KnockOutcome | null;
   flashKey: KnockOutcome | null;
   onStatusTap: (key: KnockOutcome) => void;
   outcomesDisabled?: boolean;
+  // Live distance chip (shell-owned: needs the GPS fix state) — rendered at the
+  // end of the utility row; null when no honest distance exists.
+  proximity?: React.ReactNode;
+  // Appointment composer (shell-owned, same slot model as notes).
+  appointment?: React.ReactNode;
   // Recent-activity line
   recent: { label: string; who: string | null; time: string } | null;
   // Notes composer (owned by the shell — same model as before, flat section)
@@ -37,14 +44,35 @@ const primaryUtilBtn =
 export function QuickBody(props: QuickBodyProps): JSX.Element {
   const {
     directionsHref, phone, copiedAddr, onCopyAddress,
-    outcomes, iconMap, activeOutcome, flashKey, onStatusTap, outcomesDisabled = false,
+    primaryOutcomes, stripOutcomes, iconMap, activeOutcome, flashKey, onStatusTap,
+    outcomesDisabled = false, proximity, appointment,
     recent, notes,
   } = props;
+
+  // Bring the pressed disc into view when a card opens on a strip-tier status
+  // (a NOSO door must show its pressed NOSO disc, not a scrolled-away strip).
+  // "nearest" never scrolls the page vertically; instant, so reduced-motion
+  // needs no special case. Deliberately NOT for the pressed LEAD disc: a fresh
+  // door is the common open, its state already reads from the green header
+  // line, and scrolling to the strip's far end would hide Follow-up/Go Back —
+  // the dispositions the rep actually came for.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!activeOutcome || activeOutcome === "prospect") return;
+    if (!stripOutcomes.some(o => o.key === activeOutcome)) return;
+    try {
+      stripRef.current
+        ?.querySelector<HTMLElement>(`[data-testid="knock-outcome-${activeOutcome}"]`)
+        ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    } catch { /* jsdom / older WebView — the strip still scrolls by hand */ }
+  }, [activeOutcome, stripOutcomes]);
 
   return (
     <>
       {/* Secondary utility row — Field Map leads carry a phone only for
-          authorized callers, so Call renders ONLY when a valid number exists. */}
+          authorized callers, so Call renders ONLY when a valid number exists.
+          The proximity chip sits at the far end: same row as Directions because
+          they answer the same question ("how do I get to this door?"). */}
       <div data-testid="knock-action-row" className="flex items-center gap-2 pt-1">
         <a
           data-testid="action-directions"
@@ -76,30 +104,61 @@ export function QuickBody(props: QuickBodyProps): JSX.Element {
         >
           {copiedAddr ? <Check className="w-[18px] h-[18px] text-emerald-400" /> : <Copy className="w-[18px] h-[18px]" />}
         </button>
+        {proximity}
       </div>
 
-      {/* THE outcomes grid — all field dispositions in ONE 2-column grid, FIXED
-          order (primary four lead). One tap saves immediately; the active state
+      {/* THE disposition surface — one container, two tiers. The four most
+          likely reads keep their full-width 2-col cells (they are ~90% of taps
+          and deserve the big targets); every other disposition renders as a
+          compact status-coded disc in one horizontally-scrollable strip — the
+          SalesRabbit vocabulary row — in FIXED order (a disc never moves under
+          the finger). One tap saves immediately either way; the active state
           mirrors the lead's current display state in place. */}
-      <div data-testid="knock-status-grid" className="mt-3 grid grid-cols-2 gap-2">
-        {outcomes.map(o => (
-          <OutcomeButton
-            key={o.key}
-            outcome={o}
-            icon={iconMap[o.icon]}
-            active={activeOutcome === o.key}
-            flashing={flashKey === o.key}
-            onTap={onStatusTap}
-            variant="grid"
-            disabled={outcomesDisabled}
-          />
-        ))}
+      <div data-testid="knock-status-grid" className="mt-3">
+        <div className="grid grid-cols-2 gap-2">
+          {primaryOutcomes.map(o => (
+            <OutcomeButton
+              key={o.key}
+              outcome={o}
+              icon={iconMap[o.icon]}
+              active={activeOutcome === o.key}
+              flashing={flashKey === o.key}
+              onTap={onStatusTap}
+              variant="grid"
+              disabled={outcomesDisabled}
+            />
+          ))}
+        </div>
+        <div
+          ref={stripRef}
+          data-testid="knock-status-strip"
+          role="group"
+          aria-label="More dispositions"
+          // -mx-4/px-4: the strip bleeds to the sheet edge so a half-visible
+          // disc advertises the scroll; scrollbar hidden (the peeking disc is
+          // the affordance), snap keeps flicks landing on whole discs.
+          className="mt-2 -mx-4 px-4 flex gap-1.5 overflow-x-auto overscroll-x-contain snap-x scrollbar-none"
+        >
+          {stripOutcomes.map(o => (
+            <OutcomeDisc
+              key={o.key}
+              outcome={o}
+              icon={iconMap[o.icon]}
+              active={activeOutcome === o.key}
+              flashing={flashKey === o.key}
+              onTap={onStatusTap}
+              disabled={outcomesDisabled}
+            />
+          ))}
+        </div>
       </div>
       {outcomesDisabled && (
         <p className="mt-2 text-[12px] font-semibold text-destructive" role="status">
           Outcome logging is blocked for this address.
         </p>
       )}
+
+      {appointment}
 
       {/* Recent-activity line: the last thing that happened at this door. */}
       {recent && (
