@@ -18,6 +18,7 @@ EXPECTED_SKILLS = {
     "homefront-review-pr",
     "homefront-scanner-safety",
     "homefront-database-change",
+    "homefront-backend-system-design",
     "impeccable",
     "ui-skills-root",
 }
