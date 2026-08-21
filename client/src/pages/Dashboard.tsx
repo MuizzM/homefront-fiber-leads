@@ -310,7 +310,7 @@ export default function Dashboard() {
             once; a rail that clips "Sold" off the right edge hides the one
             figure the day is scored by.
 
-            The tiles LINK: a rep seeing "Follow-ups due: 3" gets a tap path to
+            The tiles LINK: a rep seeing "Follow-ups: 3" gets a tap path to
             those follow-ups instead of a dead stat beside the nav bar.
 
             Reps do not get "Unassigned": their lead scope is assigned_rep_id IN
@@ -329,7 +329,12 @@ export default function Dashboard() {
           <KpiTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="success" href="#/leads" onClick={() => leadsFilterHandoff("sold")} />
           {/* Spans the base grid's last row so a five-tile glance doesn't strand
               an orphan half-cell on phones; one cell again from md up. */}
-          <KpiTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="warning" href="#/leads" onClick={() => leadsFilterHandoff("follow_up")} className="col-span-2 md:col-span-1" />
+          {/* "Follow-ups", not "Follow-ups due": this counts DOORS in the
+              follow-up status (what the linked list shows), while a scheduled
+              appointment for tomorrow is not yet owed — Today's badge counts
+              the actually-due ones from /api/followups. The label must match
+              the number it fronts. */}
+          <KpiTile label="Follow-ups" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="warning" href="#/leads" onClick={() => leadsFilterHandoff("follow_up")} className="col-span-2 md:col-span-1" />
         </div>
       </section>
 

@@ -164,7 +164,11 @@ export default function Login() {
               className="mx-auto mb-5 h-16 w-auto object-contain"
               width={200}
               height={244}
-              fetchPriority="high"
+              // Lowercase on purpose, via spread: React 18's runtime only
+              // forwards the lowercase DOM attribute (the camelCase prop warned
+              // on every sign-in), while its TYPES only know camelCase — the
+              // spread satisfies both until the React 19 upgrade.
+              {...({ fetchpriority: "high" } as Record<string, string>)}
               decoding="async"
             />
             <h1 className="text-balance text-2xl font-semibold tracking-tight text-foreground">Sign in</h1>
