@@ -10,6 +10,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader, StatStrip, StatTile } from "@/components/ui/page-scaffold";
 import { CaseDetailPanel, CaseSummaryRow, type RecoveryCaseRow } from "@/features/recovery/RecoveryCase";
@@ -48,7 +49,15 @@ export default function MyRecoveries() {
           <CardHeader><CardTitle className="text-base">Work these in order</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {cases.isLoading && <Skeleton className="h-24 w-full" />}
-            {!cases.isLoading && rows.length === 0 && (
+            {!cases.isLoading && cases.isError && (
+              // A failed load must not read as "nothing to chase" - that would
+              // tell a rep their queue is clear when it may be full.
+              <div role="alert" className="flex items-center justify-between gap-3 py-2">
+                <p className="text-sm text-muted-foreground">Couldn't load your recoveries - some may still be waiting.</p>
+                <Button variant="outline" size="sm" onClick={() => cases.refetch()}>Retry</Button>
+              </div>
+            )}
+            {!cases.isLoading && !cases.isError && rows.length === 0 && (
               <p className="text-sm text-muted-foreground" data-testid="my-empty">
                 Nothing to chase. Every order you sold is either moving or already installed.
               </p>

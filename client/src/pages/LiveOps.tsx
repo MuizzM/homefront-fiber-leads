@@ -205,7 +205,7 @@ export default function LiveOps() {
             aria-selected={view === v}
             onClick={() => setView(v)}
             data-testid={`liveops-view-${v}`}
-            className={`rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            className={`inline-flex items-center justify-center min-h-tap md:min-h-8 rounded-lg px-3 text-[13px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               view === v ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"
             }`}
           >

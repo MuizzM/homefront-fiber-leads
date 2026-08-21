@@ -424,7 +424,7 @@ export default function AreaDetail() {
             onClick={() => setTab(t.id)}
             data-testid={`area-tab-${t.id}`}
             className={cn(
-              "h-9 flex-1 rounded-lg px-4 text-xs font-semibold transition-colors sm:flex-none",
+              "h-11 md:h-9 flex-1 rounded-lg px-4 text-xs font-semibold transition-colors sm:flex-none",
               tab === t.id ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               FOCUS,
             )}

@@ -13,8 +13,12 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
+  Dialog, DialogContent, DialogHeader, DialogTitle
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
@@ -245,18 +249,18 @@ function TenantCard({ tenant, onEdit, onDelete }: {
         {/* Actions */}
         <td className="py-3 px-4">
           <div className="flex items-center justify-end gap-1">
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+            <Button variant="ghost" size="sm" className="h-8 w-8 tap-expand p-0 text-muted-foreground hover:text-foreground"
               aria-label={expanded ? "Collapse tenant details" : "Expand tenant details"}
               onClick={() => setExpanded(v => !v)}>
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-primary"
+            <Button variant="ghost" size="sm" className="h-8 tap-expand px-2 text-xs font-semibold text-muted-foreground hover:text-primary"
               onClick={onEdit} data-testid={`btn-edit-tenant-${tenant.id}`}>
               Edit
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-destructive"
+            <Button variant="ghost" size="sm" className="h-8 tap-expand px-2 text-xs font-semibold text-muted-foreground hover:text-destructive"
               onClick={onDelete} data-testid={`btn-delete-tenant-${tenant.id}`}>
-              Cancel
+              Deactivate
             </Button>
           </div>
         </td>
@@ -510,23 +514,27 @@ export default function SuperAdmin() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirm */}
-      <Dialog open={!!deleteTenant} onOpenChange={v => !v && setDeleteTenant(null)}>
-        <DialogContent className="bg-card border-border text-foreground max-w-sm">
-          <DialogHeader><DialogTitle className="text-base">Cancel Tenant?</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This will mark <strong>{deleteTenant?.brandName}</strong> as cancelled. Their data is preserved.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTenant(null)} className="border-border">Keep Active</Button>
-            <Button onClick={() => deleteTenant && deleteMutation.mutate(deleteTenant.id)}
+      {/* Deactivate confirm - AlertDialog (role=alertdialog, no scrim/Escape
+          onto the wrong control) for a privileged action that deactivates a
+          paying client. */}
+      <AlertDialog open={!!deleteTenant} onOpenChange={v => !v && setDeleteTenant(null)}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base">Deactivate this tenant?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This marks {deleteTenant?.brandName} as cancelled and blocks their access. Their data is preserved.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep active</AlertDialogCancel>
+            <AlertDialogAction onClick={() => deleteTenant && deleteMutation.mutate(deleteTenant.id)}
               disabled={deleteMutation.isPending}
-              className="bg-destructive hover:bg-destructive/90 text-white">
-              {deleteMutation.isPending ? "Cancelling…" : "Cancel Tenant"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+              {deleteMutation.isPending ? "Deactivating…" : "Deactivate"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -23,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/ui/page-scaffold";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { useToast } from "@/hooks/use-toast";
 import { useCan } from "@/lib/capabilities";
 import { formatMiles } from "@shared/mileage";
@@ -62,12 +63,15 @@ const money = (cents: number) => {
   return `${sign}$${Math.floor(abs / 100).toLocaleString("en-US")}.${String(abs % 100).padStart(2, "0")}`;
 };
 
+// Token ink on a wash of ITSELF (the design-system contrast rule): a fixed
+// tailwind color-step wash under a theme-aware token ink is not guaranteed to
+// clear AA across themes, but the tokens are tuned to clear it on their own /15.
 const STATUS_TONE: Record<string, string> = {
   DRAFT: "bg-muted text-muted-foreground",
-  SUBMITTED: "bg-amber-500/15 text-warning",
-  APPROVED: "bg-emerald-500/15 text-success",
+  SUBMITTED: "bg-warning/15 text-warning",
+  APPROVED: "bg-success/15 text-success",
   REJECTED: "bg-destructive/15 text-destructive",
-  PAID: "bg-sky-500/15 text-info",
+  PAID: "bg-info/15 text-info",
 };
 
 // Human labels for the raw DB enum — a rep was reading "SUBMITTED" in caps next
@@ -457,6 +461,7 @@ function ApprovalQueue() {
     queryFn: () => get<Trip[]>("/api/mileage/queue"),
   });
 
+  const [rejectTrip, setRejectTrip] = useState<Trip | null>(null);
   const decide = useMutation({
     mutationFn: ({ id, action, reason }: { id: number; action: "approve" | "reject"; reason?: string }) =>
       apiRequest("POST", `/api/mileage/trips/${id}/${action}`, reason ? { reason } : {}).then(async r => {
@@ -464,7 +469,7 @@ function ApprovalQueue() {
         if (!r.ok) throw new Error(json.error ?? "Failed");
         return json;
       }),
-    onSuccess: () => invalidateMileage(),
+    onSuccess: () => { invalidateMileage(); setRejectTrip(null); },
     onError: (e: any) => toast({ title: "Could not update the trip", description: String(e?.message ?? ""), variant: "destructive" }),
   });
 
@@ -507,10 +512,7 @@ function ApprovalQueue() {
                 </Button>
                 <Button size="sm" variant="ghost" data-testid={`mileage-reject-${t.id}`}
                   aria-label={`Send back ${t.repName}'s trip with a reason`}
-                  onClick={() => {
-                    const reason = window.prompt("Why is this being sent back?");
-                    if (reason?.trim()) decide.mutate({ id: t.id, action: "reject", reason: reason.trim() });
-                  }}>
+                  onClick={() => setRejectTrip(t)}>
                   <X className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </div>
@@ -518,6 +520,17 @@ function ApprovalQueue() {
           ))
         )}
       </CardContent>
+      <RejectReasonDialog
+        open={rejectTrip != null}
+        onOpenChange={o => !o && setRejectTrip(null)}
+        title="Send this trip back?"
+        description={rejectTrip ? `${rejectTrip.repName ?? "The rep"}'s ${formatMiles(rejectTrip.milesHundredths)} trip will be returned unpaid with your reason.` : undefined}
+        label="Reason for sending back"
+        placeholder="e.g. Missing destination, or duplicate of an earlier trip"
+        confirmLabel="Send back"
+        busy={decide.isPending}
+        onConfirm={reason => rejectTrip && decide.mutate({ id: rejectTrip.id, action: "reject", reason })}
+      />
     </Card>
   );
 }
@@ -594,7 +607,7 @@ export default function Mileage() {
   });
   const [period, setPeriod] = useState<PeriodKey>("month");
   const range = periodRange(period);
-  const { data: summary } = useQuery<Summary>({
+  const { data: summary, isError: summaryError, refetch: refetchSummary } = useQuery<Summary>({
     queryKey: ["/api/mileage/summary", period],
     queryFn: () => get<Summary>(`/api/mileage/summary${qs(range)}`),
   });
@@ -634,6 +647,16 @@ export default function Mileage() {
         ))}
       </div>
 
+      {summaryError && (
+        // The money headline's source failed; say so with a retry rather than
+        // vanishing the total (which reads as "you're owed nothing").
+        <Card data-testid="mileage-summary-error">
+          <CardContent className="flex items-center justify-between gap-3 p-4" role="alert">
+            <p className="text-sm text-muted-foreground">Couldn't load your mileage total.</p>
+            <Button variant="outline" size="sm" onClick={() => refetchSummary()}>Retry</Button>
+          </CardContent>
+        </Card>
+      )}
       {summary && (
         <Card data-testid="mileage-summary">
           <CardContent className="p-4">

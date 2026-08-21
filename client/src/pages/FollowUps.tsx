@@ -199,7 +199,7 @@ function Row({ f, today, overdue, onOpen, onLog }: { f: FollowUp; today: string;
           <div className="flex items-center gap-2">
             <span className="line-clamp-2 text-[14px] font-semibold leading-snug text-foreground">{f.address}</span>
             {hot && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-destructive bg-destructive/10 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5">Hot</span>}
-            {!hot && newFiber && null}
+            {!hot && newFiber && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-info bg-info/10 rounded-full px-1.5 py-0.5">New fiber</span>}
           </div>
           <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
             <span className={`inline-flex items-center gap-1 ${overdue ? "text-destructive font-medium" : ""}`}>

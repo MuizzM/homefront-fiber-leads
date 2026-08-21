@@ -165,7 +165,13 @@ export default function OrderRecovery() {
           </CardHeader>
           <CardContent className="space-y-2">
             {cases.isLoading && <Skeleton className="h-24 w-full" />}
-            {cases.data?.cases.length === 0 && (
+            {!cases.isLoading && cases.isError && (
+              <div role="alert" className="flex items-center justify-between gap-3 py-2">
+                <p className="text-sm text-muted-foreground">Couldn't load the recovery queue - cases may still need attention.</p>
+                <Button variant="outline" size="sm" onClick={() => cases.refetch()}>Retry</Button>
+              </div>
+            )}
+            {!cases.isLoading && !cases.isError && cases.data?.cases.length === 0 && (
               <p className="text-sm text-muted-foreground" data-testid="empty-queue">
                 Nothing needs recovery right now.
               </p>

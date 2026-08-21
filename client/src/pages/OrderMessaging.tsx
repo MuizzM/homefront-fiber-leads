@@ -117,7 +117,7 @@ export default function OrderMessaging() {
               testId="sending-status-error"
             />
           ) : blockers.length === 0 ? (
-            <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-success" data-testid="sending-ready">
+            <p className="rounded-md bg-success/10 px-3 py-2 text-success" data-testid="sending-ready">
               Every requirement is met. Reps can send approved messages, subject to each customer's consent and the
               limits below.
             </p>
@@ -126,7 +126,7 @@ export default function OrderMessaging() {
               <p className="text-muted-foreground">Messages are not being sent because:</p>
               <ul className="space-y-1" data-testid="sending-blockers">
                 {blockers.map((b) => (
-                  <li key={b} className="break-words rounded-md bg-amber-500/10 px-3 py-2 text-warning [overflow-wrap:anywhere]">{b}</li>
+                  <li key={b} className="break-words rounded-md bg-warning/10 px-3 py-2 text-warning [overflow-wrap:anywhere]">{b}</li>
                 ))}
               </ul>
             </>
@@ -343,7 +343,7 @@ function TemplatesPanel({ templates, loading }: { templates: TemplateRow[]; load
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge className={t.approved ? "bg-emerald-500/15 text-success" : "bg-muted text-muted-foreground"}>
+                <Badge className={t.approved ? "bg-success/15 text-success" : "bg-muted text-muted-foreground"}>
                   {t.approved ? "Approved" : "Draft"}
                 </Badge>
                 <Button size="sm" variant="outline" onClick={() => setEditing(editing?.id === t.id ? null : t)}>

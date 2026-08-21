@@ -555,7 +555,7 @@ export default function USAScanner() {
                               data-testid={`scan-${abbr}-${market.city}`}
                               size="sm"
                               variant={isRunning ? "destructive" : market.priority === "critical" ? "default" : "outline"}
-                              className={`h-7 px-3 text-xs gap-1.5 ${isRunning ? "" : market.priority === "critical" ? "bg-primary hover:bg-primary/90" : ""}`}
+                              className={`md:h-7 px-3 text-xs gap-1.5 ${isRunning ? "" : market.priority === "critical" ? "bg-primary hover:bg-primary/90" : ""}`}
                               disabled={isScanning && !isRunning}
                               onClick={() => isRunning ? stopScan() : startScan(market)}
                             >

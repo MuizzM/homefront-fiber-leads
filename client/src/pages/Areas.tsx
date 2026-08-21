@@ -105,7 +105,7 @@ export default function Areas() {
             placeholder="Search areas"
             aria-label="Search areas by name"
             data-testid="areas-search"
-            className={cn("h-11 w-full rounded-xl border border-border bg-card pl-8 pr-8 text-sm text-foreground placeholder:text-muted-foreground", FOCUS)}
+            className={cn("h-11 w-full rounded-xl border border-border bg-card pl-3 pr-8 text-sm text-foreground placeholder:text-muted-foreground", FOCUS)}
           />
           {query && (
             <button

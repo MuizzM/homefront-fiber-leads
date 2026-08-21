@@ -194,7 +194,7 @@ export default function Messages() {
                 onClick={() => setRoom({ t: "list" })}
                 aria-label="Back to conversations"
                 data-testid="chat-back"
-                className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground", FOCUS)}
+                className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground", FOCUS)}
               >
                 <ChevronLeft className="h-5 w-5" aria-hidden="true" />
               </button>
@@ -348,7 +348,7 @@ function BoardPanel() {
   // Same URL-shaped key the full leaderboard uses, so the two share a cache —
   // opening the full page after this tab paints instantly.
   const url = `/api/leaderboard?range=${range}`;
-  const { data: board = [], isLoading, isError } = useQuery<BoardEntry[]>({
+  const { data: board = [], isLoading, isError, refetch } = useQuery<BoardEntry[]>({
     queryKey: [url],
     refetchInterval: 30_000,
   });
@@ -391,9 +391,10 @@ function BoardPanel() {
       {isLoading && <Skeleton className="h-40 w-full rounded-2xl" data-testid="board-loading" />}
 
       {!isLoading && isError && (
-        <p className="rounded-2xl border border-border bg-card p-4 text-center text-[13px] text-muted-foreground" data-testid="board-error">
-          Couldn't load the board. It's still running - check your connection.
-        </p>
+        <div className="rounded-2xl border border-border bg-card p-4 text-center" data-testid="board-error" role="alert">
+          <p className="text-[13px] text-muted-foreground">Couldn't load the board. It's still running - check your connection.</p>
+          <button onClick={() => refetch()} className="mt-2 inline-flex min-h-11 items-center justify-center rounded-lg border border-border bg-secondary px-4 text-[13px] font-semibold text-foreground">Retry</button>
+        </div>
       )}
 
       {!isLoading && !isError && !board.length && (
@@ -537,7 +538,7 @@ function SentRow({ item, now }: { item: SentItem; now: number }) {
         aria-label={`Retract "${item.headline}"`}
         data-testid={`sent-delete-${item.id}`}
         className={cn(
-          "grid h-9 w-9 shrink-0 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50",
+          "grid h-9 w-9 tap-expand shrink-0 place-items-center rounded-xl text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50",
           FOCUS,
         )}
       >

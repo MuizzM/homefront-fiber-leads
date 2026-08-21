@@ -10,6 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ApiError, apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -295,9 +296,12 @@ function QualificationChecklist({ referralId }: { referralId: number }) {
       <ul className="space-y-1">
         {data.qualification.requirements.map(r => (
           <li key={r.key} className="flex items-center gap-2 text-xs">
+            {/* An unmet requirement rendered nothing, so its label started 5.5px
+                left of the met ones - the checklist read as ragged. Both states
+                now occupy the same 3.5 slot (token success, not raw emerald). */}
             {r.met
-              ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-              : null}
+              ? <Check className="h-3.5 w-3.5 shrink-0 text-success" />
+              : <span className="h-3.5 w-3.5 shrink-0 grid place-items-center" aria-hidden="true"><span className="h-1.5 w-1.5 rounded-full border border-muted-foreground/50" /></span>}
             <span className={r.met ? "text-foreground" : "text-muted-foreground"}>{r.label}</span>
           </li>
         ))}
@@ -352,6 +356,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
     enabled: scope === "mine",
   });
 
+  const [rejectRef, setRejectRef] = useState<Referral | null>(null);
   const decide = useMutation({
     mutationFn: ({ id, action, reason }: { id: number; action: "approve" | "reject"; reason?: string }) =>
       apiRequest("POST", `/api/referrals/${id}/${action}`, reason ? { reason } : {}).then(async r => {
@@ -359,7 +364,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
         if (!r.ok) throw new Error(json.error ?? "Failed");
         return json;
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/referrals"] }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/referrals"] }); setRejectRef(null); },
     onError: (e: any) => toast({ title: "Could not update the referral", description: String(e?.message ?? ""), variant: "destructive" }),
   });
 
@@ -450,10 +455,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
                     <Button size="sm" variant="ghost" data-testid={`referral-reject-${r.id}`}
                       aria-label="Reject this referral with a reason"
                       disabled={decide.isPending}
-                      onClick={() => {
-                        const reason = window.prompt("Why is this referral being rejected?");
-                        if (reason?.trim()) decide.mutate({ id: r.id, action: "reject", reason: reason.trim() });
-                      }}>
+                      onClick={() => setRejectRef(r)}>
                       <X className="h-4 w-4" aria-hidden="true" />
                     </Button>
                   </>
@@ -469,6 +471,17 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
           </div>
         ))}
       </CardContent>
+      <RejectReasonDialog
+        open={rejectRef != null}
+        onOpenChange={o => !o && setRejectRef(null)}
+        title="Reject this referral?"
+        description={rejectRef ? `${rejectRef.referredName ?? rejectRef.referredEmail ?? "This referral"} will be rejected and your reason written to the audit trail.` : undefined}
+        label="Reason for rejection"
+        placeholder="e.g. Not a real referral, or already credited"
+        confirmLabel="Reject referral"
+        busy={decide.isPending}
+        onConfirm={reason => rejectRef && decide.mutate({ id: rejectRef.id, action: "reject", reason })}
+      />
     </Card>
   );
 }

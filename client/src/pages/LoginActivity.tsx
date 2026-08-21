@@ -58,7 +58,7 @@ export default function LoginActivity() {
         <button
           type="button"
           onClick={() => { void summaryQuery.refetch(); void feedQuery.refetch(); }}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold hover:bg-secondary"
+          className="inline-flex min-h-11 md:h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold hover:bg-secondary"
         >
            Refresh
         </button>

@@ -206,7 +206,7 @@ export default function CommissionConsole() {
           role="tab"
           aria-selected={section === "overview"}
           onClick={() => setSection("overview")}
-          className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors ${section === "overview" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+          className={`h-11 md:h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors ${section === "overview" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
           data-testid="commission-tab-overview"
         >
           Overview
@@ -220,7 +220,7 @@ export default function CommissionConsole() {
             role="tab"
             aria-selected={section === "pay"}
             onClick={() => setSection("pay")}
-            className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "pay" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            className={`h-11 md:h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "pay" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
             data-testid="commission-tab-pay"
           >
              Pay reps
@@ -234,7 +234,7 @@ export default function CommissionConsole() {
             role="tab"
             aria-selected={section === "downline"}
             onClick={() => setSection("downline")}
-            className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "downline" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            className={`h-11 md:h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "downline" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
             data-testid="commission-tab-downline"
           >
              Downline

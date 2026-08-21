@@ -34,6 +34,9 @@ export function PdfReviewer({
 }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Set once: a coarse pointer is a phone/tablet, where inline PDF embedding
+  // is unreliable (iOS Safari especially).
+  const [isCoarsePointer] = useState(() => typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true);
 
   useEffect(() => {
     let alive = true;
@@ -90,13 +93,24 @@ export function PdfReviewer({
           </div>
         )}
         {blobUrl && !error && (
-          // title attr labels the embedded viewer; the browser renders scroll/zoom/pages.
-          <object data={blobUrl} type="application/pdf" className="h-full w-full" aria-label={title}>
-            <div className="grid h-full place-items-center p-6 text-center text-sm text-muted-foreground">
-              Your browser can't display the PDF inline.
-              <Button type="button" variant="outline" size="sm" className="ml-2" onClick={download}>Download to view</Button>
+          isCoarsePointer ? (
+            // iOS Safari renders <object type=application/pdf> BLANK and does not
+            // trigger the fallback, so on touch devices (where reps read their
+            // tax/pay docs) offer an explicit open/download instead of a dead frame.
+            <div className="grid h-full place-items-center gap-3 p-6 text-center">
+              <p className="text-sm text-muted-foreground">Open this document to read it on your phone.</p>
+              <Button type="button" onClick={() => window.open(blobUrl, "_blank", "noopener")} aria-label={`Open ${title}`}>Open document</Button>
+              <Button type="button" variant="outline" size="sm" onClick={download}>Download</Button>
             </div>
-          </object>
+          ) : (
+            // title attr labels the embedded viewer; the browser renders scroll/zoom/pages.
+            <object data={blobUrl} type="application/pdf" className="h-full w-full" aria-label={title}>
+              <div className="grid h-full place-items-center p-6 text-center text-sm text-muted-foreground">
+                Your browser can't display the PDF inline.
+                <Button type="button" variant="outline" size="sm" className="ml-2" onClick={download}>Download to view</Button>
+              </div>
+            </object>
+          )
         )}
       </div>
 

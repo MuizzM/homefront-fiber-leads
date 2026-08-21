@@ -166,26 +166,29 @@ function Dashboard({
           ["Verified Fresh", stats?.verifiedFresh, Zap],
           ["Fresh Candidates", stats?.candidateFresh, RefreshCw],
           ["Errors This Cycle", stats?.errorsThisCycle, AlertTriangle],
-        ].map(([label, value]: any) => (
-          <button
-            key={label}
-            onClick={label === "Total Addresses" ? onAddresses : undefined}
-            className="rounded-2xl border border-border bg-card p-4 text-left shadow-sm"
-          >
-            <div className="flex items-center text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
-              
-              {label}
-            </div>
-            <div className="mt-3 text-2xl font-bold tabular-nums">
-              {fmt(value)}
-            </div>
-            {label === "Verified Fresh" && (
-              <div className="mt-1 text-2xs text-muted-foreground">
-                Repeat-confirmed transition
-              </div>
-            )}
-          </button>
-        ))}
+        ].map(([label, value]: any) => {
+          // Only "Total Addresses" navigates; the other three were <button>s
+          // with no handler - advertising a tap that does nothing. Render those
+          // as plain cards, and only the real link as an interactive button.
+          const interactive = label === "Total Addresses";
+          const inner = (
+            <>
+              <div className="flex items-center text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
+              <div className="mt-3 text-2xl font-bold tabular-nums">{fmt(value)}</div>
+              {label === "Verified Fresh" && (
+                <div className="mt-1 text-2xs text-muted-foreground">Repeat-confirmed transition</div>
+              )}
+            </>
+          );
+          return interactive ? (
+            <button key={label} onClick={onAddresses}
+              className="rounded-2xl border border-border bg-card p-4 text-left shadow-sm transition-colors hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              {inner}
+            </button>
+          ) : (
+            <div key={label} className="rounded-2xl border border-border bg-card p-4 shadow-sm">{inner}</div>
+          );
+        })}
       </section>
       <section className="grid gap-4 lg:grid-cols-[1fr_.8fr]">
         <article className="rounded-2xl border border-border bg-card p-5 text-foreground">

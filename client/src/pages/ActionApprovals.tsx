@@ -23,6 +23,10 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogFooter,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -263,13 +267,21 @@ export default function ActionApprovals() {
                     placeholder="What did you check?"
                   />
                 </div>
-                <Button
-                  onClick={() => decide.mutate({ id: action.id, verb: "approve" })}
-                  disabled={decide.isPending}
-                  data-testid={`approve-${action.id}`}
-                >
-                  Approve
-                </Button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button disabled={decide.isPending} data-testid={`approve-${action.id}`}>Approve</Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent className="max-w-sm">
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Run this {action.kindLabel.toLowerCase()}?</AlertDialogTitle>
+                      <AlertDialogDescription>It executes as soon as you approve and cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => decide.mutate({ id: action.id, verb: "approve" })}>Approve and run</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
                 <Button
                   variant="outline"
                   onClick={() => decide.mutate({ id: action.id, verb: "reject" })}

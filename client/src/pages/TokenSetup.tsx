@@ -40,8 +40,8 @@ export default function TokenSetup() {
         unknown
           ? "bg-card border-border"
           : tokenOk
-            ? "bg-green-500/10 border-green-500/25"
-            : "bg-red-500/10 border-red-500/25"
+            ? "bg-success/10 border-success/25"
+            : "bg-destructive/10 border-destructive/25"
       }`}>
         <div className="flex items-center gap-3">
           {unknown ? (

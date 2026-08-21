@@ -526,7 +526,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
           : <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" /> Live</span>}
         <div className="ml-auto flex gap-1">
           {(["all", "NC", "SC"] as const).map((s) => (
-            <button key={s} onClick={() => setState(s)} className={`rounded-lg px-2.5 py-1 font-semibold ${state === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s === "all" ? "All" : s}</button>
+            <button key={s} aria-pressed={state === s} onClick={() => setState(s)} className={`rounded-lg px-2.5 py-1 font-semibold ${state === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s === "all" ? "All" : s}</button>
           ))}
         </div>
         {/* Stage chips are only a real choice for managers — non-managers are

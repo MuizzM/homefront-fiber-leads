@@ -140,7 +140,7 @@ const STATUS_COPY: Record<string, { label: string; hint: string; className: stri
   paid: {
     label: "Paid",
     hint: "Settled",
-    className: "bg-emerald-500/15 text-success",
+    className: "bg-success/15 text-success",
   },
 };
 const statusCopy = (status: string) =>
@@ -276,7 +276,7 @@ function MoneyHero({ data, isLoading, isError }: {
                 {isError ? " - " : usd(awaiting)} awaiting
               </span>
               <span data-testid="stat-paid"
-                    className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success">
+                    className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success">
                 
                 {isError ? " - " : usd(totals?.paidCents ?? 0)} paid
               </span>
@@ -589,7 +589,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                     onClick={() => bulk.mutate({ ids: selectedEarned.map((s) => s.id), action: "approve" })}
                     data-testid="bulk-approve"
                     className={cn(
-                      "inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-primary px-3 text-[13px] font-semibold text-primary-foreground disabled:opacity-50",
+                      "inline-flex min-h-tap items-center gap-1.5 rounded-xl bg-primary px-3 text-[13px] font-semibold text-primary-foreground disabled:opacity-50",
                       FOCUS,
                     )}
                   >

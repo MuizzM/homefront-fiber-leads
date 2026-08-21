@@ -40,7 +40,7 @@ function UserPreview({ members }: { members: TeamMember[] }) {
           value={uid} onChange={e => setUid(e.target.value ? Number(e.target.value) : "")}
           data-testid="gov-user-select"
           aria-label="Preview a person's access"
-          className="h-9 rounded-lg bg-secondary border border-border px-3 text-[13px] text-foreground focus:outline-none focus:border-primary/60"
+          className="h-11 md:h-9 rounded-lg bg-secondary border border-border px-3 text-[13px] text-foreground focus:outline-none focus:border-primary/60"
         >
           <option value="">Select a person…</option>
           {members.filter(m => m.active).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -151,7 +151,7 @@ export default function Governance() {
           placeholder="Search capabilities…"
           aria-label="Search capabilities"
           data-testid="gov-search"
-          className="w-full max-w-xs h-9 rounded-lg bg-card border border-border px-3.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/60"
+          className="w-full max-w-xs h-11 md:h-9 rounded-lg bg-card border border-border px-3.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/60"
         />
       </div>
 

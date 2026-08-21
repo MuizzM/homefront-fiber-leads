@@ -558,7 +558,13 @@ export default function OrderImports() {
             sale they belong to.
           </p>
           {exceptions.isLoading && <Skeleton className="h-24 w-full" />}
-          {exceptions.data?.exceptions.length === 0 && (
+          {!exceptions.isLoading && exceptions.isError && (
+            <div role="alert" className="flex items-center justify-between gap-3 py-2">
+              <p className="text-sm text-muted-foreground">Couldn't load unmatched orders - they may still need a decision.</p>
+              <Button variant="outline" size="sm" onClick={() => exceptions.refetch()}>Retry</Button>
+            </div>
+          )}
+          {!exceptions.isLoading && !exceptions.isError && exceptions.data?.exceptions.length === 0 && (
             <p className="text-sm text-muted-foreground">Nothing waiting.</p>
           )}
           <div className="space-y-2">

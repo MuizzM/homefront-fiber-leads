@@ -683,7 +683,7 @@ export default function Team() {
                   {showActions && (
                     <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[156px]">
                       {canManageDocuments && member.role === "rep" && (
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                        <Button variant="ghost" size="sm" className="h-8 w-8 tap-expand p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                           onClick={() => navigate("/applications")} data-testid={`btn-documents-rep-${member.id}`}
                           aria-label={`Open rep onboarding for ${member.name}`}
                           title="Open rep onboarding">
@@ -691,7 +691,7 @@ export default function Team() {
                         </Button>
                       )}
                       {canManageCommission && member.role !== "manager" && canLifecycle(member) && (
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                        <Button variant="ghost" size="sm" className="h-8 w-8 tap-expand p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                           onClick={() => setCommissionMember(member)} data-testid={`btn-commission-rep-${member.id}`}
                           aria-label={`Set commission structure for ${member.name}`}
                           title="Commission structure">

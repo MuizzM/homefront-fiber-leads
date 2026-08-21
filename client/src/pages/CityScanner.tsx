@@ -180,6 +180,12 @@ export default function CityScanner() {
                 title: `${status.summary.fresh} fresh-fiber lead${status.summary.fresh === 1 ? "" : "s"} found`,
                 description: status.summary.unverified > 0 ? `${status.summary.unverified} address${status.summary.unverified === 1 ? " needs" : "es need"} a recheck` : "Every address received a conclusive answer",
               });
+            } else if (status.status === "error") {
+              // A scan that terminates in 'error' server-side used to poll
+              // forever, leaving the button stuck on "Scanning". Stop and say so.
+              clearInterval(pollRef.current!); pollRef.current = null;
+              setScanning(false);
+              toast({ title: "The scan stopped early", description: "It hit an error before finishing. You can start it again.", variant: "destructive" });
             }
           } catch {}
         }, 1500);

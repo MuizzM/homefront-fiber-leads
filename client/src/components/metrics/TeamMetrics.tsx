@@ -183,6 +183,7 @@ export function TeamMetrics() {
                 <tr className="border-b border-border">
                   {COLUMNS.map((c) => (
                     <th key={c.key} scope="col"
+                        aria-sort={sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
                         className={`px-3 py-2.5 font-semibold text-muted-foreground ${c.numeric ? "text-right" : ""}`}>
                       <button
                         type="button"
