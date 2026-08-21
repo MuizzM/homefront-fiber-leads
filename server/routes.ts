@@ -6439,6 +6439,61 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ id: lead.id, notes: updated?.notes ?? notes, updatedAt: updated?.updatedAt ?? null });
   });
 
+  // ── Door-captured contact identity ──────────────────────────────────────────
+  // The resident told the rep their name (and maybe an email) at the door —
+  // the same trust tier as a field note, so the same gate, tenant wall, and
+  // scope check as PATCH /notes. Writes ONLY contact_name/contact_email.
+  // Phone numbers are structurally refused here exactly like POST /api/leads:
+  // numbers enter through the Calling compliance module or nowhere.
+  app.patch("/api/leads/:id/contact", requireCapability("lead.note.write"), (req, res) => {
+    const user = (req as any).user;
+    if (req.body?.contactPhone != null || req.body?.ownerPhone != null || req.body?.phone != null) {
+      return res.status(400).json({
+        error: "Phone data must be added through the Calling compliance module.",
+        code: "CALLING_MODULE_REQUIRED",
+      });
+    }
+    const rawName = req.body?.contactName;
+    const rawEmail = req.body?.contactEmail;
+    if (rawName === undefined && rawEmail === undefined) {
+      return res.status(400).json({ error: "Provide contactName and/or contactEmail" });
+    }
+    // null/"" clears a field; a string sets it. Anything else is rejected.
+    const badName = rawName !== undefined && rawName !== null && typeof rawName !== "string";
+    const badEmail = rawEmail !== undefined && rawEmail !== null && typeof rawEmail !== "string";
+    if (badName || badEmail) return res.status(400).json({ error: "contactName/contactEmail must be strings" });
+    const contactName = rawName === undefined ? undefined : (String(rawName ?? "").trim().slice(0, 120) || null);
+    let contactEmail: string | null | undefined = rawEmail === undefined ? undefined : (String(rawEmail ?? "").trim() || null);
+    if (typeof contactEmail === "string") {
+      if (contactEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+        return res.status(400).json({ error: "contactEmail is not a valid email address" });
+      }
+      contactEmail = contactEmail.toLowerCase();
+    }
+    const lead = storage.getLeadById(Number(req.params.id));
+    const _ctid = user?.tenantId;
+    // Tenant wall for EVERY role — this is a WRITE; cross-tenant must 404.
+    if (!lead || (_ctid && lead.tenantId !== _ctid)) return res.status(404).json({ error: "Not found" });
+    if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
+    const patch: Record<string, string | null> = {};
+    if (contactName !== undefined && contactName !== ((lead as any).contactName ?? null)) patch.contactName = contactName;
+    if (contactEmail !== undefined && contactEmail !== ((lead as any).contactEmail ?? null)) patch.contactEmail = contactEmail;
+    if (!Object.keys(patch).length) {
+      return res.json({ id: lead.id, contactName: (lead as any).contactName ?? null, contactEmail: (lead as any).contactEmail ?? null });
+    }
+    const updated = storage.updateLead(lead.id, patch);
+    // Audited (identity data changed), refreshed through the same "reload the
+    // open card" bus as notes/photos — the VALUES never ride a broadcast.
+    emitLeadChange("notes", updated ?? lead, user, lead.tenantId);
+    storage.logActivity(user?.id ?? null, "lead.contact_updated", "lead", lead.id,
+      { fields: Object.keys(patch) }, req.ip);
+    res.json({
+      id: lead.id,
+      contactName: (updated as any)?.contactName ?? contactName ?? null,
+      contactEmail: (updated as any)?.contactEmail ?? contactEmail ?? null,
+    });
+  });
+
   // ── Unified lead history — one timeline for the card ────────────────────────
   // status_change rows come from knock_log; assignment + note rows from
   // lead_events. Merged, newest first, capped — append-only sources make each

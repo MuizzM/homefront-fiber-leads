@@ -34,6 +34,11 @@ export interface LeadDetail {
   competitorName?: string | null; competitorTech?: string | null;
   freshConfirmedAt?: string | null; leadTag?: string | null;
   leadStatus?: string | null;
+  // Rep-captured contact identity (PATCH /api/leads/:id/contact). Distinct
+  // from ownerName (trace/GIS): this is what the resident SAID, and the card's
+  // "Ask for" line prefers it once present.
+  contactName?: string | null;
+  contactEmail?: string | null;
   // Skip-trace contacts. These arrive ONLY from GET /api/leads/:id — the map
   // pin feed carries no contact data by design (payload size, and it would
   // broadcast every household's numbers to every client). The server sends raw

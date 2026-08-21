@@ -87,6 +87,11 @@ import {
   GRID_TIER_HIDDEN_LAYER_IDS,
   unclusteredOpacityExpr,
   iconOpacityExpr,
+  REP_LINK_SOURCE,
+  REP_LINK_LAYER,
+  REP_LINK_LAYER_SPEC,
+  repDoorLinkFeature,
+  setRepDoorLink,
 } from "@/lib/mapPins";
 import {
   MAP_VIEWPORT_MODE_THRESHOLD,
@@ -676,6 +681,17 @@ const emptyFeatureCollection = () => ({
  * This is intentionally idempotent because setStyle() removes custom sources.
  */
 function ensureTransientMapLayers(map: any): void {
+  // Rep→door proximity guide — installed FIRST so every later layer (search
+  // halo, scan pins, lead pins) draws above the dotted line.
+  if (!map.getSource(REP_LINK_SOURCE)) {
+    map.addSource(REP_LINK_SOURCE, {
+      type: "geojson",
+      data: emptyFeatureCollection(),
+    });
+  }
+  if (!map.getLayer(REP_LINK_LAYER)) {
+    map.addLayer(REP_LINK_LAYER_SPEC);
+  }
   if (!map.getSource(SEARCH_RESULT_SOURCE)) {
     map.addSource(SEARCH_RESULT_SOURCE, {
       type: "geojson",
@@ -6417,6 +6433,31 @@ export default function MapView() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLeadId, mapReady, useSheet, sheetPeekPx]);
+
+  // Rep→door proximity guide: while a card is open, a dotted line links the
+  // rep's fix to the selected door (the card's distance chip reads the same
+  // ~15s-cached fix, so the two agree). One capture per selection — the guide
+  // is orientation ("that house, over there"), not live tracking. Cleared on
+  // deselect, and drawn only when repDoorLinkFeature judges it honest (both
+  // ends known, within its max range).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (selectedLeadId == null) { setRepDoorLink(map, null); return; }
+    const lead = leadById.get(selectedLeadId);
+    if (lead?.lat == null || lead?.lng == null) { setRepDoorLink(map, null); return; }
+    let alive = true;
+    void captureFieldFix(3500).then(fix => {
+      if (!alive) return;
+      const current = mapRef.current;
+      if (!current) return;
+      setRepDoorLink(current, repDoorLinkFeature(
+        fix.repLat != null && fix.repLng != null ? { lat: fix.repLat, lng: fix.repLng } : null,
+        { lat: lead.lat, lng: lead.lng },
+      ));
+    });
+    return () => { alive = false; };
+  }, [selectedLeadId, mapReady, leadById]);
 
   // No resume system — live GPS is the anchor. The rep opens the app where
   // they stand; the blue dot is always on and moves with the device.

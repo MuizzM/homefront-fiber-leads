@@ -46,6 +46,9 @@ import { leadDisplayName, type TracedPhone } from "@shared/tracerfy";
 import { PeekBar } from "@/components/lead-sheet/PeekBar";
 import { QuickBody } from "@/components/lead-sheet/QuickBody";
 import { DetailsBody } from "@/components/lead-sheet/DetailsBody";
+import { ContactSection } from "@/components/lead-sheet/ContactSection";
+import { QuickLinks } from "@/components/lead-sheet/QuickLinks";
+import { SheetPhotos } from "@/components/lead-sheet/SheetPhotos";
 import { relativeTime, prefersReducedMotion, shortRepName, MUTED, BODY_TEXT } from "@/components/lead-sheet/utils";
 import { isFccReportedLead } from "@/lib/leadSourceFilter";
 import { useToast } from "@/hooks/use-toast";
@@ -770,6 +773,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const detailForLead = detailQuery.data?.id === renderedLead.id ? detailQuery.data : undefined;
   const contactPhones = detailForLead?.phones ?? renderedLead.phones;
   const contactOwnerName = detailForLead?.ownerName ?? renderedLead.ownerName;
+  // "Ask for" prefers the name the RESIDENT gave the rep over the traced/GIS
+  // owner — the door told us who answers it; the trace only guessed.
+  const doorName = detailForLead?.contactName?.trim() || contactOwnerName;
+  // Contact section renders only from a REAL server response — the seeded
+  // placeholder has no contact columns, and an "Add contact" chip that
+  // flickers into values a beat later reads as data loss.
+  const detailSettled = Boolean(detailForLead) && !detailQuery.isPlaceholderData;
   const statusBadge: { text: string; className: string } | null = needsReview
     ? { text: "Needs review", className: "border-warning/35 bg-warning/[0.08] text-warning" }
     : freshFiber
@@ -1088,12 +1098,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     <h2 className="min-w-0 text-[19px] leading-[1.15] font-semibold text-white truncate">
                       {renderedLead.address}
                     </h2>
-                    {/* Who to ask for. Only when the trace actually returned a
-                        name — the "Resident at …" fallback would just repeat
-                        the address line above it. */}
-                    {contactOwnerName && contactOwnerName.trim().length >= 2 && (
+                    {/* Who to ask for. Only when a real name exists (resident-
+                        given first, traced second) — the "Resident at …"
+                        fallback would just repeat the address line above it. */}
+                    {doorName && doorName.trim().length >= 2 && (
                       <p className="mt-0.5 truncate text-[13px] font-medium text-white/70" data-testid="knock-owner-name">
-                        Ask for {leadDisplayName(contactOwnerName, renderedLead.address)}
+                        Ask for {leadDisplayName(doorName, renderedLead.address)}
                       </p>
                     )}
                   </div>
@@ -1232,6 +1242,25 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             hidden={!detailsShown}
             docked={docked}
             detail={detailQuery.data}
+            contact={
+              <ContactSection
+                leadId={renderedLead.id}
+                contactName={detailForLead?.contactName}
+                contactEmail={detailForLead?.contactEmail}
+                ready={detailSettled}
+              />
+            }
+            quickLinks={
+              <QuickLinks
+                address={renderedLead.address}
+                city={renderedLead.city ?? detailForLead?.city}
+                state={renderedLead.state ?? detailForLead?.state}
+                zip={renderedLead.zip ?? detailForLead?.zip}
+                lat={renderedLead.lat}
+                lng={renderedLead.lng}
+              />
+            }
+            photos={<SheetPhotos leadId={renderedLead.id} />}
             canAssignLead={canAssignLead}
             assignedRepId={renderedLead.assignedRepId}
             team={teamQuery.data ?? []}

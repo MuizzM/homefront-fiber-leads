@@ -46,6 +46,12 @@ export interface DetailsBodyProps {
   hidden: boolean;             // not the details level (and not docked)
   docked: boolean;
   detail: LeadDetail | undefined;
+  // Shell-composed sections (same slot model as the quick body's notes):
+  // rep-captured contact identity, address-contextual research links, and the
+  // door-photo strip. Nodes so this body stays a layout, not a data owner.
+  contact?: React.ReactNode;
+  quickLinks?: React.ReactNode;
+  photos?: React.ReactNode;
   // Assignment — the ONE role difference on the shared card; lead.assign only.
   canAssignLead: boolean;
   assignedRepId?: number | null;
@@ -70,15 +76,22 @@ export interface DetailsBodyProps {
 
 export function DetailsBody(props: DetailsBodyProps): JSX.Element {
   const {
-    hidden, docked, detail, canAssignLead, assignedRepId, team, onAssign, assigning = false,
+    hidden, docked, detail, contact, quickLinks, photos,
+    canAssignLead, assignedRepId, team, onAssign, assigning = false,
     canOpenCalling, leadId, canManage, onCentralMark, onDelete,
     centralMode, deleteArmed, onToggleCentral, onDeleteTap,
     history, historyLoading,
   } = props;
   return (
     <div data-testid="knock-details-body" hidden={hidden} className="mt-5">
+      {/* Who lives here — the rep-captured identity leads the level. */}
+      {contact}
+
       {/* Customer/service details — verified premise facts. */}
       <VerifiedPremiseFacts detail={detail} />
+
+      {/* One-tap research for this address. */}
+      {quickLinks}
 
       {/* Assignment — rendered only for lead.assign holders (team lead+); reps
           never see it. The same server capability gate enforces it, so this is
@@ -147,6 +160,9 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           ) : null}
         </div>
       )}
+
+      {/* Field evidence — the door-photo strip sits beside the timeline. */}
+      {photos}
 
       {/* History — newest first. Left-rail dot + bold actor+verb + right-aligned
           relative time; three event kinds keep VerificationBadge/distance (the

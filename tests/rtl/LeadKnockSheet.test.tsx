@@ -98,6 +98,7 @@ function makeQueryClient() {
         queryFn: async ({ queryKey }) => {
           const key = String(queryKey[0] ?? "");
           if (key.endsWith("/history")) return HISTORY;
+          if (key.endsWith("/photos")) return [];
           return { id: 7, notes: "Gate code 4411", updatedAt: "2026-07-08T19:00:00.000Z" };
         },
       },
@@ -1075,5 +1076,80 @@ describe("<LeadKnockSheet /> - proximity chip", () => {
       await act(() => new Promise(r => setTimeout(r, 30)));
       expect(screen.queryByTestId("knock-proximity")).not.toBeInTheDocument();
     } finally { clearGeolocation(); }
+  });
+});
+
+describe("<LeadKnockSheet /> - details: contact, quick links, photos", () => {
+  it("details level carries the contact section, quick links, and the photo strip", async () => {
+    renderSheet();
+    await openDetails();
+    await screen.findByTestId("knock-contact-section");
+    expect(screen.getByTestId("knock-quick-links")).toBeInTheDocument();
+    expect(screen.getByTestId("knock-photos")).toBeInTheDocument();
+  });
+
+  it("quick links deep-link THIS address and open in a new tab", async () => {
+    renderSheet();
+    await openDetails();
+    const sv = screen.getByTestId("quick-link-streetview");
+    expect(sv).toHaveAttribute("href", expect.stringContaining("map_action=pano"));
+    expect(sv).toHaveAttribute("href", expect.stringContaining("34.9,-79.9"));
+    expect(sv).toHaveAttribute("target", "_blank");
+    expect(sv).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(screen.getByTestId("quick-link-zillow")).toHaveAttribute(
+      "href", expect.stringContaining(encodeURIComponent("148 Maple St")));
+    expect(screen.getByTestId("quick-link-fcc")).toHaveAttribute(
+      "href", expect.stringContaining("broadbandmap.fcc.gov"));
+  });
+
+  it("street view hides without coordinates - never a dead link", async () => {
+    renderSheet({ lead: baseLead({ lat: null, lng: null }) });
+    await openDetails();
+    expect(screen.queryByTestId("quick-link-streetview")).not.toBeInTheDocument();
+    expect(screen.getByTestId("quick-link-zillow")).toBeInTheDocument();
+  });
+
+  it("contact: Add → editor → save PATCHes name+email and never offers a phone field", async () => {
+    const calls: Array<{ url: string; body: any }> = [];
+    // @ts-expect-error test stub
+    global.fetch = vi.fn(async (url: any, init: any) => {
+      const u = String(url);
+      calls.push({ url: u, body: init?.body ? JSON.parse(init.body) : null });
+      if (u.includes("/photos")) return new Response(JSON.stringify([]), { status: 200 });
+      if (u.includes("/contact")) {
+        return new Response(JSON.stringify({ id: 7, contactName: "Dana Reyes", contactEmail: "dana@x.com" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: 7, notes: "", updatedAt: "2026-07-08T19:00:00.000Z" }), { status: 200 });
+    });
+    renderSheet();
+    await openDetails();
+    await userEvent.click(await screen.findByTestId("contact-add"));
+    // No phone input anywhere in the editor - numbers live in Calling.
+    expect(screen.getByTestId("contact-editor").querySelector('input[type="tel"]')).toBeNull();
+    expect(screen.getByTestId("contact-editor")).toHaveTextContent(/Calling/);
+    await userEvent.type(screen.getByTestId("contact-name-input"), "Dana Reyes");
+    await userEvent.type(screen.getByTestId("contact-email-input"), "dana@x.com");
+    await userEvent.click(screen.getByTestId("contact-save"));
+    await waitFor(() => {
+      const patch = calls.find(c => c.url.includes("/api/leads/7/contact"));
+      expect(patch).toBeTruthy();
+      expect(patch!.body).toEqual({ contactName: "Dana Reyes", contactEmail: "dana@x.com" });
+    });
+  });
+
+  it("a captured contact name wins the header's Ask-for line over the traced owner", async () => {
+    const qc = makeQueryClient();
+    qc.setQueryData(["/api/leads/7"], {
+      id: 7, notes: "", updatedAt: "2026-07-08T19:00:00.000Z",
+      ownerName: "TRACED OWNER", contactName: "Dana Reyes",
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <LeadKnockSheet lead={baseLead() as any} onKnock={vi.fn()} onSaveNote={vi.fn().mockResolvedValue({ status: "saved", updatedAt: "x" })} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    const who = await screen.findByTestId("knock-owner-name");
+    expect(who).toHaveTextContent(/Dana Reyes/);
+    expect(who).not.toHaveTextContent(/TRACED OWNER/);
   });
 });
