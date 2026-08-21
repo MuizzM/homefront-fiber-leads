@@ -179,7 +179,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const [snap, setSnap] = useState<SheetSnap>("quick"); // QUICK is the default open state
   const [note, setNote] = useState("");                // composer DRAFT — clears once committed
   const [noteOpen, setNoteOpen] = useState(false);     // collapsed "+ Add note" chip → textarea on focus
-  const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued" | "conflict">("idle");
+  const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued" | "conflict" | "rejected">("idle");
   const [lastCommittedNote, setLastCommittedNote] = useState<string | null>(null); // pinned "latest note"
   const [flashKey, setFlashKey] = useState<KnockOutcome | null>(null); // brief tap-confirm flash
   const [copiedAddr, setCopiedAddr] = useState(false);                 // copy-glyph → check feedback
@@ -602,7 +602,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     void onSaveNote(id, text, noteBaseRef.current).then(r => {
       if (r.status === "saved") { noteBaseRef.current = r.updatedAt; finish("saved"); return; }
       if (r.status === "queued") { finish("queued"); return; }
-      if (r.status === "rejected") { setNoteState("conflict"); return; }
+      // DATA-LOSS FIX: a rejected save (400/403/404) must release the in-flight
+      // lock, or committingRef stays true and every later note commit for the
+      // life of this sheet is silently swallowed. Keep the draft (nothing
+      // persisted) and show an honest, retryable state - "conflict" copy would
+      // wrongly claim a newer note exists.
+      if (r.status === "rejected") { committingRef.current = false; setNoteState("rejected"); return; }
       // Conflict: another device wrote since we loaded — merge and re-commit
       // once against the fresh version, never silently overwrite.
       const merged = mergeNotes(r.status === "conflict" ? r.serverNotes : "", text);
@@ -620,7 +625,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const handleNoteChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value;
     setNote(v);
-    if (noteState === "saved") setNoteState("idle"); // fresh draft — stale "Saved" off
+    if (noteState === "saved" || noteState === "rejected") setNoteState("idle"); // fresh draft — stale chip off
     const id = renderedLead?.id;
     liveNoteRef.current = id && v.trim() ? { leadId: id, value: v } : null;
   };
@@ -741,8 +746,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         </span>
         {noteState !== "idle" && (
           <span data-testid="note-save-state" data-state={noteState} className="text-2xs font-medium"
-            style={{ color: noteState === "saved" ? "#34d399" : noteState === "conflict" ? "#f59e0b" : MUTED }}>
-            {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved - newer note exists" : "Saved to history"}
+            style={{ color: noteState === "saved" ? "#34d399" : (noteState === "conflict" || noteState === "rejected") ? "#f59e0b" : MUTED }}>
+            {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved - newer note exists" : noteState === "rejected" ? "Not saved - tap Add to retry" : "Saved to history"}
           </span>
         )}
       </div>
@@ -770,7 +775,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             onChange={handleNoteChange}
             onBlur={() => { commitNote(note); setNoteOpen(false); }}
             rows={2}
-            className="w-full min-h-[60px] text-[15px] leading-snug bg-white/[0.05] border border-white/[0.08] rounded-xl pl-3.5 pr-16 py-2.5 text-white placeholder:text-white/25 resize-none focus:outline-none focus:border-primary/60"
+            /* 16px, not 15: iOS Safari auto-zooms the whole viewport when a
+               rep focuses any sub-16px input (we correctly do NOT block zoom),
+               yanking the door sheet around mid-note. 16px reads identically
+               and kills the zoom. */
+            className="w-full min-h-[60px] text-[16px] leading-snug bg-white/[0.05] border border-white/[0.08] rounded-xl pl-3.5 pr-16 py-2.5 text-white placeholder:text-white/25 resize-none focus:outline-none focus:border-primary/60"
           />
           {note.trim() && (
             <button

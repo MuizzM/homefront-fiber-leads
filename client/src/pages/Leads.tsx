@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -18,6 +18,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter,
+  AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
+import {
   Sheet, SheetContent, SheetHeader, SheetTitle
 } from "@/components/ui/sheet";
 import {
@@ -32,6 +36,7 @@ import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
 import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS, type PinDisplayState } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
+import { consumeLeadsFilterHandoff } from "@/lib/leadsFilterHandoff";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -150,42 +155,43 @@ function LeadForm({ initial, onSave, onCancel, saving }: {
     notes: initial?.notes ?? "",
   });
 
-  const set = (k: keyof InsertLead, v: string) => setForm(f => ({ ...f, [k]: v }));
+  const set = (k: keyof InsertLead, v: string) => { setForm(f => ({ ...f, [k]: v })); setFormError(null); };
+  const [formError, setFormError] = useState<string | null>(null);
 
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2">
-          <Label className="text-xs text-muted-foreground">Street Address *</Label>
-          <Input value={form.address} onChange={e => set("address", e.target.value)}
+          <Label htmlFor="form-address" className="text-xs text-muted-foreground">Street address *</Label>
+          <Input id="form-address" value={form.address} onChange={e => set("address", e.target.value)}
             className="bg-secondary border-input mt-1" placeholder="123 Main St"
             data-testid="form-address" />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">City *</Label>
-          <Input value={form.city} onChange={e => set("city", e.target.value)}
+          <Label htmlFor="form-city" className="text-xs text-muted-foreground">City *</Label>
+          <Input id="form-city" value={form.city} onChange={e => set("city", e.target.value)}
             className="bg-secondary border-input mt-1" placeholder="Rockwell"
             data-testid="form-city" />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">ZIP *</Label>
-          <Input value={form.zip} onChange={e => set("zip", e.target.value)}
+          <Label htmlFor="form-zip" className="text-xs text-muted-foreground">ZIP *</Label>
+          <Input id="form-zip" value={form.zip} onChange={e => set("zip", e.target.value)}
             className="bg-secondary border-input mt-1" placeholder="28138"
             data-testid="form-zip" />
         </div>
       </div>
       <div>
         <div>
-          <Label className="text-xs text-muted-foreground">Contact Name</Label>
-          <Input value={form.contactName ?? ""} onChange={e => set("contactName", e.target.value)}
+          <Label htmlFor="form-contact-name" className="text-xs text-muted-foreground">Contact name</Label>
+          <Input id="form-contact-name" value={form.contactName ?? ""} onChange={e => set("contactName", e.target.value)}
             className="bg-secondary border-input mt-1" placeholder="John Smith"
             data-testid="form-contact-name" />
         </div>
       </div>
       <div>
-        <Label className="text-xs text-muted-foreground">Lead Status</Label>
+        <Label htmlFor="form-lead-status" className="text-xs text-muted-foreground">Lead status</Label>
         <Select value={form.leadStatus} onValueChange={v => set("leadStatus", v)}>
-          <SelectTrigger className="bg-secondary border-input mt-1" data-testid="form-lead-status">
+          <SelectTrigger id="form-lead-status" className="bg-secondary border-input mt-1" data-testid="form-lead-status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="bg-card border-border">
@@ -196,19 +202,27 @@ function LeadForm({ initial, onSave, onCancel, saving }: {
         </Select>
       </div>
       <div>
-        <Label className="text-xs text-muted-foreground">Notes</Label>
-        <Textarea value={form.notes ?? ""} onChange={e => set("notes", e.target.value)}
+        <Label htmlFor="form-notes" className="text-xs text-muted-foreground">Notes</Label>
+        <Textarea id="form-notes" value={form.notes ?? ""} onChange={e => set("notes", e.target.value)}
           className="bg-secondary border-input mt-1 text-sm" rows={3}
           placeholder="Knocked 7/6, owner interested. Call back Friday."
           data-testid="form-notes" />
       </div>
+      {/* Validate on tap instead of a silently-disabled button: a rep who missed
+          a field gets a reason next to the action, not a dead button. */}
+      {formError && <p className="text-2xs font-medium text-destructive" data-testid="form-error">{formError}</p>}
       <div className="flex gap-2 pt-1">
         <Button variant="outline" onClick={onCancel} className="border-border flex-1">Cancel</Button>
         {/* While the POST is in flight the button says so and stays disabled —
             the form (and everything typed into it) survives a failed save. */}
-        <Button onClick={() => onSave(form)} disabled={saving || !form.address || !form.city || !form.zip}
+        <Button onClick={() => {
+          if (!form.address?.trim() || !form.city?.trim() || !form.zip?.trim()) {
+            setFormError("Street address, city and ZIP are required."); return;
+          }
+          setFormError(null); onSave(form);
+        }} disabled={saving}
           className="bg-primary hover:bg-primary/90 text-primary-foreground flex-1" data-testid="btn-save-lead-form">
-          {saving ? (<><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Saving lead…</>) : "Save Lead"}
+          {saving ? (<><RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />Saving lead…</>) : "Save lead"}
         </Button>
       </div>
     </div>
@@ -913,7 +927,7 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
           <RefreshCw className="h-3.5 w-3.5 animate-spin" />Saving…
         </div>
       ) : (
-        <div className="flex shrink-0 items-center">
+        <div className="flex shrink-0 items-center gap-1.5">
           <button onClick={() => onMap(lead)} data-testid={`lead-map-${lead.id}`} title="Show on field map" aria-label={`Show ${lead.address} on field map`} className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><MapPin className="h-4 w-4" aria-hidden="true" /></button>
           {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label={`Open Calling for ${lead.address}`} className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Phone className="h-4 w-4" aria-hidden="true" /></Link>}
           <a href={directions} target="_blank" rel="noreferrer" title="Route" aria-label={`Route to ${lead.address}`} className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Navigation className="h-4 w-4" aria-hidden="true" /></a>
@@ -1231,7 +1245,33 @@ export default function Leads() {
   // Filtering is now server-side; leads array is already filtered
   const filtered = leads;
   // Reset page when any filter/search changes
+  // After a page swap the 100 new rows render in place but scroll stays pinned
+  // at the old bottom, so the rep lands on row 100 of the next page. Bring the
+  // pipeline top back into view. Keyed on page only (a filter change resets to
+  // page 0 and already re-anchors), first render skipped.
+  const pipelineRef = useRef<HTMLElement>(null);
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) { didMountRef.current = true; return; }
+    pipelineRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [page]);
+
   const handleStatusChange = (s: string) => { setFilterStatus(s); setPage(0); };
+  // Filter handoff from the Dashboard glance tiles (see lib/leadsFilterHandoff).
+  // This page stays MOUNTED under the keep-alive stages, so a mount-only read
+  // would miss a tile tapped while Leads is already alive - also re-read on
+  // hashchange (a navigation event, not a per-frame scroll listener, so the
+  // no-scroll-listener rule holds).
+  useEffect(() => {
+    const applyHandoff = () => {
+      if (!window.location.hash.startsWith("#/leads")) return;
+      const status = consumeLeadsFilterHandoff();
+      if (status && (status === "all" || status in STATUS_LABEL)) { setFilterStatus(status); setPage(0); }
+    };
+    applyHandoff();
+    window.addEventListener("hashchange", applyHandoff);
+    return () => window.removeEventListener("hashchange", applyHandoff);
+  }, []);
   const handleSearchChange = (v: string) => { setSearch(v); setPage(0); };
   const searching = search !== debouncedSearch; // typing, query not yet fired
   const handleStateChange = (s: string) => { setFilterState(s); setFilterCity("all"); setPage(0); };
@@ -1297,11 +1337,23 @@ export default function Leads() {
       </div>
 
       {isRep && (
-        <dl className="grid grid-cols-3 divide-x divide-border rounded-xl border border-border bg-card md:hidden" data-testid="rep-leads-summary">
-          <div className="px-3 py-3"><dt className="text-2xs font-medium text-muted-foreground">Assigned</dt><dd className="mt-1 text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</dd></div>
-          <div className="px-3 py-3"><dt className="text-2xs font-medium text-muted-foreground">Follow-ups</dt><dd className="mt-1 text-xl font-semibold tabular-nums text-warning">{bs.follow_up ?? 0}</dd></div>
-          <div className="px-3 py-3"><dt className="text-2xs font-medium text-muted-foreground">Interested</dt><dd className="mt-1 text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</dd></div>
-        </dl>
+        // Each cell filters the list: a rep whose day is "work my follow-ups"
+        // taps the number and lands on exactly those doors, instead of reading a
+        // dead stat and then hunting the chip rail. min-h-tap on every cell.
+        <div className="grid grid-cols-3 divide-x divide-border rounded-xl border border-border bg-card md:hidden" data-testid="rep-leads-summary">
+          <button type="button" onClick={() => handleStatusChange("all")} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "all" ? "bg-secondary/50" : ""}`}>
+            <span className="block text-2xs font-medium text-muted-foreground">Assigned</span>
+            <span className="mt-1 block text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</span>
+          </button>
+          <button type="button" onClick={() => handleStatusChange("follow_up")} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "follow_up" ? "bg-secondary/50" : ""}`}>
+            <span className="block text-2xs font-medium text-muted-foreground">Follow-ups</span>
+            <span className="mt-1 block text-xl font-semibold tabular-nums text-warning">{bs.follow_up ?? 0}</span>
+          </button>
+          <button type="button" onClick={() => handleStatusChange("interested")} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "interested" ? "bg-secondary/50" : ""}`}>
+            <span className="block text-2xs font-medium text-muted-foreground">Interested</span>
+            <span className="mt-1 block text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</span>
+          </button>
+        </div>
       )}
       {/* A grid, not a hidden-scrollbar rail: with the scrollbar suppressed
           there was no affordance that Unassigned and Stale — the two cards
@@ -1338,7 +1390,7 @@ export default function Leads() {
         </section>
       )}
 
-      <section className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
+      <section ref={pipelineRef} className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
         <div className="px-4 py-3.5 border-b border-border flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold">Lead pipeline</h2>
@@ -1450,21 +1502,27 @@ export default function Leads() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={deleteId !== null} onOpenChange={v => !v && setDeleteId(null)}>
-        <DialogContent className="bg-card border-border text-foreground max-w-sm">
-          <DialogHeader><DialogTitle className="text-base">Delete Lead?</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">This will permanently remove the lead and all knock history.</p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteId(null)} className="border-border">Cancel</Button>
-            <Button onClick={() => deleteId && deleteMutation.mutate(deleteId)}
+      {/* AlertDialog, not Dialog: a permanent cascade-delete (lead + all knock
+          history) needs role="alertdialog" and no scrim/Escape auto-dismiss
+          onto the wrong control - the primitive built for irreversible actions. */}
+      <AlertDialog open={deleteId !== null} onOpenChange={v => !v && setDeleteId(null)}>
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base">Delete lead?</AlertDialogTitle>
+            <AlertDialogDescription>This will permanently remove the lead and all knock history.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteId && deleteMutation.mutate(deleteId)}
               disabled={deleteMutation.isPending}
-              className="bg-destructive hover:bg-destructive/90 text-white"
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
               data-testid="btn-confirm-delete">
               Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={!!knockLead} onOpenChange={v => !v && setKnockLead(null)}>
         {knockLead && <KnockLogger lead={knockLead} team={team} onClose={() => setKnockLead(null)} />}

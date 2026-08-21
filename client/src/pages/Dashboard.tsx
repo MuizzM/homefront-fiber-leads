@@ -7,9 +7,12 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
 import { useTabActive } from "@/lib/tabActivity";
-import { X, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
 import { KpiTile } from "@/components/KpiTile";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { leadsFilterHandoff } from "@/lib/leadsFilterHandoff";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
 // Only the fields the tiles below actually render — the endpoint stopped
@@ -37,6 +40,18 @@ interface ActivityEntry {
 // Section eyebrow — one consistent label treatment across every zone.
 const EYEBROW = "text-[11px] font-semibold uppercase tracking-wide text-muted-foreground";
 
+// One inline error+retry row, so a failed section says "load failed, here's a
+// real button" instead of masquerading as an empty state — with a 44px Retry
+// (the bare text-2xs links it replaces were well under the tap floor).
+function RetryRow({ message, onRetry, testId }: { message: string; onRetry: () => void; testId?: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3" data-testid={testId}>
+      <span className="text-[13px] text-muted-foreground">{message}</span>
+      <Button variant="outline" size="sm" className="shrink-0" onClick={onRetry}>Retry</Button>
+    </div>
+  );
+}
+
 // Map a KPI's icon tone → a matching tint for its icon chip, so the metric
 // bar reads as a coherent set rather than six loose colored glyphs.
 
@@ -58,7 +73,7 @@ function MetricStrip({ items, loading }: {
     >
       {items.map((m, i) => {
         return (
-          <div key={i} className="bg-card px-4 py-3.5 transition-colors hover:bg-secondary/40">
+          <div key={i} className="bg-card px-4 py-3.5">
             <div className="flex items-center gap-2">
               
               {/* Wrap, don't clip: at exactly 1280px (six columns, ~100px of
@@ -117,44 +132,50 @@ interface FirstSeenLive {
 }
 interface RepActivity {
   rep: { id: number; name: string; role: string };
-  events: { id: number; outcome: string; at: string; address: string | null }[];
+  events: { id: number; outcome: string; at: string; leadId: number | null; address: string | null; lat: number | null; lng: number | null }[];
 }
 
 
 // Tap-a-rep activity card: recent dispositions with the door + timestamp.
-function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => void }) {
-  const { data } = useQuery<RepActivity>({
+// Bottom sheet of a rep's recent doors. Radix-based Sheet (focus trap, Escape,
+// scroll lock, safe-area padding, the keep-alive portal guard) instead of a
+// hand-rolled fixed-inset overlay.
+function RepActivitySheet({ repId, onClose }: { repId: number | null; onClose: () => void }) {
+  const [, navigate] = useLocation();
+  const { data, isError, refetch, isFetching } = useQuery<RepActivity>({
     queryKey: [`/api/team/${repId}/activity`],
     queryFn: () => apiRequest("GET", `/api/team/${repId}/activity`).then(r => r.json()),
+    enabled: repId != null,
     staleTime: 30_000,
   });
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center" role="dialog" aria-label="Rep activity">
-      <div className="absolute inset-0 bg-overlay" onClick={onClose} />
-      <div className="relative flex max-h-[75dvh] w-full flex-col rounded-t-[20px] border border-border bg-card md:max-w-md md:rounded-2xl"
-        data-testid="rep-activity-card">
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-5 pb-3 pt-4">
-          <div>
-            <div className="text-[15px] font-bold text-foreground">{data?.rep.name ?? "…"}</div>
-            <div className={EYEBROW}>Recent activity</div>
-          </div>
-          <button onClick={onClose} aria-label="Close" className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        <div className="overflow-y-auto overscroll-contain px-5 py-3 space-y-2.5" style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}>
-          {!data ? (
+    <Sheet open={repId != null} onOpenChange={open => !open && onClose()}>
+      <SheetContent side="bottom" className="max-h-[75dvh] p-0" data-testid="rep-activity-card">
+        <SheetHeader className="border-b border-border px-5 pb-3 pt-4 text-left">
+          <SheetTitle className="text-[15px] font-bold text-foreground">{data?.rep.name ?? "Recent activity"}</SheetTitle>
+          <SheetDescription className={EYEBROW}>Recent activity</SheetDescription>
+        </SheetHeader>
+        <div className="overflow-y-auto overscroll-contain px-5 py-3 space-y-1" style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}>
+          {isError ? (
+            <div className="flex items-center justify-between gap-3 py-4">
+              <span className="text-[13px] text-muted-foreground">Couldn't load activity.</span>
+              <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>Retry</Button>
+            </div>
+          ) : !data ? (
             <>
-              <Skeleton className="h-5 w-full" />
-              <Skeleton className="h-5 w-2/3" />
+              <Skeleton className="h-11 w-full" />
+              <Skeleton className="h-11 w-2/3" />
             </>
           ) : data.events.length === 0 ? (
             <div className="py-6 text-center text-sm italic text-muted-foreground">No activity yet - first door's the hardest.</div>
           ) : (
             data.events.map(e => {
               const meta = isKnockOutcome(e.outcome) ? OUTCOME_META[e.outcome] : null;
-              return (
-                <div key={e.id} className="flex min-w-0 gap-2.5">
+              // Each door is tappable: a manager checking a rep's activity jumps
+              // straight to that door on the map. Falls back to a static row when
+              // the event carries no lead id.
+              const inner = (
+                <>
                   {/* Fallback dot reads the muted-foreground token (a plain
                       slate hex ignored the light theme). */}
                   <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full" style={{ background: meta?.color ?? "hsl(var(--muted-foreground))" }} />
@@ -167,13 +188,22 @@ function RepActivityCard({ repId, onClose }: { repId: number; onClose: () => voi
                     </div>
                     {e.address && <div className="mt-0.5 truncate text-[12px] text-muted-foreground">{e.address}</div>}
                   </div>
-                </div>
+                </>
+              );
+              return e.leadId != null ? (
+                <button key={e.id} type="button"
+                  onClick={() => { onClose(); openLeadOnFieldMap({ leadId: e.leadId!, lat: e.lat ?? undefined, lng: e.lng ?? undefined }, navigate); }}
+                  className="flex min-h-tap w-full min-w-0 items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-secondary/50 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                  {inner}
+                </button>
+              ) : (
+                <div key={e.id} className="flex min-w-0 items-start gap-2.5 px-2 py-2">{inner}</div>
               );
             })
           )}
         </div>
-      </div>
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -202,7 +232,7 @@ export default function Dashboard() {
   // exactly that day - the unparameterized call downloaded the tenant's entire
   // clock history to show one day's rows, and grew forever.
   const sessionsDate = new Date().toISOString().slice(0, 10);
-  const { data: clockSessions = [], isLoading: clockLoading } = useQuery<any[]>({
+  const { data: clockSessions = [], isLoading: clockLoading, isError: clockError, refetch: refetchClock } = useQuery<any[]>({
     queryKey: ["/api/clock/sessions", sessionsDate],
     queryFn: () => apiRequest("GET", `/api/clock/sessions?date=${sessionsDate}`).then(r => r.json()),
     enabled: isManager,
@@ -224,7 +254,7 @@ export default function Dashboard() {
     enabled: isManager,
     staleTime: 60_000,
   });
-  const { data: board = [], isLoading: boardLoading } = useQuery<LeaderRow[]>({
+  const { data: board = [], isLoading: boardLoading, isError: boardError, refetch: refetchBoard } = useQuery<LeaderRow[]>({
     queryKey: ["/api/leaderboard"],
     queryFn: () => apiRequest("GET", "/api/leaderboard").then(r => r.json()),
     enabled: canSeeTeam,
@@ -278,16 +308,28 @@ export default function Dashboard() {
         <h2 className={EYEBROW}>{isRep ? "Your day" : "Today at a glance"}</h2>
         {/* A grid at every width - a glance row must show every number at
             once; a rail that clips "Sold" off the right edge hides the one
-            figure the day is scored by. */}
+            figure the day is scored by.
+
+            The tiles LINK: a rep seeing "Follow-ups due: 3" gets a tap path to
+            those follow-ups instead of a dead stat beside the nav bar.
+
+            Reps do not get "Unassigned": their lead scope is assigned_rep_id IN
+            (self), which can never match NULL, so the tile read a permanent 0
+            about manager inventory. They get "Doors today" (their own knocks,
+            already fetched rep-scoped) instead. */}
         <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5"
           data-testid="field-tiles">
-          <KpiTile label="Unassigned" value={stats?.leads.unassigned ?? " - "} loading={statsLoading && !stats} tone="neutral" />
-          <KpiTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="primary" />
+          {/* Clean "#/leads" href (a query in the hash 404s this router on hard
+              reload); the target status rides sessionStorage, applied by Leads. */}
+          {isRep
+            ? <KpiTile label="Doors today" value={stats?.knocks.today ?? " - "} loading={statsLoading && !stats} tone="neutral" />
+            : <KpiTile label="Unassigned" value={stats?.leads.unassigned ?? " - "} loading={statsLoading && !stats} tone="neutral" href="#/leads" onClick={() => leadsFilterHandoff("all")} />}
+          <KpiTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="primary" href="#/leads" onClick={() => leadsFilterHandoff("all")} />
           <KpiTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="info" />
-          <KpiTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="success" />
+          <KpiTile label="Sold" value={statsFailed ? " - " : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="success" href="#/leads" onClick={() => leadsFilterHandoff("sold")} />
           {/* Spans the base grid's last row so a five-tile glance doesn't strand
               an orphan half-cell on phones; one cell again from md up. */}
-          <KpiTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="warning" className="col-span-2 md:col-span-1" />
+          <KpiTile label="Follow-ups due" value={statsFailed ? " - " : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="warning" href="#/leads" onClick={() => leadsFilterHandoff("follow_up")} className="col-span-2 md:col-span-1" />
         </div>
       </section>
 
@@ -313,12 +355,16 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+          ) : boardError ? (
+            // A failed fetch must not read as an idle team: say it failed, and
+            // give a real 44px Retry rather than a false "No team activity".
+            <RetryRow message="Couldn't load team activity." onRetry={() => refetchBoard()} />
           ) : board.length === 0 ? (
-            <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-5">
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-4">
               <span className="text-[13px] italic text-muted-foreground">No team activity yet today.</span>
-              <a href="#/map" className="shrink-0 rounded text-[12px] font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                Open field map
-              </a>
+              <Button asChild variant="ghost" size="sm" className="shrink-0 text-primary">
+                <a href="#/map">Open field map</a>
+              </Button>
             </div>
           ) : (
           <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
@@ -359,7 +405,7 @@ export default function Dashboard() {
           )}
         </section>
       )}
-      {openRepId != null && <RepActivityCard repId={openRepId} onClose={() => setOpenRepId(null)} />}
+      <RepActivitySheet repId={openRepId} onClose={() => setOpenRepId(null)} />
 
       {/* ── Fiber changes — every row carries explicit confirmation confidence ── */}
       {isManager && (
@@ -371,12 +417,7 @@ export default function Dashboard() {
             )}
           </div>
           {newFiberError ? (
-            <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3" data-testid="new-fiber-error">
-              <span className="text-2xs text-muted-foreground">Couldn't load fiber changes.</span>
-              <button type="button" onClick={() => refetchNewFiber()} className="text-2xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
-                Retry
-              </button>
-            </div>
+            <RetryRow message="Couldn't load fiber changes." onRetry={() => refetchNewFiber()} testId="new-fiber-error" />
           ) : (newFiberLoading && !newFiber) || !newFiber ? (
             <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card" data-testid="new-fiber-skeleton">
               {[0, 1, 2].map(i => (
@@ -441,22 +482,27 @@ export default function Dashboard() {
       <section className="space-y-2.5">
         <h2 className={EYEBROW}>{isManager ? "Performance overview" : "Overview"}</h2>
         {statsError ? (
-          <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3" data-testid="stats-error">
-            <span className="text-2xs text-muted-foreground">Couldn't load stats.</span>
-            <button type="button" onClick={() => refetchStats()} className="text-2xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
-              Retry
-            </button>
-          </div>
+          <RetryRow message="Couldn't load stats." onRetry={() => refetchStats()} testId="stats-error" />
         ) : (
         <MetricStrip
           loading={statsLoading}
-          items={[
+          // Role-shaped: reps used to see a permanently dead "Field hours: -"
+          // cell (its clock query is manager-only) plus manager inventory
+          // (Kinetic addresses, unassigned counts) as noise on their main
+          // screen. A rep's overview is the four numbers their week is scored
+          // by; the strip's grid collapses 2-to-3-to-6 either way.
+          items={isRep ? [
+            { label: "Knocks today", value: stats?.knocks.today ?? " - ", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
+            { label: "Week sales", value: stats?.knocks.weekSales ?? " - ", sub: "last 7 days" },
+            { label: "Pending payout", value: stats ? `$${Math.round(stats.revenue.pendingPayout).toLocaleString("en-US")}` : " - ", sub: `$${Math.round(stats?.revenue.totalPaid ?? 0).toLocaleString("en-US")} paid` },
+            { label: "New fiber leads", value: stats?.leads.newFiber ?? " - ", sub: "fresh doors to work" },
+          ] : [
             { label: "New fiber leads", value: stats?.leads.newFiber ?? " - ", sub: `${(stats?.leads.unassigned ?? 0).toLocaleString("en-US")} unassigned` },
             { label: "Knocks today", value: stats?.knocks.today ?? " - ", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
             { label: "Week sales", value: stats?.knocks.weekSales ?? " - ", sub: "last 7 days" },
             { label: "Pending payout", value: stats ? `$${Math.round(stats.revenue.pendingPayout).toLocaleString("en-US")}` : " - ", sub: `$${Math.round(stats?.revenue.totalPaid ?? 0).toLocaleString("en-US")} paid` },
             { label: "Kinetic addresses", value: stats?.kinetic.total ?? " - ", sub: `${stats?.kinetic.live ?? 0} live` },
-            { label: "Field hours", value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : " - ", sub: "clocked today" },
+            { label: "Field hours", value: `${Math.floor(todayHours / 60)}h ${todayHours % 60}m`, sub: "clocked today" },
           ]}
         />
         )}
@@ -532,7 +578,7 @@ export default function Dashboard() {
               ) : (
                 <div className="divide-y divide-border">
                   {activity.map(entry => (
-                    <div key={entry.id} className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-secondary/50" data-testid={`activity-entry-${entry.id}`}>
+                    <div key={entry.id} className="flex items-start gap-3 px-4 py-3" data-testid={`activity-entry-${entry.id}`}>
                       
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-medium text-foreground">{entry.userName}</p>
@@ -575,15 +621,16 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+              ) : clockError ? (
+                <div className="px-4 pb-4"><RetryRow message="Couldn't load field activity." onRetry={() => refetchClock()} /></div>
               ) : clockSessions.filter((s: any) => s.date === today).length === 0 ? (
                 <div className="flex items-center gap-2 px-4 pb-4 text-muted-foreground">
-                  
                   <p className="text-sm">No reps clocked in today</p>
                 </div>
               ) : (
                 <div className="divide-y divide-border">
                   {clockSessions.filter((s: any) => s.date === today).map((s: any) => (
-                    <div key={s.id} className="flex items-center justify-between px-4 py-3 transition-colors hover:bg-secondary/40" data-testid={`clock-session-${s.id}`}>
+                    <div key={s.id} className="flex items-center justify-between px-4 py-3" data-testid={`clock-session-${s.id}`}>
                       <div>
                         <p className="text-sm font-medium text-foreground">{s.repName}</p>
                         <p className="text-xs text-muted-foreground">

@@ -113,7 +113,7 @@ export function LeadContacts({ ownerName, address, phones = [], nowMs, className
                   data-testid={`lead-phone-${v.number}`}
                   data-dnc="false"
                   className={cn(
-                    "flex items-center gap-2.5 rounded-lg border border-success/15 bg-success/[0.08] px-2.5 py-2 transition-transform active:scale-[.99] hover:border-success/45",
+                    "flex min-h-tap items-center gap-2.5 rounded-lg border border-success/15 bg-success/[0.08] px-2.5 py-2 transition-transform active:scale-[.99] hover:border-success/45",
                     FOCUS,
                   )}
                 >

@@ -178,21 +178,20 @@ export default function Login() {
                 <label htmlFor="login-email" className="block text-sm font-medium text-foreground">
                   Email
                 </label>
-                <div className="relative">
-                  
-                  <input
-                    id="login-email"
-                    type="email"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    placeholder="you@email.com"
-                    required
-                    autoComplete="email"
-                    autoFocus
-                    data-testid="input-email"
-                    className={`h-11 pl-9 pr-3 text-sm ${inputClasses}`}
-                  />
-                </div>
+                {/* px-3, not pl-9: the leading icon this padding reserved space
+                    for was removed, leaving the placeholder pushed off-center. */}
+                <input
+                  id="login-email"
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@email.com"
+                  required
+                  autoComplete="email"
+                  autoFocus
+                  data-testid="input-email"
+                  className={`h-11 px-3 text-sm ${inputClasses}`}
+                />
               </div>
 
               {formError && (
@@ -264,9 +263,9 @@ export default function Login() {
               <button
                 type="button"
                 onClick={() => { setStep("email"); setCode(""); setResendIn(0); setFormError(null); }}
-                className="inline-flex w-[calc(100%+1rem)] items-center justify-center gap-1.5 min-h-11 px-2 -mx-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                className="inline-flex w-full items-center justify-center gap-1.5 min-h-11 px-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
-                 Use a different email
+                Use a different email
               </button>
             </form>
           )}
@@ -298,7 +297,10 @@ function CodeBoxes({ value, onChange, onComplete, disabled }: {
   const chars = Array.from({ length: 6 }, (_, i) => value[i] ?? "");
   const focusBox = (i: number) => refs.current[Math.max(0, Math.min(5, i))]?.focus();
 
-  useEffect(() => { focusBox(0); }, []); // land focus on the first box
+  // Land focus on box 0 on mount AND whenever the code is cleared - after a
+  // wrong code the parent resets value to "", and without this the (blurred,
+  // because disabled during verify) focus never returns, stranding the rep.
+  useEffect(() => { if (!value) focusBox(0); }, [value]);
 
   function setAt(i: number, digit: string) {
     const arr = Array.from({ length: 6 }, (_, k) => value[k] ?? "");
@@ -306,6 +308,20 @@ function CodeBoxes({ value, onChange, onComplete, disabled }: {
     const next = arr.join("").replace(/\s/g, "");
     onChange(next);
     if (digit && i < 5) focusBox(i + 1);
+    if (next.replace(/\D/g, "").length === 6) onComplete(next.slice(0, 6));
+  }
+  // One box's onChange. A single digit types normally (onFocus selects the box,
+  // so typing over an existing digit still arrives as one char). Two-or-more
+  // digits means the OS one-time-code autofill dumped the whole code into one
+  // box - spread it across the boxes instead of keeping only the last digit.
+  function onInput(i: number, raw: string) {
+    const digits = raw.replace(/\D/g, "");
+    if (digits.length <= 1) { setAt(i, digits); return; }
+    const arr = Array.from({ length: 6 }, (_, k) => value[k] ?? "");
+    for (let k = 0; k < digits.length && i + k < 6; k++) arr[i + k] = digits[k];
+    const next = arr.join("");
+    onChange(next);
+    focusBox(Math.min(i + digits.length, 5));
     if (next.replace(/\D/g, "").length === 6) onComplete(next.slice(0, 6));
   }
   function onKey(i: number, e: React.KeyboardEvent<HTMLInputElement>) {
@@ -335,7 +351,7 @@ function CodeBoxes({ value, onChange, onComplete, disabled }: {
           maxLength={1}
           value={c}
           disabled={disabled}
-          onChange={e => setAt(i, e.target.value.replace(/\D/g, "").slice(-1))}
+          onChange={e => onInput(i, e.target.value)}
           onKeyDown={e => onKey(i, e)}
           onFocus={e => e.currentTarget.select()}
           aria-label={`Digit ${i + 1} of 6`}

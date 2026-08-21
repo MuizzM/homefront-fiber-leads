@@ -61,7 +61,7 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
       {failed > 0 ? null
         : !online ? null
           : <RefreshCw className={`h-4 w-4 shrink-0 animate-spin ${overlay ? "text-teal-400" : ""}`} />}
-      <span className="min-w-0 flex-1 truncate">
+      <span className="min-w-0 flex-1 line-clamp-2">
         {failed > 0
           ? needsAttentionText(failed, deadAddress, oldestDead?.reason ?? null)
           : !online

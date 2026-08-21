@@ -98,6 +98,7 @@ export default function MyCommission() {
 
 
   const [stmtId, setStmtId] = useState<number | null>(null);
+  const [showAllWeeks, setShowAllWeeks] = useState(false);
   const { data, isLoading, isError, refetch } = useQuery<WeekResponse>({
     queryKey: ["/api/commission/statements/me/current"],
     queryFn: () => apiRequest("GET", "/api/commission/statements/me/current").then(r => r.json()),
@@ -259,11 +260,11 @@ export default function MyCommission() {
             <span className="text-sm font-semibold tracking-tight text-foreground">Past weeks</span>
             {/* Count matches what's on screen — never a number larger than the list. */}
             <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
-              {pastHistory.length > 8 ? `last 8 of ${pastHistory.length}` : pastHistory.length}
+              {!showAllWeeks && pastHistory.length > 8 ? `last 8 of ${pastHistory.length}` : pastHistory.length}
             </span>
           </header>
           <div className="divide-y divide-border">
-            {pastHistory.slice(0, 8).map((s: any) => (
+            {(showAllWeeks ? pastHistory : pastHistory.slice(0, 8)).map((s: any) => (
               <div key={s.id} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`row-week-${s.id}`}>
                 <div className="min-w-0">
                   <div className="text-sm text-foreground truncate">{s.local_week_label}</div>
@@ -279,7 +280,7 @@ export default function MyCommission() {
                     onClick={() => setStmtId(Number(s.id))}
                     aria-label={`Open statement for ${s.local_week_label}`}
                     data-testid={`statement-${s.id}`}
-                    className="relative inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 active:scale-95 transition-all after:absolute after:-inset-2"
+                    className="tap-expand inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 active:scale-95 transition-all"
                   >
                     <Printer className="w-4 h-4" />
                   </button>
@@ -287,6 +288,16 @@ export default function MyCommission() {
               </div>
             ))}
           </div>
+          {pastHistory.length > 8 && (
+            <button
+              type="button"
+              onClick={() => setShowAllWeeks(v => !v)}
+              className="min-h-tap w-full border-t border-border px-4 text-[13px] font-semibold text-primary transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              data-testid="btn-toggle-all-weeks"
+            >
+              {showAllWeeks ? "Show fewer" : `Show all ${pastHistory.length} weeks`}
+            </button>
+          )}
         </section>
       )}
     </div>
@@ -786,7 +797,10 @@ function WeekView({ data }: { data: WeekResponse }) {
               {state.label}
             </span>
           </div>
-          <div className="mt-3 text-4xl font-semibold tracking-tight text-foreground tabular-nums" data-testid="text-week-commission">
+          {/* The one number the rep opens this page for. Gold-as-text, matching
+              the money headline on Incentives/Referrals/Mileage per the design
+              system - this is the page's single gold element. */}
+          <div className="mt-3 text-4xl font-semibold tracking-tight text-gold-text tabular-nums" data-testid="text-week-commission">
             {usd(finalCents)}
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
@@ -1046,10 +1060,9 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
       <button
         onClick={() => accept.mutate()}
         disabled={accept.isPending}
-        className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        className="w-full min-h-tap flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         data-testid="btn-accept-plan"
       >
-        
         {accept.isPending ? "Accepting…" : "I understand and accept this plan"}
       </button>
     </div>

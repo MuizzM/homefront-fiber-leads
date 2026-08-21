@@ -91,10 +91,13 @@ function readCardVariant(): CardVariant {
 }
 
 function VerifyBadge({ v }: { v?: string | null }) {
-  // Icon carries the tone (works on light + dark); the text stays tokenized.
+  // Tone tells the three states apart (they were all muted, so "needs review"
+  // and "unverified" read the same as "verified"). Semantic tokens per the
+  // design system: verified stays quiet, review is owed-work amber, unverified
+  // is a failure red.
   if (v === "verified") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">Verified</span>;
-  if (v === "needs_review") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">Needs review</span>;
-  if (v === "invalid") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">Unverified</span>;
+  if (v === "needs_review") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-warning">Needs review</span>;
+  if (v === "invalid") return <span className="inline-flex items-center gap-1 text-[11px] font-medium text-destructive">Unverified</span>;
   return null;
 }
 
@@ -280,7 +283,7 @@ function ProtectedCell({ className }: { className: string }) {
 
 // V1 "Ledger" — flat card, pills row, one bordered equal-width action row.
 function SummaryLedger({ lead, canOpenCalling, onLog }: SummaryProps) {
-  const cell = "flex h-10 items-center justify-center gap-1.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
+  const cell = "flex min-h-tap items-center justify-center gap-1.5 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
   return (
     <section className="rounded-xl border border-border bg-card p-4" data-testid="detail-summary" data-variant="1">
       <PillsRow lead={lead} />
@@ -311,7 +314,7 @@ function SummarySplit({ lead, canOpenCalling, onLog }: SummaryProps) {
   if (lead.maxDownloadMbps) stats.push({ label: "Speed", value: `${lead.maxDownloadMbps} Mbps` });
   else if (lead.speedTier) stats.push({ label: "Speed", value: lead.speedTier });
 
-  const btn = "flex h-10 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium transition-colors";
+  const btn = "flex min-h-tap items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium transition-colors";
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card" data-testid="detail-summary" data-variant="2">
       <div className="sm:flex sm:items-stretch">
@@ -350,7 +353,7 @@ function SummarySplit({ lead, canOpenCalling, onLog }: SummaryProps) {
 // band, compact actions bottom-right.
 function SummaryBanded({ lead, canOpenCalling, onLog }: SummaryProps) {
   const color = STATE_COLORS[pinDisplayState(lead)];
-  const btn = "flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-medium transition-colors";
+  const btn = "flex min-h-tap items-center justify-center gap-1.5 rounded-lg px-3 text-[13px] font-medium transition-colors";
   return (
     <section
       className="overflow-hidden rounded-xl border border-border bg-card"
@@ -456,7 +459,14 @@ function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
               className="h-20 w-20 rounded-lg border border-border object-cover" />
           </button>
         ))}
-        {!photosQ.isLoading && photos.length === 0 && (
+        {/* A failed photos fetch must not read as "no photos" - the exact
+            empty-vs-error defect this file already fixed for lead history. */}
+        {!photosQ.isLoading && photosQ.isError && (
+          <div className="flex items-center pl-1 text-[12px] text-destructive">Couldn't load photos.
+            <button type="button" onClick={() => photosQ.refetch()} className="tap-expand ml-2 font-semibold text-primary hover:underline">Retry</button>
+          </div>
+        )}
+        {!photosQ.isLoading && !photosQ.isError && photos.length === 0 && (
           <div className="flex items-center pl-1 text-[12px] text-muted-foreground">No photos yet - snap the house, equipment, or paperwork.</div>
         )}
       </div>

@@ -281,7 +281,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     window.addEventListener("hfs:open-menu", open);
     return () => window.removeEventListener("hfs:open-menu", open);
   }, []);
-  useEffect(() => { setMoreOpen(false); }, [location]);
+  // Any navigation (link, hardware back, programmatic) dismisses the mobile
+  // overlays - a hardware-back with the drawer open used to navigate the page
+  // underneath while the drawer stayed put.
+  useEffect(() => { setMoreOpen(false); setMobileOpen(false); }, [location]);
 
   // Mobile More is a real modal bottom sheet: initial focus, Escape, and a
   // contained Tab loop. The desktop sidebar remains available from the header.
@@ -498,7 +501,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         <Icon aria-hidden="true" className={cn("w-[18px] h-[18px] md:w-4 md:h-4 flex-shrink-0", isActive && "text-primary")} />
                         <span className="flex-1">{label}</span>
                         {badgeCount > 0 && (
-                          <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-2xs font-bold text-black flex items-center justify-center px-1">
+                          <span className="min-w-[18px] h-[18px] rounded-full bg-warning text-2xs font-bold text-background flex items-center justify-center px-1">
                             {badgeCount > 9 ? "9+" : badgeCount}
                           </span>
                         )}

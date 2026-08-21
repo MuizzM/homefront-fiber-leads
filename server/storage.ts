@@ -413,7 +413,7 @@ export interface IStorage {
   /** Per-area activity feed rows, filtered in SQL to the given lead ids. */
   getKnocksForTerritoryActivity(tenantId: number | undefined, leadIds: number[]): TerritoryActivityKnock[];
   /** id → "address, city" pairs for a bounded id set (activity feed join). */
-  getLeadAddressesByIds(ids: number[], tenantId?: number): Array<{ id: number; address: string; city: string }>;
+  getLeadAddressesByIds(ids: number[], tenantId?: number): Array<{ id: number; address: string; city: string; lat: number | null; lng: number | null }>;
   /** Narrow projection feeding /api/stats aggregation (same scoping as getLeads). */
   getLeadStatsRows(tenantId?: number, assignedRep?: number | number[]): LeadStatsRow[];
   // ── Lead photos ─────────────────────────────────────────────────────────────
@@ -4513,13 +4513,13 @@ export class Storage implements IStorage {
   }
   // Address labels for a bounded id set (the 50-row activity card) — replaces
   // hydrating every lead in the tenant to read two columns off 50 of them.
-  getLeadAddressesByIds(ids: number[], tenantId?: number): Array<{ id: number; address: string; city: string }> {
+  getLeadAddressesByIds(ids: number[], tenantId?: number): Array<{ id: number; address: string; city: string; lat: number | null; lng: number | null }> {
     if (!ids.length) return [];
     const ph = ids.map(() => "?").join(",");
     const tenantAnd = tenantId != null ? "AND tenant_id = ?" : "";
     return rawDb.prepare(
-      `SELECT id, address, city FROM leads WHERE id IN (${ph}) ${tenantAnd}`
-    ).all(...ids, ...(tenantId != null ? [tenantId] : [])) as Array<{ id: number; address: string; city: string }>;
+      `SELECT id, address, city, lat, lng FROM leads WHERE id IN (${ph}) ${tenantAnd}`
+    ).all(...ids, ...(tenantId != null ? [tenantId] : [])) as Array<{ id: number; address: string; city: string; lat: number | null; lng: number | null }>;
   }
   // Narrow projection for /api/stats — identical scoping to getLeads (tenant
   // wall; array scope empty = match nothing, fail-closed), minus the full-row

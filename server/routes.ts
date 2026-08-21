@@ -7343,9 +7343,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // at 20k leads).
     const knocks = storage.getRecentKnocksByRep(repId, 50);
     const leadIds = [...new Set(knocks.map(k => k.leadId))];
-    const addr = new Map(
+    // Hydrate coordinates too so each activity row can deep-link to the door on
+    // the field map (the sheet renders tappable rows).
+    const geo = new Map(
       storage.getLeadAddressesByIds(leadIds, user?.tenantId ?? undefined)
-        .map(l => [l.id, `${l.address}, ${l.city}`]),
+        .map(l => [l.id, { label: `${l.address}, ${l.city}`, lat: l.lat, lng: l.lng }]),
     );
     res.json({
       rep: { id: rep.id, name: rep.name, role: rep.role },
@@ -7353,7 +7355,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         id: k.id,
         outcome: k.outcome,
         at: k.knockedAt,
-        address: addr.get(k.leadId) ?? null,
+        leadId: k.leadId,
+        address: geo.get(k.leadId)?.label ?? null,
+        lat: geo.get(k.leadId)?.lat ?? null,
+        lng: geo.get(k.leadId)?.lng ?? null,
       })),
     });
   });
