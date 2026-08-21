@@ -215,6 +215,10 @@ export interface CallingRuntimeStatus {
     pilotAllowed: boolean;
     secretsReady: boolean;
     emergencyDisabled: boolean;
+    /** A browser-softphone voice provider (Telnyx) is wired. When true the lead
+     *  screen offers click-to-call; when false it falls back to reveal-and-hand-
+     *  dial. Never a blocker - the module works either way. */
+    voiceProviderReady: boolean;
   };
   organization: {
     callingEnabled: boolean;
@@ -335,6 +339,7 @@ export async function getCallingStatus(): Promise<CallingRuntimeStatus> {
       nationalDncEnabled: Boolean(status.environment?.nationalDncEnabled), stateDncEnabled: Boolean(status.environment?.stateDncEnabled),
       manualClickRequired: Boolean(status.environment?.manualClickToCallEnabled), pilotAllowed: Boolean(status.environment?.pilotAllowed),
       secretsReady: Boolean(status.environment?.secretsReady), emergencyDisabled: Boolean(status.environment?.emergencyDisabled),
+      voiceProviderReady: Boolean(status.environment?.voiceProviderReady),
     },
     organization: status.organization,
     tracedImport: {
@@ -496,16 +501,27 @@ export function evaluateCallingLead(leadId: number): Promise<{ decisionId: strin
   return json(apiRequest("POST", `${ROOT}/leads/${leadId}/evaluate`, {}));
 }
 
-export function authorizeManualCall(leadId: number): Promise<{
+export type ManualCallAction = "reveal_and_hand_dial" | "click_to_call";
+
+export function authorizeManualCall(leadId: number, action: ManualCallAction = "reveal_and_hand_dial"): Promise<{
   token: string;
   expiresAt: string;
   decisionId: string;
   maskedPhone: string;
   script: CallingStatus["activeScript"];
 }> {
+  // Both actions are one-tap-per-lead manual attempts; the server only accepts
+  // click_to_call when a voice provider is wired (else it 409s and the caller
+  // retries with reveal_and_hand_dial).
   return json<any>(apiRequest("POST", `${ROOT}/leads/${leadId}/authorize-call`, {
-    action: "reveal_and_hand_dial", manualActionConfirmed: true,
+    action, manualActionConfirmed: true,
   })).then(value => ({ ...value, token: value.authorizationToken }));
+}
+
+/** Mint a short-lived registration JWT for the caller's browser softphone.
+ *  Server refuses (409) when no voice provider is configured. */
+export function mintVoiceToken(): Promise<{ token: string; expiresAt: string | null }> {
+  return json(apiRequest("POST", `${ROOT}/voice-token`, {}));
 }
 
 export function startManualCall(token: string): Promise<{

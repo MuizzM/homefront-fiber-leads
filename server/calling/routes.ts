@@ -5,6 +5,7 @@ import { can, type Capability, type Role } from "@shared/capabilities";
 import { CALLING_DECISIONS } from "@shared/calling";
 import { rawDb } from "../db";
 import { callingEnvironment, sha256, verifyConsentArtifactManifest } from "./crypto";
+import { getVoiceProvider } from "./voiceProviders";
 import { baseTemplatePreview, generateScriptForLead } from "./scriptEngine";
 import {
   createConsentRecord,
@@ -104,10 +105,14 @@ const validationSchema = z.object({
 }).strict();
 
 const authorizeSchema = z.object({
-  // Copying is a separately audited action after a manual attempt starts.
-  // No click-to-call transport exists in this release, so accepting those
-  // labels here would imply behavior the server does not implement.
-  action: z.literal("reveal_and_hand_dial"),
+  // Two manual transports, one authorization shape:
+  //   reveal_and_hand_dial - reveal the E.164, rep dials on their own phone.
+  //   click_to_call        - the rep's BROWSER softphone dials (Telnyx WebRTC).
+  // Both are one-tap-per-lead, rep-initiated manual attempts - identical TCPA
+  // posture - which is why they share issueCallAuthorization's manual-confirmed
+  // path. `click_to_call` is only ACCEPTED when a voice provider is wired (see
+  // the route), so accepting the label can never imply behavior we cannot back.
+  action: z.enum(["reveal_and_hand_dial", "click_to_call"]),
   manualActionConfirmed: z.literal(true),
 }).strict();
 
@@ -552,6 +557,10 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
           emergencyDisabled: environment.emergencyDisabled,
           pilotAllowed: environment.pilotAllowed,
           secretsReady: environment.secretsReady,
+          // Informational, NOT a blocker: with no voice provider the module
+          // still works via reveal-and-hand-dial; the client uses this to decide
+          // whether to offer the in-browser softphone.
+          voiceProviderReady: environment.voiceProviderReady,
         },
         organization: {
           callingEnabled: profile.callingEnabled,
@@ -782,6 +791,11 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
       if (!scopedCandidate(req, res, tid, leadId)) return;
       const environment = callingEnvironment(tid);
       if (!environment.manualClickToCallEnabled) return res.status(409).json({ error: "Manual calling is disabled" });
+      // Only mint a click_to_call authorization when a softphone can actually
+      // back it; otherwise the client must fall back to reveal_and_hand_dial.
+      if (body.action === "click_to_call" && !environment.voiceProviderReady) {
+        return res.status(409).json({ error: "Browser dialer is not configured; use reveal_and_hand_dial", code: "voice_provider_missing" });
+      }
       const result = issueCallAuthorization({ tenantId: tid, actorUserId: userId(req), actorRole: role(req), leadId,
         canManage: isManager(req), action: body.action, correlationId: correlationId(req) });
       res.status(201).json({ authorizationToken: result.token, expiresAt: result.expiresAt, decisionId: result.decisionId,
@@ -798,6 +812,38 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
       // This is the only endpoint allowed to return a full phone number. The
       // one-use token has already been atomically consumed before this response.
       res.status(201).json(result);
+    } catch (error) { fail(res, error); }
+  });
+
+  // Mint a short-lived registration JWT for the caller's browser softphone.
+  // Gated exactly like a manual attempt (same capability, same environment
+  // gates, same representative-hold check) because the token is what lets a
+  // browser place a call at all - it must be no easier to obtain than the dial
+  // authorization it precedes. The provider refuses (fail-closed) when
+  // unconfigured, surfaced to the client as a 409 so it falls back to hand-dial.
+  app.post("/api/v1/calling/voice-token", cap("calling.attempt.manual"), async (req, res) => {
+    const tid = requireTenant(req, res); if (!tid) return;
+    if (!parseBody(z.object({}).strict(), req, res)) return;
+    try {
+      assertRepresentativeCallingNotHeld(tid, userId(req));
+      const environment = callingEnvironment(tid);
+      const profile = ensureCallingProfile(tid);
+      if (!environment.moduleEnabled || !environment.manualClickToCallEnabled || environment.emergencyDisabled
+          || !environment.pilotAllowed || !environment.secretsReady || !profile.callingEnabled
+          || profile.emergencyDisabled || !profile.callerIdAuthorized) {
+        return res.status(409).json({ error: "Calling is currently disabled" });
+      }
+      if (!environment.voiceProviderReady) {
+        return res.status(409).json({ error: "Browser dialer is not configured", code: "voice_provider_missing" });
+      }
+      const minted = await getVoiceProvider().mintClientToken({ identity: `t${tid}-u${userId(req)}`, ttlSeconds: 600 });
+      if (!minted.ok || !minted.token) {
+        return res.status(502).json({ error: minted.safeError ?? "The voice provider could not issue a token" });
+      }
+      appendCallingAudit({ tenantId: tid, correlationId: correlationId(req), eventType: "call.voice_token_issued",
+        entityType: "user", entityId: String(userId(req)), actorUserId: userId(req),
+        metadata: { provider: getVoiceProvider().name, expiresAt: minted.expiresAt } });
+      res.status(201).json({ token: minted.token, expiresAt: minted.expiresAt });
     } catch (error) { fail(res, error); }
   });
 

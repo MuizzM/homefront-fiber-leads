@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Clipboard } from "lucide-react";
+import { Check, Clipboard, Phone, PhoneOff, Mic, MicOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -10,11 +10,12 @@ import {
 import { CallingAvailability, CallingChrome, CallingPageSkeleton, CallingUnknownState } from "@/components/calling/CallingChrome";
 import { LeadScriptPanel } from "@/components/calling/LeadScriptPanel";
 import {
-  addInternalOptOut, auditPhoneCopy, authorizeManualCall, traceCallingLead, evaluateCallingLead, formatDecision, formatStage,
+  addInternalOptOut, auditPhoneCopy, authorizeManualCall, mintVoiceToken, traceCallingLead, evaluateCallingLead, formatDecision, formatStage,
   getCallingLead, getCallingQueue, getCallingStatus, newIdempotencyKey, revokeCallingConsent, saveConsent, saveDisposition,
   selectTracedPhone, startManualCall,
   type CallingLeadDetail, type CallingStatus, type ConsentEvidence, type DispositionCode,
 } from "@/lib/callingApi";
+import { useTelnyxSoftphone } from "@/lib/telnyxSoftphone";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { useCan } from "@/lib/capabilities";
@@ -318,6 +319,18 @@ export default function CallingLead() {
   const [optOutReason, setOptOutReason] = useState<"do_not_call" | "stop_request" | "wrong_number" | "wrong_party" | "consent_revoked">("stop_request");
   const [revocationEvidence, setRevocationEvidence] = useState("");
   const statusQuery = useQuery({ queryKey: ["/api/v1/calling/status"], queryFn: getCallingStatus, staleTime: 10_000, retry: 1 });
+  // ── Browser softphone (click-to-call) ──────────────────────────────────────
+  // Purely additive over reveal-and-hand-dial: only engaged when the server
+  // reports a wired voice provider AND the SDK actually registers. Any failure
+  // (no provider, token refused, socket drop) leaves softphoneReady false and
+  // the screen behaves exactly as before - reveal the number, dial by hand.
+  const softphone = useTelnyxSoftphone();
+  const voiceProviderReady = Boolean(statusQuery.data?.environment.voiceProviderReady);
+  const softphoneReady = voiceProviderReady && softphone.status === "registered";
+  useEffect(() => {
+    if (!voiceProviderReady || !canAttemptManual) return;
+    if (softphone.status === "idle") void softphone.register(mintVoiceToken);
+  }, [voiceProviderReady, canAttemptManual, softphone]);
   const detailQuery = useQuery({
     queryKey: ["/api/v1/calling/leads", leadId], queryFn: () => getCallingLead(leadId),
     enabled: Number.isSafeInteger(leadId) && leadId > 0 && statusQuery.isSuccess, staleTime: 5_000, retry: 1,
@@ -383,12 +396,23 @@ export default function CallingLead() {
 
   const evaluateMutation = useMutation({ mutationFn: () => evaluateCallingLead(leadId), onSuccess: value => setEvaluation(value),
     onError: (error: Error) => toast({ title: "Compliance check failed", description: error.message, variant: "destructive" }) });
-  const authorizeMutation = useMutation({ mutationFn: () => authorizeManualCall(leadId), onSuccess: value => setAuthorization(value),
+  const authorizeMutation = useMutation({
+    // Ask for click_to_call only when a softphone is standing by; the server
+    // rejects the label otherwise, so this can never over-promise.
+    mutationFn: () => authorizeManualCall(leadId, softphoneReady ? "click_to_call" : "reveal_and_hand_dial"),
+    onSuccess: value => setAuthorization(value),
     onError: (error: Error) => toast({ title: "Authorization blocked", description: error.message, variant: "destructive" }) });
   const startMutation = useMutation({ mutationFn: () => startManualCall(authorization!.token), onSuccess: value => {
     attemptRevalidationFloorRef.current = detailQuery.dataUpdatedAt;
     setActiveAttempt({ ...value, maskedPhone: detailQuery.data!.candidate.maskedPhone ?? "Protected number", resumed: false });
     setAuthorization(null);
+    // Click-to-call: place the call in-browser through the authorized number the
+    // server just returned. If the dial itself throws, the attempt is still open
+    // and the rep can hang up / disposition - we never strand a live attempt.
+    if (softphoneReady && value.phoneNumber) {
+      softphone.dial(value.phoneNumber).catch((e: Error) =>
+        toast({ title: "Dial failed", description: `${e.message}. You can still reveal and hand-dial.`, variant: "destructive" }));
+    }
   },
     onError: (error: Error) => { setAuthorization(null); toast({ title: "Call could not start", description: error.message, variant: "destructive" }); } });
   const dispositionMutation = useMutation({
@@ -526,12 +550,12 @@ export default function CallingLead() {
 
             {!activeAttempt && !completed && canAttemptManual && (
               <section className="rounded-2xl border border-border bg-card p-4">
-                <div className="flex items-start gap-3"><div><h2 className="text-base font-semibold">One manual call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Authorization is short-lived, bound to you and this exact lead, and can be used once. It does not dial automatically.</p></div></div>
+                <div className="flex items-start gap-3"><div className="min-w-0"><div className="flex items-center gap-2"><h2 className="text-base font-semibold">One manual call</h2>{softphoneReady && <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-primary"><Phone className="h-3 w-3" />Browser dialer ready</span>}</div><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Authorization is short-lived, bound to you and this exact lead, and can be used once. {softphoneReady ? "Tapping Call places one call from your browser - no auto-next." : "It does not dial automatically."}</p></div></div>
                 <label className="mt-4 flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/55 p-3"><input type="checkbox" checked={humanReady} onChange={event => setHumanReady(event.target.checked)} className="mt-0.5 h-5 w-5 accent-[hsl(var(--primary))]" /><span className="text-xs leading-relaxed">I am the authorized rep, physically ready to place one manual call, and will use the approved script.</span></label>
                 {!authorization ? (
                   <Button className="mt-3 w-full" size="lg" disabled={!eligible || !humanReady || authorizeMutation.isPending || manualFlowDisabled} onClick={() => authorizeMutation.mutate()}>{authorizeMutation.isPending ? "Authorizing…" : "Authorize one manual call"}</Button>
                 ) : (
-                  <div className="mt-3 rounded-xl border border-success/15 bg-success/[0.08] p-3"><div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold text-success">One-use authorization ready</span><span className="font-mono tabular-nums text-muted-foreground">{expiresIn}s</span></div><Button className="mt-3 w-full" size="lg" disabled={expiresIn <= 0 || startMutation.isPending} onClick={() => startMutation.mutate()}>{startMutation.isPending ? "Re-checking gates…" : "Reveal number & start manual attempt"}</Button></div>
+                  <div className="mt-3 rounded-xl border border-success/15 bg-success/[0.08] p-3"><div className="flex items-center justify-between gap-3 text-xs"><span className="font-semibold text-success">One-use authorization ready</span><span className="font-mono tabular-nums text-muted-foreground">{expiresIn}s</span></div><Button className="mt-3 w-full" size="lg" disabled={expiresIn <= 0 || startMutation.isPending} onClick={() => startMutation.mutate()}>{startMutation.isPending ? "Re-checking gates…" : softphoneReady ? <span className="inline-flex items-center gap-2"><Phone className="h-4 w-4" />Call now</span> : "Reveal number & start manual attempt"}</Button></div>
                 )}
                 {!eligible && <p className="mt-3 text-center text-[11px] text-muted-foreground">A current eligible compliance decision is required. The frontend cannot override a blocked decision.</p>}
               </section>
@@ -547,9 +571,37 @@ export default function CallingLead() {
               <>
                 <section className="rounded-2xl border border-primary/30 bg-primary/[0.06] p-4" data-testid="active-manual-attempt">
                   <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-primary"> Manual attempt active</div>
-                  <div className="mt-3 flex items-center gap-2"><div className="min-w-0 flex-1 truncate font-mono text-2xl font-semibold tracking-tight">{activeAttempt.phoneNumber ?? activeAttempt.maskedPhone}</div>{activeAttempt.phoneNumber && <Button variant="outline" size="icon" aria-label="Copy phone number" disabled={copyMutation.isPending} onClick={() => copyMutation.mutate()}>{copied ? <Check className="h-4 w-4 text-success" /> : <Clipboard className="h-4 w-4" />}</Button>}</div>
-                  {activeAttempt.resumed && <p className="mt-2 text-[11px] text-warning">Resumed open attempt after navigation or refresh. The full number is not revealed again; record the outcome to close this attempt.</p>}
-                  <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"> No auto-dial, phone link, auto-next, recording, or prerecorded voice is initiated by this app.</p>
+                  {softphone.call ? (
+                    // Click-to-call: the browser softphone is on the line. Show
+                    // live call state + controls; the full number stays hidden
+                    // (the softphone dialed it) so it is never on screen or copied.
+                    <div className="mt-3" data-testid="softphone-call">
+                      <div className="flex items-center gap-3">
+                        <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${softphone.call.phase === "active" ? "bg-success animate-pulse" : "bg-warning"}`} aria-hidden="true" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-base font-semibold">{activeAttempt.maskedPhone}</div>
+                          <div className="text-[11px] tabular-nums text-muted-foreground">
+                            {softphone.call.phase === "active"
+                              ? `On call · ${String(Math.floor(softphone.call.durationSec / 60)).padStart(2, "0")}:${String(softphone.call.durationSec % 60).padStart(2, "0")}`
+                              : softphone.call.phase === "held" ? "On hold" : "Connecting…"}
+                          </div>
+                        </div>
+                        <Button variant="outline" size="icon" aria-label={softphone.call.muted ? "Unmute" : "Mute"} onClick={softphone.toggleMute}>
+                          {softphone.call.muted ? <MicOff className="h-4 w-4 text-warning" /> : <Mic className="h-4 w-4" />}
+                        </Button>
+                        <Button variant="destructive" size="icon" aria-label="Hang up" data-testid="softphone-hangup" onClick={softphone.hangup}>
+                          <PhoneOff className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-[11px] text-muted-foreground">One call, placed when you tapped Call. No auto-next, recording, or prerecorded voice. Record the outcome below when you hang up.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-3 flex items-center gap-2"><div className="min-w-0 flex-1 truncate font-mono text-2xl font-semibold tracking-tight">{activeAttempt.phoneNumber ?? activeAttempt.maskedPhone}</div>{activeAttempt.phoneNumber && <Button variant="outline" size="icon" aria-label="Copy phone number" disabled={copyMutation.isPending} onClick={() => copyMutation.mutate()}>{copied ? <Check className="h-4 w-4 text-success" /> : <Clipboard className="h-4 w-4" />}</Button>}</div>
+                      {activeAttempt.resumed && <p className="mt-2 text-[11px] text-warning">Resumed open attempt after navigation or refresh. The full number is not revealed again; record the outcome to close this attempt.</p>}
+                      <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"> No auto-dial, phone link, auto-next, recording, or prerecorded voice is initiated by this app.</p>
+                    </>
+                  )}
                 </section>
                 <section className="rounded-2xl border border-border bg-card p-4"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Approved script · {activeAttempt.script.version}</div><h2 className="mt-1 text-base font-semibold">{activeAttempt.script.title}</h2><div className="mt-3 rounded-xl border border-border bg-background/60 p-4 text-sm leading-relaxed whitespace-pre-wrap"><div className="mb-2 font-semibold">{activeAttempt.script.sellerName} · {activeAttempt.script.companyName} · {activeAttempt.script.purpose}</div>{activeAttempt.script.body}</div></section>
                 <section className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center gap-2"><h2 className="text-base font-semibold">Record outcome</h2></div><textarea value={notes} onChange={event => setNotes(event.target.value)} rows={3} placeholder="Call notes (do not enter sensitive payment data)" className="mt-3 w-full rounded-xl border border-border bg-background p-3 text-sm" />

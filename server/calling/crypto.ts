@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { CallAuthorizationClaims } from "@shared/calling";
+import { voiceProviderReady } from "./voiceProviders";
 
 function keyFromEnv(name: string): Buffer {
   const raw = process.env[name]?.trim();
@@ -183,6 +184,9 @@ export function callingEnvironment(tenantId: number): {
   emergencyDisabled: boolean;
   pilotAllowed: boolean;
   secretsReady: boolean;
+  /** A Telnyx (or other) browser-softphone provider is wired. When false, the
+   *  client falls back to reveal-and-hand-dial instead of the in-browser call. */
+  voiceProviderReady: boolean;
 } {
   const pilot = new Set((process.env.CALLING_PILOT_ORG_IDS ?? "").split(",").map((value) => Number(value.trim())).filter(Number.isSafeInteger));
   return {
@@ -195,5 +199,6 @@ export function callingEnvironment(tenantId: number): {
     emergencyDisabled: process.env.CALLING_EMERGENCY_DISABLED !== "false",
     pilotAllowed: pilot.has(tenantId),
     secretsReady: callingSecretsReady(),
+    voiceProviderReady: voiceProviderReady(),
   };
 }
