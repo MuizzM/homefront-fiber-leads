@@ -608,20 +608,23 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           <p className="text-xs text-muted-foreground">{titleCaseAddress(current.city)}, {current.state} {current.zip}</p>
         </SheetHeader>
 
+        {/* h-11 on touch / h-9 from lg mirrors the filter-row pattern: the
+            sheet is a thumb surface first. Every action carries the same
+            focus-visible ring as the rows that opened it. */}
         <div className="px-5 py-4 border-b border-border grid grid-cols-2 sm:grid-cols-4 gap-2">
           {canOpenCalling && (
-            <Link href={`/calling/lead/${current.id}`} onClick={onClose} className="h-9 rounded-md bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5">
+            <Link href={`/calling/lead/${current.id}`} onClick={onClose} className="h-11 lg:h-9 rounded-md bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                Calling
             </Link>
           )}
-          <a href={directions} target="_blank" rel="noreferrer" className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">
+          <a href={directions} target="_blank" rel="noreferrer" className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
              Navigate
           </a>
           {/* The field map is where knocks are logged, so the sheet must not be
               a dead end for a rep whose only other action here is Navigate. */}
-          {onMap && <button onClick={onMap} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">Field map</button>}
-          {canAssign && <button onClick={onAssign} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">{current.assignedRepId ? "Reassign" : "Assign"}</button>}
-          {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15"> Qualify</button>}
+          {onMap && <button onClick={onMap} className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Field map</button>}
+          {canAssign && <button onClick={onAssign} className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{current.assignedRepId ? "Reassign" : "Assign"}</button>}
+          {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-11 lg:h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"> Qualify</button>}
         </div>
 
         <div className="px-5 py-5">
