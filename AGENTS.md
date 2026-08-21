@@ -51,6 +51,21 @@ Never weaken, skip, or delete a quality gate merely to make CI green.
 - Do not deploy, rotate secrets, alter production infrastructure, or run paid scans unless the user explicitly asks for that action.
 - Never commit secrets, real customer exports, production databases, signed URLs, or local data directories.
 
+## Autonomy and approval gates
+
+Work autonomously through inspection, planning, implementation, local validation, and draft-PR preparation when the requested outcome and completion criteria are clear. Use a feature branch or isolated worktree, keep one writer responsible for integration, and checkpoint substantial work in an ExecPlan.
+
+Stop and ask for a decision before:
+
+- merging into the default branch, deploying, publishing a release, or changing live infrastructure;
+- rotating, revealing, or adding production secrets or credentials;
+- running paid scans, bulk provider calls, outbound customer communications, or other actions with external cost or irreversible business impact;
+- deleting or rewriting production data, applying a destructive migration, or proceeding without a verified recovery path;
+- changing commission, lead assignment, calling-consent, tenant-access, or provider-policy behavior when the intended business rule is ambiguous;
+- continuing after the same verification failure twice without a new diagnosis or after evidence contradicts the requested outcome.
+
+At every meaningful checkpoint, record completed work, validation evidence, remaining risks, and the next safe action. Time alone is not a reason to stop; missing authority, unclear requirements, safety boundaries, and failed verification are.
+
 ## Skills
 
 - Use `$homefront-verify-change` after code or harness changes.
