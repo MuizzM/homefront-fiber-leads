@@ -28,6 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ErrorState } from "@/components/ErrorState";
 import { AuthedImg } from "@/components/AuthedImg";
+import { PhotoLightbox } from "@/components/PhotoLightbox";
 import { useCan } from "@/lib/capabilities";
 import { ChevronLeft, Zap, Wifi, Building2, User as UserIcon, Mail, AlertTriangle, StickyNote, UserPlus, RefreshCw, WifiOff, CloudUpload } from "lucide-react";
 
@@ -463,20 +464,8 @@ function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
         )}
       </div>
 
-      {/* Full-screen viewer — Escape/tap to close, close button auto-focused */}
-      {viewer != null && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Photo viewer" onClick={() => setViewer(null)}>
-          <AuthedImg photoId={viewer} alt="Door photo (full size)" className="max-w-full max-h-full rounded-xl object-contain" />
-          <button
-            autoFocus onClick={() => setViewer(null)}
-            onKeyDown={e => { if (e.key === "Escape") setViewer(null); }}
-            aria-label="Close photo"
-            className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 w-11 h-11 rounded-full bg-black/50 text-white text-2xl leading-none flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-          >
-            ×
-          </button>
-        </div>
-      )}
+      {/* Full-screen viewer — the ONE shared lightbox (Escape/tap to close). */}
+      {viewer != null && <PhotoLightbox photoId={viewer} onClose={() => setViewer(null)} />}
     </div>
   );
 }

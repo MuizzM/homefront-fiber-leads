@@ -11,6 +11,7 @@ import { Camera, RefreshCw } from "lucide-react";
 import { apiRequest, apiUpload } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { AuthedImg } from "@/components/AuthedImg";
+import { PhotoLightbox } from "@/components/PhotoLightbox";
 import { MUTED } from "./utils";
 
 interface LeadPhotoRow { id: number; createdAt: string; takenBy: string | null }
@@ -117,28 +118,8 @@ export function SheetPhotos({ leadId }: { leadId: number }): JSX.Element {
         )}
       </div>
 
-      {/* Full-screen viewer — Escape/tap closes, close button auto-focused. */}
-      {viewer != null && (
-        <div
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Photo viewer"
-          onClick={() => setViewer(null)}
-        >
-          <AuthedImg photoId={viewer} alt="Door photo (full size)" className="max-w-full max-h-full rounded-xl object-contain" />
-          <button
-            autoFocus
-            type="button"
-            onClick={() => setViewer(null)}
-            onKeyDown={e => { if (e.key === "Escape") setViewer(null); }}
-            aria-label="Close photo"
-            className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 w-11 h-11 rounded-full bg-black/50 text-white text-2xl leading-none flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-          >
-            ×
-          </button>
-        </div>
-      )}
+      {/* Full-screen viewer — the ONE shared lightbox (Escape/tap closes). */}
+      {viewer != null && <PhotoLightbox photoId={viewer} onClose={() => setViewer(null)} />}
     </div>
   );
 }
