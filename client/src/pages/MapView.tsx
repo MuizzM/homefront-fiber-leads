@@ -312,6 +312,7 @@ const ROCKWELL_CENTER: [number, number] = [-80.41, 35.545];
 const FILTER_STATUS_ORDER: PinDisplayState[] = [
   "unworked",
   "follow_up",
+  "go_back",
   "interested",
   "sold",
   "not_home",
@@ -319,6 +320,10 @@ const FILTER_STATUS_ORDER: PinDisplayState[] = [
   "callback",
   "contacted",
   "already_customer",
+  "competitor",
+  "renter",
+  "moving",
+  "no_soliciting",
 ];
 const FILTERABLE_STATUSES: readonly string[] = FILTER_STATUS_ORDER;
 
@@ -6267,7 +6272,7 @@ export default function MapView() {
   );
 
   const handleKnock = useCallback(
-    (outcome: KnockOutcome): boolean => {
+    (outcome: KnockOutcome, opts?: { callbackDate?: string | null; callbackTime?: string | null }): boolean => {
       const lead =
         selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
       if (!lead) return false;
@@ -6277,11 +6282,15 @@ export default function MapView() {
       // tap replaces the "This lead has no rep assigned" dead end from the
       // field report. Central mark shows its own success/failure toast and
       // updates the same caches the knock path would.
-      if (canManage && resolveCreditedRepId(user, lead.assignedRepId) == null) {
+      // EXCEPT a scheduled follow-up: the appointment lives on the rep knock
+      // row, and silently dropping the date to fit the central path would lie
+      // to the person who just picked it — let logKnock fail with its honest
+      // "no rep assigned" toast instead.
+      if (canManage && !opts?.callbackDate && resolveCreditedRepId(user, lead.assignedRepId) == null) {
         void handleCentralMark(outcome);
         return true;
       }
-      if (!logKnock(lead, outcome)) return false;
+      if (!logKnock(lead, outcome, opts)) return false;
 
       const nextLeadStatus = OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus;
       const nextDisplayState = pinDisplayState({

@@ -37,6 +37,63 @@ export function outcomeFillTextColor(fill: string): "#07111B" | "#FFFFFF" {
   return contrast(fill, "#07111B") >= contrast(fill, "#FFFFFF") ? "#07111B" : "#FFFFFF";
 }
 
+// ── Compact disposition disc ─────────────────────────────────────────────────
+// The strip form of the same disposition surface: a filled status-colored disc
+// carrying the pin's glyph with the compact status code beneath (LEAD, ACTV,
+// COMP… — the vocabulary reps carry from SalesRabbit-family tools). Same testid
+// contract (knock-outcome-{key}), same active/flash semantics as the grid
+// cells, one column narrow enough that every disposition stays one thumb-scroll
+// away. The CODE is the accessible-name supplement, never the only signal —
+// aria-label carries the full label.
+export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, disabled = false }: Omit<OutcomeButtonProps, "variant">): JSX.Element {
+  const filled = active || flashing;
+  const darkSheetColor = isLeadMapStatus(o.key)
+    ? (STATUS_CONFIG[o.key].onDark ?? o.color)
+    : o.color;
+  return (
+    <button
+      key={o.key}
+      type="button"
+      data-testid={`knock-outcome-${o.key}`}
+      aria-pressed={active}
+      aria-label={o.label}
+      title={o.label}
+      disabled={disabled}
+      onClick={() => onTap(o.key)}
+      className={[
+        // 44px column min-width + the disc itself is the 44px target; snap-start
+        // keeps a flicked strip landing on whole discs.
+        "shrink-0 snap-start w-[52px] pt-0.5 pb-1 flex flex-col items-center gap-1 rounded-xl transition",
+        disabled ? "cursor-not-allowed opacity-45" : "active:scale-95",
+      ].join(" ")}
+    >
+      <span
+        aria-hidden="true"
+        className="w-11 h-11 rounded-full flex items-center justify-center transition-shadow"
+        style={{
+          background: o.color,
+          // Active = the same white ring the selected map pin wears; the flash
+          // adds the glow the grid cells use. Idle discs sit on a hairline so
+          // the dark NOSO disc never dissolves into the dark sheet.
+          boxShadow: filled
+            ? `0 0 0 2px rgba(255,255,255,0.92)${flashing ? `, 0 2px 12px ${o.color}88` : ""}`
+            : "0 0 0 1px rgba(255,255,255,0.22)",
+        }}
+      >
+        {flashing
+          ? <Check aria-hidden="true" className="w-5 h-5" style={{ color: outcomeFillTextColor(o.color) }} />
+          : Icon ? <Icon aria-hidden="true" className="w-5 h-5 text-white" /> : null}
+      </span>
+      <span
+        className="text-[10px] font-bold tracking-[0.04em] leading-none"
+        style={{ color: filled ? "#FFFFFF" : darkSheetColor }}
+      >
+        {o.short}
+      </span>
+    </button>
+  );
+}
+
 export function OutcomeButton({ outcome: o, icon: Icon, active, flashing, onTap, variant, disabled = false }: OutcomeButtonProps): JSX.Element {
   const filled = active || flashing;
   const darkSheetColor = isLeadMapStatus(o.key)

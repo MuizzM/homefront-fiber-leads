@@ -73,6 +73,14 @@ const STATE_CHIP: Record<PinDisplayState, string> = {
   sold:             "bg-success/10 text-success",
   not_interested:   "bg-red-500/10 text-red-700 dark:bg-red-500/15 dark:text-red-400",
   already_customer: "bg-blue-600/10 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400",
+  // Competition dispositions — same ink-on-its-own-tint recipe, hues per
+  // shared/statusConfig.ts (competitor burnt orange, renter warm stone, moving
+  // cyan, no-soliciting slate, go-back pink).
+  competitor:       "bg-orange-700/10 text-orange-800 dark:bg-orange-600/15 dark:text-orange-400",
+  renter:           "bg-stone-500/10 text-stone-600 dark:bg-stone-500/15 dark:text-stone-300",
+  moving:           "bg-cyan-600/10 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-400",
+  no_soliciting:    "bg-slate-600/10 text-slate-700 dark:bg-slate-500/15 dark:text-slate-300",
+  go_back:          "bg-pink-500/10 text-pink-700 dark:bg-pink-500/15 dark:text-pink-400",
 };
 
 // Label + chip for a lead row honoring the lastOutcome disambiguator —

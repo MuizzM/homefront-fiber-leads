@@ -44,19 +44,30 @@ const CANONICAL_STATUSES = [
 
 const ALL_PIN_STATES: PinDisplayState[] = [
   "unworked", "not_home", "contacted", "interested", "follow_up", "callback", "sold", "not_interested",
-  "already_customer",
+  "already_customer", "competitor", "renter", "moving", "no_soliciting", "go_back",
 ];
 
 describe("OUTCOMES - totality", () => {
-  it("defines exactly 9 outcomes with unique keys (8 rep statuses + needs_verification)", () => {
-    expect(OUTCOMES).toHaveLength(9);
-    expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(9);
+  it("defines exactly 14 outcomes with unique keys (13 rep statuses + needs_verification)", () => {
+    expect(OUTCOMES).toHaveLength(14);
+    expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(14);
   });
 
   it("does not offer Callback or Needs Verification for new field entries", () => {
+    // Fixed presentation order: primary four → follow-up family → the
+    // structural competition reads → the reset. The sheet renders this
+    // verbatim (grid = first four, strip = the rest).
     expect(FIELD_OUTCOMES.map((outcome) => outcome.key)).toEqual([
-      "not_home", "interested", "sold", "not_interested", "already_customer", "follow_up", "prospect",
+      "not_home", "interested", "sold", "not_interested",
+      "follow_up", "go_back", "already_customer",
+      "competitor", "renter", "moving", "no_soliciting", "prospect",
     ]);
+  });
+
+  it("every field outcome carries a unique compact code for the strip", () => {
+    const shorts = FIELD_OUTCOMES.map((o) => o.short);
+    expect(new Set(shorts).size).toBe(shorts.length);
+    for (const s of shorts) expect(s).toMatch(/^[A-Z]{2,4}$/);
   });
 
   it("maps every outcome to one of the 6 canonical lead statuses", () => {
@@ -151,11 +162,24 @@ describe("pinDisplayState - truth table", () => {
     expect(pinDisplayState({ leadStatus: "prospect", visited: false })).toBe("unworked");
   });
 
-  it("STATE_COLORS covers all 9 pin states with valid hex colors", () => {
+  it("STATE_COLORS covers all 14 pin states with valid hex colors", () => {
     expect(Object.keys(STATE_COLORS).sort()).toEqual([...ALL_PIN_STATES].sort());
     for (const state of ALL_PIN_STATES) {
       expect(STATE_COLORS[state]).toMatch(/^#[0-9a-f]{6}$/i);
     }
+  });
+
+  it("competition dispositions render as their own display states off shared stored statuses", () => {
+    // The already_customer mechanism, extended: not_interested is the stored
+    // status for four distinct field reads; lastOutcome disambiguates.
+    for (const o of ["already_customer", "competitor", "renter", "moving", "no_soliciting"] as const) {
+      expect(pinDisplayState({ leadStatus: "not_interested", visited: 1, lastOutcome: o })).toBe(o);
+    }
+    // …and go_back rides follow_up exactly like callback does.
+    expect(pinDisplayState({ leadStatus: "follow_up", visited: 1, lastOutcome: "go_back" })).toBe("go_back");
+    // A later plain knock reclaims the base state on both families.
+    expect(pinDisplayState({ leadStatus: "not_interested", visited: 1, lastOutcome: "not_interested" })).toBe("not_interested");
+    expect(pinDisplayState({ leadStatus: "follow_up", visited: 1, lastOutcome: "follow_up" })).toBe("follow_up");
   });
 
   it("uses canonical field-map colors and aliases callback to Follow-up", () => {
@@ -375,9 +399,13 @@ describe("already_customer - the door is done, but it is not hostile", () => {
     expect(deriveWasHome("already_customer")).toBe(true);
   });
 
-  it("is offered for new field entries, next to Not Interested", () => {
+  it("is offered for new field entries, in the strip tier after the primary four", () => {
     const keys = FIELD_OUTCOMES.map((o) => o.key);
-    expect(keys.indexOf("already_customer")).toBe(keys.indexOf("not_interested") + 1);
+    expect(keys).toContain("already_customer");
+    // Lives with the other not_interested-family variants in the strip — after
+    // the four primary grid cells, before the prospect reset.
+    expect(keys.indexOf("already_customer")).toBeGreaterThan(keys.indexOf("not_interested"));
+    expect(keys.indexOf("already_customer")).toBeLessThan(keys.indexOf("prospect"));
   });
 
   it("is NOT a bulk-lasso status - its pin needs a real knock's lastOutcome", () => {

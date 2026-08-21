@@ -31,6 +31,11 @@ export const STATUS_ICON: Record<PinDisplayState | "neutral", {
   sold:           { key: "pin-sold",           glyph: "dollar", tint: "sold" },
   not_interested: { key: "pin-not_interested", glyph: "x",      tint: "not_interested" },
   already_customer: { key: "pin-already_customer", glyph: "user", tint: "already_customer" },
+  competitor:     { key: "pin-competitor",     glyph: "flag",   tint: "competitor" },
+  renter:         { key: "pin-renter",         glyph: "key",    tint: "renter" },
+  moving:         { key: "pin-moving",         glyph: "truck",  tint: "moving" },
+  no_soliciting:  { key: "pin-no_soliciting",  glyph: "ban",    tint: "no_soliciting" },
+  go_back:        { key: "pin-go_back",        glyph: "rotate", tint: "go_back" },
   neutral:        { key: "pin-prospect",       glyph: "arrow",  tint: "unworked" },
 });
 
@@ -71,6 +76,19 @@ const GLYPHS = {
   // The prospect down-arrow, kept from the old arrow-shaped pin — now drawn
   // INSIDE the circle so the glyph identity survives the silhouette change.
   arrow: `<path d="M20 12.5v13m-5.5-5.5 5.5 5.5 5.5-5.5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`,
+  // ── Competition-disposition glyphs (all vector paths — same no-font rule) ──
+  // Competitor: a planted flag — rival colors flying at this address.
+  flag: `<path d="M14.5 30V11" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M14.5 12.2c2.2-1.4 4.4-1.4 6.6 0s4.4 1.4 6.6 0V21c-2.2 1.4-4.4 1.4-6.6 0s-4.4-1.4-6.6 0Z" fill="#fff"/>`,
+  // Renter: a key — the buying decision lives with whoever holds the deed.
+  key: `<circle cx="24.8" cy="15.2" r="4.4" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M21.6 18.4 13.2 26.8v2.7h2.7M17.9 22.1l2.3 2.3" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`,
+  // Moving: a box truck — resident on the way out, fresh lead on the way in.
+  truck: `<path d="M11 13.5h13v11.5H11zM24 17h3.4l2.6 3.5v4.5h-2" fill="none" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/><circle cx="15.5" cy="27.8" r="2.3" fill="#fff"/><circle cx="25.5" cy="27.8" r="2.3" fill="#fff"/>`,
+  // No Soliciting: the no-entry ring-and-slash — never knock this door again.
+  ban: `<circle cx="20" cy="20" r="8.5" fill="none" stroke="#fff" stroke-width="2.6"/><path d="m14 14 12 12" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>`,
+  // Go Back: a counter-clockwise return arrow — promising door, come around
+  // again. Lucide RotateCcw geometry scaled onto the 40-grid: the arc leaves a
+  // real gap and the corner-bracket arrowhead stays legible at pin size.
+  rotate: `<path d="M12.1 20a7.9 7.9 0 1 0 7.9-7.9 8.5 8.5 0 0 0-5.9 2.4L12.1 16.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12.1 12.1v4.4h4.4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`,
   none: "",
 } as const;
 

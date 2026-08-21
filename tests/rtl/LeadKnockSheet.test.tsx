@@ -227,23 +227,41 @@ describe("<LeadKnockSheet /> - unified outcomes grid", () => {
 
   it("uses the dark-sheet status override and readable ink for filled outcomes", () => {
     renderSheet();
+    // Unfilled grid cell: ink is the dark-sheet-legible status colour.
     expect(screen.getByTestId("knock-outcome-sold")).toHaveStyle({
       color: STATUS_CONFIG.sold.onDark,
     });
-    expect(screen.getByTestId("knock-outcome-prospect")).toHaveStyle({
-      color: outcomeFillTextColor(STATUS_CONFIG.prospect.color),
-    });
+    // The active disc (default lead is an unworked prospect): the disc wears
+    // the status fill with the white pin glyph; the code label goes white.
+    const prospectDisc = screen.getByTestId("knock-outcome-prospect");
+    expect(prospectDisc).toHaveAttribute("aria-pressed", "true");
+    expect(prospectDisc.querySelector("svg")).not.toBeNull();
     expect(outcomeFillTextColor(STATUS_CONFIG.prospect.color)).toBe("#07111B");
     expect(outcomeFillTextColor(STATUS_CONFIG.interested.color)).toBe("#07111B");
     expect(screen.getByTestId("knock-outcome-interested").querySelector("svg")).not.toBeNull();
   });
 
-  it("ONE grid holds every disposition: primary four lead, the rest follow, fixed order", () => {
+  it("ONE surface holds every disposition: primary four as grid cells, the rest as strip discs, fixed order", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
-    // Exactly FIELD_OUTCOMES, primary-four-first — one grid, one surface.
-    expect(gridOrder()).toEqual(["not_home", "interested", "sold", "not_interested", "already_customer", "follow_up", "prospect"]);
+    // Exactly FIELD_OUTCOMES, primary-four-first — one surface, two tiers.
+    expect(gridOrder()).toEqual([
+      "not_home", "interested", "sold", "not_interested",
+      "follow_up", "go_back", "already_customer",
+      "competitor", "renter", "moving", "no_soliciting", "prospect",
+    ]);
     expect(gridOrder()).toEqual(ALL_KEYS);
+    // The strip is a real labelled group inside the one surface, and every
+    // non-primary disposition lives there with its compact code visible.
+    const strip = screen.getByTestId("knock-status-strip");
+    expect(screen.getByTestId("knock-status-grid").contains(strip)).toBe(true);
+    for (const o of FIELD_OUTCOMES) {
+      if (PRIMARY_KEYS.includes(o.key)) continue;
+      const disc = screen.getByTestId(`knock-outcome-${o.key}`);
+      expect(strip.contains(disc)).toBe(true);
+      expect(disc).toHaveTextContent(o.short);
+      expect(disc).toHaveAccessibleName(o.label);
+    }
     // …and callback / needs_verification are never offered for new marks.
     expect(screen.queryByTestId("knock-outcome-callback")).not.toBeInTheDocument();
     expect(screen.queryByTestId("knock-outcome-needs_verification")).not.toBeInTheDocument();
@@ -274,7 +292,11 @@ describe("<LeadKnockSheet /> - unified outcomes grid", () => {
   it("every outcome is a one-handed tap target (≥44px)", () => {
     renderSheet();
     for (const key of ALL_KEYS) {
-      expect(screen.getByTestId(`knock-outcome-${key}`).className).toMatch(/\bh-11\b/);
+      const btn = screen.getByTestId(`knock-outcome-${key}`);
+      // Grid cells are h-11 buttons; strip discs carry a 44px (w-11 h-11) disc
+      // inside the button, so both forms meet the touch floor.
+      const meets = /\bh-11\b/.test(btn.className) || btn.querySelector(".w-11.h-11") != null;
+      expect(meets, `${key} misses the 44px touch floor`).toBe(true);
     }
   });
 
@@ -904,5 +926,154 @@ describe("LeadKnockSheet - traced contacts", () => {
     await screen.findByTestId("knock-status-grid");
     expect(screen.queryByTestId("knock-contacts")).toBeNull();
     expect(screen.queryByTestId("knock-owner-name")).toBeNull();
+  });
+});
+
+describe("<LeadKnockSheet /> - competition dispositions (strip)", () => {
+  it("each strip disposition marks through the same one-tap path", async () => {
+    for (const key of ["competitor", "renter", "moving", "no_soliciting", "go_back"]) {
+      const { props, unmount } = renderSheet();
+      await userEvent.click(screen.getByTestId(`knock-outcome-${key}`));
+      expect(props.onKnock).toHaveBeenCalledTimes(1);
+      expect(props.onKnock).toHaveBeenCalledWith(key);
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
+      unmount();
+    }
+  });
+
+  it("a competitor door presses the COMP disc in place and says Competitor on the status line", () => {
+    renderSheet({
+      lead: baseLead({
+        leadStatus: "not_interested", visited: true, lastOutcome: "competitor",
+        lastKnockedAt: new Date().toISOString(),
+      }),
+    });
+    expect(screen.getByTestId("knock-outcome-competitor")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("knock-outcome-not_interested")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Competitor");
+  });
+
+  it("a go-back door presses GB, not Follow-up, though both store follow_up", () => {
+    renderSheet({
+      lead: baseLead({
+        leadStatus: "follow_up", visited: true, lastOutcome: "go_back",
+        lastKnockedAt: new Date().toISOString(),
+      }),
+    });
+    expect(screen.getByTestId("knock-outcome-go_back")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("knock-outcome-follow_up")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Go Back");
+  });
+});
+
+describe("<LeadKnockSheet /> - appointment composer", () => {
+  it("collapsed chip → editor; Set stays disabled until a date is picked", async () => {
+    renderSheet();
+    expect(screen.queryByTestId("appt-editor")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    expect(screen.getByTestId("appt-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("appt-save")).toBeDisabled();
+  });
+
+  it("confirming logs ONE follow-up knock carrying the chosen date and time, then collapses to Peek", async () => {
+    const { props } = renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    fireEvent.change(screen.getByTestId("appt-date"), { target: { value: "2026-08-29" } });
+    fireEvent.change(screen.getByTestId("appt-time"), { target: { value: "18:30" } });
+    await userEvent.click(screen.getByTestId("appt-save"));
+    expect(props.onKnock).toHaveBeenCalledTimes(1);
+    expect(props.onKnock).toHaveBeenCalledWith("follow_up", { callbackDate: "2026-08-29", callbackTime: "18:30" });
+    await waitFor(() =>
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek"));
+  });
+
+  it("time is optional - a date alone schedules with callbackTime null", async () => {
+    const { props } = renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    fireEvent.change(screen.getByTestId("appt-date"), { target: { value: "2026-08-29" } });
+    await userEvent.click(screen.getByTestId("appt-save"));
+    expect(props.onKnock).toHaveBeenCalledWith("follow_up", { callbackDate: "2026-08-29", callbackTime: null });
+  });
+
+  it("a Go Back door keeps its GB disposition when an appointment is added", async () => {
+    const { props } = renderSheet({
+      lead: baseLead({
+        leadStatus: "follow_up", visited: true, lastOutcome: "go_back",
+        lastKnockedAt: new Date().toISOString(),
+      }),
+    });
+    await userEvent.click(screen.getByTestId("appt-open"));
+    fireEvent.change(screen.getByTestId("appt-date"), { target: { value: "2026-08-29" } });
+    await userEvent.click(screen.getByTestId("appt-save"));
+    expect(props.onKnock).toHaveBeenCalledWith("go_back", { callbackDate: "2026-08-29", callbackTime: null });
+  });
+
+  it("a rejected command keeps the editor open with the picked values intact", async () => {
+    renderSheet({ onKnock: vi.fn(() => false) });
+    await userEvent.click(screen.getByTestId("appt-open"));
+    fireEvent.change(screen.getByTestId("appt-date"), { target: { value: "2026-08-29" } });
+    await userEvent.click(screen.getByTestId("appt-save"));
+    expect(screen.getByTestId("appt-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("appt-date")).toHaveValue("2026-08-29");
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
+  });
+
+  it("no appointment affordance on a do-not-knock door - an appointment IS a knock", () => {
+    renderSheet({ lead: baseLead({ doNotKnock: 1 }) });
+    expect(screen.queryByTestId("knock-appointment")).not.toBeInTheDocument();
+  });
+});
+
+describe("<LeadKnockSheet /> - proximity chip", () => {
+  function stubGeolocation(coords: { latitude: number; longitude: number; accuracy: number } | null) {
+    Object.defineProperty(navigator, "geolocation", {
+      configurable: true,
+      value: coords == null ? undefined : {
+        getCurrentPosition: (ok: PositionCallback) =>
+          ok({ coords, timestamp: Date.now() } as GeolocationPosition),
+      },
+    });
+  }
+  const clearGeolocation = () =>
+    Object.defineProperty(navigator, "geolocation", { configurable: true, value: undefined });
+
+  it("shows the live distance to this door and 'At door' inside 60 m", async () => {
+    // baseLead sits at (34.9, -79.9); the fix is right on the doorstep.
+    stubGeolocation({ latitude: 34.9, longitude: -79.9, accuracy: 12 });
+    try {
+      renderSheet();
+      const chip = await screen.findByTestId("knock-proximity");
+      expect(chip).toHaveTextContent("At door");
+    } finally { clearGeolocation(); }
+  });
+
+  it("far from the door it reads an honest distance hint", async () => {
+    // ~1,112 m north of the lead → "0.7mi".
+    stubGeolocation({ latitude: 34.91, longitude: -79.9, accuracy: 12 });
+    try {
+      renderSheet();
+      const chip = await screen.findByTestId("knock-proximity");
+      expect(chip).toHaveTextContent("0.7mi");
+      expect(chip).not.toHaveTextContent("At door");
+    } finally { clearGeolocation(); }
+  });
+
+  it("renders NOTHING without GPS, and NOTHING when the fix is too loose to be honest", async () => {
+    stubGeolocation(null); // no geolocation API at all
+    try {
+      const { unmount } = renderSheet();
+      await screen.findByTestId("knock-status-grid");
+      expect(screen.queryByTestId("knock-proximity")).not.toBeInTheDocument();
+      unmount();
+    } finally { clearGeolocation(); }
+
+    stubGeolocation({ latitude: 34.9, longitude: -79.9, accuracy: 900 }); // ±900 m fix
+    try {
+      renderSheet();
+      await screen.findByTestId("knock-status-grid");
+      // Give the capture a tick to land, then confirm the chip stayed away.
+      await act(() => new Promise(r => setTimeout(r, 30)));
+      expect(screen.queryByTestId("knock-proximity")).not.toBeInTheDocument();
+    } finally { clearGeolocation(); }
   });
 });

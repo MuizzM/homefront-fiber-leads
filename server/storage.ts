@@ -4593,12 +4593,15 @@ export class Storage implements IStorage {
           ORDER BY k2.knocked_at DESC, k2.id DESC
           LIMIT 1
         )
-        AND k.outcome = 'callback'
+        -- A scheduled return is ANY follow-up-family knock carrying a real
+        -- date: legacy 'callback' rows, and the field map's appointment
+        -- composer which rides 'follow_up' / 'go_back' knocks (Aug 2026).
+        AND k.outcome IN ('callback', 'follow_up', 'go_back')
         AND k.callback_date IS NOT NULL
         AND (
           l.last_outcome_at IS NULL
           OR l.last_outcome_at <= k.knocked_at
-          OR l.last_outcome IN ('callback', 'follow_up')
+          OR l.last_outcome IN ('callback', 'follow_up', 'go_back')
         )
         ${tenantAnd}
         ${repAnd}

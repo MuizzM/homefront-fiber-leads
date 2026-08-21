@@ -15,6 +15,16 @@
    background (filled, outline, ghost) in both themes without per-variant
    colors. Hover only where a hover pointer exists (no sticky-hover on touch). */
 @layer utilities {
+  /* Horizontal chip/disc strips: the half-visible last item IS the scroll
+     affordance, so the bar itself would only add chrome (and on Android it
+     overlays the discs' labels). Keyboard users tab through the buttons inside;
+     wheel/drag scrolling is untouched. */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
   @media (hover: hover) {
     .hover-elevate:hover {
       background-image: linear-gradient(hsl(var(--foreground) / 0.06), hsl(var(--foreground) / 0.06));
