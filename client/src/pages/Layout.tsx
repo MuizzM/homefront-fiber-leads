@@ -366,10 +366,19 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // would still land on a permanently empty screen. The count endpoint is the
   // probe: a 200 means the feature is on, and it doubles as the badge. Same
   // mistake the Login Activity comment above records, avoided the same way.
+  //
+  // The flag state itself rides the session payload (like isSuperAdmin), and
+  // the poll only runs where it says the feature is on. Probing blind meant
+  // every flag-off environment logged a console 404 per minute per approver -
+  // the browser prints "Failed to load resource" for a 404 whether or not the
+  // app handles it. The probe's 200 is still what turns the nav entry on, so
+  // a server whose flag dropped mid-session converges to hidden on the next
+  // poll; a flip ON is noticed at the next sign-in or app relaunch, which is
+  // how an env-var change already reaches clients.
   const gateProbe = useQuery<{ pending: number }>({
     queryKey: ["/api/actions/pending-count"],
     refetchInterval: 60_000,
-    enabled: can(role, "action.queue.read") && !gated,
+    enabled: can(role, "action.queue.read") && !gated && user?.guardedActionsEnabled === true,
     retry: false,
   });
   const actionGateLive = gateProbe.isSuccess;

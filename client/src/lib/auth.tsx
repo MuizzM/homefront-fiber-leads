@@ -21,6 +21,13 @@ export interface AuthUser {
   // separately-fetched allowlist) is what keeps the console from disappearing
   // on refresh: it arrives with the session, in the same payload as the role.
   isSuperAdmin?: boolean;
+  // Whether GUARDED_ACTIONS_ENABLED is set server-side. Same delivery choice
+  // as isSuperAdmin: it arrives with the session, so Layout can decide whether
+  // to run the pending-count poll at all instead of discovering a flag-off
+  // environment through a 404 every minute (an error the browser logs to the
+  // console unsuppressably). Absent on payloads from older servers, which
+  // reads as false - the poll simply stays off until the next hydration.
+  guardedActionsEnabled?: boolean;
 }
 
 interface AuthCtx {

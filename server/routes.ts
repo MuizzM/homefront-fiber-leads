@@ -174,6 +174,7 @@ import { registerAcademyRoutes } from "./academyRoutes";
 import { registerVendorOrderRoutes } from "./vendorOrderRoutes";
 import { registerCommissionFileRoutes } from "./commissionFileRoutes";
 import { registerGuardedActionRoutes } from "./guardedActionRoutes";
+import { guardedActionsEnabled } from "./guardedActionEngine";
 import { registerAddressPointRoutes } from "./addressPointRoutes";
 
 type AddressScanner = typeof scanAddress;
@@ -7569,6 +7570,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             id: u.id, name: u.name, email: u.email, role: u.role,
             teamMemberId: u.teamMemberId, tenantId: (u as any).tenantId ?? null,
             isSuperAdmin: Boolean((u as any).isSuperAdmin),
+            // Rides the session payload for the same reason isSuperAdmin does:
+            // the nav must know before it fetches. With the flag down every
+            // /api/actions route answers 404 (deliberately - see
+            // guardedActionRoutes.ts), so a client that only discovers the
+            // state by probing logs a console 404 every poll in every
+            // flag-off environment. Saying it here costs nothing an
+            // authenticated caller could not already learn from 403-vs-404.
+            guardedActionsEnabled: guardedActionsEnabled(),
           };
         } else if (u) {
           accessRevoked = true;
@@ -7766,7 +7775,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     otpRateBuckets.reset("verify", ipBucketKey(ip));
     otpRateBuckets.reset("request", `email:${cleanEmail}`);
     const session = storage.createSession(user.id);
-    res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId } });
+    // guardedActionsEnabled must ship on the LOGIN payload too, not only on
+    // /api/auth/status: the SPA runs on this user object until the next full
+    // reload (login() never re-runs checkStatus), so leaving it off would hide
+    // the Action Approvals nav from a freshly signed-in approver.
+    res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId, guardedActionsEnabled: guardedActionsEnabled() } });
   }
 
   // Login-attempt audit (owner ask 2026-07-26): managers read the persistent

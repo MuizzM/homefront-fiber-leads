@@ -160,7 +160,13 @@ disabling it is a rollback that needs no deploy.
 
 The nav entry is filtered on a live probe of `/api/actions/pending-count` rather
 than on the capability alone - with the flag down that endpoint 404s, so a role
-holding `action.queue.read` does not get a permanently empty screen.
+holding `action.queue.read` does not get a permanently empty screen. The client
+does not probe blind, though: the session payload (`/api/auth/status` and the
+login response) carries `guardedActionsEnabled`, and Layout only starts the
+poll where it is true. Probing blind meant every flag-off environment logged an
+unsuppressable console 404 once a minute for every signed-in approver. The 404
+wall itself is unchanged - the flag bit on an authenticated session discloses
+nothing that 403-vs-404 on these routes did not already.
 
 ## What is deliberately not here
 

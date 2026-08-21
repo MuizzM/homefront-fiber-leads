@@ -10,9 +10,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 let mockRole = "rep";
+// The server-side GUARDED_ACTIONS_ENABLED bit as the session payload delivers
+// it. Defaults off, which is how the feature ships.
+let mockGuardedActionsEnabled = false;
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
-    user: { id: 1, name: "Rae Rep", role: mockRole, teamMemberId: 9, isSuperAdmin: false },
+    user: {
+      id: 1, name: "Rae Rep", role: mockRole, teamMemberId: 9, isSuperAdmin: false,
+      guardedActionsEnabled: mockGuardedActionsEnabled,
+    },
     logout: vi.fn(),
   }),
 }));
@@ -25,6 +31,7 @@ import Layout, { isTrainingGateOpenClientPath } from "../../client/src/pages/Lay
 
 function renderLayout(role: string) {
   mockRole = role;
+  mockGuardedActionsEnabled = false;
   const qc = new QueryClient({
     defaultOptions: {
       queries: {
@@ -107,6 +114,61 @@ describe("field nav reachability", () => {
     expect(within(dialog).getByRole("heading", { name: "Field" })).toBeInTheDocument();
     expect(within(dialog).getByRole("link", { name: "Leaderboard" })).toHaveAttribute("aria-current", "page");
     expect(within(dialog).getByRole("link", { name: "Profile and account" })).toBeInTheDocument();
+  });
+});
+
+describe("the action-approvals gate probe", () => {
+  // The probe (GET /api/actions/pending-count) must only ever run where the
+  // session payload says the guarded-actions flag is on. With the flag off the
+  // server answers 404 by design, and a browser logs every 404 to the console
+  // unsuppressably - so an approver-role user in a flag-off environment used
+  // to collect one console error per minute from this poll alone.
+  function renderRecordingRequests(role: string, guardedOn: boolean) {
+    mockRole = role;
+    mockGuardedActionsEnabled = guardedOn;
+    const requested: string[] = [];
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          queryFn: ({ queryKey }) => {
+            const url = String(queryKey[0]);
+            requested.push(url);
+            return Promise.resolve(
+              url.includes("territory") ? []
+              : url === "/api/actions/pending-count" ? { pending: 3 }
+              : {});
+          },
+        },
+      },
+    });
+    render(
+      <QueryClientProvider client={qc}>
+        <Layout><div /></Layout>
+      </QueryClientProvider>,
+    );
+    return requested;
+  }
+
+  it("an admin in a flag-off environment never issues the request and sees no nav entry", async () => {
+    const requested = renderRecordingRequests("admin", false);
+    // Let the layout's other queries fire so "never" means settled, not early.
+    await waitFor(() => expect(requested.length).toBeGreaterThan(0));
+    expect(requested).not.toContain("/api/actions/pending-count");
+    expect(screen.queryByTestId("nav-action-approvals")).toBeNull();
+  });
+
+  it("an admin in a flag-on environment probes, and the entry appears once the probe answers", async () => {
+    const requested = renderRecordingRequests("admin", true);
+    await waitFor(() => expect(screen.getByTestId("nav-action-approvals")).toBeTruthy());
+    expect(requested).toContain("/api/actions/pending-count");
+  });
+
+  it("a rep never probes even where the flag is on (no action.queue.read)", async () => {
+    const requested = renderRecordingRequests("rep", true);
+    await waitFor(() => expect(requested.length).toBeGreaterThan(0));
+    expect(requested).not.toContain("/api/actions/pending-count");
+    expect(screen.queryByTestId("nav-action-approvals")).toBeNull();
   });
 });
 
