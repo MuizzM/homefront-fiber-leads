@@ -1,0 +1,6 @@
+interface:
+  display_name: "Design Principles"
+  short_description: "S-tier SaaS dashboard design checklist"
+  default_prompt: "Use $design-principles to design or review this dashboard UI against the S-tier checklist."
+policy:
+  allow_implicit_invocation: true

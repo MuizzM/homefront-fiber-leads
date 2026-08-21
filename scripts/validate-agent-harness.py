@@ -21,6 +21,7 @@ EXPECTED_SKILLS = {
     "homefront-backend-system-design",
     "impeccable",
     "ui-skills-root",
+    "design-principles",
 }
 SKILL_FRONTMATTER_FIELDS = {
     "impeccable": ["name", "description", "version"],

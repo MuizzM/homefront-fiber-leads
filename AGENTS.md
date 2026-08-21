@@ -71,6 +71,7 @@ At every meaningful checkpoint, record completed work, validation evidence, rema
 - Use `$homefront-verify-change` after code or harness changes.
 - Use `$impeccable` for explicit frontend design, critique, audit, polish, responsive, or UI hardening work.
 - Use `$ui-skills-root` before UI work when a narrower accessibility, metadata, motion, or baseline craft skill should be selected through the UI Skills registry.
+- Use `$design-principles` when designing or reviewing dashboards, SaaS interfaces, or frontend work that should meet the S-tier design checklist (tokens, hierarchy, tables, forms, interaction states, accessibility).
 - Use `$homefront-review-pr` for cross-cutting PR review.
 - Use `$homefront-backend-system-design` for backend architecture, production readiness, scaling, queues, resilience, observability, or deep SaaS improvements.
 - Use `$homefront-scanner-safety` for Kinetic/Decodo, market discovery, fresh-fiber, new-build, or scan-budget work.
