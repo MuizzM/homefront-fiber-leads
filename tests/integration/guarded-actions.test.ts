@@ -157,6 +157,16 @@ describe("with the flag off the surface does not exist", () => {
   it("leaves the door exactly where it was", async () => {
     expect(assigneeOf(doorIds[0])).toBe(repMemberId);
   });
+
+  it("tells the session payload the feature is off, so no client ever probes into the wall", async () => {
+    // The nav gate reads this bit before it starts the pending-count poll.
+    // Without it, every signed-in approver in a flag-off environment logged an
+    // unsuppressable console 404 per minute against the 404 wall above.
+    const { status, body } = await json("/api/auth/status", leadASession);
+    expect(status).toBe(200);
+    expect(body.currentUser?.id).toBeTruthy();
+    expect(body.currentUser?.guardedActionsEnabled).toBe(false);
+  });
 });
 
 // ── Everything below runs with the gate on ───────────────────────────────────
@@ -167,6 +177,12 @@ describe("with the gate on", () => {
   beforeEach(() => {
     rawDb.prepare(`UPDATE leads SET assigned_rep_id = ? WHERE tenant_id = ?`).run(repMemberId, ORG);
     rawDb.prepare(`DELETE FROM guarded_action_policies WHERE tenant_id = ?`).run(ORG);
+  });
+
+  it("tells the session payload the feature is on, which is what starts the client's poll", async () => {
+    const { status, body } = await json("/api/auth/status", leadASession);
+    expect(status).toBe(200);
+    expect(body.currentUser?.guardedActionsEnabled).toBe(true);
   });
 
   describe("an automatic action executes and is journaled", () => {
