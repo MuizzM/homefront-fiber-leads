@@ -25,10 +25,7 @@
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Copy, Check, X, DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone, UserCheck,
-  Flag, KeyRound, Truck, Ban, RotateCcw, CalendarPlus, LocateFixed, type LucideIcon,
-} from "lucide-react";
+import { Copy, Check, X, CalendarPlus, LocateFixed } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
@@ -36,9 +33,10 @@ import { apiRequest } from "@/lib/queryClient";
 import { captureFieldFix } from "@/lib/geoFix";
 import {
   FIELD_OUTCOMES, OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
-  haversineMeters, distanceHint, todayISO,
-  type KnockOutcome, type PinDisplayState,
+  haversineMeters, distanceHint, todayISO, DS_TO_OUTCOME,
+  type KnockOutcome,
 } from "@shared/knock";
+import { ICON_MAP } from "@/components/lead-sheet/OutcomeButton";
 import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
 import { normalizeZip5 } from "@shared/addressKey";
 import { LeadContacts } from "@/components/LeadContacts";
@@ -113,13 +111,6 @@ export interface LeadKnockSheetProps {
   onDelete?: () => void;
 }
 
-// lucide icon NAME (from OutcomeDef.icon) → component. Pins and card share one
-// palette; this is the one place a name string becomes a rendered glyph.
-const ICON_MAP: Record<string, LucideIcon> = {
-  DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle, UserCheck,
-  Flag, KeyRound, Truck, Ban, RotateCcw,
-};
-
 // Tap-vs-drag threshold: header taps must still land.
 const TAP_SLOP_PX = 6;
 // Dragging further than this below the peek position dismisses the sheet.
@@ -137,15 +128,8 @@ const FLICK_VELOCITY = 0.5; // px/ms
 const PRIMARY_GRID_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
 const PRIMARY_OUTCOMES = FIELD_OUTCOMES.filter(o => PRIMARY_GRID_KEYS.includes(o.key));
 const STRIP_OUTCOMES = FIELD_OUTCOMES.filter(o => !PRIMARY_GRID_KEYS.includes(o.key));
-
-// The active outcome mirrors the lead's CURRENT display state.
-const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {
-  unworked: "prospect", not_home: "not_home", interested: "interested",
-  follow_up: "follow_up", callback: "callback", sold: "sold",
-  not_interested: "not_interested", already_customer: "already_customer",
-  competitor: "competitor", renter: "renter", moving: "moving",
-  no_soliciting: "no_soliciting", go_back: "go_back",
-};
+// The active outcome mirrors the lead's CURRENT display state — DS_TO_OUTCOME
+// now lives in shared/knock.ts so every disposition surface reads one mirror.
 
 // One responsive card, two homes: bottom sheet under ~1024px, docked right
 // panel above it (same components, same behavior — no forked UI).

@@ -4,9 +4,21 @@
 // same active/flash styling, same testid contract (knock-outcome-{key}) so the
 // disposition surface is identical no matter which level it renders at.
 
-import { Check, type LucideIcon } from "lucide-react";
+import {
+  Check, DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle, UserCheck,
+  Flag, KeyRound, Truck, Ban, RotateCcw, type LucideIcon,
+} from "lucide-react";
 import type { OutcomeDef } from "@shared/knock";
 import { isLeadMapStatus, STATUS_CONFIG } from "@shared/statusConfig";
+
+// lucide icon NAME (from OutcomeDef.icon) → component. THE one place a name
+// string becomes a rendered glyph — the map card, the Today/PropertyDetail
+// sheet, and the manager quick-log all read this map, so a disposition added
+// to shared/knock.ts gets its icon everywhere at once.
+export const ICON_MAP: Record<string, LucideIcon> = {
+  DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle, UserCheck,
+  Flag, KeyRound, Truck, Ban, RotateCcw,
+};
 
 export interface OutcomeButtonProps {
   outcome: OutcomeDef;
@@ -45,11 +57,28 @@ export function outcomeFillTextColor(fill: string): "#07111B" | "#FFFFFF" {
 // cells, one column narrow enough that every disposition stays one thumb-scroll
 // away. The CODE is the accessible-name supplement, never the only signal —
 // aria-label carries the full label.
-export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, disabled = false }: Omit<OutcomeButtonProps, "variant">): JSX.Element {
+//
+// Two surfaces, one disc: "glass" (the map card's fixed-dark sheet — white
+// ring/label chrome) and "card" (Today/PropertyDetail's themed shadcn Sheet
+// and the manager Dialog — chrome from the semantic tokens so both themes
+// hold AA without a per-status ink table). The status-colored fill and white
+// pin glyph are theme-independent on both.
+export interface OutcomeDiscProps extends Omit<OutcomeButtonProps, "variant"> {
+  surface?: "glass" | "card";
+}
+
+export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, disabled = false, surface = "glass" }: OutcomeDiscProps): JSX.Element {
   const filled = active || flashing;
   const darkSheetColor = isLeadMapStatus(o.key)
     ? (STATUS_CONFIG[o.key].onDark ?? o.color)
     : o.color;
+  const discShadow = surface === "glass"
+    ? (filled
+        ? `0 0 0 2px rgba(255,255,255,0.92)${flashing ? `, 0 2px 12px ${o.color}88` : ""}`
+        : "0 0 0 1px rgba(255,255,255,0.22)")
+    : (filled
+        ? `0 0 0 2px hsl(var(--ring))${flashing ? `, 0 2px 12px ${o.color}88` : ""}`
+        : "0 0 0 1px hsl(var(--border))");
   return (
     <button
       key={o.key}
@@ -72,24 +101,31 @@ export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, d
         className="w-11 h-11 rounded-full flex items-center justify-center transition-shadow"
         style={{
           background: o.color,
-          // Active = the same white ring the selected map pin wears; the flash
-          // adds the glow the grid cells use. Idle discs sit on a hairline so
-          // the dark NOSO disc never dissolves into the dark sheet.
-          boxShadow: filled
-            ? `0 0 0 2px rgba(255,255,255,0.92)${flashing ? `, 0 2px 12px ${o.color}88` : ""}`
-            : "0 0 0 1px rgba(255,255,255,0.22)",
+          // Active = the ring the surface's selection language uses (white on
+          // glass, --ring on tokens); the flash adds the grid cells' glow.
+          // Idle discs sit on a hairline so the dark NOSO disc never dissolves
+          // into a dark surface.
+          boxShadow: discShadow,
         }}
       >
         {flashing
           ? <Check aria-hidden="true" className="w-5 h-5" style={{ color: outcomeFillTextColor(o.color) }} />
           : Icon ? <Icon aria-hidden="true" className="w-5 h-5 text-white" /> : null}
       </span>
-      <span
-        className="text-2xs font-bold tracking-[0.04em] leading-none"
-        style={{ color: filled ? "#FFFFFF" : darkSheetColor }}
-      >
-        {o.short}
-      </span>
+      {surface === "glass" ? (
+        <span
+          className="text-2xs font-bold tracking-[0.04em] leading-none"
+          style={{ color: filled ? "#FFFFFF" : darkSheetColor }}
+        >
+          {o.short}
+        </span>
+      ) : (
+        <span
+          className={`text-2xs font-bold tracking-[0.04em] leading-none ${filled ? "text-foreground" : "text-muted-foreground"}`}
+        >
+          {o.short}
+        </span>
+      )}
     </button>
   );
 }

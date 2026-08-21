@@ -159,6 +159,19 @@ const NOT_INTERESTED_VARIANTS: readonly KnockOutcome[] =
   ["already_customer", "competitor", "renter", "moving", "no_soliciting"];
 const FOLLOW_UP_VARIANTS: readonly KnockOutcome[] = ["callback", "go_back"];
 
+// Display state → the outcome whose button mirrors it as "pressed". Shared by
+// every disposition surface (map card, Today/PropertyDetail sheet, manager
+// quick-log) so the active-state mirror can never disagree between them.
+// Legacy contacted/needs_verification deliberately have no entry — nothing on
+// a current surface should light up for them.
+export const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {
+  unworked: "prospect", not_home: "not_home", interested: "interested",
+  follow_up: "follow_up", callback: "callback", sold: "sold",
+  not_interested: "not_interested", already_customer: "already_customer",
+  competitor: "competitor", renter: "renter", moving: "moving",
+  no_soliciting: "no_soliciting", go_back: "go_back",
+};
+
 export function pinDisplayState(p: {
   leadStatus: string; visited?: boolean | number | null; lastOutcome?: string | null;
 }): PinDisplayState {
