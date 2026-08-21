@@ -37,6 +37,7 @@ import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
 import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS, type PinDisplayState } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
+import { titleCaseAddress } from "@/lib/leadDisplay";
 import { consumeLeadsFilterHandoff } from "@/lib/leadsFilterHandoff";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -301,7 +302,7 @@ function KnockLogger({ lead, team }: {
       <DialogHeader>
         <DialogTitle className="text-base flex items-center gap-2">
           
-          Door Knock - {lead.address}
+          Door Knock - {titleCaseAddress(lead.address)}
         </DialogTitle>
       </DialogHeader>
       <div className="space-y-3">
@@ -437,7 +438,7 @@ function AssignRepModal({ lead, team, onClose }: {
       <DialogHeader>
         <DialogTitle className="text-base">Assign Rep</DialogTitle>
       </DialogHeader>
-      <p className="text-xs text-muted-foreground">{lead.address}, {lead.city}</p>
+      <p className="text-xs text-muted-foreground">{titleCaseAddress(lead.address)}, {titleCaseAddress(lead.city)}</p>
       <Select value={repId} onValueChange={setRepId}>
         <SelectTrigger className="bg-secondary border-input" data-testid="assign-rep-select">
           <SelectValue placeholder="Select rep..." />
@@ -505,7 +506,7 @@ const ONBOARDING_STAGE_LABEL: Record<string, string> = {
   failed: "Delivery failed",
 };
 
-function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign = false, onboardingStage, onAssign, onEdit, onQualify }: {
+function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign = false, onboardingStage, onAssign, onEdit, onQualify, onMap }: {
   lead: Lead;
   open: boolean;
   onClose: () => void;
@@ -516,6 +517,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
   onAssign?: () => void;
   onEdit?: () => void;
   onQualify?: () => void;
+  onMap?: () => void;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -602,8 +604,8 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             </Badge>
             {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-warning/10 text-warning text-2xs">High priority</Badge>}
           </div>
-          <SheetTitle className="text-lg font-semibold tracking-tight mt-2">{current.address}</SheetTitle>
-          <p className="text-xs text-muted-foreground">{current.city}, {current.state} {current.zip}</p>
+          <SheetTitle className="text-lg font-semibold tracking-tight mt-2">{titleCaseAddress(current.address)}</SheetTitle>
+          <p className="text-xs text-muted-foreground">{titleCaseAddress(current.city)}, {current.state} {current.zip}</p>
         </SheetHeader>
 
         <div className="px-5 py-4 border-b border-border grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -615,6 +617,9 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           <a href={directions} target="_blank" rel="noreferrer" className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">
              Navigate
           </a>
+          {/* The field map is where knocks are logged, so the sheet must not be
+              a dead end for a rep whose only other action here is Navigate. */}
+          {onMap && <button onClick={onMap} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">Field map</button>}
           {canAssign && <button onClick={onAssign} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">{current.assignedRepId ? "Reassign" : "Assign"}</button>}
           {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15"> Qualify</button>}
         </div>
@@ -886,9 +891,9 @@ const LeadTableRow = memo(function LeadTableRow({
   const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
   return (
     <tr data-testid={`card-lead-${lead.id}`} className={`group hover:bg-muted/35 transition-colors${saving ? " opacity-70" : ""}`}>
-      <td className="px-4 py-3"><button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={lead.address}>{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+      <td className="px-4 py-3"><button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={titleCaseAddress(lead.address)}>{titleCaseAddress(lead.address)}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
       <td className="px-3 py-3">{(() => { const s = leadStateChip(lead); return <Badge className={`border-0 text-2xs font-semibold ${s.chip}`}>{s.label}</Badge>; })()}</td>
-      <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
+      <td className="px-3 py-3"><div className="text-xs font-medium">{titleCaseAddress(lead.city)}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
       <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100 · {lead.lastScannedAt ? `scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "no scan timestamp"}</div></td>
       <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-destructive" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
@@ -941,7 +946,7 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
     <article className={`render-lazy flex items-center gap-1 py-1.5 pl-4 pr-2 transition-colors active:bg-secondary/50${saving ? " opacity-70" : ""}`} data-testid={`mobile-lead-${lead.id}`}>
       <button onClick={() => !saving && onOpen(lead)} aria-label={`Open details for ${lead.address}`} className="min-h-tap min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <div className="flex items-center gap-2">
-          <span className="truncate text-[14px] font-semibold leading-snug text-foreground">{lead.address}</span>
+          <span className="truncate text-[14px] font-semibold leading-snug text-foreground">{titleCaseAddress(lead.address)}</span>
           {(lead.leadScore ?? 0) >= 80 && <span className="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-2xs font-bold text-warning">HIGH</span>}
           {/* leadStateChip, NOT the raw lookup: "already a customer" is stored
               as not_interested + lastOutcome, and the raw label showed those
@@ -950,7 +955,7 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
           {(() => { const s = leadStateChip(lead); return <Badge className={`ml-auto shrink-0 border-0 text-2xs ${s.chip}`}>{s.label}</Badge>; })()}
         </div>
         <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[12px] text-muted-foreground">
-          <span className="truncate">{lead.city}, {lead.state} {lead.zip}</span>
+          <span className="truncate">{titleCaseAddress(lead.city)}, {lead.state} {lead.zip}</span>
           <span aria-hidden="true">·</span>
           <span className={`shrink-0 font-semibold ${next.tone}`}>{next.label}</span>
           <span className="ml-auto shrink-0 pl-2 text-[11px]">{formatActivity(lead.updatedAt || lead.createdAt)}</span>
@@ -1375,15 +1380,15 @@ export default function Leads() {
         // taps the number and lands on exactly those doors, instead of reading a
         // dead stat and then hunting the chip rail. min-h-tap on every cell.
         <div className="grid grid-cols-3 divide-x divide-border rounded-xl border border-border bg-card md:hidden" data-testid="rep-leads-summary">
-          <button type="button" onClick={() => handleStatusChange("all")} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "all" ? "bg-secondary/50" : ""}`}>
+          <button type="button" onClick={() => handleStatusChange("all")} aria-pressed={filterStatus === "all"} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "all" ? "bg-secondary/50" : ""}`}>
             <span className="block text-2xs font-medium text-muted-foreground">Assigned</span>
             <span className="mt-1 block text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</span>
           </button>
-          <button type="button" onClick={() => handleStatusChange("follow_up")} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "follow_up" ? "bg-secondary/50" : ""}`}>
+          <button type="button" onClick={() => handleStatusChange("follow_up")} aria-pressed={filterStatus === "follow_up"} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "follow_up" ? "bg-secondary/50" : ""}`}>
             <span className="block text-2xs font-medium text-muted-foreground">Follow-ups</span>
             <span className="mt-1 block text-xl font-semibold tabular-nums text-warning">{bs.follow_up ?? 0}</span>
           </button>
-          <button type="button" onClick={() => handleStatusChange("interested")} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "interested" ? "bg-secondary/50" : ""}`}>
+          <button type="button" onClick={() => handleStatusChange("interested")} aria-pressed={filterStatus === "interested"} className={`min-h-tap px-3 py-3 text-left transition-colors active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${filterStatus === "interested" ? "bg-secondary/50" : ""}`}>
             <span className="block text-2xs font-medium text-muted-foreground">Interested</span>
             <span className="mt-1 block text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</span>
           </button>
@@ -1437,7 +1442,7 @@ export default function Leads() {
           <div className="flex flex-col lg:flex-row gap-2.5">
             <div className="relative flex-1 min-w-[240px]">
               
-              <Input aria-label="Search leads" value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-11 lg:h-9" data-testid="input-search-leads" />
+              <Input aria-label="Search leads" value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, ZIP, or name" className="pl-9 pr-9 bg-card border-input text-sm h-11 lg:h-9" data-testid="input-search-leads" />
               {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
             </div>
             <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-11 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2">Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
@@ -1445,9 +1450,9 @@ export default function Leads() {
               {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
               <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
               <Select value={filterCity} onValueChange={handleCityChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-city"><SelectValue placeholder="Territory" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="all">All territories</SelectItem>{cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
-              <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber states</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>
+              <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>
               <Select value={scanWindow} onValueChange={value => handleScanWindowChange(value as typeof scanWindow)}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-scan-window"><SelectValue placeholder="Scan age" /></SelectTrigger><SelectContent><SelectItem value="all">Any scan age</SelectItem><SelectItem value="24h">Scanned in 24h</SelectItem><SelectItem value="7d">Scanned in 7 days</SelectItem><SelectItem value="30d">Scanned in 30 days</SelectItem></SelectContent></Select>
-              <Select value={sortMode} onValueChange={value => handleSortChange(value as typeof sortMode)}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]" data-testid="sort-leads"><SelectValue placeholder="Sort leads" /></SelectTrigger><SelectContent><SelectItem value="created_desc">Newest added</SelectItem><SelectItem value="scanned_desc">Newest scanned</SelectItem></SelectContent></Select>
+              <Select value={sortMode} onValueChange={value => handleSortChange(value as typeof sortMode)}><SelectTrigger className="col-span-2 sm:col-span-1 h-10 bg-card lg:h-9 lg:w-[150px]" data-testid="sort-leads"><SelectValue placeholder="Sort leads" /></SelectTrigger><SelectContent><SelectItem value="created_desc">Newest added</SelectItem><SelectItem value="scanned_desc">Newest scanned</SelectItem></SelectContent></Select>
             </div>
           </div>
 
@@ -1579,6 +1584,7 @@ export default function Leads() {
           onAssign={() => { setAssignLead(intelLead); setIntelLead(null); }}
           onEdit={() => { setEditLead(intelLead); setIntelLead(null); }}
           onQualify={() => updateMutation.mutate({ id: intelLead.id, data: { leadStatus: "interested" } })}
+          onMap={() => { const target = intelLead; setIntelLead(null); openLeadOnMap(target); }}
         />
       )}
     </div>

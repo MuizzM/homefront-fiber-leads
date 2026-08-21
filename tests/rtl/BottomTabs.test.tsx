@@ -167,4 +167,19 @@ describe("liquid motion: press state and entrance", () => {
     render(<BottomTabs role="rep" />);
     expect(screen.getByTestId("bottom-tabs").className).not.toContain("liquid-bar-enter");
   });
+
+  // A screen reader must hear "Today, link, current page" — not four bare
+  // links. The visible label text is the accessible name; aria-current marks
+  // the active destination. Pinned by role+name so an aria-hidden or
+  // text-outside-the-link refactor cannot silently strip the names again.
+  it("names every destination for assistive tech and marks the active one", () => {
+    window.location.hash = "#/leads";
+    render(<BottomTabs role="rep" />);
+    for (const name of ["Today", "Leads", "Map", "Pay"]) {
+      expect(screen.getByRole("link", { name })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("link", { name: "Leads" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Today" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Open more navigation" })).toBeInTheDocument();
+  });
 });
