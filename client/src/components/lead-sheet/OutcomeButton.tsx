@@ -85,7 +85,7 @@ export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, d
           : Icon ? <Icon aria-hidden="true" className="w-5 h-5 text-white" /> : null}
       </span>
       <span
-        className="text-[10px] font-bold tracking-[0.04em] leading-none"
+        className="text-2xs font-bold tracking-[0.04em] leading-none"
         style={{ color: filled ? "#FFFFFF" : darkSheetColor }}
       >
         {o.short}
