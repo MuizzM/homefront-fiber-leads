@@ -1,0 +1,40 @@
+import * as React from "react"
+import * as TooltipPrimitive from "@radix-ui/react-tooltip"
+
+import { cn } from "@/lib/utils"
+
+// shadcn/ui Tooltip (new-york), themed to the app's tokens. The one commonly
+// needed primitive the toolkit was missing: a native `title=` never appears on
+// touch and is unreliable for keyboard users, so an affordance whose meaning
+// lives only in a title (e.g. a gated/disabled control) has no explanation on a
+// phone. This gives those cases a real, accessible tooltip.
+//
+// A single TooltipProvider sits at the app root (App.tsx); individual call
+// sites use <Tooltip><TooltipTrigger/><TooltipContent/></Tooltip>.
+
+const TooltipProvider = TooltipPrimitive.Provider
+
+const Tooltip = TooltipPrimitive.Root
+
+const TooltipTrigger = TooltipPrimitive.Trigger
+
+const TooltipContent = React.forwardRef<
+  React.ElementRef<typeof TooltipPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>
+>(({ className, sideOffset = 6, ...props }, ref) => (
+  <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Content
+      ref={ref}
+      sideOffset={sideOffset}
+      className={cn(
+        "z-50 max-w-[16rem] overflow-hidden rounded-lg border border-border bg-card px-2.5 py-1.5 text-2xs font-medium text-foreground shadow-[0_1px_2px_hsl(216_30%_3%/0.16),0_10px_30px_-24px_hsl(216_60%_2%/0.55)]",
+        "animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-1 data-[side=top]:slide-in-from-bottom-1 motion-reduce:animate-none",
+        className,
+      )}
+      {...props}
+    />
+  </TooltipPrimitive.Portal>
+))
+TooltipContent.displayName = TooltipPrimitive.Content.displayName
+
+export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider }

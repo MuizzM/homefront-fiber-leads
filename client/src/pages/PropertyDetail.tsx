@@ -25,6 +25,7 @@ import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { OUTCOME_META, STATE_COLORS, STATE_LABELS, pinDisplayState, type KnockOutcome } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { ErrorState } from "@/components/ErrorState";
 import { useCan } from "@/lib/capabilities";
 import { ChevronLeft, Zap, Wifi, Building2, User as UserIcon, Mail, AlertTriangle, StickyNote, UserPlus, RefreshCw, WifiOff, CloudUpload } from "lucide-react";
@@ -273,11 +274,19 @@ function PillsRow({ lead, showScore = true }: { lead: Lead; showScore?: boolean 
 }
 
 // Shared "Calling is gated" cell — same footprint as the live link.
+// The gated "Calling" affordance. Its only explanation was a native title= that
+// never appears on a phone (where reps live) - now a real accessible tooltip
+// that opens on tap-and-hold and on keyboard focus.
 function ProtectedCell({ className }: { className: string }) {
   return (
-    <div className={`${className} cursor-not-allowed text-muted-foreground`} title="Requires calling access" aria-disabled="true">
-      Protected
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className={`${className} cursor-not-allowed text-muted-foreground`} aria-disabled="true" aria-label="Calling is protected: requires calling access">
+          Protected
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>Requires calling access. Ask your manager to enable it.</TooltipContent>
+    </Tooltip>
   );
 }
 

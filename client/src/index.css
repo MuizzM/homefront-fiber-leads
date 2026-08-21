@@ -572,6 +572,21 @@
     color: hsl(var(--foreground));
   }
 
+  /* The three browser surfaces left on their defaults: the text caret (a black
+     bar in every field), native form controls (checkbox/radio/range tick), and
+     the underline a text link draws. Theming them from the palette is the
+     cheapest "built, not assembled" signal - the rest of the chrome (focus,
+     selection, scrollbars) was already themed above. */
+  input, textarea, [contenteditable] { caret-color: hsl(var(--primary)); }
+  :root { accent-color: hsl(var(--primary)); }
+  /* Default link underlines sit cramped against the baseline and clip
+     descenders; a small offset + a thin skip lets the ink breathe. Scoped to
+     genuine text links, not the many role="button" anchors. */
+  a:not([class*="rounded"]):not([role="button"]) {
+    text-underline-offset: 0.18em;
+    text-decoration-thickness: from-font;
+  }
+
   /* Thin, themed scrollbars. The thumb colour was typed three times (standard
      property + webkit thumb + its hover); one token now feeds all three. */
   * {

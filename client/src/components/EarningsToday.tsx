@@ -88,8 +88,11 @@ export function EarningsToday({ className }: { className?: string }) {
       <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Earned today
       </div>
+      {/* Gold-as-text, matching the MyCommission hero and the design system's
+          rule that money headline figures are gold - the rep's day, in money,
+          is the one figure this widget exists for. */}
       <div
-        className="mt-0.5 text-[34px] font-bold leading-none tracking-tight tabular-nums text-foreground"
+        className="mt-0.5 text-[34px] font-bold leading-none tracking-tight tabular-nums text-gold-text"
         data-testid="earnings-today-banked"
       >
         {usd(shown)}

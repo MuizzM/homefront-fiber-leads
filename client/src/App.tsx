@@ -14,6 +14,7 @@ import Layout from "@/pages/Layout";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/not-found";
 import { UpdatePrompt } from "@/components/UpdatePrompt";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Route-level code splitting — every in-app page ships as its own lazy chunk
 // (Mapbox/GL, recharts, the five scanners, etc. no longer weigh down the
@@ -537,9 +538,13 @@ function App() {
   return (
     <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
       <AuthProvider>
-        <AppRoutes />
-        <Suspense fallback={null}><Toaster /></Suspense>
-        <UpdatePrompt />
+        {/* One Tooltip provider for the app; delayDuration tuned so a hint
+            appears intentionally, not on every incidental hover. */}
+        <TooltipProvider delayDuration={300} skipDelayDuration={150}>
+          <AppRoutes />
+          <Suspense fallback={null}><Toaster /></Suspense>
+          <UpdatePrompt />
+        </TooltipProvider>
       </AuthProvider>
     </PersistQueryClientProvider>
   );
