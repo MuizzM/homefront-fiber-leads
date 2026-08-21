@@ -877,7 +877,9 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 style={{ colorScheme: "dark" }}
               />
             </label>
-            <label className="w-[118px]">
+            {/* 132px: Chrome's 12-hour value ("06:30 PM" + clock icon) at the
+                16px no-zoom size clips at anything narrower — measured. */}
+            <label className="w-[132px]">
               <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>
                 Time <span className="normal-case font-normal text-white/35">(optional)</span>
               </span>

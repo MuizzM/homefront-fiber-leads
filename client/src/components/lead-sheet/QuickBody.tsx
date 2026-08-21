@@ -52,10 +52,14 @@ export function QuickBody(props: QuickBodyProps): JSX.Element {
   // Bring the pressed disc into view when a card opens on a strip-tier status
   // (a NOSO door must show its pressed NOSO disc, not a scrolled-away strip).
   // "nearest" never scrolls the page vertically; instant, so reduced-motion
-  // needs no special case.
+  // needs no special case. Deliberately NOT for the pressed LEAD disc: a fresh
+  // door is the common open, its state already reads from the green header
+  // line, and scrolling to the strip's far end would hide Follow-up/Go Back —
+  // the dispositions the rep actually came for.
   const stripRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!activeOutcome || !stripOutcomes.some(o => o.key === activeOutcome)) return;
+    if (!activeOutcome || activeOutcome === "prospect") return;
+    if (!stripOutcomes.some(o => o.key === activeOutcome)) return;
     try {
       stripRef.current
         ?.querySelector<HTMLElement>(`[data-testid="knock-outcome-${activeOutcome}"]`)
