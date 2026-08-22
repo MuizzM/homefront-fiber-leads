@@ -25,14 +25,14 @@
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Check, X, CalendarPlus, LocateFixed } from "lucide-react";
+import { Copy, Check, X, LocateFixed } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
 import { captureFieldFix } from "@/lib/geoFix";
 import {
-  FIELD_OUTCOMES, OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
+  OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
   haversineMeters, distanceHint, todayISO, DS_TO_OUTCOME,
   type KnockOutcome,
 } from "@shared/knock";
@@ -41,7 +41,8 @@ import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
 import { normalizeZip5 } from "@shared/addressKey";
 import { LeadContacts } from "@/components/LeadContacts";
 import { leadDisplayName, type TracedPhone } from "@shared/tracerfy";
-import { PeekBar } from "@/components/lead-sheet/PeekBar";
+import { PeekBar, circleBtn } from "@/components/lead-sheet/PeekBar";
+import { StatusPinChip } from "@/components/lead-sheet/StatusPinChip";
 import { QuickBody } from "@/components/lead-sheet/QuickBody";
 import { DetailsBody } from "@/components/lead-sheet/DetailsBody";
 import { ContactSection } from "@/components/lead-sheet/ContactSection";
@@ -114,7 +115,24 @@ export interface LeadKnockSheetProps {
   canManage?: boolean;
   onCentralMark?: (outcome: KnockOutcome) => boolean | void | Promise<boolean | void>;
   onDelete?: () => void;
+  // The nearest OPEN door from where the rep stands (MapView ranks it with the
+  // same rule as the Nearest doors strip, excluding this door and the doors
+  // just worked). Offered in the peek lip right after a mark so the rep flows
+  // door to door without closing the card. Null when nothing honest is near.
+  nextDoor?: NextDoor | null;
+  onOpenLead?: (id: number) => void;
 }
+
+export interface NextDoor {
+  id: number;
+  address: string;
+  meters: number;
+  atDoor: boolean;
+}
+
+// Dispositions that mean "come back": the post-mark step is a time, not the
+// next door.
+const COME_BACK: ReadonlySet<KnockOutcome> = new Set<KnockOutcome>(["interested", "follow_up", "go_back"]);
 
 // Tap-vs-drag threshold: header taps must still land.
 const TAP_SLOP_PX = 6;
@@ -122,19 +140,17 @@ const TAP_SLOP_PX = 6;
 const CLOSE_OVERDRAG_PX = 80;
 // Flick faster than this decides snap direction regardless of position.
 const FLICK_VELOCITY = 0.5; // px/ms
+// A snap settles in the time the remaining travel takes at the release speed
+// (floored so a 40px correction still reads as motion, capped so a 500px
+// handle jump never lurches); the close path is capped by the unmount timer.
+const SNAP_MS_MIN = 120;
+const SNAP_MS_MAX = 280;
 
-// ONE unified disposition surface, two tiers, FIXED order (a control never
-// moves under the finger): the four most likely reads — Not Home | Interested /
-// Sold | Not Interested — keep the big 2-col grid cells, and EVERY other field
-// disposition renders as a compact status-coded disc in the strip beneath
-// (FU · GB · ACTV · COMP · RENT · MOV · NOSO · LEAD). Both tiers are exactly
-// FIELD_OUTCOMES split by PRIMARY_GRID_KEYS, so a disposition added to the
-// shared list appears here without a sheet change.
-const PRIMARY_GRID_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
-const PRIMARY_OUTCOMES = FIELD_OUTCOMES.filter(o => PRIMARY_GRID_KEYS.includes(o.key));
-const STRIP_OUTCOMES = FIELD_OUTCOMES.filter(o => !PRIMARY_GRID_KEYS.includes(o.key));
-// The active outcome mirrors the lead's CURRENT display state — DS_TO_OUTCOME
-// now lives in shared/knock.ts so every disposition surface reads one mirror.
+// ONE disposition surface, FIXED order (a control never moves under the
+// finger): every field disposition as the same 44px disc, six per row, in
+// FIELD_OUTCOMES order (the four most likely reads lead the first row). The
+// active outcome mirrors the lead's CURRENT display state — DS_TO_OUTCOME
+// lives in shared/knock.ts so every disposition surface reads one mirror.
 
 // One responsive card, two homes: bottom sheet under ~1024px, docked right
 // panel above it (same components, same behavior — no forked UI).
@@ -169,7 +185,7 @@ function readSafeAreaBottom(): number {
 }
 
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
-  const { canManage = false, onCentralMark, onDelete } = props;
+  const { canManage = false, onCentralMark, onDelete, nextDoor = null, onOpenLead } = props;
   const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0, onPeekHeight } = props;
 
   // Keep the last lead rendered while `lead: null` animates the sheet out.
@@ -193,18 +209,36 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   // way); it never deletes history. Cleared on a card swap or after the window.
   const [undo, setUndo] = useState<{ prev: KnockOutcome; outcome: KnockOutcome; leadId: number } | null>(null);
   const undoTimer = useRef<number | null>(null);
+  // Every short-lived UI timer the card arms (flash, copied, delete-arm, undo)
+  // is tracked and cleared on unmount: a timer that fires after the sheet is
+  // gone sets state on an unmounted component (and, in jsdom, after teardown).
+  const uiTimers = useRef<Set<number>>(new Set());
+  const armTimer = (fn: () => void, ms: number): number => {
+    const id = window.setTimeout(() => { uiTimers.current.delete(id); fn(); }, ms);
+    uiTimers.current.add(id);
+    return id;
+  };
+  useEffect(() => () => {
+    uiTimers.current.forEach(id => window.clearTimeout(id));
+    uiTimers.current.clear();
+    if (suppressClearTimer.current != null) window.clearTimeout(suppressClearTimer.current);
+  }, []);
   const activeOutcomeRef = useRef<KnockOutcome | null>(null);
   const armUndo = (next: typeof undo) => {
     if (undoTimer.current != null) { window.clearTimeout(undoTimer.current); undoTimer.current = null; }
     setUndo(next);
-    if (next) undoTimer.current = window.setTimeout(() => setUndo(u => (u === next ? null : u)), UNDO_WINDOW_MS);
+    if (next) undoTimer.current = armTimer(() => setUndo(u => (u === next ? null : u)), UNDO_WINDOW_MS);
   };
   const [note, setNote] = useState("");                // composer DRAFT — clears once committed
   const [noteOpen, setNoteOpen] = useState(false);     // collapsed "+ Add note" chip → textarea on focus
   const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued" | "conflict" | "rejected">("idle");
   const [lastCommittedNote, setLastCommittedNote] = useState<string | null>(null); // pinned "latest note"
   const [flashKey, setFlashKey] = useState<KnockOutcome | null>(null); // brief tap-confirm flash
-  const [copiedAddr, setCopiedAddr] = useState(false);                 // copy-glyph → check feedback
+  const [copiedAddr, setCopiedAddr] = useState<false | "ok" | "failed">(false); // copy disc feedback
+  // The last accepted rep mark on THIS card: drives the post-mark next step
+  // (Set a time / Next door). Cleared on a card swap, an undo, or a scheduled
+  // commit (the appointment IS the follow-through).
+  const [marked, setMarked] = useState<{ leadId: number; outcome: KnockOutcome } | null>(null);
   const noteBaseRef = useRef<string | null>(null);     // lead.updatedAt we loaded — conflict base
   const liveNoteRef = useRef<{ leadId: number; value: string } | null>(null); // for outgoing-lead flush
   const committingRef = useRef(false);                 // one in-flight commit at a time
@@ -296,6 +330,21 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const quickVisiblePx = quickPx ?? SHEET_PEEK_BASE_PX;
   const peekY = Math.max(0, sheetH - (peekVisiblePx + safeBottom));
   const quickY = Math.max(0, sheetH - (quickVisiblePx + safeBottom));
+  // Velocity-matched settle: the NEXT snap transition's duration, written by
+  // whoever requests the snap (tap, flick, release, mark) from the distance
+  // left to travel and the release speed. A ref, not state: it only matters
+  // on the render that applies the new snap.
+  const snapMsRef = useRef(200);
+  // A drag-dismiss keeps its momentum out; a programmatic close (X, Escape,
+  // map tap) accelerates away instead of reusing the entrance's decel curve.
+  const closeByDragRef = useRef(false);
+  const offsetOf = (s: SheetSnap) => (s === "details" ? 0 : s === "quick" ? quickY : peekY);
+  const settleMs = (fromY: number, toY: number, vy = 0) =>
+    Math.round(Math.min(SNAP_MS_MAX, Math.max(SNAP_MS_MIN, Math.abs(toY - fromY) / Math.max(Math.abs(vy), 1.1))));
+  const snapTo = (next: SheetSnap, fromY?: number, vy = 0) => {
+    snapMsRef.current = settleMs(fromY ?? offsetOf(snap), offsetOf(next), vy);
+    setSnap(next);
+  };
 
   // ── Drag (handle + peek bar + header only) ─────────────────────────────────
   // Per-frame drag position lives in a REF and is written straight to
@@ -309,6 +358,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     lastY: number; lastT: number; vy: number; moved: boolean;
   } | null>(null);
   const suppressClick = useRef(false);
+  const suppressClearTimer = useRef<number | null>(null); // disarms suppressClick after a touch drag
   // Never leave the pulse loop paused if the sheet unmounts mid-drag.
   useEffect(() => () => setSheetDragActive(false), []);
 
@@ -317,12 +367,36 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (dragging) return dragYRef.current;
     return snap === "details" ? 0 : snap === "quick" ? quickY : peekY;
   };
+  // The sheet's LIVE translateY, mid-transition included, so a grab during a
+  // snap continues from where the sheet IS instead of teleporting by the
+  // remaining travel on the first move. Falls back to the snap offset (jsdom
+  // has no DOMMatrix and no computed transform).
+  const liveOffset = () => {
+    const el = sheetRef.current;
+    if (!el || dragging || closing) return currentOffset();
+    try {
+      const t = getComputedStyle(el).transform;
+      if (t && t !== "none") {
+        const y = new DOMMatrix(t).m42;
+        if (Number.isFinite(y)) return Math.max(0, y);
+      }
+    } catch { /* jsdom */ }
+    return currentOffset();
+  };
 
+  // NO pointer capture on the press itself. Capturing here retargeted the
+  // pointerup — and with it the compatibility click — to the drag region, so
+  // the close / copy / handle buttons that live INSIDE the regions never
+  // received their click from a mouse or trackpad (touch survived only because
+  // the browser synthesizes a tap's click from the gesture, not the pointer
+  // stream). Capture is taken the moment a press becomes a real drag, below.
   const handlePointerDown = (e: React.PointerEvent) => {
     if (closing || docked) return; // docked panel: nothing to drag
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* jsdom */ }
+    // Primary button / first finger only: a right-click or a second finger
+    // must never start (or overwrite) a press.
+    if (e.button !== 0 || !e.isPrimary) return;
     dragRef.current = {
-      pointerId: e.pointerId, startClientY: e.clientY, startOffset: currentOffset(),
+      pointerId: e.pointerId, startClientY: e.clientY, startOffset: liveOffset(),
       lastY: e.clientY, lastT: e.timeStamp, vy: 0, moved: false,
     };
   };
@@ -330,10 +404,19 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const handlePointerMove = (e: React.PointerEvent) => {
     const d = dragRef.current;
     if (!d || e.pointerId !== d.pointerId) return;
+    // With capture deferred until a real drag, a press that is released OFF
+    // the region never reaches endDrag. A mouse move with no button held is
+    // therefore a stale press, never a drag: drop it (and end a drag that was
+    // somehow still live) instead of gluing the sheet to a hovering cursor.
+    if (e.buttons === 0) { abandonPress(); return; }
     const total = e.clientY - d.startClientY;
     if (!d.moved && Math.abs(total) < TAP_SLOP_PX) return; // still a tap
     if (!d.moved) {
       d.moved = true;
+      // A real drag: own the pointer now so the sheet keeps following the
+      // finger even once it leaves the region (and a stray click lands on
+      // the region, where swallowDragClick eats it).
+      try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* jsdom */ }
       dragYRef.current = Math.max(0, d.startOffset + total);
       setDragging(true); // ONE render: drops the transition class
       setSheetDragActive(true); // pauses the map pulse loop for the drag
@@ -354,30 +437,59 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (!d || e.pointerId !== d.pointerId) return;
     dragRef.current = null;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* jsdom */ }
-    if (!d.moved) return; // tap — let the click reach its target
+    if (!d.moved) {
+      // A tap — let the click reach its target. If a drag was somehow still
+      // live (a phantom from an abandoned press), settle it now.
+      if (dragging) { setDragging(false); setSheetDragActive(false); snapMsRef.current = 160; }
+      return;
+    }
     setDragging(false); // ONE render: restores the transition class + snap transform
     setSheetDragActive(false);
-    if (cancelled) return; // spring back to the current snap
+    if (suppressClearTimer.current != null) window.clearTimeout(suppressClearTimer.current);
+    suppressClearTimer.current = window.setTimeout(() => { suppressClick.current = false; suppressClearTimer.current = null; }, 50);
+    if (cancelled) { snapMsRef.current = 160; return; } // spring back to the current snap
     const y = Math.max(0, d.startOffset + (d.lastY - d.startClientY));
-    // Swipe down past the peek lip dismisses the sheet.
-    if (y > peekY + CLOSE_OVERDRAG_PX) { onClose(); return; }
+    // Swipe down past the peek lip dismisses the sheet, carrying its momentum
+    // out (capped at the 200ms unmount timer).
+    if (y > peekY + CLOSE_OVERDRAG_PX) {
+      snapMsRef.current = Math.min(200, settleMs(y, sheetH, d.vy));
+      closeByDragRef.current = true;
+      onClose();
+      return;
+    }
     const ORDER: SheetSnap[] = ["details", "quick", "peek"];
     const OFFSETS = [0, quickY, peekY];
     if (Math.abs(d.vy) > FLICK_VELOCITY) {
       const idx = ORDER.indexOf(snap);
       // Flick up = open one level, flick down = collapse one level.
-      setSnap(d.vy < 0 ? ORDER[Math.max(0, idx - 1)] : ORDER[Math.min(ORDER.length - 1, idx + 1)]);
+      snapTo(d.vy < 0 ? ORDER[Math.max(0, idx - 1)] : ORDER[Math.min(ORDER.length - 1, idx + 1)], y, d.vy);
     } else {
       // Settle on the nearest of the three snap points.
       let best = 0;
       for (let i = 1; i < OFFSETS.length; i++) {
         if (Math.abs(y - OFFSETS[i]) < Math.abs(y - OFFSETS[best])) best = i;
       }
-      setSnap(ORDER[best]);
+      snapTo(ORDER[best], y, d.vy);
+    }
+  };
+
+  // Forget a press that ended where we cannot see it (left the region before
+  // the tap slop, lost capture to the browser, context menu ate the release).
+  // If a drag was live, settle it like a cancel: spring back to the snap.
+  const abandonPress = () => {
+    const wasDragging = dragRef.current?.moved ?? false;
+    dragRef.current = null;
+    if (wasDragging || dragging) {
+      snapMsRef.current = 160;
+      setDragging(false);
+      setSheetDragActive(false);
     }
   };
 
   // A real drag must not fire the click of whatever the pointer landed on.
+  // A TOUCH drag produces no click at all, so the flag must not outlive the
+  // gesture, or the rep's next tap on any region button is eaten: endDrag
+  // disarms it right after the click a mouse release would have dispatched.
   const swallowDragClick = (e: React.MouseEvent) => {
     if (suppressClick.current) {
       suppressClick.current = false;
@@ -394,6 +506,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     onPointerMove: handlePointerMove,
     onPointerUp: (e: React.PointerEvent) => endDrag(e, false),
     onPointerCancel: (e: React.PointerEvent) => endDrag(e, true),
+    // A press that leaves the region before it became a drag is abandoned
+    // (once it IS a drag, capture keeps the moves coming and leave never fires).
+    onPointerLeave: () => { if (dragRef.current && !dragRef.current.moved) dragRef.current = null; },
+    onLostPointerCapture: abandonPress,
     onClickCapture: swallowDragClick,
   } as const;
 
@@ -402,6 +518,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   useEffect(() => {
     const id = renderedLead?.id ?? null;
     if (id === prevLeadId.current) return;
+    const hadLead = prevLeadId.current != null;
     // Per-lead isolation: an uncommitted draft belongs to the OUTGOING lead —
     // a card swap is an implicit blur, so commit it before this card rebinds.
     const live = liveNoteRef.current;
@@ -411,6 +528,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     prevLeadId.current = id;
     if (id == null) return;
     setSnap("quick"); // default open state for a newly selected lead
+    snapMsRef.current = 200;
+    closeByDragRef.current = false;
+    // A Next door "Open" unmounts the button under the keyboard; keep focus in
+    // the dialog rather than letting it fall to the page body.
+    if (hadLead && (document.activeElement === document.body || document.activeElement == null)) {
+      sheetRef.current?.focus({ preventScroll: true });
+    }
     setNote("");
     setNoteOpen(false);
     armUndo(null);
@@ -418,6 +542,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     setLastCommittedNote(null);
     setFlashKey(null);
     setCopiedAddr(false);
+    setMarked(null);
     noteBaseRef.current = null;
     liveNoteRef.current = null;
     setDragging(false);
@@ -459,11 +584,29 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   // the tab order and the accessibility tree so focus never lands on invisible
   // controls (inert via DOM API — React 18 doesn't own the attribute yet).
   const peekShown = !docked && snap === "peek";
+  const peekWrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     mainRef.current?.toggleAttribute("inert", peekShown);
     if (peekShown) mainRef.current?.setAttribute("aria-hidden", "true");
     else mainRef.current?.removeAttribute("aria-hidden");
+    // The peek bar is the mirror image: laid out at zero height (so it stays
+    // measurable) whenever another level is active, and its Directions /
+    // Close / next-step buttons must not be reachable by keyboard from there.
+    peekWrapRef.current?.toggleAttribute("inert", !peekShown);
+    if (!peekShown) peekWrapRef.current?.setAttribute("aria-hidden", "true");
+    else peekWrapRef.current?.removeAttribute("aria-hidden");
+    // A keyboard mark collapses the card to peek and inerts the column that
+    // held focus; park focus on the dialog so Tab continues inside the card
+    // (the peek bar's controls are next), never on the page body.
+    const active = document.activeElement;
+    if (peekShown && active instanceof HTMLElement && mainRef.current?.contains(active)) {
+      sheetRef.current?.focus({ preventScroll: true });
+    }
   }, [peekShown]);
+  // Screen-reader announcements for in-place feedback (copy result, note
+  // save state): one always-mounted polite region, so the text change is
+  // what gets announced, never a freshly mounted node.
+  const [liveMessage, setLiveMessage] = useState("");
 
   // ── Lead detail (notes seed) + history — fetched per selected lead ──────────
   const leadId = renderedLead?.id ?? 0;
@@ -637,16 +780,19 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     } else {
       armUndo(null);
     }
+    // The next step after a plain rep mark; an undo or a scheduled commit
+    // clears it (there is nothing left to suggest).
+    setMarked(!meta?.undo && !opts && leadId ? { leadId, outcome: key } : null);
     try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
     // Brief filled + check flash confirms only an accepted command. A rejected
     // manager/rep action stays open so the user can correct assignment/session.
     if (!prefersReducedMotion()) {
       setFlashKey(key);
-      window.setTimeout(() => setFlashKey(k => (k === key ? null : k)), 150);
+      armTimer(() => setFlashKey(k => (k === key ? null : k)), 150);
     }
     // Marking is the moment of commitment: confirm, then collapse to Peek so the
     // map (and the freshly recolored pin) is back in view immediately.
-    if (!docked) setSnap("peek");
+    if (!docked) snapTo("peek");
     return true;
   };
   const undoLastTap = () => {
@@ -662,7 +808,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       data-testid={testid}
       onClick={undoLastTap}
       aria-label={`Undo, put the door back to ${OUTCOME_META[undo.prev].label}`}
-      className="tap-expand relative ml-1 inline-flex h-7 shrink-0 items-center rounded-full border border-white/[0.14] bg-white/[0.06] px-2.5 text-[11px] font-bold uppercase tracking-wide text-white/85 active:scale-95 transition"
+      className="tap-expand relative ml-1 inline-flex h-7 shrink-0 items-center rounded-full border border-white/[0.14] bg-white/[0.06] px-2.5 text-[11px] font-bold uppercase tracking-wide text-white/85 tap-press"
     >
       Undo
     </button>
@@ -712,6 +858,15 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       });
     });
   };
+
+  useEffect(() => {
+    if (noteState === "idle") return;
+    setLiveMessage(
+      noteState === "saving" ? "Saving note" : noteState === "queued" ? "Note saved offline"
+      : noteState === "conflict" ? "Note not saved, a newer note exists" : noteState === "rejected" ? "Note not saved, tap Add to retry"
+      : "Note saved to history",
+    );
+  }, [noteState]);
 
   const handleNoteChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value;
@@ -768,10 +923,33 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     renderedLead.address,
     [renderedLead.city, [renderedLead.state, renderedLead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
   ].filter(Boolean).join(", ");
-  const copyAddress = () => {
-    try { navigator.clipboard?.writeText(fullAddress); } catch { /* clipboard blocked */ }
-    setCopiedAddr(true);
-    window.setTimeout(() => setCopiedAddr(false), 1200);
+  // Clipboard API first (secure contexts); on plain http (a LAN dev box) it is
+  // undefined, and a permissions policy can reject it, so fall back to a
+  // throwaway textarea + execCommand. The feedback is honest: "Address copied"
+  // only when a path reported success, "Could not copy" otherwise.
+  const copyFallback = (): boolean => {
+    try {
+      if (typeof document.execCommand !== "function") return false;
+      const ta = document.createElement("textarea");
+      ta.value = fullAddress;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy") === true;
+      ta.remove();
+      return ok;
+    } catch { return false; }
+  };
+  const copyAddress = async () => {
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(fullAddress); ok = true; }
+    } catch { /* rejected (policy, focus): try the fallback */ }
+    if (!ok) ok = copyFallback();
+    setCopiedAddr(ok ? "ok" : "failed");
+    setLiveMessage(ok ? "Address copied" : "Could not copy the address");
+    armTimer(() => setCopiedAddr(false), 1200);
   };
 
   const destination = renderedLead.lat != null && renderedLead.lng != null
@@ -821,6 +999,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       : null;
 
   const offscreen = closing || !entered;
+  const programmaticClose = closing && !closeByDragRef.current;
   const transform = docked
     ? (offscreen ? "translateX(110%)" : "translateX(0)")
     : offscreen
@@ -852,10 +1031,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         data-testid="knock-proximity"
         data-dist-m={Math.round(d)}
         onClick={() => requestFix(renderedLead.id)}
-        aria-label={`${atDoor ? "You are at this door" : `${distanceHint(d)} from this door`} — tap to refresh`}
+        aria-label={`${atDoor ? "You are at this door" : `${distanceHint(d)} from this door`}. Tap to refresh`}
         title="Distance from your location"
         className={[
-          "relative ml-auto h-10 flex items-center gap-1.5 px-3 rounded-full border text-[12px] font-semibold whitespace-nowrap active:scale-95 transition after:absolute after:-inset-1",
+          "relative ml-auto h-11 flex items-center gap-1.5 px-3.5 rounded-full border text-[12px] font-semibold whitespace-nowrap tap-press after:absolute after:-inset-1",
           atDoor
             ? "bg-success/[0.12] border-success/35 text-success"
             : "bg-white/[0.05] border-white/[0.10] text-white/65",
@@ -868,12 +1047,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   })();
 
   // ── Appointment composer — a follow-up with a real date on it ──────────────
-  // Collapsed chip → date/time editor. Confirming logs ONE knock (Go Back keeps
-  // its pink pin — it already persists as follow_up; everything else becomes a
-  // Follow-up) with the schedule attached, through the exact offline-queue path
-  // a plain status tap uses. Hidden entirely on do-not-knock doors: an
-  // appointment IS a knock.
+  // Collapsed trigger → date/time editor. Confirming logs ONE knock (Go Back
+  // keeps its pink pin — it already persists as follow_up; everything else
+  // becomes a Follow-up) with the schedule attached, through the exact
+  // offline-queue path a plain status tap uses. Hidden entirely on
+  // do-not-knock doors: an appointment IS a knock.
   const apptOutcome: KnockOutcome = activeOutcome === "go_back" ? "go_back" : "follow_up";
+  const apptAvailable = !renderedLead.doNotKnock;
   const commitAppointment = async () => {
     if (!apptDate) return;
     const ok = await handleStatusTap(apptOutcome, { callbackDate: apptDate, callbackTime: apptTime || null });
@@ -881,121 +1061,172 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   };
   const apptInput =
     "h-11 rounded-xl bg-white/[0.05] border border-white/[0.08] px-3 text-[16px] text-white focus:outline-none focus:border-primary/60";
-  const appointmentCard = Boolean(renderedLead.doNotKnock) ? null : (
-    <div className="mt-3" data-testid="knock-appointment">
-      {!apptOpen ? (
+  // The two follow-through triggers share one row as equal 44px buttons.
+  const pairBtn =
+    "flex-1 min-w-0 h-11 px-3 rounded-xl bg-white/[0.05] border border-white/[0.10] text-[13px] font-semibold text-white/90 whitespace-nowrap inline-flex items-center justify-center tap-press [--press-scale:0.97]";
+  const appointmentEditor = (
+    <div data-testid="appt-editor" className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
+          Appointment
+        </span>
         <button
           type="button"
-          data-testid="appt-open"
-          onClick={() => setApptOpen(true)}
-          className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
+          data-testid="appt-cancel"
+          onClick={() => setApptOpen(false)}
+          className="min-h-tap text-[12px] font-semibold text-white/65 hover:text-white/90 transition px-1 -mr-1 -my-2"
         >
-          <CalendarPlus aria-hidden="true" className="w-4 h-4 text-white/60" />
-          Set appointment
+          Cancel
         </button>
-      ) : (
-        <div data-testid="appt-editor" className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
-              Appointment
-            </span>
-            <button
-              type="button"
-              data-testid="appt-cancel"
-              onClick={() => setApptOpen(false)}
-              className="min-h-tap text-[12px] font-semibold text-white/65 hover:text-white/90 transition px-1 -mr-1 -my-2"
-            >
-              Cancel
-            </button>
-          </div>
-          {/* One-tap times first; a tap fills the pickers below, Set still confirms. */}
-          <QuickSlotRow
-            date={apptDate}
-            time={apptTime}
-            onPick={(slot) => { setApptDate(slot.date); setApptTime(slot.time); }}
-            surface="glass"
+      </div>
+      {/* One-tap times first; a tap fills the pickers below, Set still confirms. */}
+      <QuickSlotRow
+        date={apptDate}
+        time={apptTime}
+        onPick={(slot) => { setApptDate(slot.date); setApptTime(slot.time); }}
+        surface="glass"
+      />
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex-1 min-w-[150px]">
+          <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>Date</span>
+          <input
+            type="date"
+            data-testid="appt-date"
+            value={apptDate}
+            min={todayISO()}
+            onChange={e => setApptDate(e.target.value)}
+            className={`${apptInput} w-full`}
+            style={{ colorScheme: "dark" }}
           />
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="flex-1 min-w-[150px]">
-              <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>Date</span>
-              <input
-                type="date"
-                data-testid="appt-date"
-                value={apptDate}
-                min={todayISO()}
-                onChange={e => setApptDate(e.target.value)}
-                className={`${apptInput} w-full`}
-                style={{ colorScheme: "dark" }}
-              />
-            </label>
-            {/* 132px: Chrome's 12-hour value ("06:30 PM" + clock icon) at the
-                16px no-zoom size clips at anything narrower — measured. */}
-            <label className="w-[132px]">
-              <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>
-                Time <span className="normal-case font-normal text-white/35">(optional)</span>
-              </span>
-              <input
-                type="time"
-                data-testid="appt-time"
-                value={apptTime}
-                onChange={e => setApptTime(e.target.value)}
-                className={`${apptInput} w-full`}
-                style={{ colorScheme: "dark" }}
-              />
-            </label>
-            <button
-              type="button"
-              data-testid="appt-save"
-              disabled={!apptDate}
-              onClick={() => { void commitAppointment(); }}
-              // ml-auto: on narrow phones the row wraps and the commit action
-              // right-aligns on its own line instead of dangling bottom-left.
-              className="ml-auto h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[13px] font-semibold active:scale-95 transition disabled:opacity-45 disabled:cursor-not-allowed"
-            >
-              {apptDate ? `Set for ${describeAppointment(apptDate, apptTime)}` : "Set"}
-            </button>
-          </div>
-          <p className="mt-2 text-[11.5px] leading-snug" style={{ color: MUTED }}>
-            Saves a {OUTCOME_META[apptOutcome].label} on this date. It lands on your Schedule, with a reminder 30 minutes before a timed visit.
-          </p>
-        </div>
-      )}
+        </label>
+        {/* 132px: Chrome's 12-hour value ("06:30 PM" + clock icon) at the
+            16px no-zoom size clips at anything narrower — measured. */}
+        <label className="w-[132px]">
+          <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>
+            Time <span className="normal-case font-normal text-white/35">(optional)</span>
+          </span>
+          <input
+            type="time"
+            data-testid="appt-time"
+            value={apptTime}
+            onChange={e => setApptTime(e.target.value)}
+            className={`${apptInput} w-full`}
+            style={{ colorScheme: "dark" }}
+          />
+        </label>
+        <button
+          type="button"
+          data-testid="appt-save"
+          disabled={!apptDate}
+          onClick={() => { void commitAppointment(); }}
+          // ml-auto: on narrow phones the row wraps and the commit action
+          // right-aligns on its own line instead of dangling bottom-left.
+          className="ml-auto h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[13px] font-semibold tap-press disabled:opacity-45 disabled:cursor-not-allowed"
+        >
+          {apptDate ? `Set for ${describeAppointment(apptDate, apptTime)}` : "Set"}
+        </button>
+      </div>
+      <p className="mt-2 text-[11.5px] leading-snug" style={{ color: MUTED }}>
+        Saves a {OUTCOME_META[apptOutcome].label} on this date. It lands on your Schedule, with a reminder 30 minutes before a timed visit.
+      </p>
     </div>
   );
 
-  // Notes — a FLAT section on the one card surface (no nested card): a slim
-  // "+ Add note" chip by default; it expands to the textarea on focus. The
-  // commit model is unchanged (Add / blur / card swap = one write, one history
-  // event); the just-committed note is pinned as "latest note".
-  const notesCard = (
-    <div className="mt-3 pt-3 border-t border-white/[0.06]">
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
-          Notes
-        </span>
-        {noteState !== "idle" && (
-          <span data-testid="note-save-state" data-state={noteState} className="text-2xs font-medium"
-            style={{ color: noteState === "saved" ? "#34d399" : (noteState === "conflict" || noteState === "rejected") ? "#f59e0b" : MUTED }}>
-            {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved - newer note exists" : noteState === "rejected" ? "Not saved - tap Add to retry" : "Saved to history"}
+  // ── Post-mark next step ──────────────────────────────────────────────────
+  // Right after a mark the card has collapsed to the peek lip (the map and the
+  // recolored pin are back); this ONE row says what to do next. A "come back"
+  // mark (Interested / Follow-up / Go Back) offers a time, which reopens the
+  // card with the composer; anything else offers the nearest open door, the
+  // same ranking the Nearest doors strip uses. Never both: one row, one step.
+  const markedHere = marked && marked.leadId === renderedLead.id ? marked : null;
+  const postMarkRow = (() => {
+    if (!markedHere) return null;
+    if (COME_BACK.has(markedHere.outcome) && apptAvailable) {
+      if (apptOpen) return null;
+      return (
+        <div data-testid="knock-post-mark" data-kind="time" className={`mt-2.5 flex items-center gap-2 ${docked ? "card-swap-in" : "post-mark-in"}`}>
+          <span className="min-w-0 flex-1 text-[12px] leading-snug" style={{ color: MUTED }}>
+            Set a time to come back so it lands on your Schedule.
           </span>
-        )}
-      </div>
-      {latestNote && (
-        <div data-testid="note-latest" className="text-[12.5px] leading-snug mb-2 line-clamp-2" style={{ color: BODY_TEXT }}>
-          “{latestNote}”
+          <button
+            type="button"
+            data-testid="knock-set-time"
+            onClick={() => {
+              setApptOpen(true);
+              if (!docked) snapTo("quick");
+              // This button unmounts itself; park focus on the dialog so the
+              // next Tab lands in the composer, not on the page body.
+              requestAnimationFrame(() => { if (document.activeElement === document.body) sheetRef.current?.focus({ preventScroll: true }); });
+            }}
+            className="relative shrink-0 h-9 px-3.5 rounded-full bg-primary text-primary-foreground text-[12.5px] font-semibold tap-press after:absolute after:-inset-1"
+          >
+            Set a time
+          </button>
         </div>
-      )}
-      {!noteOpen && !note.trim() ? (
+      );
+    }
+    if (!nextDoor || !onOpenLead) return null;
+    return (
+      <div data-testid="knock-post-mark" data-kind="next" className={`mt-2.5 flex items-center gap-2 min-w-0 ${docked ? "card-swap-in" : "post-mark-in"}`}>
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>Next door</div>
+          <div className="mt-0.5 text-[13px] font-semibold text-white truncate">
+            {nextDoor.address}
+            <span className="font-medium text-white/55"> · {nextDoor.atDoor ? "At door" : distanceHint(nextDoor.meters)}</span>
+          </div>
+        </div>
         <button
           type="button"
-          data-testid="note-add-chip"
-          onClick={() => { setNoteOpen(true); requestAnimationFrame(() => noteInputRef.current?.focus()); }}
-          className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
+          data-testid="knock-next-door-open"
+          onClick={() => onOpenLead(nextDoor.id)}
+          aria-label={`Open ${nextDoor.address}`}
+          className="relative shrink-0 h-9 px-3.5 rounded-full bg-primary text-primary-foreground text-[12.5px] font-semibold tap-press after:absolute after:-inset-1"
         >
-           Add note
+          Open
         </button>
-      ) : (
-        <div className="relative">
+      </div>
+    );
+  })();
+
+  // ── Follow-through: appointment + note as one equal pair ───────────────────
+  // Two triggers side by side; whichever opens renders its editor below the
+  // row. The note commit model is unchanged (Add / blur / card swap = one
+  // write, one history event); the just-committed note is pinned as "latest
+  // note" under the Last line.
+  const noteEditorOpen = noteOpen || Boolean(note.trim());
+  const followThrough = (
+    <div className="mt-3" data-testid="knock-follow-through">
+      {(apptAvailable && !apptOpen) || !noteEditorOpen ? (
+        <div className="flex gap-2">
+          {apptAvailable && !apptOpen && (
+            <div data-testid="knock-appointment" className="flex-1 min-w-0 flex">
+              <button
+                type="button"
+                data-testid="appt-open"
+                onClick={() => setApptOpen(true)}
+                className={pairBtn}
+              >
+                Set appointment
+              </button>
+            </div>
+          )}
+          {!noteEditorOpen && (
+            <button
+              type="button"
+              data-testid="note-add-chip"
+              onClick={() => { setNoteOpen(true); requestAnimationFrame(() => noteInputRef.current?.focus()); }}
+              className={pairBtn}
+            >
+              Add note
+            </button>
+          )}
+        </div>
+      ) : null}
+      {apptAvailable && apptOpen && (
+        <div data-testid="knock-appointment" className="mt-2">{appointmentEditor}</div>
+      )}
+      {noteEditorOpen && (
+        <div className="relative mt-2">
           <textarea
             ref={noteInputRef}
             data-testid="knock-note-input"
@@ -1016,15 +1247,66 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               data-testid="note-add-btn"
               // Fires before blur (pointerdown) so this never double-commits.
               onPointerDown={(e) => { e.preventDefault(); commitNote(note); }}
-              className="absolute right-2 bottom-2 h-11 px-4 rounded-full bg-primary text-primary-foreground text-[12px] font-semibold active:scale-95 transition"
+              className="absolute right-2 bottom-2 h-11 px-4 rounded-full bg-primary text-primary-foreground text-[12px] font-semibold tap-press"
             >
               Add
             </button>
           )}
         </div>
       )}
+      {noteState !== "idle" && (
+        <div
+          data-testid="note-save-state"
+          data-state={noteState}
+          className="mt-1.5 text-2xs font-medium"
+          style={{ color: noteState === "saved" ? "#34d399" : (noteState === "conflict" || noteState === "rejected") ? "#f59e0b" : MUTED }}
+        >
+          {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved - newer note exists" : noteState === "rejected" ? "Not saved - tap Add to retry" : "Saved to history"}
+        </div>
+      )}
+      {docked && postMarkRow}
     </div>
   );
+
+  // The pinned latest note: this session's committed note, else the most
+  // recent note from history, as a quote under the Last line.
+  const latestNoteBlock = latestNote ? (
+    <div className="mt-2 flex gap-2.5 items-start min-w-0">
+      <span aria-hidden="true" className="shrink-0 mt-1 w-[3px] h-7 rounded-full bg-white/[0.18]" />
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>Latest note</div>
+        <div data-testid="note-latest" className="mt-0.5 text-[12.5px] leading-snug line-clamp-2" style={{ color: BODY_TEXT }}>
+          “{latestNote}”
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  // ── Facts the scanner already holds, read BEFORE the knock ─────────────────
+  // Competitor and occupancy are the two that change the pitch at the door.
+  // At most two chips, only when known; the full fact list stays in Details.
+  const factsRow = (() => {
+    const d = detailForLead;
+    if (!d) return null;
+    const chips: Array<{ key: string; text: string }> = [];
+    const competitor = [d.competitorName, d.competitorTech].filter(Boolean).join(" · ");
+    if (competitor) chips.push({ key: "competitor", text: competitor });
+    if (d.billingStatus === "N") chips.push({ key: "occupancy", text: "No current subscriber" });
+    if (!chips.length) return null;
+    return (
+      <div data-testid="knock-facts" className="flex flex-wrap items-center gap-1.5 pb-2">
+        {chips.map(c => (
+          <span
+            key={c.key}
+            data-testid={`knock-fact-${c.key}`}
+            className="inline-flex items-center h-6 px-2 rounded-full border border-white/[0.12] bg-white/[0.05] text-[11px] font-semibold text-white/75 whitespace-nowrap"
+          >
+            {c.text}
+          </span>
+        ))}
+      </div>
+    );
+  })();
 
   return (
     <div
@@ -1058,7 +1340,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       ].join(" ")}
       style={{
         transform,
-        transitionTimingFunction: dragging ? undefined : "cubic-bezier(0.32,0.72,0,1)",
+        // Velocity-matched settle (snapMsRef) for snaps; exits are shorter than
+        // entrances and accelerate away unless the rep threw the sheet out.
+        transitionDuration: dragging ? undefined : programmaticClose ? "160ms" : `${snapMsRef.current}ms`,
+        transitionTimingFunction: dragging ? undefined : programmaticClose ? "cubic-bezier(0.4,0,1,1)" : "cubic-bezier(0.32,0.72,0,1)",
         ...(docked && dockOffsetPx ? { right: dockOffsetPx } : null),
       }}
     >
@@ -1083,7 +1368,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             aria-expanded={snap !== "peek"}
             data-testid="knock-sheet-handle"
             className="flex justify-center pt-2 pb-1 cursor-pointer bg-transparent border-0 w-full"
-            onClick={() => setSnap(s => (s === "peek" ? "quick" : s === "quick" ? "details" : "peek"))}
+            onClick={() => snapTo(snap === "peek" ? "quick" : snap === "quick" ? "details" : "peek")}
           >
             {/* white/40 clears the 3:1 non-text floor over the 0.86 ink sheet
                 on both basemap extremes (white/25 measured ~2.2:1). */}
@@ -1094,9 +1379,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         )}
       </div>
 
+      <div role="status" aria-live="polite" className="sr-only">{liveMessage}</div>
       {/* PEEK level — clipped to zero height (but kept laid out, so its height
-          stays measurable) whenever another level is active. Draggable. */}
+          stays measurable) whenever another level is active; inert there so
+          its buttons are never keyboard-reachable through the clip. Draggable. */}
       <div
+        ref={peekWrapRef}
         {...dragRegionProps}
         className={[
           docked ? "" : "cursor-grab select-none",
@@ -1107,6 +1395,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         <div key={renderedLead.id} ref={peekBarRef} className="card-swap-in">
           <PeekBar
             address={renderedLead.address}
+            pinColor={STATUS_CONFIG[canonicalStatus].color}
+            statusIcon={ICON_MAP[STATUS_CONFIG[canonicalStatus].cardIcon]}
             statusColor={statusColor}
             statusLabel={statusLabel}
             lastKnockedAt={renderedLead.lastKnockedAt}
@@ -1114,77 +1404,83 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             directionsHref={directionsHref}
             onClose={onClose}
             undo={undoChip("knock-undo")}
+            // The docked panel never collapses: its row renders under the grid
+            // instead, never in the (clipped) peek bar.
+            followThrough={docked ? null : postMarkRow}
+            pop={markedHere ? markedHere.outcome : null}
           />
         </div>
       </div>
 
       {/* QUICK + DETAILS content — translated off-screen (and inert) in Peek. */}
-      <div ref={mainRef} className="flex-1 min-h-0 flex flex-col">
-        {/* Compact header: status dot + address (with copy glyph) + close button, the
-            locality sub-line, and the ONE status line (label · relative time) in
-            the status color. Draggable. */}
+      {/* The column fades as the sheet collapses to peek (the header would
+          otherwise hop ~60px at t=0 when the peek wrapper lays out); guarded
+          on !dragging so a drag UP from peek never shows an empty sheet. */}
+      <div
+        ref={mainRef}
+        className={[
+          "flex-1 min-h-0 flex flex-col transition-opacity duration-150 ease-out",
+          peekShown && !dragging ? "opacity-0" : "opacity-100",
+        ].join(" ")}
+      >
+        {/* Compact header: the status pin chip + address + the copy / close
+            discs, the locality sub-line (which reads "Address copied" for a
+            beat after a copy), and the ONE status line (label · relative time
+            · at most one badge) in the status color. Draggable. */}
         <div
           ref={headerRef}
           {...dragRegionProps}
           className={docked ? "shrink-0" : "cursor-grab select-none shrink-0"}
           style={{ touchAction: "none" }}
         >
-          <div className="px-4 pb-3 pt-0.5">
-            <div className="flex items-start gap-2.5">
-              <span
-                data-testid="knock-status-dot"
-                aria-hidden
-                className="w-2.5 h-2.5 rounded-full shrink-0 mt-[9px]"
-                style={{ background: statusColor }}
-              />
+          <div key={renderedLead.id} className="card-swap-in px-4 pb-3 pt-0.5">
+            <div className="flex items-start gap-3">
+              <div key={markedHere?.outcome ?? "idle"} className={`shrink-0 pt-[2px] ${markedHere ? "status-pop" : ""}`}>
+                <StatusPinChip
+                  color={STATUS_CONFIG[canonicalStatus].color}
+                  icon={ICON_MAP[STATUS_CONFIG[canonicalStatus].cardIcon]}
+                />
+              </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-start gap-1 min-w-0">
-                  <div className="min-w-0 flex-1">
-                    <h2 className="min-w-0 text-[19px] leading-[1.15] font-semibold text-white truncate">
-                      {renderedLead.address}
-                    </h2>
-                    {/* Who to ask for. Only when a real name exists (resident-
-                        given first, traced second) — the "Resident at …"
-                        fallback would just repeat the address line above it. */}
-                    {doorName && doorName.trim().length >= 2 && (
-                      <p className="mt-0.5 truncate text-[13px] font-medium text-white/70" data-testid="knock-owner-name">
-                        Ask for {leadDisplayName(doorName, renderedLead.address)}
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    data-testid="knock-copy-address"
-                    aria-label="Copy address"
-                    onClick={copyAddress}
-                    className="relative shrink-0 mt-[2px] h-7 w-7 flex items-center justify-center rounded-md text-white/45 hover:text-white active:scale-90 transition after:absolute after:-inset-2"
-                  >
-                    {copiedAddr ? <Check className="w-4 h-4 text-success" /> : <Copy className="w-[15px] h-[15px]" />}
-                  </button>
-                </div>
+                <h2 className="min-w-0 text-[20px] leading-[1.15] font-semibold tracking-[-0.01em] text-white truncate">
+                  {renderedLead.address}
+                </h2>
                 {(() => {
                   const d = detailQuery.data;
                   const city = renderedLead.city ?? d?.city;
                   const state = renderedLead.state ?? d?.state;
                   const zip5 = normalizeZip5(renderedLead.zip ?? d?.zip);
                   const complete = !!(city && state && zip5);
+                  if (copiedAddr) {
+                    return copiedAddr === "ok" ? (
+                      <div data-testid="knock-address-copied" className="text-[12.5px] truncate mt-0.5 font-semibold text-success">
+                        Address copied
+                      </div>
+                    ) : (
+                      <div data-testid="knock-address-copy-failed" className="text-[12.5px] truncate mt-0.5 font-semibold text-warning">
+                        Could not copy
+                      </div>
+                    );
+                  }
                   return complete ? (
-                    <div data-testid="knock-address-locality" className="text-[12px] truncate mt-0.5" style={{ color: MUTED }}>
+                    <div data-testid="knock-address-locality" className="text-[12.5px] truncate mt-0.5" style={{ color: MUTED }}>
                       {[city, [state, zip5].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
                     </div>
                   ) : (
-                    <div data-testid="knock-address-review" className="text-[12px] truncate mt-0.5 font-semibold text-warning">
+                    <div data-testid="knock-address-review" className="text-[12.5px] truncate mt-0.5 font-semibold text-warning">
                       Address needs review{city || state ? ` · ${[city, state].filter(Boolean).join(", ")}` : ""}
                     </div>
                   );
                 })()}
+                {/* Who to ask for. Only when a real name exists (resident-
+                    given first, traced second) — the "Resident at …"
+                    fallback would just repeat the address line above it. */}
+                {doorName && doorName.trim().length >= 2 && (
+                  <p className="mt-0.5 truncate text-[13px] font-medium text-white/70" data-testid="knock-owner-name">
+                    Ask for {leadDisplayName(doorName, renderedLead.address)}
+                  </p>
+                )}
                 <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1 flex items-center gap-1.5" style={{ color: statusColor }}>
-                  {(() => {
-                    // Same glyph the pin carries, so the card and the map agree at
-                    // a glance: $ for sold, star for interested, door for not home.
-                    const StatusIcon = ICON_MAP[STATUS_CONFIG[canonicalStatus].cardIcon];
-                    return StatusIcon ? <StatusIcon data-testid="knock-status-icon" className="w-[14px] h-[14px] shrink-0" /> : null;
-                  })()}
                   <span className="truncate">{statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}</span>
                   {undoChip("knock-undo-header")}
                   {statusBadge && (
@@ -1205,15 +1501,30 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                   </span>
                 )}
               </div>
-              <button
-                type="button"
-                data-testid="knock-sheet-close"
-                aria-label="Close"
-                onClick={onClose}
-                className="relative shrink-0 -mr-1 -mt-0.5 h-8 w-8 flex items-center justify-center rounded-full text-white/50 hover:text-white hover:bg-white/10 active:scale-90 transition after:absolute after:-inset-2"
-              >
-                <X className="w-[18px] h-[18px]" />
-              </button>
+              {/* Copy and Close: two real discs, 36px visible, 44px hit areas,
+                  8px apart. Copy is the card's ONE copy control. */}
+              <div className="flex items-center gap-2 shrink-0 -mr-1 -mt-0.5">
+                <button
+                  type="button"
+                  data-testid="knock-copy-address"
+                  aria-label={copiedAddr === "ok" ? "Address copied" : "Copy address"}
+                  onClick={() => { void copyAddress(); }}
+                  className={copiedAddr === "ok"
+                    ? `${circleBtn} !bg-success/[0.16] !border-success/40 !text-success`
+                    : circleBtn}
+                >
+                  {copiedAddr === "ok" ? <Check className="w-[17px] h-[17px]" /> : <Copy className="w-4 h-4" />}
+                </button>
+                <button
+                  type="button"
+                  data-testid="knock-sheet-close"
+                  aria-label="Close"
+                  onClick={onClose}
+                  className={circleBtn}
+                >
+                  <X className="w-[17px] h-[17px]" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1251,19 +1562,15 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             <QuickBody
               directionsHref={directionsHref}
               phone={renderedLead.phone}
-              copiedAddr={copiedAddr}
-              onCopyAddress={copyAddress}
-              primaryOutcomes={PRIMARY_OUTCOMES}
-              stripOutcomes={STRIP_OUTCOMES}
-              iconMap={ICON_MAP}
               activeOutcome={activeOutcome}
               flashKey={flashKey}
               onStatusTap={handleStatusTap}
               outcomesDisabled={Boolean(renderedLead.doNotKnock)}
               proximity={proximityChip}
-              appointment={appointmentCard}
+              facts={factsRow}
+              followThrough={followThrough}
               recent={recent}
-              notes={notesCard}
+              latestNote={latestNoteBlock}
             />
           </div>
 
@@ -1321,7 +1628,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             deleteArmed={deleteArmed}
             onToggleCentral={() => { setCentralMode(v => !v); setDeleteArmed(false); }}
             onDeleteTap={() => {
-              if (!deleteArmed) { setDeleteArmed(true); window.setTimeout(() => setDeleteArmed(false), 4000); return; }
+              if (!deleteArmed) { setDeleteArmed(true); armTimer(() => setDeleteArmed(false), 4000); return; }
               onDelete?.();
             }}
             history={history}

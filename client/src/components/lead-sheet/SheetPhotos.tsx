@@ -80,7 +80,7 @@ export function SheetPhotos({ leadId }: { leadId: number }): JSX.Element {
           data-testid="knock-photo-add"
           onClick={() => fileRef.current?.click()}
           disabled={!online || uploading}
-          className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/25 text-white/60 transition hover:border-white/45 hover:text-white/85 active:scale-95 disabled:opacity-45 disabled:hover:border-white/25 disabled:hover:text-white/60"
+          className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/25 text-white/60 tap-press hover:border-white/45 hover:text-white/85 disabled:opacity-45 disabled:hover:border-white/25 disabled:hover:text-white/60"
         >
           {uploading
             ? <RefreshCw aria-hidden="true" className="h-5 w-5 animate-spin" />
@@ -93,7 +93,7 @@ export function SheetPhotos({ leadId }: { leadId: number }): JSX.Element {
             type="button"
             onClick={() => setViewer(p.id)}
             aria-label={`View door photo${p.takenBy ? ` by ${p.takenBy}` : ""}`}
-            className="shrink-0 rounded-xl transition-transform active:scale-95"
+            className="shrink-0 rounded-xl tap-press"
           >
             <AuthedImg
               photoId={p.id}
@@ -113,7 +113,7 @@ export function SheetPhotos({ leadId }: { leadId: number }): JSX.Element {
         )}
         {!photosQ.isLoading && !photosQ.isError && photos.length === 0 && (
           <div className="flex items-center pl-1 text-[12px]" style={{ color: MUTED }}>
-            No photos yet — snap the house or the drop.
+            No photos yet. Snap the house or the drop.
           </div>
         )}
       </div>

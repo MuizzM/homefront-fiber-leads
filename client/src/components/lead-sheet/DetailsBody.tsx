@@ -16,7 +16,21 @@ import type { HistoryRow, LeadDetail, TeamMember } from "./types";
 
 // Verified-premise facts: what the scanner actually proved at this address.
 // Rendered only when a fact exists — no guessed fields; the review banner
-// covers the incomplete case.
+// covers the incomplete case. An inset list (label column + value), the same
+// container every Details section shares.
+export const INSET = "rounded-[14px] bg-white/[0.04] border border-white/[0.08] overflow-hidden";
+export const INSET_ROW = "flex items-center gap-2.5 min-h-[44px] px-3 py-2";
+export const SECTION_LABEL = "text-[11px] font-semibold uppercase tracking-[0.08em]";
+
+export function InsetRow({ label, children, first = false }: { label: string; children: React.ReactNode; first?: boolean }): JSX.Element {
+  return (
+    <div className={`${INSET_ROW} ${first ? "" : "border-t border-white/[0.07]"}`}>
+      <span className={`${SECTION_LABEL} w-[84px] shrink-0`} style={{ color: MUTED }}>{label}</span>
+      <span className="min-w-0 flex-1 text-[13.5px] leading-snug text-white truncate">{children}</span>
+    </div>
+  );
+}
+
 export function VerifiedPremiseFacts({ detail }: { detail: LeadDetail | undefined }): JSX.Element | null {
   if (!detail) return null;
   const facts: Array<[string, string]> = [];
@@ -32,13 +46,13 @@ export function VerifiedPremiseFacts({ detail }: { detail: LeadDetail | undefine
   }
   if (!facts.length) return null;
   return (
-    <div data-testid="knock-premise-facts" className="flex flex-wrap gap-x-3 gap-y-0.5">
-      {facts.map(([label, value]) => (
-        <span key={label} className="text-[11px] leading-tight" style={{ color: "rgba(255,255,255,0.55)" }}>
-          <span className="uppercase tracking-wide text-2xs mr-1" style={{ color: "rgba(255,255,255,0.35)" }}>{label}</span>
-          {value}
-        </span>
-      ))}
+    <div data-testid="knock-premise-facts" className="mt-4">
+      <div className={`${SECTION_LABEL} mb-2`} style={{ color: MUTED }}>At this address</div>
+      <div className={INSET}>
+        {facts.map(([label, value], i) => (
+          <InsetRow key={label} label={label} first={i === 0}>{value}</InsetRow>
+        ))}
+      </div>
     </div>
   );
 }
@@ -103,7 +117,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           is actionable. */}
       {canAssignLead && (
         <div className="mt-3 flex items-center gap-2.5" data-testid="card-assign-row">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] shrink-0" style={{ color: MUTED }}>
+          <span className={`${SECTION_LABEL} shrink-0`} style={{ color: MUTED }}>
             Assigned to
           </span>
           <select
@@ -134,7 +148,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
             <Link
               data-testid="action-open-calling"
               href={`/calling/lead/${leadId}`}
-              className="h-10 px-3.5 rounded-full bg-white/[0.06] border border-white/15 text-white/70 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition"
+              className="h-10 px-3.5 rounded-full bg-white/[0.06] border border-white/15 text-white/70 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 tap-press"
             >
               
               Open in Calling
@@ -147,7 +161,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                 data-testid="knock-central-toggle"
                 aria-pressed={centralMode}
                 onClick={onToggleCentral}
-                className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
+                className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 tap-press ${
                   centralMode
                     ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
                     : "bg-white/[0.06] border-white/15 text-white/70"
@@ -173,7 +187,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           scan evidence). NOT keyed on lead id → no remount flash while a swap
           refetches. */}
       <div className="mt-5">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] mb-2.5" style={{ color: MUTED }}>
+        <div className={`${SECTION_LABEL} mb-2.5`} style={{ color: MUTED }}>
           History
         </div>
         <div data-testid="knock-history-list" className={`${docked ? "max-h-[42vh]" : "max-h-56"} overflow-y-auto overscroll-contain pr-1 pb-2`}>
@@ -218,7 +232,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                       to the next event (dropped on the last row). */}
                   <div className="relative flex flex-col items-center shrink-0">
                     <span className="w-2.5 h-2.5 rounded-full mt-[3px]" style={{ background: dot }} />
-                    {!isLast && <span className="w-px flex-1 mt-1 -mb-3 bg-white/10" />}
+                    {!isLast && <span className="w-px flex-1 mt-1 -mb-3 bg-white/[0.14]" />}
                   </div>
                   <div className="min-w-0 flex-1 leading-tight pb-3">
                     <div className="flex items-baseline justify-between gap-2">
@@ -248,7 +262,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                             data-testid={`history-where-${i}`}
                             aria-expanded={openDistanceId === h.id}
                             onClick={() => setOpenDistanceId((cur) => (cur === h.id ? null : h.id))}
-                            className={`tap-expand relative ml-auto h-8 rounded-full border border-white/[0.12] px-2.5 text-[11px] font-semibold text-white/70 active:scale-95 transition ${FOCUS}`}
+                            className={`tap-expand relative ml-auto h-8 rounded-full border border-white/[0.12] px-2.5 text-[11px] font-semibold text-white/70 tap-press ${FOCUS}`}
                           >
                             {openDistanceId === h.id ? "Hide" : "Where they stood"}
                           </button>
@@ -282,7 +296,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           data-testid="knock-delete"
           onClick={onDeleteTap}
           title={deleteArmed ? "Tap again to confirm delete" : "Remove this lead from the map"}
-          className={`mt-4 w-full h-11 rounded-xl border text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 active:scale-[.98] transition ${FOCUS} ${
+          className={`mt-4 w-full h-11 rounded-xl border text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 tap-press [--press-scale:0.98] ${FOCUS} ${
             deleteArmed
               ? "bg-rose-600 border-rose-500 text-white"
               : "bg-rose-500/10 border-rose-500/40 text-rose-300"

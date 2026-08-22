@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Phone, UserCheck, Zap, Home, Wifi, WifiOff, DollarSign, Info, RefreshCw, ShieldX, User, Mail, ChevronLeft, ChevronRight, X, ArrowUpRight, Navigation, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { OutcomeDisc, ICON_MAP, outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
+import { DispositionGrid } from "@/components/lead-sheet/OutcomeButton";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
@@ -143,7 +143,6 @@ const OUTCOME_COLORS: Record<string, string> = {
 // OutcomeSheet (needs_verification excluded — it's a system verdict, not a tap)
 // — and the same two-tier layout: primary four big, the rest as strip discs.
 const KNOCK_GRID = FIELD_OUTCOMES;
-const KNOCK_PRIMARY: Array<(typeof FIELD_OUTCOMES)[number]["key"]> = ["not_home", "interested", "sold", "not_interested"];
 
 // ── Lead Form ─────────────────────────────────────────────────────────────────
 function LeadForm({ initial, onSave, onCancel, saving }: {
@@ -324,50 +323,18 @@ function KnockLogger({ lead, team }: {
           </Select>
         </div>
 
-        {/* One-tap outcomes use the same shared model AND the same two-tier
-            layout as the rep surfaces: primary four as big cells, every other
-            disposition as a compact status-coded disc. One vocabulary, one
-            grammar, wherever a door gets marked. */}
+        {/* One-tap outcomes use the same shared model AND the same surface as
+            the rep card: every disposition as the same status disc, fixed
+            order. One vocabulary, one grammar, wherever a door gets marked. */}
         <div>
           <Label className="text-xs text-muted-foreground">Outcome - tap to log</Label>
-          <div className="grid grid-cols-2 gap-2 mt-1">
-            {KNOCK_GRID.filter(o => KNOCK_PRIMARY.includes(o.key)).map(o => {
-              const win = o.key === "sold";
-              return (
-                <button
-                  key={o.key} onClick={() => fire(o)} disabled={knockMutation.isPending}
-                  data-testid={`knock-outcome-${o.key}`}
-                  className="h-11 rounded-lg font-semibold text-[13px] flex items-center justify-center gap-2 active:scale-95 transition-transform border-2 disabled:opacity-60"
-                  // Filled Sold picks its ink per-fill (hard-coded near-black
-                  // went illegible when Sold's green deepened).
-                  style={win
-                    ? { background: o.color, color: outcomeFillTextColor(o.color), borderColor: o.color }
-                    : { background: `${o.color}1f`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}99` }}
-                >
-                  {!win && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: o.color }} />}
-                  {o.label}
-                </button>
-              );
-            })}
-          </div>
-          <div
-            role="group"
-            aria-label="More dispositions"
-            className="mt-2 flex gap-1.5 overflow-x-auto overscroll-x-contain snap-x scrollbar-none"
-          >
-            {KNOCK_GRID.filter(o => !KNOCK_PRIMARY.includes(o.key)).map(o => (
-              <OutcomeDisc
-                key={o.key}
-                outcome={o}
-                icon={ICON_MAP[o.icon]}
-                active={false}
-                flashing={false}
-                onTap={() => fire(o)}
-                disabled={knockMutation.isPending}
-                surface="card"
-              />
-            ))}
-          </div>
+          <DispositionGrid
+            className="mt-2"
+            surface="card"
+            activeOutcome={null}
+            onTap={(key) => { const o = KNOCK_GRID.find(x => x.key === key); if (o) fire(o); }}
+            disabled={knockMutation.isPending}
+          />
         </div>
 
         <div>

@@ -22,6 +22,7 @@ export interface RankedDoor<P extends RoutablePin = RoutablePin> {
 
 export function isOpenDoor(p: RoutablePin): boolean {
   if (!Number.isFinite(p.lat) || !Number.isFinite(p.lng)) return false;
+  if (p.doNotKnock) return false; // the resident asked us not to return
   const st = pinDisplayState(p);
   return st === "unworked" || st === "not_home";
 }

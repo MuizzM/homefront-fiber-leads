@@ -18,8 +18,8 @@ import { outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
  *   QUICK  — the default open state, ONE unified action surface: compact
  *            header (ONE status line: label · time · max ONE badge) →
  *            icon-sized utility row [action-directions, action-call (ONLY
- *            with a valid phone), action-copy] → ONE 2-column outcomes grid
- *            [knock-status-grid] with EVERY field disposition in fixed order,
+ *            with a valid phone), distance chip] → ONE disposition surface
+ *            [knock-status-grid]: EVERY field disposition as a 44px disc, fixed order,
  *            primary four leading (Not Home | Interested / Sold |
  *            Not Interested, then Follow-up, Prospect) → recent line →
  *            flat notes composer. No More section, no nested cards.
@@ -228,10 +228,10 @@ describe("<LeadKnockSheet /> - unified outcomes grid", () => {
 
   it("uses the dark-sheet status override and readable ink for filled outcomes", () => {
     renderSheet();
-    // Unfilled grid cell: ink is the dark-sheet-legible status colour.
-    expect(screen.getByTestId("knock-outcome-sold")).toHaveStyle({
-      color: STATUS_CONFIG.sold.onDark,
-    });
+    // Idle disc: the CODE beneath reads in the dark-sheet-legible status colour.
+    const soldCode = screen.getByTestId("knock-outcome-sold").querySelector("span:last-child") as HTMLElement;
+    expect(soldCode).toHaveTextContent("SOLD");
+    expect(soldCode).toHaveStyle({ color: STATUS_CONFIG.sold.onDark });
     // The active disc (default lead is an unworked prospect): the disc wears
     // the status fill with the white pin glyph; the code label goes white.
     const prospectDisc = screen.getByTestId("knock-outcome-prospect");
@@ -242,24 +242,25 @@ describe("<LeadKnockSheet /> - unified outcomes grid", () => {
     expect(screen.getByTestId("knock-outcome-interested").querySelector("svg")).not.toBeNull();
   });
 
-  it("ONE surface holds every disposition: primary four as grid cells, the rest as strip discs, fixed order", () => {
+  it("ONE surface holds every disposition as the same disc, fixed order, no strip, no rectangular cells", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
-    // Exactly FIELD_OUTCOMES, primary-four-first — one surface, two tiers.
+    // Exactly FIELD_OUTCOMES, verbatim — the four most likely reads lead.
     expect(gridOrder()).toEqual([
       "not_home", "interested", "sold", "not_interested",
       "follow_up", "go_back", "already_customer",
       "competitor", "renter", "moving", "no_soliciting", "prospect",
     ]);
     expect(gridOrder()).toEqual(ALL_KEYS);
-    // The strip is a real labelled group inside the one surface, and every
-    // non-primary disposition lives there with its compact code visible.
-    const strip = screen.getByTestId("knock-status-strip");
-    expect(screen.getByTestId("knock-status-grid").contains(strip)).toBe(true);
+    // Owner call 2026-08-22: every disposition is a circle. No second tier.
+    expect(screen.queryByTestId("knock-status-strip")).not.toBeInTheDocument();
+    const grid = screen.getByTestId("knock-status-grid");
+    expect(grid).toHaveAttribute("role", "group");
+    expect(grid.className).toMatch(/\bgrid-cols-6\b/);
     for (const o of FIELD_OUTCOMES) {
-      if (PRIMARY_KEYS.includes(o.key)) continue;
       const disc = screen.getByTestId(`knock-outcome-${o.key}`);
-      expect(strip.contains(disc)).toBe(true);
+      expect(grid.contains(disc)).toBe(true);
+      expect(disc.querySelector(".w-11.h-11.rounded-full")).not.toBeNull();
       expect(disc).toHaveTextContent(o.short);
       expect(disc).toHaveAccessibleName(o.label);
     }
@@ -381,22 +382,22 @@ describe("<LeadKnockSheet /> - double-submit guard", () => {
 });
 
 describe("<LeadKnockSheet /> - utility row, Call gating", () => {
-  it("utility row: Directions (Google, never mapbox) + Copy as icon-sized buttons", () => {
+  it("action row: Directions (Google, never mapbox) as the 44px primary; the duplicate copy circle is gone", () => {
     renderSheet();
     const a = screen.getByTestId("action-directions");
     expect(a).toHaveAttribute("href", expect.stringContaining("google.com/maps/dir"));
     expect(a.getAttribute("href")).toContain("34.9,-79.9");
     expect(a.getAttribute("href")).not.toMatch(/mapbox/i);
     expect(a).toHaveAttribute("aria-label", "Directions");
-    // Icon-sized (40px glyph buttons), not competing with the grid.
-    // Directions is now a LABELLED pill rather than a bare 40px circle: reps
-    // couldn't find an unlabelled arrow sitting between two identical grey
-    // circles. Height is still the 40px touch target; the width grows for text.
-    expect(a.className).toMatch(/\bh-10\b/);
+    // A labelled 44px pill that takes the row's width: the one thing a rep on a
+    // sidewalk needs instantly. Text only (no decorative glyph).
+    expect(a.className).toMatch(/\bh-11\b/);
+    expect(a.className).toMatch(/\bflex-1\b/);
     expect(a).toHaveTextContent("Directions");
-    const copy = screen.getByTestId("action-copy");
-    expect(copy).toHaveAttribute("aria-label", "Copy address");
-    expect(copy.className).toMatch(/\bh-10\b/);
+    expect(a.querySelector("svg")).toBeNull();
+    // ONE copy control on the card: the header disc. No second copy button.
+    expect(screen.queryByTestId("action-copy")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Copy address" })).toHaveLength(1);
     expect(screen.queryByTestId("action-text")).not.toBeInTheDocument();
   });
 
@@ -1268,5 +1269,394 @@ describe("<LeadKnockSheet /> - details: contact, quick links, photos", () => {
     const who = await screen.findByTestId("knock-owner-name");
     expect(who).toHaveTextContent(/Dana Reyes/);
     expect(who).not.toHaveTextContent(/TRACED OWNER/);
+  });
+});
+
+describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
+  // The header, peek bar and handle are drag regions. Capturing the pointer on
+  // pointerdown retargets the pointerup AND the compatibility click to the
+  // region, so the close / copy buttons inside it never received a mouse or
+  // trackpad click (touch only survived because a tap's click is synthesized
+  // from the gesture). Reproduced in Chromium 2026-08-22: mouse clicks on
+  // knock-sheet-close / knock-copy-address / knock-peek-close all landed on
+  // knock-sheet instead. Capture must wait for a real drag.
+  function withCaptureSpy<T>(run: (spy: ReturnType<typeof vi.fn>) => T): T {
+    const proto = Element.prototype as any;
+    const original = proto.setPointerCapture;
+    const spy = vi.fn();
+    proto.setPointerCapture = spy;
+    try { return run(spy); } finally { proto.setPointerCapture = original; }
+  }
+  // jsdom has no PointerEvent: a MouseEvent carries the coordinates and the
+  // pointer fields are pinned on top (React reads them off the native event).
+  const pointer = (el: Element, type: string, clientY: number, extra: Record<string, unknown> = {}) => {
+    // A press or a move with the button held carries buttons=1; pointerup has 0.
+    const buttons = type === "pointerup" ? 0 : 1;
+    const ev = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 300, clientY, buttons });
+    for (const [k, v] of Object.entries({ pointerId: 1, isPrimary: true, pointerType: "mouse", ...extra })) {
+      Object.defineProperty(ev, k, { value: v });
+    }
+    return fireEvent(el, ev);
+  };
+
+  it("a press on the close button does NOT capture the pointer, so its click still lands", () => {
+    withCaptureSpy((spy) => {
+      const { props } = renderSheet();
+      const close = screen.getByTestId("knock-sheet-close");
+      pointer(close, "pointerdown", 500);
+      expect(spy).not.toHaveBeenCalled();
+      pointer(close, "pointerup", 500);
+      fireEvent.click(close);
+      expect(props.onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("a press on the header copy button does NOT capture the pointer", () => {
+    withCaptureSpy((spy) => {
+      renderSheet();
+      const copy = screen.getByTestId("knock-copy-address");
+      pointer(copy, "pointerdown", 500);
+      pointer(copy, "pointermove", 502); // inside the tap slop
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a press that ends off the region never becomes a hover drag: a buttonless move is dropped", () => {
+    withCaptureSpy((spy) => {
+      const { props } = renderSheet();
+      const header = screen.getByTestId("knock-sheet-close").closest("[data-drag-region]") as HTMLElement;
+      pointer(header, "pointerdown", 500);
+      // The release happened off the region (never seen); the next thing the
+      // region sees is a hover move with no button held, 80px away.
+      pointer(header, "pointermove", 580, { buttons: 0 });
+      expect(spy).not.toHaveBeenCalled();
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
+      // And the stale press is gone: a real tap on the close button still lands.
+      pointer(screen.getByTestId("knock-sheet-close"), "pointerdown", 500);
+      pointer(screen.getByTestId("knock-sheet-close"), "pointerup", 500);
+      fireEvent.click(screen.getByTestId("knock-sheet-close"));
+      expect(props.onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("a right-click never starts a press", () => {
+    withCaptureSpy((spy) => {
+      renderSheet();
+      const header = screen.getByTestId("knock-sheet-close").closest("[data-drag-region]") as HTMLElement;
+      pointer(header, "pointerdown", 500, { button: 2 });
+      pointer(header, "pointermove", 560, { button: 2, buttons: 2 });
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("after a touch drag (no click follows) the next tap on a region button is NOT swallowed", async () => {
+    const { props } = renderSheet();
+    const close = screen.getByTestId("knock-sheet-close");
+    withCaptureSpy(() => {
+      pointer(close, "pointerdown", 500, { pointerType: "touch" });
+      pointer(close, "pointermove", 560, { pointerType: "touch" });
+      pointer(close, "pointerup", 560, { pointerType: "touch" });
+    });
+    // No click arrives after a touch drag. The rep taps again a moment later.
+    await new Promise<void>(resolve => setTimeout(resolve, 80));
+    fireEvent.click(close);
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a real drag (past the tap slop) DOES capture, and its click is swallowed", () => {
+    withCaptureSpy((spy) => {
+      const { props } = renderSheet();
+      const close = screen.getByTestId("knock-sheet-close");
+      pointer(close, "pointerdown", 500);
+      pointer(close, "pointermove", 540); // 40px: a drag, not a tap
+      expect(spy).toHaveBeenCalledTimes(1);
+      pointer(close, "pointerup", 540);
+      fireEvent.click(close);
+      expect(props.onClose).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("<LeadKnockSheet /> - door card v2: header chip, copy feedback, facts", () => {
+  it("the header carries the status PIN chip (pin fill + the pin's glyph), not a bare dot", () => {
+    renderSheet({
+      lead: baseLead({ leadStatus: "interested", visited: true, lastOutcome: "interested", lastKnockedAt: new Date().toISOString() }),
+    });
+    const chip = screen.getByTestId("knock-status-dot");
+    expect(chip).toHaveStyle({ background: STATUS_CONFIG.interested.color });
+    expect(chip.querySelector("svg[data-testid='knock-status-icon']")).not.toBeNull();
+    // The status LINE keeps the words; the glyph lives on the chip.
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Interested");
+    expect(screen.getByTestId("knock-status-line").querySelector("svg")).toBeNull();
+  });
+
+  it("copy: the disc confirms with a check and the locality line reads Address copied, then returns", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      renderSheet();
+      expect(screen.getByTestId("knock-address-locality")).toHaveTextContent("Rockwell, NC 28138");
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      expect(writeText).toHaveBeenCalledWith("148 Maple St, Rockwell, NC 28138");
+      expect(screen.getByTestId("knock-address-copied")).toHaveTextContent("Address copied");
+      expect(screen.getByTestId("knock-copy-address")).toHaveAccessibleName("Address copied");
+      // The address line itself never moved: the feedback replaced the locality.
+      expect(screen.queryByTestId("knock-address-locality")).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("knock-address-locality")).toBeInTheDocument(), { timeout: 2500 });
+      expect(screen.getByTestId("knock-copy-address")).toHaveAccessibleName("Copy address");
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    }
+  });
+
+  it("copy still works without the Clipboard API (plain http): the execCommand fallback runs", async () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    const seen: string[] = [];
+    const exec = vi.fn((cmd: string) => { if (cmd === "copy") seen.push((document.body.lastElementChild as HTMLTextAreaElement).value); return true; });
+    (document as any).execCommand = exec;
+    try {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      await waitFor(() => expect(screen.getByTestId("knock-address-copied")).toBeInTheDocument());
+      expect(seen).toEqual(["148 Maple St, Rockwell, NC 28138"]);
+    } finally {
+      delete (document as any).execCommand;
+    }
+  });
+
+  function renderWithDetail(detail: Record<string, unknown>) {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          queryFn: async ({ queryKey }) => {
+            const key = String(queryKey[0] ?? "");
+            if (key.endsWith("/history")) return [];
+            if (key.endsWith("/photos")) return [];
+            return { id: 7, updatedAt: "2026-07-08T19:00:00.000Z", ...detail };
+          },
+        },
+      },
+    });
+    return render(
+      <QueryClientProvider client={qc}>
+        <LeadKnockSheet
+          {...({
+            lead: baseLead(), onKnock: vi.fn(), onClose: vi.fn(),
+            onSaveNote: vi.fn().mockResolvedValue({ status: "saved" }),
+          } as any)}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("competitor and occupancy facts show under the header BEFORE the knock (quick level)", async () => {
+    renderWithDetail({ competitorName: "Spectrum", competitorTech: "Cable", billingStatus: "N", householdSegmentType: "Single family" });
+    const facts = await screen.findByTestId("knock-facts");
+    expect(screen.getByTestId("knock-fact-competitor")).toHaveTextContent("Spectrum · Cable");
+    expect(screen.getByTestId("knock-fact-occupancy")).toHaveTextContent("No current subscriber");
+    // At most the two that change the pitch; segment stays in Details.
+    expect(facts.querySelectorAll("[data-testid^='knock-fact-']")).toHaveLength(2);
+    expect(screen.getByTestId("knock-premise-facts")).toHaveTextContent("Single family");
+  });
+
+  it("renders no facts row when the scanner knows nothing about the door", async () => {
+    renderWithDetail({});
+    await screen.findByTestId("knock-status-grid");
+    expect(screen.queryByTestId("knock-facts")).not.toBeInTheDocument();
+  });
+});
+
+describe("<LeadKnockSheet /> - post-mark next step (Set a time / Next door)", () => {
+  const NEXT = { id: 9, address: "150 Maple St", meters: 38, atDoor: true };
+
+  it("after Not Home the peek lip offers the nearest open door; Open hands the id upstream", async () => {
+    const onOpenLead = vi.fn();
+    renderSheet({ nextDoor: NEXT, onOpenLead });
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
+    const row = screen.getByTestId("knock-post-mark");
+    expect(row).toHaveAttribute("data-kind", "next");
+    expect(screen.getByTestId("knock-peek-bar").contains(row)).toBe(true);
+    expect(row).toHaveTextContent("150 Maple St");
+    expect(row).toHaveTextContent("At door");
+    await userEvent.click(screen.getByTestId("knock-next-door-open"));
+    expect(onOpenLead).toHaveBeenCalledWith(9);
+  });
+
+  it("a far door reads an honest distance hint", async () => {
+    renderSheet({ nextDoor: { ...NEXT, meters: 400, atDoor: false }, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-sold"));
+    expect(screen.getByTestId("knock-post-mark")).toHaveTextContent("0.2mi");
+  });
+
+  it("after Interested the next step is a time: Set a time reopens the card with the composer", async () => {
+    renderSheet({ nextDoor: NEXT, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-interested"));
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
+    const row = screen.getByTestId("knock-post-mark");
+    expect(row).toHaveAttribute("data-kind", "time");
+    expect(screen.queryByTestId("knock-next-door-open")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-set-time"));
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
+    expect(screen.getByTestId("appt-editor")).toBeInTheDocument();
+    // While the composer is open the suggestion has done its job.
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+  });
+
+  it("no next door known: a plain mark shows no row; Undo clears a shown one", async () => {
+    const first = renderSheet();
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+    first.unmount();
+
+    renderSheet({ nextDoor: NEXT, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_interested"));
+    expect(screen.getByTestId("knock-post-mark")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-undo"));
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+  });
+
+  it("clears on a card swap: the suggestion belonged to the previous door", async () => {
+    const { rerenderSheet } = renderSheet({ nextDoor: NEXT, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.getByTestId("knock-post-mark")).toBeInTheDocument();
+    rerenderSheet({ lead: baseLead({ id: 8, address: "150 Maple St" }) });
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+  });
+
+  it("the appointment and note triggers sit side by side as one equal pair", () => {
+    renderSheet();
+    const row = screen.getByTestId("knock-follow-through").firstElementChild as HTMLElement;
+    expect(row.className).toMatch(/\bflex\b/);
+    expect(row.contains(screen.getByTestId("appt-open"))).toBe(true);
+    expect(row.contains(screen.getByTestId("note-add-chip"))).toBe(true);
+    for (const id of ["appt-open", "note-add-chip"]) {
+      expect(screen.getByTestId(id).className).toMatch(/\bh-11\b/);
+      expect(screen.getByTestId(id).querySelector("svg")).toBeNull();
+    }
+  });
+});
+
+describe("<LeadKnockSheet /> - motion: velocity-matched snaps, pops, exits", () => {
+  it("a snap writes a clamped inline duration (120..280ms) and keeps the decel curve", async () => {
+    renderSheet();
+    const sheet = screen.getByTestId("knock-sheet");
+    expect(sheet.className).toMatch(/\btransition-transform\b/);
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(sheet).toHaveAttribute("data-snap", "peek");
+    // jsdom has no layout, so every offset is 0 and the settle floors at the minimum.
+    const ms = parseInt(sheet.style.transitionDuration, 10);
+    expect(ms).toBeGreaterThanOrEqual(120);
+    expect(ms).toBeLessThanOrEqual(280);
+    expect(sheet.style.transitionTimingFunction).toBe("cubic-bezier(0.32,0.72,0,1)");
+  });
+
+  it("the mark moment: the peek chip pops, the column fades, the next step surfaces after the landing", async () => {
+    renderSheet({ nextDoor: { id: 9, address: "150 Maple St", meters: 30, atDoor: true }, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.getByTestId("knock-peek-dot").parentElement?.className).toContain("status-pop");
+    expect(screen.getByTestId("knock-post-mark").className).toContain("post-mark-in");
+    // The quick/details column is faded (class only; jsdom computes no style).
+    const column = screen.getByTestId("knock-sheet").lastElementChild as HTMLElement;
+    expect(column.className).toContain("opacity-0");
+  });
+
+  it("a programmatic close exits faster than it entered, on an accelerating curve", () => {
+    const { rerenderSheet } = renderSheet();
+    const sheet = screen.getByTestId("knock-sheet");
+    rerenderSheet({ lead: null });
+    expect(sheet.style.transitionDuration).toBe("160ms");
+    expect(sheet.style.transitionTimingFunction).toBe("cubic-bezier(0.4,0,1,1)");
+  });
+
+  it("press physics live on the disc, not the column; pills carry the shared utility", () => {
+    renderSheet();
+    const disc = screen.getByTestId("knock-outcome-sold");
+    expect(disc.className).not.toMatch(/active:scale/);
+    expect(disc.querySelector(".disc-press.w-11.h-11")).not.toBeNull();
+    for (const id of ["knock-copy-address", "knock-sheet-close", "action-directions", "appt-open", "note-add-chip"]) {
+      expect(screen.getByTestId(id).className).toContain("tap-press");
+      expect(screen.getByTestId(id).className).not.toMatch(/\btransition\b/);
+    }
+  });
+});
+
+describe("<LeadKnockSheet /> - docked panel: the post-mark step lives under the grid", () => {
+  function withDocked<T>(run: () => T): T {
+    const original = window.matchMedia;
+    (window as any).matchMedia = (q: string) => ({
+      matches: q.includes("min-width: 1024px"), media: q,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {},
+      onchange: null, dispatchEvent: () => false,
+    });
+    try { return run(); } finally { (window as any).matchMedia = original; }
+  }
+
+  it("renders the Next door row inside the follow-through block, never in the peek bar, and never collapses", async () => {
+    await withDocked(async () => {
+      const onOpenLead = vi.fn();
+      renderSheet({ nextDoor: { id: 9, address: "150 Maple St", meters: 30, atDoor: true }, onOpenLead });
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "docked");
+      await userEvent.click(screen.getByTestId("knock-outcome-sold"));
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "docked");
+      const rows = screen.getAllByTestId("knock-post-mark");
+      expect(rows).toHaveLength(1);
+      expect(screen.getByTestId("knock-follow-through").contains(rows[0])).toBe(true);
+      expect(screen.getByTestId("knock-peek-bar").contains(rows[0])).toBe(false);
+      await userEvent.click(screen.getByTestId("knock-next-door-open"));
+      expect(onOpenLead).toHaveBeenCalledWith(9);
+    });
+  });
+
+  it("Set a time opens the composer in place (no snap) and the nudge leaves", async () => {
+    await withDocked(async () => {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-outcome-interested"));
+      expect(screen.getByTestId("knock-post-mark")).toHaveAttribute("data-kind", "time");
+      await userEvent.click(screen.getByTestId("knock-set-time"));
+      expect(screen.getByTestId("appt-editor")).toBeInTheDocument();
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "docked");
+      expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+    });
+  });
+
+  it("the hidden peek bar is inert at every non-peek level, so its buttons are never tab stops", async () => {
+    renderSheet();
+    const peekWrap = screen.getByTestId("knock-peek-bar").parentElement?.parentElement as HTMLElement;
+    expect(peekWrap).toHaveAttribute("inert");
+    expect(peekWrap).toHaveAttribute("aria-hidden", "true");
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home")); // -> peek
+    expect(peekWrap).not.toHaveAttribute("inert");
+  });
+});
+
+describe("<LeadKnockSheet /> - copy feedback is honest", () => {
+  const setClipboard = (value: unknown) => Object.defineProperty(navigator, "clipboard", { configurable: true, value });
+
+  it("a rejected writeText falls back to execCommand and still reports copied with the right text", async () => {
+    setClipboard({ writeText: vi.fn().mockRejectedValue(new Error("NotAllowedError")) });
+    const seen: string[] = [];
+    (document as any).execCommand = vi.fn(() => { seen.push((document.body.lastElementChild as HTMLTextAreaElement).value); return true; });
+    try {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      await waitFor(() => expect(screen.getByTestId("knock-address-copied")).toBeInTheDocument());
+      expect(seen).toEqual(["148 Maple St, Rockwell, NC 28138"]);
+    } finally { setClipboard(undefined); delete (document as any).execCommand; }
+  });
+
+  it("when every path fails the card says so instead of flashing copied", async () => {
+    setClipboard({ writeText: vi.fn().mockRejectedValue(new Error("NotAllowedError")) });
+    (document as any).execCommand = vi.fn(() => false);
+    try {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      await waitFor(() => expect(screen.getByTestId("knock-address-copy-failed")).toHaveTextContent("Could not copy"));
+      expect(screen.queryByTestId("knock-address-copied")).not.toBeInTheDocument();
+      expect(screen.getByTestId("knock-copy-address")).toHaveAccessibleName("Copy address");
+      expect(screen.getByRole("status")).toHaveTextContent("Could not copy the address");
+    } finally { setClipboard(undefined); delete (document as any).execCommand; }
   });
 });

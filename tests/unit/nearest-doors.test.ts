@@ -41,4 +41,9 @@ describe("rankNearestDoors", () => {
     const pins = [{ id: 1, lat: Number.NaN, lng: -80.47, leadStatus: "prospect" }, at(2, 0.0002)];
     expect(rankNearestDoors(from, pins as any).map(d => d.pin.id)).toEqual([2]);
   });
+
+  it("never offers a do-not-knock door, however close it is", () => {
+    const pins = [at(1, 0.0001, { doNotKnock: 1 }), at(2, 0.0002)];
+    expect(rankNearestDoors(from, pins).map(d => d.pin.id)).toEqual([2]);
+  });
 });

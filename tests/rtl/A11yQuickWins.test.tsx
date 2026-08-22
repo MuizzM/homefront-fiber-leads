@@ -65,8 +65,8 @@ function renderKnockSheet() {
 describe("LeadKnockSheet - icon-only header buttons", () => {
   it("copy-address and close expose accessible names", () => {
     renderKnockSheet();
-    // (Copy also appears in the utility row — both must be named.)
-    expect(screen.getAllByRole("button", { name: "Copy address" }).length).toBeGreaterThan(0);
+    // ONE copy control on the card (the action-row copy circle is gone).
+    expect(screen.getAllByRole("button", { name: "Copy address" })).toHaveLength(1);
     expect(screen.getByTestId("knock-copy-address")).toHaveAccessibleName("Copy address");
     expect(screen.getByTestId("knock-sheet-close")).toHaveAccessibleName("Close");
   });
@@ -75,8 +75,10 @@ describe("LeadKnockSheet - icon-only header buttons", () => {
     renderKnockSheet();
     for (const testid of ["knock-copy-address", "knock-sheet-close"]) {
       const btn = screen.getByTestId(testid);
-      // The ::after inset expands the 28/32px visual button to a ≥44px hit area.
-      expect(btn.className).toContain("after:-inset-2");
+      // The 36px disc (h-9 w-9) plus the ::after inset reaches the 44px floor.
+      expect(btn.className).toMatch(/\bh-9\b/);
+      expect(btn.className).toMatch(/\bw-9\b/);
+      expect(btn.className).toContain("after:-inset-1");
     }
   });
 });

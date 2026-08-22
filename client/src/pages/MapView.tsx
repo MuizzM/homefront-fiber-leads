@@ -5750,11 +5750,36 @@ export default function MapView() {
     );
     return { doors: all.slice(0, NEAREST_DOORS_LIMIT), total: all.length };
   }, [nearestVisible, repFix, leads]);
+  // The card's post-mark "Next door": the nearest open door from the rep's
+  // fix, same rule and the same just-worked exclusion as the strip, minus the
+  // door on the card. Computed whenever a card is open (cheap: one pass over
+  // the pins, keyed on the fix and the pin set) so the lip can offer it the
+  // moment a mark lands. A loose fix ranks nothing, as above.
+  const cardNextDoor = useMemo(() => {
+    if (selectedLeadId == null || !repFix) return null;
+    if (repFix.accuracy != null && repFix.accuracy > 200) return null;
+    const exclude = new Set<number>([...recentIdsRef.current, selectedLeadId]);
+    const [best] = rankNearestDoors<StripPin>(repFix, leads as unknown as StripPin[], { limit: 1, excludeIds: exclude });
+    return best
+      ? { id: best.pin.id, address: best.pin.address, meters: best.meters, atDoor: best.atDoor }
+      : null;
+  }, [selectedLeadId, repFix, leads]);
+  const openLeadFromCard = useCallback(
+    (id: number) => {
+      const lead = leadById.get(id);
+      if (lead) flyToLead(lead);
+    },
+    [leadById, flyToLead],
+  );
+
   // Keep the distances honest while the strip is up: one fresh fix on show,
   // then a slow refresh, paused in a hidden tab. The geolocate control, when
   // the rep is following, feeds the same state far more often.
+  // Also while a CARD is open: the card's Next door row ranks from this fix,
+  // and a rep can stand at a door for minutes.
+  const fixWanted = nearestVisible || selectedLeadId != null;
   useEffect(() => {
-    if (!nearestVisible) return;
+    if (!fixWanted) return;
     let live = true;
     const refresh = () => {
       if (!live || document.visibilityState === "hidden") return;
@@ -5767,7 +5792,7 @@ export default function MapView() {
     refresh();
     const id = window.setInterval(refresh, 45_000);
     return () => { live = false; window.clearInterval(id); };
-  }, [nearestVisible, noteRepFix]);
+  }, [fixWanted, noteRepFix]);
 
   // Leads-panel row tap — the SAME path a pin tap takes (flyToLead →
   // setSelectedLeadId → card/sheet). Phone closes the drawer to reveal the map.
@@ -6450,6 +6475,12 @@ export default function MapView() {
         pendingKnockPaintRef.current = lead.id;
       }
       recentIdsRef.current = [...recentIdsRef.current.slice(-9), lead.id];
+      // The card's Next door row ranks from the rep fix the moment the mark
+      // lands: refresh it now (captureFieldFix never rejects; noteRepFix keeps
+      // its own 5s throttle) so the suggestion reflects where the rep stands.
+      void captureFieldFix(3500).then((f) => {
+        if (f.repLat != null && f.repLng != null) { repFixNotedAt.current = 0; noteRepFix(f.repLat, f.repLng, f.gpsAccuracy, Date.now()); }
+      });
       // Fire the pin's confirm-flash in the SAME color the card pill flashes (both
       // derive from the shared palette), so tapping an outcome pops the map marker
       // and the card in lockstep. Visual only — the card's onKnock path already did
@@ -6464,7 +6495,7 @@ export default function MapView() {
       }
       return true;
     },
-    [leadById, selectedLeadId, logKnock, scheduleClusterSetData, canManage, user, handleCentralMark],
+    [leadById, selectedLeadId, logKnock, scheduleClusterSetData, canManage, user, handleCentralMark, noteRepFix],
   );
 
   // Lead-level notes: the card owns typing; this owns persistence through the
@@ -9544,6 +9575,8 @@ export default function MapView() {
               canManage={canManage}
               onCentralMark={handleCentralMark}
               onDelete={handleDeleteLead}
+              nextDoor={cardNextDoor}
+              onOpenLead={openLeadFromCard}
             />
           )}
         </div>
