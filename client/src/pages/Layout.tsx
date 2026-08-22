@@ -348,7 +348,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/leaderboard" ? "Leaderboard"
     : location === "/my-documents" ? "Documents"
     : location === "/tax-and-pay" ? "Tax & pay"
-    : location === "/followups" ? "Follow-ups"
+    : location === "/followups" ? "Schedule"
     : location === "/mileage" ? "Mileage"
     : location === "/referrals" ? "Referrals"
     : location === "/my-territory" ? "My territory"
