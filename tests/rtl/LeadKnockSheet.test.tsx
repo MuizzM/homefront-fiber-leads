@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { LeadKnockSheet } from "@/components/LeadKnockSheet";
+import { LeadKnockSheet, UNDO_WINDOW_MS } from "@/components/LeadKnockSheet";
 import { FIELD_OUTCOMES } from "@shared/knock";
 import { STATUS_CONFIG } from "@shared/statusConfig";
 import { outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
@@ -1022,6 +1022,68 @@ describe("<LeadKnockSheet /> - appointment composer", () => {
   it("no appointment affordance on a do-not-knock door - an appointment IS a knock", () => {
     renderSheet({ lead: baseLead({ doNotKnock: 1 }) });
     expect(screen.queryByTestId("knock-appointment")).not.toBeInTheDocument();
+  });
+});
+
+describe("<LeadKnockSheet /> - undo the last mark", () => {
+  it("a fresh door marked Not Home offers Undo; Undo puts it back to Prospect through the knock path", async () => {
+    const { props } = renderSheet();
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(props.onKnock).toHaveBeenCalledTimes(1);
+    // The card collapsed to Peek, and the status line there carries Undo.
+    const undo = await screen.findByTestId("knock-undo");
+    expect(undo).toHaveAccessibleName(/put the door back to Prospect/);
+    await userEvent.click(undo);
+    expect(props.onKnock).toHaveBeenCalledTimes(2);
+    expect(props.onKnock).toHaveBeenLastCalledWith("prospect");
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("returns to the disposition the door actually had, not always Prospect", async () => {
+    const { props } = renderSheet({
+      lead: baseLead({ leadStatus: "interested", visited: true, lastOutcome: "interested", lastKnockedAt: new Date().toISOString() }),
+    });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    await userEvent.click(await screen.findByTestId("knock-undo"));
+    expect(props.onKnock).toHaveBeenLastCalledWith("interested");
+  });
+
+  it("does not arm for a rejected command", async () => {
+    renderSheet({ onKnock: vi.fn(() => false) });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("does not arm for an appointment: a scheduled visit is deliberate, not a slip", async () => {
+    renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    fireEvent.change(screen.getByTestId("appt-date"), { target: { value: "2026-08-29" } });
+    await userEvent.click(screen.getByTestId("appt-save"));
+    await waitFor(() => expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek"));
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("clears when the card swaps to another door", async () => {
+    const { rerenderSheet } = renderSheet();
+    await userEvent.click(screen.getByTestId("knock-outcome-interested"));
+    expect(await screen.findByTestId("knock-undo")).toBeInTheDocument();
+    rerenderSheet({ lead: baseLead({ id: 8, address: "150 Maple St" }) });
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("expires after the undo window", async () => {
+    vi.useFakeTimers();
+    try {
+      renderSheet();
+      fireEvent.click(screen.getByTestId("knock-outcome-not_home"));
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByTestId("knock-undo")).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(UNDO_WINDOW_MS + 50); });
+      expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -9,10 +9,12 @@ export interface PeekBarProps {
   freshFiber: boolean;
   directionsHref: string;
   onClose: () => void;
+  /** The short-lived Undo chip after a mark (shell-owned). */
+  undo?: React.ReactNode;
 }
 
 export function PeekBar(props: PeekBarProps): JSX.Element {
-  const { address, statusColor, statusLabel, lastKnockedAt, freshFiber, directionsHref, onClose } = props;
+  const { address, statusColor, statusLabel, lastKnockedAt, freshFiber, directionsHref, onClose, undo } = props;
   const lastRel = relativeTime(lastKnockedAt);
   const freshness = freshFiber ? "Fresh fiber" : lastRel ? `Last ${lastRel}` : "";
   return (
@@ -48,11 +50,14 @@ export function PeekBar(props: PeekBarProps): JSX.Element {
           <X className="w-[18px] h-[18px]" />
         </button>
       </div>
-      <div className="mt-1 pl-[22px] text-[12px] leading-tight truncate">
-        <span data-testid="knock-peek-status" className="font-semibold" style={{ color: statusColor }}>
-          {statusLabel}
+      <div className="mt-1 pl-[22px] text-[12px] leading-tight flex items-center min-w-0">
+        <span className="truncate min-w-0">
+          <span data-testid="knock-peek-status" className="font-semibold" style={{ color: statusColor }}>
+            {statusLabel}
+          </span>
+          {freshness && <span className="text-white/45"> · {freshness}</span>}
         </span>
-        {freshness && <span className="text-white/45"> · {freshness}</span>}
+        {undo}
       </div>
     </div>
   );
