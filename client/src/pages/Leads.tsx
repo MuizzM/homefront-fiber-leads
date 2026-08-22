@@ -38,7 +38,7 @@ import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABE
 import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 import { titleCaseAddress } from "@/lib/leadDisplay";
-import { metaFor, formatDistance } from "@/components/verification";
+import { metaFor, formatDistance, DistanceDiagram } from "@/components/verification";
 import { consumeLeadsFilterHandoff } from "@/lib/leadsFilterHandoff";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -497,6 +497,7 @@ type LeadHistoryItem = {
   // system actors, and assignment/note items.
   verification?: "verified" | "needs_review" | "invalid" | null;
   distanceM?: number | null;
+  gpsAccuracyM?: number | null;
 };
 
 const ONBOARDING_STAGE_LABEL: Record<string, string> = {
@@ -530,6 +531,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
   const [editContact, setEditContact] = useState(false);
   const [ownerEmail, setOwnerEmail] = useState(lead.ownerEmail ?? "");
   const canOpenCalling = useCan("calling.lead.read");
+  // Which history entry is showing its rep-vs-door distance diagram. Reset
+  // per lead so one door's expanded row never carries over to the next.
+  const [openHistoryId, setOpenHistoryId] = useState<string | null>(null);
+  useEffect(() => { setOpenHistoryId(null); }, [lead.id]);
 
   const { data: detail } = useQuery<Lead>({
     queryKey: [`/api/leads/${lead.id}`],
@@ -794,31 +799,58 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <div className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">No operational activity has been logged yet.</div>
           ) : (
             <div className="relative ml-1 space-y-0 before:absolute before:left-[6px] before:top-2 before:bottom-2 before:w-px before:bg-border">
-              {history.slice(0, 12).map(item => (
-                <div key={item.id} className="relative pl-6 py-2.5">
-                  {/* The timeline dot carries the location verdict for marked
-                      statuses — the same green/amber/red vocabulary as the map
-                      card and territory drawers; primary for everything else. */}
-                  <span
-                    className="absolute left-0 top-[15px] w-[13px] h-[13px] rounded-full border-2 border-card"
-                    style={item.type === "status_change" && item.verification
-                      ? { background: metaFor(item.verification).dot }
-                      : { background: "hsl(var(--primary))" }}
-                  />
-                  <div className="text-xs font-medium text-foreground">
-                    {item.type === "status_change" ? `Status changed to ${(item.status ?? "updated").replace(/_/g, " ")}` : item.type === "assignment" ? `Assigned to ${item.assignedTo ?? "team"}` : "Note added"}
-                  </div>
-                  {item.notePreview && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.notePreview}</div>}
-                  <div className="text-2xs text-muted-foreground mt-1">
-                    {item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}
-                    {item.type === "status_change" && item.verification && (
-                      <span className={metaFor(item.verification).text} data-testid={`history-verify-${item.verification}`}>
-                        {" · "}{metaFor(item.verification).label}{item.distanceM != null ? ` · ${formatDistance(item.distanceM)}` : ""}
-                      </span>
+              {history.slice(0, 12).map(item => {
+                const verified = item.type === "status_change" && !!item.verification;
+                const open = verified && openHistoryId === item.id;
+                const body = (
+                  <>
+                    <div className="text-xs font-medium text-foreground">
+                      {item.type === "status_change" ? `Status changed to ${(item.status ?? "updated").replace(/_/g, " ")}` : item.type === "assignment" ? `Assigned to ${item.assignedTo ?? "team"}` : "Note added"}
+                    </div>
+                    {item.notePreview && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.notePreview}</div>}
+                    <div className="text-2xs text-muted-foreground mt-1">
+                      {item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}
+                      {verified && (
+                        <span className={metaFor(item.verification).text} data-testid={`history-verify-${item.verification}`}>
+                          {" · "}{metaFor(item.verification).label}{item.distanceM != null ? ` · ${formatDistance(item.distanceM)}` : ""}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                );
+                return (
+                  <div key={item.id} className="relative pl-6 py-2.5">
+                    {/* The timeline dot carries the location verdict for marked
+                        statuses — the same green/amber/red vocabulary as the map
+                        card and territory drawers; primary for everything else. */}
+                    <span
+                      className="absolute left-0 top-[15px] w-[13px] h-[13px] rounded-full border-2 border-card"
+                      style={verified
+                        ? { background: metaFor(item.verification).dot }
+                        : { background: "hsl(var(--primary))" }}
+                    />
+                    {/* A marked status is tappable: it opens the recorded
+                        rep-vs-door distance so a manager can see where the rep
+                        stood, not just the verdict. Unverified rows stay static. */}
+                    {verified ? (
+                      <button
+                        type="button"
+                        onClick={() => setOpenHistoryId(open ? null : item.id)}
+                        aria-expanded={open}
+                        data-testid={`history-row-${item.id}`}
+                        className="block w-full min-h-tap rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {body}
+                      </button>
+                    ) : body}
+                    {open && (
+                      <div className="mt-2" data-testid="history-distance">
+                        <DistanceDiagram distanceM={item.distanceM} accuracyM={item.gpsAccuracyM} status={item.verification} />
+                      </div>
                     )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
