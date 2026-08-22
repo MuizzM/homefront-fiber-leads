@@ -9,6 +9,13 @@ import userEvent from "@testing-library/user-event";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { FIELD_OUTCOMES, OUTCOME_META } from "@shared/knock";
 
+// The live proximity chip captures one GPS fix per sheet open. jsdom has no
+// geolocation, so the module is mocked; each test sets what the "device" sees.
+const mockFix = vi.hoisted(() => ({ current: { repLat: null as number | null, repLng: null as number | null, gpsAccuracy: null as number | null } }));
+vi.mock("@/lib/geoFix", () => ({
+  captureFieldFix: vi.fn(() => Promise.resolve({ ...mockFix.current })),
+}));
+
 beforeAll(() => {
   // Radix Sheet needs these jsdom gaps filled.
   if (!window.HTMLElement.prototype.scrollIntoView) window.HTMLElement.prototype.scrollIntoView = () => {};
@@ -93,5 +100,41 @@ describe("<OutcomeSheet /> - appointment composer", () => {
     expect(props.onLog).toHaveBeenCalledWith("go_back", {
       notes: null, callbackDate: "2026-08-29", callbackTime: null,
     });
+  });
+});
+
+describe("<OutcomeSheet /> - live proximity chip", () => {
+  // Same honesty gates as the map card's chip: coordinates on the door, a fix
+  // from the device, accuracy tight enough that the number is not fiction.
+  const DOOR = { lat: 35.99, lng: -78.919 };
+
+  it("shows At door when the fix is on the doorstep", async () => {
+    mockFix.current = { repLat: DOOR.lat, repLng: DOOR.lng, gpsAccuracy: 12 };
+    renderSheet({ lead: baseLead(DOOR) });
+    const chip = await screen.findByTestId("outcome-proximity");
+    expect(chip).toHaveTextContent("At door");
+    expect(Number(chip.getAttribute("data-dist-m"))).toBeLessThanOrEqual(60);
+  });
+
+  it("shows a distance when the rep is away from the door", async () => {
+    // ~0.01 deg latitude is roughly 1.1 km — far outside the 60 m doorstep.
+    mockFix.current = { repLat: DOOR.lat + 0.01, repLng: DOOR.lng, gpsAccuracy: 12 };
+    renderSheet({ lead: baseLead(DOOR) });
+    const chip = await screen.findByTestId("outcome-proximity");
+    expect(chip).not.toHaveTextContent("At door");
+    expect(Number(chip.getAttribute("data-dist-m"))).toBeGreaterThan(60);
+  });
+
+  it("renders no chip without door coordinates, and none on a fix too loose to trust", async () => {
+    mockFix.current = { repLat: DOOR.lat, repLng: DOOR.lng, gpsAccuracy: 12 };
+    const first = renderSheet();
+    expect(screen.queryByTestId("outcome-proximity")).toBeNull();
+    first.unmount();
+    mockFix.current = { repLat: DOOR.lat, repLng: DOOR.lng, gpsAccuracy: 500 };
+    renderSheet({ lead: baseLead(DOOR) });
+    // The mocked capture resolves in a microtask; flush it before asserting absence.
+    await screen.findByTestId("outcome-sheet");
+    await Promise.resolve();
+    expect(screen.queryByTestId("outcome-proximity")).toBeNull();
   });
 });

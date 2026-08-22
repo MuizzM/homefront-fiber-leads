@@ -38,6 +38,7 @@ import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABE
 import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 import { titleCaseAddress } from "@/lib/leadDisplay";
+import { metaFor, formatDistance } from "@/components/verification";
 import { consumeLeadsFilterHandoff } from "@/lib/leadsFilterHandoff";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -491,6 +492,11 @@ type LeadHistoryItem = {
   assignedTo?: string;
   assignedBy?: string;
   notePreview?: string;
+  // Location verification recorded WHEN the status was marked (server-stamped
+  // from shared/geoVerify.ts; never recomputed live). Null on legacy rows,
+  // system actors, and assignment/note items.
+  verification?: "verified" | "needs_review" | "invalid" | null;
+  distanceM?: number | null;
 };
 
 const ONBOARDING_STAGE_LABEL: Record<string, string> = {
@@ -790,12 +796,27 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <div className="relative ml-1 space-y-0 before:absolute before:left-[6px] before:top-2 before:bottom-2 before:w-px before:bg-border">
               {history.slice(0, 12).map(item => (
                 <div key={item.id} className="relative pl-6 py-2.5">
-                  <span className="absolute left-0 top-[15px] w-[13px] h-[13px] rounded-full border-2 border-card bg-primary" />
+                  {/* The timeline dot carries the location verdict for marked
+                      statuses — the same green/amber/red vocabulary as the map
+                      card and territory drawers; primary for everything else. */}
+                  <span
+                    className="absolute left-0 top-[15px] w-[13px] h-[13px] rounded-full border-2 border-card"
+                    style={item.type === "status_change" && item.verification
+                      ? { background: metaFor(item.verification).dot }
+                      : { background: "hsl(var(--primary))" }}
+                  />
                   <div className="text-xs font-medium text-foreground">
                     {item.type === "status_change" ? `Status changed to ${(item.status ?? "updated").replace(/_/g, " ")}` : item.type === "assignment" ? `Assigned to ${item.assignedTo ?? "team"}` : "Note added"}
                   </div>
                   {item.notePreview && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.notePreview}</div>}
-                  <div className="text-2xs text-muted-foreground mt-1">{item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}</div>
+                  <div className="text-2xs text-muted-foreground mt-1">
+                    {item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}
+                    {item.type === "status_change" && item.verification && (
+                      <span className={metaFor(item.verification).text} data-testid={`history-verify-${item.verification}`}>
+                        {" · "}{metaFor(item.verification).label}{item.distanceM != null ? ` · ${formatDistance(item.distanceM)}` : ""}
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

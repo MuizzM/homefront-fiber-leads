@@ -19,6 +19,7 @@ import {
 } from "@shared/knock";
 import { X, CalendarPlus } from "lucide-react";
 import { OutcomeDisc, ICON_MAP, outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
+import { ProximityChip, useLiveProximity } from "@/components/ProximityChip";
 import type { LogOpts } from "@/lib/useKnockLogger";
 
 const PRIMARY_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
@@ -28,6 +29,9 @@ const STRIP = FIELD_OUTCOMES.filter(o => !PRIMARY_KEYS.includes(o.key));
 export interface SheetLead {
   id: number; address: string; city?: string | null; zip?: string | null;
   contactName?: string | null; leadStatus: string; visited?: boolean | number | null; lastOutcome?: string | null;
+  // Door coordinates power the live proximity chip; optional so surfaces
+  // without them (imports mid-geocode) simply render no chip.
+  lat?: number | null; lng?: number | null;
 }
 
 export function OutcomeSheet({ lead, onClose, onLog }: {
@@ -48,6 +52,10 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
 
   const ds = lead ? pinDisplayState(lead) : null;
   const activeOutcome = ds ? (DS_TO_OUTCOME[ds] ?? null) : null;
+
+  // Live rep-to-door distance — the same chip the map card carries, so a rep
+  // logging from Today or Follow-ups sees the same honesty signal.
+  const { repFix, locating, requestFix } = useLiveProximity(lead?.id);
 
   const fire = (o: KnockOutcome, schedule?: { callbackDate: string; callbackTime: string | null }) => {
     onLog(o, {
@@ -77,6 +85,7 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                 <SheetTitle className="text-[16px] font-bold text-foreground leading-tight">{lead.address}</SheetTitle>
                 <div className="text-[12px] text-muted-foreground">{lead.city}{lead.zip ? ` ${lead.zip}` : ""}{lead.contactName ? ` · ${lead.contactName}` : ""}</div>
               </div>
+              <ProximityChip leadId={lead.id} lat={lead.lat} lng={lead.lng} repFix={repFix} locating={locating} onRefresh={requestFix} />
               <button onClick={onClose} aria-label="Close" className="w-11 h-11 -mr-2 -mt-2 flex items-center justify-center text-muted-foreground"><X className="w-5 h-5" /></button>
             </div>
 

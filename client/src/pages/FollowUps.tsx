@@ -171,7 +171,7 @@ export default function FollowUps() {
 }
 
 function sheetLeadOf(f: FollowUp): SheetLead {
-  return { id: f.leadId, address: f.address, city: f.city, zip: f.zip, contactName: f.contactName, leadStatus: f.leadStatus, lastOutcome: "callback" };
+  return { id: f.leadId, address: f.address, city: f.city, zip: f.zip, contactName: f.contactName, leadStatus: f.leadStatus, lastOutcome: "callback", lat: f.lat, lng: f.lng };
 }
 
 function Section({ title, tone, count, children }: { title: string; tone: string; count: number; children: React.ReactNode }) {

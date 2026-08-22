@@ -127,7 +127,7 @@ export default function PropertyDetail() {
   const back = () => { if (window.history.length > 1) window.history.back(); else navigate("/today"); };
 
   const sheetLead: SheetLead | null = lead
-    ? { id: lead.id, address: lead.address, city: lead.city, zip: lead.zip, contactName: lead.contactName, leadStatus: lead.leadStatus, visited: lead.visited, lastOutcome: lead.lastOutcome }
+    ? { id: lead.id, address: lead.address, city: lead.city, zip: lead.zip, contactName: lead.contactName, leadStatus: lead.leadStatus, visited: lead.visited, lastOutcome: lead.lastOutcome, lat: lead.lat, lng: lead.lng }
     : null;
   const openLog = () => setSheetOpen(true);
 
