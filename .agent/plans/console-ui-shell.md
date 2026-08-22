@@ -81,6 +81,20 @@ screen; that lands per screen in later slices.
   idle behind the connection gate, rows prefetch their page; routePrefetch covers the ten
   nav routes it had missed. Entry back to 85.5 KB gzipped; palette chunk 6.5 KB gzipped.
   Full verify green (7,059 tests).
+- 2026-08-22 16:10 measured production from outside: connect + TLS steady at 90 ms while
+  server time on /api/health swings 49 ms to 2.6 s (8 of 20 probes over 300 ms). The
+  read-only perf report (6 h window) shows loop-lag per-minute max p95 16.7 s, worst
+  44.5 s; /api/leads p99 32.8 s, /api/stats p95 10.7 s, /api/discovery/jobs p95 14.2 s.
+  The bundle is not the bottleneck; synchronous SQL on the HTTP workers is. Nothing
+  names the statement, so this slice adds `server/slowStatements.ts` (db.slow_statement,
+  SLOW_SQL_MS, masked SQL, per-minute cap), `pid` on http.request, a structured
+  `buyer_score.pass`, and STALL TIMELINE / SLOW STATEMENTS / LAG BY PROCESS sections in
+  `scripts/perf-report.mjs`, collected by `perf-report.yml`. Verified live on the
+  worktree dev server (SLOW_SQL_MS=2): boot's `PRAGMA foreign_key_check` alone is 9.9 s
+  on the 3.3 GB dev file.
+- 2026-08-22 16:05 CI on the merge commit c4372a2 failed on the known flaky
+  `buyer-score.test.ts > refuses to race itself` (same-millisecond stamp); re-run
+  dispatched; the test is made deterministic here by stamping every door stale first.
 
 ## Decisions
 

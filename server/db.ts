@@ -8,12 +8,21 @@ import {
   forceWalTruncateOn,
   startWalGuardOn,
 } from "./walGuard";
+import { installSlowStatementLog, slowSqlThresholdMs } from "./slowStatements";
 
 // DATA_DIR lets the SQLite file live on a persistent volume (set DATA_DIR=/data
 // on the host and mount your volume there). Defaults to the working directory.
 const dataDir = process.env.DATA_DIR || process.cwd();
 export const dbPath = path.join(dataDir, "data.db");
 const sqlite = new Database(dbPath);
+// Name the statements that stall the loop. Wraps the better-sqlite3 prototypes
+// once per process, so every handle opened after this (drizzle, maintenance,
+// the perf pragmas in routes.ts) is covered. Off outside production unless
+// SLOW_SQL_MS is set; see server/slowStatements.ts.
+{
+  const thresholdMs = slowSqlThresholdMs();
+  if (thresholdMs != null) installSlowStatementLog(sqlite, { thresholdMs, where: walGuardWhere() });
+}
 sqlite.pragma("journal_mode = WAL");
 // Enforce the durable discovery/qualification graph in local SQLite just as
 // PostgreSQL does in production. WAL + a busy timeout lets background workers

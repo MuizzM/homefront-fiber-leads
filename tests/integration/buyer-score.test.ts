@@ -220,6 +220,11 @@ describe("buyer score job", () => {
   });
 
   it("refuses to race itself on the same tenant", async () => {
+    // Every door must be stale, or the first pass finds at most one row,
+    // finishes before its first yield, and there is no race to refuse: the
+    // previous test stamps rows to the millisecond, and on a fast runner this
+    // test's "now" can be that same millisecond.
+    rawDb.prepare(`UPDATE leads SET buyer_scored_at = '2026-01-01T00:00:00.000Z' WHERE tenant_id = ?`).run(TENANT_A);
     const first = job.rescoreTenant(TENANT_A, { batch: 1 });
     const second = await job.rescoreTenant(TENANT_A, { batch: 1 });
     expect(second).toBeNull();

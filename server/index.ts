@@ -649,6 +649,9 @@ app.use((req, res, next) => {
         path: reqPath,
         status: res.statusCode,
         durationMs: Number((performance.now() - start).toFixed(2)),
+        // Which worker served it: lets the perf report line a slow request up
+        // with that worker's loop-lag minute and its slow statements.
+        pid: process.pid,
       });
     }
   });

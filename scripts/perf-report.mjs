@@ -83,6 +83,25 @@ export function analyze(lines) {
   const routes = new Map();
   const leadsMap = { count: 0, dbMs: [], rows: [], truncated: 0, byCache: new Map(), byFormat: new Map() };
   const loopLag = { count: 0, p95: [], max: [] };
+  // ── Stall attribution ──────────────────────────────────────────────────────
+  // One perf.loop_lag line per worker per minute says THAT a loop stalled; the
+  // slow requests, slow statements, guard fires and job lines stamped in the
+  // same minute say WHAT was running. Keyed by the minute (ts to the minute)
+  // so the render can walk the worst minutes and print both sides together.
+  const minutes = new Map(); // minute -> { lag: Map<pid, {maxMs,p95Ms}>, requests: [], statements: [], guards: [], jobs: [] }
+  const minuteOf = (rec) => (typeof rec.ts === "string" && rec.ts.length >= 16 ? rec.ts.slice(0, 16) : null);
+  const bucketFor = (rec) => {
+    const key = minuteOf(rec);
+    if (key === null) return null;
+    let b = minutes.get(key);
+    if (!b) { b = { lag: new Map(), requests: [], statements: [], guards: [], jobs: [] }; minutes.set(key, b); }
+    return b;
+  };
+  const lagByPid = new Map(); // pid -> { samples, worstMs, stalledMinutes, servedHttp }
+  const statements = new Map(); // label -> { kind, label, durations, pids:Set, where:Set }
+  const SLOW_REQUEST_MS = 1000;
+  const SLOW_JOB_MS = 1000;
+  const DURATION_FIELDS = ["tookMs", "blockedMs", "durationMs", "elapsedMs", "ms"];
   const statusClasses = new Map();
   const signals = { sqliteBusy: 0, otpUnavailable: 0, walGuard: 0, projectionFailed: 0, alertFailed: 0 };
   let parsed = 0;
@@ -109,7 +128,18 @@ export function analyze(lines) {
         let bucket = routes.get(route);
         if (!bucket) { bucket = { route, durations: [], count: 0, errors: 0, statuses: new Map() }; routes.set(route, bucket); }
         bucket.count++;
-        if (typeof rec.durationMs === "number" && Number.isFinite(rec.durationMs)) bucket.durations.push(rec.durationMs);
+        if (typeof rec.durationMs === "number" && Number.isFinite(rec.durationMs)) {
+          bucket.durations.push(rec.durationMs);
+          if (rec.durationMs >= SLOW_REQUEST_MS) {
+            const mb = bucketFor(rec);
+            if (mb) mb.requests.push({ route, ms: rec.durationMs, pid: typeof rec.pid === "number" ? rec.pid : null });
+          }
+        }
+        if (typeof rec.pid === "number") {
+          let p = lagByPid.get(rec.pid);
+          if (!p) { p = { pid: rec.pid, samples: 0, worstMs: 0, stalledMinutes: 0, servedHttp: false }; lagByPid.set(rec.pid, p); }
+          p.servedHttp = true;
+        }
         const status = Number(rec.status);
         if (Number.isFinite(status)) {
           const cls = `${Math.floor(status / 100)}xx`;
@@ -136,16 +166,60 @@ export function analyze(lines) {
         loopLag.count++;
         if (typeof rec.p95Ms === "number") loopLag.p95.push(rec.p95Ms);
         if (typeof rec.maxMs === "number") loopLag.max.push(rec.maxMs);
+        if (typeof rec.pid === "number" && typeof rec.maxMs === "number") {
+          const mb = bucketFor(rec);
+          if (mb) mb.lag.set(rec.pid, { maxMs: rec.maxMs, p95Ms: typeof rec.p95Ms === "number" ? rec.p95Ms : null });
+          let p = lagByPid.get(rec.pid);
+          if (!p) { p = { pid: rec.pid, samples: 0, worstMs: 0, stalledMinutes: 0, servedHttp: false }; lagByPid.set(rec.pid, p); }
+          p.samples++;
+          if (rec.maxMs > p.worstMs) p.worstMs = rec.maxMs;
+          if (rec.maxMs >= SLOW_REQUEST_MS) p.stalledMinutes++;
+        }
+        break;
+      }
+      case "db.slow_statement": {
+        // Emitted by server/slowStatements.ts for any statement, exec or
+        // transaction at or above SLOW_SQL_MS. sql is already masked there.
+        const label = typeof rec.sql === "string" && rec.sql ? rec.sql
+          : typeof rec.firstSql === "string" && rec.firstSql ? `transaction starting ${rec.firstSql}`
+          : typeof rec.origin === "string" ? `transaction @ ${rec.origin}`
+          : "(unknown)";
+        const kind = String(rec.kind ?? "?");
+        const key = `${kind}|${label}`;
+        let st = statements.get(key);
+        if (!st) { st = { kind, label, durations: [], pids: new Set(), where: new Set() }; statements.set(key, st); }
+        if (typeof rec.ms === "number") st.durations.push(rec.ms);
+        if (typeof rec.pid === "number") st.pids.add(rec.pid);
+        if (typeof rec.where === "string") st.where.add(rec.where);
+        const mb = bucketFor(rec);
+        if (mb && typeof rec.ms === "number") mb.statements.push({ kind, label, ms: rec.ms, pid: typeof rec.pid === "number" ? rec.pid : null });
         break;
       }
       // Contention and wedge signals. These are the events that tell you WHY a
       // percentile moved, so they are counted even though none of them carry
       // timing of their own.
       case "auth.otp_unavailable": signals.otpUnavailable++; break;
-      case "db.wal_guard": signals.walGuard++; break;
+      case "db.wal_guard": {
+        signals.walGuard++;
+        const mb = bucketFor(rec);
+        if (mb) mb.guards.push({ where: String(rec.where ?? "?"), blockedMs: typeof rec.blockedMs === "number" ? rec.blockedMs : null, beforeMb: rec.beforeMb ?? null, afterMb: rec.afterMb ?? null });
+        break;
+      }
       case "fresh_fiber.projection_failed": signals.projectionFailed++; break;
       case "state_monitor.alert_failed": signals.alertFailed++; break;
-      default: break;
+      default: {
+        // Any other collected event that carries a duration at or above a
+        // second is a job worth seeing next to the lag it may have caused.
+        // Only the event name and the number are kept; no other field.
+        for (const f of DURATION_FIELDS) {
+          if (typeof rec[f] === "number" && rec[f] >= SLOW_JOB_MS) {
+            const mb = bucketFor(rec);
+            if (mb) mb.jobs.push({ event: rec.event, field: f, ms: rec[f], pid: typeof rec.pid === "number" ? rec.pid : null });
+            break;
+          }
+        }
+        break;
+      }
     }
 
     // SQLITE_BUSY surfaces as a substring on several different events rather
@@ -174,6 +248,45 @@ export function analyze(lines) {
     };
   });
 
+  const statementRows = [...statements.values()].map((st) => {
+    const sorted = [...st.durations].sort((a, z) => a - z);
+    const total = sorted.reduce((acc, n) => acc + n, 0);
+    return {
+      kind: st.kind,
+      label: st.label,
+      count: sorted.length,
+      totalMs: round(total),
+      p95: round(percentile(sorted, 95)),
+      max: round(sorted.length ? sorted[sorted.length - 1] : null),
+      pids: [...st.pids].sort((a, z) => a - z),
+      where: [...st.where].sort(),
+    };
+  }).sort((a, z) => z.totalMs - a.totalMs);
+
+  // Worst minutes by the highest single-worker loop-lag max. Each carries
+  // everything stamped in that minute so the reader sees cause and effect on
+  // one line pair instead of grepping two logs.
+  const stallMinutes = [...minutes.entries()]
+    .map(([minute, b]) => {
+      const lag = [...b.lag.entries()].map(([pid, v]) => ({ pid, maxMs: v.maxMs, p95Ms: v.p95Ms })).sort((a, z) => z.maxMs - a.maxMs);
+      return {
+        minute,
+        worstLagMs: lag.length ? lag[0].maxMs : 0,
+        lag,
+        requests: [...b.requests].sort((a, z) => z.ms - a.ms),
+        statements: [...b.statements].sort((a, z) => z.ms - a.ms),
+        guards: b.guards,
+        jobs: [...b.jobs].sort((a, z) => z.ms - a.ms),
+      };
+    })
+    .filter((m) => m.worstLagMs >= SLOW_REQUEST_MS)
+    .sort((a, z) => z.worstLagMs - a.worstLagMs);
+
+  const lagByPidRows = [...lagByPid.values()]
+    .filter((p) => p.samples > 0)
+    .map((p) => ({ ...p, worstMs: round(p.worstMs) }))
+    .sort((a, z) => z.worstMs - a.worstMs);
+
   const dbSorted = [...leadsMap.dbMs].sort((a, z) => a - z);
   const rowsSorted = [...leadsMap.rows].sort((a, z) => a - z);
   const lagP95Sorted = [...loopLag.p95].sort((a, z) => a - z);
@@ -197,6 +310,9 @@ export function analyze(lines) {
       maxMs: { p95: round(percentile(lagMaxSorted, 95)), max: round(lagMaxSorted.length ? lagMaxSorted[lagMaxSorted.length - 1] : null) },
     },
     signals,
+    slowStatements: statementRows.length === 0 ? null : statementRows,
+    stalls: stallMinutes.length === 0 ? null : { minutesOver1s: stallMinutes.length, worst: stallMinutes.slice(0, 12) },
+    lagByPid: lagByPidRows.length === 0 ? null : lagByPidRows,
   };
 }
 
@@ -271,6 +387,44 @@ function render(report) {
     out.push("");
   }
 
+  if (report.lagByPid) {
+    out.push("── LAG BY PROCESS (which loops stall; a pid with no requests is the primary) ".padEnd(78, "─"));
+    out.push("  pid      samples  min>1s   worst      role");
+    for (const p of report.lagByPid) {
+      out.push(`${fmt(p.pid, 7)}${fmt(p.samples, 9)}${fmt(p.stalledMinutes, 8)}${fmt(p.worstMs, 9)}ms  ${p.servedHttp ? "serves http" : "no http.request seen (primary / maintenance)"}`);
+    }
+    out.push("");
+  }
+
+  if (report.slowStatements) {
+    out.push("── SLOW STATEMENTS (db.slow_statement, on the loop; literals masked) ".padEnd(78, "─"));
+    out.push("  total       n    p95      max      kind         sql / transaction origin");
+    for (const st of report.slowStatements.slice(0, 15)) {
+      out.push(`${fmt(Math.round(st.totalMs), 8)}ms${fmt(st.count, 6)}${fmt(st.p95, 7)}ms${fmt(st.max, 7)}ms  ${st.kind.padEnd(12)} ${st.label}`);
+    }
+    if (report.slowStatements.length > 15) out.push(`  (${report.slowStatements.length - 15} more statement shapes not listed)`);
+    out.push("");
+  }
+
+  if (report.stalls) {
+    const st = report.stalls;
+    out.push(`── STALL TIMELINE (${st.minutesOver1s} minutes with a worker loop stalled ≥1s; worst ${st.worst.length} shown) `.padEnd(78, "─"));
+    for (const m of st.worst) {
+      const lag = m.lag.filter((l) => l.maxMs >= 200).map((l) => `${l.pid}=${Math.round(l.maxMs)}ms`).join(" ");
+      out.push(`  ${m.minute.replace("T", " ")}  lag max  ${lag}`);
+      for (const r of m.requests.slice(0, 6)) out.push(`      request    ${fmt(Math.round(r.ms), 7)}ms  ${r.pid != null ? `pid ${r.pid}  ` : ""}${r.route}`);
+      if (m.requests.length > 6) out.push(`      request    (${m.requests.length - 6} more ≥1s)`);
+      for (const q of m.statements.slice(0, 6)) out.push(`      statement  ${fmt(Math.round(q.ms), 7)}ms  ${q.pid != null ? `pid ${q.pid}  ` : ""}${q.kind}  ${q.label}`);
+      if (m.statements.length > 6) out.push(`      statement  (${m.statements.length - 6} more)`);
+      for (const g of m.guards) out.push(`      wal_guard  ${fmt(g.blockedMs != null ? Math.round(g.blockedMs) : null, 7)}ms  ${g.where}  ${g.beforeMb ?? "?"}MB → ${g.afterMb ?? "?"}MB`);
+      for (const j of m.jobs.slice(0, 4)) out.push(`      job        ${fmt(Math.round(j.ms), 7)}ms  ${j.pid != null ? `pid ${j.pid}  ` : ""}${j.event} (${j.field})`);
+      if (m.requests.length + m.statements.length + m.guards.length + m.jobs.length === 0) {
+        out.push("      nothing slow logged in this minute: the blocker is untimed work (GC, JSON serialisation, a job that logs no duration)");
+      }
+    }
+    out.push("");
+  }
+
   out.push("── CONTENTION SIGNALS ".padEnd(78, "─"));
   const s = report.signals;
   out.push(`  SQLITE_BUSY / locked      ${s.sqliteBusy}`);
@@ -285,6 +439,9 @@ function render(report) {
     // Loop lag became a real event on 2026-08-09; the gap line only applies to
     // windows that predate the sampler (no perf.loop_lag records observed).
     if (name === "event-loop delay" && report.loopLag) continue;
+    // Statements at or above SLOW_SQL_MS are named once db.slow_statement
+    // lines exist; the per-route share below the threshold stays unknown.
+    if (name === "per-route DB time" && report.slowStatements) { out.push(`  ${name.padEnd(30)} statements ≥ SLOW_SQL_MS are named above; the share below the threshold is still unknown`); continue; }
     out.push(`  ${name.padEnd(30)} ${why}`);
   }
   return out.join("\n");
