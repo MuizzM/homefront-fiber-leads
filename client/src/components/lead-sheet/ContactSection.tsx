@@ -112,7 +112,7 @@ export function ContactSection({ leadId, contactName, contactEmail, ready }: Con
             type="button"
             data-testid="contact-add"
             onClick={beginEdit}
-            className="w-full h-11 px-3 rounded-xl bg-white/[0.05] border border-white/[0.10] text-[13px] font-semibold text-white/90 inline-flex items-center justify-center active:scale-[0.97] transition"
+            className="w-full h-11 px-3 rounded-xl bg-white/[0.05] border border-white/[0.10] text-[13px] font-semibold text-white/90 inline-flex items-center justify-center tap-press [--press-scale:0.97]"
           >
             Add contact
           </button>
@@ -166,7 +166,7 @@ export function ContactSection({ leadId, contactName, contactEmail, ready }: Con
               disabled={save.isPending}
               aria-busy={save.isPending}
               onClick={commit}
-              className="h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[13px] font-semibold active:scale-95 transition disabled:opacity-45 disabled:cursor-not-allowed"
+              className="h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[13px] font-semibold tap-press disabled:opacity-45 disabled:cursor-not-allowed"
             >
               {save.isPending ? "Saving…" : "Save"}
             </button>

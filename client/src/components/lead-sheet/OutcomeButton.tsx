@@ -94,15 +94,16 @@ export function OutcomeDisc(props: OutcomeDiscProps): JSX.Element {
       onClick={() => onTap(o.key)}
       className={[
         // The 44px disc IS the target; the column adds the label beneath.
-        "shrink-0 snap-start pt-0.5 pb-1 flex flex-col items-center gap-1 rounded-xl transition",
+        // Press physics live on the inner disc (.disc-press), never the column.
+        "shrink-0 snap-start pt-0.5 pb-1 flex flex-col items-center gap-1 rounded-xl",
         fluid ? "w-full min-w-[44px]" : "w-[52px]",
-        disabled ? "cursor-not-allowed opacity-45" : "active:scale-95",
+        disabled ? "cursor-not-allowed opacity-45" : "",
         FOCUS,
       ].join(" ")}
     >
       <span
         aria-hidden="true"
-        className="w-11 h-11 rounded-full flex items-center justify-center transition-shadow"
+        className="disc-press w-11 h-11 rounded-full flex items-center justify-center"
         style={{
           background: o.color,
           // Active = the ring the surface's selection language uses (white on

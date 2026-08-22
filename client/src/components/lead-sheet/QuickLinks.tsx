@@ -65,7 +65,7 @@ export function QuickLinks(props: QuickLinksProps): JSX.Element | null {
             target="_blank"
             rel="noopener"
             title={`${label}: opens in a new tab`}
-            className="h-10 px-3.5 rounded-full bg-white/[0.06] border border-white/15 text-white/75 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center hover:text-white hover:bg-white/[0.1] active:scale-95 transition"
+            className="h-10 px-3.5 rounded-full bg-white/[0.06] border border-white/15 text-white/75 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center hover:text-white hover:bg-white/[0.1] tap-press"
           >
             {label}
           </a>

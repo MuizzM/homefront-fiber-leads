@@ -1493,3 +1493,47 @@ describe("<LeadKnockSheet /> - post-mark next step (Set a time / Next door)", ()
     }
   });
 });
+
+describe("<LeadKnockSheet /> - motion: velocity-matched snaps, pops, exits", () => {
+  it("a snap writes a clamped inline duration (120..280ms) and keeps the decel curve", async () => {
+    renderSheet();
+    const sheet = screen.getByTestId("knock-sheet");
+    expect(sheet.className).toMatch(/\btransition-transform\b/);
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(sheet).toHaveAttribute("data-snap", "peek");
+    // jsdom has no layout, so every offset is 0 and the settle floors at the minimum.
+    const ms = parseInt(sheet.style.transitionDuration, 10);
+    expect(ms).toBeGreaterThanOrEqual(120);
+    expect(ms).toBeLessThanOrEqual(280);
+    expect(sheet.style.transitionTimingFunction).toBe("cubic-bezier(0.32,0.72,0,1)");
+  });
+
+  it("the mark moment: the peek chip pops, the column fades, the next step surfaces after the landing", async () => {
+    renderSheet({ nextDoor: { id: 9, address: "150 Maple St", meters: 30, atDoor: true }, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.getByTestId("knock-peek-dot").parentElement?.className).toContain("status-pop");
+    expect(screen.getByTestId("knock-post-mark").className).toContain("post-mark-in");
+    // The quick/details column is faded (class only; jsdom computes no style).
+    const column = screen.getByTestId("knock-sheet").lastElementChild as HTMLElement;
+    expect(column.className).toContain("opacity-0");
+  });
+
+  it("a programmatic close exits faster than it entered, on an accelerating curve", () => {
+    const { rerenderSheet } = renderSheet();
+    const sheet = screen.getByTestId("knock-sheet");
+    rerenderSheet({ lead: null });
+    expect(sheet.style.transitionDuration).toBe("160ms");
+    expect(sheet.style.transitionTimingFunction).toBe("cubic-bezier(0.4,0,1,1)");
+  });
+
+  it("press physics live on the disc, not the column; pills carry the shared utility", () => {
+    renderSheet();
+    const disc = screen.getByTestId("knock-outcome-sold");
+    expect(disc.className).not.toMatch(/active:scale/);
+    expect(disc.querySelector(".disc-press.w-11.h-11")).not.toBeNull();
+    for (const id of ["knock-copy-address", "knock-sheet-close", "action-directions", "appt-open", "note-add-chip"]) {
+      expect(screen.getByTestId(id).className).toContain("tap-press");
+      expect(screen.getByTestId(id).className).not.toMatch(/\btransition\b/);
+    }
+  });
+});

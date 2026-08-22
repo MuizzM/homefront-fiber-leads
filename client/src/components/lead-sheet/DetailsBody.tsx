@@ -148,7 +148,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
             <Link
               data-testid="action-open-calling"
               href={`/calling/lead/${leadId}`}
-              className="h-10 px-3.5 rounded-full bg-white/[0.06] border border-white/15 text-white/70 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition"
+              className="h-10 px-3.5 rounded-full bg-white/[0.06] border border-white/15 text-white/70 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 tap-press"
             >
               
               Open in Calling
@@ -161,7 +161,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                 data-testid="knock-central-toggle"
                 aria-pressed={centralMode}
                 onClick={onToggleCentral}
-                className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
+                className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 tap-press ${
                   centralMode
                     ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
                     : "bg-white/[0.06] border-white/15 text-white/70"
@@ -262,7 +262,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                             data-testid={`history-where-${i}`}
                             aria-expanded={openDistanceId === h.id}
                             onClick={() => setOpenDistanceId((cur) => (cur === h.id ? null : h.id))}
-                            className={`tap-expand relative ml-auto h-8 rounded-full border border-white/[0.12] px-2.5 text-[11px] font-semibold text-white/70 active:scale-95 transition ${FOCUS}`}
+                            className={`tap-expand relative ml-auto h-8 rounded-full border border-white/[0.12] px-2.5 text-[11px] font-semibold text-white/70 tap-press ${FOCUS}`}
                           >
                             {openDistanceId === h.id ? "Hide" : "Where they stood"}
                           </button>
@@ -296,7 +296,7 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           data-testid="knock-delete"
           onClick={onDeleteTap}
           title={deleteArmed ? "Tap again to confirm delete" : "Remove this lead from the map"}
-          className={`mt-4 w-full h-11 rounded-xl border text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 active:scale-[.98] transition ${FOCUS} ${
+          className={`mt-4 w-full h-11 rounded-xl border text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 tap-press [--press-scale:0.98] ${FOCUS} ${
             deleteArmed
               ? "bg-rose-600 border-rose-500 text-white"
               : "bg-rose-500/10 border-rose-500/40 text-rose-300"

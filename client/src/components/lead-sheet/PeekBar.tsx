@@ -16,32 +16,37 @@ export interface PeekBarProps {
   undo?: React.ReactNode;
   /** The post-mark next step (Set a time / Next door), shell-owned. */
   followThrough?: React.ReactNode;
+  /** The outcome just marked on this door: pops the chip once as the visible
+   *  confirmation (the tapped disc leaves the viewport during the collapse). */
+  pop?: string | null;
 }
 
 // Copy and close share one control: a 36px glass disc with a 44px hit area.
 // The close disc is the same at every level (peek included) so it is found
 // without looking.
 export const circleBtn =
-  "relative shrink-0 h-9 w-9 flex items-center justify-center rounded-full bg-white/[0.08] border border-white/[0.12] text-white/80 hover:bg-white/[0.14] hover:text-white active:scale-90 transition after:absolute after:-inset-1";
+  "relative shrink-0 h-9 w-9 flex items-center justify-center rounded-full bg-white/[0.08] border border-white/[0.12] text-white/80 hover:bg-white/[0.14] hover:text-white tap-press [--press-scale:0.9] after:absolute after:-inset-1";
 
 export function PeekBar(props: PeekBarProps): JSX.Element {
   const {
     address, pinColor, statusIcon, statusColor, statusLabel, lastKnockedAt, freshFiber,
-    directionsHref, onClose, undo, followThrough,
+    directionsHref, onClose, undo, followThrough, pop = null,
   } = props;
   const lastRel = relativeTime(lastKnockedAt);
   const freshness = freshFiber ? "Fresh fiber" : lastRel ? `Last ${lastRel}` : "";
   return (
     <div data-testid="knock-peek-bar" className="px-4 pb-2.5 pt-0.5">
       <div className="flex items-center gap-2.5 min-w-0">
-        <StatusPinChip color={pinColor} icon={statusIcon} size={28} data-testid="knock-peek-dot" />
+        <span key={pop ?? "idle"} className={`inline-flex shrink-0 ${pop ? "status-pop" : ""}`}>
+          <StatusPinChip color={pinColor} icon={statusIcon} size={28} data-testid="knock-peek-dot" />
+        </span>
         <div className="min-w-0 flex-1">
           <h2 className="min-w-0 text-[15px] leading-tight font-semibold text-white truncate">
             {address}
           </h2>
           <div className="mt-0.5 text-[12px] leading-tight flex items-center min-w-0">
             <span className="truncate min-w-0">
-              <span data-testid="knock-peek-status" className="font-semibold" style={{ color: statusColor }}>
+              <span key={statusLabel} data-testid="knock-peek-status" className="font-semibold card-swap-in" style={{ color: statusColor }}>
                 {statusLabel}
               </span>
               {freshness && <span className="text-white/45"> · {freshness}</span>}
@@ -56,7 +61,7 @@ export function PeekBar(props: PeekBarProps): JSX.Element {
           target="_blank"
           rel="noopener"
           aria-label={`Directions to ${address}`}
-          className="relative shrink-0 h-9 px-3.5 rounded-full bg-sky-500/15 border border-sky-400/30 text-sky-300 inline-flex items-center text-[12.5px] font-semibold hover:bg-sky-500/25 active:scale-95 transition after:absolute after:-inset-1"
+          className="relative shrink-0 h-9 px-3.5 rounded-full bg-sky-500/15 border border-sky-400/30 text-sky-300 inline-flex items-center text-[12.5px] font-semibold hover:bg-sky-500/25 tap-press after:absolute after:-inset-1"
         >
           Directions
         </a>

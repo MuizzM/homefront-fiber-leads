@@ -30,7 +30,7 @@ export interface QuickBodyProps {
 // it takes the primary (sky) weight and the width; Call shares the tint only
 // when a dialable number exists. Both are 44px (h-11): one row, one height.
 const tintBtn =
-  "relative h-11 rounded-full bg-sky-500/15 border border-sky-400/30 text-sky-300 font-semibold text-[13.5px] inline-flex items-center justify-center px-5 whitespace-nowrap hover:bg-sky-500/25 hover:text-sky-200 active:scale-[0.97] transition after:absolute after:-inset-1";
+  "relative h-11 rounded-full bg-sky-500/15 border border-sky-400/30 text-sky-300 font-semibold text-[13.5px] inline-flex items-center justify-center px-5 whitespace-nowrap hover:bg-sky-500/25 hover:text-sky-200 tap-press [--press-scale:0.97] after:absolute after:-inset-1";
 
 export function QuickBody(props: QuickBodyProps): JSX.Element {
   const {

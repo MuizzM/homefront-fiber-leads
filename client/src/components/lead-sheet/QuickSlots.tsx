@@ -42,7 +42,7 @@ export function QuickSlotRow({ date, time, onPick, surface = "glass", now }: Qui
             aria-pressed={selected}
             data-testid={`appt-slot-${i}`}
             onClick={() => onPick(s)}
-            className={`shrink-0 snap-start h-11 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap active:scale-95 transition ${
+            className={`shrink-0 snap-start h-11 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap tap-press ${
               selected ? "bg-primary border-primary text-primary-foreground" : idle
             }`}
           >
