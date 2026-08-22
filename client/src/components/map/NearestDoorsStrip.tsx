@@ -40,7 +40,10 @@ export function NearestDoorsStrip({ doors, nearbyTotal, onOpen, onHide, style }:
       aria-label="Nearest doors"
       data-testid="nearest-doors"
       style={style}
-      className="absolute inset-x-0 z-20 pointer-events-none"
+      // glass-ink-scope: the cards are dark in both app themes, so the At door
+      // chip's success token must resolve to the dark palette (the light one
+      // measured about 3:1 on this glass).
+      className="absolute inset-x-0 z-20 pointer-events-none glass-ink-scope"
     >
       <div className="flex items-center gap-2 pl-3 pb-2">
         <span className="glass-capsule glass-opaque pointer-events-auto inline-flex h-7 items-center gap-1.5 pl-3 pr-1 text-2xs font-semibold text-white/85 tabular-nums">
