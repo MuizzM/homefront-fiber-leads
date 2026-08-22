@@ -1433,6 +1433,7 @@ export default function Leads() {
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => navigate("/map")} className="h-9 border-border text-sm">Field map</Button>
+          {canAddLead && <Button variant="outline" onClick={() => navigate("/leads/import")} className="h-9 border-border text-sm" data-testid="btn-import-leads">Import</Button>}
           {canAddLead && <Button onClick={openAddDialog} className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm h-9" data-testid="btn-add-lead-manual">Add lead</Button>}
         </div>
       </div>

@@ -72,6 +72,7 @@ const CallingQueue = lazyRoute(() => import("@/pages/CallingQueue"));
 const MyRecoveries = lazyRoute(() => import("@/pages/MyRecoveries"));
 const OrderRecovery = lazyRoute(() => import("@/pages/OrderRecovery"));
 const OrderImports = lazyRoute(() => import("@/pages/OrderImports"));
+const ImportLeads = lazyRoute(() => import("@/pages/ImportLeads"));
 const OrderMessaging = lazyRoute(() => import("@/pages/OrderMessaging"));
 const ActionApprovals = lazyRoute(() => import("@/pages/ActionApprovals"));
 const CallingLead = lazyRoute(() => import("@/pages/CallingLead"));
@@ -427,6 +428,9 @@ function RouteTable({ location, role, isSuperAdmin }: {
           </Route>
           <Route path="/order-recovery">
             <CapabilityGuard role={role} capability="recovery.read.team"><OrderRecovery /></CapabilityGuard>
+          </Route>
+          <Route path="/leads/import">
+            <CapabilityGuard role={role} capability="lead.assign"><ImportLeads /></CapabilityGuard>
           </Route>
           <Route path="/order-imports">
             <CapabilityGuard role={role} capability="order.import.manage"><OrderImports /></CapabilityGuard>

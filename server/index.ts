@@ -1670,6 +1670,17 @@ app.use((req, res, next) => {
     if (typeof (pruneInterval as any).unref === "function") pruneInterval.unref();
   }
 
+  // ── APPOINTMENT REMINDERS ───────────────────────────────────────────────────
+  // Push the owning rep a reminder 30 minutes before a timed callback. Same
+  // due-check shape as the prune above: a cheap 5-minute tick that asks the
+  // database what is due, gated on the primary lease at tick time so a second
+  // node never doubles a notification. Ungated by any scanner flag: a promise
+  // to a homeowner is not a revenue feature. CALLBACK_REMINDERS=off disables.
+  if (process.env.CALLBACK_REMINDERS !== "off") {
+    const { startCallbackReminders } = await import("./callbackReminders");
+    startCallbackReminders(() => isPrimaryNode());
+  }
+
   // CITY INGEST — free OSM address discovery for the priority cities
   // (Davidson/Lake Norman). Idempotent: skips cities ingested in the last 7d.
   // First pass at boot +5min, then daily. CITY_INGEST=off disables.

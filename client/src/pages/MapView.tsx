@@ -42,6 +42,10 @@ import {
   type PinDisplayState,
 } from "@shared/knock";
 import { toLeadMapStatus } from "@shared/statusConfig";
+import { rankNearestDoors, NEAREST_DOORS_LIMIT } from "@shared/nearestDoors";
+import { NearestDoorsStrip, type StripPin } from "@/components/map/NearestDoorsStrip";
+import { LassoRepPicker, type PickerRep } from "@/components/map/LassoRepPicker";
+import { ToastAction } from "@/components/ui/toast";
 import {
   saveLeadNote,
   flushPendingNotes,
@@ -971,6 +975,24 @@ export default function MapView() {
   const [legendOpen, setLegendOpen] = useState(false); // manager legend: collapsed dot-strip by default
   // Rep pin-colors key — dismissible, opt-in from the More menu (never at rest).
   const [pinKeyOpen, setPinKeyOpen] = useState(false);
+  // ── Nearest doors (rep) ────────────────────────────────────────────────────
+  // The device's own position, kept on the device: it ranks the open doors
+  // around the rep for the strip and is never sent anywhere. Fed by the
+  // geolocate control while it runs (throttled) and by a one-shot fix plus a
+  // slow refresh while the strip is the thing on screen.
+  const [repFix, setRepFix] = useState<{ lat: number; lng: number; accuracy: number | null; at: number } | null>(() => {
+    const cached = readCachedFix();
+    return cached && Date.now() - cached.at < 5 * 60_000 ? { lat: cached.lat, lng: cached.lng, accuracy: null, at: cached.at } : null;
+  });
+  const repFixNotedAt = useRef(0);
+  const noteRepFix = useCallback((lat: number, lng: number, accuracy: number | null, at = Date.now()) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    if (at - repFixNotedAt.current < 5_000) return; // a fix a second in follow mode: rank every few seconds, not every frame
+    repFixNotedAt.current = at;
+    setRepFix({ lat, lng, accuracy, at });
+  }, []);
+  // Session-level dismissal: the X hands the slot back to the Next-door FAB.
+  const [nearestHidden, setNearestHidden] = useState(false);
   const [geocoding, setGeocoding] = useState(false); // street "go to" lookup in flight
   const [sidebarSearch, setSidebarSearch] = useState("");
 
@@ -1459,16 +1481,45 @@ export default function MapView() {
       });
       return res.json();
     },
-    onSuccess: (data: { updated: number; skipped: number }) => {
+    onSuccess: (data: { updated: number; skipped: number; undoToken?: string }) => {
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       const repName =
         team.find((m: TeamMember) => m.id === Number(lassoRepId))?.name ??
         "rep";
+      // The put-back lives on the toast for 30 seconds: the server holds the
+      // prior owners under a one-use token and restores each door to its own.
       toast({
         title: `${data.updated} reassigned to ${repName}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
+        ...(data.undoToken
+          ? {
+              duration: 30_000,
+              action: (
+                <ToastAction altText="Put these doors back" onClick={() => undoAssignMutation.mutate(data.undoToken!)}>
+                  Undo
+                </ToastAction>
+              ),
+            }
+          : {}),
       });
       exitLasso();
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  // Put a lasso assignment back. One-use token, same user, inside the window.
+  const undoAssignMutation = useMutation({
+    mutationFn: async (token: string) => {
+      const res = await apiRequest("POST", "/api/leads/assign-selection/undo", { token });
+      return res.json() as Promise<{ restored: number; skipped: number }>;
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      toast({
+        title: `${data.restored} put back${data.skipped ? ` · ${data.skipped} left as someone else moved them` : ""}`,
+        severity: "success",
+      });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -3080,6 +3131,11 @@ export default function MapView() {
             Math.max(0, (Date.now() - (e.timestamp || Date.now())) / 1000),
         });
         writeCachedFix(e.coords.latitude, e.coords.longitude, Date.now());
+        noteRepFix(
+          e.coords.latitude,
+          e.coords.longitude,
+          typeof e.coords.accuracy === "number" ? e.coords.accuracy : null,
+        );
         gpsCenteredRef.current = true; // startup fallbacks stand down
         firstFixSeenRef.current = true; // the control engaged → FAB fallback stays off
         puckEl.classList.remove("hf-nav-puck-stale");
@@ -3785,10 +3841,10 @@ export default function MapView() {
 
       // Everything below is BACKGROUND — the rep already has their pin.
       void (async () => {
-        let resolved: { address: string; city: string; state: string; zip: string; lat: number; lng: number };
+        let resolved: { address: string; city: string; state: string; zip: string; lat: number; lng: number; county: boolean };
         try {
           const a = await reverseGeocode(lat, lng);
-          resolved = { address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng };
+          resolved = { address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng, county: a.source === "county" };
         } catch {
           // ONE destructive toast; the mode stays armed — the rep aims again.
           removeTempPin();
@@ -3856,7 +3912,9 @@ export default function MapView() {
               scheduleClusterSetData();
             }
             setSelectedLeadId(added.id);
-            toast({ title: "Pin added", severity: "success", description: finalAddress });
+            // Say where the address came from when it was the county file: the
+            // rep can trust the number matches the house label on the map.
+            toast({ title: "Pin added", severity: "success", description: resolved.county ? `${finalAddress} · county address file` : finalAddress });
           }
           // Durable reconcile for every other consumer (list, stats, map poll).
           //
@@ -5675,6 +5733,42 @@ export default function MapView() {
     });
   }, [leads, flyToLead, toast]);
 
+  // Nearest doors — the strip's data. Same "open door" rule and the same
+  // just-worked exclusion as Next door, ranked by live distance. Only the rep
+  // map shows it (the Next-door FAB's own gate), and only while nothing else
+  // owns the bottom of the map. A loose fix (>200 m) ranks nothing: a
+  // distance that is fiction is worse than no distance.
+  const nearestVisible =
+    mapReady && isRep && !nearestHidden && !pinKeyOpen && selectedLeadId == null && !lassoMode && !addMode;
+  const nearest = useMemo(() => {
+    if (!nearestVisible || !repFix) return { doors: [] as ReturnType<typeof rankNearestDoors<StripPin>>, total: 0 };
+    if (repFix.accuracy != null && repFix.accuracy > 200) return { doors: [], total: 0 };
+    const all = rankNearestDoors<StripPin>(
+      repFix,
+      leads as unknown as StripPin[],
+      { limit: 1000, excludeIds: new Set(recentIdsRef.current) },
+    );
+    return { doors: all.slice(0, NEAREST_DOORS_LIMIT), total: all.length };
+  }, [nearestVisible, repFix, leads]);
+  // Keep the distances honest while the strip is up: one fresh fix on show,
+  // then a slow refresh, paused in a hidden tab. The geolocate control, when
+  // the rep is following, feeds the same state far more often.
+  useEffect(() => {
+    if (!nearestVisible) return;
+    let live = true;
+    const refresh = () => {
+      if (!live || document.visibilityState === "hidden") return;
+      void captureFieldFix(3500).then((f) => {
+        if (!live || f.repLat == null || f.repLng == null) return;
+        repFixNotedAt.current = 0; // a deliberate refresh always lands
+        noteRepFix(f.repLat, f.repLng, f.gpsAccuracy, Date.now());
+      });
+    };
+    refresh();
+    const id = window.setInterval(refresh, 45_000);
+    return () => { live = false; window.clearInterval(id); };
+  }, [nearestVisible, noteRepFix]);
+
   // Leads-panel row tap — the SAME path a pin tap takes (flyToLead →
   // setSelectedLeadId → card/sheet). Phone closes the drawer to reveal the map.
   const onLeadsRowTap = useCallback(
@@ -5788,6 +5882,31 @@ export default function MapView() {
     }
     return { counts, unassigned };
   }, [territoryClippedLeads]);
+
+  // ── Lasso rep picker inputs ───────────────────────────────────────────────
+  // Doors per rep come from the pins already on the map (repLeadCounts);
+  // today's knocks come from the leaderboard, fetched only while the Assign
+  // flow is open so the map never pays for it otherwise.
+  const lassoAssignOpen = lassoMode && lassoDrawn && lassoEffectiveAction === "assign";
+  const { data: knocksToday } = useQuery<Array<{ rep: { id: number }; knocksToday?: number }>>({
+    queryKey: ["/api/leaderboard", "today"],
+    queryFn: () => apiRequest("GET", "/api/leaderboard?range=today").then((r) => r.json()),
+    enabled: lassoAssignOpen,
+    staleTime: 60_000,
+  });
+  const lassoPickerReps = useMemo<PickerRep[]>(() => {
+    const today = new Map<number, number>();
+    for (const row of knocksToday ?? []) if (row?.rep?.id != null) today.set(row.rep.id, row.knocksToday ?? 0);
+    return team
+      .filter((m) => m.active)
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        color: (m as any).color ?? null,
+        doors: repLeadCounts.counts.get(m.id) ?? 0,
+        knockedToday: knocksToday ? (today.get(m.id) ?? 0) : null,
+      }));
+  }, [team, repLeadCounts, knocksToday]);
 
   // ── Filter sheet inputs ──────────────────────────────────────────────────
   // Statuses with pins, in funnel order — same rule statusOptions applies, so
@@ -7412,7 +7531,10 @@ export default function MapView() {
           {lassoMode && bottomSlot === "lasso" && (
             <div
               style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.5rem)" }}
-              className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100vw-24px)]"
+              // Phones: bottom-centre, thumb-reachable. Desktop (lg, where the
+              // door card docks too): the DRAWN panel docks to the right edge so
+              // the loop stays in view beside it instead of underneath it.
+              className={`absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100vw-24px)] ${lassoDrawn ? "lg:left-auto lg:right-0 lg:top-0 lg:!bottom-0 lg:translate-x-0 lg:max-w-none" : ""}`}
             >
               {!lassoDrawn ? (
                 /* Armed, nothing drawn yet → drawing hint */
@@ -7435,7 +7557,10 @@ export default function MapView() {
                 /* Drawn → Sales Rabbit-style: status breakdown (tap chips to
                    refine), then an action on the refined set — Assign owner, Set
                    status, or Save as area. */
-                <div className="glass-surface flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))] max-h-[calc(100dvh-7rem)] overflow-y-auto">
+                <div
+                  data-testid="lasso-panel"
+                  className="glass-surface glass-ink-scope flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))] max-h-[calc(100dvh-7rem)] overflow-y-auto lg:h-full lg:w-[380px] lg:max-h-none lg:rounded-l-[24px] lg:rounded-r-none lg:border-l lg:border-white/10 lg:px-4 lg:pt-4"
+                >
                   {/* Count + per-status breakdown; tap a chip to include/exclude it.
                       With no doors in the loop there is nothing to break down and
                       nothing to refine — say so plainly instead of showing "0/0"
@@ -7606,30 +7731,17 @@ export default function MapView() {
                   {/* Mode control + Apply — the active tile's secondary flow.
                       The Area flow gets its own labeled section below. */}
                   {lassoEffectiveAction !== "area" && (
-                  <div className="flex items-center gap-2">
+                  <div className={`flex items-center gap-2 ${lassoEffectiveAction === "assign" ? "flex-col items-stretch" : ""}`}>
                     {lassoEffectiveAction === "assign" && (
                       <>
-                        <select
-                          value={lassoRepId}
-                          onChange={(e) => setLassoRepId(e.target.value)}
-                          data-testid="lasso-rep-select"
-                          className="h-11 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
-                        >
-                          <option value="" className="text-slate-900">
-                            Assign to rep…
-                          </option>
-                          {team
-                            .filter((m) => m.active)
-                            .map((m: TeamMember) => (
-                              <option
-                                key={m.id}
-                                value={m.id}
-                                className="text-slate-900"
-                              >
-                                {m.name}
-                              </option>
-                            ))}
-                        </select>
+                        <div className="min-w-0 flex-1">
+                          <LassoRepPicker
+                            reps={lassoPickerReps}
+                            value={lassoRepId}
+                            onChange={setLassoRepId}
+                            selectionCount={lassoActiveIds.length}
+                          />
+                        </div>
                         <Button
                           disabled={
                             !lassoRepId ||
@@ -8948,7 +9060,19 @@ export default function MapView() {
               locate FAB on the right). One tap: nearest unworked door from
               where the rep is standing → fly + open its knock sheet. Hidden
               while a sheet is open so it never covers the outcome buttons. */}
-          {mapReady && isRep && selectedLeadId == null && leads.length > 0 && (
+          {nearestVisible && nearest.doors.length > 0 && (
+            <NearestDoorsStrip
+              doors={nearest.doors}
+              nearbyTotal={nearest.total}
+              onOpen={(pin) => flyToLead(pin as unknown as MapPin)}
+              onHide={() => setNearestHidden(true)}
+              // Above the FAB row (Locate stays put on the right), clear of the
+              // home-indicator zone. The strip is the Next-door FAB's successor;
+              // the FAB only returns when the strip has nothing to say.
+              style={{ bottom: "calc(env(safe-area-inset-bottom) + 2rem + 64px)" }}
+            />
+          )}
+          {mapReady && isRep && selectedLeadId == null && leads.length > 0 && !(nearestVisible && nearest.doors.length > 0) && (
             <button
               onClick={nextBestDoor}
               aria-label="Go to the next unworked door"

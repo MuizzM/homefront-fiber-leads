@@ -48,9 +48,14 @@ import { ContactSection } from "@/components/lead-sheet/ContactSection";
 import { QuickLinks } from "@/components/lead-sheet/QuickLinks";
 import { SheetPhotos } from "@/components/lead-sheet/SheetPhotos";
 import { relativeTime, prefersReducedMotion, shortRepName, MUTED, BODY_TEXT } from "@/components/lead-sheet/utils";
+import { QuickSlotRow } from "@/components/lead-sheet/QuickSlots";
+import { describeAppointment } from "@shared/schedule";
 import { isFccReportedLead } from "@/lib/leadSourceFilter";
 import { useToast } from "@/hooks/use-toast";
 import type { HistoryRow, LeadDetail, TeamMember } from "@/components/lead-sheet/types";
+
+/** How long after a tap the door can be put back with one more tap. */
+export const UNDO_WINDOW_MS = 8000;
 
 // The three snap levels. "quick" is the default open state.
 export type SheetSnap = "peek" | "quick" | "details";
@@ -180,6 +185,20 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
 
   const docked = useDocked();
   const [snap, setSnap] = useState<SheetSnap>("quick"); // QUICK is the default open state
+  // ── Undo ─────────────────────────────────────────────────────────────────
+  // A mark is one tap and saves silently (the map already shows it), so the
+  // only honest mistake-fixer is a short window to put the door back. Undo
+  // re-logs the disposition the door carried before the tap, through the
+  // SAME knock path (so a wrong "sold" reverses its commission the normal
+  // way); it never deletes history. Cleared on a card swap or after the window.
+  const [undo, setUndo] = useState<{ prev: KnockOutcome; outcome: KnockOutcome; leadId: number } | null>(null);
+  const undoTimer = useRef<number | null>(null);
+  const activeOutcomeRef = useRef<KnockOutcome | null>(null);
+  const armUndo = (next: typeof undo) => {
+    if (undoTimer.current != null) { window.clearTimeout(undoTimer.current); undoTimer.current = null; }
+    setUndo(next);
+    if (next) undoTimer.current = window.setTimeout(() => setUndo(u => (u === next ? null : u)), UNDO_WINDOW_MS);
+  };
   const [note, setNote] = useState("");                // composer DRAFT — clears once committed
   const [noteOpen, setNoteOpen] = useState(false);     // collapsed "+ Add note" chip → textarea on focus
   const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued" | "conflict" | "rejected">("idle");
@@ -394,6 +413,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     setSnap("quick"); // default open state for a newly selected lead
     setNote("");
     setNoteOpen(false);
+    armUndo(null);
     setNoteState("idle");
     setLastCommittedNote(null);
     setFlashKey(null);
@@ -577,10 +597,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead?.id]);
 
-  const handleStatusTap = async (key: KnockOutcome, opts?: KnockScheduleOpts): Promise<boolean> => {
+  const handleStatusTap = async (key: KnockOutcome, opts?: KnockScheduleOpts, meta?: { undo?: boolean }): Promise<boolean> => {
     const now = Date.now();
     if (now - tapGuard.current < 350) return false; // double-submit guard
     tapGuard.current = now;
+    // What the door showed BEFORE this tap — the disposition Undo returns to.
+    // A legacy state with no button (contacted) falls back to the pool reset.
+    const prevOutcome: KnockOutcome = activeOutcomeRef.current ?? "prospect";
     let accepted = false;
     if (centralMode && canManage && onCentralMark && !opts) {
       if (statusCommandPendingRef.current) return false;
@@ -606,6 +629,14 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       accepted = (opts ? onKnock(key, opts) : onKnock(key)) !== false;
     }
     if (!accepted) return false;
+    // Arm Undo for an ordinary rep tap that actually changed the door. Central
+    // corrections, appointments and the undo itself never arm it.
+    const leadId = renderedLead?.id;
+    if (!meta?.undo && !opts && !(centralMode && canManage && onCentralMark) && leadId && prevOutcome !== key) {
+      armUndo({ prev: prevOutcome, outcome: key, leadId });
+    } else {
+      armUndo(null);
+    }
     try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
     // Brief filled + check flash confirms only an accepted command. A rejected
     // manager/rep action stays open so the user can correct assignment/session.
@@ -618,6 +649,24 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (!docked) setSnap("peek");
     return true;
   };
+  const undoLastTap = () => {
+    const u = undo;
+    if (!u || u.leadId !== renderedLead?.id) return;
+    tapGuard.current = 0; // the undo is a deliberate second tap, never a double-submit
+    armUndo(null);
+    void handleStatusTap(u.prev, undefined, { undo: true });
+  };
+  const undoChip = (testid: string) => undo && undo.leadId === renderedLead?.id ? (
+    <button
+      type="button"
+      data-testid={testid}
+      onClick={undoLastTap}
+      aria-label={`Undo, put the door back to ${OUTCOME_META[undo.prev].label}`}
+      className="tap-expand relative ml-1 inline-flex h-7 shrink-0 items-center rounded-full border border-white/[0.14] bg-white/[0.06] px-2.5 text-[11px] font-bold uppercase tracking-wide text-white/85 active:scale-95 transition"
+    >
+      Undo
+    </button>
+  ) : null;
 
   // ── Notes: composer model ────────────────────────────────────────────────────
   // Typing is pure local state (never touches the network). Committing — blur,
@@ -678,6 +727,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const ds = pinDisplayState(renderedLead);
   const canonicalStatus = toLeadMapStatus(ds);
   const activeOutcome = DS_TO_OUTCOME[ds] ?? null;
+  activeOutcomeRef.current = activeOutcome;
   // The card is dark, so it reads onDark where the pin colour is too dark to be
   // text (sold). Pins keep STATUS_CONFIG.color — the map contract is unchanged.
   const statusColor = STATUS_CONFIG[canonicalStatus].onDark ?? STATUS_CONFIG[canonicalStatus].color;
@@ -853,11 +903,18 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               type="button"
               data-testid="appt-cancel"
               onClick={() => setApptOpen(false)}
-              className="text-[12px] font-semibold text-white/50 hover:text-white/80 transition px-1 -mr-1"
+              className="min-h-tap text-[12px] font-semibold text-white/65 hover:text-white/90 transition px-1 -mr-1 -my-2"
             >
               Cancel
             </button>
           </div>
+          {/* One-tap times first; a tap fills the pickers below, Set still confirms. */}
+          <QuickSlotRow
+            date={apptDate}
+            time={apptTime}
+            onPick={(slot) => { setApptDate(slot.date); setApptTime(slot.time); }}
+            surface="glass"
+          />
           <div className="flex flex-wrap items-end gap-2">
             <label className="flex-1 min-w-[150px]">
               <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>Date</span>
@@ -895,11 +952,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               // right-aligns on its own line instead of dangling bottom-left.
               className="ml-auto h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[13px] font-semibold active:scale-95 transition disabled:opacity-45 disabled:cursor-not-allowed"
             >
-              Set
+              {apptDate ? `Set for ${describeAppointment(apptDate, apptTime)}` : "Set"}
             </button>
           </div>
           <p className="mt-2 text-[11.5px] leading-snug" style={{ color: MUTED }}>
-            Saves a {OUTCOME_META[apptOutcome].label} with this date — it lands on your Follow-ups.
+            Saves a {OUTCOME_META[apptOutcome].label} on this date. It lands on your Schedule, with a reminder 30 minutes before a timed visit.
           </p>
         </div>
       )}
@@ -981,7 +1038,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         // glass-sheet: the liquid-glass bottom-sheet surface (18px blur budget,
         // ink fill, specular top hairline, token shadow) — see index.css. Solid
         // enough to stay readable over the satellite basemap.
-        "glass-sheet fixed z-40 flex flex-col will-change-transform",
+        // glass-ink-scope: the card is dark in BOTH app themes, so every semantic
+        // token it reads (success chips, primary buttons, the history diagram)
+        // must resolve to the dark palette even under the light default.
+        "glass-sheet glass-ink-scope fixed z-40 flex flex-col will-change-transform",
         docked
           ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
           // Layout's persistent sidebar begins at Tailwind's md breakpoint,
@@ -1053,6 +1113,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             freshFiber={renderedLead.leadTag === "fresh_fiber_confirmed"}
             directionsHref={directionsHref}
             onClose={onClose}
+            undo={undoChip("knock-undo")}
           />
         </div>
       </div>
@@ -1125,6 +1186,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     return StatusIcon ? <StatusIcon data-testid="knock-status-icon" className="w-[14px] h-[14px] shrink-0" /> : null;
                   })()}
                   <span className="truncate">{statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}</span>
+                  {undoChip("knock-undo-header")}
                   {statusBadge && (
                     <span
                       data-testid="knock-status-badge"

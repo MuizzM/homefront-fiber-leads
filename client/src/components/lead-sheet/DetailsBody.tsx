@@ -8,7 +8,8 @@
 
 import { Link } from "wouter";
 import { FOCUS } from "@/lib/a11y";
-import { VerificationBadge, formatDistance } from "@/components/verification";
+import { useState } from "react";
+import { VerificationBadge, DistanceDiagram, formatDistance } from "@/components/verification";
 import { isKnockOutcome, OUTCOME_META, type KnockOutcome } from "@shared/knock";
 import { relativeTime, shortRepName, MUTED, BODY_TEXT } from "./utils";
 import type { HistoryRow, LeadDetail, TeamMember } from "./types";
@@ -82,6 +83,9 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
     centralMode, deleteArmed, onToggleCentral, onDeleteTap,
     history, historyLoading,
   } = props;
+  // "Where they stood": one history row at a time opens its distance
+  // diagram (rep position, this door, the measured gap when marked).
+  const [openDistanceId, setOpenDistanceId] = useState<string | null>(null);
   return (
     <div data-testid="knock-details-body" hidden={hidden} className="mt-5">
       {/* Who lives here — the rep-captured identity leads the level. */}
@@ -238,6 +242,22 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
                         <VerificationBadge status={h.verification} />
                         <span data-testid="history-distance">{formatDistance(h.distanceM)}</span>
                         {h.gpsAccuracyM != null && <span>· GPS ±{Math.round(h.gpsAccuracyM)} m</span>}
+                        {h.distanceM != null && Number.isFinite(h.distanceM) && (
+                          <button
+                            type="button"
+                            data-testid={`history-where-${i}`}
+                            aria-expanded={openDistanceId === h.id}
+                            onClick={() => setOpenDistanceId((cur) => (cur === h.id ? null : h.id))}
+                            className={`tap-expand relative ml-auto h-8 rounded-full border border-white/[0.12] px-2.5 text-[11px] font-semibold text-white/70 active:scale-95 transition ${FOCUS}`}
+                          >
+                            {openDistanceId === h.id ? "Hide" : "Where they stood"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {h.type === "status_change" && openDistanceId === h.id && (
+                      <div className="mt-2" data-testid={`history-distance-diagram-${i}`}>
+                        <DistanceDiagram distanceM={h.distanceM} accuracyM={h.gpsAccuracyM} status={h.verification} />
                       </div>
                     )}
                   </div>

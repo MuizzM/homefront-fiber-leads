@@ -105,6 +105,7 @@ const NAV_ITEMS: NavItem[] = [
   // ground that is not theirs. Gated on the same capability that hands areas
   // out, so the people who can assign are the people who can see the board.
   { href: "/areas",        label: "Areas",         icon: LayoutGrid,   show: r => roleCan(r, "assign_territory"),          group: "Field" },
+  { href: "/leads/import", label: "Import Leads",  icon: FileUp,       show: r => can(r, "lead.assign"),                group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
   // The hub (chat + announcements + board) is a FIELD surface now — every rep
   // reads and writes the room. Matches the route's field.app.use guard; the
@@ -348,7 +349,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/leaderboard" ? "Leaderboard"
     : location === "/my-documents" ? "Documents"
     : location === "/tax-and-pay" ? "Tax & pay"
-    : location === "/followups" ? "Follow-ups"
+    : location === "/leads/import" ? "Import leads"
+    : location === "/followups" ? "Schedule"
     : location === "/mileage" ? "Mileage"
     : location === "/referrals" ? "Referrals"
     : location === "/my-territory" ? "My territory"

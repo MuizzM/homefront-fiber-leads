@@ -20,6 +20,8 @@ import {
 import { X, CalendarPlus } from "lucide-react";
 import { OutcomeDisc, ICON_MAP, outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
 import { ProximityChip, useLiveProximity } from "@/components/ProximityChip";
+import { QuickSlotRow } from "@/components/lead-sheet/QuickSlots";
+import { describeAppointment } from "@shared/schedule";
 import type { LogOpts } from "@/lib/useKnockLogger";
 
 const PRIMARY_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
@@ -159,11 +161,17 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                       type="button"
                       data-testid="outcome-appt-cancel"
                       onClick={() => setApptOpen(false)}
-                      className="text-[12px] font-semibold text-muted-foreground hover:text-foreground transition px-1 -mr-1"
+                      className="min-h-tap text-[12px] font-semibold text-muted-foreground hover:text-foreground transition px-1 -mr-1 -my-2"
                     >
                       Cancel
                     </button>
                   </div>
+                  <QuickSlotRow
+                    date={apptDate}
+                    time={apptTime}
+                    onPick={(slot) => { setApptDate(slot.date); setApptTime(slot.time); }}
+                    surface="card"
+                  />
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="flex-1 min-w-[150px]">
                       <Label htmlFor="outcome-appt-date" className="text-[11px] text-muted-foreground">Date</Label>
@@ -197,11 +205,11 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                       onClick={commitAppointment}
                       className="ml-auto h-11 font-semibold"
                     >
-                      Set
+                      {apptDate ? `Set for ${describeAppointment(apptDate, apptTime)}` : "Set"}
                     </Button>
                   </div>
                   <p className="mt-2 text-[11.5px] leading-snug text-muted-foreground">
-                    Saves a {OUTCOME_META[apptOutcome].label} with this date — it lands on your Follow-ups.
+                    Saves a {OUTCOME_META[apptOutcome].label} on this date. It lands on your Schedule, with a reminder 30 minutes before a timed visit.
                   </p>
                 </div>
               )}

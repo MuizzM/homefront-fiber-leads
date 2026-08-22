@@ -177,6 +177,8 @@ import { registerCommissionFileRoutes } from "./commissionFileRoutes";
 import { registerGuardedActionRoutes } from "./guardedActionRoutes";
 import { guardedActionsEnabled } from "./guardedActionEngine";
 import { registerAddressPointRoutes } from "./addressPointRoutes";
+import { nearestAddressPoints } from "./addressPointStore";
+import { registerLeadImportRoutes } from "./leadImportRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -1267,6 +1269,37 @@ const ASSIGN_CHUNK = Math.max(100, Math.min(5_000, Number(process.env.ASSIGN_CHU
 // Runaway guard on a resolved selection. Not a payload limit - assign-selection
 // ships a ring, so the request is a couple of KB either way.
 const MAX_ASSIGN_SELECTION = Math.max(1_000, Number(process.env.MAX_ASSIGN_SELECTION) || 250_000);
+// ── Bulk-assignment undo ──────────────────────────────────────────────────────
+// A lasso assignment can be put back for a short while. The prior owner of
+// every door the write actually changed is captured INSIDE each chunk's
+// transaction (the same rows, the same scope), kept in memory under a token
+// that only the same user in the same tenant can redeem, and restored row by
+// row with a CAS on the value this assignment wrote, so a door somebody else
+// moved in the meantime is left alone. Bounded three ways: selections above
+// ASSIGN_UNDO_MAX_ROWS carry no token, tokens expire, and the table caps its
+// entry count. In-memory on purpose: an undo that outlives a restart is a
+// second assignment system, and this window is seconds, not days.
+const ASSIGN_UNDO_MAX_ROWS = 5_000;
+const ASSIGN_UNDO_TTL_MS = 10 * 60_000;
+const ASSIGN_UNDO_MAX_ENTRIES = 64;
+interface AssignUndoEntry {
+  tenantId: number | undefined;
+  userId: number;
+  appliedRepId: number | null;
+  prior: Array<{ id: number; assignedRepId: number | null; assignedBy: string | null; assignedAt: string | null; unassignedAt: string | null }>;
+  expiresAt: number;
+}
+const assignUndo = new Map<string, AssignUndoEntry>();
+function rememberAssignUndo(entry: Omit<AssignUndoEntry, "expiresAt">): { token: string; expiresAt: number } | null {
+  if (!entry.prior.length || entry.prior.length > ASSIGN_UNDO_MAX_ROWS) return null;
+  const now = Date.now();
+  for (const [k, v] of assignUndo) if (v.expiresAt <= now) assignUndo.delete(k);
+  while (assignUndo.size >= ASSIGN_UNDO_MAX_ENTRIES) assignUndo.delete(assignUndo.keys().next().value!);
+  const token = crypto.randomBytes(18).toString("base64url");
+  const expiresAt = now + ASSIGN_UNDO_TTL_MS;
+  assignUndo.set(token, { ...entry, expiresAt });
+  return { token, expiresAt };
+}
 // Bbox candidates examined before the exact ring test. Exceeding it REFUSES the
 // request rather than truncating: a dropped bbox row is a door inside the ring
 // that silently never got assigned.
@@ -1408,6 +1441,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // implementation of each and they cannot drift apart.
     repInVisibilityScope, repInCallerTenant,
   });
+  // Spreadsheet import: same capability, scope and tenant rules as the lasso.
+  registerLeadImportRoutes(app, { requireCapability, repInVisibilityScope, repInCallerTenant, bustMapCache });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
@@ -1544,6 +1579,29 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const key = `${lat.toFixed(4)},${lng.toFixed(4)}`; // ~11 m grid
     const cached = revGeocodeCache.get(key);
     if (cached) return res.json({ ...cached, cached: true });
+    // County address file first: the same E911 points that draw the house
+    // numbers on the map. Exact, free, and it snaps a tap that landed between
+    // two roofs to the nearer door. Only when no point sits within 45 m does
+    // the paid reverse geocoder run.
+    try {
+      const [hit, ...rest] = nearestAddressPoints(lat, lng, 45, 3);
+      if (hit) {
+        const result = {
+          address: hit.street.trim(), // st_address: the number is already in it
+          city: hit.city ?? "",
+          state: hit.state || "NC",
+          zip: hit.zip ?? "",
+          lat: hit.lat, lng: hit.lng,
+          placeName: hit.fullAddress || `${hit.street}, ${hit.city ?? ""} ${hit.state ?? ""} ${hit.zip ?? ""}`.trim(),
+          source: "county" as const,
+          meters: Math.round(hit.meters),
+          alternates: rest.map((p) => ({ address: p.street.trim(), lat: p.lat, lng: p.lng, meters: Math.round(p.meters) })),
+        };
+        revGeocodeCache.set(key, result);
+        if (revGeocodeCache.size > 4000) revGeocodeCache.delete(revGeocodeCache.keys().next().value!);
+        return res.json(result);
+      }
+    } catch { /* no address file yet - fall through to the geocoder */ }
     const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
     if (!token) return res.status(503).json({ error: "Geocoding not configured" });
     try {
@@ -5936,7 +5994,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     repId: number | null,
     user: any,
     tid: number | undefined,
-  ): Promise<{ updated: number; skipped: number; repName: string | null }> {
+  ): Promise<{ updated: number; skipped: number; repName: string | null; prior: AssignUndoEntry["prior"] }> {
     const assignedAt = repId ? new Date().toISOString() : null;
     const assignedBy = repId ? (user?.name ?? null) : null;
     const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
@@ -5954,6 +6012,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Carried across chunks so the bulk-event bound applies to the REQUEST, not
     // to each chunk of it.
     let emitted = 0;
+    // Prior owners, for undo. Only captured for selections small enough to
+    // hold; a 250k-door sweep carries no undo rather than 250k rows of memory.
+    const prior: AssignUndoEntry["prior"] = [];
+    const snapshot = ids.length <= ASSIGN_UNDO_MAX_ROWS;
 
     for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
       const chunk = ids.slice(i, i + ASSIGN_CHUNK);
@@ -5963,6 +6025,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // assignment, and a failure leaves whole chunks applied rather than a
       // half-written row.
       const applyChunk = rawDb.transaction(() => {
+        // The rows as they are BEFORE this write, same predicates as the write.
+        if (snapshot) {
+          const rows = rawDb.prepare(
+            `SELECT id, assigned_rep_id AS assignedRepId, assigned_by AS assignedBy, assigned_at AS assignedAt, unassigned_at AS unassignedAt
+               FROM leads WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
+          ).all(...chunk) as AssignUndoEntry["prior"];
+          prior.push(...rows);
+        }
         // Assignment events first — they must see the PRE-update rows, and
         // only for leads this caller is actually allowed to move.
         if (repName) {
@@ -5996,8 +6066,57 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (i + ASSIGN_CHUNK < ids.length) await new Promise((resolve) => setImmediate(resolve));
     }
     if (updated > 0) bustMapCache(tid);
-    return { updated, skipped: ids.length - updated, repName };
+    return { updated, skipped: ids.length - updated, repName, prior };
   }
+
+  // POST /api/leads/assign-selection/undo  { token }
+  // Puts the doors of ONE recent assignment back to their previous owners.
+  // Same capability as the assignment, same user, same tenant, inside the
+  // window; rows moved by someone else since are skipped, never overwritten.
+  app.post("/api/leads/assign-selection/undo", requireCapability("lead.assign"), async (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const token = typeof req.body?.token === "string" ? req.body.token : "";
+    const entry = token ? assignUndo.get(token) : undefined;
+    if (!entry || entry.expiresAt <= Date.now()) {
+      if (token) assignUndo.delete(token);
+      return res.status(410).json({ error: "That assignment can no longer be undone", code: "UNDO_EXPIRED" });
+    }
+    if (entry.userId !== user.id || entry.tenantId !== tid) {
+      return res.status(403).json({ error: "Only the person who made that assignment can undo it", code: "UNDO_NOT_OWNER" });
+    }
+    assignUndo.delete(token); // one redemption, even if a chunk below fails
+    const tenantSql = tid == null ? "1=1" : `tenant_id = ${Number(tid) | 0}`;
+    const priorName = (repId: number | null) => (repId ? (storage.getTeamMemberById(repId)?.name ?? `rep #${repId}`) : null);
+    let restored = 0, skipped = 0, emitted = 0;
+    for (let i = 0; i < entry.prior.length; i += ASSIGN_CHUNK) {
+      const chunk = entry.prior.slice(i, i + ASSIGN_CHUNK);
+      const restoreChunk = rawDb.transaction(() => {
+        const put = rawDb.prepare(
+          `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?, unassigned_at = ?, updated_at = datetime('now')
+            WHERE id = ? AND ${tenantSql} AND assigned_rep_id IS ?
+        RETURNING id`,
+        );
+        const event = rawDb.prepare(`INSERT INTO lead_events (lead_id, type, actor, detail, at) VALUES (?, 'assignment', ?, ?, datetime('now'))`);
+        const done: number[] = [];
+        for (const row of chunk) {
+          const hit = put.get(row.assignedRepId, row.assignedBy, row.assignedAt, row.unassignedAt, row.id, entry.appliedRepId) as { id: number } | undefined;
+          if (!hit) { skipped++; continue; }
+          done.push(hit.id);
+          event.run(hit.id, user?.name ?? null, JSON.stringify({ assignedTo: priorName(row.assignedRepId), assignedBy: user?.name ?? null, undo: true }));
+        }
+        return done;
+      });
+      const changed = restoreChunk.immediate() as number[];
+      restored += changed.length;
+      emitLeadChangesBulk("assignment", changed.slice(0, Math.max(0, LEAD_EVENT_BULK_MAX - emitted)), user, tid);
+      emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + changed.length);
+      if (i + ASSIGN_CHUNK < entry.prior.length) await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (restored > 0) bustMapCache(tid);
+    storage.logActivity(user.id, "lead.assign_selection.undo", "lead", undefined, { restored, skipped, appliedRepId: entry.appliedRepId });
+    res.json({ restored, skipped });
+  });
 
   // POST /api/leads/bulk-assign  { leadIds: number[], repId: number | null }
   // EXACT-ID assignment. Kept for callers that genuinely hold a list; the lasso
@@ -6173,12 +6292,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.json({ assigned: 0, updated: 0, skipped: 0, total: 0, repId, resolveMs });
     }
 
-    const { updated, skipped } = await applyAssignment(ids, repId, user, tid);
+    const { updated, skipped, prior } = await applyAssignment(ids, repId, user, tid);
     storage.logActivity(user?.id ?? null, "lead.assign_selection", "lead", undefined,
       { repId, ringPoints: polygon.length, resolved: ids.length, updated, skipped, resolveMs }, req.ip);
+    // Put-back token for the doors this write actually changed (none for a
+    // selection too large to hold, or when nothing moved).
+    const undo = updated > 0 ? rememberAssignUndo({ tenantId: tid, userId: user.id, appliedRepId: repId, prior }) : null;
     // assigned mirrors updated so the field name matches assign-area's response;
     // updated/skipped match bulk-assign's. One payload serves both callers.
-    res.json({ assigned: updated, updated, skipped, total: ids.length, repId, resolveMs });
+    res.json({
+      assigned: updated, updated, skipped, total: ids.length, repId, resolveMs,
+      ...(undo ? { undoToken: undo.token, undoExpiresAt: new Date(undo.expiresAt).toISOString() } : {}),
+    });
   });
 
   // POST /api/leads/bulk-status  { leadIds: number[], outcome: KnockOutcome }

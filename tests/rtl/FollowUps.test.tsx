@@ -3,7 +3,7 @@
 // Grouping is the contract: a callback dated before today is OVERDUE, today is
 // TODAY, later is UPCOMING — and the header states the totals so a rep reads
 // their debt in one glance. These tests also pin the error and empty forks.
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { todayISO } from "../../shared/knock";
@@ -18,6 +18,10 @@ vi.mock("@/lib/useKnockLogger", () => ({
 }));
 vi.mock("@/components/OutcomeSheet", () => ({ OutcomeSheet: () => null }));
 vi.mock("wouter", () => ({ useLocation: () => ["/", vi.fn()] }));
+// One GPS fix per page open feeds the per-row distance hint. Default: no fix
+// (jsdom has no geolocation) — the distance column simply does not render.
+const captureFieldFix = vi.fn();
+vi.mock("@/lib/geoFix", () => ({ captureFieldFix: (...a: any[]) => captureFieldFix(...a) }));
 
 import FollowUps from "../../client/src/pages/FollowUps";
 
@@ -39,7 +43,11 @@ function renderPage(payload: any[] | "error") {
   return render(<QueryClientProvider client={qc}><FollowUps /></QueryClientProvider>);
 }
 
-beforeEach(() => apiRequest.mockReset());
+beforeEach(() => {
+  apiRequest.mockReset();
+  captureFieldFix.mockReset();
+  captureFieldFix.mockResolvedValue({ repLat: null, repLng: null, gpsAccuracy: null });
+});
 
 describe("Follow-ups grouping", () => {
   it("splits Overdue / Today / Upcoming and states the totals in the header", async () => {
@@ -73,5 +81,66 @@ describe("Follow-ups grouping", () => {
   it("renders the caught-up empty state when nothing is owed", async () => {
     renderPage([]);
     expect(await screen.findByTestId("followups-empty")).toBeTruthy();
+  });
+});
+
+describe("Schedule week strip and time-first rows", () => {
+  it("renders the seven days of this week with today selected, one dot per booking", async () => {
+    const today = todayISO();
+    renderPage([fu(1, today, { callbackTime: "09:30" }), fu(2, today)]);
+    await screen.findByTestId("followup-1");
+    const strip = screen.getByTestId("schedule-week");
+    const days = within(strip).getAllByRole("button");
+    expect(days).toHaveLength(7);
+    const todayTab = screen.getByTestId(`schedule-day-${today}`);
+    expect(todayTab.getAttribute("aria-pressed")).toBe("true");
+    // Two bookings today -> two dots on today's day cell.
+    expect(todayTab.querySelectorAll("span[style*='background']").length).toBe(2);
+    // The week label names the Monday.
+    expect(screen.getByTestId("schedule-week-label").textContent).toMatch(/^Week of /);
+  });
+
+  it("leads each row with its time, and says so when a callback has none", async () => {
+    const today = todayISO();
+    renderPage([fu(1, today, { callbackTime: "09:30" }), fu(2, today)]);
+    expect((await screen.findByTestId("followup-time-1")).textContent).toBe("9:30 AM");
+    expect(screen.getByTestId("followup-time-2").textContent).toBe("Any time");
+  });
+
+  it("tapping another day shows only that day's bookings, and the way back", async () => {
+    const today = todayISO();
+    const tomorrow = (() => { const d = new Date(today + "T00:00:00"); d.setDate(d.getDate() + 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+    renderPage([fu(1, today), fu(2, tomorrow, { callbackTime: "14:00" })]);
+    await screen.findByTestId("followup-1");
+    const strip = screen.getByTestId("schedule-week");
+    // Tomorrow may fall in next week's strip (Sunday). Only assert when it is on the strip.
+    const tomorrowTab = within(strip).queryByTestId(`schedule-day-${tomorrow}`);
+    if (!tomorrowTab) return;
+    fireEvent.click(tomorrowTab);
+    const view = screen.getByTestId("schedule-day-view");
+    expect(within(view).getByTestId("followup-2")).toBeTruthy();
+    expect(within(view).queryByTestId("followup-1")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Today" })).toBeNull();
+    // A day with nothing booked says so and offers the way back to today.
+    const empty = within(strip).getAllByRole("button").find(t => t.getAttribute("aria-pressed") !== "true" && t !== tomorrowTab && t.getAttribute("data-testid") !== `schedule-day-${today}`)!;
+    fireEvent.click(empty);
+    expect(screen.getByTestId("schedule-day-empty").textContent).toContain("Nothing booked for");
+    fireEvent.click(screen.getByText("Back to today"));
+    expect(screen.getByRole("heading", { name: "Today" })).toBeTruthy();
+  });
+
+  it("shows how far each door is once a tight GPS fix arrives", async () => {
+    captureFieldFix.mockResolvedValue({ repLat: 35.67, repLng: -80.47, gpsAccuracy: 12 });
+    const today = todayISO();
+    renderPage([fu(1, today, { lat: 35.671, lng: -80.47 }), fu(2, today)]);
+    expect((await screen.findByTestId("followup-distance-1")).textContent).toMatch(/^\d+m$/);
+    expect(screen.queryByTestId("followup-distance-2")).toBeNull();
+  });
+
+  it("hides distances when the fix is too loose to mean anything", async () => {
+    captureFieldFix.mockResolvedValue({ repLat: 35.67, repLng: -80.47, gpsAccuracy: 800 });
+    renderPage([fu(1, todayISO(), { lat: 35.671, lng: -80.47 })]);
+    await screen.findByTestId("followup-1");
+    expect(screen.queryByTestId("followup-distance-1")).toBeNull();
   });
 });

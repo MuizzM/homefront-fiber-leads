@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll } from "vitest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { LeadKnockSheet } from "@/components/LeadKnockSheet";
+import { LeadKnockSheet, UNDO_WINDOW_MS } from "@/components/LeadKnockSheet";
 import { FIELD_OUTCOMES } from "@shared/knock";
 import { STATUS_CONFIG } from "@shared/statusConfig";
 import { outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
@@ -70,7 +70,7 @@ const ALL_KEYS = FIELD_OUTCOMES.map(o => o.key);
 
 // Unified timeline: status changes, assignments ("assigned by"), note events.
 const HISTORY = [
-  { id: "k12", type: "status_change", actor: "Muizz Muhammad", changedAt: "2026-07-08T19:12:00.000Z", status: "sold" },
+  { id: "k12", type: "status_change", actor: "Muizz Muhammad", changedAt: "2026-07-08T19:12:00.000Z", status: "sold", verification: "verified", distanceM: 12, gpsAccuracyM: 8 },
   { id: "e5", type: "note", actor: "Zargham Muhammad", changedAt: "2026-07-08T19:15:00.000Z", notePreview: "Gate code 4412, come back after 6pm" },
   { id: "e4", type: "assignment", actor: "Muizz Muhammad", changedAt: "2026-07-08T13:02:00.000Z", assignedTo: "Zargham Muhammad", assignedBy: "Muizz Muhammad" },
   { id: "k10", type: "status_change", actor: null, changedAt: "2026-07-06T14:00:00.000Z", status: "not_home" },
@@ -634,6 +634,25 @@ describe("<LeadKnockSheet /> - notes and history (unchanged model)", () => {
   });
 });
 
+describe("<LeadKnockSheet /> - where they stood", () => {
+  it("a verified history row opens its distance diagram on demand, one row at a time", async () => {
+    renderSheet();
+    const rows = await screen.findAllByTestId(/knock-history-item-/);
+    expect(rows.length).toBeGreaterThan(0);
+    const where = screen.getAllByTestId(/history-where-/);
+    // Only rows that carry a measured distance offer it.
+    expect(where.length).toBeGreaterThan(0);
+    expect(where.length).toBeLessThanOrEqual(rows.length);
+    expect(screen.queryByTestId("distance-diagram")).not.toBeInTheDocument();
+    await userEvent.click(where[0]);
+    expect(where[0]).toHaveAttribute("aria-expanded", "true");
+    expect(where[0]).toHaveTextContent("Hide");
+    expect(screen.getAllByTestId("distance-diagram")).toHaveLength(1);
+    await userEvent.click(where[0]);
+    expect(screen.queryByTestId("distance-diagram")).not.toBeInTheDocument();
+  });
+});
+
 describe("<LeadKnockSheet /> - perceived latency: instant open, instant close", () => {
   // Deferred query client: detail + history promises stay PENDING until flush()
   // — proving the shell never waits on the network.
@@ -1022,6 +1041,104 @@ describe("<LeadKnockSheet /> - appointment composer", () => {
   it("no appointment affordance on a do-not-knock door - an appointment IS a knock", () => {
     renderSheet({ lead: baseLead({ doNotKnock: 1 }) });
     expect(screen.queryByTestId("knock-appointment")).not.toBeInTheDocument();
+  });
+});
+
+describe("<LeadKnockSheet /> - undo the last mark", () => {
+  it("a fresh door marked Not Home offers Undo; Undo puts it back to Prospect through the knock path", async () => {
+    const { props } = renderSheet();
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(props.onKnock).toHaveBeenCalledTimes(1);
+    // The card collapsed to Peek, and the status line there carries Undo.
+    const undo = await screen.findByTestId("knock-undo");
+    expect(undo).toHaveAccessibleName(/put the door back to Prospect/);
+    await userEvent.click(undo);
+    expect(props.onKnock).toHaveBeenCalledTimes(2);
+    expect(props.onKnock).toHaveBeenLastCalledWith("prospect");
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("returns to the disposition the door actually had, not always Prospect", async () => {
+    const { props } = renderSheet({
+      lead: baseLead({ leadStatus: "interested", visited: true, lastOutcome: "interested", lastKnockedAt: new Date().toISOString() }),
+    });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    await userEvent.click(await screen.findByTestId("knock-undo"));
+    expect(props.onKnock).toHaveBeenLastCalledWith("interested");
+  });
+
+  it("does not arm for a rejected command", async () => {
+    renderSheet({ onKnock: vi.fn(() => false) });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("does not arm for an appointment: a scheduled visit is deliberate, not a slip", async () => {
+    renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    fireEvent.change(screen.getByTestId("appt-date"), { target: { value: "2026-08-29" } });
+    await userEvent.click(screen.getByTestId("appt-save"));
+    await waitFor(() => expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek"));
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("clears when the card swaps to another door", async () => {
+    const { rerenderSheet } = renderSheet();
+    await userEvent.click(screen.getByTestId("knock-outcome-interested"));
+    expect(await screen.findByTestId("knock-undo")).toBeInTheDocument();
+    rerenderSheet({ lead: baseLead({ id: 8, address: "150 Maple St" }) });
+    expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+  });
+
+  it("expires after the undo window", async () => {
+    vi.useFakeTimers();
+    try {
+      renderSheet();
+      fireEvent.click(screen.getByTestId("knock-outcome-not_home"));
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByTestId("knock-undo")).toBeInTheDocument();
+      act(() => { vi.advanceTimersByTime(UNDO_WINDOW_MS + 50); });
+      expect(screen.queryByTestId("knock-undo")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("<LeadKnockSheet /> - quick appointment slots", () => {
+  it("offers one-tap times; a tap fills the pickers and names the booking on Set, Set still confirms", async () => {
+    const { props } = renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    const slots = screen.getByTestId("appt-slots");
+    const chips = Array.from(slots.querySelectorAll("button"));
+    // Three or four chips: "today" drops out after working hours.
+    expect(chips.length).toBeGreaterThanOrEqual(3);
+    expect(chips.length).toBeLessThanOrEqual(4);
+    expect(props.onKnock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("appt-slot-1")); // tomorrow 10 AM, always offered
+    expect(screen.getByTestId("appt-slot-1")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("appt-time")).toHaveValue("10:00");
+    expect(screen.getByTestId("appt-date")).not.toHaveValue("");
+    expect(screen.getByTestId("appt-save")).toHaveTextContent("Set for tomorrow 10 AM");
+    // Nothing is logged until Set.
+    expect(props.onKnock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("appt-save"));
+    expect(props.onKnock).toHaveBeenCalledTimes(1);
+    const [outcome, opts] = props.onKnock.mock.calls[0];
+    expect(outcome).toBe("follow_up");
+    expect(opts.callbackTime).toBe("10:00");
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const iso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+    expect(opts.callbackDate).toBe(iso);
+  });
+
+  it("editing the time by hand un-presses the chip, so a chip only ever claims an exact match", async () => {
+    renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    await userEvent.click(screen.getByTestId("appt-slot-1"));
+    fireEvent.change(screen.getByTestId("appt-time"), { target: { value: "11:15" } });
+    expect(screen.getByTestId("appt-slot-1")).toHaveAttribute("aria-pressed", "false");
   });
 });
 

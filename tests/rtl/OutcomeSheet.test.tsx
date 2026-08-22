@@ -77,6 +77,19 @@ describe("<OutcomeSheet /> - two-tier disposition surface", () => {
 });
 
 describe("<OutcomeSheet /> - appointment composer", () => {
+  it("offers the same one-tap times as the map card; a tap fills the pickers, Set confirms", async () => {
+    const { props } = renderSheet();
+    await userEvent.click(screen.getByTestId("outcome-appt-open"));
+    expect(screen.getByTestId("appt-slots")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("appt-slot-1")); // tomorrow 10 AM, always offered
+    expect(screen.getByTestId("outcome-appt-time")).toHaveValue("10:00");
+    expect(screen.getByTestId("outcome-appt-save")).toHaveTextContent("Set for tomorrow 10 AM");
+    expect(props.onLog).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("outcome-appt-save"));
+    expect(props.onLog).toHaveBeenCalledTimes(1);
+    expect(props.onLog.mock.calls[0][1].callbackTime).toBe("10:00");
+  });
+
   it("chip → editor; Set disabled until a date; confirming logs ONE follow-up with the schedule", async () => {
     const { props } = renderSheet();
     await userEvent.click(screen.getByTestId("outcome-appt-open"));
