@@ -3810,10 +3810,10 @@ export default function MapView() {
 
       // Everything below is BACKGROUND — the rep already has their pin.
       void (async () => {
-        let resolved: { address: string; city: string; state: string; zip: string; lat: number; lng: number };
+        let resolved: { address: string; city: string; state: string; zip: string; lat: number; lng: number; county: boolean };
         try {
           const a = await reverseGeocode(lat, lng);
-          resolved = { address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng };
+          resolved = { address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng, county: a.source === "county" };
         } catch {
           // ONE destructive toast; the mode stays armed — the rep aims again.
           removeTempPin();
@@ -3881,7 +3881,9 @@ export default function MapView() {
               scheduleClusterSetData();
             }
             setSelectedLeadId(added.id);
-            toast({ title: "Pin added", severity: "success", description: finalAddress });
+            // Say where the address came from when it was the county file: the
+            // rep can trust the number matches the house label on the map.
+            toast({ title: "Pin added", severity: "success", description: resolved.county ? `${finalAddress} · county address file` : finalAddress });
           }
           // Durable reconcile for every other consumer (list, stats, map poll).
           //

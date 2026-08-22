@@ -252,6 +252,38 @@ export function addressPointsInBbox(
 }
 
 /**
+ * The nearest address points to a tapped spot, for snapping a tap-to-add to
+ * the county file before paying for a reverse geocode.
+ *
+ * A padded bbox does the indexed cut (R-tree), then a haversine sort over the
+ * few survivors. `radiusM` is small on purpose: a tap is on or beside a roof,
+ * and the house next door is 20 to 30 m away, so 45 m says "this house" and
+ * anything farther is honestly "no county match here".
+ */
+export function nearestAddressPoints(
+  lat: number, lng: number, radiusM = 45, limit = 3,
+): Array<AddressPoint & { meters: number }> {
+  ensureAddressPointSchema();
+  const dLat = radiusM / 111_320;
+  const dLng = radiusM / (111_320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+  const rows = rawDb.prepare(`
+    SELECT p.id, p.house_number, p.street, p.full_address, p.city, p.state, p.zip, p.county, p.lat, p.lng
+    FROM address_points_rtree r
+    JOIN address_points p ON p.id = r.id
+    WHERE r.max_lat >= ? AND r.min_lat <= ? AND r.max_lng >= ? AND r.min_lng <= ?
+    LIMIT 64
+  `).all(lat - dLat, lat + dLat, lng - dLng, lng + dLng) as any[];
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const out = rows.map(ROW_TO_POINT).map((p) => {
+    const a = toRad(p.lat - lat), b = toRad(p.lng - lng);
+    const h = Math.sin(a / 2) ** 2 + Math.cos(toRad(lat)) * Math.cos(toRad(p.lat)) * Math.sin(b / 2) ** 2;
+    return { ...p, meters: 2 * 6371000 * Math.asin(Math.sqrt(h)) };
+  }).filter((p) => p.meters <= radiusM);
+  out.sort((x, y) => x.meters - y.meters || x.id - y.id);
+  return out.slice(0, limit);
+}
+
+/**
  * Points inside a lasso ring.
  *
  * Two stages on purpose. SQLite here has no spatial index, so the bbox does

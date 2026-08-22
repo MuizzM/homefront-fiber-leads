@@ -177,6 +177,7 @@ import { registerCommissionFileRoutes } from "./commissionFileRoutes";
 import { registerGuardedActionRoutes } from "./guardedActionRoutes";
 import { guardedActionsEnabled } from "./guardedActionEngine";
 import { registerAddressPointRoutes } from "./addressPointRoutes";
+import { nearestAddressPoints } from "./addressPointStore";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -1544,6 +1545,29 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const key = `${lat.toFixed(4)},${lng.toFixed(4)}`; // ~11 m grid
     const cached = revGeocodeCache.get(key);
     if (cached) return res.json({ ...cached, cached: true });
+    // County address file first: the same E911 points that draw the house
+    // numbers on the map. Exact, free, and it snaps a tap that landed between
+    // two roofs to the nearer door. Only when no point sits within 45 m does
+    // the paid reverse geocoder run.
+    try {
+      const [hit, ...rest] = nearestAddressPoints(lat, lng, 45, 3);
+      if (hit) {
+        const result = {
+          address: hit.street.trim(), // st_address: the number is already in it
+          city: hit.city ?? "",
+          state: hit.state || "NC",
+          zip: hit.zip ?? "",
+          lat: hit.lat, lng: hit.lng,
+          placeName: hit.fullAddress || `${hit.street}, ${hit.city ?? ""} ${hit.state ?? ""} ${hit.zip ?? ""}`.trim(),
+          source: "county" as const,
+          meters: Math.round(hit.meters),
+          alternates: rest.map((p) => ({ address: p.street.trim(), lat: p.lat, lng: p.lng, meters: Math.round(p.meters) })),
+        };
+        revGeocodeCache.set(key, result);
+        if (revGeocodeCache.size > 4000) revGeocodeCache.delete(revGeocodeCache.keys().next().value!);
+        return res.json(result);
+      }
+    } catch { /* no address file yet - fall through to the geocoder */ }
     const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
     if (!token) return res.status(503).json({ error: "Geocoding not configured" });
     try {

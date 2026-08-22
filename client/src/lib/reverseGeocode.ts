@@ -12,6 +12,12 @@ export interface TappedAddress {
   lng: number;
   placeName: string;
   cached?: boolean;
+  /** "county" when the server snapped the tap to an E911 address point. */
+  source?: "county";
+  /** Metres from the tap to the matched point (county matches only). */
+  meters?: number;
+  /** The next-nearest county points, nearest first (county matches only). */
+  alternates?: Array<{ address: string; lat: number; lng: number; meters: number }>;
 }
 
 export async function reverseGeocode(lat: number, lng: number): Promise<TappedAddress> {
