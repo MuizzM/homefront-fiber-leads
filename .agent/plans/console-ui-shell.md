@@ -74,6 +74,13 @@ screen; that lands per screen in later slices.
   the More sheet's search row opens the palette as a bottom sheet on a 390 px phone.
   Found and fixed: cmdk's fuzzy scorer ranked Field Hours above Rulebook for "rule";
   replaced with a word-prefix ranker (`rankEntry`) and pinned it in the palette test.
+- 2026-08-22 15:40 merged as PR #168 (c4372a2). Measured the cost: cmdk and the Radix
+  dialog had landed in the entry chunk, index 83 KB to 102 KB gzipped.
+- 2026-08-22 16:00 speed slice on `claude/console-speed` (PR #169): the palette is lazy
+  (`paletteShell.tsx` keeps the shortcut, trigger and ranking out of cmdk's chunk), warmed on
+  idle behind the connection gate, rows prefetch their page; routePrefetch covers the ten
+  nav routes it had missed. Entry back to 85.5 KB gzipped; palette chunk 6.5 KB gzipped.
+  Full verify green (7,059 tests).
 
 ## Decisions
 
@@ -113,7 +120,7 @@ screen; that lands per screen in later slices.
   plus every METRIC_DEFS formula, and a nav-to-route integrity test.
 - Remaining risks: the breadcrumb bar adds 44 px above every desktop page except map and
   calling; pages with their own sticky header (PropertyDetail) now show both. cmdk is a
-  new client dependency (MIT, React-only).
+  new client dependency (MIT, React-only), loaded lazily since the speed slice.
 - Follow-up slices from the canvas: per-screen grammar adoption (PageHeader, StatStrip with
   5 and 6 columns, ListGroup) on Dashboard, Team, Leads, Commissions; the three-branch
   data states program from docs/ui-audit-2026-08.md; data search (doors, reps) in the palette.
