@@ -178,6 +178,7 @@ import { registerGuardedActionRoutes } from "./guardedActionRoutes";
 import { guardedActionsEnabled } from "./guardedActionEngine";
 import { registerAddressPointRoutes } from "./addressPointRoutes";
 import { nearestAddressPoints } from "./addressPointStore";
+import { registerLeadImportRoutes } from "./leadImportRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -1440,6 +1441,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // implementation of each and they cannot drift apart.
     repInVisibilityScope, repInCallerTenant,
   });
+  // Spreadsheet import: same capability, scope and tenant rules as the lasso.
+  registerLeadImportRoutes(app, { requireCapability, repInVisibilityScope, repInCallerTenant, bustMapCache });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle

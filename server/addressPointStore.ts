@@ -252,6 +252,27 @@ export function addressPointsInBbox(
 }
 
 /**
+ * Points by premise key (addressPointKey), for geocoding an imported address
+ * against the county file before anything is paid for. Chunked IN queries on
+ * the canonical_key index; the first point per key wins (a duplex listed twice
+ * shares coordinates anyway).
+ */
+export function lookupAddressPointsByKeys(keys: string[]): Map<string, AddressPoint> {
+  ensureAddressPointSchema();
+  const out = new Map<string, AddressPoint>();
+  const list = [...new Set(keys.filter(Boolean))];
+  for (let i = 0; i < list.length; i += 500) {
+    const chunk = list.slice(i, i + 500);
+    const rows = rawDb.prepare(`
+      SELECT id, house_number, street, full_address, city, state, zip, county, lat, lng, canonical_key
+      FROM address_points WHERE canonical_key IN (${chunk.map(() => "?").join(",")})
+    `).all(...chunk) as any[];
+    for (const r of rows) if (!out.has(r.canonical_key)) out.set(r.canonical_key, ROW_TO_POINT(r));
+  }
+  return out;
+}
+
+/**
  * The nearest address points to a tapped spot, for snapping a tap-to-add to
  * the county file before paying for a reverse geocode.
  *
