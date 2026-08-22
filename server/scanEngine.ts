@@ -58,6 +58,7 @@ import { watchComingSoon } from "./comingSoonProgram";
 import { structuredLog } from "./structuredLog";
 import { calculateFiberFreshness } from "@shared/fiberFreshness";
 import { isActiveBilling } from "@shared/billingStatus";
+import { recordFutureService } from "./comingLedger";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
 import { ensureKineticScannerSchema, upsertKineticAddress } from "./kineticScannerStore";
 import { hashKineticEvidence } from "./kineticProviderAdapter";
@@ -710,6 +711,34 @@ function applyCheck(
     customerSignals: customer.signals,
   });
   recordProviderOutcome(tenantId, true);
+
+  // ── THE COMING LEDGER ───────────────────────────────────────────────────────
+  // Read this answer for a future-service promise and record it with the date
+  // the provider stated. This is the seam where the raw body is still in hand,
+  // which matters: the promise lives in fields the parser never modelled
+  // (Frontier ships `futureServiceDate` / `fiberBuildOutStatus` /
+  // `isFutureFiberEligible`; measured on 3,454 stored payloads, 164 dated doors
+  // we were discarding). Under the once-only law this ledger is the ONLY thing
+  // that may ever cause an answered address to be bought again.
+  try {
+    recordFutureService(
+      tenantId,
+      { id: t.targetId, address: result.address || t.address, city: result.city || t.city,
+        state: result.state || t.state, zip: result.zip ?? t.zip, source: (t as any).source ?? null },
+      {
+        householdSegmentType: result.householdSegmentType,
+        marketSegmentType: (result as any).marketSegmentType ?? null,
+        serviceStatus: (result as any).serviceStatus ?? null,
+        billingStatus: result.billingStatus,
+        finalQual: (result as any).finalQual ?? null,
+        maxQual: (result as any).maxQual ?? null,
+      },
+      result.rawResponse,
+      { fiberAvailable: result.fiberAvailable },
+    );
+  } catch (e: any) {
+    structuredLog("coming_ledger.record_failed", { tenantId, runId, error: String(e?.message ?? e).slice(0, 120) }, "warn");
+  }
 
   // Keep known NEW FIBER addresses in the existing Kinetic monitoring inventory.
   // Active-service rows are silent Coming Soon watches; the nightly recheck worker

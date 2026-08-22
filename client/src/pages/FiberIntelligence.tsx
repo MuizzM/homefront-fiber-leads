@@ -119,6 +119,12 @@ export default function FiberIntelligence() {
   );
 }
 
+/** "2026-11-01" -> "Nov 2026" - the provider states a month, not a day. */
+function monthLabel(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
 // ── Neighborhoods — whole-neighborhood sweep: which clusters are fresh and
 // unknocked, which are still being flooded, and whether the sweep is running. ──
 interface NeighborhoodRow {
@@ -131,6 +137,11 @@ interface SweepState {
   enabled: boolean; state: string; intervalMin: number; cells: Record<string, number>;
   neighborhoodsWithUnworked: number; unworkedFreshDoors: number;
   unscannedInHotCells: number; unlinkedGreens: number; pending: number;
+  coming?: {
+    active: number; dated: number; overdue: number; dueNow: number;
+    byBand: Record<string, number>; byStatus: Record<string, number>;
+    nextDates: Array<{ date: string; doors: number }>;
+  };
   lastCycle: { started_at: string; budget: number; confirm: number; flood: number; probe: number; flood_cells: number; probe_cells: number; skipped: string | null; superseded_runs: number; drain_per_min: number } | null;
   last24h: { checks: number; hits: number; leads: number };
 }
@@ -202,6 +213,27 @@ function Neighborhoods({ isManager, isAdmin }: { isManager: boolean; isAdmin: bo
           </div>
         )}
       </div>
+      {(state?.coming?.active ?? 0) > 0 && (
+        <div className="rounded-2xl border border-info/20 bg-card px-4 py-3" data-testid="coming-board">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-info">Fiber the provider says is coming</div>
+            <div className="text-[11px] text-muted-foreground">
+              {state!.coming!.active.toLocaleString()} doors · {state!.coming!.dated.toLocaleString()} with a stated month
+              {state!.coming!.overdue > 0 ? ` · ${state!.coming!.overdue} past due` : ""}
+            </div>
+          </div>
+          {state!.coming!.nextDates.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {state!.coming!.nextDates.map((d) => (
+                <span key={d.date} className="rounded-lg border border-border bg-background px-2 py-1 text-[11px] text-foreground">
+                  <b className="tabular-nums">{d.doors}</b> doors <span className="text-muted-foreground">{monthLabel(d.date)}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="mt-2 text-[12px] text-muted-foreground">Recorded from the provider's own answer, with the date it stated. These doors are re-checked once, on the date they were promised - nothing else answered is ever re-checked.</p>
+        </div>
+      )}
       <p className="px-1 text-[12px] text-muted-foreground">Ranked by fresh doors nobody has knocked. A neighborhood is a 1 km cell; the sweep checks every door in a cell once any door there comes back NEW FIBER, street by street, then moves to the cells around it. Open one on the map and lasso it to a crew.</p>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         {isLoading && !data ? (

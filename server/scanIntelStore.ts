@@ -5,7 +5,7 @@
 // are pure DB operations over data the product already accumulated.
 import { rawDb } from "./db";
 import type { MarketAggregate } from "@shared/marketIntel";
-import { INCONCLUSIVE_GIVEUP, anfParkedSql } from "@shared/scanPolicy";
+import { INCONCLUSIVE_GIVEUP, anfParkedSql, answeredSql, onceOnlyEnabled } from "@shared/scanPolicy";
 
 // Quiet window for addresses concluded address_not_found (persistent needs-fix
 // non-answers with no adoptable suggestion): parked out of BULK claims this
@@ -369,6 +369,18 @@ const _skipRecentlyScanned = rawDb.prepare(
 // re-burning proxy checks; after it lapses they are claimable again (re-probe).
 // Uses the SHARED escalating-window predicate (@shared/scanPolicy) so the
 // claim layer and every selector agree on "parked" by construction.
+// ONCE-ONLY (see @shared/scanPolicy): the same skip, with no window. A target
+// that already carries a conclusive provider answer is never bought again by a
+// bulk producer. This sits in the claim transaction on purpose - it is the one
+// chokepoint EVERY producer's work funnels through, so no new selector, no
+// reconciler and no future feeder can bypass it by writing its own SQL. Kinds
+// that pass skipSec=0 (manual, lasso, field, recheck, the coming-soon lane) are
+// never subjected to it: a rep's tap and a dated promise must always re-verify.
+const _skipAlreadyAnswered = rawDb.prepare(
+  `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+     WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
+       AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
+                     AND ${answeredSql("st")})`);
 const _skipParkedNotFound = rawDb.prepare(
   `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
      WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
@@ -384,7 +396,11 @@ const _skipParkedNotFound = rawDb.prepare(
 // briefly) and the prerequisite for multi-process work-stealing.
 const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlyScannedSec: number) => {
   if (skipRecentlyScannedSec > 0) {
-    _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
+    if (onceOnlyEnabled()) {
+      _skipAlreadyAnswered.run("superseded: address already answered (once-only)", runId);
+    } else {
+      _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
+    }
     _skipParkedNotFound.run(
       "parked: address_not_found quiet window (needs-fix non-answers exhausted)",
       runId,

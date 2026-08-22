@@ -84,3 +84,48 @@ export function provenHourlyCapacity(
   const dayAverage = Math.round((Number(checkedLast24h) || 0) / 24);
   return Math.max(Number(checkedLastHour) || 0, dayAverage, Math.max(1, floor));
 }
+
+// ── ONCE-ONLY: an answered door is never bought twice ────────────────────────
+// Operator law (2026-08-22): "don't scan again if we scanned and found nothing;
+// we should never scan the same address twice."
+//
+// The evidence says this is not merely a preference, it is the correct economics.
+// Measured on the production-shaped copy, NC Kinetic:
+//   * 55,503 checks were spent re-scanning addresses that already had a
+//     conclusive answer (17,167 targets carry scan_count >= 2, up to 9 each);
+//   * those re-scans produced ZERO new Kinetic fiber. Every one of the 25
+//     addresses in all recorded history that went conclusive-negative and later
+//     came back fiber was a FRONTIER door in Durham, on the separate carrier
+//     path (scan_targets.first_seen_live_at is set on exactly 2 NC Kinetic rows);
+//   * meanwhile 311,933 NC Kinetic doors have never been checked even once.
+// So a re-check is not competing with nothing - it is competing with a door we
+// have never touched, and losing. Until the unscanned pool for a market is
+// exhausted, re-buying an answered door is strictly the worse trade.
+//
+// The caveat, stated honestly: our whole scan history is a 12-day window in July
+// 2026. A copper-to-fiber flip takes months, so "zero flips" is partly a short
+// window, not proof flips never happen. The rule is justified by opportunity
+// cost, which holds regardless. When a market runs out of unscanned inventory,
+// revisit it - and see the coming ledger below for the one sanctioned exception.
+//
+// ONE exception: an address the provider itself says will be serviceable LATER
+// goes on the coming ledger and is re-bought exactly once at its due date
+// (shared/futureService.ts). That is not a blind re-scan; it is collecting on a
+// stated promise.
+//
+// A rep's own action (manual check, lasso, tap-a-house, an explicit recheck run)
+// is never blocked: those kinds pass skipSec=0 and bypass this guard entirely.
+
+/** `last_scanned_at IS NOT NULL` means a real provider answer landed: the engine
+ *  requeues blocked/failed checks BEFORE recordScanTargetResult, so a transport
+ *  failure never stamps it (server/scanEngine.ts, the `result.blocked ||
+ *  checkFailed` branch returns before applyCheck). Safe to treat as terminal. */
+export function answeredSql(alias: string): string {
+  return `${alias}.last_scanned_at IS NOT NULL`;
+}
+
+/** Off switch for the law, so an operator can restore window-based re-scanning
+ *  without a code change. Default on. */
+export function onceOnlyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return String(env.SCAN_ONCE_ONLY ?? "on").trim().toLowerCase() !== "off";
+}

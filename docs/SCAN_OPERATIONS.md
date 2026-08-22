@@ -80,12 +80,101 @@ GeoJSON source. It reports checked addresses, fresh matches, and leads dropped.
 The selection rectangle is cleared on completion, provider error, start error,
 or cancellation, so another box can be drawn immediately without a cooldown.
 
+## Once only: an answered door is never bought twice
+
+`SCAN_ONCE_ONLY` (default on, `@shared/scanPolicy`) is the scanning law. A
+target that carries a conclusive provider answer (`last_scanned_at IS NOT
+NULL`) is never bought again by a bulk producer. It is enforced inside
+`claimRunTargets` (`server/scanIntelStore.ts`), the one chokepoint every
+producer funnels through, so no selector can bypass it by writing its own SQL.
+
+Why: measured on the production-shaped copy, 55,503 of 78,058 NC Kinetic
+checks (71%) were repeats of addresses already answered - one address was
+bought 65 times - and they produced zero Kinetic fiber. Every one of the 25
+negative-to-fiber flips in all recorded history was a Frontier door in Durham.
+Meanwhile 311,933 NC doors have never been checked once. A re-check is not
+competing with nothing; it is competing with a door we have never touched.
+
+Two exceptions, both deliberate:
+
+- **Rep actions.** Kinds containing manual / lasso / bbox / area / field pass
+  `skipSec=0` and are never blocked. A rep's tap always re-verifies.
+- **The coming ledger.** A promise the provider itself made is collected on its
+  due date, via a run kind containing `watch` (also `skipSec=0`).
+
+`NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES=on` restores the 21-day flip watch inside
+hot cells; `SCAN_ONCE_ONLY=off` restores the old 18-hour window everywhere.
+Neither needs a code change. Revisit when a market's unscanned pool is
+exhausted - that, not the flip rate, is what makes a re-check worth buying.
+
+## The coming ledger: doors the provider says will turn on
+
+Both carriers state future service, and until 2026-08-22 the code read none of
+it (`server/comingLedger.ts`, `shared/futureService.ts`):
+
+- **Kinetic** sends `broadbandService.{futureQual, technologyType:
+  "FUTURE_QUAL_EXTENDED", futureTechnologyType, estimatedCompletionDt}`. The
+  date is a month, e.g. `"NOV-2026"`, or the undated sentinel `"Future Fiber
+  Build Planned"`. Measured over 22,242 stored bodies (`fiber_checks.result`):
+  476 NC doors with a real month - Harrisburg FEB-2027 (131), Indian Trail
+  MAR-2027 (125), Monroe NOV-2026, China Grove, Marshville, Broadway - and 488
+  more undated. Every one of those doors is filed today as a terminal negative
+  (copper or no_service), which is exactly why the once-only law must exempt
+  them.
+- **Frontier** sends `isFutureFiberEligible`, `fiberBuildOutStatus: "PENDING"`
+  and `futureServiceDate` (a full date): 168 pending builds, 164 dated.
+
+A future answer opens a row in `coming_soon_watchlist` carrying
+`promised_date`, `date_source` (`provider`, never invented), `date_path` (the
+exact payload path, so the claim is auditable), `provider_quote`, `signals` and
+a computed `band` / `due_at`. A settled, live or already-sold answer CLOSES the
+row so it stops consuming the one re-check lane.
+
+Scheduling (`nextRecheckAt`): a date already passed or within
+`COMING_SOON_HOT_WINDOW_DAYS` (14) is `hot` and re-checked every
+`COMING_SOON_HOT_HOURS` (6); a further-out date is not polled at all until its
+window opens; an undated promise rides the observed flip window (days 2-14
+after first sight) and then relaxes to `COMING_SOON_WATCH_HOURS` (24).
+
+An UNDATED promise ("Future Fiber Build Planned") is re-read every
+`COMING_LEDGER_UNDATED_DAYS` (30), not on the daily watch band: the undated
+population polled daily would cost roughly 24,000 checks a month, far more than
+the once-only law saves. A promise is expired only once its OWN date has passed
+and nobody honoured it - measuring staleness by last-touch alone would kill a
+FEB-2027 build in November, because a far-future promise is deliberately left
+untouched until its window opens.
+
+`backfillFromStoredEvidence` mines promises out of bodies already paid for -
+one shot per process, ~2 s over 22k rows. Measured: **1,327 doors recovered,
+525 with a stated month, for zero provider spend.**
+
+`reconcileNowActiveWatches` closes watches whose target is really NEW FIBER
+with an active account. The old code admitted those as "coming soon"
+(`availabilitySnapshot.ts` `lifecycleSignalOf`), which is why 294 of 330 live
+watches were doors somebody had already bought, and none ever flipped.
+Measured on the copy: 325 closed on first run.
+
 ## Neighborhood sweep
 
 `NEIGHBORHOOD_SWEEP=on` (control worker only, `server/neighborhoodSweep.ts`)
 is the statewide producer for one state (`NEIGHBORHOOD_SWEEP_STATE`, default
-NC). It replaces "one or two checks per street" with three moves per cycle
-(`NEIGHBORHOOD_SWEEP_INTERVAL_MIN`, default 10):
+NC). It replaces "one or two checks per street" with a strict ladder per cycle
+(`NEIGHBORHOOD_SWEEP_INTERVAL_MIN`, default 10). Every tier buys only doors no
+other run holds, and `NEIGHBORHOOD_SWEEP_SEED_CITIES`
+(default `broadway,wingate,rockwell`) sorts first inside every tier, so the
+opening move is the operator's without starving the rest of the state:
+
+0. **Coming due** - collect on promises whose date has arrived
+   (`NEIGHBORHOOD_SWEEP_COMING_PER_CYCLE`, 300). The only re-purchase.
+1. **Confirm** - known NEW FIBER doors that never became leads.
+2. **Street completion** - unscanned doors on a street that already produced
+   fiber (`NEIGHBORHOOD_SWEEP_STREET_PER_CYCLE`, 1500). Of 403 NC streets with
+   a hit, 264 came back 100% NEW FIBER and the p25 share is 72%, so this is the
+   highest-yield check available; ~6,000 such doors exist statewide.
+3. **Cell flood** - the rest of a hit cell, street by street.
+4. **Probe** - cold cells, one door per street, ranked by neighbour spillover.
+
+Then the original three moves in detail:
 
 1. **Confirm**: re-check doors Kinetic already called NEW FIBER that never
    became leads (no conclusive snapshot, so the projector rejected them).
@@ -95,9 +184,10 @@ NC). It replaces "one or two checks per street" with three moves per cycle
    once per `NEIGHBORHOOD_SWEEP_CONFIRM_RECHECK_DAYS` (7) per door and at most
    `NEIGHBORHOOD_SWEEP_CONFIRM_MAX_ATTEMPTS` (3) times per 90 days.
 2. **Flood**: every 0.01 degree cell (`scan_targets.cell_lat/cell_lng`,
-   about 1 km) that has ever produced a hit gets all of its claimable doors
-   enqueued as one run, street by street, plus its negatives older than
-   `NEIGHBORHOOD_SWEEP_NEG_RECHECK_DAYS` (21). Run id
+   about 1 km) that has ever produced a hit gets all of its UNSCANNED doors
+   enqueued as one run, street by street. Its negatives are only included when
+   `NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES=on`
+   (`NEIGHBORHOOD_SWEEP_NEG_RECHECK_DAYS`, 21). Run id
    `nsweep_<tenant>_<cell>_<day>_f<n>`; one open run per cell, at most
    `NEIGHBORHOOD_SWEEP_MAX_FLOOD_RUNS` (12) new flood runs per cycle.
 3. **Probe**: cold cells get one address per street (group testing), up to
@@ -125,8 +215,15 @@ DISCOVERY admission class with the 18 h bulk dedup.
 On each cycle the sweep also cancels stale `running` runs of other producers
 (`NEIGHBORHOOD_SWEEP_SUPERSEDE_KINDS`, heartbeat older than
 `NEIGHBORHOOD_SWEEP_SUPERSEDE_HOURS` 24) and skips their queued tails in
-2,000-row chunks, because `enqueueRunTargets` drops any target another
-running run still holds. With county E911 address points imported
+2,000-row chunks, because `enqueueRunTargets` drops any target another running
+run still holds. This is not housekeeping, it is the precondition for any work
+at all: measured on the copy, dead runs held 249,045 never-scanned NC doors
+(daily-diff), 20,222 (hot_market), 20,060 (address_discovery) and 207 of the
+coming ledger's own promises (coming_soon_watch). The list is EXACT kind names -
+the query uses `IN`, not `LIKE`, so `address_discovery` must be named
+separately from `discovery`. `manual` and `lasso` are never included: a rep's
+work is not ours to cancel. One pass clears up to 500 runs, so a deep backlog
+drains over several cycles (measured: 107,383 doors unlocked on the first). With county E911 address points imported
 (`POST /api/admin/address-points/import`), `NEIGHBORHOOD_SWEEP_E911` (on)
 upserts every structure inside a cell about to flood so the flood is the whole
 neighborhood, not the part OSM knew about; a cell is bridged at most

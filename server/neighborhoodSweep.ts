@@ -31,6 +31,7 @@ import { readPressure } from "./resourcePressure";
 import { isFootprintCity, warmFootprintGate } from "./footprintGate";
 import { addressPointsInBbox, countAddressPoints } from "./addressPointStore";
 import { structuredLog } from "./structuredLog";
+import { backfillFromStoredEvidence, comingSummary, dueComingTargets, expireStaleWatches, markComingChecked, reconcileNowActiveWatches } from "./comingLedger";
 import { anfParkedSql } from "@shared/scanPolicy";
 import { normalizeKineticAddressKey, streetKeyOf } from "@shared/addressKey";
 import {
@@ -59,6 +60,18 @@ export const SWEEP_CFG = {
   confirmRecheckDays: () => num(process.env.NEIGHBORHOOD_SWEEP_CONFIRM_RECHECK_DAYS, 7, 1, 365),
   /** Negative verdicts older than this are due again inside a hot cell. */
   negativeRecheckDays: () => num(process.env.NEIGHBORHOOD_SWEEP_NEG_RECHECK_DAYS, 21, 1, 365),
+  /** Cities to work first, in order. The operator's opening move. */
+  seedCities: () => (process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES ?? "broadway,wingate,rockwell")
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+  /** Doors per cycle for the street-completion tier (the highest-yield work). */
+  streetPerCycle: () => num(process.env.NEIGHBORHOOD_SWEEP_STREET_PER_CYCLE, 1500, 0, 50_000),
+  /** Promises collected per cycle from the coming ledger. */
+  comingPerCycle: () => num(process.env.NEIGHBORHOOD_SWEEP_COMING_PER_CYCLE, 300, 0, 20_000),
+  /** Stored bodies examined by the one-shot promise backfill. */
+  backfillLimit: () => num(process.env.NEIGHBORHOOD_SWEEP_BACKFILL_LIMIT, 50_000, 0, 500_000),
+  /** ONCE-ONLY: re-check conclusive negatives inside hot cells. Default OFF -
+   *  55,503 such checks produced zero Kinetic flips (see @shared/scanPolicy). */
+  rescanNegatives: () => process.env.NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES === "on",
   /** Confirm attempts per door per 90 days; past it the door is left to the projector backfill. */
   confirmMaxAttempts90d: () => num(process.env.NEIGHBORHOOD_SWEEP_CONFIRM_MAX_ATTEMPTS, 3, 1, 50),
   /** Per-run cap for a cell flood (a 0.01 degree cell rarely exceeds 2k doors). */
@@ -66,8 +79,16 @@ export const SWEEP_CFG = {
   /** Flood runs started per cycle (each is a worker loop; keep near MAX_ACTIVE_RUN_WORKERS). */
   maxFloodRuns: () => num(process.env.NEIGHBORHOOD_SWEEP_MAX_FLOOD_RUNS, 12, 1, 200),
   /** Stale bulk runs (other producers, now off) are cancelled so the sweep owns the queue. */
+  // Exact kind names (the query uses IN, not LIKE), so every dead producer must
+  // be listed explicitly. Measured on the production copy, these runs hold
+  // never-scanned NC doors hostage: daily-diff 249,045, hot_market 20,222,
+  // address_discovery 20,060, discovery 3,065 - and 207 of the coming ledger's
+  // own promises are held by 27 dead coming_soon_watch* runs, which would have
+  // blocked tier 0 outright. `manual` and `lasso` are never listed: a rep's work
+  // is not ours to cancel. fresh_sweep% is excluded in the query itself.
   supersedeKinds: () => (process.env.NEIGHBORHOOD_SWEEP_SUPERSEDE_KINDS
-    ?? "daily-diff,hot_market,city-sweep,copper_upgrade,state-monitor,market,fresh_harvest,keepwarm,discovery")
+    ?? "daily-diff,hot_market,city-sweep,copper_upgrade,state-monitor,market,fresh_harvest,keepwarm,"
+     + "discovery,address_discovery,coming_soon_watch,coming_soon_watch_yield,frontier_hot,nightly")
     .split(",").map((s) => s.trim()).filter(Boolean),
   supersedeStaleHours: () => num(process.env.NEIGHBORHOOD_SWEEP_SUPERSEDE_HOURS, 24, 1, 24 * 365),
   /** E911 address points (when imported) fill a hot cell's inventory before it floods. */
@@ -86,7 +107,38 @@ export const SWEEP_CFG = {
 /** Run kinds contain "fresh" on purpose: providerPriorityForRun maps them to the
  *  DISCOVERY admission class (revenue band: fast boot resume, FIFO jump) while
  *  keeping the 18 h bulk dedup at claim time. */
-export const SWEEP_RUN_KIND = { confirm: "fresh_sweep_confirm", flood: "fresh_sweep_flood", probe: "fresh_sweep_probe" } as const;
+export const SWEEP_RUN_KIND = {
+  // "recheck" makes dedupSkipSecondsForRun return 0 so the once-only guard does
+  // not apply: this tier re-buys ANSWERED greens on purpose. "fresh" still wins
+  // providerPriorityForRun, so it keeps the DISCOVERY admission class.
+  confirm: "fresh_sweep_confirm_recheck",
+  flood: "fresh_sweep_flood",
+  probe: "fresh_sweep_probe",
+  street: "fresh_sweep_street",
+  // "coming_soon" wins providerPriorityForRun over "fresh" (NEW_BUILD class,
+  // reserved capacity) and "watch" makes it dedup-exempt, so a dated promise is
+  // the one thing allowed to re-buy an answered door.
+  coming: "fresh_sweep_coming_soon_watch",
+} as const;
+
+// street_key is maintained by the yield rollups and is populated on every row in
+// production, but a fresh install (or a replay DB) has it NULL until that job
+// runs. Registering the same pure key function as a SQL callable lets the street
+// tier work either way; SQLite short-circuits COALESCE, so the UDF only fires
+// for the rows that actually lack the column.
+let streetFnReady = false;
+function registerStreetKeyFn(): void {
+  if (streetFnReady) return;
+  try {
+    (rawDb as any).function("sweep_street_key", { deterministic: true },
+      (addr: unknown) => streetKeyOf(typeof addr === "string" ? addr : ""));
+  } catch { /* already registered */ }
+  streetFnReady = true;
+}
+const STREET_KEY_SQL = (alias: string) => `COALESCE(NULLIF(${alias}.street_key,''), sweep_street_key(${alias}.address))`;
+
+/** The evidence backfill is a one-shot per process, not per cycle. */
+let evidenceBackfilled = false;
 
 let schemaReady = false;
 export function ensureSweepSchema(): void {
@@ -136,12 +188,20 @@ export function ensureSweepSchema(): void {
       flood_cells INTEGER NOT NULL DEFAULT 0,
       probe_cells INTEGER NOT NULL DEFAULT 0,
       e911_added INTEGER NOT NULL DEFAULT 0,
+      coming INTEGER NOT NULL DEFAULT 0,
+      street INTEGER NOT NULL DEFAULT 0,
+      closed_now_active INTEGER NOT NULL DEFAULT 0,
       superseded_runs INTEGER NOT NULL DEFAULT 0,
       superseded_targets INTEGER NOT NULL DEFAULT 0,
       skipped TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_sweep_cycles_tenant ON sweep_cycles(tenant_id, started_at);
   `);
+  // Forward-only: an install created before the coming/street tiers existed.
+  const cycleCols = new Set((rawDb.prepare(`PRAGMA table_info(sweep_cycles)`).all() as Array<{ name: string }>).map((c) => c.name));
+  for (const [name, decl] of [["coming", "INTEGER NOT NULL DEFAULT 0"], ["street", "INTEGER NOT NULL DEFAULT 0"], ["closed_now_active", "INTEGER NOT NULL DEFAULT 0"]] as const) {
+    if (!cycleCols.has(name)) { try { rawDb.exec(`ALTER TABLE sweep_cycles ADD COLUMN ${name} ${decl}`); } catch { /* concurrent boot */ } }
+  }
   schemaReady = true;
 }
 
@@ -394,14 +454,22 @@ interface CellTargetRow { id: number; address: string; last_scanned_at: string |
 
 function cellTargets(tenantId: number, state: string, cell: { cellLat: number; cellLng: number }, mode: "unscanned" | "due", limit: number): CellTargetRow[] {
   const negDays = SWEEP_CFG.negativeRecheckDays();
-  const due = mode === "due"
+  // ONCE-ONLY: a flood buys UNSCANNED doors. Re-checking conclusive negatives is
+  // opt-in (NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES=on) because the measured return
+  // on it was zero - see the evidence in @shared/scanPolicy.
+  const due = mode === "due" && SWEEP_CFG.rescanNegatives()
     ? `(last_scanned_at IS NULL OR (${NEGATIVE_SQL} AND last_scanned_at < datetime('now','-${negDays} days')))`
     : `last_scanned_at IS NULL`;
+  // Never buy a door another run already holds. The confirm and street tiers
+  // carry the same guard; without it here a door could land in this cycle's
+  // street run AND its flood run, or in a flood still open from a prior cycle.
   return rawDb.prepare(
-    `SELECT id, address, last_scanned_at, street_key FROM scan_targets
-      WHERE tenant_id=? AND state=? AND COALESCE(carrier,'kinetic')='kinetic'
-        AND cell_lat=? AND cell_lng=? AND ${due}
-        AND NOT ${anfParkedSql("scan_targets", 14)}
+    `SELECT id, address, last_scanned_at, street_key FROM scan_targets s
+      WHERE s.tenant_id=? AND s.state=? AND COALESCE(s.carrier,'kinetic')='kinetic'
+        AND s.cell_lat=? AND s.cell_lng=? AND ${due.replace(/\b(last_scanned_at|last_fiber_available|last_is_new_fiber)\b/g, "s.$1")}
+        AND NOT ${anfParkedSql("s", 14)}
+        AND NOT EXISTS (SELECT 1 FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id
+                         WHERE t.target_id=s.id AND t.state IN ('queued','inflight') AND r.status='running')
       LIMIT ?`,
   ).all(tenantId, state, cell.cellLat, cell.cellLng, limit) as CellTargetRow[];
 }
@@ -463,6 +531,7 @@ export interface CycleResult {
   skipped?: string;
   budget: number; drainPerMin: number; pendingBefore: number;
   confirm: number; flood: number; probe: number; floodCells: number; probeCells: number;
+  coming: number; street: number; closedNowActive: number; backfilled: number;
   e911Added: number; supersededRuns: number; supersededTargets: number;
   runIds: string[];
 }
@@ -497,19 +566,24 @@ export async function runSweepCycle(tenantId: number, deps: CycleDeps = {}): Pro
   const t0 = Date.now();
   const result: CycleResult = {
     budget: 0, drainPerMin: 0, pendingBefore: 0, confirm: 0, flood: 0, probe: 0, floodCells: 0, probeCells: 0,
+    coming: 0, street: 0, closedNowActive: 0, backfilled: 0,
     e911Added: 0, supersededRuns: 0, supersededTargets: 0, runIds: [],
   };
   const finish = (skipped?: string) => {
     result.skipped = skipped;
     rawDb.prepare(`INSERT INTO sweep_cycles (tenant_id, state, started_at, duration_ms, budget, drain_per_min, pending_before,
-        confirm, flood, probe, flood_cells, probe_cells, e911_added, superseded_runs, superseded_targets, skipped)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        confirm, flood, probe, flood_cells, probe_cells, e911_added, superseded_runs, superseded_targets, skipped,
+        coming, street, closed_now_active)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(tenantId, state, new Date(nowMs).toISOString(), Date.now() - t0, result.budget, result.drainPerMin, result.pendingBefore,
         result.confirm, result.flood, result.probe, result.floodCells, result.probeCells, result.e911Added,
-        result.supersededRuns, result.supersededTargets, skipped ?? null);
+        result.supersededRuns, result.supersededTargets, skipped ?? null,
+        result.coming, result.street, result.closedNowActive);
     structuredLog("neighborhood_sweep.cycle", {
       tenantId, state, skipped: skipped ?? null, budget: result.budget, drainPerMin: +result.drainPerMin.toFixed(2),
-      pendingBefore: result.pendingBefore, confirm: result.confirm, flood: result.flood, probe: result.probe,
+      pendingBefore: result.pendingBefore, coming: result.coming, street: result.street,
+      closedNowActive: result.closedNowActive, backfilled: result.backfilled,
+      confirm: result.confirm, flood: result.flood, probe: result.probe,
       floodCells: result.floodCells, probeCells: result.probeCells, e911Added: result.e911Added,
       supersededRuns: result.supersededRuns, supersededTargets: result.supersededTargets, ms: Date.now() - t0,
     }, skipped ? "warn" : "info");
@@ -540,6 +614,54 @@ export async function runSweepCycle(tenantId: number, deps: CycleDeps = {}): Pro
   persistFrontier(tenantId, state, frontier, policy, nowMs);
   const day = dayKey(nowMs);
 
+  // Seed cities lead every tier: the operator's opening move (Broadway,
+  // Wingate, Rockwell), applied as an ORDERING boost rather than a tier of its
+  // own, so starting there never starves the rest of the state.
+  const seeds = SWEEP_CFG.seedCities();
+  const seedRank = (city: string | null | undefined): number => {
+    const i = seeds.indexOf(String(city ?? "").trim().toLowerCase());
+    return i < 0 ? seeds.length : i;
+  };
+  const seedSql = seeds.length
+    ? `CASE lower(trim(s.city)) ${seeds.map((c, i) => `WHEN '${c.replace(/'/g, "''")}' THEN ${i}`).join(" ")} ELSE ${seeds.length} END`
+    : "0";
+
+  // ── TIER 0: COMING DUE ──────────────────────────────────────────────────────
+  // The one sanctioned re-purchase of an answered door: the provider told us it
+  // would be serviceable by now. Closing mislabelled watches first keeps sold
+  // doors (NEW FIBER + active account) out of this lane entirely.
+  // One-shot per process: mine promises out of bodies we already paid for.
+  // ~2 s over 22k stored responses, and it is how the ledger starts full rather
+  // than empty (measured: 1,327 doors recovered, 525 with a stated month).
+  if (!evidenceBackfilled) {
+    evidenceBackfilled = true;
+    try {
+      const b = backfillFromStoredEvidence(tenantId, SWEEP_CFG.backfillLimit(), nowMs);
+      result.backfilled = b.recorded;
+    } catch (e: any) {
+      structuredLog("neighborhood_sweep.backfill_failed", { error: String(e?.message ?? e).slice(0, 160) }, "warn");
+    }
+  }
+  result.closedNowActive = reconcileNowActiveWatches(tenantId, nowMs);
+  expireStaleWatches(tenantId, nowMs);
+  const comingCap = Math.min(left, SWEEP_CFG.comingPerCycle());
+  if (comingCap > 0) {
+    const due = dueComingTargets(tenantId, state, comingCap, nowMs);
+    if (due.length) {
+      const prior = (rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_runs WHERE tenant_id=? AND id LIKE ?`)
+        .get(tenantId, `nsweep_${tenantId}_${state}_coming_${day}_%`) as any)?.n ?? 0;
+      const runId = `nsweep_${tenantId}_${state}_coming_${day}_w${Number(prior) + 1}`;
+      const dated = due.filter((d) => d.promisedDate).length;
+      const queued = startSweepRun(tenantId, runId, SWEEP_RUN_KIND.coming,
+        `Sweep coming ${state}: ${due.length} promised doors (${dated} dated)`,
+        "sweep-coming", state, due.map((d) => d.targetId), dispatch);
+      if (queued) {
+        markComingChecked(tenantId, due.map((d) => d.targetId), nowMs);
+        result.coming = queued; result.runIds.push(runId); left -= queued;
+      }
+    }
+  }
+
   // CONFIRM: known NEW FIBER doors that never became leads.
   const confirmCap = Math.min(Math.round(left * SWEEP_CFG.confirmFraction()), SWEEP_CFG.confirmPerCycle());
   if (confirmCap > 0) {
@@ -566,10 +688,55 @@ export async function runSweepCycle(tenantId: number, deps: CycleDeps = {}): Pro
     }
   }
 
+  // ── TIER 2: STREET COMPLETION ───────────────────────────────────────────────
+  // Builders light a street at a time: of 403 NC streets that produced a hit,
+  // 264 came back 100% NEW FIBER and the p25 hit share is 72%. So an unscanned
+  // door on a street that already produced a hit is the single highest-yield
+  // check available, and it beats finishing the rest of a cell. ~6,000 such
+  // doors exist statewide (Lilesville 939, Rockwell 935, Harrisburg 657...).
+  const streetCap = Math.min(left, SWEEP_CFG.streetPerCycle());
+  if (streetCap > 0) {
+    registerStreetKeyFn();
+    const rows = rawDb.prepare(
+      `WITH hit_streets AS (
+         -- alias is skey, never street_key: SQLite resolves a bare street_key
+         -- in HAVING to the TABLE COLUMN (NULL before the rollup backfills it),
+         -- which silently emptied this whole tier.
+         SELECT ${STREET_KEY_SQL("scan_targets")} AS skey, lower(trim(city)) AS city,
+                COUNT(*) AS scanned, SUM(last_is_new_fiber=1) AS hits
+           FROM scan_targets
+          WHERE tenant_id=? AND state=? AND COALESCE(carrier,'kinetic')='kinetic'
+            AND last_scanned_at IS NOT NULL
+          GROUP BY 1,2 HAVING SUM(last_is_new_fiber=1) > 0 AND skey <> ''
+       )
+       SELECT s.id, s.address, ${STREET_KEY_SQL("s")} AS street_key, lower(trim(s.city)) AS city,
+              hs.hits AS hits, CAST(hs.hits AS REAL)/hs.scanned AS share
+         FROM scan_targets s
+         JOIN hit_streets hs ON hs.skey=${STREET_KEY_SQL("s")} AND hs.city=lower(trim(s.city))
+        WHERE s.tenant_id=? AND s.state=? AND COALESCE(s.carrier,'kinetic')='kinetic'
+          AND s.last_scanned_at IS NULL
+          AND NOT ${anfParkedSql("s", 14)}
+          AND NOT EXISTS (SELECT 1 FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id
+                           WHERE t.target_id=s.id AND t.state IN ('queued','inflight') AND r.status='running')
+        ORDER BY ${seedSql} ASC, share DESC, hs.hits DESC, lower(trim(s.city)) ASC, hs.skey ASC, s.id ASC
+        LIMIT ?`,
+    ).all(tenantId, state, tenantId, state, streetCap) as Array<{ id: number; address: string; street_key: string; city: string; hits: number; share: number }>;
+    if (rows.length) {
+      const prior = (rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_runs WHERE tenant_id=? AND id LIKE ?`)
+        .get(tenantId, `nsweep_${tenantId}_${state}_street_${day}_%`) as any)?.n ?? 0;
+      const runId = `nsweep_${tenantId}_${state}_street_${day}_s${Number(prior) + 1}`;
+      const cities = new Set(rows.map((r) => r.city));
+      const queued = startSweepRun(tenantId, runId, SWEEP_RUN_KIND.street,
+        `Sweep streets ${state}: ${rows.length} doors on ${new Set(rows.map((r) => `${r.city}|${r.street_key}`)).size} streets that already produced fiber (${[...cities].slice(0, 3).map(titleCase).join(", ")})`,
+        "sweep-street", state, rows.map((r) => r.id), dispatch);
+      if (queued) { result.street = queued; result.runIds.push(runId); left -= queued; }
+    }
+  }
+
   // FLOOD: hot cells, best first, whole cell per run.
   const workOf = (c: FrontierCell) => c.unscanned + c.staleNegatives + c.unlinkedGreens;
   const floods = frontier.filter((c) => c.decision.phase === "flood")
-    .sort((a, b) => b.decision.score - a.decision.score || workOf(b) - workOf(a));
+    .sort((a, b) => seedRank(a.city) - seedRank(b.city) || b.decision.score - a.decision.score || workOf(b) - workOf(a));
   const probeBudget = Math.round(left * SWEEP_CFG.probeFraction());
   let floodLeft = left - probeBudget;
   let e911Cells = 0;
@@ -604,7 +771,8 @@ export async function runSweepCycle(tenantId: number, deps: CycleDeps = {}): Pro
   // PROBE: cold cells, best evidence first, one address per street. All of a
   // cycle's probes travel in ONE run (cells in rank order) so a cycle starts a
   // handful of worker loops, not one per 12-door cell.
-  const probes = frontier.filter((c) => c.decision.phase === "probe").sort((a, b) => b.decision.score - a.decision.score);
+  const probes = frontier.filter((c) => c.decision.phase === "probe")
+    .sort((a, b) => seedRank(a.city) - seedRank(b.city) || b.decision.score - a.decision.score);
   const probeIds: number[] = [];
   const probedCells: FrontierCell[] = [];
   for (const cell of probes) {
@@ -728,6 +896,7 @@ export interface SweepSummary {
   /** Cells holding at least one fresh lead no rep has touched, and those doors. */
   neighborhoodsWithUnworked: number; unworkedFreshDoors: number;
   unscannedInHotCells: number; unlinkedGreens: number;
+  coming: ReturnType<typeof comingSummary>;
   lastCycle: any | null;
   last24h: { checks: number; hits: number; leads: number };
   pending: number;
@@ -760,7 +929,7 @@ export function sweepSummary(tenantId: number): SweepSummary {
   return {
     enabled: SWEEP_CFG.enabled(), state, intervalMin: SWEEP_CFG.intervalMin(),
     cells, neighborhoodsWithUnworked: Number(unworked?.cells ?? 0), unworkedFreshDoors: Number(unworked?.doors ?? 0),
-    unscannedInHotCells, unlinkedGreens, lastCycle,
+    unscannedInHotCells, unlinkedGreens, coming: comingSummary(tenantId, state, Date.now()), lastCycle,
     last24h: { checks: Number(checks?.n ?? 0), hits: Number(checks?.h ?? 0), leads: Number(leads?.n ?? 0) },
     pending: pendingSweepRows(tenantId),
   };

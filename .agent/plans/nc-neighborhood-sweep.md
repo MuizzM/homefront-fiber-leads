@@ -168,6 +168,58 @@ cancelled with the existing run controls. Superseded runs are marked
 `cancelled` with a reason; re-enabling their producer recreates them. The
 `sweep_cells` table is derived and can be dropped; the next cycle rebuilds it.
 
+## Round 2 (2026-08-22): once-only + the coming ledger
+
+Operator directive: read whether a door will ever turn on and save it with the
+date the provider states; scan nearby clusters in every city starting with
+Broadway, Wingate and Rockwell; and never scan the same address twice.
+
+### What the evidence said
+
+- **Re-scanning is the waste.** 55,503 of 78,058 NC Kinetic checks (71%) were
+  repeats of already-answered addresses (one bought 65 times), and produced
+  ZERO Kinetic fiber: all 25 negative-to-fiber flips in recorded history were
+  Frontier doors in Durham. 311,933 NC doors have never been checked once.
+- **Both carriers state future service and we read none of it.** Kinetic sends
+  `broadbandService.{futureQual, technologyType:"FUTURE_QUAL_EXTENDED",
+  futureTechnologyType, estimatedCompletionDt}`; the date is a month
+  ("NOV-2026") or the sentinel "Future Fiber Build Planned". 476 NC doors carry
+  a real month, 488 more the sentinel. Frontier sends `isFutureFiberEligible`,
+  `fiberBuildOutStatus:"PENDING"`, `futureServiceDate`: 168 / 164. Every writer
+  hardcoded `estimatedCompletionDate: null`, so `coming_soon_watchlist
+  .estimated_completion` was NULL on all 330 rows.
+- **The existing "coming soon" list was wrong.** `lifecycleSignalOf` admitted
+  NEW FIBER + active billing, which the canonical classifier calls NOW_ACTIVE -
+  a door somebody already bought. 294 of 330 watches were that, which is why
+  none ever flipped, and they sat in the one dedup-exempt recheck lane.
+- **The dated doors are all filed as terminal negatives** (675 copper, 256
+  no_service), so a naive once-only law would have blacklisted every promise.
+  Monroe (93.9% of sampled payloads FUTURE_QUAL) and Broadway (28.3%) are
+  pre-build markets misfiled as dead.
+
+### What shipped
+
+- `shared/futureService.ts` - reads both carriers' future vocabularies, finds a
+  provider date by key intent (never `addressCatalogDt`, never an override's
+  `dateActive`), parses MON-YYYY, and schedules the one sanctioned re-check.
+- `server/comingLedger.ts` - the ledger on `coming_soon_watchlist` with
+  `promised_date` / `date_source` / `date_path` / `provider_quote` / `signals`
+  / `band` / `due_at`; closes settled, live and now-active rows; expires cold
+  ones; and backfills promises out of bodies already paid for.
+- `@shared/scanPolicy` once-only law, enforced in `claimRunTargets` so no
+  producer can bypass it; rep actions and the coming lane exempt by run kind.
+- Sweep ladder: coming due, confirm, street completion, cell flood, probe -
+  with seed cities sorted first inside every tier, and no tier buying a door
+  another run holds (that guard was missing from `cellTargets`).
+
+### Measured on the production-shaped copy
+
+One cycle: 1,327 promises backfilled (525 dated) for zero provider spend; 157
+mislabelled watches closed; 240 confirms; **360 doors on 21 proven-fiber
+streets in Broadway, Wingate and Rockwell**; 286 stale runs / 726,722 queued
+rows superseded. Ledger: 1,124 active promises, 410 dated - Nov 2026 (105),
+Dec 2026 (39), Jan 2027 (10), Feb 2027 (131), Mar 2027 (125).
+
 ## Result
 
 Built, reviewed, verified; not merged, not deployed. The compose switch is

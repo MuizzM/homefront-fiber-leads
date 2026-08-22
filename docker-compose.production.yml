@@ -300,6 +300,30 @@ services:
       NEIGHBORHOOD_SWEEP_CONFIRM_MAX_ATTEMPTS: "3"
       NEIGHBORHOOD_SWEEP_NEG_RECHECK_DAYS: "21"
       NEIGHBORHOOD_SWEEP_MAX_FLOOD_RUNS: "12"
+      # ONCE ONLY (2026-08-22). An address with a conclusive answer is never
+      # bought again by a bulk producer; enforced in claimRunTargets so no
+      # producer can bypass it. Measured: 55,503 of 78,058 NC Kinetic checks
+      # (71%) were repeats and returned zero Kinetic fiber, while 311,933 doors
+      # have never been checked once. Rep taps and the coming ledger are exempt.
+      # SCAN_ONCE_ONLY=off restores the old 18h window; RESCAN_NEGATIVES=on
+      # restores the flip watch. Neither needs a code change.
+      SCAN_ONCE_ONLY: "on"
+      NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES: "off"
+      # Where the sweep starts, in order. Every tier sorts these first.
+      NEIGHBORHOOD_SWEEP_SEED_CITIES: "broadway,wingate,rockwell"
+      # Street completion: unscanned doors on streets that already produced
+      # fiber. 264 of 403 such NC streets came back 100% NEW FIBER.
+      NEIGHBORHOOD_SWEEP_STREET_PER_CYCLE: "1500"
+      # The coming ledger: collect on provider-stated turn-on dates. Kinetic
+      # sends broadbandService.estimatedCompletionDt ("NOV-2026"), Frontier
+      # sends futureServiceDate. Backfilled once per process from bodies we
+      # already paid for (measured: 1,327 doors, 525 dated, zero new spend).
+      NEIGHBORHOOD_SWEEP_COMING_PER_CYCLE: "300"
+      NEIGHBORHOOD_SWEEP_BACKFILL_LIMIT: "50000"
+      # An undated "Future Fiber Build Planned" is months out: re-read monthly,
+      # not daily. Daily polling of the undated population would cost ~24,000
+      # checks/month, more than the once-only law saves.
+      COMING_LEDGER_UNDATED_DAYS: "30"
       # FRESH HARVEST — continuous Kinetic scanning ranked by expected yield
       # (coming-soon flips → fresh-cluster neighbors → hot-city frontier →
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
