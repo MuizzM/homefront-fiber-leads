@@ -163,6 +163,8 @@ export interface MapPinRow {
   // (territories.assignee_ids), and the client already holds the territory list.
   assignedTerritoryId?: number | null;
   leadScore: number | null;
+  /** shared/buyerScore.ts: 1.0 to 10.0, null when unscored or removed. */
+  buyerScore?: number | null;
   leadTag: string | null;
   freshConfidence: string | null;
   /** Independent-evidence provenance (JSON list) + the field-verification
@@ -306,7 +308,7 @@ export type LeadDeleteResult =
   | { deleted: false; reason: "not_found" }
   | { deleted: false; reason: "has_history"; knocks: number; commissions: number; photos: number };
 
-export type LeadListSort = "created_desc" | "scanned_desc";
+export type LeadListSort = "created_desc" | "scanned_desc" | "buyer_desc";
 export type LeadListOptions = {
   status?: string;
   zip?: string;
@@ -614,6 +616,12 @@ export function runMigrations() {
     // "hold" (don't assign yet). Orthogonal to lead_status and assignment — it
     // rides straight through a later assign. NULL = unmarked.
     `ALTER TABLE leads ADD COLUMN assign_mark TEXT`,
+    // Buyer score (shared/buyerScore.ts): the household-level "will they buy"
+    // number, its reasons (JSON) and the stamp. Written by the nightly job and
+    // the knock path only; never bumps updated_at.
+    `ALTER TABLE leads ADD COLUMN buyer_score REAL`,
+    `ALTER TABLE leads ADD COLUMN buyer_score_reasons TEXT`,
+    `ALTER TABLE leads ADD COLUMN buyer_scored_at TEXT`,
     `ALTER TABLE leads ADD COLUMN source_scan_target_id INTEGER`,
     `ALTER TABLE leads ADD COLUMN fresh_confirmed_at TEXT`,
     `ALTER TABLE leads ADD COLUMN fresh_confidence TEXT`,
@@ -3608,7 +3616,7 @@ const LEAD_SCAN_EPOCH_SQL = sql<number | null>`julianday(${LEAD_SCAN_AT_SQL})`;
 const LEAD_LIST_COLUMNS = {
   id: leads.id, address: leads.address, city: leads.city, state: leads.state, zip: leads.zip,
   lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus, fiberStatus: leads.fiberStatus,
-  lastOutcome: leads.lastOutcome, leadScore: leads.leadScore,
+  lastOutcome: leads.lastOutcome, leadScore: leads.leadScore, buyerScore: leads.buyerScore,
   assignedRepId: leads.assignedRepId, assignedAt: leads.assignedAt, assignmentSource: leads.assignmentSource,
   contactName: leads.contactName, contactEmail: leads.contactEmail, notes: leads.notes,
   ownerName: leads.ownerName, ownerEmail: leads.ownerEmail,
@@ -3618,7 +3626,7 @@ const LEAD_LIST_COLUMNS = {
 };
 export type LeadListRow = Pick<Lead,
   "id" | "address" | "city" | "state" | "zip" | "lat" | "lng" | "leadStatus" | "fiberStatus" |
-  "lastOutcome" | "leadScore" | "assignedRepId" | "assignedAt" | "assignmentSource" |
+  "lastOutcome" | "leadScore" | "buyerScore" | "assignedRepId" | "assignedAt" | "assignmentSource" |
   "contactName" | "contactEmail" | "notes" | "ownerName" | "ownerEmail" |
   "isNewFiber" | "maxDownloadMbps" | "dfAddressId" | "createdAt" | "updatedAt"> & {
   lastScannedAt: string | null;
@@ -3894,7 +3902,7 @@ export class Storage implements IStorage {
         l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
         l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
         l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
-        l.lead_score AS leadScore,
+        l.lead_score AS leadScore, l.buyer_score AS buyerScore,
         l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
         l.fresh_sources AS freshSources, l.fresh_confirmed_at AS freshConfirmedAt,
         l.assign_mark AS assignMark, l.do_not_knock AS doNotKnock,
@@ -3971,7 +3979,12 @@ export class Storage implements IStorage {
       .leftJoin(scanTargets, eq(leads.sourceScanTargetId, scanTargets.id));
     const order = opts.sort === "scanned_desc"
       ? [sql`${LEAD_SCAN_EPOCH_SQL} IS NULL`, desc(LEAD_SCAN_EPOCH_SQL), desc(leads.createdAt)]
-      : [desc(leads.createdAt)];
+      // Best buyers first: unscored doors (closed, blocked, or not scored yet)
+      // sort LAST rather than as zero, so a fresh import never outranks a door
+      // the model has actually looked at. Ties break on recency.
+      : opts.sort === "buyer_desc"
+        ? [sql`${leads.buyerScore} IS NULL`, desc(leads.buyerScore), desc(leads.createdAt)]
+        : [desc(leads.createdAt)];
     const rows = (where ? listQ.where(where) : listQ)
       .orderBy(...order).limit(opts.limit).offset(opts.offset).all();
     // The default list count is on every page load and needs no scan join.
@@ -4355,7 +4368,12 @@ export class Storage implements IStorage {
     const where = conditions.length === 1 ? conditions[0] : and(...conditions);
     const order = opts.sort === "scanned_desc"
       ? [sql`${LEAD_SCAN_EPOCH_SQL} IS NULL`, desc(LEAD_SCAN_EPOCH_SQL), desc(leads.createdAt)]
-      : [desc(leads.createdAt)];
+      // Best buyers first: unscored doors (closed, blocked, or not scored yet)
+      // sort LAST rather than as zero, so a fresh import never outranks a door
+      // the model has actually looked at. Ties break on recency.
+      : opts.sort === "buyer_desc"
+        ? [sql`${leads.buyerScore} IS NULL`, desc(leads.buyerScore), desc(leads.createdAt)]
+        : [desc(leads.createdAt)];
     const rows = db.select(LEAD_LIST_COLUMNS).from(leads)
       .leftJoin(scanTargets, eq(leads.sourceScanTargetId, scanTargets.id))
       .where(where).orderBy(...order).limit(opts.limit).offset(opts.offset).all();

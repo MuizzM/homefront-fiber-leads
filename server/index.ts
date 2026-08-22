@@ -1158,6 +1158,23 @@ app.use((req, res, next) => {
     const { startComingSoonWatchlist } = await import("./comingSoonWatchlist");
     deferBoot(startComingSoonWatchlist, "coming-soon-watchlist");
   } catch (e: any) { console.warn("[coming-soon-watchlist] start skipped:", e?.message); }
+  // Buyer score (shared/buyerScore.ts): one bounded pass per tenant after the
+  // deploy gate, then every six hours (each door about daily; never-scored
+  // doors first). Pure reads of existing columns plus three
+  // score columns written back; no provider calls, no spend. Primary/single
+  // process only: the scorer yields between batches but there is no reason
+  // for N workers to walk the same tenant. Kill-switch: BUYER_SCORE_JOB=off.
+  if (!IS_CLUSTER_WORKER && String(process.env.BUYER_SCORE_JOB ?? "on").toLowerCase() !== "off") {
+    try {
+      const { runBuyerScoreForAllTenants, BUYER_SCORE_INTERVAL_MS } = await import("./buyerScoreJob");
+      const tick = () => { void runBuyerScoreForAllTenants((m) => console.log(m)).catch((e: any) => console.warn("[buyer-score] pass failed:", e?.message)); };
+      deferBoot(() => {
+        tick();
+        const t = setInterval(tick, BUYER_SCORE_INTERVAL_MS);
+        t.unref();
+      }, "buyer-score");
+    } catch (e: any) { console.warn("[buyer-score] start skipped:", e?.message); }
+  }
   try {
     // Rumor-driven territory probes ("I heard there's Kinetic fiber near X"):
     // EXPLORE_CITIES="durham:nc,…" → bounded city sweeps outside the verified

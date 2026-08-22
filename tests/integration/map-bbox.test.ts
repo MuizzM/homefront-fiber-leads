@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { MAP_PINS_WIRE_VERSION } from "../../shared/mapPinsWire";
 
 let server: Server; let baseUrl: string; let storage: any; let rawDb: any;
 const fx: Record<string, any> = {};
@@ -117,7 +118,9 @@ describe("bbox window rows", () => {
     const res = await req("/api/leads/map?format=packed&bbox=-80.6,35.4,-80.1,35.6", fx.manager.session);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.v).toBe(8);
+    // The window declares the CURRENT wire version (server + client ship
+    // together), not a literal: every field added to the projection bumps it.
+    expect(body.v).toBe(MAP_PINS_WIRE_VERSION);
     expect(Array.isArray(body.rows)).toBe(true);
     expect(body.truncated ?? false).toBe(false);
   });

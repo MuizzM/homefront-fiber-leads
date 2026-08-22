@@ -31,6 +31,7 @@ import { AuthedImg } from "@/components/AuthedImg";
 import { PhotoLightbox } from "@/components/PhotoLightbox";
 import { useCan } from "@/lib/capabilities";
 import { ChevronLeft, Zap, Wifi, Building2, User as UserIcon, Mail, AlertTriangle, StickyNote, UserPlus, RefreshCw, WifiOff, CloudUpload } from "lucide-react";
+import { BuyerScoreSection } from "@/components/BuyerScoreSection";
 
 interface Lead {
   id: number; address: string; city: string; state?: string | null; zip?: string | null;
@@ -39,6 +40,7 @@ interface Lead {
   speedTier?: string | null; maxDownloadMbps?: number | null; techType?: string | null;
   competitorName?: string | null; competitorSpeedMbps?: number | null; inCompetitorArea?: boolean | null;
   leadTag?: string | null; leadScore?: number | null;
+  buyerScore?: number | null; buyerScoreReasons?: string | null; buyerScoredAt?: string | null; doNotKnock?: boolean | number | null;
   contactName?: string | null; contactEmail?: string | null;
   visited?: boolean | null; lastOutcome?: string | null;
 }
@@ -163,6 +165,12 @@ export default function PropertyDetail() {
             {variant === 2 ? <SummarySplit lead={lead} canOpenCalling={canOpenCalling} onLog={openLog} />
               : variant === 3 ? <SummaryBanded lead={lead} canOpenCalling={canOpenCalling} onLog={openLog} />
               : <SummaryLedger lead={lead} canOpenCalling={canOpenCalling} onLog={openLog} />}
+
+            {/* Buyer score: the household-level "will they buy" number and the
+                math behind it. Reads the persisted row (server/buyerScoreJob.ts);
+                renders nothing for a door that was never scored, and says why
+                for a door the model removed. */}
+            <BuyerScoreSection lead={lead} />
 
             {/* Fiber details */}
             <SectionLabel>Fiber</SectionLabel>

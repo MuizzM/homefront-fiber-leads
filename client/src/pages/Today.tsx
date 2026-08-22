@@ -25,6 +25,8 @@ import {
   distanceHint, haversineMeters, todayISO, type RoutablePin,
 } from "@shared/knock";
 import { orderNextDoors, SCORE_SATURATION, type DoorRank } from "@shared/doorPriority";
+import { buyerTier } from "@shared/buyerScore";
+import { BuyerScorePill } from "@/components/BuyerScorePill";
 import { doorOpener } from "@shared/doorOpener";
 import { usd } from "@shared/moneyFormat";
 import { useRankedDoors } from "@/lib/useRankedDoors";
@@ -38,6 +40,8 @@ interface Pin extends RoutablePin {
   leadTag?: string | null; fiberStatus?: string | null;
   carrier?: string | null; freshConfirmedAt?: string | null;
   contactName?: string | null; assignedRepId?: number | null; lastKnockedAt?: string | null; knockCount?: number | null;
+  /** shared/buyerScore.ts, on the pin wire (v9). Absent = not scored. */
+  buyerScore?: number | null;
 }
 interface LeaderRow { rep: { id: number; name: string; role: string }; knocks: number; sales: number; knocksToday: number; salesToday: number }
 interface LatLng { lat: number; lng: number }
@@ -537,7 +541,21 @@ function HeroCard({ p, loc, rank, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng
           when the hero is not the closest door on the street. Renders only for
           doors the ranker actually scored - it pools confirmed-fresh leads
           only, and an unranked door is neutral, never weak. */}
-      {rank && (
+      {typeof p.buyerScore === "number" && (
+        <div className="mt-3.5" data-testid="today-buyer-score" data-tier={buyerTier(p.buyerScore)}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Buyer score</span>
+            <BuyerScorePill score={p.buyerScore} size="md" label />
+          </div>
+          <div className="relative mt-2 h-1 rounded-full bg-muted"
+            role="progressbar" aria-valuenow={p.buyerScore} aria-valuemin={1} aria-valuemax={10} aria-label="Buyer score for this door">
+            <span className={`absolute inset-y-0 left-0 rounded-full ${buyerTier(p.buyerScore) === "likely" ? "bg-gold" : buyerTier(p.buyerScore) === "possible" ? "bg-primary" : "bg-muted-foreground"}`} style={{ width: `${Math.max(0, Math.min(100, p.buyerScore * 10)).toFixed(1)}%` }} />
+            <span aria-hidden="true" className="absolute -top-[3px] -bottom-[3px] left-1/2 w-px bg-foreground/25" />
+            <span aria-hidden="true" className="absolute -top-[3px] -bottom-[3px] left-[80%] w-px bg-foreground/25" />
+          </div>
+        </div>
+      )}
+      {rank && typeof p.buyerScore !== "number" && (
         <div className="mt-3.5" data-testid="today-opportunity">
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Opportunity</span>
@@ -584,6 +602,7 @@ function DoorRow({ p, n, loc, rank, onOpen }: { p: Pin; n: number; loc: LatLng |
         <div className="text-[14px] font-semibold text-foreground truncate">{p.address}</div>
         <div className="text-[12px] text-muted-foreground truncate">{p.city}{dist ? ` · ${dist}` : ""}{rs[0] ? ` · ${rs[0]}` : ""}</div>
       </div>
+      {typeof p.buyerScore === "number" && <BuyerScorePill score={p.buyerScore} />}
       <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
     </button>
   );

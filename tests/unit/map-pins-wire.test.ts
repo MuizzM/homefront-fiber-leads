@@ -65,6 +65,18 @@ describe("packed map-pin wire format", () => {
     expect((out[0] as any).lastKnockedAt).toBeUndefined();
   });
 
+  it("carries buyerScore (v9) so Today and the map can rank a door without a detail fetch", () => {
+    const pins = [
+      { id: 1, lat: 35.8, lng: -80.2, leadStatus: "prospect", address: "1 A St", city: "X", state: "NC", zip: "27292", buyerScore: 8.4 },
+      { id: 2, lat: 35.7, lng: -80.3, leadStatus: "prospect", address: "2 A St", city: "X", state: "NC", zip: "27292" },
+    ];
+    const { pins: out } = unpackMapPins<typeof pins[number]>(packMapPins(pins));
+    expect(out[0].buyerScore).toBe(8.4);
+    // Unscored doors ship a null cell and unpack to an ABSENT key, the same
+    // compact-pin rule every optional field follows.
+    expect(out[1].buyerScore).toBeUndefined();
+  });
+
   it("rejects unknown versions and malformed rows", () => {
     expect(() => unpackMapPins({ v: 99, total: 0, rows: [] })).toThrow(/Unsupported/);
     expect(() => unpackMapPins({ v: MAP_PINS_WIRE_VERSION, total: 1, rows: [[1]] })).toThrow(/Invalid map row 0/);
@@ -99,6 +111,8 @@ describe("packed map-pin wire format", () => {
       // same honesty rule as assignedTerritoryId above.
       freshConfirmedAt: i % 5 === 0 ? "2026-07-01T00:00:00.000Z" : undefined,
       freshSources: i % 10 === 0 ? "[\"kfs\",\"pole\"]" : undefined,
+      // v9: a scored door carries one number; closed doors carry nothing.
+      buyerScore: i % 6 === 0 ? undefined : 5 + (i % 50) / 10,
     }));
     const objectBytes = Buffer.byteLength(JSON.stringify({ pins, total: pins.length }));
     const packedBytes = Buffer.byteLength(JSON.stringify(packMapPins(pins)));

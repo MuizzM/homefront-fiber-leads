@@ -33,14 +33,20 @@
 // client without a per-lead detail fetch. Both ride along for the bbox-window
 // responses as well — the packed schema is the SAME for the full feed and a
 // bbox window, only the row set differs.
-export const MAP_PINS_WIRE_VERSION = 8 as const;
+//
+// 8 → 9: `buyerScore` (shared/buyerScore.ts, 1.0 to 10.0 or absent) joined the
+// projection so Today's route and the field map can show the household-level
+// "will they buy" number without a per-lead detail fetch. The reasons list
+// stays on the lead row (detail fetch): it is text, and the full feed is
+// shipped for every pin in the tenant.
+export const MAP_PINS_WIRE_VERSION = 9 as const;
 
 export const MAP_PIN_WIRE_FIELDS = [
   "id", "lat", "lng", "leadStatus", "address", "city", "state", "zip",
   "fiberStatus", "assignedRepId", "leadScore", "visited", "knockCount",
   "lastOutcome", "lastKnockedAt", "leadTag", "freshConfidence", "carrier",
   "assignMark", "assignedTerritoryId", "doNotKnock", "lastOutcomeAt",
-  "freshSources", "freshConfirmedAt",
+  "freshSources", "freshConfirmedAt", "buyerScore",
 ] as const;
 
 export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];
