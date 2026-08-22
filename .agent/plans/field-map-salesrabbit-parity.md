@@ -131,7 +131,26 @@ Per milestone (all green, `DATA_DIR=$(mktemp -d)` per the pristine-data rule):
 - `npx vitest run tests/integration/assign-selection-undo.test.ts tests/integration/assign-selection.test.ts tests/rtl/LassoRepPicker.test.tsx tests/unit/lasso-*.test.ts`
 - `npx vitest run tests/unit/lead-import-mapping.test.ts tests/integration/lead-import.test.ts tests/rtl/ImportLeads.test.tsx`
 - `npx tsc --noEmit -p tsconfig.json` clean after every milestone.
-- Full: `bash scripts/agent-verify.sh full` (result recorded in Result).
+- Full: `DATA_DIR=$(mktemp -d) bash scripts/agent-verify.sh full` on 41d434c:
+  harness valid (4 agents, 8 skills); deployment controls passed (docker
+  compose unavailable locally, config validation skipped); `npm run check` and
+  `check:fast` clean; **554 test files, 7,010 tests passed**; `npm run build`
+  succeeded. Exit 0.
+- Live, dev server `homefront-fieldmap` (port 5077, `.dev-verify` fixture,
+  producers off), driven with the repo's Playwright (swiftshader, mocked GPS
+  at 35.60005,-80.5976 as `rex.rep@`; `mona.manager@` on desktop):
+  Schedule page renders the week strip, overdue row, time column and a
+  0.5mi distance; the map shows "Nearest doors 3 of 139 nearby" with the
+  first card "At door" 6 m away, a tap opens the card and hides the strip;
+  marking Interested shows Undo in the peek bar and a touch tap on it
+  re-logs Not Home (two POST /api/leads/:id/knock, 201 each); the
+  appointment composer's "Tomorrow 10 AM" chip fills the pickers and the
+  button reads "Set for tomorrow 10 AM"; the import page previews a 4-row
+  CSV (phone column locked and masked), imports 1, skips 3, and the row
+  without a county match lands without a pin; the desktop lasso docks right,
+  catches 9 doors, lists 7 reps with loads, previews "Ada will have 9
+  doors", assigns, and the toast's Undo restores 9 (activity log
+  `lead.assign_selection.undo {"restored":9,"skipped":0}`).
 
 ## Recovery
 
@@ -141,4 +160,26 @@ be a forward-only migration covered by the migration tests.
 
 ## Result
 
-(pending)
+Shipped on `claude/field-map-parity` (10 commits), pushed, draft PR opened.
+Eight of the canvas's nine feature surfaces are built: Schedule, quick slots
+with reminders, in-card Undo, the Nearest doors strip, county-first
+tap-to-add, where-they-stood on History (plus the dark-token fix for every
+surface on the ink sheet), the lasso rep picker with a docked desktop panel
+and assignment undo, and the spreadsheet import.
+
+Not built, deliberately: verification badges on the map pins (the packed
+wire format and the three racing lead-layer writers; see Decisions), a
+per-booking reminder toggle (reminders are on for every timed callback), and
+a paid geocode backfill for imported rows the county file cannot place
+(they import without a pin and show in Leads).
+
+Remaining risks: the reminder job's in-memory sent set means a restart inside
+the 10-minute window can re-send once (the push tag collapses it on the
+device); lasso undo tokens are in-memory and die with the process; the
+nearest-doors strip reads the device GPS every 45 s while it is on screen
+(device-local, never transmitted, pauses when the tab is hidden).
+
+Follow-ups: pin badges via a wire-version bump; a Mapbox backfill for
+unmatched imports under `mapboxBudget`; rep rows in the lasso picker could
+be limited to field roles (today it lists every active member, as the
+select did).
