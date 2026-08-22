@@ -113,6 +113,11 @@ export const SWEEP_RUN_KIND = {
   // providerPriorityForRun, so it keeps the DISCOVERY admission class.
   confirm: "fresh_sweep_confirm_recheck",
   flood: "fresh_sweep_flood",
+  // Used INSTEAD of `flood` when NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES=on: the
+  // "recheck" substring makes the run dedup-exempt, without which every stale
+  // negative the flag admits is skipped at claim time by the once-only guard and
+  // the flag is inert while still charging the cycle budget.
+  floodRecheck: "fresh_sweep_flood_recheck",
   probe: "fresh_sweep_probe",
   street: "fresh_sweep_street",
   // "coming_soon" wins providerPriorityForRun over "fresh" (NEW_BUILD class,
@@ -628,9 +633,18 @@ export async function runSweepCycle(tenantId: number, deps: CycleDeps = {}): Pro
     const i = seeds.indexOf(String(city ?? "").trim().toLowerCase());
     return i < 0 ? seeds.length : i;
   };
+  // BOUND, not interpolated: these city names arrive from an env var. Escaping
+  // quotes by hand is the wrong shape of defence even when the source is the
+  // operator's own compose file - the placeholders go in the SQL, the values go
+  // in the params array (spliced in ORDER BY position, after the WHERE binds).
   const seedSql = seeds.length
-    ? `CASE lower(trim(s.city)) ${seeds.map((c, i) => `WHEN '${c.replace(/'/g, "''")}' THEN ${i}`).join(" ")} ELSE ${seeds.length} END`
-    : "0";
+    ? `CASE lower(trim(s.city)) ${seeds.map((_c, i) => `WHEN ? THEN ${i}`).join(" ")} ELSE ${seeds.length} END`
+    // NULL, not 0: SQLite reads a bare integer literal in ORDER BY as a COLUMN
+    // ORDINAL, so `ORDER BY 0` threw "1st ORDER BY term out of range" and an
+    // operator who cleared NEIGHBORHOOD_SWEEP_SEED_CITIES lost the whole
+    // street tier every cycle.
+    : "NULL";
+  const seedBinds: string[] = seeds.length ? [...seeds] : [];
 
   // ── TIER 0: COMING DUE ──────────────────────────────────────────────────────
   // The one sanctioned re-purchase of an answered door: the provider told us it
@@ -726,7 +740,7 @@ export async function runSweepCycle(tenantId: number, deps: CycleDeps = {}): Pro
                            WHERE t.target_id=s.id AND t.state IN ('queued','inflight') AND r.status='running')
         ORDER BY ${seedSql} ASC, share DESC, hs.hits DESC, lower(trim(s.city)) ASC, hs.skey ASC, s.id ASC
         LIMIT ?`,
-    ).all(tenantId, state, tenantId, state, streetCap) as Array<{ id: number; address: string; street_key: string; city: string; hits: number; share: number }>;
+    ).all(tenantId, state, tenantId, state, ...seedBinds, streetCap) as Array<{ id: number; address: string; street_key: string; city: string; hits: number; share: number }>;
     if (rows.length) {
       const prior = (rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_runs WHERE tenant_id=? AND id LIKE ?`)
         .get(tenantId, `nsweep_${tenantId}_${state}_street_${day}_%`) as any)?.n ?? 0;
@@ -765,7 +779,8 @@ export async function runSweepCycle(tenantId: number, deps: CycleDeps = {}): Pro
     const ck = cellKey(cell.cellLat, cell.cellLng);
     const seqRow = rawDb.prepare(`SELECT floods FROM sweep_cells WHERE tenant_id=? AND state=? AND cell_lat=? AND cell_lng=?`).get(tenantId, state, cell.cellLat, cell.cellLng) as any;
     const runId = `nsweep_${tenantId}_${ck}_${day}_f${Number(seqRow?.floods ?? 0) + 1}`;
-    const queued = startSweepRun(tenantId, runId, SWEEP_RUN_KIND.flood,
+    const queued = startSweepRun(tenantId, runId,
+      SWEEP_CFG.rescanNegatives() ? SWEEP_RUN_KIND.floodRecheck : SWEEP_RUN_KIND.flood,
       `Sweep flood ${titleCase(cell.city)} ${cell.cellLat.toFixed(2)},${cell.cellLng.toFixed(2)}: ${ordered.length} doors (${cell.hits} hits so far)`,
       cell.city, state, ordered.map((r) => r.id), dispatch);
     if (!queued) continue;

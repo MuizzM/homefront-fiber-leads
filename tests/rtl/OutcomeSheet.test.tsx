@@ -78,8 +78,15 @@ describe("<OutcomeSheet /> - appointment composer", () => {
   it("offers the same one-tap times as the map card; a tap fills the pickers, Set confirms", async () => {
     const { props } = renderSheet();
     await userEvent.click(screen.getByTestId("outcome-appt-open"));
-    expect(screen.getByTestId("appt-slots")).toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("appt-slot-1")); // tomorrow 10 AM, always offered
+    const slots = screen.getByTestId("appt-slots");
+    expect(slots).toBeInTheDocument();
+    // BY LABEL, never by index: "Tomorrow 10 AM" is always offered, but it is
+    // only slot-1 while the Today chip is present, and quickSlots drops Today
+    // after CLOSE_MIN (19:00). An index passes all afternoon and fails in CI.
+    const tomorrowChip = Array.from(slots.querySelectorAll("button"))
+      .find((c) => /^Tomorrow /i.test(c.textContent ?? ""))!;
+    expect(tomorrowChip, "a Tomorrow chip is always offered").toBeTruthy();
+    await userEvent.click(tomorrowChip);
     expect(screen.getByTestId("outcome-appt-time")).toHaveValue("10:00");
     expect(screen.getByTestId("outcome-appt-save")).toHaveTextContent("Set for tomorrow 10 AM");
     expect(props.onLog).not.toHaveBeenCalled();

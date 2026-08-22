@@ -26,6 +26,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import { storage } from "./storage";
 import { rawDb } from "./db";
+import { isRecheckExemptKind } from "@shared/scanPolicy";
 import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
 import {
@@ -202,18 +203,9 @@ function logBreakerWait(runId: string): void {
   }, "warn");
 }
 function dedupSkipSecondsForRun(kind: string): number {
-  const v = String(kind ?? "").toLowerCase();
-  if (v.includes("manual") || v === "target_ids" || v.includes("lasso") || v.includes("bbox") || v.includes("area") || v.includes("field")) return 0;
-  // Change-detection runs must ALWAYS re-verify (never skip a recently-checked address):
-  // rechecks, rescans, nightly, and the state/coming-soon MONITOR/WATCH watchers
-  // (the Coming-Soon watchlist's 'coming_soon_watch' cadence — down to 6h — would
-  // otherwise be silently swallowed by the 18h bulk dedup window).
-  if (v.includes("recheck") || v.includes("rescan") || v.includes("nightly") || v.includes("scheduled") || v.includes("monitor") || v.includes("watch")) return 0;
-  // Frontier runs check a DIFFERENT provider than the Kinetic sweeps — a recent
-  // Kinetic verdict says nothing about Frontier serviceability. Without this,
-  // Kinetic's constant last_scanned_at refreshes starved every frontier_hot run
-  // into claiming 0 targets and finishing "done" with 0 checks (observed live).
-  if (v.includes("frontier")) return 0;
+  // One predicate decides exemption (see @shared/scanPolicy isRecheckExemptKind);
+  // this function only chooses the window for everything else.
+  if (isRecheckExemptKind(kind)) return 0;
   return DEDUP_RECHECK_SEC;
 }
 
@@ -353,7 +345,7 @@ export async function runScanWorker(
       // grab the same targets and double-spend the proxy. Requeued (transient-error)
       // targets are 'queued' again, so the queue only drains once every address has
       // a conclusive or unresolved answer.
-      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind));
+      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind), run.kind);
       // Yield a full event-loop turn every claim cycle: a batch of instantly-failing
       // addresses (fail-closed transport) would otherwise chain microtasks forever
       // and starve timers/cancels. One setImmediate per batch costs ~nothing.

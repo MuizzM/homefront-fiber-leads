@@ -438,3 +438,55 @@ describe("E911 bridge (county address points fill a hot cell before it floods)",
     }
   });
 });
+
+describe("seed cities lead every tier", () => {
+  // The operator's opening move (Broadway, Wingate, Rockwell) is an ORDERING
+  // boost, not a tier of its own, so starting there never starves the state.
+  // The city names come from an env var and are BOUND, never interpolated.
+  const seedCity = "O'Fallon Heights"; // an apostrophe: a hand-escaped CASE is the wrong defence
+  const otherCity = "Zebulon";
+  const P = { lat: 35.55, lng: -80.11 };
+  const Q = { lat: 35.56, lng: -80.12 };
+
+  beforeAll(() => {
+    // Each city gets one street that already produced fiber plus unscanned
+    // doors on it. Identical yield, so ONLY the seed order can separate them.
+    for (const [c, cell] of [[seedCity, P], [otherCity, Q]] as const) {
+      const hit = { tenant_id: TENANT, address: `10 ${c} Main St`, city: c, state: "NC", zip: "27597",
+        lat: cell.lat, lng: cell.lng, source: "test", carrier: "kinetic",
+        last_scanned_at: sqlTime(30 * DAY), scan_count: 1, last_is_new_fiber: 1,
+        last_fiber_status: "new_fiber", last_fiber_available: 1 };
+      insertTarget(hit);
+      for (let i = 0; i < 8; i++) insertTarget({ tenant_id: TENANT, address: `${20 + i * 2} ${c} Main St`,
+        city: c, state: "NC", zip: "27597", lat: cell.lat, lng: cell.lng, source: "test", carrier: "kinetic" });
+    }
+  });
+
+  it("works the seed city's street doors before an identical non-seed city, with the name bound not escaped", async () => {
+    process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES = `${seedCity},wingate`;
+    try {
+      const r = await sweep.runSweepCycle(TENANT, { dispatch, nowMs: NOW + 20 * DAY });
+      const streetRun = r.runIds.find((id) => id.includes("_street_"));
+      expect(streetRun, "the street tier ran").toBeDefined();
+      const cities = runTargets(streetRun!).map((t) =>
+        (rawDb.prepare(`SELECT city FROM scan_targets WHERE id=?`).get(t.id) as any).city as string);
+      const seedRows = cities.filter((c) => c === seedCity);
+      const otherRows = cities.filter((c) => c === otherCity);
+      expect(seedRows.length, "the seed city's doors are in the run").toBeGreaterThan(0);
+      // Every seed-city door precedes every non-seed door.
+      if (otherRows.length) {
+        expect(cities.lastIndexOf(seedCity)).toBeLessThan(cities.indexOf(otherCity));
+      }
+    } finally {
+      delete process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES;
+    }
+  });
+
+  it("survives a seed list that is empty or entirely unknown", async () => {
+    for (const value of ["", "   ", "nowhere,nocity"]) {
+      process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES = value;
+      await expect(sweep.runSweepCycle(TENANT, { dispatch, nowMs: NOW + 21 * DAY })).resolves.toBeTruthy();
+    }
+    delete process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES;
+  });
+});

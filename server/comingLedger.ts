@@ -33,6 +33,7 @@
 // the parser, the ledger and the UI.
 import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
+import { anfParkedSql } from "@shared/scanPolicy";
 import { nextRecheckAt, readFutureService, type FutureServiceInput, type FutureServiceRead } from "@shared/futureService";
 
 const HOUR_MS = 3_600_000;
@@ -54,6 +55,11 @@ export const LEDGER_CFG = {
   expireDays: () => bounded(process.env.COMING_SOON_EXPIRE_DAYS, 90, 7, 3650),
   /** Re-read cadence for an UNDATED promise ("Future Fiber Build Planned"). */
   undatedDays: () => bounded(process.env.COMING_LEDGER_UNDATED_DAYS, 30, 1, 365),
+  /** Collections allowed AFTER a promised date has passed before the promise is
+   *  written off. Without a cap a provider that keeps restating a stale month is
+   *  re-bought on the hot cadence forever - which is the once-only law's own
+   *  exception eating the law. */
+  overdueGraceChecks: () => bounded(process.env.COMING_LEDGER_OVERDUE_CHECKS, 4, 1, 100),
   /** Hard cap on how many promises one cycle may collect on. */
   perCycle: () => bounded(process.env.COMING_LEDGER_PER_CYCLE, 300, 0, 20_000),
 };
@@ -75,6 +81,8 @@ export function ensureComingLedgerSchema(): void {
   add("signals", "TEXT NOT NULL DEFAULT '[]'");
   add("band", "TEXT");
   add("due_at", "INTEGER");
+  // Collections made after the promised date passed; drives the write-off.
+  add("overdue_checks", "INTEGER NOT NULL DEFAULT 0");
   try { rawDb.exec(`CREATE INDEX IF NOT EXISTS idx_coming_due_at ON coming_soon_watchlist(tenant_id, status, due_at)`); } catch { /* exists */ }
   ready = true;
 }
@@ -114,13 +122,33 @@ export function recordFutureService(
   }
 
   const prior = rawDb.prepare(
-    `SELECT first_seen_at, last_checked_at FROM coming_soon_watchlist WHERE tenant_id=? AND scan_target_id=?`,
-  ).get(tenantId, target.id) as { first_seen_at: number; last_checked_at: number | null } | undefined;
+    `SELECT first_seen_at, last_checked_at, overdue_checks FROM coming_soon_watchlist WHERE tenant_id=? AND scan_target_id=?`,
+  ).get(tenantId, target.id) as { first_seen_at: number; last_checked_at: number | null; overdue_checks?: number } | undefined;
   // WHEN WE FOUND IT, not when we wrote the row. The backfill replays answers
   // from July, so stamping "now" would claim we discovered every promise today
   // and would put month-old finds inside the 2-14 day flip window.
   const observedMs = opts.observedAt ?? nowMs;
   const firstSeenMs = Math.min(prior?.first_seen_at ?? observedMs, observedMs);
+
+  // A promise whose own date has passed and which the provider keeps restating
+  // is not going to be honoured. Count those collections and write the row off
+  // at the cap, so the one lane allowed to re-buy an answered door cannot spin
+  // on it forever. Undated promises are not counted: they never claimed a date.
+  const promisedMs = read.promisedDate ? Date.parse(`${read.promisedDate}T00:00:00Z`) : NaN;
+  const isOverdue = Number.isFinite(promisedMs) && promisedMs <= nowMs;
+  const overdueChecks = (Number(prior?.overdue_checks ?? 0) || 0) + (isOverdue ? 1 : 0);
+  if (isOverdue && overdueChecks > LEDGER_CFG.overdueGraceChecks()) {
+    rawDb.prepare(
+      `UPDATE coming_soon_watchlist SET status='overdue', updated_at=?, due_at=NULL, overdue_checks=?
+        WHERE tenant_id=? AND scan_target_id=?`,
+    ).run(nowMs, overdueChecks, tenantId, target.id);
+    if (opts.log !== false) {
+      structuredLog("coming_ledger.written_off", {
+        tenantId, targetId: target.id, promisedDate: read.promisedDate, checksAfterDate: overdueChecks,
+      }, "warn");
+    }
+    return read;
+  }
   const sched = nextRecheckAt({
     promisedDate: read.promisedDate, firstSeenMs, lastCheckedMs: observedMs,
     hotHours: LEDGER_CFG.hotHours(), soonHours: LEDGER_CFG.soonHours(), watchHours: LEDGER_CFG.watchHours(),
@@ -132,9 +160,9 @@ export function recordFutureService(
     `INSERT INTO coming_soon_watchlist
        (tenant_id, scan_target_id, address_key, first_seen_at, last_checked_at, estimated_completion,
         source, confidence, cluster_id, status, created_at, updated_at,
-        promised_date, date_source, date_path, provider_quote, signals, band, due_at)
+        promised_date, date_source, date_path, provider_quote, signals, band, due_at, overdue_checks)
      VALUES (@tenant, @target, @key, @firstSeen, @observed, @date, @source, @confidence, NULL, 'active', @now, @now,
-             @date, @dateSource, @datePath, @quote, @signals, @band, @dueAt)
+             @date, @dateSource, @datePath, @quote, @signals, @band, @dueAt, @overdueChecks)
      ON CONFLICT(scan_target_id) DO UPDATE SET
        status          = 'active',
        first_seen_at   = MIN(coming_soon_watchlist.first_seen_at, @firstSeen),
@@ -149,13 +177,15 @@ export function recordFutureService(
        provider_quote       = COALESCE(@quote, coming_soon_watchlist.provider_quote),
        signals              = @signals,
        band                 = @band,
-       due_at               = @dueAt`,
+       due_at               = @dueAt,
+       overdue_checks       = @overdueChecks`,
   ).run({
     tenant: tenantId, target: target.id,
     key: `${String(target.address).trim().toLowerCase()}|${String(target.city).trim().toLowerCase()}|${String(target.state).trim().toUpperCase()}`,
     now: nowMs, firstSeen: firstSeenMs, observed: observedMs,
     date: read.promisedDate, dateSource: read.dateSource, datePath: read.datePath,
     quote: read.quote, signals: JSON.stringify(read.signals), band: sched.band, dueAt: sched.dueAtMs,
+    overdueChecks: overdueChecks,
     source: target.source ?? "provider-answer",
     confidence: read.promisedDate ? "dated" : read.signals.includes("build_pending") ? "high" : "medium",
   });
@@ -207,17 +237,22 @@ export function expireStaleWatches(tenantId: number, nowMs = Date.now()): number
   ensureComingLedgerSchema();
   if (!ready) return 0;
   const cut = nowMs - LEDGER_CFG.expireDays() * 24 * HOUR_MS;
-  const today = new Date(nowMs).toISOString().slice(0, 10);
-  // A promise is cold only once its own date has PASSED and nobody honoured it.
-  // Measuring staleness by updated_at alone killed 266 of 443 dated doors before
-  // their due date: a FEB-2027 build is parked until Jan 2027 and never touched,
-  // so a 90-day untouched rule would expire it in November.
+  const cutDay = new Date(cut).toISOString().slice(0, 10);
+  // Staleness is measured against the PROMISE, never against updated_at: the
+  // ledger re-stamps updated_at on every collection, so an actively re-checked
+  // row could never reach the cut and nothing dated ever expired. Equally, a
+  // FEB-2027 build is deliberately left untouched until Jan 2027, so an
+  // "untouched for 90 days" rule would have killed it in November.
+  //
+  //   dated   -> cold once its own date is more than expireDays in the past
+  //              (the overdue write-off above usually gets there first)
+  //   undated -> cold once we FIRST SAW it that long ago and it never landed
   return rawDb.prepare(
     `UPDATE coming_soon_watchlist SET status='expired', updated_at=?, due_at=NULL
-      WHERE tenant_id=? AND status='active' AND updated_at < ?
-        AND (promised_date IS NULL OR promised_date < ?)
-        AND (due_at IS NULL OR due_at <= ?)`,
-  ).run(nowMs, tenantId, cut, today, nowMs).changes;
+      WHERE tenant_id=? AND status='active'
+        AND CASE WHEN promised_date IS NOT NULL THEN promised_date < ?
+                 ELSE first_seen_at < ? END`,
+  ).run(nowMs, tenantId, cutDay, cut).changes;
 }
 
 export interface DueComingRow {
@@ -243,6 +278,8 @@ export function dueComingTargets(tenantId: number, state: string, limit: number,
        FROM coming_soon_watchlist w JOIN scan_targets s ON s.id = w.scan_target_id
       WHERE w.tenant_id=? AND w.status='active' AND s.state=?
         AND (w.due_at IS NULL OR w.due_at <= ?)
+        -- a door Kinetic's fabric keeps rejecting leaves the lane like any other
+        AND NOT ${anfParkedSql("s", 14)}
         AND NOT EXISTS (SELECT 1 FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id
                          WHERE t.target_id=s.id AND t.state IN ('queued','inflight') AND r.status='running')
       ORDER BY CASE WHEN w.promised_date IS NOT NULL AND w.promised_date <= ? THEN 0
@@ -257,10 +294,29 @@ export function dueComingTargets(tenantId: number, state: string, limit: number,
 export function markComingChecked(tenantId: number, targetIds: number[], nowMs = Date.now()): void {
   ensureComingLedgerSchema();
   if (!ready || !targetIds.length) return;
+  // Re-due each row on ITS OWN band. A flat hot-cadence bump pulled every
+  // collected promise - including a 2027 build and a 30-day undated re-read -
+  // back into the lane a few hours later.
+  const read = rawDb.prepare(
+    `SELECT promised_date AS promisedDate, first_seen_at AS firstSeenAt FROM coming_soon_watchlist
+      WHERE tenant_id=? AND scan_target_id=?`);
   const stmt = rawDb.prepare(
-    `UPDATE coming_soon_watchlist SET last_checked_at=?, due_at=? WHERE tenant_id=? AND scan_target_id=?`);
-  const nextDue = nowMs + LEDGER_CFG.hotHours() * HOUR_MS;
-  const tx = rawDb.transaction((ids: number[]) => { for (const id of ids) stmt.run(nowMs, nextDue, tenantId, id); });
+    `UPDATE coming_soon_watchlist SET last_checked_at=?, due_at=?, band=? WHERE tenant_id=? AND scan_target_id=?`);
+  const cfg = {
+    hotHours: LEDGER_CFG.hotHours(), soonHours: LEDGER_CFG.soonHours(), watchHours: LEDGER_CFG.watchHours(),
+    hotWindowDays: LEDGER_CFG.hotWindowDays(), flipFromDays: LEDGER_CFG.flipFromDays(),
+    flipToDays: LEDGER_CFG.flipToDays(), undatedDays: LEDGER_CFG.undatedDays(),
+  };
+  const tx = rawDb.transaction((ids: number[]) => {
+    for (const id of ids) {
+      const row = read.get(tenantId, id) as { promisedDate: string | null; firstSeenAt: number | null } | undefined;
+      const sched = nextRecheckAt({
+        ...cfg, promisedDate: row?.promisedDate ?? null,
+        firstSeenMs: row?.firstSeenAt ?? nowMs, lastCheckedMs: nowMs,
+      }, nowMs);
+      stmt.run(nowMs, sched.dueAtMs, sched.band, tenantId, id);
+    }
+  });
   tx.immediate(targetIds);
 }
 
@@ -284,14 +340,21 @@ export function backfillFromStoredEvidence(tenantId: number, limit = 5000, nowMs
   try {
     // A cheap LIKE prefilter first: json_extract over every stored body is far
     // too slow (22,242 rows), while the text scan narrows to ~4,900 in 70 ms.
-    candidates = rawDb.prepare(
+    // LIMIT is pushed into SQL and the rows are streamed: `.all()` materialised
+    // every matching body (14,145 rows, tens of MB of JSON) into one array
+    // before the caller's limit could bound anything.
+    candidates = [];
+    for (const row of (rawDb.prepare(
       `SELECT address, result, checked_at AS checkedAt
          FROM fiber_checks
         WHERE tenant_id=? AND result IS NOT NULL
           AND (result LIKE '%futureQual%' OR result LIKE '%futureServiceDate%'
             OR result LIKE '%estimatedCompletionDt%' OR result LIKE '%fiberBuildOutStatus%')
-        ORDER BY checked_at ASC`,
-    ).all(tenantId) as any[];
+        ORDER BY checked_at ASC
+        LIMIT ?`,
+    ) as any).iterate(tenantId, Math.max(1, limit) * 20)) {
+      candidates.push(row as any);
+    }
   } catch (e: any) {
     structuredLog("coming_ledger.backfill_failed", { tenantId, error: String(e?.message ?? e).slice(0, 160) }, "warn");
     return { scanned: 0, recorded: 0, dated: 0 };

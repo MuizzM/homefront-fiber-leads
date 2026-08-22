@@ -227,7 +227,13 @@ export function readFutureService(p: FutureServiceInput, raw?: unknown): FutureS
   }
 
   const found = raw === undefined ? null : findProviderDate(raw);
-  if (found) signals.push("provider_date");
+  if (found) {
+    signals.push("provider_date");
+    // A stated month IS the provider's own words when nothing else spoke: a
+    // dated promise used to be filed with no evidence text at all, so the board
+    // could show a turn-on date it could not attribute to anything.
+    quote ??= found.raw ?? found.date;
+  }
 
   // A stated turn-on date is itself a promise, even if the text vocabulary is
   // one we do not recognise. An already-active door is never "future": the

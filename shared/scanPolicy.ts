@@ -129,3 +129,23 @@ export function answeredSql(alias: string): string {
 export function onceOnlyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return String(env.SCAN_ONCE_ONLY ?? "on").trim().toLowerCase() !== "off";
 }
+
+/**
+ * Kinds that ALWAYS re-verify an address: a rep's own action, a change-detection
+ * recheck, and the coming-soon watch lane. They are exempt from both the dedup
+ * window and the once-only law.
+ *
+ * This is the single source of truth. `dedupSkipSecondsForRun` (server/scanEngine)
+ * derives its zero from here, and the claim guard asks this directly rather than
+ * inferring exemption from "the dedup window happens to be zero" - which coupled
+ * the operator's scanning law to an unrelated tuning knob
+ * (SCAN_DEDUP_RECHECK_HOURS=0 silently disabled once-only).
+ */
+export function isRecheckExemptKind(kind: string | null | undefined): boolean {
+  const v = String(kind ?? "").toLowerCase();
+  return v.includes("manual") || v === "target_ids" || v.includes("lasso")
+    || v.includes("bbox") || v.includes("area") || v.includes("field")
+    || v.includes("recheck") || v.includes("rescan") || v.includes("nightly")
+    || v.includes("scheduled") || v.includes("monitor") || v.includes("watch")
+    || v.includes("frontier");
+}
