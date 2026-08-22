@@ -1038,7 +1038,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         // glass-sheet: the liquid-glass bottom-sheet surface (18px blur budget,
         // ink fill, specular top hairline, token shadow) — see index.css. Solid
         // enough to stay readable over the satellite basemap.
-        "glass-sheet fixed z-40 flex flex-col will-change-transform",
+        // glass-ink-scope: the card is dark in BOTH app themes, so every semantic
+        // token it reads (success chips, primary buttons, the history diagram)
+        // must resolve to the dark palette even under the light default.
+        "glass-sheet glass-ink-scope fixed z-40 flex flex-col will-change-transform",
         docked
           ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
           // Layout's persistent sidebar begins at Tailwind's md breakpoint,

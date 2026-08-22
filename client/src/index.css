@@ -710,6 +710,7 @@
      floated over the map (territory panel) re-assert the dark palette here so
      their 20+ semantic-token usages read correctly even under `.light`. */
   .glass-ink-scope {
+    --background: 216 22% 6%;
     --card: 210 50% 13%;
     --card-foreground: 210 20% 94%;
     --foreground: 210 20% 94%;
@@ -719,6 +720,22 @@
     --muted-foreground: 210 15% 55%;
     --border: 210 35% 22%;
     --input: 210 35% 22%;
+    /* The SIGNAL tokens too, at the dark theme's display brightness. Under the
+       light default these resolved to the light palette on an ink sheet: the
+       door card's "At door" chip was the light success (3:1 on the sheet) and
+       its primary buttons the logo navy (1.9:1 against the ink). A surface
+       that is dark in both themes has to carry the dark signal set, not only
+       the dark neutrals. Values mirror :root.dark exactly. */
+    --primary: 209 78% 62%;
+    --primary-foreground: 212 60% 10%;
+    --destructive: 0 80% 68%;
+    --destructive-foreground: 0 60% 10%;
+    --ring: 172 44% 52%;
+    --success: 160 84% 42%;
+    --warning: 38 92% 55%;
+    --info: 202 80% 62%;
+    --accent-gold-text: 38 92% 68%;
+    --accent-gold-soft: 38 60% 14%;
   }
   /* Legibility floor when blur is unavailable or the user opts out */
   @supports not (backdrop-filter: blur(1px)) {

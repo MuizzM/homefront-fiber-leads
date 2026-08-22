@@ -70,7 +70,7 @@ const ALL_KEYS = FIELD_OUTCOMES.map(o => o.key);
 
 // Unified timeline: status changes, assignments ("assigned by"), note events.
 const HISTORY = [
-  { id: "k12", type: "status_change", actor: "Muizz Muhammad", changedAt: "2026-07-08T19:12:00.000Z", status: "sold" },
+  { id: "k12", type: "status_change", actor: "Muizz Muhammad", changedAt: "2026-07-08T19:12:00.000Z", status: "sold", verification: "verified", distanceM: 12, gpsAccuracyM: 8 },
   { id: "e5", type: "note", actor: "Zargham Muhammad", changedAt: "2026-07-08T19:15:00.000Z", notePreview: "Gate code 4412, come back after 6pm" },
   { id: "e4", type: "assignment", actor: "Muizz Muhammad", changedAt: "2026-07-08T13:02:00.000Z", assignedTo: "Zargham Muhammad", assignedBy: "Muizz Muhammad" },
   { id: "k10", type: "status_change", actor: null, changedAt: "2026-07-06T14:00:00.000Z", status: "not_home" },
@@ -631,6 +631,25 @@ describe("<LeadKnockSheet /> - notes and history (unchanged model)", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+describe("<LeadKnockSheet /> - where they stood", () => {
+  it("a verified history row opens its distance diagram on demand, one row at a time", async () => {
+    renderSheet();
+    const rows = await screen.findAllByTestId(/knock-history-item-/);
+    expect(rows.length).toBeGreaterThan(0);
+    const where = screen.getAllByTestId(/history-where-/);
+    // Only rows that carry a measured distance offer it.
+    expect(where.length).toBeGreaterThan(0);
+    expect(where.length).toBeLessThanOrEqual(rows.length);
+    expect(screen.queryByTestId("distance-diagram")).not.toBeInTheDocument();
+    await userEvent.click(where[0]);
+    expect(where[0]).toHaveAttribute("aria-expanded", "true");
+    expect(where[0]).toHaveTextContent("Hide");
+    expect(screen.getAllByTestId("distance-diagram")).toHaveLength(1);
+    await userEvent.click(where[0]);
+    expect(screen.queryByTestId("distance-diagram")).not.toBeInTheDocument();
   });
 });
 
