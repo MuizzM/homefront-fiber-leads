@@ -236,31 +236,75 @@ Dec 2026 (39), Jan 2027 (10), Feb 2027 (131), Mar 2027 (125).
 - **Planner statistics were frozen.** `ANALYZE` ran once behind the
   `analyze_done` latch, so `sqlite_stat1` held stats for ONE scan_targets index
   with the value `0 0 0 0`. The planner walked 919k rows for a 24-hour count the
-  range index answers in 9 ms. `PRAGMA optimize` could not help: it only
-  reconsiders tables the current connection has queried.
-  `reanalyseStaleTable` re-analyses one big table per tick, once a day each, on
-  the primary. A sampled ANALYZE was tried and rejected - it still picked the
-  wrong index.
+  range index answers in 9 ms. Plain `PRAGMA optimize` could not rescue it: it
+  only reconsiders tables THE CURRENT CONNECTION has queried, and the
+  maintenance connection never touches scan_targets.
+
+  The first fix attempted here was a full-ANALYZE rotation (one big table per
+  tick) plus unary `+` hints to steer the planner off the wrong index. The
+  `sqlite-engineering` standard the operator supplied mid-build says not to do
+  either: no unbounded routine `ANALYZE`, and no `INDEXED BY`-style forcing
+  before the statistics are fixed. It is right, and the documented lifecycle is
+  better than what it replaced: `optimizePlannerStats()` runs
+  **`PRAGMA optimize=0x10002`** (which lifts exactly the connection-scope
+  restriction that defeated plain optimize) on the first maintenance tick and
+  once a day, then plain `PRAGMA optimize` on every tick. The app's SQLite is
+  3.49.2, so optimize already bounds its own analysis work. Every query hint
+  was then REMOVED and the numbers below re-measured without them - they got
+  better, not worse. A sampled ANALYZE (`analysis_limit=400`) was tried and
+  rejected: it still picked the wrong index.
 
 Measured, cold, on the production-shaped copy:
 
 | step | before | after |
 | --- | ---: | ---: |
 | reconcileNowActiveWatches (every cycle) | 2,476 ms | 4 ms |
-| sweepSummary (every manager poll, 20 s) | 1,221 ms | 117 ms |
+| sweepSummary (every manager poll, 20 s) | 2,951 ms | 12 ms |
+| buildFrontier (every cycle) | 2,697 ms | 494 ms |
 | pending-rows counter | 937 ms | 82 ms |
 | 24-hour scan counter | 2,966 ms | 9 ms |
 
 Skills installed at the operator's request: `oracle-*` (five domains from
 github.com/oracle/skills - Oracle-specific, so its tuning advice does not
-transfer to SQLite) and `sqlite` (from
-github.com/martinholovsky/claude-skills-generator). The wins above came from
-that skill's method - EXPLAIN QUERY PLAN plus measurement - not from its Rust
-examples.
+transfer to SQLite), `sqlite` (github.com/martinholovsky/claude-skills-generator,
+Rust/Tauri examples) and `sqlite-engineering` with its
+`references/performance-security.md` standard. The last is the one that paid:
+it corrected both the ANALYZE approach and the index-hint instinct above, and
+its "never interpolate into SQL" rule is why the seed-city names are now bound
+parameters. Read it before any SQLite work in this repo.
+
+## Review round 2 and what it changed
+
+A second adversarial review (35 agents) confirmed 13 defects in rounds 2-3. The
+ones that were load-bearing:
+
+- Exemption from the once-only law was inferred from "the dedup window is
+  zero", so `SCAN_DEDUP_RECHECK_HOURS=0` - a tuning knob - switched the law off
+  for every producer at once. One predicate, `isRecheckExemptKind`, now decides
+  it, asked directly by the claim guard.
+- A promise the provider kept restating past its date was re-bought forever:
+  the one lane allowed to spend on an answered door had no stopping condition.
+  `overdue_checks` writes it off after a grace count.
+- Expiry keyed on `updated_at`, which the ledger re-stamps on every collection.
+  An actively-checked promise could never expire and a FEB-2027 build expired
+  in November. It keys on the promise now.
+- `NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES=on` dispatched runs under a kind the law
+  blocks, so the escape hatch claimed nothing; those runs are
+  `fresh_sweep_flood_recheck` now.
+- `ORDER BY 0` (the no-seed-cities case) is a column ORDINAL in SQLite: clearing
+  `NEIGHBORHOOD_SWEEP_SEED_CITIES` threw and took the street tier with it. Found
+  by the test written for the binding change, not by the review.
+- `backfillFromStoredEvidence` materialised every matching body before the
+  caller's limit could bound anything; it streams now.
+
+Tests were added for the exemption hinge itself, the account pin end to end,
+the backfill (echoed address line, original check date, newest body wins,
+bounded, idempotent), expiry against the promise, and seed ordering.
 
 ## Result
 
-Built, reviewed, verified; not merged, not deployed. The compose switch is
+Built, reviewed twice, verified. 7,224 tests pass; typecheck and production
+build clean. The compose switch is
 "on" and `SCAN_GLOBAL_CONCURRENCY` is 6 (rung 1 of the ramp) in the same
 change, so the next deploy of the default branch starts paid Decodo/Kinetic
 scanning for NC under the bounds in this plan. Remaining risks: the Kinetic
