@@ -1658,6 +1658,27 @@ app.use((req, res, next) => {
 
   }
 
+  // NEIGHBORHOOD SWEEP — whole-neighborhood Kinetic discovery for one state
+  // (NC by default): re-confirm known NEW FIBER doors that never became leads,
+  // flood every cell that has produced a hit (all of its doors, street by
+  // street, plus its due negatives), probe cold cells one address per street,
+  // park proven sinks. Sized to the measured drain each cycle, deterministic
+  // run ids, control worker only. OFF unless NEIGHBORHOOD_SWEEP=on (the compose
+  // switch is the single source of truth for prod). See docs/SCAN_OPERATIONS.md.
+  if (process.env.NEIGHBORHOOD_SWEEP === "on") {
+    deferBoot(() => {
+      void (async () => {
+        try {
+          const { getDefaultTenantId } = await import("./storage");
+          const { startNeighborhoodSweep } = await import("./neighborhoodSweep");
+          const tid = getDefaultTenantId();
+          if (tid == null) return;
+          startNeighborhoodSweep(tid);
+        } catch (e: any) { console.warn("[neighborhood-sweep] start skipped:", e?.message); }
+      })();
+    }, "neighborhood-sweep");
+  }
+
   // ── NIGHTLY DB PRUNE ────────────────────────────────────────────────────────
   // UNGATED, and that is the point. This sat inside the
   // `FRESH_HARVEST !== "off"` block above, so turning the scanner off — the

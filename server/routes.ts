@@ -178,6 +178,7 @@ import { registerCommissionFileRoutes } from "./commissionFileRoutes";
 import { registerGuardedActionRoutes } from "./guardedActionRoutes";
 import { guardedActionsEnabled } from "./guardedActionEngine";
 import { registerAddressPointRoutes } from "./addressPointRoutes";
+import { registerNeighborhoodSweepRoutes } from "./neighborhoodSweepRoutes";
 import { nearestAddressPoints } from "./addressPointStore";
 import { registerLeadImportRoutes } from "./leadImportRoutes";
 
@@ -1445,6 +1446,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   // Spreadsheet import: same capability, scope and tenant rules as the lasso.
   registerLeadImportRoutes(app, { requireCapability, repInVisibilityScope, repInCallerTenant, bustMapCache });
+  // Neighborhood sweep: the ranked "whole neighborhoods nobody has knocked"
+  // read model and the cycle nudge (manager reads, admin nudge).
+  registerNeighborhoodSweepRoutes(app, { requireManager, requireAdmin });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
