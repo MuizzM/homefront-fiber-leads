@@ -432,7 +432,12 @@ services:
       # One 403 does not mean the IP is burnt (the 86% run took its first at
       # check 15, then ran 30 clean). Rotating on the first denial is what
       # turned 205 denials into 205 IP rotations.
-      DECODO_ROTATE_AFTER_DENIALS: "3"
+      # Set HIGH deliberately. Changing egress IP mid-run is the thing that
+      # correlates with collapse: the one clean local run that never changed IP
+      # held 86% over 80 checks, while runs that rotated freely fell to 13%.
+      # A denial is a reason to slow down, not to move house. Time-based
+      # refresh (DECODO_STICKY_MINUTES) still cycles IPs in an orderly way.
+      DECODO_ROTATE_AFTER_DENIALS: "8"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
       KFS_TOKEN_MAX_CHECKS: "1000"
