@@ -88,6 +88,18 @@ and asked for "the cleanest UI, works on every screen, all buttons work", then
       Leads quick-log on the same grid; `OutcomeButton` cell deleted.
 - [x] 2026-08-22 M4: live pass green on four viewport/input combinations
       (below); full verification run recorded under Validation.
+- [x] 2026-08-22 M5 (owner: "make it the best fluid smooth UI"): four-lens
+      motion analysis judged into a ten-item plan, implemented (cd31d89):
+      base-layer cascade fix, disc/pill press physics, velocity-matched
+      snaps, live-transform grabs, accelerating exits, the sequenced mark
+      moment. Motion contracts tested in RTL + a CSS unit test.
+- [x] 2026-08-22 M6: adversarial review of the branch diff (5 lenses, 30
+      findings, 2 skeptics each); confirmed findings fixed (19b319e):
+      phantom mouse drag after an off-region release, touch-drag click
+      swallow, inert peek bar + focus parking, honest copy feedback + live
+      region, DNK exclusion, fresh fix while the card is open, timer cleanup.
+- [x] 2026-08-22 merged origin/rep-knocking-workflow (PRs #168, #169) into
+      the branch; the base had fixed the buyer-score race test identically.
 
 ## Decisions
 
@@ -113,6 +125,19 @@ and asked for "the cleanest UI, works on every screen, all buttons work", then
 - `navigator.clipboard` is undefined on plain http (the LAN dev box), which
   is why "copy does nothing" also reproduces without the pointer bug; the
   execCommand fallback covers it.
+- Tailwind v3 flattens `@layer`, so `button:not(:disabled):active {
+  transform: translateY(0.5px) }` in the base layer (0,2,1) beat every
+  `active:scale-*` utility (0,2,0): no button in the app ever rendered its
+  press scale. `translate:` composes; `transform:` shadows.
+- Deferring pointer capture to the first real move re-opened a mouse hole:
+  a press released OFF the region never reaches endDrag, and a later hover
+  move (buttons 0) would start a drag. Guard on `e.buttons === 0`,
+  pointerleave and lostpointercapture; primary button only.
+- A touch drag produces no click, so a "swallow the drag's click" flag must
+  be disarmed on a timer, or the next tap on any region button is eaten.
+- The repo's `pin-glyphs-and-contrast` test enforces "onDark only when the
+  pin colour is under 4.5:1 on the card": INT (4.54) and NI (5.1) may not
+  carry overrides even though a bright tile under the 0.86 sheet lowers them.
 - Playwright's `locator.click()` fails actionability on the sheet
   ("intercepts pointer events" flaps between the dialog and its button);
   drive the card with `page.mouse.click` / `page.touchscreen.tap` at the
@@ -145,6 +170,15 @@ and asked for "the cleanest UI, works on every screen, all buttons work", then
 - Full, pre-rebase tree (claude/field-map-parity + the two commits):
   `DATA_DIR=$(mktemp -d) bash scripts/agent-verify.sh full` -> harness valid,
   typecheck clean, 554 files / 7,024 tests passed, build green, exit 0.
+- Full, merged tip eb28946 (base 7d045cb = #169): harness valid, typecheck
+  clean, build green, **562 files / 7,101 tests passed**, no unhandled errors.
+- Live on the merged build (port 5082 from this worktree): the four-way
+  control pass again all green (tablet re-run after one mid-transition tap
+  miss by the script), plus motion probes: disc press `matrix(0.9,...)` under
+  a held mouse, snaps writing 280ms (mark collapse) / 196ms (handle tap),
+  `160ms cubic-bezier(0.4,0,1,1)` on a programmatic close, `status-pop` on
+  the peek chip, `post-mark-in 0.28s` on the next-step row, and every
+  duration collapsing to 1e-05s under `prefers-reduced-motion`.
 - Full, this branch (rebased onto d8c0cae, the merge of #166): 557 files,
   7,055 / 7,056 passed. The one failure,
   `tests/integration/buyer-score.test.ts > refuses to race itself on the
