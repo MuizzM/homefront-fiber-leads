@@ -50,7 +50,7 @@ import {
   Search,
   Home,
 } from "lucide-react";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { lazy, Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { BottomTabs } from "@/components/BottomTabs";
@@ -59,7 +59,12 @@ import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
 import { navIntentHandlers } from "@/lib/routePrefetch";
 import { TrainingLock, useTrainingGate } from "@/components/TrainingLock";
-import { CommandPalette, PaletteTrigger, usePaletteShortcut, type PaletteAction } from "@/components/CommandPalette";
+import { PaletteTrigger, usePaletteShortcut, loadCommandPalette, type PaletteAction } from "@/components/paletteShell";
+import { canPrefetchRouteChunks } from "@/lib/routePrefetch";
+
+// The palette carries cmdk and the Radix dialog - loaded the first time it is
+// opened (or warmed on idle below), never on the entry path.
+const CommandPalette = lazy(loadCommandPalette);
 import { leadsAddIntent } from "@/lib/leadsFilterHandoff";
 import { useTheme } from "@/hooks/use-theme";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -267,8 +272,27 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
   // Cmd-K palette: every page this role can open, plus the common actions.
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const togglePalette = useCallback(() => setPaletteOpen(open => !open), []);
+  // Mounted on first open and kept mounted after, so the close animation and
+  // the typed query behave like a native control from the second use on.
+  const [paletteMounted, setPaletteMounted] = useState(false);
+  const togglePalette = useCallback(() => { setPaletteMounted(true); setPaletteOpen(open => !open); }, []);
   usePaletteShortcut(togglePalette);
+  // Warm the palette chunk once the browser is idle, on the same connection
+  // gate the tab chunks use, so the first Cmd-K never waits on the network.
+  useEffect(() => {
+    if (!canPrefetchRouteChunks()) return;
+    const idle = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const warm = () => { void loadCommandPalette(); };
+    if (idle.requestIdleCallback) {
+      const id = idle.requestIdleCallback(warm, { timeout: 5000 });
+      return () => idle.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(warm, 3000);
+    return () => window.clearTimeout(timer);
+  }, []);
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const role = (user?.role ?? "rep") as AppRole;
@@ -455,7 +479,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       paletteActions.push({ id: "clock", label: "Clock in or out", keywords: ["shift", "hours"], icon: Clock, run: () => { window.location.hash = "#/clock"; } });
     }
   }
-  const openPalette = () => { setMoreOpen(false); setMobileOpen(false); setPaletteOpen(true); };
+  const openPalette = () => { setMoreOpen(false); setMobileOpen(false); setPaletteMounted(true); setPaletteOpen(true); };
 
   // Desktop breadcrumb: the group the sidebar would light, then the page.
   const activeNav = visibleNav.find(item => navItemIsActive(item.href, location));
@@ -787,7 +811,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} pages={visibleNav} actions={paletteActions} />
+      {paletteMounted && (
+        <Suspense fallback={null}>
+          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} pages={visibleNav} actions={paletteActions} />
+        </Suspense>
+      )}
     </div>
   );
 }
