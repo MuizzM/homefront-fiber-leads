@@ -1117,8 +1117,14 @@ describe("<LeadKnockSheet /> - quick appointment slots", () => {
     expect(chips.length).toBeGreaterThanOrEqual(3);
     expect(chips.length).toBeLessThanOrEqual(4);
     expect(props.onKnock).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByTestId("appt-slot-1")); // tomorrow 10 AM, always offered
-    expect(screen.getByTestId("appt-slot-1")).toHaveAttribute("aria-pressed", "true");
+    // Pick the chip BY LABEL, never by index. "Tomorrow 10 AM" is always
+    // offered but it is only slot-1 while the Today chip is still there, and
+    // Today drops out after close - so an index made this assertion pass in the
+    // afternoon and fail in CI at 19:21 UTC.
+    const tomorrowChip = chips.find((c) => /^Tomorrow /i.test(c.textContent ?? ""))!;
+    expect(tomorrowChip, "a Tomorrow chip is always offered").toBeTruthy();
+    await userEvent.click(tomorrowChip);
+    expect(tomorrowChip).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("appt-time")).toHaveValue("10:00");
     expect(screen.getByTestId("appt-date")).not.toHaveValue("");
     expect(screen.getByTestId("appt-save")).toHaveTextContent("Set for tomorrow 10 AM");
@@ -1137,9 +1143,12 @@ describe("<LeadKnockSheet /> - quick appointment slots", () => {
   it("editing the time by hand un-presses the chip, so a chip only ever claims an exact match", async () => {
     renderSheet();
     await userEvent.click(screen.getByTestId("appt-open"));
-    await userEvent.click(screen.getByTestId("appt-slot-1"));
+    const chip = Array.from(screen.getByTestId("appt-slots").querySelectorAll("button"))
+      .find((c) => /^Tomorrow /i.test(c.textContent ?? ""))!;
+    await userEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
     fireEvent.change(screen.getByTestId("appt-time"), { target: { value: "11:15" } });
-    expect(screen.getByTestId("appt-slot-1")).toHaveAttribute("aria-pressed", "false");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
   });
 });
 

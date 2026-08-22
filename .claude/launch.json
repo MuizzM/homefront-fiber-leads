@@ -130,6 +130,56 @@
       ],
       "port": 5081,
       "autoPort": false
+    },
+    {
+      "name": "design-canvas",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/muizzmuhammad/.claude/projects/-Applications-homefront-fiber-full/design-canvas/console && python3 -m http.server 5090"
+      ],
+      "port": 5090,
+      "autoPort": false
+    },
+    {
+      "name": "console-ui",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Applications/homefront-fiber-full/.claude/worktrees/console-ui && PORT=5083 SLOW_SQL_MS=2 BACKGROUND_RESUME_DELAY_MS=86400000 KFS_MINT_IMPERSONATE=off KFS_MINT_DIRECT=off SMTP_HOST=127.0.0.1 SMTP_PORT=1 PROXY_URL=http://noop:noop@127.0.0.1:1 DECODO_HOST=127.0.0.1 DECODO_PORT=1 DECODO_USER=noop DECODO_PASS=noop KFS_TOKEN_MAINTENANCE_MS=3600000 DATA_DIR=/Applications/homefront-fiber-full/.dev-verify FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5083,
+      "autoPort": false
+    },
+    {
+      "name": "homefront-doorcard-wt",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Applications/homefront-door-card-v2 && PORT=5082 BACKGROUND_RESUME_DELAY_MS=86400000 KFS_MINT_IMPERSONATE=off KFS_MINT_DIRECT=off SMTP_HOST=127.0.0.1 SMTP_PORT=1 PROXY_URL=http://noop:noop@127.0.0.1:1 DECODO_HOST=127.0.0.1 DECODO_PORT=1 DECODO_USER=noop DECODO_PASS=noop KFS_TOKEN_MAINTENANCE_MS=3600000 DATA_DIR=.dev-verify FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5082,
+      "autoPort": false
+    },
+    {
+      "name": "console-ui-proddb",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Applications/homefront-fiber-full/.claude/worktrees/console-ui && PORT=5084 SLOW_SQL_MS=100 BACKGROUND_RESUME_DELAY_MS=86400000 KFS_MINT_IMPERSONATE=off KFS_MINT_DIRECT=off SMTP_HOST=127.0.0.1 SMTP_PORT=1 PROXY_URL=http://noop:noop@127.0.0.1:1 DECODO_HOST=127.0.0.1 DECODO_PORT=1 DECODO_USER=noop DECODO_PASS=noop KFS_TOKEN_MAINTENANCE_MS=3600000 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/49888987-d72b-41c0-aa9a-8f9f5ad1ace8/scratchpad/proddb FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5084,
+      "autoPort": false
+    },
+    {
+      "name": "homefront-nsweep",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5091 BACKGROUND_RESUME_DELAY_MS=86400000 KFS_MINT_IMPERSONATE=off KFS_MINT_DIRECT=off SMTP_HOST=127.0.0.1 SMTP_PORT=1 PROXY_URL=http://noop:noop@127.0.0.1:1 DECODO_HOST=127.0.0.1 DECODO_PORT=1 DECODO_USER=noop DECODO_PASS=noop KFS_TOKEN_MAINTENANCE_MS=3600000 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/16b00132-c36a-40e0-9c7f-2f4b1ded9fc5/scratchpad/dates FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5091,
+      "autoPort": false
     }
   ]
 }

@@ -26,6 +26,7 @@ import crypto from "node:crypto";
 import os from "node:os";
 import { storage } from "./storage";
 import { rawDb } from "./db";
+import { isRecheckExemptKind } from "@shared/scanPolicy";
 import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
 import {
@@ -58,6 +59,8 @@ import { watchComingSoon } from "./comingSoonProgram";
 import { structuredLog } from "./structuredLog";
 import { calculateFiberFreshness } from "@shared/fiberFreshness";
 import { isActiveBilling } from "@shared/billingStatus";
+import { recordFutureService } from "./comingLedger";
+import { recordAccount } from "./customerAccount";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
 import { ensureKineticScannerSchema, upsertKineticAddress } from "./kineticScannerStore";
 import { hashKineticEvidence } from "./kineticProviderAdapter";
@@ -200,18 +203,9 @@ function logBreakerWait(runId: string): void {
   }, "warn");
 }
 function dedupSkipSecondsForRun(kind: string): number {
-  const v = String(kind ?? "").toLowerCase();
-  if (v.includes("manual") || v === "target_ids" || v.includes("lasso") || v.includes("bbox") || v.includes("area") || v.includes("field")) return 0;
-  // Change-detection runs must ALWAYS re-verify (never skip a recently-checked address):
-  // rechecks, rescans, nightly, and the state/coming-soon MONITOR/WATCH watchers
-  // (the Coming-Soon watchlist's 'coming_soon_watch' cadence — down to 6h — would
-  // otherwise be silently swallowed by the 18h bulk dedup window).
-  if (v.includes("recheck") || v.includes("rescan") || v.includes("nightly") || v.includes("scheduled") || v.includes("monitor") || v.includes("watch")) return 0;
-  // Frontier runs check a DIFFERENT provider than the Kinetic sweeps — a recent
-  // Kinetic verdict says nothing about Frontier serviceability. Without this,
-  // Kinetic's constant last_scanned_at refreshes starved every frontier_hot run
-  // into claiming 0 targets and finishing "done" with 0 checks (observed live).
-  if (v.includes("frontier")) return 0;
+  // One predicate decides exemption (see @shared/scanPolicy isRecheckExemptKind);
+  // this function only chooses the window for everything else.
+  if (isRecheckExemptKind(kind)) return 0;
   return DEDUP_RECHECK_SEC;
 }
 
@@ -351,7 +345,7 @@ export async function runScanWorker(
       // grab the same targets and double-spend the proxy. Requeued (transient-error)
       // targets are 'queued' again, so the queue only drains once every address has
       // a conclusive or unresolved answer.
-      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind));
+      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind), run.kind);
       // Yield a full event-loop turn every claim cycle: a batch of instantly-failing
       // addresses (fail-closed transport) would otherwise chain microtasks forever
       // and starve timers/cancels. One setImmediate per batch costs ~nothing.
@@ -710,6 +704,41 @@ function applyCheck(
     customerSignals: customer.signals,
   });
   recordProviderOutcome(tenantId, true);
+
+  // ── THE COMING LEDGER ───────────────────────────────────────────────────────
+  // Read this answer for a future-service promise and record it with the date
+  // the provider stated. This is the seam where the raw body is still in hand,
+  // which matters: the promise lives in fields the parser never modelled
+  // (Frontier ships `futureServiceDate` / `fiberBuildOutStatus` /
+  // `isFutureFiberEligible`; measured on 3,454 stored payloads, 164 dated doors
+  // we were discarding). Under the once-only law this ledger is the ONLY thing
+  // that may ever cause an answered address to be bought again.
+  try {
+    recordFutureService(
+      tenantId,
+      { id: t.targetId, address: result.address || t.address, city: result.city || t.city,
+        state: result.state || t.state, zip: result.zip ?? t.zip, source: (t as any).source ?? null },
+      {
+        householdSegmentType: result.householdSegmentType,
+        marketSegmentType: (result as any).marketSegmentType ?? null,
+        serviceStatus: (result as any).serviceStatus ?? null,
+        billingStatus: result.billingStatus,
+        finalQual: (result as any).finalQual ?? null,
+        maxQual: (result as any).maxQual ?? null,
+      },
+      result.rawResponse,
+      { fiberAvailable: result.fiberAvailable },
+    );
+  } catch (e: any) {
+    structuredLog("coming_ledger.record_failed", { tenantId, runId, error: String(e?.message ?? e).slice(0, 120) }, "warn");
+  }
+
+  // THE ACCOUNT PIN. When the household is already on the provider's books the
+  // answer carries the account itself; record it so a rep can see the door is
+  // taken (and which tier) instead of knocking it cold. Never logged, and it
+  // only ever leaves the server masked.
+  try { recordAccount(tenantId, t.targetId, result.rawResponse); }
+  catch (e: any) { structuredLog("customer_account.failed", { tenantId, runId, error: String(e?.message ?? e).slice(0, 120) }, "warn"); }
 
   // Keep known NEW FIBER addresses in the existing Kinetic monitoring inventory.
   // Active-service rows are silent Coming Soon watches; the nightly recheck worker

@@ -5,7 +5,7 @@
 // are pure DB operations over data the product already accumulated.
 import { rawDb } from "./db";
 import type { MarketAggregate } from "@shared/marketIntel";
-import { INCONCLUSIVE_GIVEUP, anfParkedSql } from "@shared/scanPolicy";
+import { INCONCLUSIVE_GIVEUP, anfParkedSql, answeredSql, isRecheckExemptKind, onceOnlyEnabled } from "@shared/scanPolicy";
 
 // Quiet window for addresses concluded address_not_found (persistent needs-fix
 // non-answers with no adoptable suggestion): parked out of BULK claims this
@@ -369,6 +369,18 @@ const _skipRecentlyScanned = rawDb.prepare(
 // re-burning proxy checks; after it lapses they are claimable again (re-probe).
 // Uses the SHARED escalating-window predicate (@shared/scanPolicy) so the
 // claim layer and every selector agree on "parked" by construction.
+// ONCE-ONLY (see @shared/scanPolicy): the same skip, with no window. A target
+// that already carries a conclusive provider answer is never bought again by a
+// bulk producer. This sits in the claim transaction on purpose - it is the one
+// chokepoint EVERY producer's work funnels through, so no new selector, no
+// reconciler and no future feeder can bypass it by writing its own SQL. Kinds
+// that pass skipSec=0 (manual, lasso, field, recheck, the coming-soon lane) are
+// never subjected to it: a rep's tap and a dated promise must always re-verify.
+const _skipAlreadyAnswered = rawDb.prepare(
+  `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+     WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
+       AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
+                     AND ${answeredSql("st")})`);
 const _skipParkedNotFound = rawDb.prepare(
   `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
      WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
@@ -382,9 +394,18 @@ const _skipParkedNotFound = rawDb.prepare(
 // actually flipped queued→inflight are returned, so a row that lost the race is
 // never scanned twice. Correct at N=1 (deploy-overlap already runs two writers
 // briefly) and the prerequisite for multi-process work-stealing.
-const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlyScannedSec: number) => {
-  if (skipRecentlyScannedSec > 0) {
-    _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
+const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlyScannedSec: number, kind?: string) => {
+  // Exemption is a property of the RUN KIND, asked directly. Deriving it from
+  // "skipSec > 0" meant SCAN_DEDUP_RECHECK_HOURS=0 - a tuning knob with nothing
+  // to do with the operator's scanning law - silently switched once-only off for
+  // every producer at once.
+  const exempt = kind !== undefined ? isRecheckExemptKind(kind) : skipRecentlyScannedSec <= 0;
+  if (!exempt) {
+    if (onceOnlyEnabled()) {
+      _skipAlreadyAnswered.run("superseded: address already answered (once-only)", runId);
+    } else if (skipRecentlyScannedSec > 0) {
+      _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
+    }
     _skipParkedNotFound.run(
       "parked: address_not_found quiet window (needs-fix non-answers exhausted)",
       runId,
@@ -397,8 +418,8 @@ const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlySc
   }
   return claimed;
 });
-export function claimRunTargets(runId: string, limit: number, skipRecentlyScannedSec = 0): Array<{ targetId: number; seq: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }> {
-  return (_claimTx as any).immediate(runId, limit, skipRecentlyScannedSec) as any;
+export function claimRunTargets(runId: string, limit: number, skipRecentlyScannedSec = 0, kind?: string): Array<{ targetId: number; seq: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }> {
+  return (_claimTx as any).immediate(runId, limit, skipRecentlyScannedSec, kind) as any;
 }
 
 // Finalize one checked target: set its terminal state AND bump the run counters

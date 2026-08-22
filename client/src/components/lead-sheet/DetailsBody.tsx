@@ -35,8 +35,15 @@ export function VerifiedPremiseFacts({ detail }: { detail: LeadDetail | undefine
   if (!detail) return null;
   const facts: Array<[string, string]> = [];
   if (detail.householdSegmentType) facts.push(["Segment", detail.householdSegmentType]);
+  if (detail.accountPin) {
+    // An existing account is the most decisive fact on the card: do not knock
+    // this door cold. Tier first, then the masked tail so the rep can confirm.
+    const pin = detail.accountPin;
+    facts.push(["Account", [pin.tier, pin.masked].filter(Boolean).join(" · ") || "Existing customer"]);
+  }
   if (detail.billingStatus) {
-    facts.push(["Occupancy", detail.billingStatus === "N" ? "No current subscriber" : `Billing ${detail.billingStatus}`]);
+    facts.push(["Occupancy", detail.billingStatus === "N" ? "No current subscriber"
+      : detail.accountPin ? "Existing customer" : `Billing ${detail.billingStatus}`]);
   }
   if (detail.competitorName || detail.competitorTech) {
     facts.push(["Competitor", [detail.competitorName, detail.competitorTech].filter(Boolean).join(" · ")]);

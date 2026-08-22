@@ -145,6 +145,20 @@ describe("neighborhood sweep cycle (temp DB, zero proxy)", () => {
     expect(store.getRun("run_2_stale_dailydiff", 2)?.status).toBe("running");
   });
 
+  it("frees doors held hostage by dead producers, including the coming lane's own", () => {
+    // 249,045 never-scanned NC doors sit in queued rows under stale daily-diff
+    // runs, 20,060 under address_discovery, and 207 promises under dead
+    // coming_soon_watch runs - all of which the NOT EXISTS guards would treat as
+    // "someone else owns this door" forever.
+    const kinds = sweep.SWEEP_CFG.supersedeKinds();
+    for (const k of ["daily-diff", "hot_market", "address_discovery", "coming_soon_watch", "coming_soon_watch_yield"]) {
+      expect(kinds, k).toContain(k);
+    }
+    // A rep's work is never cancelled.
+    expect(kinds).not.toContain("manual");
+    expect(kinds).not.toContain("lasso");
+  });
+
   it("re-confirms only the NEW FIBER doors the projector can publish, first", () => {
     const confirmRun = first.runIds.find((id) => id.includes("_confirm_"))!;
     expect(confirmRun).toBeDefined();
@@ -152,23 +166,35 @@ describe("neighborhood sweep cycle (temp DB, zero proxy)", () => {
     const targets = runTargets(confirmRun).map((t) => t.id).sort();
     expect(targets).toEqual([...ids.aGreensUnlinked].sort());
     for (const id of [...ids.aGreensLinked, ...ids.aGreenActive, ...ids.aGreenReview]) expect(targets).not.toContain(id);
-    expect(store.getRun(confirmRun, TENANT)?.kind).toBe("fresh_sweep_confirm");
+    // The kind carries "recheck" so dedupSkipSecondsForRun returns 0: this tier
+    // re-buys ANSWERED greens by design and must not hit the once-only guard.
+    expect(store.getRun(confirmRun, TENANT)?.kind).toBe("fresh_sweep_confirm_recheck");
+    expect(store.claimRunTargets(confirmRun, 50, 0).length).toBeGreaterThan(0);
     expect(dispatched).toContain(confirmRun);
   });
 
-  it("floods the hot cell whole: every claimable door and every due negative, street by street", () => {
+  it("floods the hot cell whole: every UNSCANNED door, street by street, and never an answered one", () => {
     const floodRun = first.runIds.find((id) => id.includes(`_${cellKey(A.lat, A.lng)}_`) && id.endsWith("_f1"))!;
     expect(floodRun).toBeDefined();
     const targets = runTargets(floodRun);
     const got = targets.map((t) => t.id).sort();
-    const want = [...ids.aUnscanned, ...ids.aStaleNeg].sort();
+    // ONCE-ONLY: unscanned doors only. The 4 stale negatives are NOT re-bought -
+    // 55,503 such re-checks produced zero Kinetic flips (see @shared/scanPolicy).
+    // And the doors on Oak St - a street that already produced fiber - were
+    // taken by the higher STREET tier, so the flood gets the rest of the cell.
+    const streetRun = first.runIds.find((id) => id.includes("_street_"))!;
+    const streetIds = runTargets(streetRun).map((t) => t.id);
+    const want = ids.aUnscanned.filter((id) => !streetIds.includes(id)).sort();
     expect(got).toEqual(want);
+    expect(got.every((id) => streetOf(id) !== "Oak St")).toBe(true);
+    for (const id of ids.aStaleNeg) expect(got).not.toContain(id);
     // Excluded on purpose: the recent negative, the parked row, other tenant, linked greens, the tenured door.
     for (const id of [...ids.aRecentNeg, ...ids.aParked, ...ids.aOtherTenant, ...ids.aGreensLinked, ...ids.aTenured]) expect(got).not.toContain(id);
-    // Street order: the run walks Elm Ave, then Oak St, then Pine Ct, house numbers ascending.
+    // Street order: what remains walks Elm Ave, then Pine Ct, house numbers
+    // ascending, so a rep watching the map sees whole streets finish.
     const streets = targets.map((t) => streetOf(t.id));
-    expect(streets.lastIndexOf("Elm Ave")).toBeLessThan(streets.indexOf("Oak St"));
-    expect(streets.lastIndexOf("Oak St")).toBeLessThan(streets.indexOf("Pine Ct"));
+    expect(new Set(streets)).toEqual(new Set(["Elm Ave", "Pine Ct"]));
+    expect(streets.lastIndexOf("Elm Ave")).toBeLessThan(streets.indexOf("Pine Ct"));
     const elm = targets.filter((t) => streetOf(t.id) === "Elm Ave").map((t) => Number(addressOf(t.id).match(/^\d+/)![0]));
     expect(elm).toEqual([...elm].sort((a, b) => a - b));
     expect(store.getRun(floodRun, TENANT)).toMatchObject({ kind: "fresh_sweep_flood", budget: want.length, status: "running" });
@@ -176,18 +202,54 @@ describe("neighborhood sweep cycle (temp DB, zero proxy)", () => {
     expect(first.floodCells).toBe(1);
   });
 
+  it("finishes streets that already produced fiber before it finishes cells", () => {
+    // 264 of 403 NC streets that produced a hit came back 100% NEW FIBER, so an
+    // unscanned door on a proven street is the best check available.
+    const streetRun = first.runIds.find((id) => id.includes("_street_"))!;
+    expect(streetRun).toBeDefined();
+    expect(store.getRun(streetRun, TENANT)?.kind).toBe("fresh_sweep_street");
+    const got = runTargets(streetRun).map((t) => t.id);
+    // Oak St is the hit street in cell A (its scanned doors are the greens).
+    const wantOak = ids.aUnscanned.filter((id) => streetOf(id) === "Oak St").sort();
+    expect(got.slice().sort()).toEqual(wantOak);
+    expect(got.length).toBeGreaterThan(0);
+    // It is ordered ahead of the flood and the probe in the cycle.
+    expect(first.runIds.indexOf(streetRun)).toBeLessThan(first.runIds.findIndex((id) => id.endsWith("_f1")));
+    expect(first.street).toBe(wantOak.length);
+  });
+
+  it("the once-only law is enforced at the claim layer, so no producer can bypass it", () => {
+    // Any bulk run that manages to enqueue an already-answered door has that row
+    // skipped when it is claimed - the guard lives in claimRunTargets, the one
+    // chokepoint every producer funnels through.
+    const answered = ids.aStaleNeg[0];
+    store.createScanRun({ id: "run_1_rogue_bulk", tenantId: TENANT, kind: "market", label: "rogue", city: "Tryon", state: "NC", budget: 1 });
+    store.enqueueRunTargets("run_1_rogue_bulk", [{ id: answered, seq: 0 }]);
+    const claimed = store.claimRunTargets("run_1_rogue_bulk", 10, 18 * 3600);
+    expect(claimed).toEqual([]);
+    expect(runTargets("run_1_rogue_bulk")[0]).toMatchObject({ state: "skipped" });
+    // A rep's own action is never blocked: skipSec=0 bypasses the guard.
+    store.createScanRun({ id: "run_1_rep_tap", tenantId: TENANT, kind: "manual", label: "tap", city: "Tryon", state: "NC", budget: 1 });
+    store.enqueueRunTargets("run_1_rep_tap", [{ id: answered, seq: 0 }]);
+    expect(store.claimRunTargets("run_1_rep_tap", 10, 0).map((c: any) => c.targetId)).toEqual([answered]);
+  });
+
   it("probes cold cells in one run, one address per street, the cell beside the hot one first, never the sink", () => {
     const probeRuns = first.runIds.filter((id) => id.includes("_probe_"));
     expect(probeRuns).toHaveLength(1);
     const targets = runTargets(probeRuns[0]);
     expect(first.probeCells).toBe(2);
-    // D's 12 doors come before B's 11 (one of B's picks is held by the live manual run and deduped away).
+    // D's 12 doors come before B's 12. The door the live manual run holds is
+    // excluded BEFORE selection, so B still gets a full 12 rather than a short
+    // probe - the selector never wastes a slot on a door another run owns.
     const cells = targets.map((t) => cellOf(t.id));
     expect(cells.slice(0, 12).every((c) => c === cellKey(D.lat, D.lng))).toBe(true);
     expect(cells.slice(12).every((c) => c === cellKey(B.lat, B.lng))).toBe(true);
-    expect(cells.slice(12)).toHaveLength(11);
-    expect(first.probe).toBe(23);
-    expect(store.getRun(probeRuns[0], TENANT)?.budget).toBe(23);
+    expect(cells.slice(12)).toHaveLength(12);
+    const heldByManual = runTargets("run_1_live_manual")[0].id;
+    expect(targets.map((t) => t.id)).not.toContain(heldByManual);
+    expect(first.probe).toBe(24);
+    expect(store.getRun(probeRuns[0], TENANT)?.budget).toBe(24);
     // B's probe covers all six streets before repeating any.
     const bStreets = targets.slice(12, 18).map((t) => streetOf(t.id));
     expect(new Set(bStreets).size).toBe(6);
@@ -237,10 +299,14 @@ describe("neighborhood sweep cycle (temp DB, zero proxy)", () => {
     const third = await sweep.runSweepCycle(TENANT, { dispatch, nowMs: NOW + 180_000 });
     const floodD = third.runIds.find((id) => id.includes(`_${cellKey(D.lat, D.lng)}_`) && id.endsWith("_f1"))!;
     expect(floodD).toBeDefined();
-    const targets = runTargets(floodD).map((t) => t.id).sort();
-    // Every door the probe did not touch, and nothing it did (all answered today).
-    expect(targets).toEqual(ids.d.filter((id) => !probedD.includes(id)).sort());
-    expect(targets).toHaveLength(30 - 12);
+    // The hit's own street is finished by the STREET tier; the rest of the cell
+    // by the flood. Together they are every door the probe did not touch, and
+    // nothing it did (all answered today, so once-only excludes them).
+    const streetRun = third.runIds.find((id) => id.includes("_street_"));
+    const covered = [...runTargets(floodD).map((t) => t.id), ...(streetRun ? runTargets(streetRun).map((t) => t.id) : [])];
+    const dCovered = covered.filter((id) => ids.d.includes(id)).sort();
+    expect(dCovered).toEqual(ids.d.filter((id) => !probedD.includes(id)).sort());
+    expect(dCovered).toHaveLength(30 - 12);
     expect(sweepCell(D).phase).toBe("flood");
   });
 
@@ -251,8 +317,9 @@ describe("neighborhood sweep cycle (temp DB, zero proxy)", () => {
     const probeRun = r.runIds.find((id) => id.includes("_probe_"))!;
     expect(probeRun).toBeDefined();
     const probedC = runTargets(probeRun).map((t) => t.id).filter((id) => cellOf(id) === cellKey(C.lat, C.lng));
-    // 12 picked; one of them is still held by the live daily-diff run, so the dedup drops it.
-    expect(probedC).toHaveLength(11);
+    // A full 12: the door the live daily-diff run holds is skipped before
+    // selection rather than deduped away afterwards.
+    expect(probedC).toHaveLength(12);
     expect(probedC).not.toContain(ids.cUnscanned[0]);
     expect(sweepCell(C)).toMatchObject({ phase: "probe", parked_until: null });
     expect(JSON.parse(sweepCell(C).reasons)).toContain("park_expired");
@@ -273,7 +340,7 @@ describe("neighborhood sweep cycle (temp DB, zero proxy)", () => {
     store.setRunStatus(confirmRun, "done");
     for (let n = 2; n <= 3; n++) {
       const id = `nsweep_${TENANT}_NC_confirm_20260801_c${n}`;
-      store.createScanRun({ id, tenantId: TENANT, kind: "fresh_sweep_confirm", label: "earlier", city: "sweep-confirm", state: "NC", budget: 3 });
+      store.createScanRun({ id, tenantId: TENANT, kind: sweep.SWEEP_RUN_KIND.confirm, label: "earlier", city: "sweep-confirm", state: "NC", budget: 3 });
       store.enqueueRunTargets(id, ids.aGreensUnlinked.map((t, seq) => ({ id: t, seq })));
       rawDb.prepare(`UPDATE scan_run_targets SET state='failed' WHERE run_id=?`).run(id);
       store.setRunStatus(id, "done");
@@ -369,5 +436,57 @@ describe("E911 bridge (county address points fill a hot cell before it floods)",
     } finally {
       process.env.NEIGHBORHOOD_SWEEP_E911 = "off";
     }
+  });
+});
+
+describe("seed cities lead every tier", () => {
+  // The operator's opening move (Broadway, Wingate, Rockwell) is an ORDERING
+  // boost, not a tier of its own, so starting there never starves the state.
+  // The city names come from an env var and are BOUND, never interpolated.
+  const seedCity = "O'Fallon Heights"; // an apostrophe: a hand-escaped CASE is the wrong defence
+  const otherCity = "Zebulon";
+  const P = { lat: 35.55, lng: -80.11 };
+  const Q = { lat: 35.56, lng: -80.12 };
+
+  beforeAll(() => {
+    // Each city gets one street that already produced fiber plus unscanned
+    // doors on it. Identical yield, so ONLY the seed order can separate them.
+    for (const [c, cell] of [[seedCity, P], [otherCity, Q]] as const) {
+      const hit = { tenant_id: TENANT, address: `10 ${c} Main St`, city: c, state: "NC", zip: "27597",
+        lat: cell.lat, lng: cell.lng, source: "test", carrier: "kinetic",
+        last_scanned_at: sqlTime(30 * DAY), scan_count: 1, last_is_new_fiber: 1,
+        last_fiber_status: "new_fiber", last_fiber_available: 1 };
+      insertTarget(hit);
+      for (let i = 0; i < 8; i++) insertTarget({ tenant_id: TENANT, address: `${20 + i * 2} ${c} Main St`,
+        city: c, state: "NC", zip: "27597", lat: cell.lat, lng: cell.lng, source: "test", carrier: "kinetic" });
+    }
+  });
+
+  it("works the seed city's street doors before an identical non-seed city, with the name bound not escaped", async () => {
+    process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES = `${seedCity},wingate`;
+    try {
+      const r = await sweep.runSweepCycle(TENANT, { dispatch, nowMs: NOW + 20 * DAY });
+      const streetRun = r.runIds.find((id) => id.includes("_street_"));
+      expect(streetRun, "the street tier ran").toBeDefined();
+      const cities = runTargets(streetRun!).map((t) =>
+        (rawDb.prepare(`SELECT city FROM scan_targets WHERE id=?`).get(t.id) as any).city as string);
+      const seedRows = cities.filter((c) => c === seedCity);
+      const otherRows = cities.filter((c) => c === otherCity);
+      expect(seedRows.length, "the seed city's doors are in the run").toBeGreaterThan(0);
+      // Every seed-city door precedes every non-seed door.
+      if (otherRows.length) {
+        expect(cities.lastIndexOf(seedCity)).toBeLessThan(cities.indexOf(otherCity));
+      }
+    } finally {
+      delete process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES;
+    }
+  });
+
+  it("survives a seed list that is empty or entirely unknown", async () => {
+    for (const value of ["", "   ", "nowhere,nocity"]) {
+      process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES = value;
+      await expect(sweep.runSweepCycle(TENANT, { dispatch, nowMs: NOW + 21 * DAY })).resolves.toBeTruthy();
+    }
+    delete process.env.NEIGHBORHOOD_SWEEP_SEED_CITIES;
   });
 });

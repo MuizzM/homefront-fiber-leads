@@ -179,6 +179,7 @@ import { registerGuardedActionRoutes } from "./guardedActionRoutes";
 import { guardedActionsEnabled } from "./guardedActionEngine";
 import { registerAddressPointRoutes } from "./addressPointRoutes";
 import { registerNeighborhoodSweepRoutes } from "./neighborhoodSweepRoutes";
+import { accountPinForLead } from "./customerAccount";
 import { nearestAddressPoints } from "./addressPointStore";
 import { registerLeadImportRoutes } from "./leadImportRoutes";
 
@@ -2920,10 +2921,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // derives that on the client, so a scrub that ages out re-blocks a number
     // with nothing written anywhere.
     const phones = tid ? tracedPhonesForLead(tid, lead.id) : [];
+    // The account pin: when the provider says this household is already on its
+    // books, show the rep the tier and a masked tail so they can confirm the
+    // account at the door instead of pitching a customer. The full number never
+    // leaves the server (server/customerAccount.ts).
+    const accountPin = tid
+      ? accountPinForLead(tid, {
+          id: lead.id,
+          sourceScanTargetId: (lead as any).sourceScanTargetId ?? null,
+          canonicalKey: (lead as any).canonicalKey ?? null,
+        })
+      : null;
     res.json({
       ...stripProviderIds(lead, user),
       ownerName: (lead as any).tracedOwnerName ?? (lead as any).ownerName ?? null,
       phones,
+      accountPin,
     });
   });
   // Team lead+ can create leads; manager+ can update status/delete
