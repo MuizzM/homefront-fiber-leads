@@ -61,6 +61,19 @@ const PREFIX_CHUNKS: Record<string, Thunk> = {
   "/billing": () => import("@/pages/Billing"),
   "/super-admin": () => import("@/pages/SuperAdmin"),
   "/token": () => import("@/pages/TokenSetup"),
+  // Added with the console shell: these had nav entries (and now palette
+  // rows) but no warm-up, so their first open always paid a cold chunk fetch
+  // at tap time.
+  "/leads/import": () => import("@/pages/ImportLeads"),
+  "/metrics": () => import("@/pages/Metrics"),
+  "/mileage": () => import("@/pages/Mileage"),
+  "/referrals": () => import("@/pages/Referrals"),
+  "/my-recoveries": () => import("@/pages/MyRecoveries"),
+  "/order-recovery": () => import("@/pages/OrderRecovery"),
+  "/order-imports": () => import("@/pages/OrderImports"),
+  "/order-messaging": () => import("@/pages/OrderMessaging"),
+  "/action-approvals": () => import("@/pages/ActionApprovals"),
+  "/rulebook": () => import("@/pages/Rulebook"),
 };
 
 // ── Data warm-up ─────────────────────────────────────────────────────────────

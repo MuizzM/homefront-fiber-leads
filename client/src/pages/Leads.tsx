@@ -40,7 +40,7 @@ import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 import { titleCaseAddress } from "@/lib/leadDisplay";
 import { metaFor, formatDistance, DistanceDiagram } from "@/components/verification";
-import { consumeLeadsFilterHandoff } from "@/lib/leadsFilterHandoff";
+import { consumeLeadsFilterHandoff, consumeLeadsAddIntent } from "@/lib/leadsFilterHandoff";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -1343,6 +1343,10 @@ export default function Leads() {
       if (!window.location.hash.startsWith("#/leads")) return;
       const status = consumeLeadsFilterHandoff();
       if (status && (status === "all" || status in STATUS_LABEL)) { setFilterStatus(status); setPage(0); }
+      // The command palette's "Add a lead" lands here with the dialog open.
+      // The intent is consumed either way, so a rep who cannot add never
+      // carries it to a later visit.
+      if (consumeLeadsAddIntent() && canAddLead) openAddDialog();
     };
     applyHandoff();
     window.addEventListener("hashchange", applyHandoff);

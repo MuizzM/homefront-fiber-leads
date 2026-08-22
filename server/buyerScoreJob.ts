@@ -17,6 +17,7 @@
 // WRITES. Only the three buyer columns. updated_at is NOT bumped: scoring is
 // not activity, and the Leads list's "Last activity" and staleness read it.
 
+import { structuredLog } from "./structuredLog";
 import { rawDb } from "./db";
 import {
   NEIGHBOR_DAYS, NEIGHBOR_RADIUS_M, scoreBuyer,
@@ -272,7 +273,13 @@ export async function runBuyerScoreForAllTenants(log: (msg: string) => void = ()
   for (const t of tenants) {
     try {
       const s = await rescoreTenant(t.id, { maxAgeMs: BUYER_SCORE_MAX_AGE_MS });
-      if (s) { out.push(s); log(`[buyer-score] tenant ${t.id}: scored ${s.scored}, removed ${s.removed}, ${s.tookMs}ms${s.capped ? " (capped, continues next run)" : ""}`); }
+      if (s) {
+        out.push(s);
+        log(`[buyer-score] tenant ${t.id}: scored ${s.scored}, removed ${s.removed}, ${s.tookMs}ms${s.capped ? " (capped, continues next run)" : ""}`);
+        // Counts and a duration only, so the perf report can set a pass beside
+        // the loop-lag minute it ran in.
+        structuredLog("buyer_score.pass", { pid: process.pid, tenantId: t.id, scored: s.scored, removed: s.removed, tookMs: s.tookMs, capped: s.capped });
+      }
     } catch (e: any) {
       log(`[buyer-score] tenant ${t.id} failed: ${String(e?.message ?? e).slice(0, 200)}`);
     }

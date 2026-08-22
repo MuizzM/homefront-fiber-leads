@@ -276,9 +276,18 @@ Two candidate mechanisms, both already described in `db.ts`:
 
 Both are diagnosable without SSH, read-only:
 
-- `perf-report.yml` aggregates the `http.request` and `perf.leads_map` logs the app
-  already emits.
+- `perf-report.yml` aggregates the `http.request`, `perf.leads_map`, `perf.loop_lag` and
+  `db.slow_statement` logs the app already emits. Since 2026-08-22 it also prints a
+  STALL TIMELINE: the worst loop-lag minutes, each with the slow requests (by worker
+  pid), slow statements, guard fires and job durations stamped in the same minute, so a
+  stall is attributed to a statement rather than guessed at.
 - `host-disk.yml` with `action: report` prints live WAL and disk size.
+
+`db.slow_statement` comes from `server/slowStatements.ts`: every better-sqlite3
+statement, exec or outermost transaction at or above `SLOW_SQL_MS` (250 ms in production;
+`off` disables) logs its SQL with literals masked, its duration, and its worker. A
+transaction is named by its first statement and its statement count, because the
+production bundle has no source maps. Parameters and rows are never logged.
 
 The `db.wal_guard` structured log line (`beforeMb` / `afterMb` / `result` per tick) is the
 fastest confirmation: a guard that runs every 120 s and never shrinks the file is starved,
