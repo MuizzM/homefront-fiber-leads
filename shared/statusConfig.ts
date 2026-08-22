@@ -55,6 +55,7 @@ export const STATUS_CONFIG: Readonly<Record<LeadMapStatus, Readonly<LeadStatusCo
   },
   interested: {
     label: "Interested", short: "INT", color: "#8B5CF6", shape: "circle", glyph: "star", cardIcon: "Star",
+    onDark: "#A78BFA",
   },
   sold: {
     // Deep dark green — clearly distinct from prospect (#16A34A) on the map.
@@ -65,6 +66,7 @@ export const STATUS_CONFIG: Readonly<Record<LeadMapStatus, Readonly<LeadStatusCo
   },
   not_interested: {
     label: "Not Interested", short: "NI", color: "#EF4444", shape: "circle", glyph: "x", cardIcon: "X",
+    onDark: "#F87171",
   },
   prospect: {
     // "LEAD" — the industry code for a fresh/reset door, and the word reps

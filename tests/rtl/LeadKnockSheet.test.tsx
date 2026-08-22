@@ -1289,9 +1289,11 @@ describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
   }
   // jsdom has no PointerEvent: a MouseEvent carries the coordinates and the
   // pointer fields are pinned on top (React reads them off the native event).
-  const pointer = (el: Element, type: string, clientY: number) => {
-    const ev = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 300, clientY });
-    for (const [k, v] of Object.entries({ pointerId: 1, isPrimary: true, pointerType: "mouse" })) {
+  const pointer = (el: Element, type: string, clientY: number, extra: Record<string, unknown> = {}) => {
+    // A press or a move with the button held carries buttons=1; pointerup has 0.
+    const buttons = type === "pointerup" ? 0 : 1;
+    const ev = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 300, clientY, buttons });
+    for (const [k, v] of Object.entries({ pointerId: 1, isPrimary: true, pointerType: "mouse", ...extra })) {
       Object.defineProperty(ev, k, { value: v });
     }
     return fireEvent(el, ev);
@@ -1316,6 +1318,49 @@ describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
       pointer(copy, "pointerdown", 500);
       pointer(copy, "pointermove", 502); // inside the tap slop
       expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a press that ends off the region never becomes a hover drag: a buttonless move is dropped", () => {
+    withCaptureSpy((spy) => {
+      const { props } = renderSheet();
+      const header = screen.getByTestId("knock-sheet-close").closest("[data-drag-region]") as HTMLElement;
+      pointer(header, "pointerdown", 500);
+      // The release happened off the region (never seen); the next thing the
+      // region sees is a hover move with no button held, 80px away.
+      pointer(header, "pointermove", 580, { buttons: 0 });
+      expect(spy).not.toHaveBeenCalled();
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
+      // And the stale press is gone: a real tap on the close button still lands.
+      pointer(screen.getByTestId("knock-sheet-close"), "pointerdown", 500);
+      pointer(screen.getByTestId("knock-sheet-close"), "pointerup", 500);
+      fireEvent.click(screen.getByTestId("knock-sheet-close"));
+      expect(props.onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("a right-click never starts a press", () => {
+    withCaptureSpy((spy) => {
+      renderSheet();
+      const header = screen.getByTestId("knock-sheet-close").closest("[data-drag-region]") as HTMLElement;
+      pointer(header, "pointerdown", 500, { button: 2 });
+      pointer(header, "pointermove", 560, { button: 2, buttons: 2 });
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("after a touch drag (no click follows) the next tap on a region button is NOT swallowed", async () => {
+    withCaptureSpy(() => {
+      const { props } = renderSheet();
+      const close = screen.getByTestId("knock-sheet-close");
+      pointer(close, "pointerdown", 500, { pointerType: "touch" });
+      pointer(close, "pointermove", 560, { pointerType: "touch" });
+      pointer(close, "pointerup", 560, { pointerType: "touch" });
+      // No click arrives after a touch drag. The rep taps again a moment later.
+      return new Promise<void>(resolve => setTimeout(resolve, 80)).then(() => {
+        fireEvent.click(close);
+        expect(props.onClose).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
@@ -1367,13 +1412,14 @@ describe("<LeadKnockSheet /> - door card v2: header chip, copy feedback, facts",
 
   it("copy still works without the Clipboard API (plain http): the execCommand fallback runs", async () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
-    const exec = vi.fn().mockReturnValue(true);
+    const seen: string[] = [];
+    const exec = vi.fn((cmd: string) => { if (cmd === "copy") seen.push((document.body.lastElementChild as HTMLTextAreaElement).value); return true; });
     (document as any).execCommand = exec;
     try {
       renderSheet();
       await userEvent.click(screen.getByTestId("knock-copy-address"));
-      expect(exec).toHaveBeenCalledWith("copy");
-      expect(screen.getByTestId("knock-address-copied")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("knock-address-copied")).toBeInTheDocument());
+      expect(seen).toEqual(["148 Maple St, Rockwell, NC 28138"]);
     } finally {
       delete (document as any).execCommand;
     }
@@ -1535,5 +1581,83 @@ describe("<LeadKnockSheet /> - motion: velocity-matched snaps, pops, exits", () 
       expect(screen.getByTestId(id).className).toContain("tap-press");
       expect(screen.getByTestId(id).className).not.toMatch(/\btransition\b/);
     }
+  });
+});
+
+describe("<LeadKnockSheet /> - docked panel: the post-mark step lives under the grid", () => {
+  function withDocked<T>(run: () => T): T {
+    const original = window.matchMedia;
+    (window as any).matchMedia = (q: string) => ({
+      matches: q.includes("min-width: 1024px"), media: q,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {},
+      onchange: null, dispatchEvent: () => false,
+    });
+    try { return run(); } finally { (window as any).matchMedia = original; }
+  }
+
+  it("renders the Next door row inside the follow-through block, never in the peek bar, and never collapses", async () => {
+    await withDocked(async () => {
+      const onOpenLead = vi.fn();
+      renderSheet({ nextDoor: { id: 9, address: "150 Maple St", meters: 30, atDoor: true }, onOpenLead });
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "docked");
+      await userEvent.click(screen.getByTestId("knock-outcome-sold"));
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "docked");
+      const rows = screen.getAllByTestId("knock-post-mark");
+      expect(rows).toHaveLength(1);
+      expect(screen.getByTestId("knock-follow-through").contains(rows[0])).toBe(true);
+      expect(screen.getByTestId("knock-peek-bar").contains(rows[0])).toBe(false);
+      await userEvent.click(screen.getByTestId("knock-next-door-open"));
+      expect(onOpenLead).toHaveBeenCalledWith(9);
+    });
+  });
+
+  it("Set a time opens the composer in place (no snap) and the nudge leaves", async () => {
+    await withDocked(async () => {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-outcome-interested"));
+      expect(screen.getByTestId("knock-post-mark")).toHaveAttribute("data-kind", "time");
+      await userEvent.click(screen.getByTestId("knock-set-time"));
+      expect(screen.getByTestId("appt-editor")).toBeInTheDocument();
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "docked");
+      expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+    });
+  });
+
+  it("the hidden peek bar is inert at every non-peek level, so its buttons are never tab stops", async () => {
+    renderSheet();
+    const peekWrap = screen.getByTestId("knock-peek-bar").parentElement?.parentElement as HTMLElement;
+    expect(peekWrap).toHaveAttribute("inert");
+    expect(peekWrap).toHaveAttribute("aria-hidden", "true");
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home")); // -> peek
+    expect(peekWrap).not.toHaveAttribute("inert");
+  });
+});
+
+describe("<LeadKnockSheet /> - copy feedback is honest", () => {
+  const setClipboard = (value: unknown) => Object.defineProperty(navigator, "clipboard", { configurable: true, value });
+
+  it("a rejected writeText falls back to execCommand and still reports copied with the right text", async () => {
+    setClipboard({ writeText: vi.fn().mockRejectedValue(new Error("NotAllowedError")) });
+    const seen: string[] = [];
+    (document as any).execCommand = vi.fn(() => { seen.push((document.body.lastElementChild as HTMLTextAreaElement).value); return true; });
+    try {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      await waitFor(() => expect(screen.getByTestId("knock-address-copied")).toBeInTheDocument());
+      expect(seen).toEqual(["148 Maple St, Rockwell, NC 28138"]);
+    } finally { setClipboard(undefined); delete (document as any).execCommand; }
+  });
+
+  it("when every path fails the card says so instead of flashing copied", async () => {
+    setClipboard({ writeText: vi.fn().mockRejectedValue(new Error("NotAllowedError")) });
+    (document as any).execCommand = vi.fn(() => false);
+    try {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      await waitFor(() => expect(screen.getByTestId("knock-address-copy-failed")).toHaveTextContent("Could not copy"));
+      expect(screen.queryByTestId("knock-address-copied")).not.toBeInTheDocument();
+      expect(screen.getByTestId("knock-copy-address")).toHaveAccessibleName("Copy address");
+      expect(screen.getByRole("status")).toHaveTextContent("Could not copy the address");
+    } finally { setClipboard(undefined); delete (document as any).execCommand; }
   });
 });

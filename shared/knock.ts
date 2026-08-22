@@ -236,6 +236,8 @@ export interface RoutablePin extends LatLng {
   visited?: boolean | number | null;
   lastOutcome?: string | null;
   leadScore?: number | null;
+  /** The resident asked us not to return: never a "next door". */
+  doNotKnock?: boolean | number | null;
 }
 
 // Next Door candidates: unworked OR not_home (a not-home door is the highest-value

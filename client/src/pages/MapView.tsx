@@ -5775,8 +5775,11 @@ export default function MapView() {
   // Keep the distances honest while the strip is up: one fresh fix on show,
   // then a slow refresh, paused in a hidden tab. The geolocate control, when
   // the rep is following, feeds the same state far more often.
+  // Also while a CARD is open: the card's Next door row ranks from this fix,
+  // and a rep can stand at a door for minutes.
+  const fixWanted = nearestVisible || selectedLeadId != null;
   useEffect(() => {
-    if (!nearestVisible) return;
+    if (!fixWanted) return;
     let live = true;
     const refresh = () => {
       if (!live || document.visibilityState === "hidden") return;
@@ -5789,7 +5792,7 @@ export default function MapView() {
     refresh();
     const id = window.setInterval(refresh, 45_000);
     return () => { live = false; window.clearInterval(id); };
-  }, [nearestVisible, noteRepFix]);
+  }, [fixWanted, noteRepFix]);
 
   // Leads-panel row tap — the SAME path a pin tap takes (flyToLead →
   // setSelectedLeadId → card/sheet). Phone closes the drawer to reveal the map.
@@ -6472,6 +6475,12 @@ export default function MapView() {
         pendingKnockPaintRef.current = lead.id;
       }
       recentIdsRef.current = [...recentIdsRef.current.slice(-9), lead.id];
+      // The card's Next door row ranks from the rep fix the moment the mark
+      // lands: refresh it now (captureFieldFix never rejects; noteRepFix keeps
+      // its own 5s throttle) so the suggestion reflects where the rep stands.
+      void captureFieldFix(3500).then((f) => {
+        if (f.repLat != null && f.repLng != null) { repFixNotedAt.current = 0; noteRepFix(f.repLat, f.repLng, f.gpsAccuracy, Date.now()); }
+      });
       // Fire the pin's confirm-flash in the SAME color the card pill flashes (both
       // derive from the shared palette), so tapping an outcome pops the map marker
       // and the card in lockstep. Visual only — the card's onKnock path already did
@@ -6486,7 +6495,7 @@ export default function MapView() {
       }
       return true;
     },
-    [leadById, selectedLeadId, logKnock, scheduleClusterSetData, canManage, user, handleCentralMark],
+    [leadById, selectedLeadId, logKnock, scheduleClusterSetData, canManage, user, handleCentralMark, noteRepFix],
   );
 
   // Lead-level notes: the card owns typing; this owns persistence through the

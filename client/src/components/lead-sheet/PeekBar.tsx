@@ -38,7 +38,7 @@ export function PeekBar(props: PeekBarProps): JSX.Element {
     <div data-testid="knock-peek-bar" className="px-4 pb-2.5 pt-0.5">
       <div className="flex items-center gap-2.5 min-w-0">
         <span key={pop ?? "idle"} className={`inline-flex shrink-0 ${pop ? "status-pop" : ""}`}>
-          <StatusPinChip color={pinColor} icon={statusIcon} size={28} data-testid="knock-peek-dot" />
+          <StatusPinChip color={pinColor} icon={statusIcon} size={28} data-testid="knock-peek-dot" iconTestId="knock-peek-status-icon" />
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="min-w-0 text-[15px] leading-tight font-semibold text-white truncate">

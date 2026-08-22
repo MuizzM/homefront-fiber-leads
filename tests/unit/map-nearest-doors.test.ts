@@ -31,7 +31,10 @@ describe("Nearest doors strip (MapView wiring)", () => {
   });
 
   it("refreshes slowly, pauses in a hidden tab, and is fed by the geolocate control", () => {
-    const effect = between("if (!nearestVisible) return;", "}, [nearestVisible, noteRepFix]);");
+    // The same slow refresh also runs while a card is open: its Next door row
+    // ranks from this fix, and a rep can stand at a door for minutes.
+    expect(src).toContain("const fixWanted = nearestVisible || selectedLeadId != null;");
+    const effect = between("if (!fixWanted) return;", "}, [fixWanted, noteRepFix]);");
     expect(effect).toContain('document.visibilityState === "hidden"');
     expect(effect).toContain("window.setInterval(refresh, 45_000)");
     expect(effect).toContain("captureFieldFix(3500)");

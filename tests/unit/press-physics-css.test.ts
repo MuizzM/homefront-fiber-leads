@@ -23,6 +23,11 @@ describe("press physics css", () => {
       const durations = [...block![1].matchAll(/(\d+)ms/g)].map(m => Number(m[1]));
       expect(durations.length).toBeGreaterThan(0);
       for (const d of durations) expect(d).toBeLessThanOrEqual(320);
+      // Only compositor-cheap or small-element paint properties transition:
+      // never a layout property (height, width, margin, padding, top, left).
+      const props = [...block![1].matchAll(/(?:^|,|transition:)\s*([a-z-]+)\s+\d+ms/g)].map(m => m[1]);
+      expect(props.length).toBeGreaterThan(0);
+      for (const prop of props) expect(["transform", "box-shadow", "background-color", "border-color", "color", "opacity"]).toContain(prop);
     }
     expect(css).toMatch(/button:active > \.disc-press\s*\{[^}]*transform:\s*scale\(0\.9\)[^}]*transition-duration:\s*40ms/);
     expect(css).toMatch(/\.tap-press:active\s*\{[^}]*transform:\s*scale\(var\(--press-scale, 0\.95\)\)[^}]*transition-duration:\s*40ms/);
