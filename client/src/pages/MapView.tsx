@@ -42,6 +42,8 @@ import {
   type PinDisplayState,
 } from "@shared/knock";
 import { toLeadMapStatus } from "@shared/statusConfig";
+import { rankNearestDoors, NEAREST_DOORS_LIMIT } from "@shared/nearestDoors";
+import { NearestDoorsStrip, type StripPin } from "@/components/map/NearestDoorsStrip";
 import {
   saveLeadNote,
   flushPendingNotes,
@@ -971,6 +973,24 @@ export default function MapView() {
   const [legendOpen, setLegendOpen] = useState(false); // manager legend: collapsed dot-strip by default
   // Rep pin-colors key — dismissible, opt-in from the More menu (never at rest).
   const [pinKeyOpen, setPinKeyOpen] = useState(false);
+  // ── Nearest doors (rep) ────────────────────────────────────────────────────
+  // The device's own position, kept on the device: it ranks the open doors
+  // around the rep for the strip and is never sent anywhere. Fed by the
+  // geolocate control while it runs (throttled) and by a one-shot fix plus a
+  // slow refresh while the strip is the thing on screen.
+  const [repFix, setRepFix] = useState<{ lat: number; lng: number; accuracy: number | null; at: number } | null>(() => {
+    const cached = readCachedFix();
+    return cached && Date.now() - cached.at < 5 * 60_000 ? { lat: cached.lat, lng: cached.lng, accuracy: null, at: cached.at } : null;
+  });
+  const repFixNotedAt = useRef(0);
+  const noteRepFix = useCallback((lat: number, lng: number, accuracy: number | null, at = Date.now()) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    if (at - repFixNotedAt.current < 5_000) return; // a fix a second in follow mode: rank every few seconds, not every frame
+    repFixNotedAt.current = at;
+    setRepFix({ lat, lng, accuracy, at });
+  }, []);
+  // Session-level dismissal: the X hands the slot back to the Next-door FAB.
+  const [nearestHidden, setNearestHidden] = useState(false);
   const [geocoding, setGeocoding] = useState(false); // street "go to" lookup in flight
   const [sidebarSearch, setSidebarSearch] = useState("");
 
@@ -3080,6 +3100,11 @@ export default function MapView() {
             Math.max(0, (Date.now() - (e.timestamp || Date.now())) / 1000),
         });
         writeCachedFix(e.coords.latitude, e.coords.longitude, Date.now());
+        noteRepFix(
+          e.coords.latitude,
+          e.coords.longitude,
+          typeof e.coords.accuracy === "number" ? e.coords.accuracy : null,
+        );
         gpsCenteredRef.current = true; // startup fallbacks stand down
         firstFixSeenRef.current = true; // the control engaged → FAB fallback stays off
         puckEl.classList.remove("hf-nav-puck-stale");
@@ -5674,6 +5699,42 @@ export default function MapView() {
       flyToLead(next);
     });
   }, [leads, flyToLead, toast]);
+
+  // Nearest doors — the strip's data. Same "open door" rule and the same
+  // just-worked exclusion as Next door, ranked by live distance. Only the rep
+  // map shows it (the Next-door FAB's own gate), and only while nothing else
+  // owns the bottom of the map. A loose fix (>200 m) ranks nothing: a
+  // distance that is fiction is worse than no distance.
+  const nearestVisible =
+    mapReady && isRep && !nearestHidden && !pinKeyOpen && selectedLeadId == null && !lassoMode && !addMode;
+  const nearest = useMemo(() => {
+    if (!nearestVisible || !repFix) return { doors: [] as ReturnType<typeof rankNearestDoors<StripPin>>, total: 0 };
+    if (repFix.accuracy != null && repFix.accuracy > 200) return { doors: [], total: 0 };
+    const all = rankNearestDoors<StripPin>(
+      repFix,
+      leads as unknown as StripPin[],
+      { limit: 1000, excludeIds: new Set(recentIdsRef.current) },
+    );
+    return { doors: all.slice(0, NEAREST_DOORS_LIMIT), total: all.length };
+  }, [nearestVisible, repFix, leads]);
+  // Keep the distances honest while the strip is up: one fresh fix on show,
+  // then a slow refresh, paused in a hidden tab. The geolocate control, when
+  // the rep is following, feeds the same state far more often.
+  useEffect(() => {
+    if (!nearestVisible) return;
+    let live = true;
+    const refresh = () => {
+      if (!live || document.visibilityState === "hidden") return;
+      void captureFieldFix(3500).then((f) => {
+        if (!live || f.repLat == null || f.repLng == null) return;
+        repFixNotedAt.current = 0; // a deliberate refresh always lands
+        noteRepFix(f.repLat, f.repLng, f.gpsAccuracy, Date.now());
+      });
+    };
+    refresh();
+    const id = window.setInterval(refresh, 45_000);
+    return () => { live = false; window.clearInterval(id); };
+  }, [nearestVisible, noteRepFix]);
 
   // Leads-panel row tap — the SAME path a pin tap takes (flyToLead →
   // setSelectedLeadId → card/sheet). Phone closes the drawer to reveal the map.
@@ -8948,7 +9009,19 @@ export default function MapView() {
               locate FAB on the right). One tap: nearest unworked door from
               where the rep is standing → fly + open its knock sheet. Hidden
               while a sheet is open so it never covers the outcome buttons. */}
-          {mapReady && isRep && selectedLeadId == null && leads.length > 0 && (
+          {nearestVisible && nearest.doors.length > 0 && (
+            <NearestDoorsStrip
+              doors={nearest.doors}
+              nearbyTotal={nearest.total}
+              onOpen={(pin) => flyToLead(pin as unknown as MapPin)}
+              onHide={() => setNearestHidden(true)}
+              // Above the FAB row (Locate stays put on the right), clear of the
+              // home-indicator zone. The strip is the Next-door FAB's successor;
+              // the FAB only returns when the strip has nothing to say.
+              style={{ bottom: "calc(env(safe-area-inset-bottom) + 2rem + 64px)" }}
+            />
+          )}
+          {mapReady && isRep && selectedLeadId == null && leads.length > 0 && !(nearestVisible && nearest.doors.length > 0) && (
             <button
               onClick={nextBestDoor}
               aria-label="Go to the next unworked door"
