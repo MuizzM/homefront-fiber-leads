@@ -1350,18 +1350,17 @@ describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
   });
 
   it("after a touch drag (no click follows) the next tap on a region button is NOT swallowed", async () => {
+    const { props } = renderSheet();
+    const close = screen.getByTestId("knock-sheet-close");
     withCaptureSpy(() => {
-      const { props } = renderSheet();
-      const close = screen.getByTestId("knock-sheet-close");
       pointer(close, "pointerdown", 500, { pointerType: "touch" });
       pointer(close, "pointermove", 560, { pointerType: "touch" });
       pointer(close, "pointerup", 560, { pointerType: "touch" });
-      // No click arrives after a touch drag. The rep taps again a moment later.
-      return new Promise<void>(resolve => setTimeout(resolve, 80)).then(() => {
-        fireEvent.click(close);
-        expect(props.onClose).toHaveBeenCalledTimes(1);
-      });
     });
+    // No click arrives after a touch drag. The rep taps again a moment later.
+    await new Promise<void>(resolve => setTimeout(resolve, 80));
+    fireEvent.click(close);
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("a real drag (past the tap slop) DOES capture, and its click is swallowed", () => {
