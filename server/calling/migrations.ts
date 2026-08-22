@@ -912,9 +912,16 @@ export function runCallingMigrations(): void {
       "call_authorizations", "call_attempts", "call_dispositions", "callback_tasks",
       "calling_opportunities", "provider_usage_events", "calling_audit_events", "calling_audit_heads",
     ]);
-    const foreignKeys = rawDb.prepare("PRAGMA foreign_key_check").all() as Array<{ table?: string }>;
-    if (foreignKeys.some((row) => row.table && callingTables.has(row.table))) {
-      throw new Error("Calling migration foreign-key verification failed");
+    // Check the calling tables only. The unscoped pragma walks every table
+    // with a foreign key in the whole file, on every boot, inside this write
+    // transaction: 18 s on a 3.3 GB copy, and the filter below discarded
+    // everything it found outside these tables anyway. Per-table checks read
+    // the same rows the filter kept, in milliseconds.
+    for (const table of callingTables) {
+      const exists = rawDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table);
+      if (!exists) continue;
+      const problems = rawDb.pragma(`foreign_key_check(${table})`) as Array<{ table?: string }>;
+      if (problems.length) throw new Error("Calling migration foreign-key verification failed");
     }
     rawDb.exec("COMMIT");
   } catch (error) {

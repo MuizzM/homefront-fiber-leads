@@ -3620,6 +3620,11 @@ export function orgTimezoneFor(tenantId: number | undefined | null): string {
 // not retained. Keep this as one SQL expression so filtering, sorting, and the
 // value rendered by the client can never disagree about what "last scanned"
 // means.
+export const SCAN_POOL_STATS_TTL_MS = 20_000;
+let scanTargetStatsMemo: { at: number; value: { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null } } | null = null;
+/** Test seam and write-path hook: the next getScanTargetStats() recomputes. */
+export function bustScanTargetStats(): void { scanTargetStatsMemo = null; }
+
 const LEAD_SCAN_AT_SQL = sql<string | null>`coalesce(${scanTargets.lastScannedAt}, ${leads.freshConfirmedAt})`;
 const LEAD_SCAN_EPOCH_SQL = sql<number | null>`julianday(${LEAD_SCAN_AT_SQL})`;
 
@@ -5688,6 +5693,11 @@ export class Storage implements IStorage {
   // walks); MAX stays its own statement so it keeps the O(log N) seek off
   // idx_scan_targets_scanned instead of joining the scan.
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null } {
+    // Two full passes over scan_targets (260 to 360 ms on the production-shaped
+    // copy) for counters the City Scanner polls every 8 s while scanning. The
+    // memo keeps one pass per SCAN_POOL_STATS_TTL_MS per process.
+    const hit = scanTargetStatsMemo;
+    if (hit && Date.now() - hit.at < SCAN_POOL_STATS_TTL_MS) return hit.value;
     const agg = rawDb.prepare(
       `SELECT COUNT(*) AS total,
               COALESCE(SUM(last_scanned_at IS NOT NULL), 0) AS scanned,
@@ -5695,7 +5705,9 @@ export class Storage implements IStorage {
          FROM scan_targets`
     ).get() as { total: number; scanned: number; newFiber: number };
     const lastScannedAt = (rawDb.prepare("SELECT MAX(last_scanned_at) m FROM scan_targets").get() as any).m ?? null;
-    return { total: agg.total, scanned: agg.scanned, neverScanned: agg.total - agg.scanned, newFiber: agg.newFiber, lastScannedAt };
+    const value = { total: agg.total, scanned: agg.scanned, neverScanned: agg.total - agg.scanned, newFiber: agg.newFiber, lastScannedAt };
+    scanTargetStatsMemo = { at: Date.now(), value };
+    return value;
   }
 
   // ── Commissions ────────────────────────────────────────────────────────────

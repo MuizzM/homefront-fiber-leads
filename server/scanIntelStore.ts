@@ -20,7 +20,25 @@ const all = <T = any>(sql: string, ...args: any[]): T[] => rawDb.prepare(sql).al
 // Everything is tenant-scoped. Pool rows may have tenant_id NULL (platform
 // harvest), so pool aggregates are NOT tenant-filtered (the address inventory is
 // shared), but leads/knocks/outcomes — the operational data — ARE.
-export function getMarketAggregates(tenantId: number): MarketAggregate[] {
+// The pool rollup below is one GROUP BY over every scan_targets row (919k on
+// the production-shaped copy: 1.1 to 1.3 s, synchronous on the HTTP worker) and
+// Fiber Intelligence polls /api/scan/markets every 30 s. Pool counts move only
+// while a scan runs, so a short memo per tenant turns a per-poll stall into one
+// every MARKET_AGGREGATES_TTL_MS. Writers that need the next read fresh call
+// bustMarketAggregates().
+export const MARKET_AGGREGATES_TTL_MS = 120_000;
+const marketAggregatesMemo = new Map<number, { at: number; rows: MarketAggregate[] }>();
+export function bustMarketAggregates(): void { marketAggregatesMemo.clear(); }
+
+export function getMarketAggregates(tenantId: number, nowMs = Date.now()): MarketAggregate[] {
+  const hit = marketAggregatesMemo.get(tenantId);
+  if (hit && nowMs - hit.at < MARKET_AGGREGATES_TTL_MS) return hit.rows;
+  const rows = computeMarketAggregates(tenantId);
+  marketAggregatesMemo.set(tenantId, { at: nowMs, rows });
+  return rows;
+}
+
+function computeMarketAggregates(tenantId: number): MarketAggregate[] {
   // Pool coverage per city (shared inventory; not tenant-scoped).
   const pool = all<{ city: string; state: string; poolSize: number; verified: number; verifiedNewFiber: number; newlyLive: number; lastVerifiedAt: string | null }>(
     `SELECT s.city, s.state,
