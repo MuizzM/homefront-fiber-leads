@@ -76,7 +76,8 @@ pins, manager Buyer score page (caps, threshold, histogram, calibration), routin
   `BuyerScoreSection`, Leads row tile + table column + sort option, PropertyDetail section,
   Today hero block + row pills (6 RTL tests). Previewed on a seeded pristine DATA_DIR at
   430 and 1440 px: rep list, Today hero and rows, detail breakdown, manager table.
-- 2026-08-22: full verification gate running (`scripts/agent-verify.sh full`).
+- 2026-08-22: full gate green (544 files, 6,958 tests, build 4.6 s). Committed b6c5371,
+  pushed `claude/buyer-score`, draft PR #166 into `rep-knocking-workflow`.
 
 ## Decisions
 
@@ -108,7 +109,16 @@ pins, manager Buyer score page (caps, threshold, histogram, calibration), routin
 
 ## Validation
 
-See Milestone 5. Expected: all listed suites green; `npm run check` clean.
+- `bash scripts/agent-verify.sh full` with `DATA_DIR=$(mktemp -d)`: harness validator,
+  `tests/deployment-safety.sh`, `npm run check`, `npm run check:fast`, `npm test` (544 files,
+  6,958 tests, green), `npm run build` (4.6 s). First run failed one test,
+  `tests/integration/map-bbox.test.ts`, which pinned the packed wire version literal to 8; it
+  now asserts `MAP_PINS_WIRE_VERSION`.
+- Focused: `tests/unit/buyer-score.test.ts` 13, `tests/integration/buyer-score.test.ts` 12,
+  `tests/rtl/BuyerScore.test.tsx` 6, `tests/unit/map-pins-wire.test.ts` 8.
+- Browser (pristine DATA_DIR seeded with a scored street, producers off): rep My leads with
+  tiles and sort, Today hero block and row pills, property page breakdown adding to 9.1,
+  manager table column at 1440 px.
 
 ## Recovery
 
@@ -118,4 +128,9 @@ back the client without the server (or vice versa) breaks packed pins (wire v9):
 
 ## Result
 
-Pending.
+Slice 1 is on PR #166 (draft). Reps see the score on My leads, the property page and Today;
+managers get the column and a bounded rescore. Remaining risks: wire v9 requires the client
+to reload after deploy (existing contract); a large tenant converges over the first few
+six-hour passes. Follow-ups, in order: parcel ingestion from NC OneMap (fills homeowner,
+tenure, value band), the Buyer score map layer, the manager settings page with calibration,
+and the routing blend in `shared/doorPriority.ts` once the owner picks the threshold.
