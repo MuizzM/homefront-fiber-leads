@@ -50,7 +50,8 @@ function renderLayout(role: string) {
   );
 }
 
-const palette = () => screen.getByRole("dialog", { name: "Search or jump to a page" });
+// The dialog is a lazy chunk: it appears once the import resolves.
+const palette = () => screen.findByRole("dialog", { name: "Search or jump to a page" });
 
 describe("command palette", () => {
   it("opens on Cmd-K, lists this role's pages, and closes on Escape", async () => {
@@ -58,7 +59,7 @@ describe("command palette", () => {
     expect(screen.queryByRole("dialog", { name: "Search or jump to a page" })).toBeNull();
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    const dialog = palette();
+    const dialog = await palette();
     expect(within(dialog).getByTestId("palette-page-rulebook")).toBeInTheDocument();
     expect(within(dialog).getByTestId("palette-page-commission-console")).toBeInTheDocument();
     expect(within(dialog).getByTestId("palette-action-add-lead")).toBeInTheDocument();
@@ -67,10 +68,10 @@ describe("command palette", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search or jump to a page" })).toBeNull());
   });
 
-  it("never offers a rep a page the sidebar would not", () => {
+  it("never offers a rep a page the sidebar would not", async () => {
     renderLayout("rep");
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
-    const dialog = palette();
+    const dialog = await palette();
     expect(within(dialog).queryByTestId("palette-page-rulebook")).toBeNull();
     expect(within(dialog).queryByTestId("palette-page-commission-console")).toBeNull();
     expect(within(dialog).queryByTestId("palette-action-add-lead")).toBeNull();
@@ -81,7 +82,7 @@ describe("command palette", () => {
   it("opens from the sidebar field and navigates through the hash router", async () => {
     renderLayout("admin");
     fireEvent.click(screen.getByTestId("palette-trigger"));
-    const dialog = palette();
+    const dialog = await palette();
     fireEvent.click(within(dialog).getByTestId("palette-page-leads"));
     await waitFor(() => expect(window.location.hash).toBe("#/leads"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search or jump to a page" })).toBeNull());
@@ -90,7 +91,7 @@ describe("command palette", () => {
   it("hands the Add a lead intent to the Leads page", async () => {
     renderLayout("manager");
     fireEvent.keyDown(window, { key: "K", metaKey: true });
-    fireEvent.click(within(palette()).getByTestId("palette-action-add-lead"));
+    fireEvent.click(within(await palette()).getByTestId("palette-action-add-lead"));
     await waitFor(() => expect(window.location.hash).toBe("#/leads"));
     expect(consumeLeadsAddIntent()).toBe(true);
     // One-shot: a later visit does not re-open the dialog.
@@ -115,7 +116,7 @@ describe("command palette", () => {
 
 describe("palette ranking", () => {
   it("prefers a word prefix over a fuzzy scatter, so Enter opens what was typed", async () => {
-    const { rankEntry } = await import("../../client/src/components/CommandPalette");
+    const { rankEntry } = await import("../../client/src/components/paletteShell");
     expect(rankEntry("Rulebook Governance /rulebook", "rule")).toBeGreaterThan(rankEntry("Field Hours Field /clock", "rule"));
     expect(rankEntry("Field Hours Field /clock", "rule")).toBe(0);
     expect(rankEntry("Team Metrics Metrics /metrics/team", "team met")).toBeGreaterThan(0);

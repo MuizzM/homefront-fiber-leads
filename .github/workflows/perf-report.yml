@@ -138,7 +138,7 @@ jobs:
           # transfer small and means domain events carrying lead detail never
           # leave the box at all.
           docker logs --since "$WINDOW" "$APP" 2>&1 \
-            | grep -aE '"event":"(http\.request|perf\.[a-z_]+|auth\.otp_unavailable|db\.wal_guard|fresh_fiber\.projection_failed|state_monitor\.alert_failed)"' \
+            | grep -aE '"event":"(http\.request|perf\.[a-z_]+|auth\.otp_unavailable|db\.wal_guard|db\.slow_statement|fresh_fiber\.projection_failed|state_monitor\.alert_failed|scan\.reaper\.slow_tick|resource\.pressure|buyer_score\.pass|yield_rollups\.[a-z_]+|rep_metrics\.(rollup|insights)|anf_backfill\.finalized)"' \
             || true
           REMOTE
           echo "collected $(wc -l < out/raw.ndjson) matching lines"
