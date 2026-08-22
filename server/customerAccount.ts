@@ -41,7 +41,7 @@ export function ensureAccountSchema(): void {
   } catch { ready = false; }
 }
 
-/** "061769244" -> "..9244". Never the whole number. */
+/** "000000123" -> "..0123". Never the whole number, and never logged. */
 export function maskAccountNumber(value: string | null | undefined): string | null {
   const s = String(value ?? "").replace(/\s+/g, "");
   if (!s) return null;

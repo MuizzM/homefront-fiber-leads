@@ -174,7 +174,7 @@ an existing customer from a cold prospect.
 `account_seen_at`) and the lead sheet shows an "Account" fact with the tier and
 a masked tail. The number is customer data: it is never written to a log line
 (the event carries the tier and a boolean) and never leaves the server whole -
-`maskAccountNumber` yields `..9244`. An answer with no account never clears a
+`maskAccountNumber` yields a four-digit tail. An answer with no account never clears a
 stored one, because one silent answer is not evidence a household cancelled.
 
 ## Planner statistics (why scans were slow)
