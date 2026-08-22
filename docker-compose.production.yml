@@ -136,6 +136,14 @@ services:
       # the DB via a synchronous better-sqlite3 claim). 6/worker × 4 workers = up to 24
       # run loops box-wide, matching the global concurrency cap.
       MAX_ACTIVE_RUN_WORKERS: "6"
+      # Only the control worker (no HTTP) consumes scan runs: resume passes, the
+      # 60 s reaper and the run loops it dispatches. Measured 2026-08-22 with the
+      # slow-statement log, 15 min after a deploy: every HTTP worker's reaper tick
+      # took 10 to 30 s and the run loops' write transactions queued on the single
+      # SQLite write lock (BEGIN IMMEDIATE 430 times, 571 s total, up to 15 s each)
+      # ON the request loops. With SCAN_GLOBAL_CONCURRENCY=1 the extra processes
+      # bought no throughput. "all" restores consumption in every worker.
+      SCAN_CONSUME_ROLE: "control"
       # ── TEMPORARY: heavy background PRODUCERS paused to keep the portal up ────
       # The single JS thread silently pegs at ~100% and starves /api (portal 000,
       # Docker unhealthy, no log output, probe can't even fork) ~150s after every

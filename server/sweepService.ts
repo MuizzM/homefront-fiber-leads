@@ -573,10 +573,14 @@ function mapStateSweep(r: any, cities: any[]) {
     discovered = Number(agg?.discovered ?? 0);
     pending = Number(agg?.pending ?? 0);
     // Cumulative retry attempts (transient failures re-queued for another try).
+    // Keyed on the sweep's tenant so idx_fiber_failures_run (tenant_id,
+    // run_id, ...) can seek; filtering on run_id alone scanned the whole
+    // index (823k rows on the production-shaped copy, 1.6 s cold) for every
+    // row of the sweeps list.
     retried = Number((rawDb.prepare(
-      `SELECT COUNT(*) AS n FROM fiber_job_failures WHERE run_id IN (
+      `SELECT COUNT(*) AS n FROM fiber_job_failures WHERE tenant_id=? AND run_id IN (
          SELECT current_run_id FROM sweep_jobs WHERE id IN (${ph}) AND current_run_id IS NOT NULL)`,
-    ).get(...jobIds) as any)?.n ?? 0);
+    ).get(r.tenant_id, ...jobIds) as any)?.n ?? 0);
     // Confirmed fresh leads at addresses this sweep touched, split by whether
     // the Lead was created during this sweep (New) or already existed (Still Fresh).
     const leadSplit = rawDb.prepare(

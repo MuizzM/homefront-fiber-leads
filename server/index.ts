@@ -46,6 +46,7 @@ import { isUnsafeHttpMethod, PORTAL_ALLOWED_METHODS } from "./httpMethodPolicy";
 //   explicit integer pins it; 0/unset stays single-process. Shared parser
 //   (scanWorkers.ts) so index/db/scanner can never drift.
 import { resolveScanWorkerCount } from "./scanWorkers";
+import { consumesScanRuns } from "./scanConsumeRole";
 import { startPrimaryElection, isPrimaryNode } from "./primaryNodeLease";
 import { isoDaysAgo } from "./sqlTime";
 const SCAN_WORKERS = resolveScanWorkerCount();
@@ -54,6 +55,19 @@ const SCAN_WORKERS = resolveScanWorkerCount();
 // and only in the index-0 worker under the cluster. Work-CONSUMING resume/reaper runs
 // in every process regardless.
 const IS_CONTROL_ROLE = SCAN_WORKERS === 0 || process.env.HF_ROLE === "control";
+// Which processes CONSUME scan runs (resume passes + the 60 s reaper + the run
+// workers they dispatch). Measured in production on 2026-08-22 with the
+// slow-statement log, 15 minutes after a deploy: every HTTP worker's reaper
+// tick took 10 to 30 s, and the run workers' write transactions then queued on
+// the one SQLite write lock - BEGIN IMMEDIATE ran 430 times for 571 s total,
+// up to 15 s each, all of it synchronous on request loops. With
+// SCAN_GLOBAL_CONCURRENCY=1 the extra processes bought no throughput, only the
+// contention. Under the cluster the control worker (which serves no HTTP)
+// consumes alone by default; SCAN_CONSUME_ROLE=all restores consumption in
+// every worker for a rig that wants the multi-core lever back.
+const CONSUMES_SCAN_RUNS = consumesScanRuns({
+  scanWorkers: SCAN_WORKERS, role: process.env.HF_ROLE, consumeRole: process.env.SCAN_CONSUME_ROLE,
+});
 // A cluster WORKER must NOT re-run migrations / coordinator boot-clean / calling
 // migrations — the primary ran them exactly once before forking, and a concurrent
 // merge migration would race. Single-process runs them inline as before.
@@ -994,16 +1008,22 @@ app.use((req, res, next) => {
     if (typeof (t as any).unref === "function") (t as any).unref();
   };
   const deferredResume = setTimeout(() => { void (async () => {
-    // RUN CONSUMERS + REAPER — run in EVERY worker. This is the multi-core lever:
-    // each process independently pulls queued targets (atomic claimRunTargets makes
-    // sharing safe) and reaps dead-worker runs. The decoupled run heartbeat keeps a
+    // RUN CONSUMERS + REAPER. Atomic claimRunTargets makes sharing safe, so
+    // every worker CAN pull queued targets and reap dead-worker runs (the
+    // multi-core lever, SCAN_CONSUME_ROLE=all). Under the cluster the default
+    // is the control worker alone: see CONSUMES_SCAN_RUNS for the measurement
+    // that moved it off the request loops. The decoupled run heartbeat keeps a
     // live sibling's run from being reclaimed here.
-    try {
-      const { resumeInterruptedRuns, resumeCriticalRuns, startScanReaper } = await import("./scanEngine");
-      resumeCriticalRuns();    // CRITICAL runs (new-build/manual/field) resume first
-      resumeInterruptedRuns();
-      startScanReaper(); // periodic reaper — started only now so its 60s tick can't fire during the health gate
-    } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
+    if (CONSUMES_SCAN_RUNS) {
+      try {
+        const { resumeInterruptedRuns, resumeCriticalRuns, startScanReaper } = await import("./scanEngine");
+        resumeCriticalRuns();    // CRITICAL runs (new-build/manual/field) resume first
+        resumeInterruptedRuns();
+        startScanReaper(); // periodic reaper — started only now so its 60s tick can't fire during the health gate
+      } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
+    } else {
+      log(`scan-engine: this worker serves HTTP only; run consumption stays on the control worker (SCAN_CONSUME_ROLE=${process.env.SCAN_CONSUME_ROLE ?? "control"})`);
+    }
     // SWEEP DRIVERS — control worker of the PRIMARY node only. These advance the
     // statewide-sweep checkpoint / re-drive sweep jobs (work PRODUCERS); driving
     // them from every worker would race the checkpoint, and driving them from a

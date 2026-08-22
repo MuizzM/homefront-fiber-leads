@@ -1707,6 +1707,15 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN last_customer_confidence TEXT NOT NULL DEFAULT 'low'`,
     `ALTER TABLE scan_targets ADD COLUMN last_customer_signals TEXT NOT NULL DEFAULT '[]'`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`,
+    // freshPoints() (stateMonitorStore) behind /api/scan/first-seen-live,
+    // /api/scan/changes, /api/monitor/* and the alert scheduler filters on
+    // tenant + last_fiber_available=1 and orders by first_seen_live_at. The
+    // planner's only tenant-keyed choice was idx_scan_targets_street, which
+    // walks every row of the tenant: measured on the 919k-row production-shaped
+    // copy, 5.5 to 10.3 s per call, synchronous on the HTTP worker. With this
+    // partial index the same query returns identical rows in 5 to 46 ms. The
+    // WHERE keeps it at the live rows only (4.7k rows, 52 KB).
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`,
     `CREATE TABLE IF NOT EXISTS availability_snapshots (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        tenant_id INTEGER NOT NULL,
@@ -3223,6 +3232,7 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_green_unlinked ON scan_targets(tenant_id, last_fiber_status, last_billing_status) WHERE converted_to_lead_id IS NULL`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_lifecycle ON scan_targets(lifecycle_state, lifecycle_changed_at)`);
     // Must be recreated here too: the rebuild drops every index with the old
@@ -3447,6 +3457,19 @@ export function bootstrapDefaultTenant(raw: any): void {
       .map(t => t.name)
       .filter(name => name !== "app_settings" && name !== "tenants");
     let adopted = 0;
+    // Each UPDATE below reads its whole table while holding the write lock,
+    // on every boot, even when nothing is left to adopt: fiber_checks (2.66 GB,
+    // no indexes) alone cost 64 s of the 2026-08-22 deploy. A per-table
+    // watermark in app_settings (platform bucket, tenant_id 0) records the
+    // highest rowid the sweep has already covered, so the next boot scans only
+    // the rows written since, by primary key. Rows that lose their tenant
+    // after the sweep are not a thing this app does; a WITHOUT ROWID table
+    // (no rowid to watermark) keeps the full sweep.
+    const readWatermark = raw.prepare("SELECT value FROM app_settings WHERE tenant_id = 0 AND key = ?");
+    const writeWatermark = raw.prepare(
+      `INSERT INTO app_settings (tenant_id, key, value, updated_at) VALUES (0, ?, ?, datetime('now'))
+       ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    );
     for (const table of tables) {
       const cols = (raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name);
       if (!cols.includes("tenant_id")) continue;
@@ -3456,8 +3479,19 @@ export function bootstrapDefaultTenant(raw: any): void {
       const where = table === "activity_log"
         ? "tenant_id IS NULL AND user_id IS NOT NULL"
         : "tenant_id IS NULL";
-      const res = raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE ${where}`).run(tenant.id);
+      const key = `tenant_adopt_watermark:${table}`;
+      let maxRowid: number | null = null;
+      try {
+        const row = raw.prepare(`SELECT MAX(rowid) AS m FROM ${table}`).get() as { m: number | null } | undefined;
+        maxRowid = row?.m == null ? 0 : Number(row.m);
+      } catch { maxRowid = null; } // WITHOUT ROWID: full sweep below
+      const prior = maxRowid == null ? null : (readWatermark.get(key) as { value: string } | undefined)?.value;
+      const from = prior != null && Number.isFinite(Number(prior)) ? Number(prior) : null;
+      const res = from != null
+        ? raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE rowid > ? AND ${where}`).run(tenant.id, from)
+        : raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE ${where}`).run(tenant.id);
       adopted += res.changes;
+      if (maxRowid != null) writeWatermark.run(key, String(maxRowid));
     }
     if (adopted > 0) {
       console.log(`[tenant] Adopted ${adopted} unowned rows into "Home Front Solutions"`);
@@ -3610,6 +3644,11 @@ export function orgTimezoneFor(tenantId: number | undefined | null): string {
 // not retained. Keep this as one SQL expression so filtering, sorting, and the
 // value rendered by the client can never disagree about what "last scanned"
 // means.
+export const SCAN_POOL_STATS_TTL_MS = 20_000;
+let scanTargetStatsMemo: { at: number; value: { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null } } | null = null;
+/** Test seam and write-path hook: the next getScanTargetStats() recomputes. */
+export function bustScanTargetStats(): void { scanTargetStatsMemo = null; }
+
 const LEAD_SCAN_AT_SQL = sql<string | null>`coalesce(${scanTargets.lastScannedAt}, ${leads.freshConfirmedAt})`;
 const LEAD_SCAN_EPOCH_SQL = sql<number | null>`julianday(${LEAD_SCAN_AT_SQL})`;
 
@@ -5678,6 +5717,11 @@ export class Storage implements IStorage {
   // walks); MAX stays its own statement so it keeps the O(log N) seek off
   // idx_scan_targets_scanned instead of joining the scan.
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null } {
+    // Two full passes over scan_targets (260 to 360 ms on the production-shaped
+    // copy) for counters the City Scanner polls every 8 s while scanning. The
+    // memo keeps one pass per SCAN_POOL_STATS_TTL_MS per process.
+    const hit = scanTargetStatsMemo;
+    if (hit && Date.now() - hit.at < SCAN_POOL_STATS_TTL_MS) return hit.value;
     const agg = rawDb.prepare(
       `SELECT COUNT(*) AS total,
               COALESCE(SUM(last_scanned_at IS NOT NULL), 0) AS scanned,
@@ -5685,7 +5729,9 @@ export class Storage implements IStorage {
          FROM scan_targets`
     ).get() as { total: number; scanned: number; newFiber: number };
     const lastScannedAt = (rawDb.prepare("SELECT MAX(last_scanned_at) m FROM scan_targets").get() as any).m ?? null;
-    return { total: agg.total, scanned: agg.scanned, neverScanned: agg.total - agg.scanned, newFiber: agg.newFiber, lastScannedAt };
+    const value = { total: agg.total, scanned: agg.scanned, neverScanned: agg.total - agg.scanned, newFiber: agg.newFiber, lastScannedAt };
+    scanTargetStatsMemo = { at: Date.now(), value };
+    return value;
   }
 
   // ── Commissions ────────────────────────────────────────────────────────────
