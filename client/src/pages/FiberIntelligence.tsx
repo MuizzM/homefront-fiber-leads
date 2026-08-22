@@ -125,10 +125,18 @@ function dayLabel(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-/** "2026-11-01" -> "Nov 2026" - the provider states a month, not a day. */
+/**
+ * Kinetic states a MONTH ("NOV-2026"), which we store as the 1st; Frontier
+ * states an exact day. Rendering both as "Mon YYYY" put two different promises
+ * on two chips reading "Dec 2026", so a day that is not the 1st keeps its day.
+ */
 function monthLabel(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+  if (Number.isNaN(d.getTime())) return iso;
+  const exactDay = d.getUTCDate() !== 1;
+  return d.toLocaleDateString("en-US", exactDay
+    ? { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }
+    : { month: "short", year: "numeric", timeZone: "UTC" });
 }
 
 // ── Neighborhoods — whole-neighborhood sweep: which clusters are fresh and
