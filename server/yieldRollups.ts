@@ -193,6 +193,19 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         structuredLog("yield_rollups.paused", { reason: `resource_pressure_${level}` });
         return;
       }
+      // 0) Planner statistics FIRST, never behind the migration ladder.
+      //
+      // This used to sit at the bottom, after every one-time step (index
+      // builds, street_key janitor, neg_streak backfill, ANALYZE, the alias
+      // merge) - each of which `return`s. So on any install where a migration
+      // was still draining, the planner upkeep did not run at all, and if the
+      // alias merge ever halts on its integrity guard it never would. Upkeep
+      // for the query planner is not a migration step and must not queue
+      // behind one: it is a bounded no-op in steady state (measured 0-5 ms,
+      // 14 s on the very first 0x10002 pass) and every other step in this tick
+      // runs faster with fresh statistics than without them.
+      optimizePlannerStats();
+
       // 1) One-time index builds, one per tick (each is a single blocking
       // statement; spreading them across ticks bounds any one stall).
       for (const idx of INDEXES) {
@@ -254,12 +267,9 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         }
         return;
       }
-      // Steady-state: keep stats fresh the recommended way (cheap no-op when
-      // nothing changed enough to matter).
-      // Planner statistics, per SQLite's documented lifecycle. See
-      // optimizePlannerStats below for why plain PRAGMA optimize alone was not
-      // enough on this database.
-      optimizePlannerStats();
+      // Steady state: nothing one-time is left. Planner statistics were already
+      // refreshed at the top of this tick (step 0), which is the only work the
+      // steady state has to do.
       // NOTE: PRAGMA optimize only reconsiders tables THIS CONNECTION has
       // queried, which is why the 0x10002 mask is used for the first pass.
     } catch (e: any) {

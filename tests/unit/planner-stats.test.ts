@@ -59,3 +59,24 @@ describe("optimizePlannerStats", () => {
     expect(mod.optimizePlannerStats(Date.now())).toBeNull();
   });
 });
+
+describe("planner upkeep never queues behind a migration", () => {
+  // It used to sit at the BOTTOM of the maintenance tick, after five one-time
+  // steps that each `return`. On any install still draining a migration the
+  // planner ran blind, and if the alias merge halts on its integrity guard it
+  // would never run at all.
+  it("runs before the one-time ladder in the tick body", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/yieldRollups.ts"), "utf8");
+    const body = src.slice(src.indexOf("const tick = () =>"));
+    const upkeep = body.indexOf("optimizePlannerStats()");
+    expect(upkeep, "optimizePlannerStats is called inside the tick").toBeGreaterThan(-1);
+    // Every one-time step must come AFTER it.
+    for (const marker of ["INDEXES", "streetKeyJanitorChunk", "negStreakBackfillChunk",
+                          "analyze_done", "alias_merge_done"]) {
+      expect(body.indexOf(marker), `${marker} runs after the planner upkeep`).toBeGreaterThan(upkeep);
+    }
+    // ...and it is called exactly once, so there is no second copy left behind.
+    expect(body.split("optimizePlannerStats()").length - 1).toBe(1);
+  });
+});
