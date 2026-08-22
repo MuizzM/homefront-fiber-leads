@@ -59,6 +59,7 @@ import { structuredLog } from "./structuredLog";
 import { calculateFiberFreshness } from "@shared/fiberFreshness";
 import { isActiveBilling } from "@shared/billingStatus";
 import { recordFutureService } from "./comingLedger";
+import { recordAccount } from "./customerAccount";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
 import { ensureKineticScannerSchema, upsertKineticAddress } from "./kineticScannerStore";
 import { hashKineticEvidence } from "./kineticProviderAdapter";
@@ -739,6 +740,13 @@ function applyCheck(
   } catch (e: any) {
     structuredLog("coming_ledger.record_failed", { tenantId, runId, error: String(e?.message ?? e).slice(0, 120) }, "warn");
   }
+
+  // THE ACCOUNT PIN. When the household is already on the provider's books the
+  // answer carries the account itself; record it so a rep can see the door is
+  // taken (and which tier) instead of knocking it cold. Never logged, and it
+  // only ever leaves the server masked.
+  try { recordAccount(tenantId, t.targetId, result.rawResponse); }
+  catch (e: any) { structuredLog("customer_account.failed", { tenantId, runId, error: String(e?.message ?? e).slice(0, 120) }, "warn"); }
 
   // Keep known NEW FIBER addresses in the existing Kinetic monitoring inventory.
   // Active-service rows are silent Coming Soon watches; the nightly recheck worker

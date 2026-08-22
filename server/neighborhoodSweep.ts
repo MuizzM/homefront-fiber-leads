@@ -545,14 +545,25 @@ export interface CycleDeps {
 }
 
 function measureDrainPerMinute(): number {
+  // The unary + keeps the planner off any other predicate so the range index on
+  // last_scanned_at drives. Without it SQLite picks a tenant-prefixed index and
+  // walks every row: measured 2,966 ms versus 9 ms for the same answer, because
+  // sqlite_stat1 carries stats for exactly one scan_targets index (and they are
+  // 0 0 0 0). See the ANALYZE maintenance in server/yieldRollups.ts.
   const row = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE last_scanned_at > datetime('now','-60 minutes')`).get() as any;
   return Number(row?.n ?? 0) / 60;
 }
 
 function pendingSweepRows(tenantId: number): number {
+  // Two steps on purpose. Joining scan_run_targets (803k rows) to scan_runs and
+  // filtering on `kind LIKE` - a column with no index - drove the join from the
+  // wrong side: 937 ms. Resolving the handful of sweep run ids first and letting
+  // the run_id index do the counting is the same answer in 82 ms.
   const row = rawDb.prepare(
-    `SELECT COUNT(*) AS n FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id
-      WHERE r.tenant_id=? AND r.kind LIKE 'fresh_sweep%' AND r.status='running' AND t.state IN ('queued','inflight')`,
+    `SELECT COUNT(*) AS n FROM scan_run_targets
+      WHERE state IN ('queued','inflight')
+        AND run_id IN (SELECT id FROM scan_runs
+                        WHERE tenant_id=? AND status='running' AND kind LIKE 'fresh_sweep%')`,
   ).get(tenantId) as any;
   return Number(row?.n ?? 0);
 }
@@ -913,7 +924,12 @@ export function sweepSummary(tenantId: number): SweepSummary {
     unlinkedGreens += Number(r.g ?? 0);
   }
   const lastCycle = rawDb.prepare(`SELECT * FROM sweep_cycles WHERE tenant_id=? AND state=? ORDER BY id DESC LIMIT 1`).get(tenantId, state) ?? null;
-  const checks = rawDb.prepare(`SELECT COUNT(*) AS n, SUM(last_is_new_fiber=1) AS h FROM scan_targets WHERE tenant_id=? AND state=? AND last_scanned_at > datetime('now','-24 hours')`).get(tenantId, state) as any;
+  // + on tenant_id/state so the last_scanned_at range index drives the scan;
+  // the tenant-prefixed index the planner otherwise picks costs 2,966 ms here.
+  const checks = rawDb.prepare(
+    `SELECT COUNT(*) AS n, SUM(last_is_new_fiber=1) AS h FROM scan_targets
+      WHERE last_scanned_at > datetime('now','-24 hours') AND +tenant_id=? AND +state=?`,
+  ).get(tenantId, state) as any;
   // fresh_confirmed_at is copied from scan_targets (SQLite 'YYYY-MM-DD HH:MM:SS'); the
   // aggregate is unindexed, so normalizing the column is exact (server/sqlTime.ts).
   const leads = rawDb.prepare(`SELECT COUNT(*) AS n FROM leads WHERE tenant_id=? AND upper(state)=? AND lead_tag='fresh_fiber_confirmed'

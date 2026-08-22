@@ -220,6 +220,44 @@ streets in Broadway, Wingate and Rockwell**; 286 stale runs / 726,722 queued
 rows superseded. Ledger: 1,124 active promises, 410 dated - Nov 2026 (105),
 Dec 2026 (39), Jan 2027 (10), Feb 2027 (131), Mar 2027 (125).
 
+## Round 3 (2026-08-22): two dates, the account pin, and the planner
+
+- **Two dates, never conflated.** `first_seen_at` = when a scan found the
+  promise; `promised_date` = when the provider says it turns on. The backfill
+  stamps the original `fiber_checks.checked_at` so a July find is not reported
+  as today's, and the flip-window maths is not fooled. `comingSummary` returns
+  `foundOn` beside `nextDates`; the tab shows both rows.
+- **The account pin.** A door already on the provider's books returns
+  `address.localAccountNumber` + `accountTier` + `billingSystem` (1,084 checks,
+  959 distinct accounts, Tier 2 on 706 doors) - never read before.
+  `server/customerAccount.ts` stores them on scan_targets and the lead sheet
+  shows tier + a masked tail. The number is never logged and never leaves the
+  server whole.
+- **Planner statistics were frozen.** `ANALYZE` ran once behind the
+  `analyze_done` latch, so `sqlite_stat1` held stats for ONE scan_targets index
+  with the value `0 0 0 0`. The planner walked 919k rows for a 24-hour count the
+  range index answers in 9 ms. `PRAGMA optimize` could not help: it only
+  reconsiders tables the current connection has queried.
+  `reanalyseStaleTable` re-analyses one big table per tick, once a day each, on
+  the primary. A sampled ANALYZE was tried and rejected - it still picked the
+  wrong index.
+
+Measured, cold, on the production-shaped copy:
+
+| step | before | after |
+| --- | ---: | ---: |
+| reconcileNowActiveWatches (every cycle) | 2,476 ms | 4 ms |
+| sweepSummary (every manager poll, 20 s) | 1,221 ms | 117 ms |
+| pending-rows counter | 937 ms | 82 ms |
+| 24-hour scan counter | 2,966 ms | 9 ms |
+
+Skills installed at the operator's request: `oracle-*` (five domains from
+github.com/oracle/skills - Oracle-specific, so its tuning advice does not
+transfer to SQLite) and `sqlite` (from
+github.com/martinholovsky/claude-skills-generator). The wins above came from
+that skill's method - EXPLAIN QUERY PLAN plus measurement - not from its Rust
+examples.
+
 ## Result
 
 Built, reviewed, verified; not merged, not deployed. The compose switch is

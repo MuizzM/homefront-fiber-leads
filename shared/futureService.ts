@@ -131,6 +131,42 @@ export function readBuildFlags(raw: unknown): ProviderBuildFlags {
 const up = (v: unknown) => String(v ?? "").trim().toUpperCase();
 
 /**
+ * The provider's ACCOUNT record for a door that already has service.
+ *
+ * Measured on the stored bodies: every payload with `address.billingStatus='A'`
+ * carries `address.localAccountNumber` (1,084 checks, 959 distinct accounts),
+ * usually with `accountTier` ("Tier 2" on 706 doors), `accountSubTier` and
+ * `billingSystem` ("CAMS"). None of it was ever read, so a rep standing at an
+ * existing customer's door had no way to see that the household is already on
+ * the books, let alone which tier.
+ *
+ * The account number is customer data. It is stored, never logged, and only
+ * ever leaves the server masked (see maskAccountNumber in
+ * server/customerAccount.ts).
+ */
+export interface ProviderAccount {
+  accountNumber: string | null;
+  tier: string | null;
+  subTier: string | null;
+  billingSystem: string | null;
+}
+
+export function readAccount(raw: unknown): ProviderAccount {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const addr = (r.address && typeof r.address === "object" ? r.address : {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => {
+    const s = String(v ?? "").trim();
+    return s && s !== "null" && s !== "undefined" ? s : null;
+  };
+  return {
+    accountNumber: str(addr.localAccountNumber ?? addr.accountNumber),
+    tier: str(addr.accountTier),
+    subTier: str(addr.accountSubTier),
+    billingSystem: str(addr.billingSystem),
+  };
+}
+
+/**
  * Explicit pre-launch vocabulary. Deliberately narrow: every term here means
  * "not yet, but it is coming". `PENDING` is included only for serviceStatus
  * (a pending SERVICE order), never for a segment, where it is ambiguous.

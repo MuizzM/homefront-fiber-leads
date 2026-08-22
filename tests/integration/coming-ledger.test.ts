@@ -241,6 +241,30 @@ describe("correcting the old inference", () => {
     expect(watchOf(1011).status).toBe("expired");
   });
 
+  it("records WHEN we found the promise, not when the row was written", () => {
+    const t = target(1030, "1500 Found In July Rd");
+    const july = Date.parse("2026-07-18T09:00:00.000Z");
+    ledger.recordFutureService(TENANT, t, {}, frontier({ futureServiceDate: "2026-11-01" }),
+      { nowMs: NOW, observedAt: july });
+    const w = watchOf(1030);
+    expect(w.first_seen_at).toBe(july);   // when the provider said it
+    expect(w.last_checked_at).toBe(july); // the answer we replayed, not "now"
+    expect(w.promised_date).toBe("2026-11-01"); // when it turns on
+    // Re-observing later never moves the discovery date backwards or forwards.
+    ledger.recordFutureService(TENANT, t, {}, frontier({ futureServiceDate: "2026-11-01" }),
+      { nowMs: NOW, observedAt: NOW });
+    expect(watchOf(1030).first_seen_at).toBe(july);
+    expect(watchOf(1030).last_checked_at).toBe(NOW);
+  });
+
+  it("summarises found-on days beside promised months", () => {
+    const s = ledger.comingSummary(TENANT, "NC", NOW);
+    expect(s.foundOn.length).toBeGreaterThan(0);
+    expect(s.foundOn[0]).toHaveProperty("day");
+    expect(s.foundOn.some((f) => f.day === "2026-07-18")).toBe(true);
+    expect(s.oldestFoundAt).toBeLessThanOrEqual(s.newestFoundAt!);
+  });
+
   it("summarises the ledger for the operator", () => {
     const s = ledger.comingSummary(TENANT, "NC", NOW);
     expect(s.active).toBeGreaterThan(0);

@@ -31,6 +31,9 @@ export interface LeadDetail {
   city?: string | null; state?: string | null; zip?: string | null;
   fiberStatus?: string | null; householdSegmentType?: string | null;
   billingStatus?: string | null;
+  /** Set when the provider says this household already has an account. The
+   *  number is masked server-side; the full value never reaches the browser. */
+  accountPin?: { masked: string; tier: string | null; subTier: string | null; billingSystem: string | null; seenAt: string | null } | null;
   competitorName?: string | null; competitorTech?: string | null;
   freshConfirmedAt?: string | null; leadTag?: string | null;
   leadStatus?: string | null;

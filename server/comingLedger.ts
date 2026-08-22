@@ -94,7 +94,7 @@ export function recordFutureService(
   target: LedgerTarget,
   parsed: FutureServiceInput,
   raw: unknown,
-  opts: { fiberAvailable?: boolean | null; nowMs?: number; log?: boolean } = {},
+  opts: { fiberAvailable?: boolean | null; nowMs?: number; log?: boolean; observedAt?: number } = {},
 ): FutureServiceRead {
   ensureComingLedgerSchema();
   const nowMs = opts.nowMs ?? Date.now();
@@ -116,9 +116,13 @@ export function recordFutureService(
   const prior = rawDb.prepare(
     `SELECT first_seen_at, last_checked_at FROM coming_soon_watchlist WHERE tenant_id=? AND scan_target_id=?`,
   ).get(tenantId, target.id) as { first_seen_at: number; last_checked_at: number | null } | undefined;
-  const firstSeenMs = prior?.first_seen_at ?? nowMs;
+  // WHEN WE FOUND IT, not when we wrote the row. The backfill replays answers
+  // from July, so stamping "now" would claim we discovered every promise today
+  // and would put month-old finds inside the 2-14 day flip window.
+  const observedMs = opts.observedAt ?? nowMs;
+  const firstSeenMs = Math.min(prior?.first_seen_at ?? observedMs, observedMs);
   const sched = nextRecheckAt({
-    promisedDate: read.promisedDate, firstSeenMs, lastCheckedMs: nowMs,
+    promisedDate: read.promisedDate, firstSeenMs, lastCheckedMs: observedMs,
     hotHours: LEDGER_CFG.hotHours(), soonHours: LEDGER_CFG.soonHours(), watchHours: LEDGER_CFG.watchHours(),
     hotWindowDays: LEDGER_CFG.hotWindowDays(), flipFromDays: LEDGER_CFG.flipFromDays(), flipToDays: LEDGER_CFG.flipToDays(),
     undatedDays: LEDGER_CFG.undatedDays(),
@@ -129,11 +133,12 @@ export function recordFutureService(
        (tenant_id, scan_target_id, address_key, first_seen_at, last_checked_at, estimated_completion,
         source, confidence, cluster_id, status, created_at, updated_at,
         promised_date, date_source, date_path, provider_quote, signals, band, due_at)
-     VALUES (@tenant, @target, @key, @now, @now, @date, @source, @confidence, NULL, 'active', @now, @now,
+     VALUES (@tenant, @target, @key, @firstSeen, @observed, @date, @source, @confidence, NULL, 'active', @now, @now,
              @date, @dateSource, @datePath, @quote, @signals, @band, @dueAt)
      ON CONFLICT(scan_target_id) DO UPDATE SET
        status          = 'active',
-       last_checked_at = @now,
+       first_seen_at   = MIN(coming_soon_watchlist.first_seen_at, @firstSeen),
+       last_checked_at = @observed,
        updated_at      = @now,
        -- a stated date always wins over an absent one; never overwrite a
        -- provider date with a null on a later, vaguer answer
@@ -148,7 +153,7 @@ export function recordFutureService(
   ).run({
     tenant: tenantId, target: target.id,
     key: `${String(target.address).trim().toLowerCase()}|${String(target.city).trim().toLowerCase()}|${String(target.state).trim().toUpperCase()}`,
-    now: nowMs,
+    now: nowMs, firstSeen: firstSeenMs, observed: observedMs,
     date: read.promisedDate, dateSource: read.dateSource, datePath: read.datePath,
     quote: read.quote, signals: JSON.stringify(read.signals), band: sched.band, dueAt: sched.dueAtMs,
     source: target.source ?? "provider-answer",
@@ -176,6 +181,11 @@ export function reconcileNowActiveWatches(tenantId: number, nowMs = Date.now()):
   // Frontier future build as isNewFiber=1 + billing 'Y' - the exact shape of a
   // sold Kinetic door - so closing on billing alone would discard every dated
   // Frontier build (86 doors) along with the mislabelled ones.
+  // Driven from the watchlist (about a thousand rows) with a primary-key lookup
+  // per target. The `IN (SELECT ... FROM scan_targets WHERE last_is_new_fiber=1
+  // ...)` shape scanned all 919k targets on columns with no index: measured
+  // 207 ms as a SELECT and 2,476 ms as the UPDATE, every single cycle. Same
+  // result in 1 ms.
   const n = rawDb.prepare(
     `UPDATE coming_soon_watchlist SET status='now_active', updated_at=?, due_at=NULL
       WHERE tenant_id=? AND status='active'
@@ -183,11 +193,11 @@ export function reconcileNowActiveWatches(tenantId: number, nowMs = Date.now()):
         AND COALESCE(signals,'[]') NOT LIKE '%build_pending%'
         AND COALESCE(signals,'[]') NOT LIKE '%future_qual%'
         AND COALESCE(signals,'[]') NOT LIKE '%provider_future_eligible%'
-        AND scan_target_id IN (
-        SELECT id FROM scan_targets
-         WHERE tenant_id=? AND last_is_new_fiber=1
-           AND upper(COALESCE(last_billing_status,'')) IN ('Y','A'))`,
-  ).run(nowMs, tenantId, tenantId).changes;
+        AND EXISTS (SELECT 1 FROM scan_targets s
+                     WHERE s.id = coming_soon_watchlist.scan_target_id
+                       AND s.last_is_new_fiber=1
+                       AND upper(COALESCE(s.last_billing_status,'')) IN ('Y','A'))`,
+  ).run(nowMs, tenantId).changes;
   if (n) structuredLog("coming_ledger.reconciled_now_active", { tenantId, closed: n }, "warn");
   return n;
 }
@@ -210,7 +220,12 @@ export function expireStaleWatches(tenantId: number, nowMs = Date.now()): number
   ).run(nowMs, tenantId, cut, today, nowMs).changes;
 }
 
-export interface DueComingRow { targetId: number; promisedDate: string | null; band: string | null; city: string; address: string }
+export interface DueComingRow {
+  targetId: number; promisedDate: string | null; band: string | null; city: string; address: string;
+  /** When the provider first told us it was coming (epoch ms). */
+  firstSeenAt: number | null;
+  lastCheckedAt: number | null;
+}
 
 /**
  * Promises that have come due. Ordered by the strength of the promise: a date
@@ -223,6 +238,7 @@ export function dueComingTargets(tenantId: number, state: string, limit: number,
   const today = new Date(nowMs).toISOString().slice(0, 10);
   return rawDb.prepare(
     `SELECT w.scan_target_id AS targetId, w.promised_date AS promisedDate, w.band AS band,
+            w.first_seen_at AS firstSeenAt, w.last_checked_at AS lastCheckedAt,
             s.city AS city, s.address AS address
        FROM coming_soon_watchlist w JOIN scan_targets s ON s.id = w.scan_target_id
       WHERE w.tenant_id=? AND w.status='active' AND s.state=?
@@ -283,10 +299,10 @@ export function backfillFromStoredEvidence(tenantId: number, limit = 5000, nowMs
 
   // Latest body per address wins, so a stale promise cannot overwrite a newer
   // settled answer. Ordered ascending above, so a later row simply replaces.
-  const latest = new Map<string, { result: string; address: string }>();
+  const latest = new Map<string, { result: string; address: string; checkedAt: string }>();
   for (const c of candidates) {
     const key = String(c.address ?? "").trim().toLowerCase();
-    if (key) latest.set(key, { result: c.result, address: String(c.address ?? "") });
+    if (key) latest.set(key, { result: c.result, address: String(c.address ?? ""), checkedAt: c.checkedAt });
   }
 
   // The (lower(trim(address)), lower(trim(city)), upper(trim(state))) expression
@@ -324,7 +340,10 @@ export function backfillFromStoredEvidence(tenantId: number, limit = 5000, nowMs
       { id: t.id, address: t.address, city: t.city, state: t.state, zip: t.zip, source: t.source },
       { householdSegmentType: raw?.address?.householdSegmentType, billingStatus: raw?.address?.billingStatus },
       raw,
-      { nowMs, log: false }, // the backfill emits one aggregate line, not one per door
+      // observedAt is the date the provider actually said it, so "found on" is
+      // truthful and the flip-window maths is not fooled into treating a July
+      // answer as today's discovery.
+      { nowMs, log: false, observedAt: parseSqlMs(row.checkedAt) ?? nowMs },
     );
     if (read.isFuture) { recorded++; if (read.promisedDate) dated++; }
   }
@@ -332,15 +351,30 @@ export function backfillFromStoredEvidence(tenantId: number, limit = 5000, nowMs
   return { scanned, recorded, dated };
 }
 
+/** scan/lead timestamps are SQLite-format ("YYYY-MM-DD HH:MM:SS") or ISO. */
+function parseSqlMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const s = String(value).trim();
+  const t = Date.parse(s.includes("T") ? s : `${s.replace(" ", "T")}Z`);
+  return Number.isFinite(t) ? t : null;
+}
+
 export interface ComingSummary {
   active: number; dated: number; overdue: number; dueNow: number;
   byBand: Record<string, number>; byStatus: Record<string, number>;
+  /** Promised turn-on months, soonest first. */
   nextDates: Array<{ date: string; doors: number }>;
+  /** WHEN WE FOUND THEM, by day - the other half of the question: a promise
+   *  found in July for a November build is a different thing from one found
+   *  today, and the operator needs to see both dates. */
+  foundOn: Array<{ day: string; doors: number; dated: number }>;
+  oldestFoundAt: number | null;
+  newestFoundAt: number | null;
 }
 
 export function comingSummary(tenantId: number, state: string, nowMs = Date.now()): ComingSummary {
   ensureComingLedgerSchema();
-  const empty: ComingSummary = { active: 0, dated: 0, overdue: 0, dueNow: 0, byBand: {}, byStatus: {}, nextDates: [] };
+  const empty: ComingSummary = { active: 0, dated: 0, overdue: 0, dueNow: 0, byBand: {}, byStatus: {}, nextDates: [], foundOn: [], oldestFoundAt: null, newestFoundAt: null };
   if (!ready) return empty;
   const today = new Date(nowMs).toISOString().slice(0, 10);
   const base = `FROM coming_soon_watchlist w JOIN scan_targets s ON s.id=w.scan_target_id WHERE w.tenant_id=? AND s.state=?`;
@@ -354,10 +388,19 @@ export function comingSummary(tenantId: number, state: string, nowMs = Date.now(
   const out: ComingSummary = {
     active: Number(row?.active ?? 0), dated: Number(row?.dated ?? 0),
     overdue: Number(row?.overdue ?? 0), dueNow: Number(row?.dueNow ?? 0),
-    byBand: {}, byStatus: {}, nextDates: [],
+    byBand: {}, byStatus: {}, nextDates: [], foundOn: [], oldestFoundAt: null, newestFoundAt: null,
   };
   for (const r of rawDb.prepare(`SELECT COALESCE(w.band,'none') AS k, COUNT(*) AS n ${base} AND w.status='active' GROUP BY 1`).all(tenantId, state) as any[]) out.byBand[r.k] = r.n;
   for (const r of rawDb.prepare(`SELECT w.status AS k, COUNT(*) AS n ${base} GROUP BY 1`).all(tenantId, state) as any[]) out.byStatus[r.k] = r.n;
+  const span = rawDb.prepare(`SELECT MIN(w.first_seen_at) AS oldest, MAX(w.first_seen_at) AS newest ${base} AND w.status='active'`).get(tenantId, state) as any;
+  out.oldestFoundAt = span?.oldest ?? null;
+  out.newestFoundAt = span?.newest ?? null;
+  out.foundOn = (rawDb.prepare(
+    `SELECT date(w.first_seen_at/1000, 'unixepoch') AS day, COUNT(*) AS doors,
+            SUM(w.promised_date IS NOT NULL) AS dated
+       ${base} AND w.status='active' AND w.first_seen_at IS NOT NULL
+      GROUP BY 1 ORDER BY 1 DESC LIMIT 14`).all(tenantId, state) as any[])
+    .map((r) => ({ day: r.day, doors: r.doors, dated: r.dated ?? 0 }));
   out.nextDates = (rawDb.prepare(
     `SELECT w.promised_date AS date, COUNT(*) AS doors ${base} AND w.status='active' AND w.promised_date IS NOT NULL
       GROUP BY 1 ORDER BY 1 ASC LIMIT 12`).all(tenantId, state) as any[]).map((r) => ({ date: r.date, doors: r.doors }));

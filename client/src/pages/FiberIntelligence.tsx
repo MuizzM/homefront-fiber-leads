@@ -119,6 +119,12 @@ export default function FiberIntelligence() {
   );
 }
 
+/** "2026-07-18" -> "Jul 18" - the day a scan found the promise. */
+function dayLabel(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
 /** "2026-11-01" -> "Nov 2026" - the provider states a month, not a day. */
 function monthLabel(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -141,6 +147,8 @@ interface SweepState {
     active: number; dated: number; overdue: number; dueNow: number;
     byBand: Record<string, number>; byStatus: Record<string, number>;
     nextDates: Array<{ date: string; doors: number }>;
+    foundOn: Array<{ day: string; doors: number; dated: number }>;
+    oldestFoundAt: number | null; newestFoundAt: number | null;
   };
   lastCycle: { started_at: string; budget: number; confirm: number; flood: number; probe: number; flood_cells: number; probe_cells: number; skipped: string | null; superseded_runs: number; drain_per_min: number } | null;
   last24h: { checks: number; hits: number; leads: number };
@@ -223,15 +231,31 @@ function Neighborhoods({ isManager, isAdmin }: { isManager: boolean; isAdmin: bo
             </div>
           </div>
           {state!.coming!.nextDates.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {state!.coming!.nextDates.map((d) => (
-                <span key={d.date} className="rounded-lg border border-border bg-background px-2 py-1 text-[11px] text-foreground">
-                  <b className="tabular-nums">{d.doors}</b> doors <span className="text-muted-foreground">{monthLabel(d.date)}</span>
-                </span>
-              ))}
+            <div className="mt-2">
+              <div className="text-[11px] font-medium text-muted-foreground">Turns on</div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {state!.coming!.nextDates.map((d) => (
+                  <span key={d.date} className="rounded-lg border border-border bg-background px-2 py-1 text-[11px] text-foreground">
+                    <b className="tabular-nums">{d.doors}</b> doors <span className="text-muted-foreground">{monthLabel(d.date)}</span>
+                  </span>
+                ))}
+              </div>
             </div>
           )}
-          <p className="mt-2 text-[12px] text-muted-foreground">Recorded from the provider's own answer, with the date it stated. These doors are re-checked once, on the date they were promised - nothing else answered is ever re-checked.</p>
+          {(state!.coming!.foundOn?.length ?? 0) > 0 && (
+            <div className="mt-2">
+              <div className="text-[11px] font-medium text-muted-foreground">Found on</div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {state!.coming!.foundOn.slice(0, 8).map((f) => (
+                  <span key={f.day} className="rounded-lg border border-border/60 bg-background px-2 py-1 text-[11px] text-muted-foreground">
+                    <b className="tabular-nums text-foreground">{f.doors}</b> {dayLabel(f.day)}
+                    {f.dated > 0 ? <span className="text-muted-foreground/70"> · {f.dated} dated</span> : null}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="mt-2 text-[12px] text-muted-foreground">Two different dates: when the scan found the promise, and the month the provider says it turns on. Recorded from the provider's own answer. These doors are re-checked once, on their date - nothing else answered is ever re-checked.</p>
         </div>
       )}
       <p className="px-1 text-[12px] text-muted-foreground">Ranked by fresh doors nobody has knocked. A neighborhood is a 1 km cell; the sweep checks every door in a cell once any door there comes back NEW FIBER, street by street, then moves to the cells around it. Open one on the map and lasso it to a crew.</p>

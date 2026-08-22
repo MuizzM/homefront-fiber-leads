@@ -257,6 +257,20 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
       // Steady-state: keep stats fresh the recommended way (cheap no-op when
       // nothing changed enough to matter).
       try { rawDb.exec("PRAGMA optimize"); } catch { /* advisory */ }
+      // ...but PRAGMA optimize only reconsiders tables THIS CONNECTION has
+      // queried, and the maintenance connection never touches scan_targets, so
+      // on a long-lived install its stats are whatever ANALYZE captured the one
+      // time the latch above allowed - here, when the table was still tiny.
+      // Measured on a production-shaped copy: sqlite_stat1 held stats for
+      // exactly ONE scan_targets index and they were "0 0 0 0", so the planner
+      // chose a tenant-prefixed index and walked all 919k rows for a query the
+      // range index answers in 9 ms (2,966 ms -> 9 ms after a real ANALYZE).
+      // A sampled ANALYZE (analysis_limit) was NOT enough - it produced stats
+      // that still picked the wrong index - so this re-analyses the big tables
+      // in full, one per tick, at most once a day each. It runs on the cluster
+      // primary, which serves no HTTP, and is skipped under sentinel pressure
+      // like every other step here.
+      reanalyseStaleTable();
     } catch (e: any) {
       structuredLog("yield_rollups.error", { error: e?.message ?? String(e) }, "error");
     }
@@ -281,3 +295,29 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
   _resetYieldRollupReadyForTests();
 }
 
+// ── Planner statistics upkeep ────────────────────────────────────────────────
+// One table per tick, each at most once per ANALYZE_MAX_AGE_H. Full ANALYZE:
+// the sampled form leaves the planner making the same wrong choice.
+const ANALYZE_TABLES = ["scan_targets", "scan_run_targets", "leads", "availability_snapshots"] as const;
+const ANALYZE_MAX_AGE_H = Math.max(1, Number(process.env.ANALYZE_MAX_AGE_HOURS) || 24);
+
+export function reanalyseStaleTable(nowMs = Date.now()): string | null {
+  if (process.env.ANALYZE_MAINTENANCE === "off") return null;
+  for (const table of ANALYZE_TABLES) {
+    const key = `analyzed_at:${table}`;
+    const last = Number(getState(key) ?? 0);
+    if (Number.isFinite(last) && nowMs - last < ANALYZE_MAX_AGE_H * 3_600_000) continue;
+    const t = Date.now();
+    try {
+      rawDb.exec(`ANALYZE ${table}`);
+      setState(key, String(nowMs));
+      structuredLog("yield_rollups.analyze_table", { table, ms: Date.now() - t });
+    } catch (e: any) {
+      // Never let stats upkeep halt the runner; try the next table next tick.
+      setState(key, String(nowMs));
+      structuredLog("yield_rollups.analyze_failed", { table, error: String(e?.message ?? e).slice(0, 120) }, "warn");
+    }
+    return table; // one table per tick: an ANALYZE on the biggest table is seconds, not milliseconds
+  }
+  return null;
+}

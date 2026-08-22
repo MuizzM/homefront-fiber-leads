@@ -144,6 +144,13 @@ and nobody honoured it - measuring staleness by last-touch alone would kill a
 FEB-2027 build in November, because a far-future promise is deliberately left
 untouched until its window opens.
 
+Two dates, never conflated: `first_seen_at` is when a scan FOUND the promise
+and `promised_date` is when the provider says it turns on. The backfill stamps
+the original `fiber_checks.checked_at`, not the time the row was written, so a
+July find is not reported as today's discovery (and does not fall inside the
+2-14 day flip window by accident). `comingSummary` returns both: `nextDates`
+(turn-on months) beside `foundOn` (discovery days).
+
 `backfillFromStoredEvidence` mines promises out of bodies already paid for -
 one shot per process, ~2 s over 22k rows. Measured: **1,327 doors recovered,
 525 with a stated month, for zero provider spend.**
@@ -153,6 +160,47 @@ with an active account. The old code admitted those as "coming soon"
 (`availabilitySnapshot.ts` `lifecycleSignalOf`), which is why 294 of 330 live
 watches were doors somebody had already bought, and none ever flipped.
 Measured on the copy: 325 closed on first run.
+
+## The account pin: doors that already have service
+
+When the household is already on the provider's books the answer carries the
+account: `address.localAccountNumber`, `accountTier` ("Tier 2" on 706 doors),
+`accountSubTier`, `billingSystem` ("CAMS"). Measured over the stored bodies,
+1,084 checks across 959 distinct accounts - never read, so a rep could not tell
+an existing customer from a cold prospect.
+
+`server/customerAccount.ts` records them on `scan_targets`
+(`account_number`, `account_tier`, `account_sub_tier`, `billing_system`,
+`account_seen_at`) and the lead sheet shows an "Account" fact with the tier and
+a masked tail. The number is customer data: it is never written to a log line
+(the event carries the tier and a boolean) and never leaves the server whole -
+`maskAccountNumber` yields `..9244`. An answer with no account never clears a
+stored one, because one silent answer is not evidence a household cancelled.
+
+## Planner statistics (why scans were slow)
+
+`ANALYZE` used to run once, latched by `analyze_done`, so a long-lived install
+kept whatever statistics existed the first time. Measured on a
+production-shaped copy: `sqlite_stat1` held stats for exactly ONE
+`scan_targets` index and their value was `0 0 0 0`. The planner therefore chose
+a tenant-prefixed index and walked all 919k rows for a 24-hour count the range
+index answers in 9 ms - 2,966 ms versus 9 ms. `PRAGMA optimize` did not save it:
+it only reconsiders tables the current connection has queried, and the
+maintenance connection never touches `scan_targets`.
+
+`reanalyseStaleTable` (server/yieldRollups.ts) now re-analyses one big table per
+tick, each at most once per `ANALYZE_MAX_AGE_HOURS` (24), on the cluster primary
+which serves no HTTP. It is a FULL ANALYZE on purpose - a sampled one
+(`analysis_limit`) produced stats that still picked the wrong index.
+`ANALYZE_MAINTENANCE=off` disables it.
+
+Two query shapes in the sweep are written to be fast regardless of planner
+statistics, because an install's stats may still be stale: the unary `+` on
+`tenant_id`/`state` keeps the range index driving the 24-hour counters, and the
+pending-rows counter resolves its handful of run ids before counting instead of
+joining 803k rows against an unindexed `kind LIKE` (937 ms -> 82 ms). The
+now-active reconciler drives from the watchlist with a primary-key lookup per
+row rather than scanning every target (2,476 ms -> 4 ms).
 
 ## Neighborhood sweep
 
