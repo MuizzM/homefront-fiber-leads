@@ -318,9 +318,14 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     return snap === "details" ? 0 : snap === "quick" ? quickY : peekY;
   };
 
+  // NO pointer capture on the press itself. Capturing here retargeted the
+  // pointerup — and with it the compatibility click — to the drag region, so
+  // the close / copy / handle buttons that live INSIDE the regions never
+  // received their click from a mouse or trackpad (touch survived only because
+  // the browser synthesizes a tap's click from the gesture, not the pointer
+  // stream). Capture is taken the moment a press becomes a real drag, below.
   const handlePointerDown = (e: React.PointerEvent) => {
     if (closing || docked) return; // docked panel: nothing to drag
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* jsdom */ }
     dragRef.current = {
       pointerId: e.pointerId, startClientY: e.clientY, startOffset: currentOffset(),
       lastY: e.clientY, lastT: e.timeStamp, vy: 0, moved: false,
@@ -334,6 +339,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (!d.moved && Math.abs(total) < TAP_SLOP_PX) return; // still a tap
     if (!d.moved) {
       d.moved = true;
+      // A real drag: own the pointer now so the sheet keeps following the
+      // finger even once it leaves the region (and a stray click lands on
+      // the region, where swallowDragClick eats it).
+      try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* jsdom */ }
       dragYRef.current = Math.max(0, d.startOffset + total);
       setDragging(true); // ONE render: drops the transition class
       setSheetDragActive(true); // pauses the map pulse loop for the drag

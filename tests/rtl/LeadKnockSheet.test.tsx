@@ -1270,3 +1270,64 @@ describe("<LeadKnockSheet /> - details: contact, quick links, photos", () => {
     expect(who).not.toHaveTextContent(/TRACED OWNER/);
   });
 });
+
+describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
+  // The header, peek bar and handle are drag regions. Capturing the pointer on
+  // pointerdown retargets the pointerup AND the compatibility click to the
+  // region, so the close / copy buttons inside it never received a mouse or
+  // trackpad click (touch only survived because a tap's click is synthesized
+  // from the gesture). Reproduced in Chromium 2026-08-22: mouse clicks on
+  // knock-sheet-close / knock-copy-address / knock-peek-close all landed on
+  // knock-sheet instead. Capture must wait for a real drag.
+  function withCaptureSpy<T>(run: (spy: ReturnType<typeof vi.fn>) => T): T {
+    const proto = Element.prototype as any;
+    const original = proto.setPointerCapture;
+    const spy = vi.fn();
+    proto.setPointerCapture = spy;
+    try { return run(spy); } finally { proto.setPointerCapture = original; }
+  }
+  // jsdom has no PointerEvent: a MouseEvent carries the coordinates and the
+  // pointer fields are pinned on top (React reads them off the native event).
+  const pointer = (el: Element, type: string, clientY: number) => {
+    const ev = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 300, clientY });
+    for (const [k, v] of Object.entries({ pointerId: 1, isPrimary: true, pointerType: "mouse" })) {
+      Object.defineProperty(ev, k, { value: v });
+    }
+    return fireEvent(el, ev);
+  };
+
+  it("a press on the close button does NOT capture the pointer, so its click still lands", () => {
+    withCaptureSpy((spy) => {
+      const { props } = renderSheet();
+      const close = screen.getByTestId("knock-sheet-close");
+      pointer(close, "pointerdown", 500);
+      expect(spy).not.toHaveBeenCalled();
+      pointer(close, "pointerup", 500);
+      fireEvent.click(close);
+      expect(props.onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("a press on the header copy button does NOT capture the pointer", () => {
+    withCaptureSpy((spy) => {
+      renderSheet();
+      const copy = screen.getByTestId("knock-copy-address");
+      pointer(copy, "pointerdown", 500);
+      pointer(copy, "pointermove", 502); // inside the tap slop
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a real drag (past the tap slop) DOES capture, and its click is swallowed", () => {
+    withCaptureSpy((spy) => {
+      const { props } = renderSheet();
+      const close = screen.getByTestId("knock-sheet-close");
+      pointer(close, "pointerdown", 500);
+      pointer(close, "pointermove", 540); // 40px: a drag, not a tap
+      expect(spy).toHaveBeenCalledTimes(1);
+      pointer(close, "pointerup", 540);
+      fireEvent.click(close);
+      expect(props.onClose).not.toHaveBeenCalled();
+    });
+  });
+});
