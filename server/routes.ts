@@ -6,6 +6,7 @@ import { sendMailResilient, mailFrom, adminInbox, emailShell, escapeHtml, logoAt
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage, getDefaultTenantId, orgTimezoneFor, type MapPinRow, type MapPinWindow, type MapView, type TerritoryLeadWrite } from "./storage";
+import { tenantLocalDate } from "./repMetricsStore";
 import { localWallToUtcMs, localYmdParts } from "@shared/workweek";
 import { billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
@@ -6757,8 +6758,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           leadId,
         );
         const rep = storage.getTeamMemberById(knockRow.repId);
-        const saleDate = new Date().toISOString().slice(0, 10);
         const rateTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
+        // Tenant-local day, never the UTC date: a sale knocked at 9 PM Eastern
+        // is tonight's sale, and the metrics rollup looks it up by this string.
+        const saleDate = tenantLocalDate(rateTenant ?? null);
         const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
         const active = pickActiveStructure(structures, knockRow.repId, rep?.role ?? null, saleDate);
         // Log only a REAL suppression — one where a commission would otherwise
@@ -6939,7 +6942,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const rep = storage.getTeamMemberById(parsed.data.repId);
         const rateTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
         const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
-        const active = pickActiveStructure(structures, parsed.data.repId, rep?.role ?? null, new Date().toISOString().slice(0, 10));
+        const active = pickActiveStructure(structures, parsed.data.repId, rep?.role ?? null, tenantLocalDate(rateTenant ?? null));
         if (active) {
           storage.logActivity((req as any).user?.id ?? null, "commission.auto_created", "knock", knock.id,
             { repId: parsed.data.repId, leadId: Number(req.params.id), structureId: active.id, version: active.version }, req.ip);
@@ -11259,7 +11262,9 @@ export function registerSaasRoutes(app: any) {
       name: String(b.name), role: b.role ?? null, repId: b.repId != null ? Number(b.repId) : null,
       ratePerSale: Number(b.ratePerSale) || 0,
       calcType, percentage: Number(b.percentage) || 0, tiers: tiersJson,
-      effectiveFrom: typeof b.effectiveFrom === "string" ? b.effectiveFrom : new Date().toISOString().slice(0, 10),
+      // "Effective today" means the org's today: the UTC date would make a
+      // plan created at 9 PM Eastern price nothing until local tomorrow.
+      effectiveFrom: typeof b.effectiveFrom === "string" ? b.effectiveFrom : tenantLocalDate(user?.tenantId ?? null),
       effectiveTo: typeof b.effectiveTo === "string" ? b.effectiveTo : null,
       version: 1, updatedBy: user?.name ?? null, isActive: true,
     } as any);

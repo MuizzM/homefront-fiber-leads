@@ -88,6 +88,16 @@ export function localDateString(utcMs: number, timezone: string): string {
 }
 
 /**
+ * The calendar day a money event belongs to, in the tenant's commission
+ * timezone. Every writer of a bare 'YYYY-MM-DD' sale/metric date must use
+ * this: the rep-day rollup looks orders up by this exact string, so a UTC
+ * date written at 9 PM Eastern lands the sale on tomorrow's metrics.
+ */
+export function tenantLocalDate(tenantId: number | null, nowMs: number = Date.now()): string {
+  return localDateString(nowMs, tenantTimezone(tenantId));
+}
+
+/**
  * SQLite stores timestamps two ways in this codebase (see server/sqlTime.ts).
  * Every comparison below therefore normalizes BOTH sides with
  * replace(col,'T',' ') and compares against a space-separated UTC string.

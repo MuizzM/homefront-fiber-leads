@@ -29,6 +29,7 @@ let server: Server;
 let baseUrl: string;
 let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: any;
+let tenantLocalDate: (typeof import("../../server/repMetricsStore"))["tenantLocalDate"];
 
 type Person = { userId: number; memberId: number; session: string };
 
@@ -83,7 +84,10 @@ async function knock(
 const commissionsFor = (leadId: number): any[] =>
   rawDb.prepare("SELECT * FROM commissions WHERE lead_id = ? ORDER BY id").all(leadId);
 
-const today = () => new Date().toISOString().slice(0, 10);
+// The sale's calendar day is the ORG's day, never the UTC date - a sale
+// knocked at 9 PM Eastern belongs to tonight, and the metrics rollup looks it
+// up by exactly this string.
+const today = () => tenantLocalDate(1);
 
 /** Create a commission structure through the REAL route (tenant comes from the
  *  caller's session — never client-supplied). */
@@ -120,6 +124,7 @@ beforeAll(async () => {
   mod.runMigrations(); // creates + adopts the default tenant (id 1)
   storage = mod.storage;
   ({ rawDb } = await import("../../server/db"));
+  ({ tenantLocalDate } = await import("../../server/repMetricsStore"));
 
   TENANT_B = storage.createTenant({
     slug: "commission-pipeline-b", companyName: "Org B", ownerName: "B Owner",
