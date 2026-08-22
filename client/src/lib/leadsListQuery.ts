@@ -27,7 +27,7 @@ export type LeadsListFilters = {
   rep: string;
   fiber: string;
   scanWindow: "all" | "24h" | "7d" | "30d";
-  sort: "created_desc" | "scanned_desc";
+  sort: "created_desc" | "scanned_desc" | "buyer_desc";
   page: number;
 };
 

@@ -34,6 +34,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
+import { BuyerScorePill, BuyerScoreTile, isClosedForScoring } from "@/components/BuyerScorePill";
 import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS, type PinDisplayState } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
@@ -947,7 +948,10 @@ const LeadTableRow = memo(function LeadTableRow({
   const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
   return (
     <tr data-testid={`card-lead-${lead.id}`} className={`group hover:bg-muted/35 transition-colors${saving ? " opacity-70" : ""}`}>
-      <td className="px-4 py-3"><button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={titleCaseAddress(lead.address)}>{titleCaseAddress(lead.address)}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+      <td className="px-4 py-3"><button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={titleCaseAddress(lead.address)}>{titleCaseAddress(lead.address)}</span>{(lead.leadScore ?? 0) >= 80 && lead.buyerScore == null && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+      {/* Buyer score (shared/buyerScore.ts): the household-level "will they
+          buy" number. Unscored doors say so rather than showing a zero. */}
+      <td className="px-3 py-3">{lead.buyerScore == null && isClosedForScoring(lead.leadStatus) ? null : <BuyerScorePill score={lead.buyerScore} label />}</td>
       <td className="px-3 py-3">{(() => { const s = leadStateChip(lead); return <Badge className={`border-0 text-2xs font-semibold ${s.chip}`}>{s.label}</Badge>; })()}</td>
       <td className="px-3 py-3"><div className="text-xs font-medium">{titleCaseAddress(lead.city)}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
       <td className="px-3 py-3"><button onClick={() => !saving && canAssign && onAssign(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignedName}</button><div className="text-2xs text-muted-foreground mt-0.5">{onboardingStage ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
@@ -1006,10 +1010,14 @@ const LeadMobileCard = memo(function LeadMobileCard({ lead, canOpenCalling, onOp
   // stay as 44px trailing icon buttons so field use loses nothing.
   return (
     <article className={`render-lazy flex items-center gap-1 py-1.5 pl-4 pr-2 transition-colors active:bg-secondary/50${saving ? " opacity-70" : ""}`} data-testid={`mobile-lead-${lead.id}`}>
+      {/* Buyer score leads the line (fixed width, so the column scans down
+          the list). It is the one number a rep sorts their day by; the
+          address and stage still carry the row. */}
+      <BuyerScoreTile score={lead.buyerScore} closed={isClosedForScoring(lead.leadStatus)} className="mr-1" />
       <button onClick={() => !saving && onOpen(lead)} aria-label={`Open details for ${lead.address}`} className="min-h-tap min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <div className="flex items-center gap-2">
           <span className="truncate text-[14px] font-semibold leading-snug text-foreground">{titleCaseAddress(lead.address)}</span>
-          {(lead.leadScore ?? 0) >= 80 && <span className="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-2xs font-bold text-warning">HIGH</span>}
+          {(lead.leadScore ?? 0) >= 80 && lead.buyerScore == null && <span className="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-2xs font-bold text-warning">HIGH</span>}
           {/* leadStateChip, NOT the raw lookup: "already a customer" is stored
               as not_interested + lastOutcome, and the raw label showed those
               doors as "Not Interested" — the exact field-reported bug the
@@ -1046,7 +1054,7 @@ export default function Leads() {
   const [filterRep, setFilterRep] = useState("all");
   const [filterFiber, setFilterFiber] = useState("all");
   const [scanWindow, setScanWindow] = useState<"all" | "24h" | "7d" | "30d">("all");
-  const [sortMode, setSortMode] = useState<"created_desc" | "scanned_desc">("created_desc");
+  const [sortMode, setSortMode] = useState<"created_desc" | "scanned_desc" | "buyer_desc">("created_desc");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
@@ -1380,7 +1388,7 @@ export default function Leads() {
   const handleRepChange = (r: string) => { setFilterRep(r); setPage(0); };
   const handleFiberChange = (f: string) => { setFilterFiber(f); setPage(0); };
   const handleScanWindowChange = (window: "all" | "24h" | "7d" | "30d") => { setScanWindow(window); setPage(0); };
-  const handleSortChange = (sort: "created_desc" | "scanned_desc") => { setSortMode(sort); setPage(0); };
+  const handleSortChange = (sort: "created_desc" | "scanned_desc" | "buyer_desc") => { setSortMode(sort); setPage(0); };
 
   // Active-filter summary — surfaced as dismissible chips so a rep always sees
   // (and can one-tap clear) what's narrowing the list. Pure view over existing
@@ -1515,7 +1523,7 @@ export default function Leads() {
               <Select value={filterCity} onValueChange={handleCityChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-city"><SelectValue placeholder="Territory" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="all">All territories</SelectItem>{cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
               <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>
               <Select value={scanWindow} onValueChange={value => handleScanWindowChange(value as typeof scanWindow)}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-scan-window"><SelectValue placeholder="Scan age" /></SelectTrigger><SelectContent><SelectItem value="all">Any scan age</SelectItem><SelectItem value="24h">Scanned in 24h</SelectItem><SelectItem value="7d">Scanned in 7 days</SelectItem><SelectItem value="30d">Scanned in 30 days</SelectItem></SelectContent></Select>
-              <Select value={sortMode} onValueChange={value => handleSortChange(value as typeof sortMode)}><SelectTrigger className="col-span-2 sm:col-span-1 h-10 bg-card lg:h-9 lg:w-[150px]" data-testid="sort-leads"><SelectValue placeholder="Sort leads" /></SelectTrigger><SelectContent><SelectItem value="created_desc">Newest added</SelectItem><SelectItem value="scanned_desc">Newest scanned</SelectItem></SelectContent></Select>
+              <Select value={sortMode} onValueChange={value => handleSortChange(value as typeof sortMode)}><SelectTrigger className="col-span-2 sm:col-span-1 h-10 bg-card lg:h-9 lg:w-[150px]" data-testid="sort-leads"><SelectValue placeholder="Sort leads" /></SelectTrigger><SelectContent><SelectItem value="created_desc">Newest added</SelectItem><SelectItem value="scanned_desc">Newest scanned</SelectItem><SelectItem value="buyer_desc">Best buyers first</SelectItem></SelectContent></Select>
             </div>
           </div>
 
@@ -1534,8 +1542,8 @@ export default function Leads() {
             /* Desktop: 8-column row skeletons mirroring the real table grid. */
             <div className="divide-y divide-border">
               {Array.from({ length: 8 }).map((_, i) => (
-                <div key={i} className="grid grid-cols-[27%_1fr_1fr_1fr_1fr_1fr_1fr_1fr] items-center gap-3 px-4 py-3">
-                  {Array.from({ length: 8 }).map((_, j) => <Skeleton key={j} className="h-8" />)}
+                <div key={i} className="grid grid-cols-[24%_1fr_1fr_1fr_1fr_1fr_1fr_1fr_1fr] items-center gap-3 px-4 py-3">
+                  {Array.from({ length: 9 }).map((_, j) => <Skeleton key={j} className="h-8" />)}
                 </div>
               ))}
             </div>
@@ -1551,8 +1559,8 @@ export default function Leads() {
           <div className="py-16 px-6 text-center"><div className="text-sm font-semibold mt-3">{activeFilters ? "No leads match this operational view" : isRep ? "No leads assigned yet" : "No leads have been added"}</div><div className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{activeFilters ? "Clear one or more filters to broaden the pipeline." : isRep ? "Ask your team lead for a territory. Assigned doors will appear here and on the Field Map." : "Add a lead or run a market scan to start building the pipeline."}</div>{activeFilters && <Button variant="outline" size="sm" onClick={clearAllFilters} className="mt-4 h-8">Clear filters</Button>}</div>
         ) : isDesktop ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1050px] border-collapse text-left">
-              <thead><tr className="border-b border-border bg-muted/20 text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
+            <table className="w-full min-w-[1150px] border-collapse text-left">
+              <thead><tr className="border-b border-border bg-muted/20 text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[24%]">Lead</th><th className="px-3 py-2.5">Buyer score</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {filtered.map(lead => (
                   <LeadTableRow

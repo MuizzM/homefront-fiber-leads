@@ -14,6 +14,7 @@ import { stripeConfigured, webhookConfigured, verifyStripeSignature, createCheck
 import Database from "better-sqlite3";
 import { z } from "zod";
 import { packMapPins, type PackedMapPins } from "@shared/mapPinsWire";
+import { buyerScoreBands, buyerScoreLastRun, buyerScoreRunning, rescoreLead, rescoreTenant } from "./buyerScoreJob";
 import { decideFreshFiber, type FreshFiberVerdict } from "@shared/freshFiberVerdict";
 import { structuredLog } from "./structuredLog";
 import { inlineScriptHashes } from "./cspHashes";
@@ -2836,6 +2837,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ ok: true });
   });
 
+  // ── Buyer score (shared/buyerScore.ts, server/buyerScoreJob.ts) ───────────
+  // Status is readable by anyone in the tenant (the rep surfaces show the
+  // number); the rescore is a manager action because it walks the whole
+  // tenant. Both are scoped to the caller's own tenant and nothing else.
+  app.get("/api/buyer-score/status", requireAuth, (req, res) => {
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
+    res.json({ running: buyerScoreRunning(tid), lastRun: buyerScoreLastRun(tid), bands: buyerScoreBands(tid) });
+  });
+  app.post("/api/buyer-score/run", requireManager, async (req, res) => {
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
+    if (buyerScoreRunning(tid)) return res.status(409).json({ error: "A rescore is already running" });
+    try {
+      const summary = await rescoreTenant(tid);
+      res.json({ ok: true, ...(summary ?? {}), bands: buyerScoreBands(tid) });
+    } catch (e: any) {
+      console.error("[buyer-score] run failed:", e);
+      res.status(500).json({ error: "Rescore failed" });
+    }
+  });
+
   app.get("/api/leads", requireAuth, (req, res) => {
     const { search, limit, offset, status, zip, city, state, assignedRepId, fiberStatus, sort, scanWindow } = req.query;
     const user = (req as any).user;
@@ -2849,7 +2870,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const limN = Number(limit), offN = Number(offset);
     const lim = Number.isFinite(limN) && limN > 0 ? Math.min(Math.floor(limN), 500) : 200;
     const off = Number.isFinite(offN) && offN > 0 ? Math.floor(offN) : 0;
-    const sortMode = sort === "scanned_desc" ? "scanned_desc" as const : "created_desc" as const;
+    const sortMode = sort === "scanned_desc" ? "scanned_desc" as const
+      : sort === "buyer_desc" ? "buyer_desc" as const
+      : "created_desc" as const;
     const scanDays = scanWindow === "24h" ? 1 : scanWindow === "7d" ? 7 : scanWindow === "30d" ? 30 : null;
 
     const filterOpts = {
@@ -7315,6 +7338,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (won.length) body.campaignAwards = won;
     if (momentumArmed) body.momentumOffer = momentumArmed;
     res.status(201).json(body);
+    // The rep just learned something about this house: refresh its Buyer
+    // score so the next poll says so. After the response and best-effort by
+    // contract; the knock itself is already committed and must never fail on it.
+    setImmediate(() => { try { rescoreLead(knock.leadId); } catch (e) { console.warn("[buyer-score] rescore after knock failed:", e); } });
   });
 
   // Note typed AFTER the knock saved — attaches to the existing knock row without

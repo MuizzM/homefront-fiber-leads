@@ -232,6 +232,13 @@ export const leads = sqliteTable("leads", {
   // ── Lead Scoring ──────────────────────────────────────────────────────────
   leadTag: text("lead_tag"),   // "hot_lead" | "coming_soon" | "upgrade_target" | null
   leadScore: integer("lead_score").default(0), // 0–100 priority score
+  // ── Buyer score (shared/buyerScore.ts) ─────────────────────────────────────
+  // "Will this household buy when we knock", 1.0 to 10.0 with one decimal, written
+  // ONLY by server/buyerScoreJob.ts. NULL = not scored yet, or removed from scoring
+  // (closed door, do-not-knock). reasons = JSON list of {key,label,delta}.
+  buyerScore: real("buyer_score"),
+  buyerScoreReasons: text("buyer_score_reasons"),
+  buyerScoredAt: text("buyer_scored_at"),
   // Manager/team-lead pre-assignment triage mark — "priority" | "hold" | null
   // (see shared/leadMark.ts). Independent of lead_status and assignment.
   assignMark: text("assign_mark"),
