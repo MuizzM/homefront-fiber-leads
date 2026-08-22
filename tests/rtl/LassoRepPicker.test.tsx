@@ -41,3 +41,20 @@ describe("<LassoRepPicker />", () => {
     expect(initialsOf("  ")).toBe("?");
   });
 });
+
+describe("avatarColors", () => {
+  it("clears 4.5:1 for every colour a team can pick, keeping the colour when dark ink already reads", async () => {
+    const { avatarColors } = await import("../../client/src/components/map/LassoRepPicker");
+    const lum = (c: number[]) => { const f = (v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+    const ratio = (a: number[], b: number[]) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+    const hex = (h: string) => [0, 2, 4].map((i) => parseInt(h.slice(1 + i, 3 + i), 16));
+    const swatches = ["#2563EB", "#db2777", "#8b5cf6", "#38bdf8", "#34d399", "#fbbf24", "#a78bfa", "#fb7185", "#22d3ee", "#a3e635", "#e879f9", "#14b8a6", "#f97316", "#22c55e", "#ef4444", "#eab308", "#64748b", "#10b981", "#6366f1", "#d946ef", "#ffffff", "#000000"];
+    for (const s of swatches) {
+      const { background, color } = avatarColors(s);
+      expect(ratio(hex(background), hex(color)), `${s} -> ${background}/${color}`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(avatarColors("#fbbf24")).toEqual({ background: "#fbbf24", color: "#07111B" }); // amber keeps its colour
+    expect(avatarColors("#8b5cf6").color).toBe("#FFFFFF");                               // violet settles toward ink
+    expect(avatarColors("not a colour")).toEqual({ background: "not a colour", color: "#FFFFFF" });
+  });
+});

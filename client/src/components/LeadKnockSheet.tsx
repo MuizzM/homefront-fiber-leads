@@ -903,7 +903,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               type="button"
               data-testid="appt-cancel"
               onClick={() => setApptOpen(false)}
-              className="min-h-tap text-[12px] font-semibold text-white/50 hover:text-white/80 transition px-1 -mr-1 -my-2"
+              className="min-h-tap text-[12px] font-semibold text-white/65 hover:text-white/90 transition px-1 -mr-1 -my-2"
             >
               Cancel
             </button>

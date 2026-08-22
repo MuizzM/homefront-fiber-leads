@@ -16,7 +16,7 @@ import { FOCUS } from "@/lib/a11y";
 import { distanceHint, pinDisplayState, STATE_COLORS, STATE_LABELS, type RoutablePin } from "@shared/knock";
 import { STATUS_CONFIG, isLeadMapStatus } from "@shared/statusConfig";
 import type { RankedDoor } from "@shared/nearestDoors";
-import { relativeTime } from "@/components/lead-sheet/utils";
+import { relativeTime, MUTED } from "@/components/lead-sheet/utils";
 
 export interface StripPin extends RoutablePin {
   address: string;
@@ -76,7 +76,11 @@ export function NearestDoorsStrip({ doors, nearbyTotal, onOpen, onHide, style }:
               data-testid={`nearest-door-${pin.id}`}
               data-dist-m={Math.round(meters)}
               aria-label={`${pin.address}, ${atDoor ? "at door" : distanceHint(meters) + " away"}, ${STATE_LABELS[ds]}`}
-              className={`glass-surface snap-start flex w-[272px] shrink-0 flex-col gap-1 rounded-[20px] px-3.5 py-3 text-left active:scale-[0.98] transition-transform ${FOCUS} ${
+              // glass-opaque: the ink at 0.94, no blur. Measured over light street
+              // tiles the panel glass (0.74) left 12px muted text at 2.8:1 and the
+              // green Prospect label at 2.6:1; the opaque fill clears 4.5:1 for
+              // every status colour and saves three blurred surfaces on a phone GPU.
+              className={`glass-surface glass-opaque snap-start flex w-[272px] shrink-0 flex-col gap-1 rounded-[20px] px-3.5 py-3 text-left active:scale-[0.98] transition-transform ${FOCUS} ${
                 i === 0 && atDoor ? "ring-[1.5px] ring-success/45" : ""
               }`}
             >
@@ -84,15 +88,17 @@ export function NearestDoorsStrip({ doors, nearbyTotal, onOpen, onHide, style }:
                 <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
                 <span className="flex-1 min-w-0 truncate text-[15px] font-semibold text-white">{pin.address}</span>
                 <span
-                  className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2 text-2xs font-bold tabular-nums ${
-                    atDoor ? "border-success/35 bg-success/[0.12] text-success" : "border-white/10 bg-white/[0.05] text-white/65"
+                  // At door is THE signal on this surface, so it is a filled pill
+                  // with dark ink (9:1), not a tint whose ink measured 3.2:1.
+                  className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-2xs font-bold tabular-nums ${
+                    atDoor ? "bg-success text-[#04241f]" : "border border-white/10 bg-white/[0.06] text-white/85"
                   }`}
                 >
                   <LocateFixed aria-hidden="true" className="h-3 w-3" />
                   {atDoor ? "At door" : distanceHint(meters)}
                 </span>
               </span>
-              <span className="truncate pl-[18px] text-[12px]" style={{ color: "#8A94A6" }}>
+              <span className="truncate pl-[18px] text-[12px]" style={{ color: MUTED }}>
                 <span className="font-semibold" style={{ color: ink }}>{STATE_LABELS[ds]}</span>
                 {meta ? ` · ${meta}` : ""}
               </span>

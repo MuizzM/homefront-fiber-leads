@@ -157,7 +157,7 @@ export default function ImportLeads() {
               </p>
             )}
           </div>
-          <Button variant="outline" className="h-9" onClick={() => fileInput.current?.click()} data-testid="import-choose">
+          <Button variant="outline" className="h-11 md:h-9" onClick={() => fileInput.current?.click()} data-testid="import-choose">
             {preview ? "Change file" : "Choose file"}
           </Button>
         </CardContent>
@@ -198,7 +198,7 @@ export default function ImportLeads() {
                           aria-label={`Field for ${col}`}
                           data-testid={`import-target-${i}`}
                           onChange={(e) => remap(i, e.target.value as LeadImportTarget)}
-                          className={`h-9 min-w-[168px] rounded-lg border border-border bg-card px-2.5 text-[13px] text-foreground disabled:opacity-60 ${FOCUS}`}
+                          className={`h-11 md:h-9 min-w-[168px] rounded-lg border border-border bg-card px-2.5 text-[13px] text-foreground disabled:opacity-60 ${FOCUS}`}
                         >
                           {LEAD_IMPORT_TARGETS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
                         </select>
@@ -258,7 +258,7 @@ export default function ImportLeads() {
                     aria-checked={assignMode === mode}
                     data-testid={`import-assign-${mode}`}
                     onClick={() => setAssignMode(mode)}
-                    className={`h-9 rounded-full px-3.5 text-[13px] font-semibold transition ${FOCUS} ${assignMode === mode ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                    className={`h-11 md:h-9 rounded-full px-3.5 text-[13px] font-semibold transition ${FOCUS} ${assignMode === mode ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                   >
                     {label}
                   </button>
@@ -270,7 +270,7 @@ export default function ImportLeads() {
                   onChange={(e) => setOneRep(e.target.value)}
                   aria-label="Rep"
                   data-testid="import-one-rep"
-                  className={`h-9 min-w-[180px] rounded-lg border border-border bg-card px-2.5 text-[13px] text-foreground ${FOCUS}`}
+                  className={`h-11 md:h-9 min-w-[180px] rounded-lg border border-border bg-card px-2.5 text-[13px] text-foreground ${FOCUS}`}
                 >
                   <option value="">Pick a rep</option>
                   {reps.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
@@ -289,7 +289,7 @@ export default function ImportLeads() {
                 disabled={!canImport}
                 onClick={() => importMutation.mutate()}
                 data-testid="import-run"
-                className="h-10 px-5 text-[14px] font-semibold tabular-nums"
+                className="h-11 md:h-10 px-5 text-[14px] font-semibold tabular-nums"
               >
                 {importMutation.isPending ? "Importing..." : `Import ${fmt(summary.ready)} leads`}
               </Button>
@@ -298,7 +298,7 @@ export default function ImportLeads() {
                   href={needsFixHref}
                   download="rows-to-fix.csv"
                   data-testid="import-needs-fix"
-                  className={`inline-flex h-10 items-center rounded-lg border border-border bg-card px-3.5 text-[13px] font-medium text-foreground hover:bg-secondary/60 ${FOCUS}`}
+                  className={`inline-flex h-11 md:h-10 items-center rounded-lg border border-border bg-card px-3.5 text-[13px] font-medium text-foreground hover:bg-secondary/60 ${FOCUS}`}
                 >
                   Download the {fmt(preview.needsFix.length)} rows to fix
                 </a>

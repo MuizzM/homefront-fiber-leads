@@ -120,10 +120,7 @@ export default function FollowUps() {
     <div className="min-h-full bg-background pb-24">
       <div className="mx-auto w-full max-w-lg px-4 pt-5">
         <header>
-          <div className="text-[13px] text-muted-foreground" data-testid="schedule-week-label">
-            Week of {fmtMonthDay(week[0])}
-          </div>
-          <h1 className="text-xl font-bold tracking-tight text-foreground mt-0.5">Appointments and callbacks</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">Appointments and callbacks</h1>
           {/* The one-glance read: how many owed, and whether any slipped. */}
           {!q.isLoading && !q.isError && groups.total > 0 && (
             <p className="text-[13px] text-muted-foreground mt-1" data-testid="followups-summary">
@@ -137,17 +134,24 @@ export default function FollowUps() {
             colour (capped at three so the row never grows). Tapping a day shows
             that day's agenda; tapping today restores the owed/today/upcoming view. */}
         {!q.isLoading && !q.isError && (
-          <div role="tablist" aria-label={`Week of ${fmtMonthDay(week[0])}`} data-testid="schedule-week"
-            className="mt-4 grid grid-cols-7 gap-1">
+          <div className="mt-4">
+            <div className="mb-1.5 flex items-baseline justify-end">
+              <span className="text-[11px] font-medium text-muted-foreground tabular-nums" data-testid="schedule-week-label">Week of {fmtMonthDay(week[0])}</span>
+            </div>
+          {/* Seven toggle buttons, not tabs: a tablist promises arrow-key
+              navigation this strip does not have. Bleeds to the screen edge
+              on phones so every cell clears the 44px floor at 320px. */}
+          <div role="group" aria-label={`Week of ${fmtMonthDay(week[0])}`} data-testid="schedule-week"
+            className="-mx-4 grid grid-cols-7 gap-0.5 px-0.5 sm:mx-0 sm:gap-1 sm:px-0">
             {week.map((iso, i) => {
               const selected = iso === selectedDay;
               const isToday = iso === today;
               const dots = (byDay.get(iso) ?? []).slice(0, 3);
               return (
-                <button key={iso} type="button" role="tab" aria-selected={selected} aria-label={fmtDay(iso, today)}
+                <button key={iso} type="button" aria-pressed={selected} aria-label={fmtDay(iso, today)}
                   data-testid={`schedule-day-${iso}`}
                   onClick={() => setSelectedDay(iso)}
-                  className={`flex min-h-tap flex-col items-center gap-[3px] rounded-xl border px-0 pt-1.5 pb-[7px] transition-colors ${FOCUS} ${
+                  className={`flex min-h-tap min-w-[44px] flex-col items-center gap-[3px] rounded-xl border px-0 pt-1.5 pb-[7px] transition-colors ${FOCUS} ${
                     selected
                       ? "border-primary bg-primary"
                       : isToday ? "border-primary/40 bg-transparent hover:bg-secondary/60" : "border-transparent bg-transparent hover:bg-secondary/60"
@@ -163,6 +167,7 @@ export default function FollowUps() {
                 </button>
               );
             })}
+          </div>
           </div>
         )}
 

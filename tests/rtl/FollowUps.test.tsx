@@ -90,10 +90,10 @@ describe("Schedule week strip and time-first rows", () => {
     renderPage([fu(1, today, { callbackTime: "09:30" }), fu(2, today)]);
     await screen.findByTestId("followup-1");
     const strip = screen.getByTestId("schedule-week");
-    const days = within(strip).getAllByRole("tab");
+    const days = within(strip).getAllByRole("button");
     expect(days).toHaveLength(7);
     const todayTab = screen.getByTestId(`schedule-day-${today}`);
-    expect(todayTab.getAttribute("aria-selected")).toBe("true");
+    expect(todayTab.getAttribute("aria-pressed")).toBe("true");
     // Two bookings today -> two dots on today's day cell.
     expect(todayTab.querySelectorAll("span[style*='background']").length).toBe(2);
     // The week label names the Monday.
@@ -122,7 +122,7 @@ describe("Schedule week strip and time-first rows", () => {
     expect(within(view).queryByTestId("followup-1")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Today" })).toBeNull();
     // A day with nothing booked says so and offers the way back to today.
-    const empty = within(strip).getAllByRole("tab").find(t => t.getAttribute("aria-selected") !== "true" && t !== tomorrowTab && t.getAttribute("data-testid") !== `schedule-day-${today}`)!;
+    const empty = within(strip).getAllByRole("button").find(t => t.getAttribute("aria-pressed") !== "true" && t !== tomorrowTab && t.getAttribute("data-testid") !== `schedule-day-${today}`)!;
     fireEvent.click(empty);
     expect(screen.getByTestId("schedule-day-empty").textContent).toContain("Nothing booked for");
     fireEvent.click(screen.getByText("Back to today"));

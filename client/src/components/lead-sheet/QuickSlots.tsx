@@ -28,7 +28,7 @@ export function QuickSlotRow({ date, time, onPick, surface = "glass", now }: Qui
       data-testid="appt-slots"
       // Bleeds to the editor's edge so a half-visible chip advertises the
       // scroll; snap keeps a flick landing on whole chips.
-      className="-mx-3 px-3 mb-2.5 flex gap-1.5 overflow-x-auto overscroll-x-contain snap-x scrollbar-none"
+      className="-mx-3 px-3 mb-2.5 flex gap-2 overflow-x-auto overscroll-x-contain snap-x scrollbar-none"
     >
       {slots.map((s, i) => {
         const selected = s.date === date && s.time === time;
