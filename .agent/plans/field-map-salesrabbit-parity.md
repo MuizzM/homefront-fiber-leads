@@ -72,21 +72,66 @@ column-matching import that never imports phone numbers.
 ## Progress
 
 - 2026-08-22 03:20 Branch created, plan written, code mapping in flight.
+- 2026-08-22 07:25 M1 Schedule page (9a67c12). M2 quick slots + reminder job (047c90a).
+- 2026-08-22 07:40 M3 in-card Undo (1761f8e). Pushed the branch.
+- 2026-08-22 08:05 M4 Nearest doors strip (c948b5b). M5 county-first tap-to-add (fa50a14).
+- 2026-08-22 08:30 M6 where-they-stood + dark signal tokens on the ink sheet (2a0bdef).
+- 2026-08-22 09:00 M7 lasso rep picker, docked panel, assignment undo (f87ab1e).
+- 2026-08-22 09:40 M8 spreadsheet import, routes + page + nav (2c88cd2). Pushed.
+- 2026-08-22 09:45 Full verification running (`bash scripts/agent-verify.sh full`).
 
 ## Decisions
 
 - Build in value order (Schedule, slots, undo, strip, add-lead, history,
   lasso, import) so each push is usable on its own.
 - Pin badges on map pins are deferred: they require the packed
-  `/api/leads/map` format to carry a verdict and touch the racing lead layers.
+  `/api/leads/map` format to carry a verdict (wire version bump, server and
+  client shipped together) and touch the racing lead layers.
+- Undo after a mark is an in-card chip, not a toast: the owner deliberately
+  made ordinary saves silent (`savedKnockReconciliation.ts`), so the chip
+  lives on the status line for eight seconds and re-logs the previous
+  disposition through the normal knock path (a wrong Sold reverses its money
+  the normal way; history keeps both rows).
+- Appointment reminders are always on for timed callbacks (no per-booking
+  toggle): persisting a preference needs a knock_log column and a migration,
+  and a reminder for a promise to a homeowner is the right default. Restart
+  safety comes from the push `tag` collapsing a repeat on the device.
+- Tap-to-add keeps its instant one-tap shape; the county address file is
+  consulted server-side inside `/api/geocode/reverse` (45 m), so every caller
+  benefits and Mapbox is paid only when the county file has nothing there.
+- Lasso undo is a server-side in-memory token (10 min, 5,000 doors, one use,
+  same user and tenant) rather than bridging into the guarded-action engine:
+  that engine takes explicit lead ids behind a feature flag, while the lasso
+  resolves a ring server-side.
+- Import geocodes from the county file only. Rows it cannot match import
+  without a pin (they show in Leads). A paid Mapbox backfill under the
+  existing budget is follow-up work.
 
 ## Discoveries
 
-(updated as work proceeds)
+- The dark glass door card read the LIGHT signal tokens under the light
+  default (`text-success`, `bg-primary` on a near-black sheet): the At door
+  chip measured about 3:1 and primary buttons 1.9:1 against the ink.
+  `.glass-ink-scope` only re-asserted the neutrals. Fixed by carrying the
+  dark signal set in the scope and opting the card in (test pins every value
+  to `:root.dark`).
+- `address_points.street` already holds the house number (`st_address`), so
+  the reverse-geocode snap must not prepend `house_number` again.
+- `getOpenCallbacks` without a tenant id is cross-tenant by construction; the
+  reminder job iterates active tenants and reads per tenant instead.
 
 ## Validation
 
-(per milestone, exact commands and results recorded below)
+Per milestone (all green, `DATA_DIR=$(mktemp -d)` per the pristine-data rule):
+- `npx vitest run tests/unit/schedule-calendar.test.ts tests/rtl/FollowUps.test.tsx` (17)
+- `npx vitest run tests/unit/callback-reminders.test.ts tests/integration/callback-reminders-tick.test.ts tests/rtl/LeadKnockSheet.test.tsx tests/rtl/OutcomeSheet.test.tsx`
+- `npx vitest run tests/unit/nearest-doors.test.ts tests/unit/map-nearest-doors.test.ts tests/rtl/NearestDoorsStrip.test.tsx tests/unit/map-*.test.ts`
+- `npx vitest run tests/integration/reverse-geocode-county-first.test.ts tests/integration/address-point-authority.test.ts`
+- `npx vitest run tests/unit/glass-ink-scope-signals.test.ts tests/unit/light-theme-token-coverage.test.ts tests/unit/design-tokens.test.ts`
+- `npx vitest run tests/integration/assign-selection-undo.test.ts tests/integration/assign-selection.test.ts tests/rtl/LassoRepPicker.test.tsx tests/unit/lasso-*.test.ts`
+- `npx vitest run tests/unit/lead-import-mapping.test.ts tests/integration/lead-import.test.ts tests/rtl/ImportLeads.test.tsx`
+- `npx tsc --noEmit -p tsconfig.json` clean after every milestone.
+- Full: `bash scripts/agent-verify.sh full` (result recorded in Result).
 
 ## Recovery
 
