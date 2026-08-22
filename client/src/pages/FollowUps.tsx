@@ -17,7 +17,7 @@ import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { STATE_COLORS, pinDisplayState, todayISO, haversineMeters, distanceHint } from "@shared/knock";
-import { weekOf, addDaysISO, type ScheduleFix } from "@shared/schedule";
+import { weekOf, type ScheduleFix } from "@shared/schedule";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronRight, CheckCircle2 } from "lucide-react";
 

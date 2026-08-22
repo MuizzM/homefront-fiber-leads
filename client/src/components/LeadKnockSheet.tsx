@@ -48,6 +48,8 @@ import { ContactSection } from "@/components/lead-sheet/ContactSection";
 import { QuickLinks } from "@/components/lead-sheet/QuickLinks";
 import { SheetPhotos } from "@/components/lead-sheet/SheetPhotos";
 import { relativeTime, prefersReducedMotion, shortRepName, MUTED, BODY_TEXT } from "@/components/lead-sheet/utils";
+import { QuickSlotRow } from "@/components/lead-sheet/QuickSlots";
+import { describeAppointment } from "@shared/schedule";
 import { isFccReportedLead } from "@/lib/leadSourceFilter";
 import { useToast } from "@/hooks/use-toast";
 import type { HistoryRow, LeadDetail, TeamMember } from "@/components/lead-sheet/types";
@@ -853,11 +855,18 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               type="button"
               data-testid="appt-cancel"
               onClick={() => setApptOpen(false)}
-              className="text-[12px] font-semibold text-white/50 hover:text-white/80 transition px-1 -mr-1"
+              className="min-h-tap text-[12px] font-semibold text-white/50 hover:text-white/80 transition px-1 -mr-1 -my-2"
             >
               Cancel
             </button>
           </div>
+          {/* One-tap times first; a tap fills the pickers below, Set still confirms. */}
+          <QuickSlotRow
+            date={apptDate}
+            time={apptTime}
+            onPick={(slot) => { setApptDate(slot.date); setApptTime(slot.time); }}
+            surface="glass"
+          />
           <div className="flex flex-wrap items-end gap-2">
             <label className="flex-1 min-w-[150px]">
               <span className="block text-[11px] font-medium mb-1" style={{ color: MUTED }}>Date</span>
@@ -895,11 +904,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               // right-aligns on its own line instead of dangling bottom-left.
               className="ml-auto h-11 px-4 rounded-xl bg-primary text-primary-foreground text-[13px] font-semibold active:scale-95 transition disabled:opacity-45 disabled:cursor-not-allowed"
             >
-              Set
+              {apptDate ? `Set for ${describeAppointment(apptDate, apptTime)}` : "Set"}
             </button>
           </div>
           <p className="mt-2 text-[11.5px] leading-snug" style={{ color: MUTED }}>
-            Saves a {OUTCOME_META[apptOutcome].label} with this date — it lands on your Follow-ups.
+            Saves a {OUTCOME_META[apptOutcome].label} on this date. It lands on your Schedule, with a reminder 30 minutes before a timed visit.
           </p>
         </div>
       )}

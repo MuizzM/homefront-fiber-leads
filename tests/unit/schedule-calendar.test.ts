@@ -2,7 +2,7 @@
 // quick appointment slots. Everything is wall-clock local, never UTC, because a
 // callback date is the day the rep picked on their phone.
 import { describe, expect, it } from "vitest";
-import { addDaysISO, quickSlots, toISODate, weekOf } from "../../shared/schedule";
+import { addDaysISO, describeAppointment, quickSlots, toISODate, weekOf } from "../../shared/schedule";
 
 describe("weekOf", () => {
   it("returns Monday through Sunday of the week containing the date", () => {
@@ -57,5 +57,15 @@ describe("quickSlots", () => {
   it("every slot is on or after today", () => {
     const now = at("2026-08-21", 12, 0);
     for (const s of quickSlots(now)) expect(s.date >= toISODate(now)).toBe(true);
+  });
+});
+
+describe("describeAppointment", () => {
+  it("names today and tomorrow, otherwise the weekday and date, with the time when set", () => {
+    expect(describeAppointment("2026-08-21", "17:30", "2026-08-21")).toBe("today 5:30 PM");
+    expect(describeAppointment("2026-08-22", "10:00", "2026-08-21")).toBe("tomorrow 10 AM");
+    expect(describeAppointment("2026-08-29", "14:00", "2026-08-21")).toBe("Sat, Aug 29 2 PM");
+    expect(describeAppointment("2026-08-29", null, "2026-08-21")).toBe("Sat, Aug 29");
+    expect(describeAppointment("2026-08-29", "", "2026-08-21")).toBe("Sat, Aug 29");
   });
 });

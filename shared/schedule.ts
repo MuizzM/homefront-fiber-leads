@@ -81,3 +81,18 @@ export function quickSlots(now: Date): QuickSlot[] {
   slots.push({ label: `Mon ${fmtSlotTime(9 * 60)}`, date: addDaysISO(today, toMon), time: "09:00" });
   return slots.slice(0, 4);
 }
+
+/**
+ * "today 5:30 PM", "tomorrow 10 AM", "Sat, Aug 29 2 PM", "Sat, Aug 29" - the
+ * words a confirm button uses so the rep reads what they are about to book.
+ * `today` is injectable for tests; defaults to the device's local date.
+ */
+export function describeAppointment(date: string, time: string | null | undefined, today = toISODate(new Date())): string {
+  const day = date === today ? "today"
+    : date === addDaysISO(today, 1) ? "tomorrow"
+    : parseISO(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  if (!time) return day;
+  const [h, m] = time.split(":").map(Number);
+  if (!Number.isFinite(h)) return day;
+  return `${day} ${fmtSlotTime(h * 60 + (Number.isFinite(m) ? m : 0))}`;
+}

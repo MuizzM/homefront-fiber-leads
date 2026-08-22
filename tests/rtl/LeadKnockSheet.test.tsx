@@ -1025,6 +1025,42 @@ describe("<LeadKnockSheet /> - appointment composer", () => {
   });
 });
 
+describe("<LeadKnockSheet /> - quick appointment slots", () => {
+  it("offers one-tap times; a tap fills the pickers and names the booking on Set, Set still confirms", async () => {
+    const { props } = renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    const slots = screen.getByTestId("appt-slots");
+    const chips = Array.from(slots.querySelectorAll("button"));
+    // Three or four chips: "today" drops out after working hours.
+    expect(chips.length).toBeGreaterThanOrEqual(3);
+    expect(chips.length).toBeLessThanOrEqual(4);
+    expect(props.onKnock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("appt-slot-1")); // tomorrow 10 AM, always offered
+    expect(screen.getByTestId("appt-slot-1")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("appt-time")).toHaveValue("10:00");
+    expect(screen.getByTestId("appt-date")).not.toHaveValue("");
+    expect(screen.getByTestId("appt-save")).toHaveTextContent("Set for tomorrow 10 AM");
+    // Nothing is logged until Set.
+    expect(props.onKnock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("appt-save"));
+    expect(props.onKnock).toHaveBeenCalledTimes(1);
+    const [outcome, opts] = props.onKnock.mock.calls[0];
+    expect(outcome).toBe("follow_up");
+    expect(opts.callbackTime).toBe("10:00");
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const iso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+    expect(opts.callbackDate).toBe(iso);
+  });
+
+  it("editing the time by hand un-presses the chip, so a chip only ever claims an exact match", async () => {
+    renderSheet();
+    await userEvent.click(screen.getByTestId("appt-open"));
+    await userEvent.click(screen.getByTestId("appt-slot-1"));
+    fireEvent.change(screen.getByTestId("appt-time"), { target: { value: "11:15" } });
+    expect(screen.getByTestId("appt-slot-1")).toHaveAttribute("aria-pressed", "false");
+  });
+});
+
 describe("<LeadKnockSheet /> - proximity chip", () => {
   function stubGeolocation(coords: { latitude: number; longitude: number; accuracy: number } | null) {
     Object.defineProperty(navigator, "geolocation", {
