@@ -324,11 +324,15 @@ services:
       # not daily. Daily polling of the undated population would cost ~24,000
       # checks/month, more than the once-only law saves.
       COMING_LEDGER_UNDATED_DAYS: "30"
-      # Planner statistics upkeep. ANALYZE used to run once and never again, so
-      # sqlite_stat1 held stats for one scan_targets index with value "0 0 0 0"
-      # and the planner walked 919k rows for a query the range index answers in
-      # 9 ms. One big table re-analysed per maintenance tick, at most once a day
-      # each, on the cluster primary. "off" disables.
+      # Planner statistics upkeep, on SQLite's documented lifecycle: ANALYZE used
+      # to run once and never again, so sqlite_stat1 held stats for a single
+      # scan_targets index with the value "0 0 0 0" and the planner walked 919k
+      # rows for a count the range index answers immediately. The maintenance
+      # tick now runs PRAGMA optimize=0x10002 (the mask that lifts the
+      # "only tables this connection queried" restriction) once per process and
+      # once a day thereafter, then plain PRAGMA optimize on every other tick.
+      # Measured: 13.8 s for the first pass, 0-5 ms after; sweepSummary 2,951 ms
+      # -> 12 ms. Cluster primary only, never at open. "off" disables.
       ANALYZE_MAX_AGE_HOURS: "24"
       # FRESH HARVEST — continuous Kinetic scanning ranked by expected yield
       # (coming-soon flips → fresh-cluster neighbors → hot-city frontier →

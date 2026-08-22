@@ -181,26 +181,40 @@ stored one, because one silent answer is not evidence a household cancelled.
 
 `ANALYZE` used to run once, latched by `analyze_done`, so a long-lived install
 kept whatever statistics existed the first time. Measured on a
-production-shaped copy: `sqlite_stat1` held stats for exactly ONE
-`scan_targets` index and their value was `0 0 0 0`. The planner therefore chose
-a tenant-prefixed index and walked all 919k rows for a 24-hour count the range
-index answers in 9 ms - 2,966 ms versus 9 ms. `PRAGMA optimize` did not save it:
-it only reconsiders tables the current connection has queried, and the
-maintenance connection never touches `scan_targets`.
+production-shaped copy (application build SQLite 3.49.2): `sqlite_stat1` held
+stats for exactly ONE `scan_targets` index and their value was `0 0 0 0`. The
+planner therefore chose a tenant-prefixed index and walked all 919k rows for a
+24-hour count the range index answers immediately.
 
-`reanalyseStaleTable` (server/yieldRollups.ts) now re-analyses one big table per
-tick, each at most once per `ANALYZE_MAX_AGE_HOURS` (24), on the cluster primary
-which serves no HTTP. It is a FULL ANALYZE on purpose - a sampled one
-(`analysis_limit`) produced stats that still picked the wrong index.
+Plain `PRAGMA optimize` could not fix it: it only reconsiders tables the current
+connection has queried, and the maintenance connection never touches
+`scan_targets`. The `0x10002` mask lifts exactly that restriction, and since
+SQLite 3.46.0 `PRAGMA optimize` bounds its own ANALYZE work - which is why it is
+preferred over running a full `ANALYZE` on a schedule.
+
+`optimizePlannerStats` (server/yieldRollups.ts) follows SQLite's documented
+lifecycle for a long-lived connection: `PRAGMA optimize=0x10002` on the first
+maintenance tick (and again every `ANALYZE_MAX_AGE_HOURS`, default 24), then
+plain `PRAGMA optimize` on every tick after. It runs on the cluster primary,
+which serves no HTTP, and never at open, so it cannot delay the health gate.
 `ANALYZE_MAINTENANCE=off` disables it.
 
-Two query shapes in the sweep are written to be fast regardless of planner
-statistics, because an install's stats may still be stale: the unary `+` on
-`tenant_id`/`state` keeps the range index driving the 24-hour counters, and the
-pending-rows counter resolves its handful of run ids before counting instead of
-joining 803k rows against an unindexed `kind LIKE` (937 ms -> 82 ms). The
-now-active reconciler drives from the watchlist with a primary-key lookup per
-row rather than scanning every target (2,476 ms -> 4 ms).
+Measured on the 3.3 GB copy, with no query hints anywhere:
+
+| | before stats | after |
+| --- | ---: | ---: |
+| `sweepSummary` (every manager poll) | 2,951 ms | 12 ms |
+| `buildFrontier` (every cycle) | 2,697 ms | 494 ms |
+| the first `0x10002` pass | | 13.8 s, once |
+| every later `PRAGMA optimize` | | 0-5 ms |
+
+Two query shapes in the sweep were also rewritten, because they were wrong
+regardless of statistics: the pending-rows counter resolves its handful of run
+ids before counting instead of joining 803k rows against an unindexed
+`kind LIKE` (937 ms -> 82 ms), and the now-active reconciler drives from the
+watchlist with a primary-key lookup per row rather than scanning every target
+(2,476 ms -> 4 ms). No index is pinned with `INDEXED BY` or suppressed with a
+unary `+`: statistics are fixed where they belong and the planner chooses.
 
 ## Neighborhood sweep
 

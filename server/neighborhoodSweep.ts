@@ -545,11 +545,6 @@ export interface CycleDeps {
 }
 
 function measureDrainPerMinute(): number {
-  // The unary + keeps the planner off any other predicate so the range index on
-  // last_scanned_at drives. Without it SQLite picks a tenant-prefixed index and
-  // walks every row: measured 2,966 ms versus 9 ms for the same answer, because
-  // sqlite_stat1 carries stats for exactly one scan_targets index (and they are
-  // 0 0 0 0). See the ANALYZE maintenance in server/yieldRollups.ts.
   const row = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE last_scanned_at > datetime('now','-60 minutes')`).get() as any;
   return Number(row?.n ?? 0) / 60;
 }
@@ -924,11 +919,15 @@ export function sweepSummary(tenantId: number): SweepSummary {
     unlinkedGreens += Number(r.g ?? 0);
   }
   const lastCycle = rawDb.prepare(`SELECT * FROM sweep_cycles WHERE tenant_id=? AND state=? ORDER BY id DESC LIMIT 1`).get(tenantId, state) ?? null;
-  // + on tenant_id/state so the last_scanned_at range index drives the scan;
-  // the tenant-prefixed index the planner otherwise picks costs 2,966 ms here.
+  // Depends on the planner having usable statistics: with them the range index
+  // on last_scanned_at drives and this is immediate; without them SQLite picks a
+  // tenant-prefixed index and walks 919k rows (measured 3,373 ms). That is a
+  // statistics problem, not a query problem, and it is fixed where it belongs -
+  // optimizePlannerStats() in server/yieldRollups.ts - rather than by pinning an
+  // index here.
   const checks = rawDb.prepare(
     `SELECT COUNT(*) AS n, SUM(last_is_new_fiber=1) AS h FROM scan_targets
-      WHERE last_scanned_at > datetime('now','-24 hours') AND +tenant_id=? AND +state=?`,
+      WHERE last_scanned_at > datetime('now','-24 hours') AND tenant_id=? AND state=?`,
   ).get(tenantId, state) as any;
   // fresh_confirmed_at is copied from scan_targets (SQLite 'YYYY-MM-DD HH:MM:SS'); the
   // aggregate is unindexed, so normalizing the column is exact (server/sqlTime.ts).
