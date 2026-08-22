@@ -60,23 +60,46 @@ describe("optimizePlannerStats", () => {
   });
 });
 
+describe("planner upkeep is not gated by an unrelated feature flag", () => {
+  // Production sets YIELD_ROLLUPS=off. startYieldRollupMaintenance returns
+  // before its timer is created, so anything wired inside that tick never runs
+  // there - which is exactly how the address repair lane was silently disabled
+  // once before.
+  it("starts with YIELD_ROLLUPS=off and stops only for its own switch", async () => {
+    const mod = await import("../../server/yieldRollups");
+    const prev = { y: process.env.YIELD_ROLLUPS, a: process.env.ANALYZE_MAINTENANCE };
+    try {
+      process.env.YIELD_ROLLUPS = "off";
+      delete process.env.ANALYZE_MAINTENANCE;
+      expect(mod.startYieldRollupMaintenance(), "the rollup tick is off in prod").toBeNull();
+      const t = mod.startPlannerStatsMaintenance();
+      expect(t, "planner upkeep still starts").not.toBeNull();
+      clearInterval(t as NodeJS.Timeout);
+      process.env.ANALYZE_MAINTENANCE = "off";
+      expect(mod.startPlannerStatsMaintenance(), "its own switch stops it").toBeNull();
+    } finally {
+      if (prev.y === undefined) delete process.env.YIELD_ROLLUPS; else process.env.YIELD_ROLLUPS = prev.y;
+      if (prev.a === undefined) delete process.env.ANALYZE_MAINTENANCE; else process.env.ANALYZE_MAINTENANCE = prev.a;
+    }
+  });
+
+  it("is wired into the server boot independently of the rollup tick", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/index.ts"), "utf8");
+    expect(src).toContain("startPlannerStatsMaintenance()");
+  });
+});
+
 describe("planner upkeep never queues behind a migration", () => {
   // It used to sit at the BOTTOM of the maintenance tick, after five one-time
   // steps that each `return`. On any install still draining a migration the
   // planner ran blind, and if the alias merge halts on its integrity guard it
   // would never run at all.
-  it("runs before the one-time ladder in the tick body", async () => {
+  it("no longer rides the rollup tick at all", async () => {
     const [fs, path] = [await import("node:fs"), await import("node:path")];
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/yieldRollups.ts"), "utf8");
-    const body = src.slice(src.indexOf("const tick = () =>"));
-    const upkeep = body.indexOf("optimizePlannerStats()");
-    expect(upkeep, "optimizePlannerStats is called inside the tick").toBeGreaterThan(-1);
-    // Every one-time step must come AFTER it.
-    for (const marker of ["INDEXES", "streetKeyJanitorChunk", "negStreakBackfillChunk",
-                          "analyze_done", "alias_merge_done"]) {
-      expect(body.indexOf(marker), `${marker} runs after the planner upkeep`).toBeGreaterThan(upkeep);
-    }
-    // ...and it is called exactly once, so there is no second copy left behind.
-    expect(body.split("optimizePlannerStats()").length - 1).toBe(1);
+    const tick = src.slice(src.indexOf("const tick = () =>"), src.indexOf("const timer = setInterval(tick"));
+    expect(tick, "the migration ladder cannot starve it if it is not in there")
+      .not.toContain("optimizePlannerStats()");
   });
 });

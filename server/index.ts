@@ -700,8 +700,15 @@ app.use((req, res, next) => {
       // backfill) — chunked, sentinel-gated, interval-only. Runs in the
       // PRIMARY: its near-idle loop can absorb the one-time blocking index
       // builds that would stall an HTTP-serving worker.
-      const { startYieldRollupMaintenance } = await import("./yieldRollups");
+      const { startYieldRollupMaintenance, startPlannerStatsMaintenance } = await import("./yieldRollups");
       startYieldRollupMaintenance();
+      // QUERY PLANNER STATISTICS — INDEPENDENT of YIELD_ROLLUPS, for exactly the
+      // reason the address repair lane below is: production sets
+      // YIELD_ROLLUPS=off, which returns before that timer is created, so
+      // anything wired inside it silently never runs. sqlite_stat1 going stale
+      // is what makes the planner walk 919k rows for a count an index answers
+      // immediately. Own switch: ANALYZE_MAINTENANCE=off.
+      startPlannerStatsMaintenance();
       // ADDRESS REPAIR LANE — INDEPENDENT of YIELD_ROLLUPS. It was originally
       // wired inside the rollup tick, so YIELD_ROLLUPS=off silently disabled
       // it (observed live: the repair columns were never even created). It

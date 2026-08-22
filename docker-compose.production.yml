@@ -405,11 +405,34 @@ services:
       DECODO_RESERVE_PCT: "10"
       DECODO_BILLING_DAY: "1"
       YIELD_ROLLUPS: "off"
+      # Query planner statistics run on their OWN timer, not inside the rollup
+      # tick that YIELD_ROLLUPS=off disables - sqlite_stat1 going stale is what
+      # makes the planner walk 919k rows for counts an index answers at once.
+      # ANALYZE_MAINTENANCE=off is its kill switch.
+      ANALYZE_TICK_MS: "300000"
       # TOKEN ECONOMY (bot-wall workaround): mint rarely, ride tokens long.
       # 1 mint/2s max; each token serves 40 leases / 1000 checks before
       # retirement. One success per minute = 1000 checks/min of capacity.
       KFS_MINT_MIN_INTERVAL_MS: "15000"
-      DECODO_STICKY: "off"
+      # DECODO STICKY EGRESS - ON, and by PORT (measured 2026-08-22).
+      # Decodo does sticky through the port, not a username suffix:
+      # us.decodo.com:10000 hands out a DIFFERENT residential IP on every
+      # request and REJECTS every session-suffix form outright, which is why
+      # this was "off" - switching it on used to break every request.
+      # 10001+ each hold one persistent IP.
+      # This matters because a Kinetic bearer token is bound to the IP that
+      # minted it, so mint-here/search-there is a guaranteed 403. Measured end
+      # to end on Rockwell doors: port 10000 gave 31 of 236 checks (13%, 205
+      # denials); port 10001 gave 69 of 80 (86%), longest clean streak 30.
+      # PROXY_URL keeps its :10000 - the port is rewritten per sticky session.
+      DECODO_STICKY: "on"
+      DECODO_STICKY_PORT_BASE: "10001"
+      DECODO_STICKY_PORT_COUNT: "100"
+      DECODO_STICKY_MINUTES: "15"
+      # One 403 does not mean the IP is burnt (the 86% run took its first at
+      # check 15, then ran 30 clean). Rotating on the first denial is what
+      # turned 205 denials into 205 IP rotations.
+      DECODO_ROTATE_AFTER_DENIALS: "3"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
       KFS_TOKEN_MAX_CHECKS: "1000"

@@ -67,33 +67,67 @@ function configuredProxyUrl(): string | null {
   return proxyUrlFromEnv(process.env);
 }
 
-// ── STICKY DECODO SESSIONS (Cloudflare workaround, verified live) ───────────
-// Per-connection rotation makes EVERY request roll the IP-reputation dice
-// fresh (measured: 87% of checks 403'd during a wall). Cloudflare reputation
-// is sticky per egress IP — a clean IP stays clean for many minutes. So we
-// ride ONE residential IP per 15-minute window (Decodo `session-<id>` username
-// suffix) and rotate the id on schedule — or immediately on an auth denial,
-// which was already the behavior via rotateProxySession(). A bad IP is
-// retired in seconds; a good one is used at full speed instead of being
-// thrown away after a single request. DECODO_STICKY=off restores per-
-// connection rotation.
+// ── STICKY DECODO SESSIONS, BY PORT ─────────────────────────────────────────
+// Decodo hands out sticky residential sessions through the PORT, not through a
+// username suffix. Measured live 2026-08-22 against us.decodo.com:
+//
+//   port 10000  ->  206.204.115.128, 2601:84:847e:..., 68.201.57.149, ...
+//                   a DIFFERENT residential IP on every single request
+//   port 10001  ->  32.223.187.36 on every request
+//   port 10002  ->  73.105.42.201        "
+//   port 10005  ->  68.3.94.34           "
+//   port 10100  ->  47.32.214.254        "
+//
+// and every username-suffix form (`-session-x`, `-session-x-sessionduration-10`,
+// `-sessionduration-10-session-x`, `-sessid-x`) is REJECTED outright by 10000 -
+// the connection simply fails. That is why the suffix-based stickiness written
+// here originally could not work, and why DECODO_STICKY had to be set to "off"
+// in production: switching it on broke every request, so it was disabled and
+// the scanner has been running on the rotating gateway ever since.
+//
+// Running on 10000 is fatal for this workload because a Kinetic bearer token is
+// bound to the IP that minted it: mint on one IP, search from another, get 403.
+// Measured end to end on Rockwell doors:
+//
+//   port 10000 (rotating)  236 checks ->  31 x 200 (13%), 205 x 403
+//   port 10001 (sticky)     80 checks ->  69 x 200 (86%),  10 x 403,
+//                                         longest clean streak 30, 1.23 s/check
+//
+// So: pick a port from the sticky range and STAY on it. Rotation means moving to
+// the NEXT PORT (a different residential IP), never re-dialling 10000.
+// DECODO_STICKY=off restores the old rotating-gateway behaviour.
 const STICKY_MS = Math.max(60_000, Number(process.env.DECODO_STICKY_MINUTES ?? 15) * 60_000);
-let _stickyId = Math.random().toString(36).slice(2, 10);
+// Read at CALL time, like configuredProxyUrl(): the port range is operator
+// configuration, and capturing it at import makes it unreachable to anything
+// that sets the env after this module is first loaded.
+const stickyPortBase = () => Math.max(1, Number(process.env.DECODO_STICKY_PORT_BASE ?? 10001));
+const stickyPortCount = () => Math.max(1, Number(process.env.DECODO_STICKY_PORT_COUNT ?? 100));
+let _stickyPortOffset = Math.floor(Math.random() * 100);
 let _stickyUntil = Date.now() + STICKY_MS;
+
+/** The sticky port this process is currently riding. */
+function currentStickyPort(): number {
+  return stickyPortBase() + (_stickyPortOffset % stickyPortCount());
+}
+
+/** Move to the next residential IP by stepping to the next sticky port. */
+function advanceStickyPort(): void {
+  _stickyPortOffset = (_stickyPortOffset + 1) % stickyPortCount();
+  _stickyUntil = Date.now() + STICKY_MS;
+}
 
 function stickyProxyUrl(base: string): string {
   if (process.env.DECODO_STICKY === "off") return base;
   try {
     if (Date.now() > _stickyUntil) {
-      _stickyId = Math.random().toString(36).slice(2, 10);
-      _stickyUntil = Date.now() + STICKY_MS;
-      console.log(`[proxy-fetch] sticky session window expired → new sticky id`);
+      advanceStickyPort();
+      console.log(`[proxy-fetch] sticky window expired -> port ${currentStickyPort()}`);
     }
     const u = new URL(base);
     if (!u.username) return base;
-    // Avoid double-stick if the operator baked a session into the URL already.
+    // An operator who baked their own session into the URL owns the choice.
     if (u.username.includes("-session-")) return base;
-    u.username = `${u.username}-session-${_stickyId}-sessionduration-30`;
+    u.port = String(currentStickyPort());
     return u.toString();
   } catch { return base; }
 }
@@ -177,6 +211,9 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         const cl = Number((res as any).headers?.get?.("content-length") ?? 0) || 0;
         if (res.status === 407) noteProxyAuthFailure();
         else { noteProxySuccess(); recordProxyResponse(cl); }
+        // A 2xx proves THIS egress IP is still welcome: forgive its earlier
+        // denials so an occasional 403 never accumulates into a rotation.
+        if (res.status >= 200 && res.status < 300) _denialStreak = 0;
       } catch { /* metrics must never break the transport */ }
       // Rotate for the NEXT request, off the hot path.
       if (shouldProactiveRotate) void rotateProxySession("proactive");
@@ -215,10 +252,7 @@ function rebuildDispatcher(proxyUrl: string): void {
   // A rebuild is almost always denial-driven (403/socket reset): the whole
   // point is a FRESH egress IP. Force a new sticky id here — the time-based
   // window only applies to undisturbed operation, never to a rotate.
-  if (process.env.DECODO_STICKY !== "off") {
-    _stickyId = Math.random().toString(36).slice(2, 10);
-    _stickyUntil = Date.now() + STICKY_MS;
-  }
+  if (process.env.DECODO_STICKY !== "off") advanceStickyPort();
   _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
   _sessionSeq++;
   // Graceful, fire-and-forget close of the old pool so in-flight requests finish
@@ -246,9 +280,28 @@ async function doRotate(proxyUrl: string, reason?: string): Promise<void> {
  * run BEFORE `_rotateInFlight = done` and leave a resolved promise pinned forever,
  * silently disabling all future rotations (the exact bug that stalled the scan).
  */
+// How many consecutive denials retire a sticky IP. Measured on port 10001:
+// 80 checks, 69 x 200 (86%), first 403 at check 15 and then a 30-check clean
+// run - so ONE denial says nothing about the IP, and rotating on it throws away
+// a working session and pays a cold handshake for nothing. On the rotating
+// gateway (DECODO_STICKY=off) there is no IP to keep, so rotate immediately.
+const rotateAfterDenials = () => Math.max(1, Number(process.env.DECODO_ROTATE_AFTER_DENIALS ?? 3));
+let _denialStreak = 0;
+
+/** Diagnostics: the sticky port in use and the current denial streak. */
+export function getProxyStickyState(): { port: number | null; denialStreak: number } {
+  return { port: process.env.DECODO_STICKY === "off" ? null : currentStickyPort(), denialStreak: _denialStreak };
+}
+
 export async function rotateProxySession(reason?: string): Promise<void> {
   const proxyUrl = configuredProxyUrl();
   if (!proxyUrl) return;
+  // On a sticky port, hold the IP until it has failed repeatedly. This is the
+  // fix for the rotation death spiral: 205 denials in 57 s once meant 205 IP
+  // rotations, which is exactly the per-request rotation stickiness exists to
+  // prevent. The caller still invalidates its own token either way.
+  if (process.env.DECODO_STICKY !== "off" && ++_denialStreak < rotateAfterDenials()) return;
+  _denialStreak = 0;
   if (_rotateInFlight) return _rotateInFlight;
   // Min-interval throttle for SEQUENTIAL callers (single-flight above only
   // covers concurrent ones). Within the window we skip the rebuild entirely so
@@ -270,6 +323,7 @@ export function __resetRotationStateForTests(): void {
   _lastRotateAt = 0;
   _reqSinceRotate = 0;
   _rotateInFlight = null;
+  _denialStreak = 0;
 }
 
 // In unlimited-plan mode the bandwidth governor rotates (instead of freezing) on

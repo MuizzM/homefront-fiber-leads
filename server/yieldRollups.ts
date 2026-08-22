@@ -193,19 +193,6 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         structuredLog("yield_rollups.paused", { reason: `resource_pressure_${level}` });
         return;
       }
-      // 0) Planner statistics FIRST, never behind the migration ladder.
-      //
-      // This used to sit at the bottom, after every one-time step (index
-      // builds, street_key janitor, neg_streak backfill, ANALYZE, the alias
-      // merge) - each of which `return`s. So on any install where a migration
-      // was still draining, the planner upkeep did not run at all, and if the
-      // alias merge ever halts on its integrity guard it never would. Upkeep
-      // for the query planner is not a migration step and must not queue
-      // behind one: it is a bounded no-op in steady state (measured 0-5 ms,
-      // 14 s on the very first 0x10002 pass) and every other step in this tick
-      // runs faster with fresh statistics than without them.
-      optimizePlannerStats();
-
       // 1) One-time index builds, one per tick (each is a single blocking
       // statement; spreading them across ticks bounds any one stall).
       for (const idx of INDEXES) {
@@ -294,6 +281,44 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
   rawDb.exec("ANALYZE");
   setState("analyze_done", "1");
   _resetYieldRollupReadyForTests();
+}
+
+/**
+ * Planner statistics get their OWN timer, deliberately.
+ *
+ * They used to ride the yield-rollup tick, which is wrong twice over:
+ *
+ *  1. `YIELD_ROLLUPS=off` returns before the timer is even created
+ *     (startYieldRollupMaintenance above) - and production sets exactly that.
+ *     So the statistics fix shipped in 342be18 never ran in production at all.
+ *  2. Even with rollups on, the call sat below five one-time migration steps
+ *     that each `return`, so any install still draining a migration ran blind,
+ *     and an alias merge halted on its integrity guard would block it forever.
+ *
+ * This is the same trap the address-repair lane already fell into and was
+ * pulled out of (see server/index.ts, "INDEPENDENT of YIELD_ROLLUPS"). Query
+ * planner upkeep is infrastructure, not a feature: it belongs to the process,
+ * not to a feature flag. Its only switch is its own, ANALYZE_MAINTENANCE=off.
+ *
+ * Cost: 0-5 ms per tick in steady state; 14 s once, on the first
+ * PRAGMA optimize=0x10002 pass. Primary/control worker only - it serves no
+ * HTTP, so a one-off blocking pragma stalls nothing that answers a request.
+ */
+export function startPlannerStatsMaintenance(): NodeJS.Timeout | null {
+  if (process.env.ANALYZE_MAINTENANCE === "off") return null;
+  const intervalMs = Math.max(30_000, Number(process.env.ANALYZE_TICK_MS) || 300_000);
+  const tick = () => {
+    try {
+      if (PRESSURE_ORDER[readPressure().level] >= PRESSURE_ORDER.pause) return;
+      optimizePlannerStats();
+    } catch (e: any) {
+      structuredLog("planner_stats.error", { error: e?.message ?? String(e) }, "error");
+    }
+  };
+  const timer = setInterval(tick, intervalMs);
+  if (typeof (timer as any).unref === "function") (timer as any).unref();
+  structuredLog("planner_stats.maintenance_started", { intervalMs });
+  return timer;
 }
 
 // ── Planner statistics upkeep ────────────────────────────────────────────────
