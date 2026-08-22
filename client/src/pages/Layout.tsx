@@ -43,6 +43,12 @@ import {
   Lightbulb,
   FileBarChart,
   ChevronDown,
+  ChevronRight,
+  BookOpen,
+  Plus,
+  Lasso,
+  Search,
+  Home,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -53,6 +59,8 @@ import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
 import { navIntentHandlers } from "@/lib/routePrefetch";
 import { TrainingLock, useTrainingGate } from "@/components/TrainingLock";
+import { CommandPalette, PaletteTrigger, usePaletteShortcut, type PaletteAction } from "@/components/CommandPalette";
+import { leadsAddIntent } from "@/lib/leadsFilterHandoff";
 import { useTheme } from "@/hooks/use-theme";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { can, type Role as AppRole } from "@shared/capabilities";
@@ -167,6 +175,10 @@ const NAV_ITEMS: NavItem[] = [
   // clicking Approve. Also filtered on the feature flag below - the capability
   // alone would point at an empty screen while the gate is off.
   { href: "/action-approvals", label: "Action Approvals", icon: ShieldCheck, show: r => can(r, "action.queue.read"), group: "Governance" },
+  // Every number the app computes, stated in one sentence with its thresholds,
+  // read from the shared constants. Governance because it answers "why did the
+  // app decide that", which is an oversight question before it is a field one.
+  { href: "/rulebook",     label: "Rulebook",      icon: BookOpen,     show: r => hasRole(r, "admin", "manager"),      group: "Governance" },
   // ── Admin ─────────────────────────────────────────────────────────────────
   // Gated on the immutable is_super_admin column that rides on the session
   // user. This used to compare the user's email against a list fetched from
@@ -253,6 +265,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   });
   const moreSheetRef = useRef<HTMLDivElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // Cmd-K palette: every page this role can open, plus the common actions.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const togglePalette = useCallback(() => setPaletteOpen(open => !open), []);
+  usePaletteShortcut(togglePalette);
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const role = (user?.role ?? "rep") as AppRole;
@@ -414,6 +430,38 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       : { ...groups, [currentNavGroup]: true });
   }, [currentNavGroup]);
 
+  // Palette actions. Each one is gated exactly as the screen it lands on, so
+  // the list never advertises a power the page would refuse. Navigation is a
+  // hash change like every other link; "Add a lead" hands its intent to Leads.
+  const paletteActions: PaletteAction[] = [];
+  if (!gated) {
+    if (hasRole(role, "admin", "manager", "team_lead")) {
+      paletteActions.push({ id: "add-lead", label: "Add a lead", keywords: ["new", "door", "create"], icon: Plus, run: () => { leadsAddIntent(); window.location.hash = "#/leads"; } });
+    }
+    if (can(role, "lead.assign")) {
+      paletteActions.push({ id: "import-leads", label: "Import a spreadsheet", keywords: ["csv", "xlsx", "upload"], icon: FileUp, run: () => { window.location.hash = "#/leads/import"; } });
+    }
+    if (roleCan(role, "assign_territory")) {
+      paletteActions.push({ id: "draw-area", label: "Draw an area on the map", keywords: ["lasso", "territory"], icon: Lasso, run: () => { window.location.hash = "#/map"; } });
+    }
+    if (hasRole(role, "admin", "manager", "team_lead")) {
+      paletteActions.push({ id: "finalize-week", label: "Review this week's pay", keywords: ["commission", "payroll", "finalize"], icon: Banknote, run: () => { window.location.hash = "#/commission-console"; } });
+    }
+    if (hasRole(role, "admin", "manager")) {
+      paletteActions.push({ id: "invite-rep", label: "Send a private invite", keywords: ["onboarding", "recruit", "candidate"], icon: Send, run: () => { window.location.hash = "#/applications"; } });
+    }
+    if (role === "rep") {
+      paletteActions.push({ id: "next-door", label: "Open my next door", keywords: ["today", "route", "knock"], icon: Home, run: () => { window.location.hash = "#/today"; } });
+      paletteActions.push({ id: "clock", label: "Clock in or out", keywords: ["shift", "hours"], icon: Clock, run: () => { window.location.hash = "#/clock"; } });
+    }
+  }
+  const openPalette = () => { setMoreOpen(false); setMobileOpen(false); setPaletteOpen(true); };
+
+  // Desktop breadcrumb: the group the sidebar would light, then the page.
+  const activeNav = visibleNav.find(item => navItemIsActive(item.href, location));
+  const crumbGroup = activeNav?.group ?? (location === "/profile" ? "Account" : location === "/followups" ? "Today" : "Core");
+  const crumbTitle = activeNav?.label ?? mobileTitle;
+
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
       <a
@@ -453,6 +501,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           >
             <X className="w-4 h-4" aria-hidden="true" />
           </button>
+        </div>
+
+        <div className="px-3 pt-3">
+          <PaletteTrigger onOpen={openPalette} />
         </div>
 
         {/* Nav — grouped by section */}
@@ -619,6 +671,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <PaywallBanner />
         {!onCalling && <FieldStatusBar overlay={onMap} />}
 
+        {/* Desktop breadcrumb bar — where am I, in the sidebar's own words.
+            Full-bleed routes (map, calling) carry their own chrome instead. */}
+        {!onMap && !onCalling && (
+          <nav aria-label="Breadcrumb" data-testid="breadcrumb-bar" className="hidden md:flex h-11 shrink-0 items-center gap-1.5 border-b border-border bg-card/60 px-6 text-sm">
+            <span className="text-muted-foreground">{crumbGroup}</span>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+            <span className="font-semibold text-foreground" aria-current="page">{crumbTitle}</span>
+            <span className="flex-1" />
+            <button type="button" onClick={openPalette} aria-label="Search or jump to a page" className="grid h-9 w-9 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <Search className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </nav>
+        )}
+
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
         <main id="main-content" tabIndex={-1} className={`flex-1 overflow-hidden outline-none ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -657,6 +723,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="px-4 pb-4">
+              <button type="button" onClick={openPalette} data-testid="more-palette-trigger" className="mb-4 flex min-h-12 w-full items-center gap-3 rounded-2xl border border-border bg-background/55 px-4 text-left text-sm-minus font-medium text-muted-foreground hover:border-primary/25 hover:bg-secondary/40">
+                <Search className="h-4 w-4" aria-hidden="true" /><span className="flex-1">Search or jump to a page</span>
+              </button>
               <div className="space-y-5">
                 {mobileMoreGroups.map(({ group, items }) => {
                   const groupId = `mobile-more-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
@@ -717,6 +786,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       )}
+
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} pages={visibleNav} actions={paletteActions} />
     </div>
   );
 }
