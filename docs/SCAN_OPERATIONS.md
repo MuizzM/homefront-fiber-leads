@@ -95,16 +95,28 @@ negative-to-fiber flips in all recorded history was a Frontier door in Durham.
 Meanwhile 311,933 NC doors have never been checked once. A re-check is not
 competing with nothing; it is competing with a door we have never touched.
 
-Two exceptions, both deliberate:
+Exemption is decided by ONE predicate, `isRecheckExemptKind`
+(`@shared/scanPolicy`), which the claim guard asks directly and from which
+`dedupSkipSecondsForRun` derives its zero. Do not add a second place that
+decides this. Exempt kinds:
 
-- **Rep actions.** Kinds containing manual / lasso / bbox / area / field pass
-  `skipSec=0` and are never blocked. A rep's tap always re-verifies.
-- **The coming ledger.** A promise the provider itself made is collected on its
-  due date, via a run kind containing `watch` (also `skipSec=0`).
+- **Rep actions.** Kinds containing manual / lasso / bbox / area / field. A
+  rep's tap always re-verifies.
+- **Change detection.** recheck / rescan / nightly / scheduled / monitor /
+  watch - which is how the coming ledger collects on a promise on its due date,
+  and why the confirm tier is named `fresh_sweep_confirm_recheck` (as
+  `fresh_sweep_confirm` it skipped 100% of its own targets).
+- **Frontier runs**, because a recent Kinetic verdict says nothing about
+  Frontier serviceability.
+
+Exemption used to be inferred from "the dedup window is zero", which coupled
+the law to an unrelated knob: `SCAN_DEDUP_RECHECK_HOURS=0` silently switched
+once-only off for every producer. It no longer does.
 
 `NEIGHBORHOOD_SWEEP_RESCAN_NEGATIVES=on` restores the 21-day flip watch inside
-hot cells; `SCAN_ONCE_ONLY=off` restores the old 18-hour window everywhere.
-Neither needs a code change. Revisit when a market's unscanned pool is
+hot cells (those runs go out as `fresh_sweep_flood_recheck`, an exempt kind, or
+the law would drop every one of their targets); `SCAN_ONCE_ONLY=off` restores
+the old 18-hour window everywhere. Neither needs a code change. Revisit when a market's unscanned pool is
 exhausted - that, not the flip rate, is what makes a re-check worth buying.
 
 ## The coming ledger: doors the provider says will turn on
@@ -143,6 +155,12 @@ the once-only law saves. A promise is expired only once its OWN date has passed
 and nobody honoured it - measuring staleness by last-touch alone would kill a
 FEB-2027 build in November, because a far-future promise is deliberately left
 untouched until its window opens.
+
+A promise the provider keeps restating after its date has passed is written off
+as `overdue` once it has been collected on `COMING_LEDGER_OVERDUE_CHECKS` times
+(default 4; `overdue_checks` counts them). Without that counter the one lane
+permitted to re-buy an answered door would spin on it every six hours forever,
+and the exception would have eaten the law it is an exception to.
 
 Two dates, never conflated: `first_seen_at` is when a scan FOUND the promise
 and `promised_date` is when the provider says it turns on. The backfill stamps
@@ -224,7 +242,9 @@ NC). It replaces "one or two checks per street" with a strict ladder per cycle
 (`NEIGHBORHOOD_SWEEP_INTERVAL_MIN`, default 10). Every tier buys only doors no
 other run holds, and `NEIGHBORHOOD_SWEEP_SEED_CITIES`
 (default `broadway,wingate,rockwell`) sorts first inside every tier, so the
-opening move is the operator's without starving the rest of the state:
+opening move is the operator's without starving the rest of the state. The
+names are bound into the query, not escaped into it, and an empty list is
+valid - it simply drops the boost:
 
 0. **Coming due** - collect on promises whose date has arrived
    (`NEIGHBORHOOD_SWEEP_COMING_PER_CYCLE`, 300). The only re-purchase.
