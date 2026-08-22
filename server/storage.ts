@@ -1707,6 +1707,15 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN last_customer_confidence TEXT NOT NULL DEFAULT 'low'`,
     `ALTER TABLE scan_targets ADD COLUMN last_customer_signals TEXT NOT NULL DEFAULT '[]'`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`,
+    // freshPoints() (stateMonitorStore) behind /api/scan/first-seen-live,
+    // /api/scan/changes, /api/monitor/* and the alert scheduler filters on
+    // tenant + last_fiber_available=1 and orders by first_seen_live_at. The
+    // planner's only tenant-keyed choice was idx_scan_targets_street, which
+    // walks every row of the tenant: measured on the 919k-row production-shaped
+    // copy, 5.5 to 10.3 s per call, synchronous on the HTTP worker. With this
+    // partial index the same query returns identical rows in 5 to 46 ms. The
+    // WHERE keeps it at the live rows only (4.7k rows, 52 KB).
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`,
     `CREATE TABLE IF NOT EXISTS availability_snapshots (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        tenant_id INTEGER NOT NULL,
@@ -3223,6 +3232,7 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_green_unlinked ON scan_targets(tenant_id, last_fiber_status, last_billing_status) WHERE converted_to_lead_id IS NULL`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_lifecycle ON scan_targets(lifecycle_state, lifecycle_changed_at)`);
     // Must be recreated here too: the rebuild drops every index with the old
