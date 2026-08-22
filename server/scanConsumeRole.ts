@@ -14,6 +14,8 @@
 // unless SCAN_CONSUME_ROLE=all asks for every worker. Single-process and
 // one-worker rigs are unchanged: there is nobody else to hand the work to.
 
+import { resolveScanWorkerCount } from "./scanWorkers";
+
 export interface ScanConsumeInput {
   /** resolveScanWorkerCount(): 0 = single process. */
   scanWorkers: number;
@@ -27,4 +29,13 @@ export function consumesScanRuns({ scanWorkers, role, consumeRole }: ScanConsume
   if (scanWorkers <= 1) return true;
   if (role === "control") return true;
   return String(consumeRole ?? "control").trim().toLowerCase() === "all";
+}
+
+/** The policy for THIS process, read from the same env the cluster fork sets. */
+export function thisProcessConsumesScanRuns(): boolean {
+  return consumesScanRuns({
+    scanWorkers: resolveScanWorkerCount(),
+    role: process.env.HF_ROLE,
+    consumeRole: process.env.SCAN_CONSUME_ROLE,
+  });
 }

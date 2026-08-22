@@ -28,6 +28,7 @@ import {
   pauseKineticScan,
   resumeKineticScan,
   resumeKineticWorkersAfterRestart,
+  startKineticJobPoller,
   startKineticRecheck,
   startKineticScan,
   stopKineticWorker,
@@ -124,7 +125,11 @@ function csvCell(value: unknown): string {
 
 export function registerKineticScannerRoutes(app: Express, deps: Deps): void {
   ensureKineticScannerSchema();
+  // Both are inert in a process that does not consume scan runs (an HTTP
+  // worker under the cluster): the resume only re-drives interrupted jobs
+  // where they run, and the poller starts the jobs HTTP workers enqueue.
   resumeKineticWorkersAfterRestart();
+  startKineticJobPoller();
   const read = deps.requireCapability("scan.manage"),
     manage = deps.requireCapability("scan.manage");
   app.get("/api/kinetic-scanner/ping", read, async (req, res) => {
