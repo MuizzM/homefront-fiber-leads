@@ -220,6 +220,13 @@ describe("buyer score job", () => {
   });
 
   it("refuses to race itself on the same tenant", async () => {
+    // The race needs the first run to still be in flight when the second call
+    // lands, which only happens when it has more than one batch to walk (it
+    // yields between batches). The previous test stamped every row "now"; if
+    // this test starts inside the same millisecond nothing is stale, the first
+    // run completes synchronously, and the guard has nothing to refuse. Age
+    // the rows explicitly so the setup never depends on the clock.
+    rawDb.prepare(`UPDATE leads SET buyer_scored_at = '2026-01-01T00:00:00.000Z' WHERE tenant_id = ?`).run(TENANT_A);
     const first = job.rescoreTenant(TENANT_A, { batch: 1 });
     const second = await job.rescoreTenant(TENANT_A, { batch: 1 });
     expect(second).toBeNull();
