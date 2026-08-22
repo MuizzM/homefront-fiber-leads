@@ -142,8 +142,16 @@ and asked for "the cleanest UI, works on every screen, all buttons work", then
   diagram; phone/tablet: handle cycles to details and peek, peek X closes.
   Zero console or page errors on all four runs. Desktop confirmed the
   post-mark row renders once (no hidden duplicate).
-- Full: `DATA_DIR=$(mktemp -d) bash scripts/agent-verify.sh full` (result
-  recorded in the final commit message / session summary).
+- Full, pre-rebase tree (claude/field-map-parity + the two commits):
+  `DATA_DIR=$(mktemp -d) bash scripts/agent-verify.sh full` -> harness valid,
+  typecheck clean, 554 files / 7,024 tests passed, build green, exit 0.
+- Full, this branch (rebased onto d8c0cae, the merge of #166): 557 files,
+  7,055 / 7,056 passed. The one failure,
+  `tests/integration/buyer-score.test.ts > refuses to race itself on the
+  same tenant`, fails identically (3/3) on untouched rep-knocking-workflow in
+  a local run and passes in CI for d8c0cae; this diff has no server/ or
+  shared/ changes, so it is a pre-existing local date/fixture dependency of
+  the buyer-score job test, not a regression.
 
 ## Recovery
 
@@ -152,4 +160,24 @@ migration involved. The canvas stays the spec if code is reverted.
 
 ## Result
 
-(filled at the end)
+Branch `claude/door-card-v2` (cut from rep-knocking-workflow after PRs #165
+and #166 merged), two commits, PR #167
+(https://github.com/MuizzM/homefront-fiber-leads/pull/167) against
+rep-knocking-workflow. Not merged, not deployed.
+
+Shipped: the pointer-capture fix; the all-circle 6 x 2 disposition grid on
+all three surfaces; the header pin chip and copy/close discs with in-place
+copy feedback and the plain-http fallback; the 44px action row; the
+appointment/note pair and latest-note quote; inset Details; the post-mark
+Set a time / Next door row; competitor and occupancy facts before the knock.
+
+Remaining risks: `cardNextDoor` reads `recentIdsRef` inside a memo keyed on
+the fix and the pin set, so a door marked while the pins array identity does
+not change is excluded only because the selected id is excluded explicitly
+(fine today; revisit if the card ever stays on a door after a swap). The
+hidden peek bar's own Directions / Close remain in the DOM at other levels
+(pre-existing). The buyer-score race test needs a date-independent setup.
+
+Follow-ups from the owner's list, not built: dictation and one-tap note
+chips, offline strip on the card, buyer-score tier chip in the header,
+today's route on the map, desktop keyboard layer.
