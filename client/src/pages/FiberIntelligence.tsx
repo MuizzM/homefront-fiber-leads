@@ -22,7 +22,7 @@ import ComingSoonWatchlist, { WATCHLIST_QUERY, type WatchlistItem } from "@/comp
 // has swept (Coverage). The old Newly Lit tab was the same first-seen data on
 // a longer window — now a 24h/7d toggle here — and the old Map tab was just a
 // link (the sidebar already has the Field Map).
-type TabKey = "fresh" | "coming" | "newbuilds" | "coverage";
+type TabKey = "fresh" | "neighborhoods" | "coming" | "newbuilds" | "coverage";
 interface FirstSeenLive {
   windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
   addresses: Array<{ id: number; address: string; city: string; state: string; zip?: string | null; lat: number; lng: number; firstSeenLiveAt: string; confidence: string; leadId?: number | null; carrier?: string }>;
@@ -63,6 +63,7 @@ function fmtTime(iso: string): string {
 
 const TABS: Array<{ key: TabKey; label: string; icon: any }> = [
   { key: "fresh", label: "Fresh Now", icon: Zap },
+  { key: "neighborhoods", label: "Neighborhoods", icon: Layers },
   { key: "coming", label: "Coming Soon", icon: Clock },
   { key: "newbuilds", label: "New Builds", icon: Hammer },
   { key: "coverage", label: "Coverage", icon: Layers },
@@ -109,9 +110,148 @@ export default function FiberIntelligence() {
 
       <div className="min-h-0 flex-1">
         {tab === "fresh" && <FreshNow />}
+        {tab === "neighborhoods" && <Neighborhoods isManager={isManager} isAdmin={isAdmin} />}
         {tab === "newbuilds" && <NewBuilds isManager={isManager} />}
         {tab === "coming" && <ComingSoon />}
         {tab === "coverage" && <Coverage isAdmin={isAdmin} />}
+      </div>
+    </div>
+  );
+}
+
+// ── Neighborhoods — whole-neighborhood sweep: which clusters are fresh and
+// unknocked, which are still being flooded, and whether the sweep is running. ──
+interface NeighborhoodRow {
+  cellLat: number; cellLng: number; city: string; state: string; phase: string; reasons: string[];
+  scanned: number; hits: number; live: number; unscanned: number; staleNegatives: number;
+  lastHitAt: string | null; run: { status: string; verified: number; budget: number; newFiber: number } | null;
+  leads: number; unworkedLeads: number; knockedLeads: number; assignedLeads: number; sampleLeadId: number | null;
+}
+interface SweepState {
+  enabled: boolean; state: string; intervalMin: number; cells: Record<string, number>;
+  neighborhoodsWithUnworked: number; unworkedFreshDoors: number;
+  unscannedInHotCells: number; unlinkedGreens: number; pending: number;
+  lastCycle: { started_at: string; budget: number; confirm: number; flood: number; probe: number; flood_cells: number; probe_cells: number; skipped: string | null; superseded_runs: number; drain_per_min: number } | null;
+  last24h: { checks: number; hits: number; leads: number };
+}
+const REASON_LABEL: Record<string, string> = {
+  hit_in_cell: "fiber found here", recent_hit: "hit this month", neighbor_hits: "fiber next door",
+  unlinked_greens: "known doors to confirm", announced_build: "announced build", fcc_build_evidence: "FCC build block",
+  coming_soon: "coming soon", tenured_fiber_present: "older fiber nearby", cold: "not yet probed", probed_no_hit: "probed, no hit yet",
+};
+function Neighborhoods({ isManager, isAdmin }: { isManager: boolean; isAdmin: boolean }) {
+  const [, navigate] = useLocation();
+  const { data: state } = useQuery<SweepState>({
+    queryKey: ["/api/sweep/state"],
+    queryFn: () => apiRequest("GET", "/api/sweep/state").then((r) => r.json()),
+    refetchInterval: 20_000, staleTime: 10_000, enabled: isManager,
+  });
+  const { data, isLoading } = useQuery<{ neighborhoods: NeighborhoodRow[] }>({
+    queryKey: ["/api/sweep/neighborhoods"],
+    queryFn: () => apiRequest("GET", "/api/sweep/neighborhoods?limit=60").then((r) => r.json()),
+    refetchInterval: 20_000, staleTime: 10_000, enabled: isManager,
+  });
+  const [nudging, setNudging] = useState(false);
+  const [nudgeNote, setNudgeNote] = useState<string | null>(null);
+  const nudge = async () => {
+    setNudging(true); setNudgeNote(null);
+    try {
+      const r = await apiRequest("POST", "/api/sweep/cycle");
+      const body = await r.json().catch(() => ({}));
+      setNudgeNote(r.ok
+        ? `Cycle done: ${body.confirm ?? 0} confirm, ${body.flood ?? 0} flood across ${body.floodCells ?? 0} cells, ${body.probe ?? 0} probe${body.skipped ? ` (skipped: ${body.skipped})` : ""}`
+        : body.error ?? `Cycle refused (${r.status})`);
+    } catch (e: any) { setNudgeNote(e?.message ?? "Cycle failed"); }
+    finally { setNudging(false); }
+  };
+  if (!isManager) {
+    return <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-[13px] text-muted-foreground">Neighborhood sweeps are a manager view. Your fresh doors appear on Fresh Now and the Field Map.</div>;
+  }
+  const rows = data?.neighborhoods ?? [];
+  const cells = state?.cells ?? {};
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <StatTile label="Neighborhoods with unknocked fresh doors" value={state?.neighborhoodsWithUnworked ?? 0} tone="text-success" />
+        <StatTile label="Unknocked fresh doors" value={state?.unworkedFreshDoors ?? 0} tone="text-success" />
+        <StatTile label="Doors left in hot neighborhoods" value={state?.unscannedInHotCells ?? 0} tone="text-primary" />
+        <StatTile label="Fresh leads last 24h" value={state?.last24h.leads ?? 0} tone="text-foreground" />
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border bg-card px-4 py-3" data-testid="sweep-status">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className={`h-2 w-2 rounded-full ${state?.enabled ? "bg-success animate-pulse" : "bg-muted-foreground/40"}`} aria-hidden />
+            Neighborhood sweep {state ? (state.enabled ? "running" : "off") : "..."}{state?.state ? ` · ${state.state}` : ""}
+          </div>
+          <div className="mt-0.5 text-[12px] text-muted-foreground">
+            {state?.lastCycle
+              ? `Last cycle ${fmtTime(state.lastCycle.started_at)}: ${state.lastCycle.confirm} confirm, ${state.lastCycle.flood} flood across ${state.lastCycle.flood_cells} neighborhoods, ${state.lastCycle.probe} probe across ${state.lastCycle.probe_cells}${state.lastCycle.skipped ? ` (skipped: ${state.lastCycle.skipped.replace(/_/g, " ")})` : ""}. ${state.pending.toLocaleString()} queued.`
+              : state?.enabled ? "No cycle recorded yet." : "Turn on NEIGHBORHOOD_SWEEP to keep the scanner on whole neighborhoods."}
+          </div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
+            {(cells.flood ?? 0).toLocaleString()} hot · {(cells.probe ?? 0).toLocaleString()} to probe · {(cells.parked ?? 0).toLocaleString()} parked · {(cells.complete ?? 0).toLocaleString()} complete · {(state?.unlinkedGreens ?? 0).toLocaleString()} known doors still to confirm · {(state?.last24h.checks ?? 0).toLocaleString()} checks in 24h
+          </div>
+        </div>
+        {isAdmin && (
+          <div className="flex flex-col items-end gap-1">
+            <button type="button" onClick={nudge} disabled={nudging || !state?.enabled} data-testid="sweep-cycle-now"
+              className="min-h-10 rounded-lg border border-border px-3 text-[12px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              {nudging ? "Running cycle" : "Run a cycle now"}
+            </button>
+            {nudgeNote && <div className="max-w-xs text-right text-[11px] text-muted-foreground">{nudgeNote}</div>}
+          </div>
+        )}
+      </div>
+      <p className="px-1 text-[12px] text-muted-foreground">Ranked by fresh doors nobody has knocked. A neighborhood is a 1 km cell; the sweep checks every door in a cell once any door there comes back NEW FIBER, street by street, then moves to the cells around it. Open one on the map and lasso it to a crew.</p>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        {isLoading && !data ? (
+          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3"><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
+          ))}</div>
+        ) : rows.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[13px] text-muted-foreground">
+            {state?.enabled ? "No neighborhoods ranked yet. The first cycle builds the list from every NC door the scanner knows." : "The sweep is off, so there is no neighborhood list. Fresh Now still shows every confirmed door."}
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {rows.map((r) => {
+              const done = r.run ? Math.min(100, Math.round((r.run.verified / Math.max(1, r.run.budget)) * 100)) : null;
+              const label = r.city ? r.city.replace(/\b\w/g, (c) => c.toUpperCase()) : "Unnamed";
+              return (
+                <div key={`${r.cellLat}_${r.cellLng}`} className="flex min-w-0 items-center gap-3 px-4 py-3" data-testid={`neighborhood-${r.cellLat}-${r.cellLng}`}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="truncate text-[14px] font-semibold text-foreground">{label}</span>
+                      <span className="text-[11px] tabular-nums text-muted-foreground">{r.cellLat.toFixed(2)}, {r.cellLng.toFixed(2)}</span>
+                      {r.unworkedLeads > 0 && <span className="rounded-full bg-success/10 px-2 py-0.5 text-2xs font-bold uppercase text-success">{r.unworkedLeads} unknocked</span>}
+                      {r.phase === "flood" && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold uppercase text-primary">{r.run?.status === "running" ? "sweeping" : "hot"}</span>}
+                      {r.phase === "probe" && <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold uppercase text-muted-foreground">probing</span>}
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                      <span><b className="text-foreground">{r.hits}</b> NEW FIBER of {r.scanned} checked</span>
+                      <span><b className="text-foreground">{r.unscanned}</b> doors left</span>
+                      <span><b className="text-foreground">{r.leads}</b> leads · {r.knockedLeads} knocked · {r.assignedLeads} assigned</span>
+                      {done != null && r.run && <span>run {done}% ({r.run.newFiber} fresh so far)</span>}
+                      {r.lastHitAt && <span>last hit {fmtTime(r.lastHitAt)}</span>}
+                    </div>
+                    {r.reasons.length > 0 && (
+                      <div className="mt-0.5 text-[11px] text-muted-foreground/80">{r.reasons.map((x) => REASON_LABEL[x] ?? x.replace(/_/g, " ")).join(" · ")}</div>
+                    )}
+                  </div>
+                  {r.sampleLeadId ? (
+                    <button type="button" onClick={() => openLeadOnFieldMap({ leadId: r.sampleLeadId!, lat: r.cellLat, lng: r.cellLng }, navigate)}
+                      className="min-h-10 shrink-0 rounded-lg border border-border px-3 text-[12px] font-semibold text-foreground hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      data-testid={`neighborhood-map-${r.cellLat}-${r.cellLng}`}>
+                      Map
+                    </button>
+                  ) : (
+                    <span className="shrink-0 text-[11px] text-muted-foreground">no leads yet</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

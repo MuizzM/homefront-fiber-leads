@@ -26,7 +26,9 @@ cached. A timeout, authentication failure, throttle, challenge, malformed
 response, or unknown status remains `RECHECK` and can never become a cached No.
 
 `SCAN_PROVIDER_REQUESTS_PER_MINUTE` is the database-backed aggregate rolling
-minute request-start ceiling and defaults to 100. `KFS_TOKEN_POOL_MAX` enables
+minute request-start ceiling. Its code default is 30,000 (server/scanner.ts),
+so in practice `SCAN_GLOBAL_CONCURRENCY` is the binding throttle; set the
+per-minute knob explicitly when a provider agreement names a rate. `KFS_TOKEN_POOL_MAX` enables
 up to 100 server-memory token slots, and `KFS_TOKEN_MAX_CHECKS` defaults to 100
 different normalized address hashes per token lifecycle (10,000 maximum cohort
 capacity);
@@ -77,6 +79,67 @@ The client polls incrementally and appends qualifying rows to one clustered
 GeoJSON source. It reports checked addresses, fresh matches, and leads dropped.
 The selection rectangle is cleared on completion, provider error, start error,
 or cancellation, so another box can be drawn immediately without a cooldown.
+
+## Neighborhood sweep
+
+`NEIGHBORHOOD_SWEEP=on` (control worker only, `server/neighborhoodSweep.ts`)
+is the statewide producer for one state (`NEIGHBORHOOD_SWEEP_STATE`, default
+NC). It replaces "one or two checks per street" with three moves per cycle
+(`NEIGHBORHOOD_SWEEP_INTERVAL_MIN`, default 10):
+
+1. **Confirm**: re-check doors Kinetic already called NEW FIBER that never
+   became leads (no conclusive snapshot, so the projector rejected them).
+   Only doors the projector can publish qualify (NEW FIBER, billing N, no
+   address review). Capped at `NEIGHBORHOOD_SWEEP_CONFIRM_FRACTION` (0.4) of
+   the cycle and `NEIGHBORHOOD_SWEEP_CONFIRM_PER_CYCLE` (600) doors, at most
+   once per `NEIGHBORHOOD_SWEEP_CONFIRM_RECHECK_DAYS` (7) per door and at most
+   `NEIGHBORHOOD_SWEEP_CONFIRM_MAX_ATTEMPTS` (3) times per 90 days.
+2. **Flood**: every 0.01 degree cell (`scan_targets.cell_lat/cell_lng`,
+   about 1 km) that has ever produced a hit gets all of its claimable doors
+   enqueued as one run, street by street, plus its negatives older than
+   `NEIGHBORHOOD_SWEEP_NEG_RECHECK_DAYS` (21). Run id
+   `nsweep_<tenant>_<cell>_<day>_f<n>`; one open run per cell, at most
+   `NEIGHBORHOOD_SWEEP_MAX_FLOOD_RUNS` (12) new flood runs per cycle.
+3. **Probe**: cold cells get one address per street (group testing), up to
+   `NEIGHBORHOOD_SWEEP_PROBE_PER_CELL` (12), from the share of the cycle
+   reserved by `NEIGHBORHOOD_SWEEP_PROBE_FRACTION` (0.25). All of a cycle's
+   probes travel in one run (cells in rank order). A hit promotes the cell to
+   a flood on the next cycle.
+
+Cells are decided by `shared/neighborhoodSweep.ts`: empirical-Bayes hit rate
+(prior from the city), spillover from the eight neighboring cells, official
+evidence (announced build markets, FCC likely-2026 build addresses, coming
+soon), and two sink rules: a cell with `NEIGHBORHOOD_SWEEP_SINK_CELL_SCANS`
+(15) scans and nothing live, or a city with 200+ scans below 0.5% hits and
+nothing live, is parked for `NEIGHBORHOOD_SWEEP_PARK_DAYS` (45), after which
+it earns one re-probe (and re-parks if nothing changed). Cold cells outside
+the footprint gate are parked unless evidence says otherwise.
+
+Each cycle is sized to the measured drain (checks completed in the last hour
+times the interval times `NEIGHBORHOOD_SWEEP_OVERSUBSCRIBE` 1.5, between
+`NEIGHBORHOOD_SWEEP_FLOOR` 600 and `NEIGHBORHOOD_SWEEP_MAX_PER_CYCLE` 6000)
+minus the producer's own queued rows; when its backlog is already twice a
+cycle it enqueues nothing. Run kinds contain `fresh`, so they sit in the
+DISCOVERY admission class with the 18 h bulk dedup.
+
+On each cycle the sweep also cancels stale `running` runs of other producers
+(`NEIGHBORHOOD_SWEEP_SUPERSEDE_KINDS`, heartbeat older than
+`NEIGHBORHOOD_SWEEP_SUPERSEDE_HOURS` 24) and skips their queued tails in
+2,000-row chunks, because `enqueueRunTargets` drops any target another
+running run still holds. With county E911 address points imported
+(`POST /api/admin/address-points/import`), `NEIGHBORHOOD_SWEEP_E911` (on)
+upserts every structure inside a cell about to flood so the flood is the whole
+neighborhood, not the part OSM knew about; a cell is bridged at most
+`NEIGHBORHOOD_SWEEP_E911_CELLS` (4) per cycle and once per
+`NEIGHBORHOOD_SWEEP_E911_REBRIDGE_DAYS` (30).
+
+Observability: `neighborhood_sweep.cycle` (one line per cycle),
+`neighborhood_sweep.superseded`, the `sweep_cycles` table, and
+`GET /api/sweep/state`. Managers read `GET /api/sweep/neighborhoods` (Fiber
+Intelligence, Neighborhoods tab): cells ranked by fresh leads nobody has
+knocked, with the flood run's progress. Admins may `POST /api/sweep/cycle` on
+the control worker. The sweep publishes no leads itself; the engine and
+`projectConfirmedFreshLeads` do, unchanged.
 
 ## Result contract
 
