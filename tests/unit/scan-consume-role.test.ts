@@ -22,3 +22,24 @@ describe("which processes consume scan runs", () => {
     expect(consumesScanRuns({ scanWorkers: 4, role: "scan", consumeRole: "everyone" })).toBe(false);
   });
 });
+
+describe("thisProcessConsumesScanRuns reads the cluster env", () => {
+  const saved = { SCAN_WORKERS: process.env.SCAN_WORKERS, HF_ROLE: process.env.HF_ROLE, SCAN_CONSUME_ROLE: process.env.SCAN_CONSUME_ROLE };
+  const restore = () => {
+    for (const [k, v] of Object.entries(saved)) { if (v == null) delete process.env[k]; else process.env[k] = v; }
+  };
+
+  it("an HTTP worker under the cluster does not consume; the control worker does; single-process always does", async () => {
+    const { thisProcessConsumesScanRuns } = await import("../../server/scanConsumeRole");
+    try {
+      process.env.SCAN_WORKERS = "4"; process.env.HF_ROLE = "scan"; delete process.env.SCAN_CONSUME_ROLE;
+      expect(thisProcessConsumesScanRuns()).toBe(false);
+      process.env.HF_ROLE = "control";
+      expect(thisProcessConsumesScanRuns()).toBe(true);
+      process.env.HF_ROLE = "scan"; process.env.SCAN_CONSUME_ROLE = "all";
+      expect(thisProcessConsumesScanRuns()).toBe(true);
+      process.env.SCAN_WORKERS = "0"; delete process.env.HF_ROLE; delete process.env.SCAN_CONSUME_ROLE;
+      expect(thisProcessConsumesScanRuns()).toBe(true);
+    } finally { restore(); }
+  });
+});

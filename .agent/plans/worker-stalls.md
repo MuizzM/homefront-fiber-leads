@@ -56,6 +56,8 @@ minutes of boot-time table scans.
 4. Adoption-sweep watermark in `bootstrapDefaultTenant`.
 5. `bash scripts/agent-verify.sh full`, PR, merge on green CI, deploy, then a perf report
    over the first hour to confirm the timeline.
+6. Kinetic recheck (the other consumer): resume, nightly cron and job start gated to the
+   consuming process; queued jobs picked up by the control worker's poller.
 
 ## Progress
 
@@ -64,7 +66,17 @@ minutes of boot-time table scans.
 - 2026-08-22 17:10 milestone 2 measured end to end on the copy with the worktree dev server
   (`console-ui-proddb`, port 5084): first-seen-live 4.6 ms, sweeps/state 3.1 ms, markets
   3 ms on memo hits (767 ms cold), pool-stats 1 ms on hits (137 ms cold). Committed (d0d7bea).
-- 2026-08-22 17:20 milestones 3 and 4 implemented with tests; full verify running.
+- 2026-08-22 17:20 milestones 3 and 4 implemented with tests; full verify green (7,080).
+- 2026-08-22 17:35 PR #170 merged (3ff9e4c) and deployed 17:50. External probe at 5 min
+  uptime still p50 1.5 s, max 7.2 s; the 17:49 to 17:57 timeline shows the reaper now on
+  the control worker only (scan.reaper.slow_tick on pid 165 alone) but the provider-lock
+  convoy still on all three HTTP workers: `transaction starting SELECT * FROM
+  kinetic_addresses ...` named the Kinetic RECHECK job. registerKineticScannerRoutes()
+  called resumeKineticWorkersAfterRestart() in every worker, so N workers re-drove the
+  same interrupted recheck, each 50 addresses wide, and startNightlyCron() was scheduled
+  in every worker too. Milestone 6: both gated on thisProcessConsumesScanRuns();
+  startKineticRecheck() only enqueues on a non-consuming process and a control-worker
+  poller (startKineticJobPoller, 20 s) starts queued jobs.
 
 ## Decisions
 

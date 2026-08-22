@@ -1,3 +1,4 @@
+import { thisProcessConsumesScanRuns } from "./scanConsumeRole";
 import { rawDb } from "./db";
 import {
   getKineticEvidenceGateway,
@@ -188,6 +189,8 @@ function active(tenantId: number): any {
     .get(tenantId);
 }
 
+const KINETIC_JOB_POLL_MS = Math.max(5_000, Number(process.env.KINETIC_JOB_POLL_MS) || 20_000);
+
 export function startKineticScan(): never {
   throw new Error(
     "Sequential range scanning is unavailable because no permitted enumeration contract exists.",
@@ -208,8 +211,36 @@ export function startKineticRecheck(input: {
     workerType: "recheck",
     createdBy: input.createdBy,
   });
-  void runRecheck(id);
+  // Under the cluster an HTTP worker only enqueues; the control worker's
+  // poller (startKineticJobPoller) picks the job up within one tick. Running
+  // it here would put a 50-wide provider recheck on a request loop.
+  if (thisProcessConsumesScanRuns()) void runRecheck(id);
   return id;
+}
+
+/** Queued recheck jobs nobody in this process is running. */
+function queuedRecheckJobs(): string[] {
+  return (rawDb
+    .prepare(`SELECT id FROM kinetic_scan_jobs WHERE worker_type='recheck' AND status='queued'`)
+    .all() as Array<{ id: string }>)
+    .map((row) => row.id)
+    .filter((id) => !runtimes.has(id));
+}
+
+let _poller: ReturnType<typeof setInterval> | null = null;
+/**
+ * Control-worker poller: rechecks enqueued by HTTP workers (the API route, the
+ * nightly cron's manual trigger) start here. Idempotent; a second call is a
+ * no-op. Stays inert in a process that does not consume scan runs.
+ */
+export function startKineticJobPoller(intervalMs = KINETIC_JOB_POLL_MS): void {
+  if (_poller || !thisProcessConsumesScanRuns()) return;
+  const tick = () => { try { for (const id of queuedRecheckJobs()) void runRecheck(id); } catch { /* next tick */ } };
+  _poller = setInterval(tick, intervalMs);
+  if (typeof (_poller as any).unref === "function") (_poller as any).unref();
+}
+export function stopKineticJobPoller(): void {
+  if (_poller) { clearInterval(_poller); _poller = null; }
 }
 export function pauseKineticScan(): boolean {
   return false;
@@ -238,6 +269,11 @@ export function stopKineticWorker(
   return true;
 }
 export function resumeKineticWorkersAfterRestart(): void {
+  // Every HTTP worker used to run this at route registration, so N workers
+  // resumed the SAME interrupted recheck, each 50 addresses wide: measured
+  // in production on 2026-08-22 as the provider-lock convoy that stalled
+  // request loops for up to 15 s. Only the consuming process resumes.
+  if (!thisProcessConsumesScanRuns()) return;
   rawDb
     .prepare(
       `UPDATE kinetic_scan_jobs SET status='failed',last_error='Stopped after restart: no permitted Sequential ID enumeration contract exists',completed_at=datetime('now'),updated_at=datetime('now') WHERE worker_type='scan' AND status IN ('queued','running','paused')`,

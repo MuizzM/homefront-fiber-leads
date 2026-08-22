@@ -270,6 +270,7 @@ import { mergeAreaAddressSources, planUnifiedAreaScan } from "./areaScanStrategy
 import { gatherCoverage, providerStatus, type BBox as CoverageBBox, type RawAddress } from "./providers";
 import { createTileScanJob, runTileScan, type TileScanJob, type Tile } from "./tileScan";
 import { getCronStatus, triggerManualScan, startNightlyCron, getEngineStatus } from "./cron-scanner";
+import { thisProcessConsumesScanRuns } from "./scanConsumeRole";
 import { getProxyStatus } from "./proxy-fetch";
 
 /**
@@ -12037,8 +12038,12 @@ export function registerSaasRoutes(app: any) {
     res.json(result.spiff);
   });
 
-  // Start nightly cron at server boot
-  startNightlyCron();
+  // Start nightly cron at server boot. Under the cluster only the consuming
+  // (control) worker schedules it: routes register in every worker, and the
+  // 2 AM recheck it fires is scan-plane work. The manual /api/cron/trigger
+  // route still works from any worker; the job it enqueues runs on the
+  // control worker's poller.
+  if (thisProcessConsumesScanRuns()) startNightlyCron();
   startStateMonitorScheduler();
 
 }
