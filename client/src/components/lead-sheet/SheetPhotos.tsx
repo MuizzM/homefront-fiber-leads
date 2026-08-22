@@ -113,7 +113,7 @@ export function SheetPhotos({ leadId }: { leadId: number }): JSX.Element {
         )}
         {!photosQ.isLoading && !photosQ.isError && photos.length === 0 && (
           <div className="flex items-center pl-1 text-[12px]" style={{ color: MUTED }}>
-            No photos yet — snap the house or the drop.
+            No photos yet. Snap the house or the drop.
           </div>
         )}
       </div>

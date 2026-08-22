@@ -12,10 +12,10 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Mail, UserRound } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { MUTED, BODY_TEXT } from "./utils";
+import { MUTED } from "./utils";
+import { INSET, INSET_ROW, SECTION_LABEL } from "./DetailsBody";
 
 export interface ContactSectionProps {
   leadId: number;
@@ -69,8 +69,8 @@ export function ContactSection({ leadId, contactName, contactEmail, ready }: Con
 
   return (
     <div data-testid="knock-contact-section" className="mt-4">
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
+      <div className="flex items-center justify-between mb-2">
+        <span className={SECTION_LABEL} style={{ color: MUTED }}>
           Contact
         </span>
         {!editing && hasAny && (
@@ -78,7 +78,7 @@ export function ContactSection({ leadId, contactName, contactEmail, ready }: Con
             type="button"
             data-testid="contact-edit"
             onClick={beginEdit}
-            className="text-[12px] font-semibold text-white/50 hover:text-white/80 transition px-1 -mr-1"
+            className="min-h-tap text-[12px] font-semibold text-sky-300 hover:text-sky-200 transition px-1 -mr-1 -my-2"
           >
             Edit
           </button>
@@ -87,23 +87,24 @@ export function ContactSection({ leadId, contactName, contactEmail, ready }: Con
 
       {!editing ? (
         hasAny ? (
-          <div className="space-y-1" data-testid="contact-view">
+          <div className={INSET} data-testid="contact-view">
             {contactName?.trim() && (
-              <div className="flex items-center gap-2 text-[13.5px] font-medium text-white">
-                <UserRound aria-hidden="true" className="w-[15px] h-[15px] shrink-0 text-white/45" />
-                <span className="truncate" data-testid="contact-name-line">{contactName}</span>
+              <div className={INSET_ROW}>
+                <span className={`${SECTION_LABEL} w-[84px] shrink-0`} style={{ color: MUTED }}>Name</span>
+                <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-white" data-testid="contact-name-line">{contactName}</span>
               </div>
             )}
             {contactEmail?.trim() && (
-              <a
-                href={`mailto:${contactEmail}`}
-                data-testid="contact-email-line"
-                className="flex items-center gap-2 text-[13px] hover:underline"
-                style={{ color: BODY_TEXT }}
-              >
-                <Mail aria-hidden="true" className="w-[15px] h-[15px] shrink-0 text-white/45" />
-                <span className="truncate">{contactEmail}</span>
-              </a>
+              <div className={`${INSET_ROW} ${contactName?.trim() ? "border-t border-white/[0.07]" : ""}`}>
+                <span className={`${SECTION_LABEL} w-[84px] shrink-0`} style={{ color: MUTED }}>Email</span>
+                <a
+                  href={`mailto:${contactEmail}`}
+                  data-testid="contact-email-line"
+                  className="min-w-0 flex-1 truncate text-[13.5px] text-white hover:underline"
+                >
+                  {contactEmail}
+                </a>
+              </div>
             )}
           </div>
         ) : (
@@ -111,9 +112,8 @@ export function ContactSection({ leadId, contactName, contactEmail, ready }: Con
             type="button"
             data-testid="contact-add"
             onClick={beginEdit}
-            className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
+            className="w-full h-11 px-3 rounded-xl bg-white/[0.05] border border-white/[0.10] text-[13px] font-semibold text-white/90 inline-flex items-center justify-center active:scale-[0.97] transition"
           >
-            <UserRound aria-hidden="true" className="w-4 h-4 text-white/60" />
             Add contact
           </button>
         )

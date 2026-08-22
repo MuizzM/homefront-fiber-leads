@@ -18,8 +18,8 @@ import { outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
  *   QUICK  — the default open state, ONE unified action surface: compact
  *            header (ONE status line: label · time · max ONE badge) →
  *            icon-sized utility row [action-directions, action-call (ONLY
- *            with a valid phone), action-copy] → ONE 2-column outcomes grid
- *            [knock-status-grid] with EVERY field disposition in fixed order,
+ *            with a valid phone), distance chip] → ONE disposition surface
+ *            [knock-status-grid]: EVERY field disposition as a 44px disc, fixed order,
  *            primary four leading (Not Home | Interested / Sold |
  *            Not Interested, then Follow-up, Prospect) → recent line →
  *            flat notes composer. No More section, no nested cards.
@@ -228,10 +228,10 @@ describe("<LeadKnockSheet /> - unified outcomes grid", () => {
 
   it("uses the dark-sheet status override and readable ink for filled outcomes", () => {
     renderSheet();
-    // Unfilled grid cell: ink is the dark-sheet-legible status colour.
-    expect(screen.getByTestId("knock-outcome-sold")).toHaveStyle({
-      color: STATUS_CONFIG.sold.onDark,
-    });
+    // Idle disc: the CODE beneath reads in the dark-sheet-legible status colour.
+    const soldCode = screen.getByTestId("knock-outcome-sold").querySelector("span:last-child") as HTMLElement;
+    expect(soldCode).toHaveTextContent("SOLD");
+    expect(soldCode).toHaveStyle({ color: STATUS_CONFIG.sold.onDark });
     // The active disc (default lead is an unworked prospect): the disc wears
     // the status fill with the white pin glyph; the code label goes white.
     const prospectDisc = screen.getByTestId("knock-outcome-prospect");
@@ -242,24 +242,25 @@ describe("<LeadKnockSheet /> - unified outcomes grid", () => {
     expect(screen.getByTestId("knock-outcome-interested").querySelector("svg")).not.toBeNull();
   });
 
-  it("ONE surface holds every disposition: primary four as grid cells, the rest as strip discs, fixed order", () => {
+  it("ONE surface holds every disposition as the same disc, fixed order, no strip, no rectangular cells", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
-    // Exactly FIELD_OUTCOMES, primary-four-first — one surface, two tiers.
+    // Exactly FIELD_OUTCOMES, verbatim — the four most likely reads lead.
     expect(gridOrder()).toEqual([
       "not_home", "interested", "sold", "not_interested",
       "follow_up", "go_back", "already_customer",
       "competitor", "renter", "moving", "no_soliciting", "prospect",
     ]);
     expect(gridOrder()).toEqual(ALL_KEYS);
-    // The strip is a real labelled group inside the one surface, and every
-    // non-primary disposition lives there with its compact code visible.
-    const strip = screen.getByTestId("knock-status-strip");
-    expect(screen.getByTestId("knock-status-grid").contains(strip)).toBe(true);
+    // Owner call 2026-08-22: every disposition is a circle. No second tier.
+    expect(screen.queryByTestId("knock-status-strip")).not.toBeInTheDocument();
+    const grid = screen.getByTestId("knock-status-grid");
+    expect(grid).toHaveAttribute("role", "group");
+    expect(grid.className).toMatch(/\bgrid-cols-6\b/);
     for (const o of FIELD_OUTCOMES) {
-      if (PRIMARY_KEYS.includes(o.key)) continue;
       const disc = screen.getByTestId(`knock-outcome-${o.key}`);
-      expect(strip.contains(disc)).toBe(true);
+      expect(grid.contains(disc)).toBe(true);
+      expect(disc.querySelector(".w-11.h-11.rounded-full")).not.toBeNull();
       expect(disc).toHaveTextContent(o.short);
       expect(disc).toHaveAccessibleName(o.label);
     }
@@ -381,22 +382,22 @@ describe("<LeadKnockSheet /> - double-submit guard", () => {
 });
 
 describe("<LeadKnockSheet /> - utility row, Call gating", () => {
-  it("utility row: Directions (Google, never mapbox) + Copy as icon-sized buttons", () => {
+  it("action row: Directions (Google, never mapbox) as the 44px primary; the duplicate copy circle is gone", () => {
     renderSheet();
     const a = screen.getByTestId("action-directions");
     expect(a).toHaveAttribute("href", expect.stringContaining("google.com/maps/dir"));
     expect(a.getAttribute("href")).toContain("34.9,-79.9");
     expect(a.getAttribute("href")).not.toMatch(/mapbox/i);
     expect(a).toHaveAttribute("aria-label", "Directions");
-    // Icon-sized (40px glyph buttons), not competing with the grid.
-    // Directions is now a LABELLED pill rather than a bare 40px circle: reps
-    // couldn't find an unlabelled arrow sitting between two identical grey
-    // circles. Height is still the 40px touch target; the width grows for text.
-    expect(a.className).toMatch(/\bh-10\b/);
+    // A labelled 44px pill that takes the row's width: the one thing a rep on a
+    // sidewalk needs instantly. Text only (no decorative glyph).
+    expect(a.className).toMatch(/\bh-11\b/);
+    expect(a.className).toMatch(/\bflex-1\b/);
     expect(a).toHaveTextContent("Directions");
-    const copy = screen.getByTestId("action-copy");
-    expect(copy).toHaveAttribute("aria-label", "Copy address");
-    expect(copy.className).toMatch(/\bh-10\b/);
+    expect(a.querySelector("svg")).toBeNull();
+    // ONE copy control on the card: the header disc. No second copy button.
+    expect(screen.queryByTestId("action-copy")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Copy address" })).toHaveLength(1);
     expect(screen.queryByTestId("action-text")).not.toBeInTheDocument();
   });
 
@@ -1329,5 +1330,166 @@ describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
       fireEvent.click(close);
       expect(props.onClose).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("<LeadKnockSheet /> - door card v2: header chip, copy feedback, facts", () => {
+  it("the header carries the status PIN chip (pin fill + the pin's glyph), not a bare dot", () => {
+    renderSheet({
+      lead: baseLead({ leadStatus: "interested", visited: true, lastOutcome: "interested", lastKnockedAt: new Date().toISOString() }),
+    });
+    const chip = screen.getByTestId("knock-status-dot");
+    expect(chip).toHaveStyle({ background: STATUS_CONFIG.interested.color });
+    expect(chip.querySelector("svg[data-testid='knock-status-icon']")).not.toBeNull();
+    // The status LINE keeps the words; the glyph lives on the chip.
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Interested");
+    expect(screen.getByTestId("knock-status-line").querySelector("svg")).toBeNull();
+  });
+
+  it("copy: the disc confirms with a check and the locality line reads Address copied, then returns", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      renderSheet();
+      expect(screen.getByTestId("knock-address-locality")).toHaveTextContent("Rockwell, NC 28138");
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      expect(writeText).toHaveBeenCalledWith("148 Maple St, Rockwell, NC 28138");
+      expect(screen.getByTestId("knock-address-copied")).toHaveTextContent("Address copied");
+      expect(screen.getByTestId("knock-copy-address")).toHaveAccessibleName("Address copied");
+      // The address line itself never moved: the feedback replaced the locality.
+      expect(screen.queryByTestId("knock-address-locality")).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("knock-address-locality")).toBeInTheDocument(), { timeout: 2500 });
+      expect(screen.getByTestId("knock-copy-address")).toHaveAccessibleName("Copy address");
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    }
+  });
+
+  it("copy still works without the Clipboard API (plain http): the execCommand fallback runs", async () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    const exec = vi.fn().mockReturnValue(true);
+    (document as any).execCommand = exec;
+    try {
+      renderSheet();
+      await userEvent.click(screen.getByTestId("knock-copy-address"));
+      expect(exec).toHaveBeenCalledWith("copy");
+      expect(screen.getByTestId("knock-address-copied")).toBeInTheDocument();
+    } finally {
+      delete (document as any).execCommand;
+    }
+  });
+
+  function renderWithDetail(detail: Record<string, unknown>) {
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          queryFn: async ({ queryKey }) => {
+            const key = String(queryKey[0] ?? "");
+            if (key.endsWith("/history")) return [];
+            if (key.endsWith("/photos")) return [];
+            return { id: 7, updatedAt: "2026-07-08T19:00:00.000Z", ...detail };
+          },
+        },
+      },
+    });
+    return render(
+      <QueryClientProvider client={qc}>
+        <LeadKnockSheet
+          {...({
+            lead: baseLead(), onKnock: vi.fn(), onClose: vi.fn(),
+            onSaveNote: vi.fn().mockResolvedValue({ status: "saved" }),
+          } as any)}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("competitor and occupancy facts show under the header BEFORE the knock (quick level)", async () => {
+    renderWithDetail({ competitorName: "Spectrum", competitorTech: "Cable", billingStatus: "N", householdSegmentType: "Single family" });
+    const facts = await screen.findByTestId("knock-facts");
+    expect(screen.getByTestId("knock-fact-competitor")).toHaveTextContent("Spectrum · Cable");
+    expect(screen.getByTestId("knock-fact-occupancy")).toHaveTextContent("No current subscriber");
+    // At most the two that change the pitch; segment stays in Details.
+    expect(facts.querySelectorAll("[data-testid^='knock-fact-']")).toHaveLength(2);
+    expect(screen.getByTestId("knock-premise-facts")).toHaveTextContent("Single family");
+  });
+
+  it("renders no facts row when the scanner knows nothing about the door", async () => {
+    renderWithDetail({});
+    await screen.findByTestId("knock-status-grid");
+    expect(screen.queryByTestId("knock-facts")).not.toBeInTheDocument();
+  });
+});
+
+describe("<LeadKnockSheet /> - post-mark next step (Set a time / Next door)", () => {
+  const NEXT = { id: 9, address: "150 Maple St", meters: 38, atDoor: true };
+
+  it("after Not Home the peek lip offers the nearest open door; Open hands the id upstream", async () => {
+    const onOpenLead = vi.fn();
+    renderSheet({ nextDoor: NEXT, onOpenLead });
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
+    const row = screen.getByTestId("knock-post-mark");
+    expect(row).toHaveAttribute("data-kind", "next");
+    expect(screen.getByTestId("knock-peek-bar").contains(row)).toBe(true);
+    expect(row).toHaveTextContent("150 Maple St");
+    expect(row).toHaveTextContent("At door");
+    await userEvent.click(screen.getByTestId("knock-next-door-open"));
+    expect(onOpenLead).toHaveBeenCalledWith(9);
+  });
+
+  it("a far door reads an honest distance hint", async () => {
+    renderSheet({ nextDoor: { ...NEXT, meters: 400, atDoor: false }, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-sold"));
+    expect(screen.getByTestId("knock-post-mark")).toHaveTextContent("0.2mi");
+  });
+
+  it("after Interested the next step is a time: Set a time reopens the card with the composer", async () => {
+    renderSheet({ nextDoor: NEXT, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-interested"));
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
+    const row = screen.getByTestId("knock-post-mark");
+    expect(row).toHaveAttribute("data-kind", "time");
+    expect(screen.queryByTestId("knock-next-door-open")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-set-time"));
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
+    expect(screen.getByTestId("appt-editor")).toBeInTheDocument();
+    // While the composer is open the suggestion has done its job.
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+  });
+
+  it("no next door known: a plain mark shows no row; Undo clears a shown one", async () => {
+    const first = renderSheet();
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+    first.unmount();
+
+    renderSheet({ nextDoor: NEXT, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_interested"));
+    expect(screen.getByTestId("knock-post-mark")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-undo"));
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+  });
+
+  it("clears on a card swap: the suggestion belonged to the previous door", async () => {
+    const { rerenderSheet } = renderSheet({ nextDoor: NEXT, onOpenLead: vi.fn() });
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(screen.getByTestId("knock-post-mark")).toBeInTheDocument();
+    rerenderSheet({ lead: baseLead({ id: 8, address: "150 Maple St" }) });
+    expect(screen.queryByTestId("knock-post-mark")).not.toBeInTheDocument();
+  });
+
+  it("the appointment and note triggers sit side by side as one equal pair", () => {
+    renderSheet();
+    const row = screen.getByTestId("knock-follow-through").firstElementChild as HTMLElement;
+    expect(row.className).toMatch(/\bflex\b/);
+    expect(row.contains(screen.getByTestId("appt-open"))).toBe(true);
+    expect(row.contains(screen.getByTestId("note-add-chip"))).toBe(true);
+    for (const id of ["appt-open", "note-add-chip"]) {
+      expect(screen.getByTestId(id).className).toMatch(/\bh-11\b/);
+      expect(screen.getByTestId(id).querySelector("svg")).toBeNull();
+    }
   });
 });

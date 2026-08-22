@@ -5750,6 +5750,28 @@ export default function MapView() {
     );
     return { doors: all.slice(0, NEAREST_DOORS_LIMIT), total: all.length };
   }, [nearestVisible, repFix, leads]);
+  // The card's post-mark "Next door": the nearest open door from the rep's
+  // fix, same rule and the same just-worked exclusion as the strip, minus the
+  // door on the card. Computed whenever a card is open (cheap: one pass over
+  // the pins, keyed on the fix and the pin set) so the lip can offer it the
+  // moment a mark lands. A loose fix ranks nothing, as above.
+  const cardNextDoor = useMemo(() => {
+    if (selectedLeadId == null || !repFix) return null;
+    if (repFix.accuracy != null && repFix.accuracy > 200) return null;
+    const exclude = new Set<number>([...recentIdsRef.current, selectedLeadId]);
+    const [best] = rankNearestDoors<StripPin>(repFix, leads as unknown as StripPin[], { limit: 1, excludeIds: exclude });
+    return best
+      ? { id: best.pin.id, address: best.pin.address, meters: best.meters, atDoor: best.atDoor }
+      : null;
+  }, [selectedLeadId, repFix, leads]);
+  const openLeadFromCard = useCallback(
+    (id: number) => {
+      const lead = leadById.get(id);
+      if (lead) flyToLead(lead);
+    },
+    [leadById, flyToLead],
+  );
+
   // Keep the distances honest while the strip is up: one fresh fix on show,
   // then a slow refresh, paused in a hidden tab. The geolocate control, when
   // the rep is following, feeds the same state far more often.
@@ -9544,6 +9566,8 @@ export default function MapView() {
               canManage={canManage}
               onCentralMark={handleCentralMark}
               onDelete={handleDeleteLead}
+              nextDoor={cardNextDoor}
+              onOpenLead={openLeadFromCard}
             />
           )}
         </div>

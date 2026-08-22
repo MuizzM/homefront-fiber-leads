@@ -1,15 +1,22 @@
-// ── Outcome button ───────────────────────────────────────────────────────────
-// One button component for every knock disposition on the sheet — the 2-col
-// quick grid cells and the compact pills inside "More". Same tap target (h-11),
-// same active/flash styling, same testid contract (knock-outcome-{key}) so the
-// disposition surface is identical no matter which level it renders at.
+// ── Disposition discs ────────────────────────────────────────────────────────
+// ONE control for every knock disposition, everywhere a disposition can be
+// marked (the map card, the Today/PropertyDetail sheet, the manager quick-log):
+// a 44px status-colored disc carrying the pin's own glyph with the compact
+// status code beneath (NH, INT, SOLD, NI, FU, GB, ACTV, COMP, RENT, MOV, NOSO,
+// LEAD - the vocabulary reps carry from SalesRabbit-family tools). The
+// rectangular 2-column cells that used to lead the surface are gone (owner
+// call, 2026-08-22: "remove all the rectangles, keep only circles"), so the
+// surface is a single fixed-order grid and a control never moves under the
+// finger. Same testid contract as before (knock-outcome-{key}), same
+// active/flash semantics.
 
 import {
   Check, DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle, UserCheck,
   Flag, KeyRound, Truck, Ban, RotateCcw, type LucideIcon,
 } from "lucide-react";
-import type { OutcomeDef } from "@shared/knock";
+import { FIELD_OUTCOMES, type KnockOutcome, type OutcomeDef } from "@shared/knock";
 import { isLeadMapStatus, STATUS_CONFIG } from "@shared/statusConfig";
+import { FOCUS } from "@/lib/a11y";
 
 // lucide icon NAME (from OutcomeDef.icon) → component. THE one place a name
 // string becomes a rendered glyph — the map card, the Today/PropertyDetail
@@ -19,16 +26,6 @@ export const ICON_MAP: Record<string, LucideIcon> = {
   DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle, UserCheck,
   Flag, KeyRound, Truck, Ban, RotateCcw,
 };
-
-export interface OutcomeButtonProps {
-  outcome: OutcomeDef;
-  icon?: LucideIcon;
-  active: boolean;         // mirrors the lead's CURRENT display state
-  flashing: boolean;       // brief tap-confirm flash (skips under reduced motion)
-  onTap: (key: OutcomeDef["key"]) => void;
-  variant: "grid" | "pill";
-  disabled?: boolean;
-}
 
 function luminance(hex: string): number {
   const value = hex.replace("#", "");
@@ -44,34 +41,41 @@ function contrast(a: string, b: string): number {
   return (high + 0.05) / (low + 0.05);
 }
 
-/** Pin fills stay canonical; button text independently chooses the legible ink. */
+/** Pin fills stay canonical; a filled control independently chooses the legible ink. */
 export function outcomeFillTextColor(fill: string): "#07111B" | "#FFFFFF" {
   return contrast(fill, "#07111B") >= contrast(fill, "#FFFFFF") ? "#07111B" : "#FFFFFF";
 }
 
-// ── Compact disposition disc ─────────────────────────────────────────────────
-// The strip form of the same disposition surface: a filled status-colored disc
-// carrying the pin's glyph with the compact status code beneath (LEAD, ACTV,
-// COMP… — the vocabulary reps carry from SalesRabbit-family tools). Same testid
-// contract (knock-outcome-{key}), same active/flash semantics as the grid
-// cells, one column narrow enough that every disposition stays one thumb-scroll
-// away. The CODE is the accessible-name supplement, never the only signal —
-// aria-label carries the full label.
-//
+/** The text color a disposition's code reads in on the map's dark glass. */
+export function outcomeInkOnDark(o: OutcomeDef): string {
+  return isLeadMapStatus(o.key) ? (STATUS_CONFIG[o.key].onDark ?? o.color) : o.color;
+}
+
 // Two surfaces, one disc: "glass" (the map card's fixed-dark sheet — white
 // ring/label chrome) and "card" (Today/PropertyDetail's themed shadcn Sheet
 // and the manager Dialog — chrome from the semantic tokens so both themes
 // hold AA without a per-status ink table). The status-colored fill and white
 // pin glyph are theme-independent on both.
-export interface OutcomeDiscProps extends Omit<OutcomeButtonProps, "variant"> {
+export interface OutcomeDiscProps {
+  outcome: OutcomeDef;
+  icon?: LucideIcon;
+  active: boolean;         // mirrors the lead's CURRENT display state
+  flashing: boolean;       // brief tap-confirm flash (skips under reduced motion)
+  onTap: (key: KnockOutcome) => void;
+  disabled?: boolean;
   surface?: "glass" | "card";
+  /** Grid cells stretch to their column; a strip keeps the 52px column. */
+  fluid?: boolean;
+  /** The Today/PropertyDetail sheet keeps its own `outcome-` ids. */
+  testIdPrefix?: string;
 }
 
-export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, disabled = false, surface = "glass" }: OutcomeDiscProps): JSX.Element {
+export function OutcomeDisc(props: OutcomeDiscProps): JSX.Element {
+  const {
+    outcome: o, icon: Icon, active, flashing, onTap, disabled = false,
+    surface = "glass", fluid = false, testIdPrefix = "knock-outcome-",
+  } = props;
   const filled = active || flashing;
-  const darkSheetColor = isLeadMapStatus(o.key)
-    ? (STATUS_CONFIG[o.key].onDark ?? o.color)
-    : o.color;
   const discShadow = surface === "glass"
     ? (filled
         ? `0 0 0 2px rgba(255,255,255,0.92)${flashing ? `, 0 2px 12px ${o.color}88` : ""}`
@@ -81,19 +85,19 @@ export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, d
         : "0 0 0 1px hsl(var(--border))");
   return (
     <button
-      key={o.key}
       type="button"
-      data-testid={`knock-outcome-${o.key}`}
+      data-testid={`${testIdPrefix}${o.key}`}
       aria-pressed={active}
       aria-label={o.label}
       title={o.label}
       disabled={disabled}
       onClick={() => onTap(o.key)}
       className={[
-        // 44px column min-width + the disc itself is the 44px target; snap-start
-        // keeps a flicked strip landing on whole discs.
-        "shrink-0 snap-start w-[52px] pt-0.5 pb-1 flex flex-col items-center gap-1 rounded-xl transition",
+        // The 44px disc IS the target; the column adds the label beneath.
+        "shrink-0 snap-start pt-0.5 pb-1 flex flex-col items-center gap-1 rounded-xl transition",
+        fluid ? "w-full min-w-[44px]" : "w-[52px]",
         disabled ? "cursor-not-allowed opacity-45" : "active:scale-95",
+        FOCUS,
       ].join(" ")}
     >
       <span
@@ -102,7 +106,7 @@ export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, d
         style={{
           background: o.color,
           // Active = the ring the surface's selection language uses (white on
-          // glass, --ring on tokens); the flash adds the grid cells' glow.
+          // glass, --ring on tokens); the flash adds a glow in the status hue.
           // Idle discs sit on a hairline so the dark NOSO disc never dissolves
           // into a dark surface.
           boxShadow: discShadow,
@@ -114,14 +118,14 @@ export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, d
       </span>
       {surface === "glass" ? (
         <span
-          className="text-2xs font-bold tracking-[0.04em] leading-none"
-          style={{ color: filled ? "#FFFFFF" : darkSheetColor }}
+          className="text-2xs font-bold tracking-[0.04em] leading-none whitespace-nowrap"
+          style={{ color: filled ? "#FFFFFF" : outcomeInkOnDark(o) }}
         >
           {o.short}
         </span>
       ) : (
         <span
-          className={`text-2xs font-bold tracking-[0.04em] leading-none ${filled ? "text-foreground" : "text-muted-foreground"}`}
+          className={`text-2xs font-bold tracking-[0.04em] leading-none whitespace-nowrap ${filled ? "text-foreground" : "text-muted-foreground"}`}
         >
           {o.short}
         </span>
@@ -130,32 +134,51 @@ export function OutcomeDisc({ outcome: o, icon: Icon, active, flashing, onTap, d
   );
 }
 
-export function OutcomeButton({ outcome: o, icon: Icon, active, flashing, onTap, variant, disabled = false }: OutcomeButtonProps): JSX.Element {
-  const filled = active || flashing;
-  const darkSheetColor = isLeadMapStatus(o.key)
-    ? (STATUS_CONFIG[o.key].onDark ?? o.color)
-    : o.color;
+// ── The disposition surface ──────────────────────────────────────────────────
+// Every field disposition as the same disc, six per row, FIXED order
+// (FIELD_OUTCOMES verbatim: the four most likely reads lead the first row).
+// 12 discs in two rows fit a 343px phone sheet with nothing to scroll; wider
+// homes (tablet sheet, docked panel, the Today sheet) spread the columns.
+export interface DispositionGridProps {
+  outcomes?: OutcomeDef[];
+  activeOutcome: KnockOutcome | null;
+  flashKey?: KnockOutcome | null;
+  onTap: (key: KnockOutcome) => void;
+  disabled?: boolean;
+  surface?: "glass" | "card";
+  testIdPrefix?: string;
+  className?: string;
+  "data-testid"?: string;
+}
+
+export function DispositionGrid(props: DispositionGridProps): JSX.Element {
+  const {
+    outcomes = FIELD_OUTCOMES, activeOutcome, flashKey = null, onTap, disabled = false,
+    surface = "glass", testIdPrefix, className = "",
+  } = props;
   return (
-    <button
-      key={o.key}
-      type="button"
-      data-testid={`knock-outcome-${o.key}`}
-      aria-pressed={active}
-      disabled={disabled}
-      onClick={() => onTap(o.key)}
-      className={[
-        "h-11 rounded-xl border text-[13px] font-semibold inline-flex items-center gap-1.5 transition",
-        disabled ? "cursor-not-allowed opacity-45" : "active:scale-95",
-        variant === "grid" ? "w-full justify-center px-2" : "px-3.5 rounded-full whitespace-nowrap",
-      ].join(" ")}
-      style={filled
-        ? { background: o.color, borderColor: o.color, color: outcomeFillTextColor(o.color), boxShadow: `0 2px 12px ${o.color}55` }
-        : { background: `${o.color}14`, borderColor: `${o.color}55`, color: darkSheetColor }}
+    <div
+      data-testid={props["data-testid"] ?? "knock-status-grid"}
+      role="group"
+      aria-label="Disposition"
+      className={`grid grid-cols-6 gap-x-1 gap-y-1.5 justify-items-center ${className}`}
     >
-      {flashing ? <Check aria-hidden="true" className="w-4 h-4" /> : Icon ? <Icon aria-hidden="true" className="w-4 h-4" /> : null}
-      {o.label}
-    </button>
+      {outcomes.map(o => (
+        <OutcomeDisc
+          key={o.key}
+          outcome={o}
+          icon={ICON_MAP[o.icon]}
+          active={activeOutcome === o.key}
+          flashing={flashKey === o.key}
+          onTap={onTap}
+          disabled={disabled}
+          surface={surface}
+          fluid
+          testIdPrefix={testIdPrefix}
+        />
+      ))}
+    </div>
   );
 }
 
-export default OutcomeButton;
+export default OutcomeDisc;

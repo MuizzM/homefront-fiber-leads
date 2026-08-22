@@ -37,25 +37,30 @@ function renderSheet(overrides: Record<string, any> = {}) {
   return { ...view, props };
 }
 
-describe("<OutcomeSheet /> - two-tier disposition surface", () => {
-  it("primary four render as big cells; every other disposition is a strip disc", () => {
+describe("<OutcomeSheet /> - one disposition surface, all discs", () => {
+  it("every field disposition renders as the same disc in ONE grid, fixed order, no strip", () => {
     renderSheet();
-    for (const k of PRIMARY) expect(screen.getByTestId(`outcome-${k}`)).toBeInTheDocument();
-    const strip = screen.getByTestId("outcome-strip");
+    const grid = screen.getByTestId("outcome-grid");
+    expect(screen.queryByTestId("outcome-strip")).not.toBeInTheDocument();
     for (const o of FIELD_OUTCOMES) {
-      if (PRIMARY.includes(o.key)) continue;
-      const disc = screen.getByTestId(`knock-outcome-${o.key}`);
-      expect(strip.contains(disc)).toBe(true);
+      const disc = screen.getByTestId(`outcome-${o.key}`);
+      expect(grid.contains(disc)).toBe(true);
+      expect(disc.querySelector(".w-11.h-11.rounded-full")).not.toBeNull();
       expect(disc).toHaveTextContent(o.short);
       expect(disc).toHaveAccessibleName(o.label);
     }
+    const order = [...grid.querySelectorAll("[data-testid^='outcome-']")]
+      .map(b => (b as HTMLElement).dataset.testid!.replace("outcome-", ""));
+    expect(order).toEqual(FIELD_OUTCOMES.map(o => o.key));
+    expect(order.slice(0, 4)).toEqual(PRIMARY);
+    expect(order.slice(4)).toEqual(STRIP_KEYS);
   });
 
-  it("a strip disc logs through the same one-tap path, carrying the typed note", async () => {
+  it("a disc logs through the same one-tap path, carrying the typed note", async () => {
     const { props } = renderSheet();
     await userEvent.click(screen.getByText("Add a note"));
     await userEvent.type(screen.getByTestId("outcome-note"), "gate code 4411");
-    await userEvent.click(screen.getByTestId("knock-outcome-competitor"));
+    await userEvent.click(screen.getByTestId("outcome-competitor"));
     expect(props.onLog).toHaveBeenCalledTimes(1);
     expect(props.onLog).toHaveBeenCalledWith("competitor", {
       notes: "gate code 4411", callbackDate: null, callbackTime: null,
@@ -64,15 +69,8 @@ describe("<OutcomeSheet /> - two-tier disposition surface", () => {
 
   it("mirrors the door's current state: a COMP door presses the COMP disc in place", () => {
     renderSheet({ lead: baseLead({ leadStatus: "not_interested", visited: 1, lastOutcome: "competitor" }) });
-    expect(screen.getByTestId("knock-outcome-competitor")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("outcome-competitor")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("outcome-not_interested")).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it("keeps every disposition in the shared FIELD order across tiers", () => {
-    renderSheet();
-    const stripOrder = [...screen.getByTestId("outcome-strip").querySelectorAll("[data-testid^='knock-outcome-']")]
-      .map(b => (b as HTMLElement).dataset.testid!.replace("knock-outcome-", ""));
-    expect(stripOrder).toEqual(STRIP_KEYS);
   });
 });
 

@@ -120,6 +120,17 @@ column-matching import that never imports phone numbers.
 - `getOpenCallbacks` without a tenant id is cross-tenant by construction; the
   reminder job iterates active tenants and reads per tenant instead.
 
+- The card's close and copy buttons never received a mouse or trackpad
+  click (2026-08-22, owner report). The header, peek bar and handle are drag
+  regions that called `setPointerCapture` on every pointerdown; with capture
+  active Chromium retargets pointerup and the compatibility click to the
+  capturing element, so clicks on `knock-sheet-close`, `knock-copy-address`
+  and `knock-peek-close` landed on `knock-sheet`. Touch taps survived only
+  because the tap's click is synthesized from the gesture. Fixed by taking
+  capture on the first pointermove past `TAP_SLOP_PX` instead of on the press
+  (`tests/rtl/LeadKnockSheet.test.tsx`, "drag regions never capture a tap":
+  two of the three tests fail on the old code).
+
 ## Validation
 
 Per milestone (all green, `DATA_DIR=$(mktemp -d)` per the pristine-data rule):
@@ -151,6 +162,15 @@ Per milestone (all green, `DATA_DIR=$(mktemp -d)` per the pristine-data rule):
   catches 9 doors, lists 7 reps with loads, previews "Ada will have 9
   doors", assigns, and the toast's Undo restores 9 (activity log
   `lead.assign_selection.undo {"restored":9,"skipped":0}`).
+
+- Close/copy fix (uncommitted at the time of writing): `DATA_DIR=$(mktemp -d)
+  bash scripts/agent-verify.sh focused tests/rtl/LeadKnockSheet.test.tsx
+  tests/rtl/A11yQuickWins.test.tsx` green (90 tests; `check` and
+  `check:fast` clean). Live on `homefront-fieldmap` with Playwright at
+  375x812: mouse click, touch tap and mouse-in-touch-context on the header
+  copy, body copy, header X and peek X all land (before: only touch did);
+  a 250px drag from the address still snaps quick to details and a drag
+  that starts on the X snaps instead of closing.
 
 ## Recovery
 

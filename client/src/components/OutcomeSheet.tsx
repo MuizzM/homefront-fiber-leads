@@ -14,19 +14,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
-  FIELD_OUTCOMES, OUTCOME_META, pinDisplayState, todayISO,
+  OUTCOME_META, pinDisplayState, todayISO,
   STATE_COLORS, DS_TO_OUTCOME, type KnockOutcome,
 } from "@shared/knock";
 import { X, CalendarPlus } from "lucide-react";
-import { OutcomeDisc, ICON_MAP, outcomeFillTextColor } from "@/components/lead-sheet/OutcomeButton";
+import { DispositionGrid } from "@/components/lead-sheet/OutcomeButton";
 import { ProximityChip, useLiveProximity } from "@/components/ProximityChip";
 import { QuickSlotRow } from "@/components/lead-sheet/QuickSlots";
 import { describeAppointment } from "@shared/schedule";
 import type { LogOpts } from "@/lib/useKnockLogger";
 
-const PRIMARY_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
-const PRIMARY = FIELD_OUTCOMES.filter(o => PRIMARY_KEYS.includes(o.key));
-const STRIP = FIELD_OUTCOMES.filter(o => !PRIMARY_KEYS.includes(o.key));
 
 export interface SheetLead {
   id: number; address: string; city?: string | null; zip?: string | null;
@@ -91,52 +88,17 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
               <button onClick={onClose} aria-label="Close" className="w-11 h-11 -mr-2 -mt-2 flex items-center justify-center text-muted-foreground"><X className="w-5 h-5" /></button>
             </div>
 
-            {/* Primary four — the big targets, Sold emphasized (the win). The
-                pressed cell mirrors the door's CURRENT state in place. */}
-            <div className="px-5 pt-4 pb-1 grid grid-cols-2 gap-2.5">
-              {PRIMARY.map(o => {
-                const win = o.key === "sold";
-                const pressed = activeOutcome === o.key;
-                return (
-                  <button
-                    key={o.key} onClick={() => fire(o.key)} data-testid={`outcome-${o.key}`}
-                    aria-pressed={pressed}
-                    className="h-14 rounded-xl font-semibold text-[14px] flex items-center justify-center gap-2 active:scale-95 transition-transform border-2"
-                    // Filled cells (the Sold emphasis, or the pressed mirror of the
-                    // door's current state) pick their ink per-fill — the old
-                    // hard-coded near-black went illegible when Sold's green
-                    // deepened. Unfilled: always-AA card-foreground; the HUE is
-                    // carried by a saturated dot + border, never low-contrast text.
-                    style={win || pressed
-                      ? { background: o.color, color: outcomeFillTextColor(o.color), borderColor: o.color }
-                      : { background: `${o.color}1f`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}99` }}
-                  >
-                    {!win && !pressed && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: o.color }} />}
-                    {o.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Every other disposition — the compact status-coded strip, same
-                order and testable contract as the map card's. */}
-            <div
-              data-testid="outcome-strip"
-              role="group"
-              aria-label="More dispositions"
-              className="px-5 pt-1 flex gap-1.5 overflow-x-auto overscroll-x-contain snap-x scrollbar-none"
-            >
-              {STRIP.map(o => (
-                <OutcomeDisc
-                  key={o.key}
-                  outcome={o}
-                  icon={ICON_MAP[o.icon]}
-                  active={activeOutcome === o.key}
-                  flashing={false}
-                  onTap={key => fire(key)}
-                  surface="card"
-                />
-              ))}
+            {/* Every disposition as the same status disc, fixed order (the
+                map card's surface in the themed tokens). The pressed disc
+                mirrors the door's CURRENT state in place. */}
+            <div className="px-5 pt-3 pb-1">
+              <DispositionGrid
+                data-testid="outcome-grid"
+                surface="card"
+                testIdPrefix="outcome-"
+                activeOutcome={activeOutcome}
+                onTap={key => fire(key)}
+              />
             </div>
 
             {/* Appointment — a follow-up with a real date, exactly the map
