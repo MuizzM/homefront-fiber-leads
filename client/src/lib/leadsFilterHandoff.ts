@@ -24,3 +24,22 @@ export function consumeLeadsFilterHandoff(): string | null {
     return v;
   } catch { return null; }
 }
+
+// ── "Add a lead" intent ──────────────────────────────────────────────────────
+// The command palette's "Add a lead" action lands on the Leads page with its
+// Add dialog already open. Same mechanism as the filter handoff, same reason.
+const ADD_KEY = "hfs.leads.intent";
+
+/** Ask the Leads page to open its Add dialog on arrival. */
+export function leadsAddIntent(): void {
+  try { sessionStorage.setItem(ADD_KEY, "add"); } catch { /* private mode - the page just opens */ }
+}
+
+/** Read and clear the pending intent (one-shot). */
+export function consumeLeadsAddIntent(): boolean {
+  try {
+    const v = sessionStorage.getItem(ADD_KEY);
+    if (v) sessionStorage.removeItem(ADD_KEY);
+    return v === "add";
+  } catch { return false; }
+}

@@ -61,6 +61,7 @@ const Profile = lazyRoute(() => import("@/pages/Profile"));
 const Diagnostics = lazyRoute(() => import("@/pages/Diagnostics"));
 const LoginActivity = lazyRoute(() => import("@/pages/LoginActivity"));
 const Governance = lazyRoute(() => import("@/pages/Governance"));
+const Rulebook = lazyRoute(() => import("@/pages/Rulebook"));
 const Billing = lazyRoute(() => import("@/pages/Billing"));
 const SuperAdmin = lazyRoute(() => import("@/pages/SuperAdmin"));
 const Training = lazyRoute(() => import("@/pages/Training"));
@@ -409,6 +410,12 @@ function RouteTable({ location, role, isSuperAdmin }: {
           <Route path="/profile" component={Profile} />
           <Route path="/diagnostics">
             <Guard role={role} allowed={["admin", "manager"]}><Diagnostics /></Guard>
+          </Route>
+          <Route path="/rulebook">
+            {/* Every computed rule with its thresholds, read from shared constants.
+                Same audience as Diagnostics: the people who answer "why did the
+                app decide that". */}
+            <Guard role={role} allowed={["admin", "manager"]}><Rulebook /></Guard>
           </Route>
           <Route path="/login-activity">
             {/* Admin/manager visibility into the org's auth trail (server
