@@ -3457,6 +3457,19 @@ export function bootstrapDefaultTenant(raw: any): void {
       .map(t => t.name)
       .filter(name => name !== "app_settings" && name !== "tenants");
     let adopted = 0;
+    // Each UPDATE below reads its whole table while holding the write lock,
+    // on every boot, even when nothing is left to adopt: fiber_checks (2.66 GB,
+    // no indexes) alone cost 64 s of the 2026-08-22 deploy. A per-table
+    // watermark in app_settings (platform bucket, tenant_id 0) records the
+    // highest rowid the sweep has already covered, so the next boot scans only
+    // the rows written since, by primary key. Rows that lose their tenant
+    // after the sweep are not a thing this app does; a WITHOUT ROWID table
+    // (no rowid to watermark) keeps the full sweep.
+    const readWatermark = raw.prepare("SELECT value FROM app_settings WHERE tenant_id = 0 AND key = ?");
+    const writeWatermark = raw.prepare(
+      `INSERT INTO app_settings (tenant_id, key, value, updated_at) VALUES (0, ?, ?, datetime('now'))
+       ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    );
     for (const table of tables) {
       const cols = (raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name);
       if (!cols.includes("tenant_id")) continue;
@@ -3466,8 +3479,19 @@ export function bootstrapDefaultTenant(raw: any): void {
       const where = table === "activity_log"
         ? "tenant_id IS NULL AND user_id IS NOT NULL"
         : "tenant_id IS NULL";
-      const res = raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE ${where}`).run(tenant.id);
+      const key = `tenant_adopt_watermark:${table}`;
+      let maxRowid: number | null = null;
+      try {
+        const row = raw.prepare(`SELECT MAX(rowid) AS m FROM ${table}`).get() as { m: number | null } | undefined;
+        maxRowid = row?.m == null ? 0 : Number(row.m);
+      } catch { maxRowid = null; } // WITHOUT ROWID: full sweep below
+      const prior = maxRowid == null ? null : (readWatermark.get(key) as { value: string } | undefined)?.value;
+      const from = prior != null && Number.isFinite(Number(prior)) ? Number(prior) : null;
+      const res = from != null
+        ? raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE rowid > ? AND ${where}`).run(tenant.id, from)
+        : raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE ${where}`).run(tenant.id);
       adopted += res.changes;
+      if (maxRowid != null) writeWatermark.run(key, String(maxRowid));
     }
     if (adopted > 0) {
       console.log(`[tenant] Adopted ${adopted} unowned rows into "Home Front Solutions"`);

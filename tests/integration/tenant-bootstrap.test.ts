@@ -87,3 +87,23 @@ describe("bootstrapDefaultTenant", () => {
     expect((session as any).tenantId).toBe(hfs.id);
   });
 });
+
+describe("bootstrapDefaultTenant adoption watermark", () => {
+  it("records the highest rowid it swept per table and only rescans rows written since", () => {
+    const hfs = rawDb.prepare(`SELECT id FROM tenants WHERE slug = 'home-front-solutions'`).get() as any;
+    storageMod.bootstrapDefaultTenant(rawDb);
+    const mark = rawDb.prepare(`SELECT value FROM app_settings WHERE tenant_id = 0 AND key = 'tenant_adopt_watermark:team_members'`).get() as any;
+    const max = rawDb.prepare(`SELECT MAX(rowid) m FROM team_members`).get() as any;
+    expect(Number(mark.value)).toBe(max.m);
+    // A row written after the sweep is still adopted on the next boot...
+    rawDb.prepare(`INSERT INTO team_members (name, role, active, tenant_id, created_at) VALUES ('Late Orphan','rep',1,NULL,datetime('now'))`).run();
+    storageMod.bootstrapDefaultTenant(rawDb);
+    const late = rawDb.prepare(`SELECT tenant_id FROM team_members WHERE name = 'Late Orphan'`).get() as any;
+    expect(late.tenant_id).toBe(hfs.id);
+    // ...and the watermark moves up to it.
+    const mark2 = rawDb.prepare(`SELECT value FROM app_settings WHERE tenant_id = 0 AND key = 'tenant_adopt_watermark:team_members'`).get() as any;
+    expect(Number(mark2.value)).toBe((rawDb.prepare(`SELECT MAX(rowid) m FROM team_members`).get() as any).m);
+    // Rows owned by another tenant stay untouched throughout.
+    expect((rawDb.prepare(`SELECT tenant_id FROM team_members WHERE name = 'Owned Rep'`).get() as any).tenant_id).toBe(77);
+  });
+});
