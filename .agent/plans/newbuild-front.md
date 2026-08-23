@@ -51,32 +51,46 @@ exactly the same **1,030** stored bodies:
 `fiber_checks.result` JSON, so the claim guard cannot currently ask "is this
 door allowed a second look?" without parsing JSON per row.
 
-**The footprint gap is the largest single opportunity in the data.** NC cities
-that have already produced NEW FIBER, with their unworked inventory:
+**The footprint gap - CORRECTED 2026-08-23.** The table first published here
+mixed carriers and was wrong in its largest row: Durham's 24,252 never-scanned
+doors are **Frontier**, not Kinetic, and counting them as Kinetic opportunity
+inflated the headline. Frontier is a different carrier and a different product;
+it is excluded everywhere below.
 
-| city | new fiber found | inventory | never scanned |
+NC, kinetic only:
+
+| | doors |
+| --- | ---: |
+| kinetic doors held | 334,488 |
+| scanned | 22,640 |
+| never-scanned, in cities that produced kinetic fiber | **167,679** |
+| (frontier, excluded) | 36,072 |
+
+**And the hit rate that was applied to it was not sound either.** "14.69%" is a
+blend across selection methods over doors the yield tiers deliberately CHOSE.
+Split by how the door was picked:
+
+| chosen by | scanned | fiber | rate |
 | --- | ---: | ---: | ---: |
-| concord | 987 | 70,470 | **67,730** |
-| indian trail | 433 | 38,548 | **35,963** |
-| durham | 1,421 | 36,072 | **24,252** |
-| sanford | 259 | 11,252 | 10,732 |
-| matthews | 9 | 9,799 | 9,784 |
-| marshville | 13 | 7,402 | 7,292 |
-| monroe | 6 | 5,919 | 5,779 |
-| harrisburg | 82 | 5,573 | 4,603 |
-| kannapolis | 162 | 5,466 | 4,348 |
-| albemarle | 21 | 6,877 | 4,284 |
-| rockwell | 625 | 3,073 | 2,370 |
-| wingate | 46 | 2,795 | 2,399 |
-| china grove | 325 | 4,081 | 1,880 |
-| broadway | 45 | 4,102 | 1,609 |
-| lilesville | 598 | 2,385 | 1,352 |
-| tryon | 481 | 1,567 | 901 |
-| pinebluff | 483 | 1,490 | 777 |
+| mapbox-grid | 4,983 | 508 | 10.19% |
+| live-china grove | 1,580 | 212 | 13.42% |
+| live-broadway | 1,023 | 35 | 3.42% |
+| harvest-overpass+mapbox | 1,999 | 23 | 1.15% |
+| live-concord | 1,159 | 13 | 1.12% |
+| live-albemarle | 1,628 | 10 | 0.61% |
+| overpass | 1,080 | 0 | 0.00% |
+| (leads-backfill, excluded: circular) | 2,226 | 2,225 | 99.96% |
 
-Roughly **180,000 never-scanned doors sit in cities with proven fiber.** The
-flood tier only works cells that already had a hit, so most of this is invisible
-to the current ladder.
+Extrapolating the blend onto cold inventory was the error. The honest figure
+comes from scanning cold doors directly: **7.5% sellable** measured on 40
+never-scanned Kinetic doors in Rockwell, verified from response bodies.
+
+So the earlier claim that ~$5.62 of proxy bandwidth buys ~24,600 fiber doors is
+**withdrawn**. At 7.5% the same 167,679 doors imply on the order of 12,000
+sellable - and even that assumes the whole footprint behaves like Rockwell,
+which the same night's data contradicts: Rockwell's rural roads ran above 90%
+sellable while its town core ran near 7%. A single city-level rate is the wrong
+unit. See the street-level split in the Rockwell run.
 
 **`addressCatalogDt` is a real but thin signal.** 4,292 of ~4,600 rows carrying
 it say 2019 (the initial catalog load); only 40 are within 24 months. Those 40

@@ -410,10 +410,27 @@ services:
       # makes the planner walk 919k rows for counts an index answers at once.
       # ANALYZE_MAINTENANCE=off is its kill switch.
       ANALYZE_TICK_MS: "300000"
-      # TOKEN ECONOMY (bot-wall workaround): mint rarely, ride tokens long.
-      # 1 mint/2s max; each token serves 40 leases / 1000 checks before
-      # retirement. One success per minute = 1000 checks/min of capacity.
-      KFS_MINT_MIN_INTERVAL_MS: "15000"
+      # TOKEN ECONOMY - REVERSED 2026-08-23, because "mint rarely, ride tokens
+      # long" is measurably the wrong direction.
+      #
+      # A Kinetic token is spent after roughly 20 real answers, however many
+      # IPs you rotate it through. Measured against the live search API, reading
+      # the response BODY rather than the status:
+      #
+      #   one TOKEN, fresh IP every 20 ......... 20/60   (33%)
+      #   one IP, fresh TOKEN every 20 ......... 35/60   (58%)
+      #   fresh TOKEN + fresh IP every 20 ...... 60/60   (100%)
+      #
+      # The old settings were the FIRST row exactly: DECODO_CHECKS_PER_IP=20
+      # rotated the address while KFS_TOKEN_MAX_CHECKS=1000 rode one token
+      # across fifty of them. The pair has to retire together.
+      #
+      # Mint pacing then becomes the throughput ceiling rather than a safety
+      # valve: at one mint per 15 s and 20 checks per token, the whole fleet is
+      # capped at 1.3 checks/s. A local run at 400 ms sustained 3.7/s with 10
+      # denials across 800 answers, so the wall is not what 15 s was protecting
+      # against. 1 s is deliberately conservative against that measurement.
+      KFS_MINT_MIN_INTERVAL_MS: "1000"
       # DECODO STICKY EGRESS - ON, and by PORT (measured 2026-08-22).
       # Decodo does sticky through the port, not a username suffix:
       # us.decodo.com:10000 hands out a DIFFERENT residential IP on every
@@ -444,11 +461,12 @@ services:
       # One 403 does not mean the IP is burnt (the 86% run took its first at
       # check 15, then ran 30 clean). Rotating on the first denial is what
       # turned 205 denials into 205 IP rotations.
-      # Set HIGH deliberately. Changing egress IP mid-run is the thing that
-      # correlates with collapse: the one clean local run that never changed IP
-      # held 86% over 80 checks, while runs that rotated freely fell to 13%.
-      # A denial is a reason to slow down, not to move house. Time-based
-      # refresh (DECODO_STICKY_MINUTES) still cycles IPs in an orderly way.
+      # A denial is a reason to slow down, not to move house: an isolated 403
+      # says nothing about an IP (a run that finished at 86% took its first at
+      # check 15). The streak is spent only when a rotation actually happens.
+      # DECODO_STICKY_MINUTES is a real second trigger now - it never fired
+      # before, because the expiry was evaluated only when a dispatcher was
+      # built and the rebuild reset the deadline moments earlier.
       DECODO_ROTATE_AFTER_DENIALS: "8"
       # Retire each residential IP after 20 checks, while it is still healthy.
       # Measured across five sticky ports driven to exhaustion: the longest
@@ -458,8 +476,10 @@ services:
       # the fleet-shared 403-storm backoff. 20 stays inside the clean run.
       DECODO_CHECKS_PER_IP: "20"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
-      KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
-      KFS_TOKEN_MAX_CHECKS: "1000"
+      # Retire the token WITH the IP (DECODO_CHECKS_PER_IP above), not fifty
+      # times later. 1000 was the setting that produced the 33% arm.
+      KFS_TOKEN_MAX_LEASES_PER_SLOT: "20"
+      KFS_TOKEN_MAX_CHECKS: "20"
       SCAN_TARGET_MERGE: "off"
       # ── Heavy-migration gates — BOTH required to keep the app off the
       # scan_targets table rebuild (949k rows) that wedged the event loop twice.

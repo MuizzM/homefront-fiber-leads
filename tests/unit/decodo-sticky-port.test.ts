@@ -196,3 +196,21 @@ describe("what the measurements actually established", () => {
       .not.toContain("sticky egress in force");
   });
 });
+
+describe("the time window is reachable", () => {
+  // DECODO_STICKY_MINUTES never fired once: the expiry lived inside
+  // stickyProxyUrl(), which is only called when a dispatcher is BUILT, and
+  // rebuildDispatcher() advances the port immediately beforehand and resets the
+  // deadline - so the test was always false. Meanwhile the deploy manifest
+  // asserted "time-based refresh still cycles IPs in an orderly way".
+  it("is evaluated on the request path, not only at dispatcher build", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/proxy-fetch.ts"), "utf8");
+    expect(src, "a dedicated predicate exists").toContain("function stickyWindowExpired()");
+    const fetchBody = src.slice(src.indexOf("export async function proxyFetch"));
+    expect(fetchBody, "and the request path consults it").toContain("stickyWindowExpired()");
+    // The old placement must not come back.
+    const builder = src.slice(src.indexOf("function stickyProxyUrl"), src.indexOf("function buildAgent"));
+    expect(builder).not.toContain("_stickyUntil");
+  });
+});
