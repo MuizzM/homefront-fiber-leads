@@ -11,11 +11,13 @@ import { join } from "node:path";
  * two into one "already served" colour would tell a rep to walk past 6,574
  * workable doors in the current data, so the split is what these tests defend.
  *
- * The first version of this read model also queried `account_number`, a column
- * that exists on no table in this schema, so every request threw and the
- * client's `if (!r.ok) return` swallowed it - the layer silently never drew.
- * The executes-at-all test below is deliberately not redundant with the tag
- * tests: it is the one that would have caught that.
+ * The first version of this read model also queried `account_number`, which is
+ * created on demand by ensureAccountSchema() rather than by runMigrations().
+ * It is therefore present on databases a server has exercised and absent on
+ * ones it has not, so the endpoint threw `no such column` on some deployments
+ * and worked on others, with the client's `if (!r.ok) return` swallowing the
+ * difference. The executes-at-all test below runs against a freshly migrated
+ * database, which is exactly the state where that query failed.
  */
 let rawDb: import("better-sqlite3").Database;
 let mod: typeof import("../../server/scannedDoors");

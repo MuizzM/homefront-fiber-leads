@@ -18,10 +18,15 @@
 // have told reps to skip 6,574 doors that are workable. The tag below splits
 // them, because the split is the entire value of the layer.
 //
-// That earlier version also tested `account_number IS NOT NULL`, a column that
-// exists on no table in this schema, so every request threw `no such column`
-// and the client's `if (!r.ok) return` swallowed it. The layer never drew a
-// single pin. Only columns verified present on scan_targets are used here.
+// That earlier version also tested `account_number IS NOT NULL`. That column is
+// created on demand by ensureAccountSchema() in customerAccount.ts, which is
+// called only from that module's own three functions - never at boot, and not
+// by runMigrations(). So whether the query worked depended on whether some
+// unrelated code path had happened to run first: it is absent from the repo's
+// data.db and .dev-verify (where the query throws `no such column`, and the
+// client's `if (!r.ok) return` swallows it), and present on every database a
+// server has exercised. A read model must not be a coin flip on boot order, so
+// only columns guaranteed by runMigrations() are used here.
 import { rawDb } from "./db";
 
 /** What a rep is looking at. Derived on the server so the client cannot drift. */
