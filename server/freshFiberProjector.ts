@@ -382,11 +382,14 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         // Carrier-honest copy: Frontier leads were being stamped "Kinetic fiber"
         // (hardcoded below), which read as a wrong-carrier verdict on red pins.
         const carrierName = (candidate as any).carrier === "frontier" ? "Frontier" : "Kinetic";
+        // The comment leads with the provider's own segment word. A rep reading
+        // the lead card sees the same term the map glyph and the scan answer
+        // use, instead of three ways of saying the same thing.
         const created = insert.get(
           candidate.address, candidate.city, candidate.state, candidate.zip ?? "", candidate.lat, candidate.lng,
           candidate.last_fiber_status ?? "new_fiber", candidate.max_download_mbps,
           leadSegment, leadBilling,
-          `Confirmed fresh ${carrierName} fiber with no active-service signal.`,
+          `New Fiber. Confirmed ${carrierName} fiber at the address with no active service on it.`,
           decision.sources.length >= 2
             ? `Unavailable-to-fiber flip; independently confirmed by ${decision.sources.slice(1).join(", ")}.`
             : `NEW FIBER + billing N (authoritative ${carrierName} new-build signal).`,

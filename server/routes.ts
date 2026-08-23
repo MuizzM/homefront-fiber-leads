@@ -267,7 +267,7 @@ import { CATALOG_OBSERVED_AT, KINETIC_DIRECTORY_URLS, KINETIC_MONITORED_STATES, 
 import * as sweepService from "./sweepService";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
-import { servedDoorsInBbox } from "./servedDoors";
+import { scannedDoorsInBbox } from "./scannedDoors";
 import {
   filterCounts as mpboxFilterCounts, listResults as mpboxListResults,
   readStats as mpboxReadStats,
@@ -1917,7 +1917,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Served doors are a background layer, not the working set: a tighter cap
   // than the lead window, because a rep never needs five thousand of them to
   // understand that a street is taken.
-  const SERVED_DOORS_CAP = 5_000;
+  const SCANNED_DOORS_CAP = 5_000;
   function parseMapBBox(raw: unknown, maxSpanDeg: number = MAP_BBOX_MAX_SPAN_DEG): MapPinWindow | { error: string } | null {
     if (raw == null || raw === "") return null;
     if (typeof raw !== "string") return { error: "bbox must be minLng,minLat,maxLng,maxLat" };
@@ -2092,18 +2092,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
-  // ── Doors that already have service ─────────────────────────────────────
-  // NOT leads, and deliberately a separate endpoint so they can never be
-  // mistaken for them. The lead projector only publishes NEW FIBER + billing N,
-  // so an already-served house is filtered out upstream and never becomes a
-  // pin - which left a rep unable to tell a sellable fiber door from one that
-  // is already taken. Measured live in Rockwell: 8 of 10 fiber doors already
-  // had an account.
-  app.get("/api/map/served", requireAuth, (req: any, res: any) => {
+  // ── Scanned doors ───────────────────────────────────────────────────────
+  // Every door we have an answer for, tagged. NOT leads, and deliberately a
+  // separate endpoint so they can never be mistaken for them: no lead row, no
+  // assignment, no knock queue. The lead projector only publishes NEW FIBER +
+  // billing N, so before this a rep standing on an already-scanned street saw
+  // bare map and had no way to tell a sellable door from one already taken.
+  //
+  // The tag is computed in SQL (see scannedDoors.ts) so the map, the door card
+  // and the legend cannot disagree about what a pin means.
+  app.get("/api/map/scanned-doors", requireAuth, (req: any, res: any) => {
     const bbox = parseMapBBox(req.query.bbox);
     if (bbox && "error" in bbox) return res.status(400).json({ error: bbox.error });
     if (!bbox) return res.status(400).json({ error: "bbox is required: minLng,minLat,maxLng,maxLat" });
-    const out = servedDoorsInBbox(tid(req), bbox, SERVED_DOORS_CAP);
+    const out = scannedDoorsInBbox(tid(req), bbox, SCANNED_DOORS_CAP);
     res.json({ count: out.doors.length, truncated: out.truncated, doors: out.doors });
   });
 

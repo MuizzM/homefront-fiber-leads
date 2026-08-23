@@ -202,6 +202,7 @@ import { MapViewportNotice } from "@/components/map/MapViewportNotice";
 import { MapLensNotice } from "@/components/map/MapLensNotice";
 import { MapSettingsSheet } from "@/components/map/MapSettingsSheet";
 import { MapLegend } from "@/components/map/MapLegend";
+import { ScannedDoorCard, DOOR_TAG_STYLE, type ScannedDoorCardDoor } from "@/components/map/ScannedDoorCard";
 import { FOCUS } from "@/lib/a11y";
 import { takeLeadMapTarget, type LeadMapTarget } from "@/lib/leadMapNavigation";
 
@@ -617,8 +618,15 @@ const SCAN_RESULTS_SOURCE = "scan-results";
 // these are not leads, are never assignable, and must never be mistaken for a
 // knockable pin. Measured live in Rockwell: 8 of 10 fiber doors already had an
 // account, and the map gave a rep no way to tell.
-const SERVED_DOORS_SOURCE = "served-doors";
-const SERVED_DOORS_LAYER = "served-doors-points";
+// Mirrors DOOR_TAG_LABEL in server/scannedDoors.ts. The server sends the label
+// with every door for the card; the legend needs it before any door is tapped.
+const DOOR_TAG_LABEL_CLIENT: Record<string, string> = {
+  new_fiber: "New Fiber",
+  tenured_active: "Tenured",
+  fiber_open: "Fiber, no account",
+};
+const SCANNED_DOORS_SOURCE = "scanned-doors";
+const SCANNED_DOORS_LAYER = "scanned-doors-points";
 const SCAN_RESULTS_CLUSTER_LAYER = "scan-results-clusters";
 const SCAN_RESULTS_COUNT_LAYER = "scan-results-count";
 const SCAN_RESULTS_POINT_LAYER = "scan-results-points";
@@ -736,23 +744,44 @@ function ensureTransientMapLayers(map: any): void {
     });
   }
 
-  if (!map.getSource(SERVED_DOORS_SOURCE)) {
-    map.addSource(SERVED_DOORS_SOURCE, { type: "geojson", data: emptyFeatureCollection() });
+  if (!map.getSource(SCANNED_DOORS_SOURCE)) {
+    map.addSource(SCANNED_DOORS_SOURCE, { type: "geojson", data: emptyFeatureCollection() });
   }
-  if (!map.getLayer(SERVED_DOORS_LAYER)) {
+  if (!map.getLayer(SCANNED_DOORS_LAYER)) {
     map.addLayer({
-      id: SERVED_DOORS_LAYER,
+      id: SCANNED_DOORS_LAYER,
       type: "circle",
-      source: SERVED_DOORS_SOURCE,
+      source: SCANNED_DOORS_SOURCE,
       paint: {
-        // Blue = the fiber is on and somebody is already on it. Deliberately
-        // smaller and dimmer than a lead pin: this is context a rep reads past,
-        // not work they act on.
-        "circle-radius": 5,
-        "circle-color": "#3b82f6",
-        "circle-opacity": 0.55,
-        "circle-stroke-width": 1,
-        "circle-stroke-color": "#bfdbfe",
+        // Colour carries the verdict, size carries whether to act on it.
+        // Tenured-active doors are already sold, so they stay small and dim:
+        // context a rep reads past. The two workable tags are drawn larger and
+        // more opaque so a street reads at a glance instead of needing taps.
+        "circle-radius": [
+          "match", ["get", "tag"],
+          "tenured_active", 5,
+          6.5,
+        ],
+        "circle-color": [
+          "match", ["get", "tag"],
+          "new_fiber", "#16a34a",
+          "fiber_open", "#f59e0b",
+          "tenured_active", "#3b82f6",
+          "#94a3b8",
+        ],
+        "circle-opacity": [
+          "match", ["get", "tag"],
+          "tenured_active", 0.55,
+          0.85,
+        ],
+        "circle-stroke-width": 1.5,
+        "circle-stroke-color": [
+          "match", ["get", "tag"],
+          "new_fiber", "#dcfce7",
+          "fiber_open", "#fef3c7",
+          "tenured_active", "#bfdbfe",
+          "#e2e8f0",
+        ],
       },
     });
   }
@@ -1006,6 +1035,13 @@ export default function MapView() {
   // camera when the sheet's real content height lands (varies per lead).
   const [sheetPeekPx, setSheetPeekPx] = useState<number | null>(null);
   const [legendOpen, setLegendOpen] = useState(false); // manager legend: collapsed dot-strip by default
+  // Tapped scanned door. Separate from the lead card on purpose: a scanned
+  // door is not a lead, and merging the two surfaces is exactly how an
+  // already-sold house starts looking like work.
+  const [selectedDoor, setSelectedDoor] = useState<ScannedDoorCardDoor | null>(null);
+  // Scanned doors currently in view, per tag. Feeds the legend so a rep can
+  // read the colours without tapping one.
+  const [doorTagCounts, setDoorTagCounts] = useState<Record<string, number>>({});
   // Rep pin-colors key — dismissible, opt-in from the More menu (never at rest).
   const [pinKeyOpen, setPinKeyOpen] = useState(false);
   // ── Nearest doors (rep) ────────────────────────────────────────────────────
@@ -2658,61 +2694,72 @@ export default function MapView() {
   // with leads, and are never assignable. A rep reads them as context.
   // Failures are silent by design - the working set is the lead pins, and a
   // missing context layer must never blank or block them.
-  const servedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const servedAbortRef = useRef<AbortController | null>(null);
+  const scannedDoorsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scannedDoorsAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    const fetchServed = async () => {
+    const fetchScannedDoors = async () => {
       // A style swap wipes sources. Re-create rather than silently no-op:
       // returning here left the layer permanently dead after the first swap,
       // with no error anywhere - it took a live browser session to notice the
       // request was simply never being made.
-      if (!map.getSource(SERVED_DOORS_SOURCE)) {
+      if (!map.getSource(SCANNED_DOORS_SOURCE)) {
         try { ensureTransientMapLayers(map); } catch { /* style mid-swap */ }
       }
-      const src: any = map.getSource(SERVED_DOORS_SOURCE);
+      const src: any = map.getSource(SCANNED_DOORS_SOURCE);
       if (!src?.setData) return;
-      if (import.meta.env.DEV) console.info("[served] fetch", { zoom: map.getZoom() });
+      if (import.meta.env.DEV) console.info("[scanned-doors] fetch", { zoom: map.getZoom() });
       // Below street zoom this is noise, and the window would be huge.
-      if (map.getZoom() < 13) { try { src.setData(emptyFeatureCollection()); } catch {} return; }
+      if (map.getZoom() < 13) {
+        try { src.setData(emptyFeatureCollection()); } catch {}
+        setDoorTagCounts({});
+        return;
+      }
       const b = map.getBounds();
       const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
         .map((n) => n.toFixed(5)).join(",");
-      servedAbortRef.current?.abort();
+      scannedDoorsAbortRef.current?.abort();
       const ac = new AbortController();
-      servedAbortRef.current = ac;
+      scannedDoorsAbortRef.current = ac;
       try {
         // x-session-id HEADER, not a cookie. This app does not use cookie auth,
         // and `credentials: "include"` silently 401s every request - the same
         // trap leadStream.ts:20 documents. Verified live: the first version of
         // this fetch returned 401 on every pan.
         const sessionId = getStoredSessionId();
-        const r = await fetch(`/api/map/served?bbox=${encodeURIComponent(bbox)}`, {
+        const r = await fetch(`/api/map/scanned-doors?bbox=${encodeURIComponent(bbox)}`, {
           headers: sessionId ? { "x-session-id": sessionId } : {},
           signal: ac.signal,
         });
         if (!r.ok) return;
         const body = await r.json();
+        const tally: Record<string, number> = {};
+        for (const d of body.doors ?? []) tally[d.tag] = (tally[d.tag] ?? 0) + 1;
+        setDoorTagCounts(tally);
         src.setData({
           type: "FeatureCollection",
           features: (body.doors ?? []).map((d: any) => ({
             type: "Feature",
             geometry: { type: "Point", coordinates: [d.lng, d.lat] },
-            properties: { id: d.id, address: d.address, city: d.city, reason: d.reason },
+            properties: {
+              id: d.id, address: d.address, city: d.city,
+              tag: d.tag, label: d.label, scannedAt: d.scannedAt ?? null,
+              leadId: d.leadId ?? null,
+            },
           })),
         });
       } catch { /* aborted pan, or offline - the lead pins are what matter */ }
     };
     const onMoveEnd = () => {
-      if (servedTimerRef.current) clearTimeout(servedTimerRef.current);
-      servedTimerRef.current = setTimeout(fetchServed, 350);
+      if (scannedDoorsTimerRef.current) clearTimeout(scannedDoorsTimerRef.current);
+      scannedDoorsTimerRef.current = setTimeout(fetchScannedDoors, 350);
     };
     map.on("moveend", onMoveEnd);
-    void fetchServed();
+    void fetchScannedDoors();
     return () => {
-      if (servedTimerRef.current) clearTimeout(servedTimerRef.current);
-      servedAbortRef.current?.abort();
+      if (scannedDoorsTimerRef.current) clearTimeout(scannedDoorsTimerRef.current);
+      scannedDoorsAbortRef.current?.abort();
       try { map.off("moveend", onMoveEnd); } catch {}
     };
   }, [mapReady, styleEpoch]);
@@ -3572,6 +3619,25 @@ export default function MapView() {
           source: "scan",
         });
       });
+      map.on("click", SCANNED_DOORS_LAYER, (e: any) => {
+        if (drawToolActive()) return;
+        const p = e.features?.[0]?.properties;
+        if (!p) return;
+        setSelectedDoor({
+          id: Number(p.id),
+          address: String(p.address ?? ""),
+          city: String(p.city ?? ""),
+          tag: (p.tag ?? "fiber_open") as ScannedDoorCardDoor["tag"],
+          label: String(p.label ?? "Scanned"),
+          scannedAt: p.scannedAt ? String(p.scannedAt) : null,
+          // MapLibre serialises null feature properties to the STRING "null";
+          // Number("null") is NaN, which would render an Open lead button that
+          // navigates nowhere.
+          leadId: p.leadId == null || p.leadId === "null" ? null : Number(p.leadId),
+        });
+      });
+      map.on("mouseenter", SCANNED_DOORS_LAYER, () => hoverCursor("pointer"));
+      map.on("mouseleave", SCANNED_DOORS_LAYER, () => hoverCursor(""));
       map.on("mouseenter", SCAN_RESULTS_CLUSTER_LAYER, () =>
         hoverCursor("pointer"),
       );
@@ -3624,6 +3690,7 @@ export default function MapView() {
           "lead-unclustered",
           STATUS_ICON_LAYER,
           "lead-clusters",
+          SCANNED_DOORS_LAYER,
           ...territoryLayersRef.current,
         ].filter((id) => {
           try {
@@ -5971,7 +6038,7 @@ export default function MapView() {
     const core: ReadonlySet<PinDisplayState> = new Set([
       "unworked", "not_home", "interested", "follow_up", "sold", "not_interested",
     ]);
-    return FILTER_STATUS_ORDER.filter(
+    const rows = FILTER_STATUS_ORDER.filter(
       (k) => core.has(k) || (statusCounts[k] ?? 0) > 0,
     ).map((k) => ({
       key: k as string,
@@ -5980,7 +6047,19 @@ export default function MapView() {
       count: statusCounts[k] ?? 0,
       glyph: legendGlyphs[k],
     }));
-  }, [statusCounts, legendGlyphs]);
+    // Scanned doors are a different kind of thing from a lead pin, so their
+    // rows only appear when the layer is actually drawing some. Same
+    // no-dead-UI rule the source pills follow.
+    const doorRows = (Object.keys(DOOR_TAG_STYLE) as Array<keyof typeof DOOR_TAG_STYLE>)
+      .filter((t) => (doorTagCounts[t] ?? 0) > 0)
+      .map((t) => ({
+        key: `door:${t}`,
+        label: DOOR_TAG_LABEL_CLIENT[t],
+        color: DOOR_TAG_STYLE[t].dot,
+        count: doorTagCounts[t] ?? 0,
+      }));
+    return [...rows, ...doorRows];
+  }, [statusCounts, legendGlyphs, doorTagCounts]);
   // Active-filter chip presentation — honest even when the persisted filter
   // currently matches zero pins (option absent): label/color fall back to the
   // canonical display-state maps, never a misleading "All".
@@ -9259,6 +9338,15 @@ export default function MapView() {
               style={{ bottom: "calc(env(safe-area-inset-bottom) + 6.5rem)" }}
             />
           )}
+
+          {/* Tapped scanned door. Bottom-right so it never covers the legend or
+              the rep's thumb reach on the primary actions at bottom-left. */}
+          <ScannedDoorCard
+            door={selectedDoor}
+            onClose={() => setSelectedDoor(null)}
+            className="absolute right-3 z-20"
+            style={{ bottom: "calc(env(safe-area-inset-bottom) + 6.5rem)" }}
+          />
 
           {/* Pin legend + admin filter panel — bottom left, MANAGER chrome
                  (team_lead+). The floating dot-strip trigger is gone (minimal
