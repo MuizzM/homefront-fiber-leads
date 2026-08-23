@@ -169,18 +169,45 @@ describe("run-kind exemption - the hinge the whole design hangs on", () => {
   it("exempts the lanes that must re-verify and no others", async () => {
     const { isRecheckExemptKind } = await import("../../shared/scanPolicy");
     const sweep = await import("../../server/neighborhoodSweep");
+    // The promise lane: the carrier itself said to come back.
     expect(isRecheckExemptKind(sweep.SWEEP_RUN_KIND.coming), "coming lane collects on promises").toBe(true);
-    expect(isRecheckExemptKind(sweep.SWEEP_RUN_KIND.confirm), "confirm re-buys known greens").toBe(true);
-    expect(isRecheckExemptKind(sweep.SWEEP_RUN_KIND.floodRecheck), "opt-in negative rescan").toBe(true);
-    expect(isRecheckExemptKind(sweep.SWEEP_RUN_KIND.flood), "a bulk flood is bound by once-only").toBe(false);
-    expect(isRecheckExemptKind(sweep.SWEEP_RUN_KIND.street)).toBe(false);
-    expect(isRecheckExemptKind(sweep.SWEEP_RUN_KIND.probe)).toBe(false);
-    // A rep's own action always re-verifies.
-    for (const k of ["manual", "target_ids", "lasso_ring", "field_tap", "area_box"]) {
+    expect(isRecheckExemptKind("coming_soon_watch")).toBe(true);
+    expect(isRecheckExemptKind("coming_soon_watch_yield")).toBe(true);
+    // A rep tapped the door.
+    for (const k of ["manual", "target_ids", "lasso", "field", "area", "bbox", "manual_full_city", "lasso-7f3a"]) {
       expect(isRecheckExemptKind(k), k).toBe(true);
     }
-    expect(isRecheckExemptKind("market")).toBe(false);
+    // A different carrier is a FIRST check, not a re-check.
+    expect(isRecheckExemptKind("frontier_hot")).toBe(true);
+    // An operator pressing Rescan is a person choosing to spend, not a producer.
+    expect(isRecheckExemptKind("rescan")).toBe(true);
+
+    // ...and everything else is bound by the law, including the kinds that used
+    // to win an exemption by accident on a substring.
+    for (const k of [
+      "state-monitor",          // matched "monitor"
+      "fresh_flip_recheck",     // matched "recheck"
+      "nightly",                // matched "nightly"
+      sweep.SWEEP_RUN_KIND.confirm,
+      sweep.SWEEP_RUN_KIND.flood,
+      sweep.SWEEP_RUN_KIND.street,
+      sweep.SWEEP_RUN_KIND.probe,
+      "daily-diff", "hot_market", "discovery", "address_discovery",
+      "city-sweep", "copper_upgrade", "fresh_harvest", "lead_expansion",
+      "new_build", "market", "sweep",
+    ]) {
+      expect(isRecheckExemptKind(k), `${k} must NOT be exempt`).toBe(false);
+    }
+    // An unknown producer does not acquire an exemption by choosing a name.
+    expect(isRecheckExemptKind("something_brand_new_monitor_watch")).toBe(false);
     expect(isRecheckExemptKind(undefined)).toBe(false);
+    expect(isRecheckExemptKind("")).toBe(false);
+  });
+
+  it("an operator can open one lane without a deploy", async () => {
+    const { isRecheckExemptKind } = await import("../../shared/scanPolicy");
+    expect(isRecheckExemptKind("hot_market", {} as any)).toBe(false);
+    expect(isRecheckExemptKind("hot_market", { SCAN_RECHECK_EXEMPT_KINDS: "hot_market" } as any)).toBe(true);
   });
 
   it("once-only no longer depends on an unrelated tuning knob", async () => {

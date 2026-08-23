@@ -141,11 +141,57 @@ export function onceOnlyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
  * the operator's scanning law to an unrelated tuning knob
  * (SCAN_DEDUP_RECHECK_HOURS=0 silently disabled once-only).
  */
-export function isRecheckExemptKind(kind: string | null | undefined): boolean {
-  const v = String(kind ?? "").toLowerCase();
-  return v.includes("manual") || v === "target_ids" || v.includes("lasso")
-    || v.includes("bbox") || v.includes("area") || v.includes("field")
-    || v.includes("recheck") || v.includes("rescan") || v.includes("nightly")
-    || v.includes("scheduled") || v.includes("monitor") || v.includes("watch")
-    || v.includes("frontier");
+/**
+ * Kinds ALLOWED to buy a door that already has a conclusive answer.
+ *
+ * An ALLOWLIST, deliberately. This was thirteen substring tests, and substrings
+ * hand out exemptions by accident: `state-monitor` matched "monitor" and was
+ * silently permitted to re-buy answered doors - measured at 2,388 queued
+ * targets of which 2,213 already had an answer. `fresh_flip_recheck` matched
+ * "recheck". Nothing validated a kind, and createScanRun accepts any string, so
+ * every future producer inherited the same trap by naming.
+ *
+ * The operator's rule is narrow: an address is bought once, and re-bought only
+ * when the provider itself said to come back. So:
+ *
+ *  - REP ACTIONS. A person tapped this door. Always re-verify - that is what
+ *    the tap is for, and it is one check, not a producer.
+ *  - THE PROMISE LANE. The carrier stated a future turn-on date or a
+ *    qual-extended build. Collecting on that is the one sanctioned re-purchase.
+ *  - FRONTIER. A different carrier: a Kinetic answer says nothing about
+ *    Frontier serviceability, so this is a first check, not a re-check.
+ *
+ * Everything else - including every bulk producer, every sweep tier, the
+ * nightly refresh, flip rechecks and the confirm tier - is bound by the law.
+ * Unknown kinds are NOT exempt: a new producer has to ask for the exemption in
+ * writing rather than acquire it by choosing a name.
+ *
+ * SCAN_RECHECK_EXEMPT_KINDS adds kinds without a deploy, for the case where an
+ * operator needs one lane opened in a hurry.
+ */
+// "rescan" is here because it is an operator pressing Rescan on a market, not a
+// producer running on a timer. A person choosing to spend is exactly the case
+// the law is not meant to block.
+const REP_ACTION_KINDS = new Set(["manual", "target_ids", "lasso", "field", "area", "bbox", "rescan"]);
+const PROMISE_KINDS = new Set([
+  "coming_soon_watch",
+  "coming_soon_watch_yield",
+  "fresh_sweep_coming_soon_watch",
+]);
+
+export function isRecheckExemptKind(
+  kind: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const v = String(kind ?? "").trim().toLowerCase();
+  if (!v) return false;
+  if (REP_ACTION_KINDS.has(v) || PROMISE_KINDS.has(v)) return true;
+  // A rep run may carry a suffix (manual_2026..., lasso_7f3a). Anchored to the
+  // START, so "state-monitor" can never win the way it did under substrings.
+  for (const k of REP_ACTION_KINDS) if (v.startsWith(`${k}_`) || v.startsWith(`${k}-`)) return true;
+  // Frontier is a different provider, so this is a first check for that carrier.
+  if (v === "frontier" || v.startsWith("frontier_") || v.startsWith("frontier-")) return true;
+  const extra = String(env.SCAN_RECHECK_EXEMPT_KINDS ?? "")
+    .split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  return extra.includes(v);
 }

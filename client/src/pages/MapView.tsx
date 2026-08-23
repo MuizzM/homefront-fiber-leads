@@ -786,6 +786,11 @@ function ensureTransientMapLayers(map: any): void {
       paint: {
         "circle-radius": 8,
         "circle-opacity": 0.96,
+        // This layer only ever carries PUBLISHED leads, and the projector only
+        // publishes NEW FIBER + billing N - so every pin here is sellable by
+        // construction. Already-served doors are a separate source/layer
+        // (SERVED_DOORS_*), because they are not leads and must never be
+        // mistaken for them.
         // Carrier color: Kinetic fresh = green, Frontier fresh = red.
         "circle-color": ["case", ["==", ["get", "carrier"], "frontier"], "#ef4444", "#22c55e"],
         "circle-stroke-width": 2,
@@ -5385,6 +5390,11 @@ export default function MapView() {
           isNewFiber: true,
           billingStatus: row.billingStatus ?? row.billing_status ?? null,
           householdSegmentType: row.householdSegmentType ?? null,
+          // Whether somebody ALREADY has service here. Fiber being live is not
+          // the same as the door being sellable: in a live Rockwell batch, 8 of
+          // 10 fiber doors were already customers. Without this the map sends
+          // reps to doors that are already sold.
+          customerSegment: String(row.customerSegment ?? row.customer_segment ?? "unknown"),
           techType: row.techType ?? row.tech ?? "fiber",
           placement: row.placement ?? null,
           maxDownloadMbps: row.maxDownloadMbps ?? row.max_mbps ?? null,
