@@ -612,6 +612,12 @@ const SEARCH_RESULT_SOURCE = "search-result";
 const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
 const SEARCH_RESULT_POINT_LAYER = "search-result-point";
 const SCAN_RESULTS_SOURCE = "scan-results";
+// Doors that ALREADY have service. A separate source from leads on purpose:
+// these are not leads, are never assignable, and must never be mistaken for a
+// knockable pin. Measured live in Rockwell: 8 of 10 fiber doors already had an
+// account, and the map gave a rep no way to tell.
+const SERVED_DOORS_SOURCE = "served-doors";
+const SERVED_DOORS_LAYER = "served-doors-points";
 const SCAN_RESULTS_CLUSTER_LAYER = "scan-results-clusters";
 const SCAN_RESULTS_COUNT_LAYER = "scan-results-count";
 const SCAN_RESULTS_POINT_LAYER = "scan-results-points";
@@ -725,6 +731,27 @@ function ensureTransientMapLayers(map: any): void {
         "circle-color": "#14b8a6",
         "circle-stroke-width": 3,
         "circle-stroke-color": "#ffffff",
+      },
+    });
+  }
+
+  if (!map.getSource(SERVED_DOORS_SOURCE)) {
+    map.addSource(SERVED_DOORS_SOURCE, { type: "geojson", data: emptyFeatureCollection() });
+  }
+  if (!map.getLayer(SERVED_DOORS_LAYER)) {
+    map.addLayer({
+      id: SERVED_DOORS_LAYER,
+      type: "circle",
+      source: SERVED_DOORS_SOURCE,
+      paint: {
+        // Blue = the fiber is on and somebody is already on it. Deliberately
+        // smaller and dimmer than a lead pin: this is context a rep reads past,
+        // not work they act on.
+        "circle-radius": 5,
+        "circle-color": "#3b82f6",
+        "circle-opacity": 0.55,
+        "circle-stroke-width": 1,
+        "circle-stroke-color": "#bfdbfe",
       },
     });
   }
@@ -2623,6 +2650,71 @@ export default function MapView() {
       try { map.off("moveend", onMoveEnd); } catch {}
     };
   }, [mapReady, styleEpoch, viewportMode]);
+
+  // ── Served doors: the houses that are already taken ─────────────────────
+  // Its own tiny fetch loop rather than a branch inside the lead-pin machinery,
+  // because these are NOT leads: they never enter the pin cache, never cluster
+  // with leads, and are never assignable. A rep reads them as context.
+  // Failures are silent by design - the working set is the lead pins, and a
+  // missing context layer must never blank or block them.
+  const servedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const servedAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const fetchServed = async () => {
+      // A style swap wipes sources. Re-create rather than silently no-op:
+      // returning here left the layer permanently dead after the first swap,
+      // with no error anywhere - it took a live browser session to notice the
+      // request was simply never being made.
+      if (!map.getSource(SERVED_DOORS_SOURCE)) {
+        try { ensureTransientMapLayers(map); } catch { /* style mid-swap */ }
+      }
+      const src: any = map.getSource(SERVED_DOORS_SOURCE);
+      if (!src?.setData) return;
+      if (import.meta.env.DEV) console.info("[served] fetch", { zoom: map.getZoom() });
+      // Below street zoom this is noise, and the window would be huge.
+      if (map.getZoom() < 13) { try { src.setData(emptyFeatureCollection()); } catch {} return; }
+      const b = map.getBounds();
+      const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+        .map((n) => n.toFixed(5)).join(",");
+      servedAbortRef.current?.abort();
+      const ac = new AbortController();
+      servedAbortRef.current = ac;
+      try {
+        // x-session-id HEADER, not a cookie. This app does not use cookie auth,
+        // and `credentials: "include"` silently 401s every request - the same
+        // trap leadStream.ts:20 documents. Verified live: the first version of
+        // this fetch returned 401 on every pan.
+        const sessionId = getStoredSessionId();
+        const r = await fetch(`/api/map/served?bbox=${encodeURIComponent(bbox)}`, {
+          headers: sessionId ? { "x-session-id": sessionId } : {},
+          signal: ac.signal,
+        });
+        if (!r.ok) return;
+        const body = await r.json();
+        src.setData({
+          type: "FeatureCollection",
+          features: (body.doors ?? []).map((d: any) => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [d.lng, d.lat] },
+            properties: { id: d.id, address: d.address, city: d.city, reason: d.reason },
+          })),
+        });
+      } catch { /* aborted pan, or offline - the lead pins are what matter */ }
+    };
+    const onMoveEnd = () => {
+      if (servedTimerRef.current) clearTimeout(servedTimerRef.current);
+      servedTimerRef.current = setTimeout(fetchServed, 350);
+    };
+    map.on("moveend", onMoveEnd);
+    void fetchServed();
+    return () => {
+      if (servedTimerRef.current) clearTimeout(servedTimerRef.current);
+      servedAbortRef.current?.abort();
+      try { map.off("moveend", onMoveEnd); } catch {}
+    };
+  }, [mapReady, styleEpoch]);
 
   // Viewport-mode safety poll — the windowed twin of the full feed's 60s
   // refetchInterval. Windowed freshness otherwise hangs ENTIRELY off the SSE
