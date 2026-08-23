@@ -438,6 +438,13 @@ services:
       # A denial is a reason to slow down, not to move house. Time-based
       # refresh (DECODO_STICKY_MINUTES) still cycles IPs in an orderly way.
       DECODO_ROTATE_AFTER_DENIALS: "8"
+      # Retire each residential IP after 20 checks, while it is still healthy.
+      # Measured across five sticky ports driven to exhaustion: the longest
+      # clean streak was 20/20/20/21/30, and every IP that died had delivered
+      # ~30 successes first (30/30/30/36). Taking that last third costs 13-18
+      # denials to get ten answers - 63-73% efficiency - and each denial feeds
+      # the fleet-shared 403-storm backoff. 20 stays inside the clean run.
+      DECODO_CHECKS_PER_IP: "20"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
       KFS_TOKEN_MAX_CHECKS: "1000"

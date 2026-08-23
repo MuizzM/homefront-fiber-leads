@@ -10,6 +10,7 @@ const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({
 }));
 
 vi.mock("../../server/proxy-fetch", () => ({
+  onEgressChanged: () => {},
   proxyFetch,
   rotateProxySession,
   getProxySessionId: () => "exact-match-gate-session",

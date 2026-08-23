@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, getProxySessionId, proxyUrlFromEnv } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, getProxySessionId, proxyUrlFromEnv, onEgressChanged } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -383,6 +383,18 @@ export async function forceFreshTokenFromApi(): Promise<string> {
 export function invalidateAuthorizedToken(token: string | null | undefined): void {
   authorizedTokenPool.invalidate(token);
 }
+
+// A Kinetic token is bound to the IP that minted it, so a sticky-IP handover
+// kills every token we hold: minted on the old residential address, presented
+// from the new one, refused. Without this, the first check after each rotation
+// is a guaranteed 403 - which feeds the denial streak and can rotate us again,
+// off an IP that was fine. Registered once at load; proxy-fetch fires it.
+onEgressChanged((port) => {
+  const dropped = authorizedTokenPool.invalidateAllForEgressChange();
+  if (dropped > 0) {
+    structuredLog("scan.token.dropped_on_egress_change", { dropped, port }, "warn");
+  }
+});
 
 /** Per-address count of 4xx-driven token/session switches. A 4xx burns the
  * token and rotates the session up to 3 times per address (fresh-token proof

@@ -290,6 +290,31 @@ export class AuthorizedTokenPool {
     }
   }
 
+  /**
+   * Drop EVERY token because the egress IP changed.
+   *
+   * Kinetic binds a bearer token to the IP that minted it, so after a sticky-IP
+   * handover every token in this pool is dead on arrival: minted on the old
+   * residential address, presented from the new one, refused. Left in place
+   * they guarantee a 403 on the first check after each rotation - which then
+   * feeds the denial streak and can rotate us again, off a perfectly good IP.
+   *
+   * Distinct from invalidate(): that drops ONE token a caller watched fail.
+   * This drops all of them for a reason no individual caller can observe.
+   */
+  invalidateAllForEgressChange(): number {
+    let dropped = 0;
+    for (const slot of this.slots) {
+      if (!slot.token) continue;
+      slot.token = null;
+      slot.expiresAt = 0;
+      slot.state = "EMPTY";
+      slot.addressKeys.clear();
+      dropped++;
+    }
+    return dropped;
+  }
+
   install(token: string, expiresAt: number): void {
     const slot = this.slots[0] ?? this.createSlot();
     slot.token = token;

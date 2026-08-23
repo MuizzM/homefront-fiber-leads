@@ -14,7 +14,8 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
  * port 10000 gave 31 of 236 checks (13%); port 10001 gave 69 of 80 (86%).
  */
 const ENV_KEYS = ["PROXY_URL", "DECODO_STICKY", "DECODO_STICKY_PORT_BASE",
-  "DECODO_STICKY_PORT_COUNT", "DECODO_STICKY_MINUTES", "DECODO_ROTATE_AFTER_DENIALS"];
+  "DECODO_STICKY_PORT_COUNT", "DECODO_STICKY_MINUTES", "DECODO_ROTATE_AFTER_DENIALS",
+  "DECODO_CHECKS_PER_IP"];
 let saved: Record<string, string | undefined> = {};
 
 beforeEach(() => { saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]])); });
@@ -57,5 +58,68 @@ describe("Decodo sticky egress", () => {
     // Nothing to assert on the URL from outside; the contract is that the
     // module loads and reports a port without rewriting the operator's choice.
     expect(typeof mod.getProxyStickyState().port).toBe("number");
+  });
+});
+
+describe("the per-IP check budget", () => {
+  // A residential IP wears out. Measured across five sticky ports, each driven
+  // sequentially on its own slice of doors: the longest CLEAN streak was
+  // 30/20/21/20, and two of the IPs died outright (at 41 and 54 checks). So an
+  // IP is retired on a COUNT while it is still healthy, which costs one cold
+  // handshake, instead of on a run of denials, which costs a run of denials.
+  it("retires the IP after its budget and starts the next one clean", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    delete process.env.DECODO_STICKY;
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    const s0 = mod.getProxyStickyState();
+    expect(s0.checksOnThisIp, "a fresh IP has spent nothing").toBe(0);
+    expect(typeof s0.port).toBe("number");
+  });
+
+  it("counts the budget only while sticky is on", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY = "off";
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    // With stickiness off there is no IP to husband: the rotating gateway hands
+    // out a new one per request regardless, so a budget is meaningless.
+    expect(mod.getProxyStickyState().port).toBeNull();
+  });
+
+  it("a spent budget is not a denial: retiring resets the denial streak", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    delete process.env.DECODO_STICKY;
+    process.env.DECODO_ROTATE_AFTER_DENIALS = "3";
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    await mod.rotateProxySession("403");
+    expect(mod.getProxyStickyState().denialStreak).toBe(1);
+    mod.__resetRotationStateForTests();
+    expect(mod.getProxyStickyState().denialStreak, "a clean slate per IP").toBe(0);
+  });
+});
+
+describe("a token is bound to the IP that minted it", () => {
+  // Kinetic issues the bearer token to the residential address that asked for
+  // it. After a sticky-IP handover every pooled token is dead on arrival, so
+  // the pool must be drained or the first check on the new IP is a guaranteed
+  // 403 - which then feeds the denial streak and rotates us off a good IP.
+  it("drains every pooled token when the egress IP changes", async () => {
+    const { AuthorizedTokenPool } = await import("../../server/authorizedTokenPool");
+    const pool = new AuthorizedTokenPool({ mint: async () => ({ token: "t", expiresAt: Date.now() + 3_600_000 }) } as any);
+    pool.install("token-minted-on-the-old-ip", Date.now() + 3_600_000);
+    expect(pool.snapshot().ready, "a token is held").toBeGreaterThan(0);
+    const dropped = pool.invalidateAllForEgressChange();
+    expect(dropped).toBe(1);
+    expect(pool.snapshot().ready, "nothing survives an IP change").toBe(0);
+    expect(pool.invalidateAllForEgressChange(), "idempotent").toBe(0);
+  });
+
+  it("the scanner subscribes to egress changes at load", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
+    expect(src).toContain("onEgressChanged(");
+    expect(src).toContain("invalidateAllForEgressChange()");
   });
 });

@@ -9,6 +9,10 @@ vi.mock("../../server/proxy-fetch", () => ({
   proxyFetch,
   rotateProxySession,
   getProxySessionId: () => "decodo-s1",
+  // A token is bound to the IP that minted it, so the scanner subscribes at load
+  // to drop the pool whenever the sticky egress IP changes. Inert here: this mock
+  // never changes IP, so the listener is registered and never fired.
+  onEgressChanged: () => {},
   isProxyConnected: () => true,
   proxyUrlFromEnv: () => "http://redacted@proxy",
   getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100, sessionId: "decodo-s1" }),

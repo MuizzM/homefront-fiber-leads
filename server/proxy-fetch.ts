@@ -110,11 +110,50 @@ function currentStickyPort(): number {
   return stickyPortBase() + (_stickyPortOffset % stickyPortCount());
 }
 
+// EGRESS-CHANGE SUBSCRIBERS. proxy-fetch must not import the token pool (the
+// pool's mint path comes back through here), so the dependency is inverted: the
+// scanner registers a listener at load and proxy-fetch just fires it.
+type EgressListener = (port: number | null) => void;
+const _egressListeners: EgressListener[] = [];
+export function onEgressChanged(fn: EgressListener): void { _egressListeners.push(fn); }
+function fireEgressChanged(): void {
+  const port = process.env.DECODO_STICKY === "off" ? null : currentStickyPort();
+  for (const fn of _egressListeners) { try { fn(port); } catch { /* never break the transport */ } }
+}
+
 /** Move to the next residential IP by stepping to the next sticky port. */
 function advanceStickyPort(): void {
   _stickyPortOffset = (_stickyPortOffset + 1) % stickyPortCount();
   _stickyUntil = Date.now() + STICKY_MS;
+  _checksOnThisIp = 0;
+  fireEgressChanged();
 }
+
+// A RESIDENTIAL IP WEARS OUT. Measured across five sticky ports, each driven
+// sequentially on its own slice of doors (concurrency 1, no rotation, distinct
+// addresses so the coordinator cache cannot fake a healthy result):
+//
+//   port    checks   ok      longest clean   outcome
+//   10001      80    86%          30         survived
+//   10011      41    73%          20         DIED (10 consecutive denials)
+//   10023      60    88%          21         survived
+//   10037      54    67%          20         DIED
+//   10041      43    70%          20         DIED
+//   10059      48    63%          20         DIED
+//
+// Two numbers matter. The longest CLEAN streak is 20 on the nose (20/20/20/21/30,
+// median 20), and every IP that died had delivered exactly ~30 successes first
+// (30/30/30/36). Kinetic allows roughly 30 successes per residential IP, with
+// reliability falling off after about 20.
+//
+// So the budget is 20, not 30. Taking the last ten answers means eating 13-18
+// denials for them (the 63-73% runs above), each of which costs a retry and
+// feeds the fleet-shared 403-storm backoff. Stopping at 20 stays inside the
+// clean streak, costs one cold handshake per rotation, and there are 100 sticky
+// ports to cycle. An isolated denial is still forgiven, not acted on: 10023's
+// very first check was a 403 and it went on to finish at 88%.
+const CHECKS_PER_IP = () => Math.max(0, Number(process.env.DECODO_CHECKS_PER_IP ?? 20));
+let _checksOnThisIp = 0;
 
 function stickyProxyUrl(base: string): string {
   if (process.env.DECODO_STICKY === "off") return base;
@@ -214,9 +253,19 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         // A 2xx proves THIS egress IP is still welcome: forgive its earlier
         // denials so an occasional 403 never accumulates into a rotation.
         if (res.status >= 200 && res.status < 300) _denialStreak = 0;
+        // ...and spend one unit of the IP's budget. Retiring on a COUNT while
+        // the IP is still healthy beats discovering it is spent from a run of
+        // denials (see CHECKS_PER_IP for the measurements).
+        if (process.env.DECODO_STICKY !== "off") {
+          const budget = CHECKS_PER_IP();
+          if (budget > 0 && ++_checksOnThisIp >= budget) _ipBudgetSpent = true;
+        }
       } catch { /* metrics must never break the transport */ }
-      // Rotate for the NEXT request, off the hot path.
+      // Rotate for the NEXT request, off the hot path - never mid-request: a
+      // fresh dispatcher has no warm connections, so the request that trips the
+      // counter must finish on the pool it rode in on.
       if (shouldProactiveRotate) void rotateProxySession("proactive");
+      else if (_ipBudgetSpent) { _ipBudgetSpent = false; void retireStickyIp(); }
       return res;
     } catch (err: any) {
       if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
@@ -289,8 +338,32 @@ const rotateAfterDenials = () => Math.max(1, Number(process.env.DECODO_ROTATE_AF
 let _denialStreak = 0;
 
 /** Diagnostics: the sticky port in use and the current denial streak. */
-export function getProxyStickyState(): { port: number | null; denialStreak: number } {
-  return { port: process.env.DECODO_STICKY === "off" ? null : currentStickyPort(), denialStreak: _denialStreak };
+export function getProxyStickyState(): { port: number | null; denialStreak: number; checksOnThisIp: number } {
+  return {
+    port: process.env.DECODO_STICKY === "off" ? null : currentStickyPort(),
+    denialStreak: _denialStreak,
+    checksOnThisIp: _checksOnThisIp,
+  };
+}
+
+let _ipBudgetSpent = false;
+
+/**
+ * Retire a sticky IP whose check budget is spent. Distinct from
+ * rotateProxySession: that one is the response to a DENIAL and is deliberately
+ * reluctant (a streak, then a min-interval throttle). This is the opposite - a
+ * planned handover while the IP is still healthy - so it must not be gated by
+ * the denial streak, and it resets that streak because the next IP starts clean.
+ */
+async function retireStickyIp(): Promise<void> {
+  const proxyUrl = configuredProxyUrl();
+  if (!proxyUrl || process.env.DECODO_STICKY === "off") return;
+  if (!_proxyLoaded) await undiciReady;
+  if (!_ProxyAgent) return;
+  _denialStreak = 0;
+  _lastRotateAt = Date.now();
+  rebuildDispatcher(proxyUrl); // advances the port, so a new residential IP
+  console.log(`[proxy-fetch] sticky IP retired on budget -> port ${currentStickyPort()}`);
 }
 
 export async function rotateProxySession(reason?: string): Promise<void> {
@@ -324,6 +397,8 @@ export function __resetRotationStateForTests(): void {
   _reqSinceRotate = 0;
   _rotateInFlight = null;
   _denialStreak = 0;
+  _checksOnThisIp = 0;
+  _ipBudgetSpent = false;
 }
 
 // In unlimited-plan mode the bandwidth governor rotates (instead of freezing) on
