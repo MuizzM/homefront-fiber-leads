@@ -14,15 +14,27 @@ import type { AddressProvider, BBox, ProviderResult, RawAddress } from "./types"
 interface Loaded { addresses: RawAddress[]; extent: BBox | null }
 let _cache: Loaded | null = null;
 
-function serverDir(): string {
-  // dist runs from /app/dist; source from server/. Try both.
-  return __dirname.includes("providers") ? join(__dirname, "..") : __dirname;
+function serverDir(): string | null {
+  // `__dirname` exists in the CJS production bundle (script/build.ts formats
+  // "cjs") but NOT under `npm run dev`, which runs ESM through tsx. Bare
+  // `__dirname` there is a ReferenceError, and this call sits outside any
+  // try/catch - so /api/coverage/preview answered
+  // `{"error":"__dirname is not defined"}` in dev while working in production.
+  //
+  // Same guard the rest of the codebase already uses for this (see
+  // server/cspHashes.ts:70 and server/onboardingPdf.ts:33). Returning null lets
+  // load() fall through to its cwd candidates, which is what it was already
+  // written to do.
+  const dir = typeof __dirname === "string" ? __dirname : null;
+  if (!dir) return null;
+  return dir.includes("providers") ? join(dir, "..") : dir;
 }
 
 function load(): Loaded {
   if (_cache) return _cache;
   const addresses: RawAddress[] = [];
   for (const dir of [serverDir(), join(process.cwd(), "server"), process.cwd()]) {
+    if (!dir) continue;
     try {
       for (const f of readdirSync(dir)) {
         if (!/_gis_addresses\.json$/.test(f)) continue;
