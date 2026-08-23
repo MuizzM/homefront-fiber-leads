@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, getProxySessionId, proxyUrlFromEnv, onEgressChanged } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, getProxySessionId, proxyUrlFromEnv, onEgressChanged, currentEgressProxyUrl } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -238,12 +238,20 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     });
     delete mintHeaders["User-Agent"];
     const mintBody = JSON.stringify({ brazeDeviceId: "" });
+    // imp-direct mints from the SERVER's own IP. That is the cleanest egress we
+    // have and it is 6/6 when the searches also leave from here - but under a
+    // sticky Decodo session the searches do NOT: they leave from a residential
+    // address. A Kinetic token is bound to the IP that minted it, so a direct
+    // mint paired with a proxied search is a guaranteed 403. Skip this rung
+    // whenever a sticky proxy egress is in force.
+    const stickyEgress = process.env.DECODO_STICKY !== "off" && !!proxyUrlFromEnv(process.env);
     try {
+      if (stickyEgress) throw new Error("skipped: sticky egress in force, a direct mint would bind the token to the server IP");
       return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
     } catch (err) {
       structuredLog("scan.token.mint_failed", { transport: "imp-direct", error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
       try {
-        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, proxyUrlFromEnv(process.env));
+        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, currentEgressProxyUrl());
       } catch (err2) {
         structuredLog("scan.token.mint_failed", { transport: "imp-proxy", error: String((err2 as any)?.message ?? err2).slice(0, 120) }, "warn");
         // fall through to the legacy paths below

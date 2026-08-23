@@ -123,3 +123,57 @@ describe("a token is bound to the IP that minted it", () => {
     expect(src).toContain("invalidateAllForEgressChange()");
   });
 });
+
+describe("the mint and the search must leave from the SAME IP", () => {
+  // The premise of the whole sticky change is that a Kinetic bearer token is
+  // bound to the IP that minted it. The first version of this work got that
+  // wrong in the one place it mattered: server/scanner.ts handed the
+  // curl-impersonate mint `proxyUrlFromEnv()`, which is the RAW configured URL
+  // - port 10000, the rotating gateway - while searches went out on 10001+.
+  // Every mint/search pair mismatched, which is the exact 403 being fixed.
+  //
+  // These assertions look at the URL that is actually egressed through, not at
+  // a diagnostic that recomputes the port from env. Deleting the port rewrite
+  // must fail a test.
+  it("currentEgressProxyUrl carries the sticky port, unlike proxyUrlFromEnv", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY_PORT_BASE = "10001";
+    process.env.DECODO_STICKY_PORT_COUNT = "50";
+    delete process.env.DECODO_STICKY;
+    const mod = await import("../../server/proxy-fetch");
+    const raw = mod.proxyUrlFromEnv(process.env)!;
+    const egress = mod.currentEgressProxyUrl()!;
+    expect(new URL(raw).port, "the configured URL is the rotating gateway").toBe("10000");
+    const port = Number(new URL(egress).port);
+    expect(port, "what we actually egress through is a sticky port").not.toBe(10000);
+    expect(port).toBeGreaterThanOrEqual(10001);
+    expect(port).toBeLessThan(10051);
+    // ...and it agrees with what the diagnostic reports.
+    expect(port).toBe(mod.getProxyStickyState().port);
+  });
+
+  it("falls back to the raw URL when stickiness is off, so the rollback is real", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY = "off";
+    const mod = await import("../../server/proxy-fetch");
+    expect(new URL(mod.currentEgressProxyUrl()!).port).toBe("10000");
+  });
+
+  it("the scanner mints through the sticky egress, never the raw URL", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
+    // Assert on the CALL, not on a line range: KFS_MINT_DIRECT is mentioned in a
+    // comment above KFS_MINT_IMPERSONATE, so slicing between them runs backwards.
+    expect(src, "the proxied mint rung uses the sticky egress")
+      .toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, currentEgressProxyUrl())");
+    expect(src, "and no mint egresses through the raw rotating gateway")
+      .not.toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, proxyUrlFromEnv(process.env))");
+  });
+
+  it("reports no proxy at all when none is configured", async () => {
+    delete process.env.PROXY_URL;
+    delete process.env.DECODO_HOST;
+    const mod = await import("../../server/proxy-fetch");
+    expect(mod.currentEgressProxyUrl()).toBeNull();
+  });
+});

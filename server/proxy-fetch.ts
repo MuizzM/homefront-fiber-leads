@@ -155,6 +155,20 @@ function advanceStickyPort(): void {
 const CHECKS_PER_IP = () => Math.max(0, Number(process.env.DECODO_CHECKS_PER_IP ?? 20));
 let _checksOnThisIp = 0;
 
+/**
+ * Is this request a session mint rather than an address check?
+ *
+ * Matched on the path so it holds for the default endpoint and for a
+ * KFS_AUTH_URL override alike (see kineticTokenUrl in server/scanner.ts:77-81).
+ * proxy-fetch cannot import the scanner - the scanner imports this module - so
+ * the discriminator lives here rather than being passed down through every
+ * call site.
+ */
+function isMintUrl(u: string): boolean {
+  try { return /\/auth\/session|\/precisely\/token/.test(new URL(u).pathname); }
+  catch { return false; }
+}
+
 function stickyProxyUrl(base: string): string {
   if (process.env.DECODO_STICKY === "off") return base;
   try {
@@ -169,6 +183,23 @@ function stickyProxyUrl(base: string): string {
     u.port = String(currentStickyPort());
     return u.toString();
   } catch { return base; }
+}
+
+/**
+ * The proxy URL THIS PROCESS IS ACTUALLY EGRESSING THROUGH, sticky port and all.
+ *
+ * proxyUrlFromEnv() returns the raw configured URL - port 10000, the rotating
+ * gateway. Anything that egresses OUTSIDE proxyFetch (the curl-impersonate mint
+ * ladder in server/scanner.ts is the only one today) must use this instead, or
+ * it leaves from a different residential IP than the searches do.
+ *
+ * That is not a hypothetical: a Kinetic bearer token is bound to the IP that
+ * minted it, so minting on 10000 and searching on 10001+ is the exact 403 the
+ * sticky work exists to remove. Returns null when no proxy is configured.
+ */
+export function currentEgressProxyUrl(): string | null {
+  const base = configuredProxyUrl();
+  return base ? stickyProxyUrl(base) : null;
 }
 
 /** Exposed for diagnostics: the current sticky session window (masked). */
@@ -252,13 +283,34 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         else { noteProxySuccess(); recordProxyResponse(cl); }
         // A 2xx proves THIS egress IP is still welcome: forgive its earlier
         // denials so an occasional 403 never accumulates into a rotation.
-        if (res.status >= 200 && res.status < 300) _denialStreak = 0;
+        //
+        // But NOT a mint's 2xx. The mint endpoint answers happily from an IP
+        // whose search quota is exhausted, so counting it would let one healthy
+        // mint erase a run of search denials and keep a burnt IP in service
+        // forever. Only a real check earns the forgiveness.
+        if (res.status >= 200 && res.status < 300 && !isMintUrl(url)) _denialStreak = 0;
         // ...and spend one unit of the IP's budget. Retiring on a COUNT while
         // the IP is still healthy beats discovering it is spent from a run of
         // denials (see CHECKS_PER_IP for the measurements).
-        if (process.env.DECODO_STICKY !== "off") {
+        // The budget counts CHECKS, never mints.
+        //
+        // Counting every proxied request built a feedback loop that burned IPs
+        // for nothing: retiring an IP drops its tokens (they are bound to it),
+        // which forces a re-mint, and the mint is itself a proxied request - up
+        // to four with its retry ladder - so it spent the budget it had just
+        // reset and triggered another retirement. Measured live at budget 5:
+        // 58 handovers for 30 checks, entire IPs consumed without a single
+        // check being run on them.
+        //
+        // The counter is also reset HERE, synchronously at the decision, rather
+        // than in advanceStickyPort() inside the async retire - otherwise every
+        // response landing in that gap re-arms the flag and queues another one.
+        if (process.env.DECODO_STICKY !== "off" && !isMintUrl(url)) {
           const budget = CHECKS_PER_IP();
-          if (budget > 0 && ++_checksOnThisIp >= budget) _ipBudgetSpent = true;
+          if (budget > 0 && ++_checksOnThisIp >= budget) {
+            _checksOnThisIp = 0;
+            _ipBudgetSpent = true;
+          }
         }
       } catch { /* metrics must never break the transport */ }
       // Rotate for the NEXT request, off the hot path - never mid-request: a
@@ -355,15 +407,25 @@ let _ipBudgetSpent = false;
  * planned handover while the IP is still healthy - so it must not be gated by
  * the denial streak, and it resets that streak because the next IP starts clean.
  */
+let _retireInFlight = false;
+
 async function retireStickyIp(): Promise<void> {
   const proxyUrl = configuredProxyUrl();
   if (!proxyUrl || process.env.DECODO_STICKY === "off") return;
-  if (!_proxyLoaded) await undiciReady;
-  if (!_ProxyAgent) return;
-  _denialStreak = 0;
-  _lastRotateAt = Date.now();
-  rebuildDispatcher(proxyUrl); // advances the port, so a new residential IP
-  console.log(`[proxy-fetch] sticky IP retired on budget -> port ${currentStickyPort()}`);
+  // Single-flight, for the same reason rotateProxySession is: concurrent
+  // responses must not each hand over the IP.
+  if (_retireInFlight) return;
+  _retireInFlight = true;
+  try {
+    if (!_proxyLoaded) await undiciReady;
+    if (!_ProxyAgent) return;
+    _denialStreak = 0;
+    _lastRotateAt = Date.now();
+    rebuildDispatcher(proxyUrl); // advances the port, so a new residential IP
+    console.log(`[proxy-fetch] sticky IP retired on budget -> port ${currentStickyPort()}`);
+  } finally {
+    _retireInFlight = false;
+  }
 }
 
 export async function rotateProxySession(reason?: string): Promise<void> {
@@ -399,6 +461,7 @@ export function __resetRotationStateForTests(): void {
   _denialStreak = 0;
   _checksOnThisIp = 0;
   _ipBudgetSpent = false;
+  _retireInFlight = false;
 }
 
 // In unlimited-plan mode the bandwidth governor rotates (instead of freezing) on
