@@ -95,6 +95,64 @@ function pruneBatched(table: string, whereEpoch: string, cutoff: number): number
 }
 
 /**
+ * Availability snapshots, MINUS the one row per door the lead projector needs.
+ *
+ * This was a blanket `pruneBatched("availability_snapshots", "checked_at_epoch")`
+ * at SNAPSHOTS_KEEP_DAYS (30), and that quietly capped the useful life of every
+ * lead in the system at thirty days.
+ *
+ * `server/freshFiberProjector.ts:102-133` reads exactly one row per target - the
+ * latest CONCLUSIVE snapshot - and publishes nothing without it
+ * (`:243` rejects a null `fiber_available`, `:296` a non-true one, `:299` builds
+ * `authoritativeFresh` from that row's segment and billing status). Meanwhile
+ * the evidence that snapshot was derived from, `fiber_checks`, is kept forever
+ * on purpose (see the header above). So a door scanned in July stopped being
+ * publishable in August while its provider body sat on disk untouched.
+ *
+ * Measured on a production-shaped copy: 3,214 kinetic targets carry a
+ * `lifecycle_state`, which `server/availabilitySnapshot.ts:113-115` only ever
+ * writes on a successful snapshot insert - and have no snapshot left. A prune
+ * run on 2026-08-22 removed 796 more. The pool regenerates every 30 days.
+ *
+ * The latest conclusive snapshot is the product's memory, not its exhaust,
+ * exactly like the bodies behind it. History older than the window still goes;
+ * that one row per door stays, whatever its age.
+ *
+ * Cost: the keep-set is resolved ONCE per prune (a grouped scan of
+ * idx_availability_snapshots_target_epoch), not per batch, for the same reason
+ * pruneFinishedRunTargets resolves its run ids once.
+ */
+export function pruneSnapshotsKeepingLatestConclusive(cutoff: number): number {
+  // Ties on (scan_target_id, checked_at_epoch) keep both rows. Harmless: the
+  // projector's ORDER BY picks one deterministically, and keeping a spare
+  // costs a row where dropping the wrong one costs a lead.
+  try {
+    rawDb.exec(`DROP TABLE IF EXISTS temp.snapshot_keep;
+      CREATE TEMP TABLE snapshot_keep AS
+        SELECT scan_target_id, MAX(checked_at_epoch) AS keep_epoch
+          FROM availability_snapshots WHERE conclusive = 1 GROUP BY scan_target_id;
+      CREATE INDEX temp.idx_snapshot_keep ON snapshot_keep(scan_target_id, keep_epoch);`);
+  } catch { return 0; } // busy — next night; deleting nothing is always safe here
+  let total = 0;
+  for (let i = 0; i < MAX_BATCHES_PER_TABLE; i++) {
+    try {
+      const n = rawDb.prepare(
+        `DELETE FROM availability_snapshots WHERE rowid IN (
+           SELECT a.rowid FROM availability_snapshots a
+             LEFT JOIN temp.snapshot_keep k ON k.scan_target_id = a.scan_target_id
+            WHERE a.checked_at_epoch < ?
+              AND NOT (a.conclusive = 1 AND k.keep_epoch IS NOT NULL
+                       AND a.checked_at_epoch = k.keep_epoch)
+            LIMIT ${BATCH})`).run(cutoff).changes;
+      total += n;
+      if (n < BATCH) break;
+    } catch { break; }
+  }
+  try { rawDb.exec("DROP TABLE IF EXISTS temp.snapshot_keep"); } catch { /* */ }
+  return total;
+}
+
+/**
  * The per-run work queue for runs that are OVER.
  *
  * Separate from pruneBatched because eligibility lives on scan_runs, not here:
@@ -460,7 +518,7 @@ export function runDbPrune(): void {
       new Date(now - SCAN_RUN_TARGETS_KEEP_DAYS * 86_400_000).toISOString());
   } catch { /* */ }
   try { out.scan_events = pruneBatched("scan_events", "ts_epoch", now - SCAN_EVENTS_KEEP_DAYS * 86_400_000); } catch { /* table may not exist yet */ }
-  try { out.availability_snapshots = pruneBatched("availability_snapshots", "checked_at_epoch", now - SNAPSHOTS_KEEP_DAYS * 86_400_000); } catch { /* */ }
+  try { out.availability_snapshots = pruneSnapshotsKeepingLatestConclusive(now - SNAPSHOTS_KEEP_DAYS * 86_400_000); } catch { /* */ }
   try { out.bandwidth_ledger = pruneBatched("bandwidth_ledger", "ts", now - 40 * 86_400_000); } catch { /* */ }
   try { out.leads_rejected = pruneBatched("leads_rejected", "CAST(strftime('%s', rejected_at) AS INTEGER) * 1000", now - 90 * 86_400_000); } catch { /* */ }
   // Delivered notifications. `pending` is never touched at any age — an unsent
