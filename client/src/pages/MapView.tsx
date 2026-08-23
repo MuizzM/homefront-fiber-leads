@@ -13,6 +13,7 @@ import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, Li
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, apiRequestIdempotent, getStoredSessionId } from "@/lib/queryClient";
+import MpBoxScanPanel from "@/components/map/MpBoxScanPanel";
 import { useToast } from "@/hooks/use-toast";
 import { useSustained } from "@/hooks/use-sustained";
 import { LeadCard, type CardProperty } from "@/components/LeadCard";
@@ -7066,6 +7067,30 @@ export default function MapView() {
                     <X className="h-4 w-4" />
                   </button>
                 )}
+              </div>
+
+              {/* MP Box: Tenured / Fresh Fiber filters and the persisted scan
+                  statistics. Everything it shows is read from SQLite
+                  (mpbox_scan_results) rather than from the in-memory job, so a
+                  filter count is exactly what the filter can return. Mounted
+                  here so it sits under the scan state and above the progress
+                  bar - the hierarchy the design contract sets out: state, then
+                  what was found, then the doors. */}
+              <div className="mt-3 border-t border-white/10 pt-3">
+                <MpBoxScanPanel
+                  scanId={scanState.jobId ?? null}
+                  scanning={scanning || scanSubmitting}
+                  onStop={() => {
+                    const id = scanState.jobId;
+                    dispatchScan({ type: "STOP" });
+                    if (id) void discovery.cancel(id).catch(() => {});
+                  }}
+                  /* onSelectDoor intentionally omitted: the panel's targetId is
+                     a scan_targets id and flyToLead takes a LEAD id - different
+                     id spaces. Without a correct lookup the address renders as
+                     plain text rather than as a button that does nothing, which
+                     the design contract forbids. */
+                />
               </div>
 
               {/* Progress bar while running */}
