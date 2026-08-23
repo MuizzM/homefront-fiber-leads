@@ -85,9 +85,17 @@ function configuredProxyUrl(): string | null {
 // in production: switching it on broke every request, so it was disabled and
 // the scanner has been running on the rotating gateway ever since.
 //
-// Running on 10000 is fatal for this workload because a Kinetic bearer token is
-// bound to the IP that minted it: mint on one IP, search from another, get 403.
-// Measured end to end on Rockwell doors:
+// Running on 10000 is fatal for this workload, though NOT for the reason first
+// assumed. The original theory was that a Kinetic token is bound to the IP that
+// minted it. Measured 2026-08-23, that is false: a token minted on one
+// residential IP searched 20/20 from a different one, and a server-IP mint
+// searched 20/20 through a residential proxy. Tokens are portable.
+//
+// What the rotating gateway actually costs us is the ability to RIDE an IP. The
+// limit is on search volume per residential address (~20-30 checks, see
+// CHECKS_PER_IP), and on 10000 every request lands on a stranger - so we pay a
+// cold IP of unknown reputation every single time instead of spending a known
+// good one down to its budget. Measured end to end on Rockwell doors:
 //
 //   port 10000 (rotating)  236 checks ->  31 x 200 (13%), 205 x 403
 //   port 10001 (sticky)     80 checks ->  69 x 200 (86%),  10 x 403,
@@ -110,48 +118,42 @@ function currentStickyPort(): number {
   return stickyPortBase() + (_stickyPortOffset % stickyPortCount());
 }
 
-// EGRESS-CHANGE SUBSCRIBERS. proxy-fetch must not import the token pool (the
-// pool's mint path comes back through here), so the dependency is inverted: the
-// scanner registers a listener at load and proxy-fetch just fires it.
-type EgressListener = (port: number | null) => void;
-const _egressListeners: EgressListener[] = [];
-export function onEgressChanged(fn: EgressListener): void { _egressListeners.push(fn); }
-function fireEgressChanged(): void {
-  const port = process.env.DECODO_STICKY === "off" ? null : currentStickyPort();
-  for (const fn of _egressListeners) { try { fn(port); } catch { /* never break the transport */ } }
-}
-
 /** Move to the next residential IP by stepping to the next sticky port. */
 function advanceStickyPort(): void {
   _stickyPortOffset = (_stickyPortOffset + 1) % stickyPortCount();
   _stickyUntil = Date.now() + STICKY_MS;
   _checksOnThisIp = 0;
-  fireEgressChanged();
 }
 
-// A RESIDENTIAL IP WEARS OUT. Measured across five sticky ports, each driven
-// sequentially on its own slice of doors (concurrency 1, no rotation, distinct
-// addresses so the coordinator cache cannot fake a healthy result):
+// A RESIDENTIAL IP GIVES ABOUT 20 ANSWERS, THEN REFUSES - AND RECOVERS.
 //
-//   port    checks   ok      longest clean   outcome
-//   10001      80    86%          30         survived
-//   10011      41    73%          20         DIED (10 consecutive denials)
-//   10023      60    88%          21         survived
-//   10037      54    67%          20         DIED
-//   10041      43    70%          20         DIED
-//   10059      48    63%          20         DIED
+// Measured twice. First across five sticky ports driven to exhaustion, counting
+// HTTP status (longest clean streak 20/20/20/21/30; every IP that died had
+// delivered ~30 successes). Then again against the real Kinetic serviceability
+// API, 40 addresses per arm, classifying the RESPONSE BODY rather than the
+// status - because a 200 carrying "AddressNotFound" is not an answer:
 //
-// Two numbers matter. The longest CLEAN streak is 20 on the nose (20/20/20/21/30,
-// median 20), and every IP that died had delivered exactly ~30 successes first
-// (30/30/30/36). Kinetic allows roughly 30 successes per residential IP, with
-// reliability falling off after about 20.
+//   arm                                    real answers   403s
+//   A  mint IP-1 / search IP-1                  20          20
+//   B  mint IP-1 / search IP-2  (MISMATCH)      20          20
+//   C  mint IP-2 / search IP-2  (IP-2 spent)    10          30
+//   D  mint SERVER IP / search IP-1             20          20
 //
-// So the budget is 20, not 30. Taking the last ten answers means eating 13-18
-// denials for them (the 63-73% runs above), each of which costs a retry and
-// feeds the fleet-shared 403-storm backoff. Stopping at 20 stays inside the
-// clean streak, costs one cold handshake per rotation, and there are 100 sticky
-// ports to cycle. An isolated denial is still forgiven, not acted on: 10023's
-// very first check was a 403 and it went on to finish at 88%.
+// Every fresh IP gave exactly 20 real answers and then started refusing. C got
+// half that because arm B had already spent IP-2. D got a full 20 from IP-1 -
+// which A had already exhausted - because B and C took minutes in between, so
+// the IP had replenished. The budget is per-IP and time-recovering, not a
+// lifetime cap.
+//
+// Two things this DISPROVED, both of which the design briefly rested on:
+//   - tokens are NOT bound to their minting IP (arm B is the proof, on real
+//     AddressFound verdicts with echoed addresses, not on status codes);
+//   - a server-IP mint pairs fine with a residential search (arm D), so mints
+//     belong on the direct rung where they cost no residential budget at all.
+//
+// What remains true is the reason to ride one IP: spend a known-good address
+// down to its budget instead of paying a cold stranger on every request.
+// An isolated denial still means nothing - see DECODO_ROTATE_AFTER_DENIALS.
 const CHECKS_PER_IP = () => Math.max(0, Number(process.env.DECODO_CHECKS_PER_IP ?? 20));
 let _checksOnThisIp = 0;
 
@@ -193,9 +195,12 @@ function stickyProxyUrl(base: string): string {
  * ladder in server/scanner.ts is the only one today) must use this instead, or
  * it leaves from a different residential IP than the searches do.
  *
- * That is not a hypothetical: a Kinetic bearer token is bound to the IP that
- * minted it, so minting on 10000 and searching on 10001+ is the exact 403 the
- * sticky work exists to remove. Returns null when no proxy is configured.
+ * Whether the mint SHOULD ride the proxy is a separate question: tokens are
+ * portable (measured 2026-08-23), and minting from the server IP is both
+ * cleaner and free of any residential budget. This exists so that a caller
+ * which does egress through the proxy uses the SAME IP the searches are on,
+ * rather than a stranger from the rotating gateway. Returns null when no proxy
+ * is configured.
  */
 export function currentEgressProxyUrl(): string | null {
   const base = configuredProxyUrl();

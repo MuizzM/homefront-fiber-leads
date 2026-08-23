@@ -9,8 +9,9 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
  *     fails, which is why DECODO_STICKY had to be "off" in production);
  *   - ports 10001 / 10002 / 10005 / 10100 each hold ONE persistent IP.
  *
- * A Kinetic bearer token is bound to the IP that minted it, so minting on one
- * IP and searching from another is a guaranteed 403. End to end on Rockwell:
+ * Tokens are PORTABLE across IPs (measured 2026-08-23: mint on IP-1, search
+ * from IP-2, 20/20). The per-IP limit is on SEARCH VOLUME, which is what the
+ * check budget below is for. End to end on Rockwell:
  * port 10000 gave 31 of 236 checks (13%); port 10001 gave 69 of 80 (86%).
  */
 const ENV_KEYS = ["PROXY_URL", "DECODO_STICKY", "DECODO_STICKY_PORT_BASE",
@@ -100,34 +101,12 @@ describe("the per-IP check budget", () => {
   });
 });
 
-describe("a token is bound to the IP that minted it", () => {
-  // Kinetic issues the bearer token to the residential address that asked for
-  // it. After a sticky-IP handover every pooled token is dead on arrival, so
-  // the pool must be drained or the first check on the new IP is a guaranteed
-  // 403 - which then feeds the denial streak and rotates us off a good IP.
-  it("drains every pooled token when the egress IP changes", async () => {
-    const { AuthorizedTokenPool } = await import("../../server/authorizedTokenPool");
-    const pool = new AuthorizedTokenPool({ mint: async () => ({ token: "t", expiresAt: Date.now() + 3_600_000 }) } as any);
-    pool.install("token-minted-on-the-old-ip", Date.now() + 3_600_000);
-    expect(pool.snapshot().ready, "a token is held").toBeGreaterThan(0);
-    const dropped = pool.invalidateAllForEgressChange();
-    expect(dropped).toBe(1);
-    expect(pool.snapshot().ready, "nothing survives an IP change").toBe(0);
-    expect(pool.invalidateAllForEgressChange(), "idempotent").toBe(0);
-  });
-
-  it("the scanner subscribes to egress changes at load", async () => {
-    const [fs, path] = [await import("node:fs"), await import("node:path")];
-    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
-    expect(src).toContain("onEgressChanged(");
-    expect(src).toContain("invalidateAllForEgressChange()");
-  });
-});
-
-describe("the mint and the search must leave from the SAME IP", () => {
+describe("the mint egresses through the sticky proxy when one is in force", () => {
   // The premise of the whole sticky change is that a Kinetic bearer token is
-  // bound to the IP that minted it. The first version of this work got that
-  // wrong in the one place it mattered: server/scanner.ts handed the
+  // bound to its minting IP - since disproved. What survives is narrower and
+  // still worth asserting: if a mint DOES egress through the proxy, it must use
+  // the same sticky IP the searches use rather than a stranger from the
+  // rotating gateway. server/scanner.ts used to hand the
   // curl-impersonate mint `proxyUrlFromEnv()`, which is the RAW configured URL
   // - port 10000, the rotating gateway - while searches went out on 10001+.
   // Every mint/search pair mismatched, which is the exact 403 being fixed.
@@ -175,5 +154,45 @@ describe("the mint and the search must leave from the SAME IP", () => {
     delete process.env.DECODO_HOST;
     const mod = await import("../../server/proxy-fetch");
     expect(mod.currentEgressProxyUrl()).toBeNull();
+  });
+});
+
+describe("what the measurements actually established", () => {
+  // Written down as a test because the design was briefly built on the OPPOSITE
+  // belief, and a comment alone did not stop that. Measured 2026-08-23 with raw
+  // HTTP, the app's pool and dispatcher bypassed so nothing re-minted behind it:
+  //
+  // Round 2 raised it to 40 addresses per arm and classified the RESPONSE BODY,
+  // because a 200 carrying "AddressNotFound" is not an answer:
+  //
+  //   arm                                    real answers   403s
+  //   A  mint IP-1 / search IP-1                  20          20
+  //   B  mint IP-1 / search IP-2  (MISMATCH)      20          20
+  //   C  mint IP-2 / search IP-2  (IP-2 spent)    10          30
+  //   D  mint SERVER IP / search IP-1             20          20
+  //
+  // Verified against POST https://buy.gokinetic.com/api/v1/address/search with
+  // real verdicts echoed back (114 CHINA GROVE HWY -> TENURED/billing N/FIBER,
+  // 368 PALMER CIR -> NEW FIBER/billing N/FIBER).
+  //
+  // B is the one that matters: a token minted on one residential address works
+  // perfectly from another. Tokens are PORTABLE. C did worse than B only
+  // because IP-2 had already served B's 20 searches - which is the per-IP wear
+  // the check budget exists for, not a token problem.
+  it("does not drop the token pool when the egress IP changes", async () => {
+    const { AuthorizedTokenPool } = await import("../../server/authorizedTokenPool");
+    const pool: any = new AuthorizedTokenPool({ mint: async () => ({ token: "t", expiresAt: Date.now() + 3_600_000 }) } as any);
+    expect(typeof pool.invalidateAllForEgressChange,
+      "removed: it forced a pointless re-mint on every rotation").toBe("undefined");
+  });
+
+  it("does not disable the direct mint rung under a sticky egress", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
+    // imp-direct is the cleanest egress AND spends no residential budget, so it
+    // must stay reachable. A revision briefly skipped it on the binding premise.
+    expect(src).toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null)");
+    expect(src, "no sticky-egress guard around the direct rung")
+      .not.toContain("sticky egress in force");
   });
 });

@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, getProxySessionId, proxyUrlFromEnv, onEgressChanged, currentEgressProxyUrl } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, getProxySessionId, currentEgressProxyUrl } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -238,15 +238,20 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     });
     delete mintHeaders["User-Agent"];
     const mintBody = JSON.stringify({ brazeDeviceId: "" });
-    // imp-direct mints from the SERVER's own IP. That is the cleanest egress we
-    // have and it is 6/6 when the searches also leave from here - but under a
-    // sticky Decodo session the searches do NOT: they leave from a residential
-    // address. A Kinetic token is bound to the IP that minted it, so a direct
-    // mint paired with a proxied search is a guaranteed 403. Skip this rung
-    // whenever a sticky proxy egress is in force.
-    const stickyEgress = process.env.DECODO_STICKY !== "off" && !!proxyUrlFromEnv(process.env);
+    // imp-direct mints from the SERVER's own IP, and that is where we WANT the
+    // mint: cleanest egress, and it does not spend any residential IP's search
+    // budget.
+    //
+    // A previous revision skipped this rung under a sticky egress, on the
+    // premise that a Kinetic token is bound to the IP that minted it. MEASURED
+    // 2026-08-23, and the premise is false:
+    //   mint IP-1 / search IP-1 (matched)      20/20  100%
+    //   mint IP-1 / search IP-2 (MISMATCH)     20/20  100%   <- travels fine
+    //   mint SERVER IP / search residential    20/20  100%
+    // Tokens are portable. The per-IP limit is on SEARCH volume, not on token
+    // provenance - so skipping this rung disabled the best mint path for no
+    // reason at all.
     try {
-      if (stickyEgress) throw new Error("skipped: sticky egress in force, a direct mint would bind the token to the server IP");
       return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
     } catch (err) {
       structuredLog("scan.token.mint_failed", { transport: "imp-direct", error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
@@ -392,17 +397,11 @@ export function invalidateAuthorizedToken(token: string | null | undefined): voi
   authorizedTokenPool.invalidate(token);
 }
 
-// A Kinetic token is bound to the IP that minted it, so a sticky-IP handover
-// kills every token we hold: minted on the old residential address, presented
-// from the new one, refused. Without this, the first check after each rotation
-// is a guaranteed 403 - which feeds the denial streak and can rotate us again,
-// off an IP that was fine. Registered once at load; proxy-fetch fires it.
-onEgressChanged((port) => {
-  const dropped = authorizedTokenPool.invalidateAllForEgressChange();
-  if (dropped > 0) {
-    structuredLog("scan.token.dropped_on_egress_change", { dropped, port }, "warn");
-  }
-});
+// NOTE: tokens are NOT bound to the IP that minted them - measured 2026-08-23,
+// a token minted on one residential IP searched 20/20 from a different one, and
+// a server-IP mint searched 20/20 through a residential proxy. An earlier
+// revision dropped the whole token pool on every egress change to "fix" a
+// binding that does not exist; all it bought was a forced re-mint per rotation.
 
 /** Per-address count of 4xx-driven token/session switches. A 4xx burns the
  * token and rotates the session up to 3 times per address (fresh-token proof

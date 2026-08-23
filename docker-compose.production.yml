@@ -420,8 +420,11 @@ services:
       # request and REJECTS every session-suffix form outright, which is why
       # this was "off" - switching it on used to break every request.
       # 10001+ each hold one persistent IP.
-      # This matters because a Kinetic bearer token is bound to the IP that
-      # minted it, so mint-here/search-there is a guaranteed 403. Measured end
+      # NOT because tokens are IP-bound - measured 2026-08-23, they are fully
+      # portable (mint on one IP, search from another: 20/20). It matters
+      # because the limit is on SEARCH VOLUME per residential address (~20-30),
+      # so a rotating gateway pays a cold stranger IP every request instead of
+      # spending a known-good one down to its budget. Measured end
       # to end on Rockwell doors: port 10000 gave 31 of 236 checks (13%, 205
       # denials); port 10001 gave 69 of 80 (86%), longest clean streak 30.
       # PROXY_URL keeps its :10000 - the port is rewritten per sticky session.
