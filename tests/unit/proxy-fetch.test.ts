@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { proxyUrlFromEnv, rotateProxySession, getProxySessionId, __resetRotationStateForTests } from "../../server/proxy-fetch";
 
 describe("Decodo session rotation (single-flight reset)", () => {
-  afterAll(() => { delete process.env.PROXY_URL; });
+  afterAll(() => { delete process.env.PROXY_URL; delete process.env.DECODO_ROTATE_AFTER_DENIALS; });
 
   it("is not pinned after the first rotation - resumes rotating once the min-interval passes", async () => {
     // A dummy proxy URL: undici's ProxyAgent is lazy, so building one never
@@ -15,6 +15,11 @@ describe("Decodo session rotation (single-flight reset)", () => {
     // simulates the window elapsing; the key guarantee is that after it, a
     // rotation STILL advances the session (proving the guard is never pinned).
     process.env.PROXY_URL = "http://u:p@127.0.0.1:1";
+    // A sticky IP is now held until it has been denied DECODO_ROTATE_AFTER_DENIALS
+    // times (one 403 says nothing about an IP - measured: first denial at check
+    // 15, then 30 clean). This test is about the single-flight guard, not the
+    // streak, so make one denial enough and let the streak have its own test.
+    process.env.DECODO_ROTATE_AFTER_DENIALS = "1";
     await new Promise(r => setTimeout(r, 50)); // let module-level undici load settle
     __resetRotationStateForTests();
     const before = getProxySessionId();

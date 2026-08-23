@@ -267,6 +267,11 @@ import { CATALOG_OBSERVED_AT, KINETIC_DIRECTORY_URLS, KINETIC_MONITORED_STATES, 
 import * as sweepService from "./sweepService";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
+import { servedDoorsInBbox } from "./servedDoors";
+import {
+  filterCounts as mpboxFilterCounts, listResults as mpboxListResults,
+  readStats as mpboxReadStats,
+} from "./mpboxScanStore";
 import { validateScanBbox, adaptiveGridStep, pooledMap, backoffDelayMs, type BboxLL } from "./bboxScan";
 import { mergeAreaAddressSources, planUnifiedAreaScan } from "./areaScanStrategy";
 import { gatherCoverage, providerStatus, type BBox as CoverageBBox, type RawAddress } from "./providers";
@@ -1909,6 +1914,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Hard row cap per window. The query fetches cap+1 so the response can SAY
   // it truncated (the client shows "sample", never silently drops pins).
   const MAP_BBOX_ROW_CAP = 25_000;
+  // Served doors are a background layer, not the working set: a tighter cap
+  // than the lead window, because a rep never needs five thousand of them to
+  // understand that a street is taken.
+  const SERVED_DOORS_CAP = 5_000;
   function parseMapBBox(raw: unknown, maxSpanDeg: number = MAP_BBOX_MAX_SPAN_DEG): MapPinWindow | { error: string } | null {
     if (raw == null || raw === "") return null;
     if (typeof raw !== "string") return { error: "bbox must be minLng,minLat,maxLng,maxLat" };
@@ -2029,6 +2038,73 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       complexity: "O(K_window)",
     });
     res.json({ cells: rows, cell, truncated });
+  });
+
+  // ── MP Box scan: persisted results, counts and filtering ────────────────
+  // Reads straight from mpbox_scan_results, so the number on a filter chip is
+  // the number of rows that filter can actually return. Nothing here is derived
+  // from an in-memory job - that was the whole problem.
+  app.get("/api/scan/mpbox/:scanId/stats", requireManager, (req: any, res: any) => {
+    const scanId = String(req.params.scanId ?? "");
+    const row = rawDb.prepare(
+      `SELECT id, status, started_at, completed_at, duration_ms, classifier_version
+         FROM scan_runs WHERE id=? AND tenant_id=?`).get(scanId, tid(req)) as any;
+    if (!row) return res.status(404).json({ error: "Scan not found" });
+    res.json({
+      scanId, status: row.status, startedAt: row.started_at, completedAt: row.completed_at,
+      durationMs: row.duration_ms, classifierVersion: row.classifier_version,
+      stats: mpboxReadStats(scanId),
+      counts: mpboxFilterCounts(scanId),
+    });
+  });
+
+  app.get("/api/scan/mpbox/:scanId/results", requireManager, (req: any, res: any) => {
+    const scanId = String(req.params.scanId ?? "");
+    const owns = rawDb.prepare(`SELECT 1 FROM scan_runs WHERE id=? AND tenant_id=?`).get(scanId, tid(req));
+    if (!owns) return res.status(404).json({ error: "Scan not found" });
+    const tenured = req.query.tenured === "1";
+    const freshFiber = req.query.fresh === "1";
+    const after = req.query.after != null ? Number(req.query.after) : undefined;
+    if (after !== undefined && !Number.isFinite(after)) {
+      return res.status(400).json({ error: "after must be a numeric target id" });
+    }
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 100) || 100));
+    const rows = mpboxListResults(scanId, { tenured, freshFiber }, { afterTargetId: after, limit });
+    res.json({
+      scanId, filter: { tenured, freshFiber }, count: rows.length,
+      nextAfter: rows.length === limit ? rows[rows.length - 1].targetId : null,
+      results: rows,
+    });
+  });
+
+  /** The most recent completed box scan, for the "last scan" line and cold open. */
+  app.get("/api/scan/mpbox/latest", requireManager, (req: any, res: any) => {
+    const row = rawDb.prepare(
+      `SELECT id, status, started_at, completed_at, duration_ms
+         FROM scan_runs
+        WHERE tenant_id=? AND kind='area' AND stats_json IS NOT NULL
+        ORDER BY COALESCE(completed_at, started_at) DESC LIMIT 1`).get(tid(req)) as any;
+    if (!row) return res.json({ scanId: null, reason: "no_history" });
+    res.json({
+      scanId: row.id, status: row.status, startedAt: row.started_at,
+      completedAt: row.completed_at, durationMs: row.duration_ms,
+      stats: mpboxReadStats(row.id), counts: mpboxFilterCounts(row.id),
+    });
+  });
+
+  // ── Doors that already have service ─────────────────────────────────────
+  // NOT leads, and deliberately a separate endpoint so they can never be
+  // mistaken for them. The lead projector only publishes NEW FIBER + billing N,
+  // so an already-served house is filtered out upstream and never becomes a
+  // pin - which left a rep unable to tell a sellable fiber door from one that
+  // is already taken. Measured live in Rockwell: 8 of 10 fiber doors already
+  // had an account.
+  app.get("/api/map/served", requireAuth, (req: any, res: any) => {
+    const bbox = parseMapBBox(req.query.bbox);
+    if (bbox && "error" in bbox) return res.status(400).json({ error: bbox.error });
+    if (!bbox) return res.status(400).json({ error: "bbox is required: minLng,minLat,maxLng,maxLat" });
+    const out = servedDoorsInBbox(tid(req), bbox, SERVED_DOORS_CAP);
+    res.json({ count: out.doors.length, truncated: out.truncated, doors: out.doors });
   });
 
   app.get("/api/leads/map", requireAuth, (req: any, res: any) => {

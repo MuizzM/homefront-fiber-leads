@@ -254,12 +254,9 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         }
         return;
       }
-      // Steady-state: keep stats fresh the recommended way (cheap no-op when
-      // nothing changed enough to matter).
-      // Planner statistics, per SQLite's documented lifecycle. See
-      // optimizePlannerStats below for why plain PRAGMA optimize alone was not
-      // enough on this database.
-      optimizePlannerStats();
+      // Steady state: nothing one-time is left. Planner statistics were already
+      // refreshed at the top of this tick (step 0), which is the only work the
+      // steady state has to do.
       // NOTE: PRAGMA optimize only reconsiders tables THIS CONNECTION has
       // queried, which is why the 0x10002 mask is used for the first pass.
     } catch (e: any) {
@@ -286,6 +283,44 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
   _resetYieldRollupReadyForTests();
 }
 
+/**
+ * Planner statistics get their OWN timer, deliberately.
+ *
+ * They used to ride the yield-rollup tick, which is wrong twice over:
+ *
+ *  1. `YIELD_ROLLUPS=off` returns before the timer is even created
+ *     (startYieldRollupMaintenance above) - and production sets exactly that.
+ *     So the statistics fix shipped in 342be18 never ran in production at all.
+ *  2. Even with rollups on, the call sat below five one-time migration steps
+ *     that each `return`, so any install still draining a migration ran blind,
+ *     and an alias merge halted on its integrity guard would block it forever.
+ *
+ * This is the same trap the address-repair lane already fell into and was
+ * pulled out of (see server/index.ts, "INDEPENDENT of YIELD_ROLLUPS"). Query
+ * planner upkeep is infrastructure, not a feature: it belongs to the process,
+ * not to a feature flag. Its only switch is its own, ANALYZE_MAINTENANCE=off.
+ *
+ * Cost: 0-5 ms per tick in steady state; 14 s once, on the first
+ * PRAGMA optimize=0x10002 pass. Primary/control worker only - it serves no
+ * HTTP, so a one-off blocking pragma stalls nothing that answers a request.
+ */
+export function startPlannerStatsMaintenance(): NodeJS.Timeout | null {
+  if (process.env.ANALYZE_MAINTENANCE === "off") return null;
+  const intervalMs = Math.max(30_000, Number(process.env.ANALYZE_TICK_MS) || 300_000);
+  const tick = () => {
+    try {
+      if (PRESSURE_ORDER[readPressure().level] >= PRESSURE_ORDER.pause) return;
+      optimizePlannerStats();
+    } catch (e: any) {
+      structuredLog("planner_stats.error", { error: e?.message ?? String(e) }, "error");
+    }
+  };
+  const timer = setInterval(tick, intervalMs);
+  if (typeof (timer as any).unref === "function") (timer as any).unref();
+  structuredLog("planner_stats.maintenance_started", { intervalMs });
+  return timer;
+}
+
 // ── Planner statistics upkeep ────────────────────────────────────────────────
 // SQLite's documented lifecycle for a long-lived connection (lang_analyze.html):
 // `PRAGMA optimize=0x10002` once when the connection is first used, then plain
@@ -308,27 +343,63 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
 // query from 3,373 ms to 0 ms; every later plain optimize took 5 ms. It runs on
 // the cluster primary, which serves no HTTP, and only after the deferred boot
 // window - never at open, so it cannot delay the health gate.
+// Rows examined per index. 0 means unlimited, which is exactly what must never
+// run here - see the write-lock note in optimizePlannerStats.
+const ANALYSIS_LIMIT = () => Math.max(100, Number(process.env.ANALYZE_ANALYSIS_LIMIT) || 1000);
 const OPTIMIZE_PERIOD_H = Math.max(1, Number(process.env.ANALYZE_MAX_AGE_HOURS) || 24);
-let fullOptimiseDone = false;
 
 /** Returns what it did, for logging and tests. */
 export function optimizePlannerStats(nowMs = Date.now()): "full" | "incremental" | null {
   if (process.env.ANALYZE_MAINTENANCE === "off") return null;
-  const key = "optimize_full_at";
-  const last = Number(getState(key) ?? 0);
-  const due = !Number.isFinite(last) || nowMs - last >= OPTIMIZE_PERIOD_H * 3_600_000;
   const t = Date.now();
   try {
-    if (!fullOptimiseDone || due) {
-      // Analyse every table that would benefit, not just the ones this
-      // connection happens to have touched.
-      rawDb.exec("PRAGMA optimize=0x10002");
-      fullOptimiseDone = true;
-      setState(key, String(nowMs));
-      structuredLog("yield_rollups.optimize_full", { ms: Date.now() - t });
+    // ── Why ONE TABLE PER TICK, and why bounded ─────────────────────────────
+    // PRAGMA optimize runs its ANALYZE as a SINGLE write transaction across
+    // every table it touches, and SQLite's write lock is database-wide ACROSS
+    // PROCESSES. "The primary serves no HTTP" protects the primary's event loop
+    // and nothing else: while that transaction is open, every HTTP worker doing
+    // any write blocks on the busy handler, freezes its event loop, and then
+    // throws SQLITE_BUSY once busy_timeout (15 s, server/db.ts:34) elapses.
+    //
+    // Measured on a production-shaped copy, and production's database is five
+    // times larger:
+    //   PRAGMA optimize=0x10002, analysis_limit=1000 .... 13.6 s  in ONE lock
+    //   per-table ANALYZE, cold, worst single table .....  3.2 s  per lock
+    //   per-table ANALYZE, warm, all 251 tables .........   65 ms total
+    //
+    // So the whole cost is the first analysis of each table, and taking it one
+    // table at a time turns a single 13.6 s lock into a series of short ones.
+    // Production has never run this pragma at all (YIELD_ROLLUPS=off), so
+    // shipping the unbounded form would have INTRODUCED the stall behind
+    // PR #169/#170 rather than avoiding it.
+    //
+    // analysis_limit is SQLite's own bound (lang_analyze.html). Approximate
+    // statistics beat the single `0 0 0 0` row this install has today.
+    rawDb.exec(`PRAGMA analysis_limit=${ANALYSIS_LIMIT()}`);
+
+    const table = nextTableToAnalyse();
+    if (table) {
+      rawDb.exec(`ANALYZE "${table.replace(/"/g, '""')}"`);
+      setState(STAT_CURSOR_KEY, table);
+      structuredLog("yield_rollups.analyze_table", { table, ms: Date.now() - t });
       return "full";
     }
+
+    // Every table has been analysed at least once: fall back to SQLite's
+    // recommended steady-state upkeep, which is a no-op when nothing changed
+    // enough to matter (measured 1 ms).
     rawDb.exec("PRAGMA optimize");
+    // Start the clock when the sweep FINISHES, not before. Reading an unset key
+    // as 0 makes "a day has passed" true on the very first incremental tick,
+    // which cleared the cursor and restarted the sweep immediately - an endless
+    // loop that never reaches steady state.
+    const key = "optimize_full_at";
+    const last = Number(getState(key) ?? 0);
+    if (!last) setState(key, String(nowMs));
+    else if (nowMs - last >= OPTIMIZE_PERIOD_H * 3_600_000) {
+      setState(key, String(nowMs));
+      setState(STAT_CURSOR_KEY, ""); // a fresh bounded sweep tomorrow
+    }
     return "incremental";
   } catch (e: any) {
     structuredLog("yield_rollups.optimize_failed", { error: String(e?.message ?? e).slice(0, 120) }, "warn");
@@ -336,5 +407,26 @@ export function optimizePlannerStats(nowMs = Date.now()): "full" | "incremental"
   }
 }
 
+const STAT_CURSOR_KEY = "analyze_table_cursor";
+
+/**
+ * The next table to analyse this tick, biggest-impact first, or null once the
+ * sweep is done. Ordering matters: the planner is blind on scan_targets today,
+ * so that must not wait behind 250 alphabetically-earlier tables.
+ */
+function nextTableToAnalyse(): string | null {
+  const PRIORITY = ["scan_targets", "leads", "availability_snapshots", "fiber_checks",
+                    "scan_run_targets", "scan_runs", "coming_soon_watchlist"];
+  const done = String(getState(STAT_CURSOR_KEY) ?? "");
+  const all = (rawDb.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+    .all() as Array<{ name: string }>).map((r) => r.name);
+  const ordered = [...PRIORITY.filter((p) => all.includes(p)),
+                   ...all.filter((n) => !PRIORITY.includes(n))];
+  if (!done) return ordered[0] ?? null;
+  const i = ordered.indexOf(done);
+  return i >= 0 && i + 1 < ordered.length ? ordered[i + 1] : null;
+}
+
 /** Test hook: forget that the full pass ran in this process. */
-export function _resetPlannerStatsForTests(): void { fullOptimiseDone = false; }
+export function _resetPlannerStatsForTests(): void { setState(STAT_CURSOR_KEY, ""); }

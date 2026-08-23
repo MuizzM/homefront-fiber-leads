@@ -405,11 +405,58 @@ services:
       DECODO_RESERVE_PCT: "10"
       DECODO_BILLING_DAY: "1"
       YIELD_ROLLUPS: "off"
+      # Query planner statistics run on their OWN timer, not inside the rollup
+      # tick that YIELD_ROLLUPS=off disables - sqlite_stat1 going stale is what
+      # makes the planner walk 919k rows for counts an index answers at once.
+      # ANALYZE_MAINTENANCE=off is its kill switch.
+      ANALYZE_TICK_MS: "300000"
       # TOKEN ECONOMY (bot-wall workaround): mint rarely, ride tokens long.
       # 1 mint/2s max; each token serves 40 leases / 1000 checks before
       # retirement. One success per minute = 1000 checks/min of capacity.
       KFS_MINT_MIN_INTERVAL_MS: "15000"
-      DECODO_STICKY: "off"
+      # DECODO STICKY EGRESS - ON, and by PORT (measured 2026-08-22).
+      # Decodo does sticky through the port, not a username suffix:
+      # us.decodo.com:10000 hands out a DIFFERENT residential IP on every
+      # request and REJECTS every session-suffix form outright, which is why
+      # this was "off" - switching it on used to break every request.
+      # 10001+ each hold one persistent IP.
+      # NOT because tokens are IP-bound - measured 2026-08-23, they are fully
+      # portable (mint on one IP, search from another: 20/20). It matters
+      # because the limit is on SEARCH VOLUME per residential address (~20-30),
+      # so a rotating gateway pays a cold stranger IP every request instead of
+      # spending a known-good one down to its budget. Measured end
+      # to end on Rockwell doors: port 10000 gave 31 of 236 checks (13%, 205
+      # denials); port 10001 gave 69 of 80 (86%), longest clean streak 30.
+      # PROXY_URL keeps its :10000 - the port is rewritten per sticky session.
+      DECODO_STICKY: "on"
+      DECODO_STICKY_PORT_BASE: "10001"
+      # 10,000 sticky ports = 10,000 distinct residential IPs. Probed across the
+      # range 10001-24999 (10001, 10100, 10500, 10999, 11000, 11500, 12000,
+      # 19999, 20000, 24999): every one open, every one a different IP, so the
+      # ceiling is far above what is configured here.
+      # At 20 checks per IP that is 200,000 checks before any IP is revisited -
+      # more than the 167,679 never-scanned doors in NC cities that have already
+      # produced fiber. We never have to reuse a spent address.
+      # (One observation: port 11000 answered on IPv6. Harmless for a sticky
+      # session, but worth knowing if Kinetic ever treats v6 differently.)
+      DECODO_STICKY_PORT_COUNT: "10000"
+      DECODO_STICKY_MINUTES: "15"
+      # One 403 does not mean the IP is burnt (the 86% run took its first at
+      # check 15, then ran 30 clean). Rotating on the first denial is what
+      # turned 205 denials into 205 IP rotations.
+      # Set HIGH deliberately. Changing egress IP mid-run is the thing that
+      # correlates with collapse: the one clean local run that never changed IP
+      # held 86% over 80 checks, while runs that rotated freely fell to 13%.
+      # A denial is a reason to slow down, not to move house. Time-based
+      # refresh (DECODO_STICKY_MINUTES) still cycles IPs in an orderly way.
+      DECODO_ROTATE_AFTER_DENIALS: "8"
+      # Retire each residential IP after 20 checks, while it is still healthy.
+      # Measured across five sticky ports driven to exhaustion: the longest
+      # clean streak was 20/20/20/21/30, and every IP that died had delivered
+      # ~30 successes first (30/30/30/36). Taking that last third costs 13-18
+      # denials to get ten answers - 63-73% efficiency - and each denial feeds
+      # the fleet-shared 403-storm backoff. 20 stays inside the clean run.
+      DECODO_CHECKS_PER_IP: "20"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
       KFS_TOKEN_MAX_CHECKS: "1000"

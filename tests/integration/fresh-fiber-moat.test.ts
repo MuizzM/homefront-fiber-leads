@@ -69,7 +69,12 @@ describe("fresh-fiber moat simulated production flow", () => {
 
   it("publishes NEW FIBER + billing N immediately as single-source leads, deduped and idempotent", async () => {
     const runId = "run_moat_flip";
-    store.createScanRun({ id: runId, tenantId: TENANT, kind: "state-monitor", label: "Moat flip replay", city: "Flip City", state: "NC", budget: ids.length });
+    // Fixture kind is "manual" (an explicit action) because this suite is about
+    // FLIP DETECTION, not admission policy. It used "state-monitor", which was
+    // exempt only by a substring collision with "monitor" - the accident that
+    // let bulk producers re-buy answered doors. That exemption is gone; the
+    // subject of these tests is not.
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "manual", label: "Moat flip replay", city: "Flip City", state: "NC", budget: ids.length });
     store.enqueueRunTargets(runId, ids.map((id, seq) => ({ id, seq })));
     await engine.runScanWorker(runId, TENANT, async (address) => ({
       result: result(address.address, !address.address.startsWith("106")), bytes: 12_000, checkFailed: false,
@@ -115,7 +120,7 @@ describe("fresh-fiber moat simulated production flow", () => {
       VALUES (?,?, 'fcc_bdc_licensed','fcc-preloaded',datetime('now'),'available','FTTH',1000,'fcc-preloaded-hash','preloaded')`)
       .run(TENANT, targetId);
     const runId = "run_preloaded_evidence";
-    store.createScanRun({ id: runId, tenantId: TENANT, kind: "state-monitor", label: "Preloaded evidence", city: "Flip City", state: "NC", budget: 1 });
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "manual", label: "Preloaded evidence", city: "Flip City", state: "NC", budget: 1 });
     store.enqueueRunTargets(runId, [{ id: targetId, seq: 0 }]);
     const alertHook = vi.fn(async () => ({ queued: 1, delivered: 1 }));
     (globalThis as any).__flushFreshFiberAlerts = alertHook;

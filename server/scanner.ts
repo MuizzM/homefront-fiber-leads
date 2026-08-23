@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, getProxySessionId, proxyUrlFromEnv } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, getProxySessionId, currentEgressProxyUrl } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -238,12 +238,25 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     });
     delete mintHeaders["User-Agent"];
     const mintBody = JSON.stringify({ brazeDeviceId: "" });
+    // imp-direct mints from the SERVER's own IP, and that is where we WANT the
+    // mint: cleanest egress, and it does not spend any residential IP's search
+    // budget.
+    //
+    // A previous revision skipped this rung under a sticky egress, on the
+    // premise that a Kinetic token is bound to the IP that minted it. MEASURED
+    // 2026-08-23, and the premise is false:
+    //   mint IP-1 / search IP-1 (matched)      20/20  100%
+    //   mint IP-1 / search IP-2 (MISMATCH)     20/20  100%   <- travels fine
+    //   mint SERVER IP / search residential    20/20  100%
+    // Tokens are portable. The per-IP limit is on SEARCH volume, not on token
+    // provenance - so skipping this rung disabled the best mint path for no
+    // reason at all.
     try {
       return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
     } catch (err) {
       structuredLog("scan.token.mint_failed", { transport: "imp-direct", error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
       try {
-        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, proxyUrlFromEnv(process.env));
+        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, currentEgressProxyUrl());
       } catch (err2) {
         structuredLog("scan.token.mint_failed", { transport: "imp-proxy", error: String((err2 as any)?.message ?? err2).slice(0, 120) }, "warn");
         // fall through to the legacy paths below
@@ -383,6 +396,12 @@ export async function forceFreshTokenFromApi(): Promise<string> {
 export function invalidateAuthorizedToken(token: string | null | undefined): void {
   authorizedTokenPool.invalidate(token);
 }
+
+// NOTE: tokens are NOT bound to the IP that minted them - measured 2026-08-23,
+// a token minted on one residential IP searched 20/20 from a different one, and
+// a server-IP mint searched 20/20 through a residential proxy. An earlier
+// revision dropped the whole token pool on every egress change to "fix" a
+// binding that does not exist; all it bought was a forced re-mint per rotation.
 
 /** Per-address count of 4xx-driven token/session switches. A 4xx burns the
  * token and rotates the session up to 3 times per address (fresh-token proof
