@@ -12,6 +12,7 @@
 // the FINGERPRINT of the classifying fields differs, and nothing else.
 import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
+import { persistKineticObservation } from "./kineticObservation";
 import {
   CLASSIFIER_VERSION, classify, emptyStats, ensureMpboxSchema, fingerprintOf,
   loadPriorState, needsWork, persistBatch, alreadyRecorded, saveCheckpoint,
@@ -33,16 +34,38 @@ export interface MpboxRecord {
  * check. Returns the fields a classification is derived from, or throws.
  * Deliberately NOT called inside a transaction.
  */
-export type Classifier = (r: MpboxRecord) => Promise<{
+export type Classifier = (r: MpboxRecord) => Promise<ClassifierEvidence>;
+
+export interface ClassifierEvidence {
   lastFiberStatus?: string | null;
   isNewFiber?: number | boolean | null;
   billingStatus?: string | null;
   fiberAvailable?: number | boolean | null;
-}>;
+  /**
+   * The provider's own segment string, carried through so the door can reach
+   * the LEAD pipeline and not just this module's tables. Without it a scan
+   * records a verdict nobody can walk to: the projector publishes on
+   * NEW FIBER + billing N, and that comes from here.
+   */
+  householdSegmentType?: string | null;
+  techType?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}
 
 export interface RunOptions {
   scanId: string;
   tenantId: number;
+  /**
+   * Feed each conclusive answer into the lead pipeline as well as this module's
+   * tables. Off by default so the engine stays usable for a dry classification
+   * pass, but a scan meant to produce PINS must turn it on: without it a
+   * sellable door lives only in mpbox_scan_results and never becomes a lead,
+   * never reaches the projector, and never appears on the field map.
+   */
+  publishLeads?: boolean;
+  /** Provenance stamped on every observation, e.g. "mpbox-area-scan". */
+  source?: string;
   records: MpboxRecord[];
   classify: Classifier;
   /** Bounded write batch. Small enough that the write lock is held briefly. */
@@ -151,6 +174,22 @@ export async function runIncrementalScan(opts: RunOptions): Promise<MpboxStats> 
         stats.processed++;
         stats.succeeded++;
         tally(stats, c.tenured, c.freshFiber);
+        // THE STEP THAT MAKES A DOOR WALKABLE. persistKineticObservation writes
+        // the conclusive availability snapshot and the scan-target result, then
+        // runs the projector - which is the only path by which a NEW FIBER +
+        // billing N door becomes a lead and therefore a pin on the field map.
+        // Failure here must not lose the classification we already paid for, so
+        // it is caught and recorded rather than thrown.
+        if (opts.publishLeads) {
+          try {
+            publishObservation(opts.tenantId, opts.source ?? "mpbox-area-scan", it.rec, fresh);
+            stats.published = (stats.published ?? 0) + 1;
+          } catch (e: any) {
+            structuredLog("mpbox.publish_failed", {
+              targetId: it.rec.targetId, error: String(e?.message ?? e).slice(0, 160),
+            }, "warn");
+          }
+        }
         // Re-fingerprint from what the provider actually returned: the stored
         // cache must describe the evidence it was derived from, not the stale
         // row we started with.
@@ -196,6 +235,32 @@ export async function runIncrementalScan(opts: RunOptions): Promise<MpboxStats> 
     scanId: opts.scanId, ...stats, classifierVersion: CLASSIFIER_VERSION,
   }, cancelled ? "warn" : "info");
   return stats;
+}
+
+/**
+ * Hand one conclusive answer to the lead pipeline, in the same shape the
+ * existing area scan uses (server/routes.ts persistRouteKineticObservation).
+ * Deliberately a thin adapter: the invariants about what may become a lead live
+ * in the projector and its insert trigger, not here.
+ */
+function publishObservation(
+  tenantId: number, source: string, rec: MpboxRecord, ev: ClassifierEvidence,
+): void {
+  const isNew = ev.isNewFiber === true || ev.isNewFiber === 1;
+  persistKineticObservation({
+    tenantId,
+    source,
+    observation: {
+      address: rec.address, city: rec.city, state: rec.state, zip: rec.zip,
+      lat: ev.lat ?? null, lng: ev.lng ?? null,
+      fiberStatus: ev.lastFiberStatus ?? undefined,
+      fiberAvailable: ev.fiberAvailable === true || ev.fiberAvailable === 1,
+      isNewFiber: isNew,
+      billingStatus: ev.billingStatus ?? undefined,
+      householdSegmentType: ev.householdSegmentType ?? undefined,
+      techType: ev.techType ?? undefined,
+    } as any,
+  });
 }
 
 function tally(s: MpboxStats, tenured: boolean | null, fresh: boolean | null): void {

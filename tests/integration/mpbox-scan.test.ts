@@ -311,3 +311,62 @@ describe("migration and integrity", () => {
     expect(left.n, "ON DELETE CASCADE removed the orphans").toBe(0);
   });
 });
+
+describe("publishLeads: the step that makes a door walkable", () => {
+  // Without this the scan records a verdict nobody can act on. A sellable door
+  // lives only in mpbox_scan_results, never becomes a lead, never reaches the
+  // projector, and never appears as a pin on the field map. That gap is the
+  // difference between "the scanner found it" and "a rep can walk to it".
+  it("is OFF by default, so a dry classification pass stays dry", async () => {
+    const id = target({ status: "new_fiber", newFiber: 1, billing: "N", avail: 1 });
+    const before = (rawDb.prepare(`SELECT COUNT(*) n FROM availability_snapshots`).get() as any).n;
+    const s = await engine.runIncrementalScan({
+      scanId: newRun(), tenantId: TENANT, records: [rec(id)], classify: echo, nowMs: NOW,
+    });
+    expect(s.published ?? 0).toBe(0);
+    expect((rawDb.prepare(`SELECT COUNT(*) n FROM availability_snapshots`).get() as any).n).toBe(before);
+  });
+
+  it("writes a conclusive snapshot when switched on, which is what the projector reads", async () => {
+    const id = target({ status: "new_fiber", newFiber: 1, billing: "N", avail: 1 });
+    const s = await engine.runIncrementalScan({
+      scanId: newRun(), tenantId: TENANT, records: [rec(id)], nowMs: NOW,
+      publishLeads: true, source: "mpbox-test",
+      // A real classifier carries the provider's own segment through - without
+      // it the projector cannot tell NEW FIBER from anything else.
+      classify: async (r) => ({
+        ...(await echo(r)), householdSegmentType: "NEW FIBER", techType: "FIBER",
+      }),
+    });
+    expect(s.published).toBe(1);
+    const snap = rawDb.prepare(
+      `SELECT conclusive, household_segment_type seg, billing_status bill
+         FROM availability_snapshots WHERE scan_target_id=? ORDER BY id DESC LIMIT 1`).get(id) as any;
+    expect(snap, "a snapshot exists for the door").toBeTruthy();
+    expect(snap.conclusive).toBe(1);
+    expect(snap.seg).toBe("NEW FIBER");
+    expect(snap.bill).toBe("N");
+  });
+
+  it("a publish failure never loses the classification already paid for", async () => {
+    // An address the observation writer rejects (no city) must still leave a
+    // usable scan result behind - the provider answer cost money.
+    const id = ++seq + 600_000;
+    rawDb.prepare(`INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,source,
+        last_fiber_status,last_is_new_fiber,last_billing_status,last_fiber_available)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(id, TENANT, "500 No City Rd", "", "NC", "28138", "test", "new_fiber", 1, "N", 1);
+    const scanId = newRun();
+    const s = await engine.runIncrementalScan({
+      scanId, tenantId: TENANT, nowMs: NOW, publishLeads: true,
+      records: [{ targetId: id, address: "500 No City Rd", city: "", state: "NC", zip: "28138",
+                  lastFiberStatus: "new_fiber", isNewFiber: 1, billingStatus: "N", fiberAvailable: 1 }],
+      classify: echo,
+    });
+    expect(s.succeeded, "the classification survived").toBe(1);
+    expect(s.published ?? 0, "but nothing was published").toBe(0);
+    const row = rawDb.prepare(`SELECT is_fresh_fiber FROM mpbox_scan_results WHERE scan_id=? AND target_id=?`)
+      .get(scanId, id) as any;
+    expect(row?.is_fresh_fiber, "and the result is still on file").toBe(1);
+  });
+});
