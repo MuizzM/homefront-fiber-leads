@@ -175,5 +175,56 @@ violations, `quick_check` ok.
 
 ## Progress
 
-- 2026-08-23: Phase 1 investigation, schema + migration, incremental engine, 20
-  integration tests, measurements. UI next.
+- 2026-08-23: Phase 1 investigation, schema + migration, incremental engine,
+  integration tests, measurements.
+- 2026-08-23: filters + status panel built and mounted in the scan sheet; the
+  repo's own design gates failed it twice (a hand-rolled bg-black/40 scrim, three
+  sub-11px type values) and both were fixed with sanctioned tokens.
+- 2026-08-23: publishLeads added - the step that makes a door walkable.
+
+## What a live Rockwell scan established
+
+2,285 never-scanned Kinetic doors, every one recorded, none dropped:
+
+| | |
+| --- | ---: |
+| sellable NEW FIBER | **584** |
+| tenured | 1,103 |
+| dropped | 0 |
+| elapsed | 15.7 min |
+
+**Rockwell is two cities.** The first 400 doors produced 371 sellable; the next
+1,200 produced 122. The rural church roads (Organ Church, Phaniel Church, Lower
+Stone, Emanuel, Fisher, Cornelius, Sides) are a recent build-out nobody has
+worked; the town core (Howard, Hilbert, Cannon, Link, Shinn) is saturated and
+reads TENURED. A single city-level rate is the wrong unit - the street is.
+
+Route list, ranked: Palmer Cir 21/22 (95%), Holshouser 19/28, Cornelius 19/26,
+Lower Stone Church 17/37, Old Beatty Ford 16/46, Sam Euart 15/26, Organ Church
+14/20, Fisher 14/23. China Grove Hwy is the trap: 53 doors for 11 sellable.
+
+## What limits scanning, measured
+
+Four experiments against the live API, verdicts read from the response BODY:
+
+- **Tokens are portable.** Mint on IP-1, search from IP-2: 20/20. A whole
+  earlier branch was built on the opposite belief and had to be unwound.
+- **Where a token is minted buys nothing.** Minting from different residential
+  IPs (35/60) versus direct (33/60) is a wash. So mint direct.
+- **The cap is the (token, search-IP) PAIR at ~20 answers.** One token with
+  fresh IPs: 33%. One IP with fresh tokens: 58%. Both fresh: **100%**.
+- **The mint endpoint is its own shared rate limit.** That 100% figure is
+  SEQUENTIAL. Eight lanes each minting on their own rotation (~5.6 mints/s)
+  collapsed to 0.9 answers per pair. One paced minter feeding a pool restored
+  12-15. In the final run 496 of 622 mints still failed - minting, not IPs, is
+  now the binding constraint.
+
+Decodo sticky ports are **10001-39999** (binary-searched; 40000 is the first
+closed one). A base outside the range fails the CONNECTION, which reads exactly
+like a provider denial - one run reported "870 denied" when nothing had left the
+machine. The range is guarded in code now.
+
+## Still not done
+
+`/api/scan/area` still calls runAreaScan against the in-memory Map. The engine
+can publish leads, but the live route does not use the engine yet.
