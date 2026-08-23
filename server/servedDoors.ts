@@ -11,12 +11,25 @@
 // mistaken for them: no lead row, no assignment, no knock queue. They exist so a
 // rep can see, on the map, which houses are already taken.
 //
-// THE SIGNAL. Measured across NC scan_targets:
-//   last_fiber_status = 'tenured_fiber' ........ 8,679   <- the dominant one
-//   last_customer_segment = 'existing_customer' .. 250
-//   account_number IS NOT NULL .................... 24   (only from live scans)
-//   any of the above, with coordinates .......... 8,856
-// Keying on customer_segment alone would have missed 98% of them.
+// THE SIGNAL IS BILLING, NOT THE SEGMENT.
+//
+// The first version of this keyed on last_fiber_status='tenured_fiber' because
+// it was numerically dominant (8,679 NC kinetic doors against 250 tagged
+// existing_customer). That was wrong in a way that would have actively hurt:
+// TENURED means Kinetic has plant and history at the address, NOT that anyone
+// is paying for it. Measured across NC kinetic scan_targets:
+//
+//   the tenured-based predicate would paint blue .... 8,763
+//   doors that actually carry active billing ........ 4,158
+//   WRONGLY hidden from reps as already-sold ........ 5,839
+//
+// A live 40-door Rockwell run showed the same thing address by address: nine
+// came back TENURED with billing N - fiber present, nobody on it - against two
+// at TENURED billing A. Painting those nine blue tells a rep to walk past a
+// door they could sell.
+//
+// So the test is active billing, an explicit existing_customer segment, or an
+// account number on file. Nothing else.
 import { rawDb } from "./db";
 
 export interface ServedDoor {
@@ -26,7 +39,7 @@ export interface ServedDoor {
   address: string;
   city: string;
   /** Why we believe this door is taken - shown to the rep, never inferred client-side. */
-  reason: "tenured" | "existing_customer" | "account_on_file";
+  reason: "active_billing" | "existing_customer" | "account_on_file";
 }
 
 export interface ServedDoorWindow {
@@ -59,15 +72,15 @@ export function servedDoorsInBbox(
   const rows = rawDb.prepare(
     `SELECT id, lat, lng, address, city,
             CASE
-              WHEN last_customer_segment = 'existing_customer' THEN 'existing_customer'
               WHEN account_number IS NOT NULL                  THEN 'account_on_file'
-              ELSE 'tenured'
+              WHEN last_customer_segment = 'existing_customer' THEN 'existing_customer'
+              ELSE 'active_billing'
             END AS reason
        FROM scan_targets
       WHERE tenant_id = ?
         AND cell_lat BETWEEN ? AND ? AND cell_lng BETWEEN ? AND ?
         AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
-        AND ( last_fiber_status = 'tenured_fiber'
+        AND ( last_billing_status = 'A'
            OR last_customer_segment = 'existing_customer'
            OR account_number IS NOT NULL )
       LIMIT ?`,

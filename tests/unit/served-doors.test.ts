@@ -12,9 +12,12 @@ import { join } from "node:path";
  * tell an open door from one that is taken. Measured live on Howard St /
  * Hilbert Rd in Rockwell: 8 of 10 fiber doors already had an account.
  *
- * The signal is dominated by tenured_fiber (8,679 NC doors) rather than
- * customer_segment (250), which is why the predicate cannot key on segment
- * alone - doing so would miss 98% of them.
+ * THE SIGNAL IS BILLING. A first version keyed on tenured_fiber because it was
+ * numerically dominant (8,679 vs 250), but TENURED means Kinetic has plant and
+ * history at the address, not that anyone pays for it: 8,763 doors would have
+ * been painted blue against 4,158 with active billing, hiding 5,839 SELLABLE
+ * doors from reps. A live 40-door Rockwell run found nine TENURED/billing-N
+ * doors against two TENURED/billing-A.
  */
 let rawDb: import("better-sqlite3").Database;
 let served: typeof import("../../server/servedDoors");
@@ -28,13 +31,13 @@ beforeAll(async () => {
 });
 
 let seq = 0;
-function door(o: { lat: number; lng: number; status?: string; segment?: string; account?: string; tenant?: number }) {
+function door(o: { lat: number; lng: number; status?: string; segment?: string; account?: string; tenant?: number; billing?: string }) {
   const id = ++seq + 7000;
   rawDb.prepare(`INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,source,
-                   last_fiber_status,last_customer_segment)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+                   last_fiber_status,last_customer_segment,last_billing_status)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(id, o.tenant ?? T, `${id} Served Rd`, "Rockwell", "NC", "28138", o.lat, o.lng, "test",
-         o.status ?? null, o.segment ?? "unknown");
+         o.status ?? null, o.segment ?? "unknown", o.billing ?? null);
   if (o.account) {
     try { rawDb.prepare(`UPDATE scan_targets SET account_number=? WHERE id=?`).run(o.account, id); }
     catch { /* column added by ensureAccountSchema in prod */ }
@@ -47,19 +50,35 @@ const WIN = { minLat: 35.50, maxLat: 35.60, minLng: -80.50, maxLng: -80.40 };
 describe("servedDoorsInBbox", () => {
   beforeAll(async () => {
     (await import("../../server/customerAccount")).ensureAccountSchema();
-    door({ lat: 35.55, lng: -80.45, status: "tenured_fiber" });
+    door({ lat: 35.55, lng: -80.45, status: "tenured_fiber", billing: "A" });
     door({ lat: 35.55, lng: -80.44, segment: "existing_customer" });
     door({ lat: 35.55, lng: -80.43, account: "000000123" });
     door({ lat: 35.55, lng: -80.42, status: "new_fiber", segment: "new_opportunity" }); // sellable
     door({ lat: 35.55, lng: -80.41, status: "no_service" });                            // nothing there
-    door({ lat: 35.90, lng: -80.45, status: "tenured_fiber" });                         // outside the window
-    door({ lat: 35.55, lng: -80.46, status: "tenured_fiber", tenant: 999 });            // another tenant
+    // THE ONE THAT MATTERS: tenured plant, nobody paying. Sellable, must stay
+    // off this layer - the first version painted 5,839 of these blue.
+    door({ lat: 35.55, lng: -80.405, status: "tenured_fiber", billing: "N" });
+    door({ lat: 35.90, lng: -80.45, status: "tenured_fiber", billing: "A" });           // outside the window
+    door({ lat: 35.55, lng: -80.46, status: "tenured_fiber", billing: "A", tenant: 999 }); // another tenant
   });
 
   it("returns only doors that are actually taken, with the reason", () => {
     const { doors } = served.servedDoorsInBbox(T, WIN);
     const reasons = doors.map((d) => d.reason).sort();
-    expect(reasons).toEqual(["account_on_file", "existing_customer", "tenured"]);
+    expect(reasons).toEqual(["account_on_file", "active_billing", "existing_customer"]);
+  });
+
+  it("never paints a TENURED door with no active billing - it is sellable", () => {
+    // Fiber in the ground with nobody on it is an opportunity, not a customer.
+    const { doors } = served.servedDoorsInBbox(T, WIN);
+    for (const d of doors) {
+      const row = rawDb.prepare(
+        `SELECT last_fiber_status st, last_billing_status b, last_customer_segment seg,
+                account_number acct FROM scan_targets WHERE id=?`).get(d.id) as any;
+      const taken = row.b === "A" || row.seg === "existing_customer" || row.acct != null;
+      expect(taken, `${d.id} is on the layer, so something must show it is taken`).toBe(true);
+    }
+    expect(doors.some((d) => d.reason === "active_billing")).toBe(true);
   });
 
   it("never returns a sellable door - that is the whole point", () => {
