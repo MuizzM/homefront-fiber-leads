@@ -140,7 +140,10 @@ Current behavior measured, not assumed (2026-08-24):
 - [x] 2026-08-24 - Milestone 5: closed the qualification hole at the ingest as
       far as it can honestly be closed (body outranks caller), and proved the
       49-door recovery end to end without rewriting any data.
-- [ ] NEXT - map glyphs + lead filter (qualified-only pins), then Concord.
+- [x] 2026-08-24 - Milestone 6: map glyphs + lead filter (qualified-only pins).
+- [x] 2026-08-24 - Milestone 7: live China Grove + Landis scan; 882 tenured
+      leads published for China Grove.
+- [ ] NEXT - three transport defects below, then Concord.
 
 ## Validation
 
@@ -206,6 +209,39 @@ The lesson worth keeping: availability cannot be validated from the observation
 alone, because the ingest cannot see whether the caller derived it from a
 qualification or from a segment label. Only the body can settle it, and only
 publication needs it settled.
+
+## Discoveries (operational, from the live scan 2026-08-24)
+
+Three defects surfaced by running this for real. None are in the work above;
+all are pre-existing and all cost us time tonight.
+
+1. **A mint transport failure never rotates the sticky IP.**
+   `server/scanner.ts:296` gates rotation on `isAuthDenialMessage` = /401|403/.
+   A transport-level "fetch failed" therefore fails closed WITHOUT advancing the
+   sticky port, so a run that lands on an IP which cannot reach the Kinetic auth
+   endpoint retries every ~3s forever. Observed twice: the run sat at
+   verified=610 through 26 consecutive mint failures and wrote zero snapshots.
+   Restarting picks a new random port and recovers. FIX: treat N consecutive
+   mint transport failures as grounds to call `advanceStickyPort()`, the same
+   way a spent IP already does. Workaround in place:
+   `scratchpad/supervise.sh` restarts the worker after 3 minutes of no progress.
+
+2. **`address.requeued` records no reason.** 31,777 requeue events on this run
+   against 755 completions - a 42:1 churn ratio - and not one carries a reason
+   or retryReason field. That is why the livelock above took several restarts to
+   characterise. FIX: stamp the requeue reason into `payload_json`.
+
+3. **Every knob must sit UNDER the per-IP answer budget.** A residential IP
+   yields ~20 answers. `SCAN_BATCH_CONCURRENCY` defaulted to 100, so each batch
+   fired 100 requests through one IP and 66-91 of them came back 403 and were
+   requeued. Measured progression as concurrency fell: 100 -> ~91 denials/batch;
+   20 -> 20/20 denials by the end; 5 -> ZERO denials, zero storm backoffs, and
+   HIGHER throughput. Settled config is recorded in `.env`.
+
+Also confirmed, against the assumption that a bot wall was involved: ZERO
+Cloudflare markers across all 18 logs, and the dedicated detector
+(`Auto-auth non-JSON body (challenge via ...)`, scanner.ts:156/188) never fired.
+The missing `curl-impersonate-chrome` binary was therefore not implicated.
 
 ## Result
 
