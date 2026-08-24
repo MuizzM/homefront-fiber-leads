@@ -622,8 +622,9 @@ const SCAN_RESULTS_SOURCE = "scan-results";
 // with every door for the card; the legend needs it before any door is tapped.
 const DOOR_TAG_LABEL_CLIENT: Record<string, string> = {
   new_fiber: "New Fiber",
-  tenured_active: "Tenured",
   fiber_open: "Fiber, no account",
+  tenured_active: "Already a customer",
+  coming_soon: "Coming soon",
 };
 const SCANNED_DOORS_SOURCE = "scanned-doors";
 const SCANNED_DOORS_LAYER = "scanned-doors-points";
@@ -760,6 +761,7 @@ function ensureTransientMapLayers(map: any): void {
         "circle-radius": [
           "match", ["get", "tag"],
           "tenured_active", 5,
+          "coming_soon", 7,
           6.5,
         ],
         "circle-color": [
@@ -767,6 +769,7 @@ function ensureTransientMapLayers(map: any): void {
           "new_fiber", "#16a34a",
           "fiber_open", "#f59e0b",
           "tenured_active", "#3b82f6",
+          "coming_soon", "#8b5cf6",
           "#94a3b8",
         ],
         "circle-opacity": [
@@ -780,6 +783,7 @@ function ensureTransientMapLayers(map: any): void {
           "new_fiber", "#dcfce7",
           "fiber_open", "#fef3c7",
           "tenured_active", "#bfdbfe",
+          "coming_soon", "#ede9fe",
           "#e2e8f0",
         ],
       },
@@ -2745,6 +2749,8 @@ export default function MapView() {
             properties: {
               id: d.id, address: d.address, city: d.city,
               tag: d.tag, label: d.label, scannedAt: d.scannedAt ?? null,
+              promisedDate: d.promisedDate ?? null, band: d.band ?? null,
+              providerQuote: d.providerQuote ?? null,
               leadId: d.leadId ?? null,
             },
           })),
@@ -3630,6 +3636,9 @@ export default function MapView() {
           tag: (p.tag ?? "fiber_open") as ScannedDoorCardDoor["tag"],
           label: String(p.label ?? "Scanned"),
           scannedAt: p.scannedAt ? String(p.scannedAt) : null,
+          promisedDate: p.promisedDate && p.promisedDate !== "null" ? String(p.promisedDate) : null,
+          band: p.band && p.band !== "null" ? String(p.band) : null,
+          providerQuote: p.providerQuote && p.providerQuote !== "null" ? String(p.providerQuote) : null,
           // MapLibre serialises null feature properties to the STRING "null";
           // Number("null") is NaN, which would render an Open lead button that
           // navigates nowhere.

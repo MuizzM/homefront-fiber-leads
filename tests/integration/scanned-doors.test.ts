@@ -53,6 +53,20 @@ function door(o: {
 }
 const tagOf = (id: number) =>
   mod.scannedDoorsInBbox(TENANT, WINDOW).doors.find((d) => d.id === id)?.tag;
+const doorOf = (id: number) =>
+  mod.scannedDoorsInBbox(TENANT, WINDOW).doors.find((d) => d.id === id);
+
+/** Put a door on the coming-soon watchlist, optionally with a carrier date. */
+function promise(targetId: number, o: { date?: string | null; band?: string; quote?: string; status?: string } = {}) {
+  rawDb.prepare(
+    `INSERT INTO coming_soon_watchlist
+       (tenant_id, scan_target_id, address_key, first_seen_at, created_at, updated_at,
+        promised_date, estimated_completion, band, provider_quote, date_source, status, source)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'test')`,
+  ).run(TENANT, targetId, `k${targetId}`, Date.now(), Date.now(), Date.now(),
+    o.date ?? null, o.date ?? null, o.band ?? "soon", o.quote ?? null,
+    o.date ? "provider" : null, o.status ?? "active");
+}
 
 describe("scanned doors read model", () => {
   it("runs at all, against the real schema", () => {
@@ -186,5 +200,65 @@ describe("a published scan becomes a pin on the field map", () => {
     });
 
     expect(tagOf(id)).toBe("tenured_active");
+  });
+});
+
+describe("coming soon and future qual on the map", () => {
+  it("tags a promised door as coming soon even though it has no fiber yet", () => {
+    // The whole point: a planned build is NOT serviceable, so if the promise
+    // were tested after the availability clauses it would read as "no fiber"
+    // and be dropped from the map entirely.
+    const id = door({ status: "no_service", billing: null });
+    expect(tagOf(id)).toBeUndefined();      // nothing to show before the promise
+    promise(id, { date: "2027-02-01", band: "soon", quote: "FEB-2027" });
+    expect(tagOf(id)).toBe("coming_soon");
+  });
+
+  it("carries the carrier's own date, band and words through to the map", () => {
+    const id = door({ status: "no_service" });
+    promise(id, { date: "2026-11-01", band: "hot", quote: "NOV-2026" });
+    const d = doorOf(id)!;
+    expect(d.promisedDate).toBe("2026-11-01");
+    expect(d.band).toBe("hot");
+    expect(d.providerQuote).toBe("NOV-2026");
+    expect(d.label).toBe("Coming soon");
+  });
+
+  it("says nothing rather than inventing a date when Kinetic stated none", () => {
+    // 1,336 of 1,835 live watchlist rows have no provider date. Guessing one
+    // would send a rep back on a month the carrier never promised.
+    const id = door({ status: "no_service" });
+    promise(id, { date: null });
+    const d = doorOf(id)!;
+    expect(d.tag).toBe("coming_soon");
+    expect(d.promisedDate).toBeNull();
+  });
+
+  it("a promise outranks a current no-account reading", () => {
+    const id = door({ status: "tenured_fiber", billing: "N", avail: 1 });
+    expect(tagOf(id)).toBe("fiber_open");
+    promise(id, { date: "2027-03-01" });
+    expect(tagOf(id)).toBe("coming_soon");
+  });
+
+  it("ignores a closed or promoted watch row - that is history, not a promise", () => {
+    const closed = door({ status: "no_service" });
+    promise(closed, { date: "2026-09-01", status: "closed" });
+    expect(tagOf(closed)).toBeUndefined();
+    const promoted = door({ status: "no_service" });
+    promise(promoted, { date: "2026-09-01", status: "promoted" });
+    expect(tagOf(promoted)).toBeUndefined();
+  });
+
+  it("still calls an active account Already a customer", () => {
+    const id = door({ status: "tenured_fiber", billing: "A", avail: 1 });
+    const d = doorOf(id)!;
+    expect(d.tag).toBe("tenured_active");
+    expect(d.label).toBe("Already a customer");
+  });
+
+  it("reports the scan date on every door", () => {
+    const id = door({ status: "new_fiber", newFiber: 1, billing: "N", avail: 1 });
+    expect(doorOf(id)!.scannedAt).toBe("2026-08-23T12:00:00.000Z");
   });
 });

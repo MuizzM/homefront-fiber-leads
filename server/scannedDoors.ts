@@ -28,9 +28,10 @@
 // server has exercised. A read model must not be a coin flip on boot order, so
 // only columns guaranteed by runMigrations() are used here.
 import { rawDb } from "./db";
+import { ensureComingLedgerSchema } from "./comingLedger";
 
 /** What a rep is looking at. Derived on the server so the client cannot drift. */
-export type DoorTag = "new_fiber" | "tenured_active" | "fiber_open";
+export type DoorTag = "new_fiber" | "fiber_open" | "tenured_active" | "coming_soon";
 
 export interface ScannedDoor {
   id: number;
@@ -41,7 +42,14 @@ export interface ScannedDoor {
   tag: DoorTag;
   /** Short human label. Server-owned so the map, the card and the legend agree. */
   label: string;
+  /** When we last asked the provider about this door. */
   scannedAt: string | null;
+  /** Provider-stated turn-on date (YYYY-MM-DD), only ever the carrier's own. */
+  promisedDate: string | null;
+  /** How precise the promise is: hot / soon / watch. */
+  band: string | null;
+  /** The carrier's own words, so a date on the map can always be audited. */
+  providerQuote: string | null;
   /** Set when the door already became a lead, so the card can link to it. */
   leadId: number | null;
 }
@@ -50,25 +58,35 @@ export interface DoorWindow { minLat: number; maxLat: number; minLng: number; ma
 
 export const DOOR_TAG_LABEL: Record<DoorTag, string> = {
   new_fiber: "New Fiber",
-  tenured_active: "Tenured",
   fiber_open: "Fiber, no account",
+  tenured_active: "Already a customer",
+  coming_soon: "Coming soon",
 };
 
 // Doors with no fiber verdict (copper, no_service) are deliberately NOT
 // returned. They are 20,000+ of the scanned population and pin them and the
 // street disappears under grey dots that mean "nothing here".
+// COMING SOON WINS. A door the carrier has promised is a date to work, and it
+// is frequently NOT serviceable yet - so the promise is tested before any
+// current-availability clause, or a planned build would read as "no fiber" and
+// be dropped by the verdict gate below.
 const TAG_SQL = `
   CASE
-    WHEN last_is_new_fiber = 1 AND COALESCE(last_billing_status,'') <> 'A' THEN 'new_fiber'
-    WHEN COALESCE(last_billing_status,'') = 'A'
-      OR last_customer_segment = 'existing_customer'                       THEN 'tenured_active'
+    WHEN w.scan_target_id IS NOT NULL                                      THEN 'coming_soon'
+    WHEN s.last_is_new_fiber = 1 AND COALESCE(s.last_billing_status,'') <> 'A' THEN 'new_fiber'
+    WHEN COALESCE(s.last_billing_status,'') = 'A'
+      OR s.last_customer_segment = 'existing_customer'                        THEN 'tenured_active'
     ELSE 'fiber_open'
   END`;
 
+// A door earns a pin by having fiber TODAY, or by the carrier having promised
+// it. Copper and no_service without a promise stay off the map - they are
+// 20,000+ grey dots that mean "nothing here".
 const HAS_FIBER_VERDICT = `
-  ( last_is_new_fiber = 1
- OR last_fiber_status IN ('tenured_fiber','new_fiber','existing_fiber')
- OR last_fiber_available = 1 )`;
+  ( s.last_is_new_fiber = 1
+ OR s.last_fiber_status IN ('tenured_fiber','new_fiber','existing_fiber')
+ OR s.last_fiber_available = 1
+ OR w.scan_target_id IS NOT NULL )`;
 
 /**
  * Scanned doors inside a viewport.
@@ -81,6 +99,12 @@ export function scannedDoorsInBbox(
   w: DoorWindow,
   cap = 5_000,
 ): { doors: ScannedDoor[]; truncated: boolean } {
+  // promised_date, band and provider_quote are added by ensureComingLedgerSchema,
+  // not by runMigrations - so on a database no coming-soon code has touched they
+  // do not exist and this query throws `no such column`. That is exactly the
+  // failure that left the previous version of this layer silently drawing
+  // nothing, so the read model asks for the schema instead of assuming it.
+  ensureComingLedgerSchema();
   // Drive the window off cell_lat/cell_lng, the generated ROUND(lat,2) columns
   // covered by idx_scan_targets_cell (tenant_id, cell_lat, cell_lng, ...).
   // Filtering on raw lat/lng made the planner fall back to a tenant-prefixed
@@ -90,14 +114,21 @@ export function scannedDoorsInBbox(
   // predicate is what actually defines the window.
   const CELL = 0.01;
   const rows = rawDb.prepare(
-    `SELECT id, lat, lng, address, city, last_scanned_at AS scannedAt,
-            converted_to_lead_id AS leadId,
+    `SELECT s.id, s.lat, s.lng, s.address, s.city, s.last_scanned_at AS scannedAt,
+            s.converted_to_lead_id AS leadId,
+            w.promised_date AS promisedDate, w.band AS band, w.provider_quote AS providerQuote,
             ${TAG_SQL} AS tag
-       FROM scan_targets
-      WHERE tenant_id = ?
-        AND cell_lat BETWEEN ? AND ? AND cell_lng BETWEEN ? AND ?
-        AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
-        AND last_scanned_at IS NOT NULL
+       FROM scan_targets s
+       -- Only an OPEN promise counts. A closed or already-promoted watch row is
+       -- history, and painting it as "coming soon" would send a rep to a door
+       -- the carrier already turned on or gave up on.
+       LEFT JOIN coming_soon_watchlist w
+              ON w.scan_target_id = s.id AND w.tenant_id = s.tenant_id
+             AND COALESCE(w.status,'active') IN ('active','now_active')
+      WHERE s.tenant_id = ?
+        AND s.cell_lat BETWEEN ? AND ? AND s.cell_lng BETWEEN ? AND ?
+        AND s.lat BETWEEN ? AND ? AND s.lng BETWEEN ? AND ?
+        AND (s.last_scanned_at IS NOT NULL OR w.scan_target_id IS NOT NULL)
         AND ${HAS_FIBER_VERDICT}
       LIMIT ?`,
   ).all(
@@ -121,6 +152,9 @@ export function scannedDoorsInBbox(
         tag,
         label: DOOR_TAG_LABEL[tag] ?? "Scanned",
         scannedAt: r.scannedAt ? String(r.scannedAt) : null,
+        promisedDate: r.promisedDate ? String(r.promisedDate) : null,
+        band: r.band ? String(r.band) : null,
+        providerQuote: r.providerQuote ? String(r.providerQuote) : null,
         leadId: r.leadId == null ? null : Number(r.leadId),
       };
     }),

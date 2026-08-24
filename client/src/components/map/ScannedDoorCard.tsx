@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { X, Copy, Check, ArrowUpRight } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 
-export type DoorTag = "new_fiber" | "tenured_active" | "fiber_open";
+export type DoorTag = "new_fiber" | "fiber_open" | "tenured_active" | "coming_soon";
 
 export interface ScannedDoorCardDoor {
   id: number;
@@ -20,6 +20,9 @@ export interface ScannedDoorCardDoor {
   tag: DoorTag;
   label: string;
   scannedAt: string | null;
+  promisedDate: string | null;
+  band: string | null;
+  providerQuote: string | null;
   leadId: number | null;
 }
 
@@ -33,7 +36,12 @@ export const DOOR_TAG_STYLE: Record<DoorTag, { dot: string; badge: string; meani
   tenured_active: {
     dot: "#3b82f6",
     badge: "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30",
-    meaning: "Kinetic fiber with an active account. Already sold.",
+    meaning: "Already a Kinetic customer with an active account.",
+  },
+  coming_soon: {
+    dot: "#8b5cf6",
+    badge: "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30",
+    meaning: "Kinetic says fiber is coming here. Not serviceable yet.",
   },
   fiber_open: {
     dot: "#f59e0b",
@@ -41,6 +49,15 @@ export const DOOR_TAG_STYLE: Record<DoorTag, { dot: string; badge: string; meani
     meaning: "Fiber at the curb with no account on it. Worth a knock.",
   },
 };
+
+/** "2027-02-01" -> "Feb 2027". Never reformats into a precision we do not have. */
+function formatPromised(d: string): string {
+  const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(d.trim());
+  if (!m) return d;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const mon = months[Number(m[2]) - 1] ?? m[2];
+  return m[3] && m[3] !== "01" ? `${mon} ${m[3]}, ${m[1]}` : `${mon} ${m[1]}`;
+}
 
 function scannedAgo(iso: string | null): string | null {
   if (!iso) return null;
@@ -133,6 +150,25 @@ export function ScannedDoorCard({ door, onClose, onOpenLead, className, style }:
       </div>
 
       <p className="mt-2 text-xs text-muted-foreground leading-relaxed">{style_.meaning}</p>
+
+      {/* A promised date is only ever the carrier's own. When Kinetic has not
+          stated one we say so rather than inventing a month. */}
+      {door.tag === "coming_soon" ? (
+        <div className="mt-2 rounded-lg border border-border bg-secondary/30 px-2.5 py-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-2xs uppercase tracking-wide text-muted-foreground">Turn-on date</span>
+            {door.band ? (
+              <span className="text-2xs font-medium text-muted-foreground">{door.band}</span>
+            ) : null}
+          </div>
+          <p className="text-sm font-semibold text-foreground mt-0.5" data-testid="scanned-door-promised">
+            {door.promisedDate ? formatPromised(door.promisedDate) : "Not stated by Kinetic"}
+          </p>
+          {door.providerQuote ? (
+            <p className="text-2xs text-muted-foreground mt-1 break-words">{door.providerQuote}</p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-2.5 flex items-center gap-1.5">
         <button
