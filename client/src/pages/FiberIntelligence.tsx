@@ -12,6 +12,9 @@ import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 const ScanInspector = lazy(() => import("@/components/fiber/ScanInspector"));
 // Ranked fresh leads — the "knock these doors first" list on the Fresh Now tab.
 const RankedLeads = lazy(() => import("@/components/fiber/RankedLeads"));
+// Run a city from the UI: OSM harvest, probe each street, park the streets with
+// no fiber. Admin-only, because starting one spends provider budget.
+const CitySweepRunner = lazy(() => import("@/components/fiber/CitySweepRunner"));
 // Statically imported (it's tiny) so the Coming Soon tab header can share the
 // exact watchlist query — the big "Watching" count and the list count can
 // never disagree.
@@ -634,6 +637,14 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
       </div>
       <Link href="/map" className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-primary hover:underline">Open the coverage map </Link>
 
+      {isAdmin && (
+        <div className="space-y-2 pt-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations - run a city</div>
+          <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
+            <CitySweepRunner />
+          </Suspense>
+        </div>
+      )}
       {isAdmin && (
         <div className="space-y-2 pt-2">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations - live {scopeLabel ?? "all-market"} scan inspector</div>

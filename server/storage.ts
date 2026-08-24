@@ -1840,6 +1840,10 @@ export function runMigrations() {
        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
      )`,
     `CREATE INDEX IF NOT EXISTS idx_sweep_jobs_tenant ON sweep_jobs(tenant_id, started_at DESC)`,
+    // A city sweep that probes a street and finds no fiber parks the rest of it.
+    // Counters so the operator sees what the prune bought, not just what ran.
+    `ALTER TABLE sweep_jobs ADD COLUMN streets_parked INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE sweep_jobs ADD COLUMN doors_skipped INTEGER NOT NULL DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS sweep_job_targets (
        sweep_job_id TEXT NOT NULL REFERENCES sweep_jobs(id) ON DELETE CASCADE,
        target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,

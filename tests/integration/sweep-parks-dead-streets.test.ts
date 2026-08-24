@@ -1,0 +1,103 @@
+// A CITY SWEEP STOPS CHECKING A STREET THAT HAS NO FIBER.
+//
+// Measured live 2026-08-24: a blind city run checked 250 Charlotte doors and got
+// 250 unmatched - Kinetic does not know those addresses at all, because the
+// inventory there is an OSM address grid over a city it barely serves. The same
+// shape appears in reverse in Statesville: every door recognised, every one
+// "no service". Both are the same waste, and both are visible after ONE answer
+// on the street.
+//
+// So the sweep probes a street, and parks the rest of it unless something
+// answered. Streets are lit together - that is the whole premise of the
+// neighbourhood sweep's 22.5% vs 0.9% measurement - so the first answers on a
+// street are strong evidence about the rest of it.
+import { beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let rawDb: import("better-sqlite3").Database;
+let parkDeadStreets: typeof import("../../server/sweepService").parkDeadStreets;
+const TENANT = 1;
+const JOB = "sweep_test_1";
+
+beforeAll(async () => {
+  process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-sweep-park-"));
+  ({ rawDb } = await import("../../server/db"));
+  (await import("../../server/storage")).runMigrations();
+  parkDeadStreets = (await import("../../server/sweepService")).parkDeadStreets;
+  rawDb.prepare(`INSERT INTO sweep_jobs (id,tenant_id,kind,query,city,state,max_checks,phase,status)
+    VALUES (?,?,'city','Testville, NC','Testville','NC',1000,'checking','running')`).run(JOB, TENANT);
+});
+
+/** A door on a street, optionally already answered by the provider. */
+function door(street: string, houseNumber: number, answer: { status?: string; available?: 0 | 1 } | null): number {
+  const address = `${houseNumber} ${street}`;
+  const id = Number(rawDb.prepare(
+    `INSERT INTO scan_targets (address,city,state,zip,lat,lng,tenant_id,source,street_key,last_fiber_status,last_fiber_available,last_scanned_at)
+     VALUES (?,?,?,?,?,?,?,'osm',?,?,?,?)`).run(
+    address, "Testville", "NC", "27000", 35.1, -80.1, TENANT, street.toLowerCase(),
+    answer?.status ?? null, answer?.available ?? null, answer ? "2026-08-24 12:00:00" : null,
+  ).lastInsertRowid);
+  rawDb.prepare(`INSERT INTO sweep_job_targets (sweep_job_id,target_id,seq,state) VALUES (?,?,?,?)`)
+    .run(JOB, id, id, answer ? "done" : "queued");
+  return id;
+}
+
+describe("a city sweep parks streets with no fiber", () => {
+  it("parks the rest of a dead street, keeps a street that answered, and never touches an unprobed one", () => {
+    // DEAD: two answered doors, neither serviceable. 3 doors still queued.
+    door("dead st", 100, { status: "no_service", available: 0 });
+    door("dead st", 200, { status: "no_service", available: 0 });
+    const deadQueued = [door("dead st", 300, null), door("dead st", 400, null), door("dead st", 500, null)];
+    // UNMATCHED is the other failure shape: recorded, no verdict at all.
+    door("ghost ln", 10, { status: null, available: null });
+    door("ghost ln", 20, { status: null, available: null });
+    const ghostQueued = [door("ghost ln", 30, null)];
+    // ALIVE: one probe found fiber, so the street is worth flooding.
+    door("live ave", 100, { status: "new_fiber", available: 1 });
+    door("live ave", 200, { status: "no_service", available: 0 });
+    const liveQueued = [door("live ave", 300, null), door("live ave", 400, null)];
+    // COMING SOON counts as alive - a dated build is worth knowing about.
+    door("soon rd", 100, { status: "coming_soon", available: 0 });
+    door("soon rd", 200, { status: "no_service", available: 0 });
+    const soonQueued = [door("soon rd", 300, null)];
+    // UNPROBED: nothing answered yet, so nothing may be parked.
+    const unprobed = [door("quiet way", 100, null), door("quiet way", 200, null)];
+
+    parkDeadStreets(JOB);
+    const stateOf = (id: number) => (rawDb.prepare(`SELECT state FROM sweep_job_targets WHERE sweep_job_id=? AND target_id=?`).get(JOB, id) as any).state;
+
+    for (const id of deadQueued) expect(stateOf(id), "no fiber on the street: parked").toBe("skipped");
+    for (const id of ghostQueued) expect(stateOf(id), "provider does not know the street: parked").toBe("skipped");
+    for (const id of liveQueued) expect(stateOf(id), "a street that answered is still checked").toBe("queued");
+    for (const id of soonQueued) expect(stateOf(id), "coming soon is an answer worth having").toBe("queued");
+    for (const id of unprobed) expect(stateOf(id), "a street nothing has asked about is never parked").toBe("queued");
+
+    const job = rawDb.prepare(`SELECT streets_parked AS streets, doors_skipped AS doors FROM sweep_jobs WHERE id=?`).get(JOB) as any;
+    expect(job.streets, "dead st and ghost ln").toBe(2);
+    expect(job.doors).toBe(deadQueued.length + ghostQueued.length);
+  });
+
+  it("is idempotent - a second pass parks nothing new and does not double-count", () => {
+    const before = rawDb.prepare(`SELECT streets_parked AS s, doors_skipped AS d FROM sweep_jobs WHERE id=?`).get(JOB) as any;
+    parkDeadStreets(JOB);
+    const after = rawDb.prepare(`SELECT streets_parked AS s, doors_skipped AS d FROM sweep_jobs WHERE id=?`).get(JOB) as any;
+    expect(after).toEqual(before);
+  });
+
+  it("SWEEP_PARK_DEAD_STREETS=off checks every door", () => {
+    const prev = process.env.SWEEP_PARK_DEAD_STREETS;
+    process.env.SWEEP_PARK_DEAD_STREETS = "off";
+    try {
+      const id = door("later dead st", 100, { status: "no_service", available: 0 });
+      door("later dead st", 200, { status: "no_service", available: 0 });
+      const queued = door("later dead st", 300, null);
+      parkDeadStreets(JOB);
+      expect((rawDb.prepare(`SELECT state FROM sweep_job_targets WHERE sweep_job_id=? AND target_id=?`).get(JOB, queued) as any).state).toBe("queued");
+      expect(id).toBeGreaterThan(0);
+    } finally {
+      if (prev === undefined) delete process.env.SWEEP_PARK_DEAD_STREETS; else process.env.SWEEP_PARK_DEAD_STREETS = prev;
+    }
+  });
+});

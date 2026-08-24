@@ -4683,6 +4683,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ sweeps: sweepService.listSweeps(tid(req), Number(req.query.limit) || 30) });
   });
 
+  // Registered AFTER every /api/sweeps/state/... route, so ":id" can never
+  // swallow "state". Admin-only, matching the route that starts a sweep: a
+  // manager may watch one, only an admin may spend or stop provider budget.
+  app.post("/api/sweeps/:id/cancel", requireAdmin, (req: any, res) => {
+    const stopped = sweepService.cancelSweep(String(req.params.id), tid(req));
+    if (!stopped) return res.status(404).json({ error: "Sweep not found or already finished" });
+    res.json({ ok: true });
+  });
   app.get("/api/sweeps/:id", requireManager, (req: any, res) => {
     const job = sweepService.getSweep(qstr(req.params.id), tid(req));
     if (!job) return res.status(404).json({ error: "Sweep not found" });
