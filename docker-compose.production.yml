@@ -475,6 +475,18 @@ services:
       # denials to get ten answers - 63-73% efficiency - and each denial feeds
       # the fleet-shared 403-storm backoff. 20 stays inside the clean run.
       DECODO_CHECKS_PER_IP: "20"
+      # A residential IP that cannot REACH the Kinetic auth endpoint fails the
+      # mint with undici's bare "fetch failed" - no 401, no 403 - so the denial
+      # rotation above never fires for it. Observed live 2026-08-24 on
+      # run_1_mt7hy05z: 26 consecutive mint failures, the run stuck at
+      # verified=610, zero snapshots, until the worker was killed (which
+      # recovers only because the sticky port offset is randomised per process).
+      # After this many CONSECUTIVE mint attempts that never reach the provider,
+      # the process hands over to the next sticky IP. Any mint that reaches the
+      # provider at all - a success, a denial, a challenge - resets the count.
+      # 0 turns the handover off. This is the value the code already defaults to;
+      # it is set here so the knob is visible next to its siblings.
+      KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "2"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       # Retire the token WITH the IP (DECODO_CHECKS_PER_IP above), not fifty
       # times later. 1000 was the setting that produced the 33% arm.

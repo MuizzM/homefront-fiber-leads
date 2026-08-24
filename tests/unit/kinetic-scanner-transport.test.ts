@@ -1,13 +1,16 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
-const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({ proxyFetch: vi.fn(), rotateProxySession: vi.fn(async () => {}) }));
+const { proxyFetch, rotateProxySession, advanceProxyEgress } = vi.hoisted(() => ({ proxyFetch: vi.fn(), rotateProxySession: vi.fn(async () => {}), advanceProxyEgress: vi.fn(async () => {}) }));
 vi.mock("../../server/proxy-fetch", () => ({
   // Decodo-exclusive: mint AND search both funnel through proxyFetch (the Decodo
   // transport), observable through one call log. rotateProxySession is the
   // fresh-session hook the scanner calls on an auth denial.
   proxyFetch,
   rotateProxySession,
+  // The handover a caller asks for when the residential IP cannot reach the
+  // provider at all — the spent-IP path, not the denial path.
+  advanceProxyEgress,
   getProxySessionId: () => "decodo-s1",
   isProxyConnected: () => true,
   proxyUrlFromEnv: () => "http://redacted@proxy",
@@ -162,6 +165,110 @@ describe("Kinetic scanner transport hardening", () => {
       process.env.KFS_MINT_MAX_ROTATIONS = prevRot;
       scanner.__resetTokenTransportStateForTests();
     }
+  });
+
+  // ── THE MINT WEDGE (observed live 2026-08-24 on run_1_mt7hy05z) ───────────
+  // A residential IP that cannot REACH the Kinetic auth endpoint fails the mint
+  // with undici's bare "fetch failed" - no 401, no 403 anywhere in it. The
+  // rotation above was gated on isAuthDenialMessage, so the scanner retried the
+  // same dead IP every ~3 s forever: 26 consecutive mint failures, the run stuck
+  // at verified=610, zero snapshots written. Killing the worker recovered it,
+  // because the sticky port offset is randomised per process - which is the
+  // proof that the IP, not Kinetic, was the problem.
+  function transportFailure(): Error {
+    // Shaped exactly like undici's: a bare message with the real reason buried
+    // one `cause` level down, which is why classification reads the chain.
+    return Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect ECONNREFUSED 32.223.187.36:443"), { code: "ECONNREFUSED" }),
+    });
+  }
+
+  async function withMintEnv<T>(overrides: Record<string, string>, run: () => Promise<T>): Promise<T> {
+    const keys = ["KFS_MINT_IMPERSONATE", "KFS_MINT_DIRECT", "KFS_MINT_MAX_ROTATIONS",
+      "KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES", ...Object.keys(overrides)];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    // Skip the impersonate + direct rungs so the mint funnels through the Decodo
+    // rung these cases observe.
+    Object.assign(process.env, { KFS_MINT_IMPERSONATE: "off", KFS_MINT_DIRECT: "off" }, overrides);
+    scanner.__resetTokenTransportStateForTests();
+    advanceProxyEgress.mockClear();
+    rotateProxySession.mockClear();
+    try { return await run(); }
+    finally {
+      for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      scanner.__resetTokenTransportStateForTests();
+    }
+  }
+
+  it("mint transport failure: one is not evidence, a STREAK hands the residential IP over and the retry mints", async () => {
+    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "3", KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "2" }, async () => {
+      let mints = 0;
+      proxyFetch.mockImplementation(async (url: string) => {
+        if (url.includes("/api/v1/auth/session")) {
+          mints++;
+          if (mints <= 2) throw transportFailure();
+          return json(200, { access_token: "minted-on-the-next-ip", expires_in: 2_100 });
+        }
+        return json(200, noService);
+      });
+
+      // First mint: a single "fetch failed" says nothing about the IP, so it
+      // fails closed and holds the session.
+      await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/fetch failed/);
+      expect(mints).toBe(1);
+      expect(advanceProxyEgress, "one transport failure must not move house").not.toHaveBeenCalled();
+
+      // Second mint: the streak reaches the threshold, so the scanner steps to
+      // the next residential IP and retries within the same call.
+      scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
+      await expect(scanner.forceFreshTokenFromApi()).resolves.toBe("minted-on-the-next-ip");
+      expect(mints).toBe(3);
+      expect(advanceProxyEgress).toHaveBeenCalledTimes(1);
+      expect(String(advanceProxyEgress.mock.calls[0][0])).toContain("mint transport");
+      // A transport failure is NOT a denial: the reluctant denial path (a streak
+      // of 401/403s, then a min-interval throttle) is never what recovers this.
+      expect(rotateProxySession).not.toHaveBeenCalled();
+    });
+  });
+
+  it("mint challenge: a non-JSON interstitial NEVER earns an IP change, however often it repeats", async () => {
+    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "3", KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "2" }, async () => {
+      let mints = 0;
+      proxyFetch.mockImplementation(async (url: string) => {
+        if (url.includes("/api/v1/auth/session")) {
+          mints++;
+          // A bot-challenge interstitial: the provider ANSWERED, just not with JSON.
+          return new Response("<html>Attention Required</html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        return json(200, noService);
+      });
+
+      // Three in a row - past the transport threshold, had it counted them.
+      for (let i = 0; i < 3; i++) {
+        scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
+        await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/challenge/);
+      }
+      expect(mints, "one attempt each: a challenge is never retried").toBe(3);
+      expect(advanceProxyEgress, "the scanner never changes identity to get around a challenge").not.toHaveBeenCalled();
+      expect(rotateProxySession).not.toHaveBeenCalled();
+    });
+  });
+
+  it("mint transport failure: KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES=0 turns the handover off", async () => {
+    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "3", KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "0" }, async () => {
+      proxyFetch.mockImplementation(async (url: string) => {
+        if (url.includes("/api/v1/auth/session")) throw transportFailure();
+        return json(200, noService);
+      });
+      for (let i = 0; i < 3; i++) {
+        scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
+        await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/fetch failed/);
+      }
+      expect(advanceProxyEgress).not.toHaveBeenCalled();
+    });
   });
 
   it("345 James Allgood Dr flows through the SHARED scanAddress path as fresh fiber (copper override ignored)", async () => {

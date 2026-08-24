@@ -425,7 +425,7 @@ let _ipBudgetSpent = false;
  */
 let _retireInFlight = false;
 
-async function retireStickyIp(): Promise<void> {
+async function retireStickyIp(reason = "budget"): Promise<void> {
   const proxyUrl = configuredProxyUrl();
   if (!proxyUrl || process.env.DECODO_STICKY === "off") return;
   // Single-flight, for the same reason rotateProxySession is: concurrent
@@ -438,10 +438,31 @@ async function retireStickyIp(): Promise<void> {
     _denialStreak = 0;
     _lastRotateAt = Date.now();
     rebuildDispatcher(proxyUrl); // advances the port, so a new residential IP
-    console.log(`[proxy-fetch] sticky IP retired on budget -> port ${currentStickyPort()}`);
+    console.log(`[proxy-fetch] sticky IP retired (${reason}) -> port ${currentStickyPort()}`);
   } finally {
     _retireInFlight = false;
   }
+}
+
+/**
+ * Step to the next residential IP because THIS one cannot do the work at all -
+ * not because it denied us. The caller has already established that (the mint
+ * path calls this after a streak of failures that never reached the provider:
+ * DNS, connect, TLS, reset, timeout).
+ *
+ * Deliberately the SPENT-BUDGET path, not rotateProxySession: an IP that never
+ * answers produces no denials, so the denial streak it requires would never be
+ * satisfied, and its min-interval throttle can drop the rebuild entirely. This
+ * is a planned handover, so it is neither streak-gated nor throttled - and it is
+ * still bounded by its caller, which only reaches it after N consecutive
+ * failures. A denial, a challenge, or any other real provider answer must NOT
+ * come through here; that remains rotateProxySession's or the caller's business.
+ *
+ * No-op when stickiness is off (the rotating gateway hands out a fresh IP per
+ * request anyway) or when no proxy is configured (local/dev).
+ */
+export function advanceProxyEgress(reason: string): Promise<void> {
+  return retireStickyIp(reason);
 }
 
 export async function rotateProxySession(reason?: string): Promise<void> {

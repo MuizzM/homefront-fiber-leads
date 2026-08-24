@@ -345,6 +345,22 @@ projector, and outbox keys make retries idempotent.
 - Existing bounded retries use jittered exponential backoff for transient
   network failures and typed 403 backpressure.
 - A 401 refresh is attempted once inside the same queue slot.
+- A mint that never reached the provider at all (undici reports DNS, connect,
+  TLS, reset and timeout failures alike as a bare "fetch failed") is not a
+  denial and carries no 401/403, so the denial rotation cannot see it. After
+  `KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES` consecutive such failures (default
+  2) the process hands over to the next sticky residential IP, the same way a
+  spent IP is retired. Any mint that reaches the provider - a success, a denial,
+  a challenge - resets the count. Before this, a run that landed on an
+  unreachable residential IP retried the mint every few seconds indefinitely and
+  wrote nothing; only killing the worker recovered it, because the sticky port
+  offset is randomised per process (observed 2026-08-24 on `run_1_mt7hy05z`:
+  26 consecutive mint failures at verified=610). `scan.token.mint_failed` now
+  carries `kind` (`auth`, `transport`, or `answered`) and the error `cause`
+  chain, which is what makes this diagnosable from the logs alone.
+- A CAPTCHA or other non-JSON challenge remains a stop condition: it fails
+  closed without rotating the session or changing the egress IP. The transport
+  handover above fires only when nothing reached the provider.
 - Mobile polling never overlaps. After two missed progress responses the map
   displays a reconnecting warning while the server job continues.
 - Budgeted market runs are stored in `scan_runs` / `scan_run_targets` and resume

@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, getProxySessionId, currentEgressProxyUrl } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -119,6 +119,80 @@ function isAuthDenialMessage(message: string): boolean {
   return /\b(401|403)\b/.test(message);
 }
 
+/** Flatten an error and its `cause` chain into one searchable string. undici
+ * reports every dispatch failure as a bare "fetch failed" and hides the real
+ * reason (ECONNREFUSED, UND_ERR_CONNECT_TIMEOUT, a rejected tunnel) one or more
+ * `cause` levels down, so the message alone cannot classify anything. */
+function errorChainText(err: unknown): string {
+  const parts: string[] = [];
+  let cur: any = err;
+  for (let depth = 0; cur != null && depth < 4; depth++) {
+    if (typeof cur === "string") { parts.push(cur); break; }
+    for (const field of ["code", "name", "message"] as const) {
+      const value = cur[field];
+      if (typeof value === "string" && value) parts.push(value);
+    }
+    cur = cur.cause;
+  }
+  return parts.join(" | ") || String(err);
+}
+
+// The signatures of a TRANSPORT failure: the request never carried a provider
+// answer at all. An ALLOW-LIST, not "everything that is not a 401/403" — an
+// unfamiliar failure must never earn an identity change, so anything
+// unrecognized is treated as an answer from the provider and fails closed.
+const TRANSPORT_FAILURE_SIGNATURES: RegExp[] = [
+  /\bfetch failed\b/i,
+  /\bsocket hang up\b/i,
+  /\bsocket disconnected\b/i,
+  /\bother side closed\b/i,
+  /\bpremature close\b/i,
+  /\bnetwork error\b/i,
+  /\bconnection (?:refused|reset|closed|timed out)\b/i,
+  /\b(?:connect|headers|body) timeout\b/i,
+  /\boperation was aborted\b/i,
+  /\bTimeoutError\b/,
+  /\bE(?:CONNREFUSED|CONNRESET|CONNABORTED|TIMEDOUT|HOSTUNREACH|NETUNREACH|PIPE|AI_AGAIN|NOTFOUND|PROTO)\b/,
+  /\bUND_ERR_(?:CONNECT_TIMEOUT|SOCKET|HEADERS_TIMEOUT|BODY_TIMEOUT|CLOSED)\b/,
+];
+
+/** Did this mint fail without ever reaching Kinetic? Distinct from an auth
+ * denial (the provider ANSWERED 401/403) and, critically, from a challenge (the
+ * provider answered with a non-JSON interstitial) — see the fail-closed rule on
+ * the Decodo rung below. */
+function isMintTransportFailure(err: unknown): boolean {
+  const text = errorChainText(err);
+  // A Decodo 407 is an ACCOUNT-level auth/limit denial, not a bad residential
+  // IP: the bandwidth governor's circuit breaker owns it, and stepping to the
+  // next port would only hide it. undici buries it under the same generic
+  // "fetch failed" as a real socket error, so exclude it explicitly.
+  if (/\b407\b/.test(text)) return false;
+  return TRANSPORT_FAILURE_SIGNATURES.some(pattern => pattern.test(text));
+}
+
+// A RESIDENTIAL IP THAT CANNOT REACH THE AUTH ENDPOINT ANSWERS NOTHING, FOREVER.
+//
+// Observed live 2026-08-24 on run_1_mt7hy05z: the mint failed 26 times in a row
+// with "fetch failed", the run sat at verified=610 and wrote zero snapshots, and
+// only killing the worker recovered it — because the sticky port offset is
+// randomized per process. The rotation below never fired, because there is no
+// 401/403 anywhere in a transport failure.
+//
+// So COUNT consecutive transport failures and, at the threshold, hand over to
+// the next residential IP exactly the way a spent one does. Bounded and
+// consecutive-only: any mint that reaches the provider at all — a success on any
+// rung, a denial, a challenge — resets the count, and at most one handover
+// happens per mint call. 0 disables it; KFS_MINT_MAX_ROTATIONS=0, the mint-path
+// IP-switching kill switch, disables it too.
+//
+// It cannot churn through the port range either: the pool backs a run of failed
+// mints off exponentially (authorizedTokenPool, 5 s doubling to 120 s), and this
+// fires at most once per mint, so a Kinetic-wide outage - which looks the same
+// from here - costs one port every couple of minutes rather than a storm.
+const mintTransportRotateAfter = () =>
+  Math.max(0, Math.floor(Number(process.env.KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES ?? 2)) || 0);
+let mintTransportFailureStreak = 0;
+
 // One mint attempt over the authorized Decodo transport. The gokinetic token
 // endpoint is a POST that authenticates with the client Basic credential
 // (KFS_AUTH_BASIC, which already carries its "Basic " prefix) and a braze device
@@ -198,7 +272,7 @@ async function mintViaDecodo(): Promise<{ token: string; expiresAt: number }> {
   return { token, expiresAt };
 }
 
-async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
+async function mintAuthorizedTokenViaLadder(): Promise<{ token: string; expiresAt: number }> {
   // DECODO-EXCLUSIVE MINT. The token is minted ONLY through the authorized Decodo
   // residential proxy — the server's own IP is never used. Root cause of the
   // production stall ("8 found · 0 checked · 8 pending"): the long-lived undici
@@ -279,12 +353,18 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
   // 201). So when the wall hits, SWITCH THE DECODO IP and retry, up to
   // KFS_MINT_MAX_ROTATIONS fresh IPs, before deferring to the pool's next tick
   // (which is itself paced by the fleet-shared 403-storm backoff, so this can
-  // never become a hot loop). Bounded so a Kinetic-wide wall can't spin, and
-  // gated to auth denials ONLY: a non-JSON challenge or a Decodo-down transport
-  // error fails closed WITHOUT rotating — this scanner never rotates to evade a
-  // CAPTCHA/challenge. Set KFS_MINT_MAX_ROTATIONS=1 to restore the prior
-  // single-retry behavior, or 0 to disable IP switching on the mint path.
+  // never become a hot loop). Bounded so a Kinetic-wide wall can't spin.
+  //
+  // A CHALLENGE IS NEITHER A DENIAL NOR A TRANSPORT FAILURE. A non-JSON
+  // interstitial — or any other body the provider actually sent us — fails
+  // CLOSED without rotating: this scanner never changes identity to get around
+  // a CAPTCHA/challenge. That rule is untouched by the transport handling
+  // below, which fires only when nothing reached the provider at all.
+  // Set KFS_MINT_MAX_ROTATIONS=1 to restore the prior single-retry behavior, or
+  // 0 to disable IP switching on the mint path entirely, transport handovers
+  // included.
   const maxMintRotations = Math.max(0, Math.floor(Number(process.env.KFS_MINT_MAX_ROTATIONS ?? 3)) || 0);
+  const rotateAfterTransportFailures = mintTransportRotateAfter();
   let lastMintErr: unknown;
   for (let attempt = 0; ; attempt++) {
     try {
@@ -292,13 +372,53 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     } catch (err) {
       lastMintErr = err;
       const message = String((err as any)?.message ?? err);
-      structuredLog("scan.token.mint_failed", { transport: "decodo", attempt, error: message.slice(0, 120) }, "warn");
-      if (!isAuthDenialMessage(message) || attempt >= maxMintRotations) break;
-      // Fresh authorized Decodo session (new residential IP), then retry.
-      await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
+      const authDenial = isAuthDenialMessage(message);
+      const transportFailure = !authDenial && isMintTransportFailure(err);
+      // The three outcomes are logged apart because "fetch failed" alone is what
+      // made the live wedge take several restarts to characterize.
+      structuredLog("scan.token.mint_failed", {
+        transport: "decodo",
+        attempt,
+        kind: authDenial ? "auth" : transportFailure ? "transport" : "answered",
+        error: message.slice(0, 120),
+        cause: errorChainText(err).slice(0, 160),
+      }, "warn");
+      if (authDenial) {
+        mintTransportFailureStreak = 0;
+        if (attempt >= maxMintRotations) break;
+        // Fresh authorized Decodo session (new residential IP), then retry.
+        await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
+        continue;
+      }
+      if (!transportFailure) {
+        // The provider ANSWERED: a CAPTCHA or other non-JSON challenge, a body
+        // with no token, an expiry we cannot use. Fail closed WITHOUT rotating —
+        // this scanner never changes identity to get around a challenge.
+        mintTransportFailureStreak = 0;
+        break;
+      }
+      // Nothing reached the provider at all. One "fetch failed" says nothing
+      // about the IP; a STREAK of them is the evidence.
+      if (rotateAfterTransportFailures === 0
+        || ++mintTransportFailureStreak < rotateAfterTransportFailures) break;
+      mintTransportFailureStreak = 0;
+      if (maxMintRotations === 0) break; // operator disabled mint-path IP switching
+      // Hand over to the next residential IP the same way a spent one does. The
+      // handover stands on its own even when the attempt budget is spent: the
+      // next mint must not land on the same dead IP.
+      await advanceProxyEgress(`mint transport: ${message.slice(0, 40)}`);
+      if (attempt >= maxMintRotations) break;
     }
   }
   throw lastMintErr; // fail closed — pool self-heals next tick under the fleet backoff
+}
+
+async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
+  const minted = await mintAuthorizedTokenViaLadder();
+  // A token in hand — from ANY rung — proves the mint path is alive, so the
+  // consecutive-transport-failure count starts over.
+  mintTransportFailureStreak = 0;
+  return minted;
 }
 
 // ── Global mint gate — serialize mints, never pace them ──────────────────────
@@ -361,6 +481,7 @@ const authorizedTokenPool = new AuthorizedTokenPool({
 export function __resetTokenTransportStateForTests(): void {
   lastMintAt = 0;
   mintChain = Promise.resolve();
+  mintTransportFailureStreak = 0;
 }
 
 /** Called from routes.ts when user pastes a JWT from their browser */

@@ -28,6 +28,7 @@ const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({
 vi.mock("../../server/proxy-fetch", () => ({
   proxyFetch,
   rotateProxySession,
+  advanceProxyEgress: async () => {},
   getProxySessionId: () => "decodo-s1",
   isProxyConnected: () => true,
   getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100, sessionId: "decodo-s1" }),

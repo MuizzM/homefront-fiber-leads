@@ -101,6 +101,58 @@ describe("the per-IP check budget", () => {
   });
 });
 
+describe("an IP that cannot reach the provider at all", () => {
+  // THE MINT WEDGE, observed live 2026-08-24 on run_1_mt7hy05z: a sticky IP that
+  // cannot reach the Kinetic auth endpoint fails every mint with undici's bare
+  // "fetch failed". It never DENIES us, so it never builds the denial streak
+  // rotateProxySession waits for - the run sat at verified=610 through 26
+  // consecutive mint failures and wrote zero snapshots until the worker was
+  // killed, which recovers only because the port offset is randomised per
+  // process. The handover therefore has to be the SPENT-IP path, which is
+  // neither streak-gated nor throttled.
+  it("advanceProxyEgress steps to the next residential IP, with no denial streak behind it", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY_PORT_BASE = "10001";
+    process.env.DECODO_STICKY_PORT_COUNT = "100";
+    process.env.DECODO_ROTATE_AFTER_DENIALS = "8";
+    delete process.env.DECODO_STICKY;
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    const before = mod.getProxyStickyState().port;
+    expect(mod.getProxyStickyState().denialStreak, "a dead IP has denied us nothing").toBe(0);
+
+    await mod.advanceProxyEgress("mint transport: fetch failed");
+    const after = mod.getProxyStickyState().port;
+    expect(after, "the dead IP is handed over on the spot").not.toBe(before);
+    expect(after).toBeGreaterThanOrEqual(10001);
+    expect(after).toBeLessThan(10101);
+
+    // ...and unlike a denial rotation it is not swallowed by the min-interval
+    // throttle, which would otherwise drop every handover inside 4 s.
+    await mod.advanceProxyEgress("mint transport: fetch failed");
+    expect(mod.getProxyStickyState().port, "a second handover still moves").not.toBe(after);
+  });
+
+  it("is a no-op with stickiness off - the rotating gateway already changes IP per request", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY = "off";
+    const mod = await import("../../server/proxy-fetch");
+    await expect(mod.advanceProxyEgress("mint transport: fetch failed")).resolves.toBeUndefined();
+    expect(mod.getProxyStickyState().port).toBeNull();
+  });
+
+  it("only a real transport failure reaches it: a challenge fails closed in the scanner", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
+    // The classifier is an ALLOW-LIST over the error chain, never "anything that
+    // is not a 401/403" - otherwise a challenge, or any unfamiliar provider
+    // answer, would earn an identity change.
+    expect(src).toContain("function isMintTransportFailure(");
+    expect(src, "a Decodo 407 is an account denial for the governor, not a bad IP")
+      .toContain('if (/\\b407\\b/.test(text)) return false;');
+  });
+});
+
 describe("the mint egresses through the sticky proxy when one is in force", () => {
   // The premise of the whole sticky change is that a Kinetic bearer token is
   // bound to its minting IP - since disproved. What survives is narrower and
