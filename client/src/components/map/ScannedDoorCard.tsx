@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { X, Copy, Check, ArrowUpRight } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 
-export type DoorTag = "new_fiber" | "fiber_open" | "tenured_active" | "coming_soon";
+export type DoorTag = "new_fiber" | "fiber_open" | "tenured_active" | "coming_soon" | "unverified";
 
 export interface ScannedDoorCardDoor {
   id: number;
@@ -46,7 +46,12 @@ export const DOOR_TAG_STYLE: Record<DoorTag, { dot: string; badge: string; meani
   fiber_open: {
     dot: "#f59e0b",
     badge: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
-    meaning: "Fiber at the curb with no account on it. Worth a knock.",
+    meaning: "Fiber qualified at the curb with no account on it. Worth a knock.",
+  },
+  unverified: {
+    dot: "#94a3b8",
+    badge: "bg-slate-500/15 text-slate-700 dark:text-slate-300 border-slate-500/30",
+    meaning: "Answered, but no fiber qualification on record. Not a lead until it is re-read.",
   },
 };
 

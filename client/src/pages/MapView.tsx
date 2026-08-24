@@ -625,6 +625,7 @@ const DOOR_TAG_LABEL_CLIENT: Record<string, string> = {
   fiber_open: "Fiber, no account",
   tenured_active: "Already a customer",
   coming_soon: "Coming soon",
+  unverified: "Not verified",
 };
 const SCANNED_DOORS_SOURCE = "scanned-doors";
 const SCANNED_DOORS_LAYER = "scanned-doors-points";
@@ -761,6 +762,7 @@ function ensureTransientMapLayers(map: any): void {
         "circle-radius": [
           "match", ["get", "tag"],
           "tenured_active", 5,
+          "unverified", 4.5,
           "coming_soon", 7,
           6.5,
         ],
@@ -770,11 +772,13 @@ function ensureTransientMapLayers(map: any): void {
           "fiber_open", "#f59e0b",
           "tenured_active", "#3b82f6",
           "coming_soon", "#8b5cf6",
+          "unverified", "#94a3b8",
           "#94a3b8",
         ],
         "circle-opacity": [
           "match", ["get", "tag"],
           "tenured_active", 0.55,
+          "unverified", 0.45,
           0.85,
         ],
         "circle-stroke-width": 1.5,
