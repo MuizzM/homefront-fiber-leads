@@ -557,8 +557,19 @@ services:
       # DEPLOY): all four were "on" (operator, 2026-07-21 full-coverage push).
       # These are the canonical switch lines — YAML keeps the LAST duplicate
       # key, so producer switches must be flipped HERE, never redeclared above.
-      COMING_SOON_PROGRAM: "off"
-      COMING_SOON_WATCHLIST: "off"
+      # 2026-08-24 (operator): coming-soon back ON. These were switched off by
+      # the 2026-08-09 portal-first stop, which stopped ALL producers - not
+      # because this lane misbehaved ("governor-paced + circuit-broken; no wedge
+      # risk flagged" above). With it off nothing re-checks a promised build, and
+      # 552 watchlist doors are overdue a check right now.
+      # The cadence already handles the operator's point that builds light up
+      # EARLY: a door goes hot 14 days BEFORE its promised date and is then
+      # re-read every 3h (COMING_SOON_HOT_HOURS), and undated doors get a
+      # flip-window sweep 2-14 days after first sighting.
+      # Measured the same day on a live cluster near Landis: 28 of 43 doors that
+      # read no_service five weeks earlier now have fiber. Nothing was watching.
+      COMING_SOON_PROGRAM: "on"
+      COMING_SOON_WATCHLIST: "on"
       DAILY_MARKET_REFRESH: "off"
       NEWBUILD_RADAR: "off"
       # CLUSTER EXPANSION — ON (operator, 2026-07-21: "if we found new builds
