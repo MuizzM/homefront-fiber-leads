@@ -136,7 +136,16 @@ export function projectTenuredOpenLeads(
     }
   });
 
-  for (let i = 0; i < candidates.length; i += 250) run(candidates.slice(i, i + 250));
+  // .immediate(), never a plain call: this body READS (existsByKey /
+  // existsByTarget) before it writes, and a deferred BEGIN takes only a read
+  // snapshot - any other connection committing in between fails the INSERT with
+  // SQLITE_BUSY_SNAPSHOT instantly, and busy_timeout does not cover that. On
+  // this box the scanners commit continuously, so "in between" is the normal
+  // case. BEGIN IMMEDIATE takes the write lock up front, where busy_timeout
+  // applies again. The batch stays at 250 so the lock is held for milliseconds
+  // rather than for a whole sweep.
+  // Enforced by tests/unit/deferred-read-write-transactions.test.ts.
+  for (let i = 0; i < candidates.length; i += 250) run.immediate(candidates.slice(i, i + 250));
 
   structuredLog("tenured_leads.projected", {
     tenantId, considered: res.considered, created: res.created,
