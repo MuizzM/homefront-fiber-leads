@@ -171,13 +171,23 @@ function isMintUrl(u: string): boolean {
   catch { return false; }
 }
 
+/**
+ * Has this IP been ridden past its time window?
+ *
+ * The expiry used to live inside stickyProxyUrl(), which is only ever called
+ * when a dispatcher is BUILT - and rebuildDispatcher() advances the port
+ * immediately beforehand, resetting the deadline. So the test was always false
+ * and DECODO_STICKY_MINUTES never fired once, while the deploy manifest claimed
+ * "time-based refresh still cycles IPs in an orderly way". It is checked on the
+ * REQUEST path now, which is where time actually passes.
+ */
+function stickyWindowExpired(): boolean {
+  return process.env.DECODO_STICKY !== "off" && Date.now() > _stickyUntil;
+}
+
 function stickyProxyUrl(base: string): string {
   if (process.env.DECODO_STICKY === "off") return base;
   try {
-    if (Date.now() > _stickyUntil) {
-      advanceStickyPort();
-      console.log(`[proxy-fetch] sticky window expired -> port ${currentStickyPort()}`);
-    }
     const u = new URL(base);
     if (!u.username) return base;
     // An operator who baked their own session into the URL owns the choice.
@@ -299,13 +309,13 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         // denials (see CHECKS_PER_IP for the measurements).
         // The budget counts CHECKS, never mints.
         //
-        // Counting every proxied request built a feedback loop that burned IPs
-        // for nothing: retiring an IP drops its tokens (they are bound to it),
-        // which forces a re-mint, and the mint is itself a proxied request - up
-        // to four with its retry ladder - so it spent the budget it had just
-        // reset and triggered another retirement. Measured live at budget 5:
-        // 58 handovers for 30 checks, entire IPs consumed without a single
-        // check being run on them.
+        // Counting every proxied request burned IPs for nothing: a rotation
+        // forces a re-mint, and a mint is itself a proxied request - up to four
+        // with its retry ladder - so it spent the budget it had just reset and
+        // triggered another retirement. Measured live at budget 5: 58 handovers
+        // for 30 checks, entire IPs consumed without a single check run on them.
+        // (Tokens are portable across IPs, so a handover does not require a
+        // re-mint at all; the pool is retired on its own ~20-answer budget.)
         //
         // The counter is also reset HERE, synchronously at the decision, rather
         // than in advanceStickyPort() inside the async retire - otherwise every
@@ -323,6 +333,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
       // counter must finish on the pool it rode in on.
       if (shouldProactiveRotate) void rotateProxySession("proactive");
       else if (_ipBudgetSpent) { _ipBudgetSpent = false; void retireStickyIp(); }
+      else if (stickyWindowExpired()) void retireStickyIp();
       return res;
     } catch (err: any) {
       if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
@@ -441,7 +452,11 @@ export async function rotateProxySession(reason?: string): Promise<void> {
   // rotations, which is exactly the per-request rotation stickiness exists to
   // prevent. The caller still invalidates its own token either way.
   if (process.env.DECODO_STICKY !== "off" && ++_denialStreak < rotateAfterDenials()) return;
-  _denialStreak = 0;
+  // The streak is spent only once a rotation ACTUALLY happens. Resetting it
+  // here, above the guards below, meant a rotation suppressed by the
+  // single-flight check or the min-interval throttle silently discarded the
+  // denials that had earned it - so the next retirement needed a whole fresh
+  // streak and a burnt IP stayed in service that much longer.
   if (_rotateInFlight) return _rotateInFlight;
   // Min-interval throttle for SEQUENTIAL callers (single-flight above only
   // covers concurrent ones). Within the window we skip the rebuild entirely so
@@ -452,6 +467,7 @@ export async function rotateProxySession(reason?: string): Promise<void> {
   const now = Date.now();
   if (ROTATE_MIN_INTERVAL_MS > 0 && now - _lastRotateAt < ROTATE_MIN_INTERVAL_MS) return;
   _lastRotateAt = now;
+  _denialStreak = 0; // spent, because a rotation is now certain to happen
   const done = doRotate(proxyUrl, reason);
   _rotateInFlight = done;
   void done.catch(() => {}).finally(() => { if (_rotateInFlight === done) _rotateInFlight = null; });

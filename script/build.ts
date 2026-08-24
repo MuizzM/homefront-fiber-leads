@@ -68,7 +68,7 @@ async function buildAll() {
   // wal-maintenance is not an operator script - it is a long-lived sidecar the
   // server forks at boot (server/walMaintenance.ts). It is built here for the
   // same reason: dist/ is all that ships, so the entry must exist there.
-  for (const entry of ["reset-areas", "import-fcc-pins", "load-kinetic-2026", "wal-maintenance"]) {
+  for (const entry of ["reset-areas", "import-fcc-pins", "import-scan-verdicts", "load-kinetic-2026", "wal-maintenance"]) {
     await esbuild({
       entryPoints: [`script/${entry}.ts`],
       platform: "node",
@@ -117,6 +117,19 @@ async function buildAll() {
     console.log("copied Kinetic 2026 footprint to dist/");
   } catch (e) {
     console.warn("Could not copy Kinetic 2026 footprint:", e);
+  }
+
+  // Off-box scan verdicts ride beside import-scan-verdicts.cjs. A scan that
+  // never reaches the field map has not done anything, and the box cannot read
+  // a file that is not in the image.
+  try {
+    await copyFile(
+      "script/scan-verdicts-nc-2026-08.json",
+      "dist/scan-verdicts-nc-2026-08.json"
+    );
+    console.log("copied scan verdicts to dist/");
+  } catch (e) {
+    console.warn("Could not copy scan verdicts:", e);
   }
 
   // FCC addition pins ride beside import-fcc-pins.cjs the same way — the

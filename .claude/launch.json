@@ -180,6 +180,36 @@
       ],
       "port": 5091,
       "autoPort": false
+    },
+    {
+      "name": "homefront-served",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5093 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/16b00132-c36a-40e0-9c7f-2f4b1ded9fc5/scratchpad/r3 NEIGHBORHOOD_SWEEP=off YIELD_ROLLUPS=off ADDRESS_REPAIR_LANE=off SCAN_WORKERS=0 KFS_AUTOMATION_AUTHORIZED=false KFS_TOKEN_POOL_WARM_MIN=0 PROXY_URL= RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5093,
+      "autoPort": true
+    },
+    {
+      "name": "homefront-coverage",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5094 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/16b00132-c36a-40e0-9c7f-2f4b1ded9fc5/scratchpad/r3 NEIGHBORHOOD_SWEEP=off YIELD_ROLLUPS=off ADDRESS_REPAIR_LANE=off SCAN_WORKERS=0 KFS_AUTOMATION_AUTHORIZED=false KFS_TOKEN_POOL_WARM_MIN=0 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5094,
+      "autoPort": true
+    },
+    {
+      "name": "homefront-doors",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5095 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/16b00132-c36a-40e0-9c7f-2f4b1ded9fc5/scratchpad/doorsdb BACKGROUND_RESUME_DELAY_MS=86400000 KFS_MINT_IMPERSONATE=off KFS_MINT_DIRECT=off SMTP_HOST=127.0.0.1 SMTP_PORT=1 PROXY_URL=http://noop:noop@127.0.0.1:1 DECODO_HOST=127.0.0.1 DECODO_PORT=1 DECODO_USER=noop DECODO_PASS=noop KFS_TOKEN_MAINTENANCE_MS=3600000 FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= NEIGHBORHOOD_SWEEP=off YIELD_ROLLUPS=off ADDRESS_REPAIR_LANE=off SCAN_WORKERS=0 KFS_AUTOMATION_AUTHORIZED=false KFS_TOKEN_POOL_WARM_MIN=0 SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5095,
+      "autoPort": false
     }
   ]
 }
