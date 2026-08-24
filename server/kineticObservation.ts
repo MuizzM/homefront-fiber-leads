@@ -263,7 +263,16 @@ function providerServiceFields(raw: unknown) {
     // for the sentinels, which is the honest answer for them.
     completionDate: normalizeDate(flags.completionText),
     newConstInd: str(addr.newConstInd),
-    competitorCompany: str(addr.competitorCompanyName),
+    // "NO COMPETITOR" is the provider's way of saying there is none. Stored
+    // verbatim it becomes a competitor named "NO COMPETITOR" on the door card,
+    // which is worse than showing nothing: 169 leads already read that way.
+    competitorCompany: (() => {
+      const v = str(addr.competitorCompanyName);
+      return v && !/^\s*(NO\s+COMPETITOR|NONE|N\/?A)\s*$/i.test(v) ? v : null;
+    })(),
+    competitorTech: str(addr.competitorTechName),
+    competitorSpeed: Number.isFinite(Number(addr.competitorQualSpeed)) && Number(addr.competitorQualSpeed) > 0
+      ? Math.round(Number(addr.competitorQualSpeed)) : null,
     exchangeId: str(r.exchangeId) ?? str(addr.exchangeId),
   };
 }
