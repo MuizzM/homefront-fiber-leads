@@ -1,0 +1,171 @@
+name: Import scan verdicts (production)
+
+# Put Kinetic verdicts gathered off-box onto the production field map.
+#
+# A scan that never reaches the map has not done anything. script/import-scan-verdicts.ts
+# replays each verdict through persistKineticObservation - the same function the
+# live scanner calls - so every door gets an availability snapshot, gets
+# scan_targets stamped (which under SCAN_ONCE_ONLY means it is never bought a
+# second time), and, when it is NEW FIBER + billing N, becomes a lead via the
+# fresh-fiber projector. That lead is the green pin.
+#
+# Doors match on canonical address key, never on row id: ids in the source
+# database have nothing to do with production's. An address production has
+# never seen is created; one it already has is attached to and left alone. A
+# verdict OLDER than production's own answer for that door is skipped, so a
+# stale import can never overwrite live data.
+#
+# Verified on a production-shaped copy before shipping: 5,446 verdicts, 0
+# failures, and 1,318 of the 1,333 sellable doors ended up with a pin.
+#
+# Same rails as import-fcc-pins.yml: the production SSH key exists only as a
+# repository secret, so the only thing that can reach the box is Actions. The
+# importer must already be in the RUNNING image - deploy a build containing
+# dist/import-scan-verdicts.cjs first, or the run refuses with a clear error.
+#
+# DRY RUN IS THE DEFAULT. `apply: true` additionally requires retyping the org
+# id into `confirm`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Organization id to import into (prod org is 1)"
+        required: true
+        type: string
+      apply:
+        description: "WRITE. Leave unchecked for a dry run that changes nothing."
+        required: false
+        default: false
+        type: boolean
+      confirm:
+        description: "Required when apply is checked: retype the tenant id exactly"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-scan-verdicts-production
+  cancel-in-progress: false
+
+jobs:
+  import:
+    name: ${{ inputs.apply && 'APPLY — import scan verdicts' || 'Dry run — import scan verdicts' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Validate inputs
+        env:
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Whitelist, not sanitize: this string is interpolated into a remote
+          # shell command, so anything but a bare id is refused outright.
+          if [[ ! "$TENANT" =~ ^[0-9]+$ ]]; then
+            echo "tenant must be a positive integer (got: $TENANT)" >&2
+            exit 1
+          fi
+          if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "$TENANT" ]; then
+            echo "Refusing to write: 'confirm' must exactly match 'tenant' ($TENANT)." >&2
+            echo "Re-run with confirm=$TENANT, or leave 'apply' unchecked for a dry run." >&2
+            exit 1
+          fi
+          echo "tenant=$TENANT  apply=$APPLY"
+
+      - name: Run the import on the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              bash -s -- "$TENANT" "$APPLY" <<'REMOTE'
+          set -euo pipefail
+          TENANT="$1"
+          APPLY="$2"
+          [[ "$TENANT" =~ ^[0-9]+$ ]]
+          [[ "$APPLY" =~ ^(true|false)$ ]]
+
+          cd /srv/homefront
+
+          # The image tag the LIVE release is running — deploy.sh records it in
+          # .deployed-tag. Reused rather than rebuilt, so the import runs the
+          # exact code serving traffic.
+          TAG="$(cat .deployed-tag 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            RUNNING="$(docker ps --filter 'ancestor=homefront-app' --format '{{.Image}}' | head -n1)"
+            TAG="${RUNNING##*:}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Could not determine the running image tag — refusing to guess" >&2
+            exit 1
+          fi
+          echo "running against image homefront-app:$TAG"
+
+          # The importer ships inside the image (bundled by script/build.ts).
+          # A live image from before this branch has no dist/import-scan-verdicts.cjs
+          # — fail with the real reason instead of a bare ENOENT.
+          #
+          # Both compose runs get </dev/null: this script IS the remote bash's
+          # stdin, and `compose run` keeps stdin open by default — without the
+          # redirect the existence check swallows the rest of the heredoc and
+          # the import below silently never runs (bash reads EOF, exits 0).
+          if ! APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+              run --rm --no-deps --entrypoint sh app -c 'test -f dist/import-scan-verdicts.cjs' </dev/null; then
+            echo "dist/import-scan-verdicts.cjs is not in the running image — deploy a build containing it first (deploy.yml on this branch's commit)." >&2
+            exit 1
+          fi
+
+          if [ "$APPLY" = "true" ]; then MODE=(--apply); else MODE=(); fi
+
+          # `compose run` on the same volume, never `exec` into the live
+          # container — the app keeps serving and this cannot disturb it.
+          APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+            run --rm --no-deps --entrypoint node app \
+            dist/import-scan-verdicts.cjs --tenant "$TENANT" "${MODE[@]}" </dev/null
+          REMOTE
+
+      - name: What to do next
+        if: success()
+        shell: bash
+        run: |
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            echo "::notice::Import applied. Pins are live on the field map (FCC fresh chip / Latest view). Bulk undo for unworked ones: Map → admin → Remove FCC leads."
+          else
+            echo "::notice::Dry run only — nothing was written. Re-run with apply checked and confirm set to the tenant id to commit."
+          fi
