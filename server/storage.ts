@@ -1706,6 +1706,34 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN last_customer_segment TEXT NOT NULL DEFAULT 'unknown'`,
     `ALTER TABLE scan_targets ADD COLUMN last_customer_confidence TEXT NOT NULL DEFAULT 'low'`,
     `ALTER TABLE scan_targets ADD COLUMN last_customer_signals TEXT NOT NULL DEFAULT '[]'`,
+    // ── The provider's OWN words about a door that is not serviceable YET ────
+    // A door can come back householdSegmentType='TENURED' with billing 'N' and
+    // still be UNSERVICEABLE today: TENURED is a household MARKETING segment,
+    // not a fiber signal. The serviceability answer lives in maxQual and
+    // validationResult, and the build date lives in broadbandService. Measured
+    // on 843 Georgia Oak Ln: segment TENURED, billing N, maxQual 'NO QUAL',
+    // validationResult 'AddressUnserviceableInTerritory', and
+    // broadbandService.estimatedCompletionDt 'JAN-2027'. Reading only the
+    // segment calls that door sellable today. It is not; it is a January 2027
+    // build, which is a different and far more useful thing to know.
+    //
+    // All of this was already PARSED (readBuildFlags, kineticResponseParser)
+    // and then dropped on the floor - nothing persisted it, so no query could
+    // ever answer "what is coming, and when".
+    `ALTER TABLE scan_targets ADD COLUMN last_max_qual TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN last_validation_result TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN future_qual_tech TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN future_technology TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN completion_text TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN completion_date TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN new_const_ind TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN competitor_company TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN exchange_id TEXT`,
+    // "what is due this month" is the whole point of storing the date, so it
+    // gets an index. Partial, because only a small minority of doors carry one.
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_completion
+       ON scan_targets(tenant_id, completion_date)
+       WHERE completion_date IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`,
     // freshPoints() (stateMonitorStore) behind /api/scan/first-seen-live,
     // /api/scan/changes, /api/monitor/* and the alert scheduler filters on
@@ -5627,7 +5655,7 @@ export class Storage implements IStorage {
   }
   // Record a primary-provider scan result. Returns the previous classification so
   // callers can detect a change; publication still requires independent evidence.
-  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; accessId?: string | null; serviceKey?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[]; frontierControl?: string | null }): { prevIsNewFiber: boolean } {
+  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; accessId?: string | null; serviceKey?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[]; frontierControl?: string | null; maxQual?: string | null; validationResult?: string | null; futureQualTech?: string | null; futureTechnology?: string | null; completionText?: string | null; completionDate?: string | null; newConstInd?: string | null; competitorCompany?: string | null; exchangeId?: string | null }): { prevIsNewFiber: boolean } {
     const prev = rawDb.prepare("SELECT last_is_new_fiber, last_fiber_status, last_billing_status FROM scan_targets WHERE id = ?").get(id) as any;
     rawDb.prepare(
       `UPDATE scan_targets SET last_fiber_status=@fs, last_is_new_fiber=@nf, last_billing_status=@bs,
@@ -5638,6 +5666,21 @@ export class Storage implements IStorage {
          last_customer_signals=COALESCE(@customerSignals,last_customer_signals),
          df_address_id=COALESCE(@df, df_address_id),
          frontier_control=COALESCE(@frontierControl, frontier_control),
+         -- Provider serviceability + build-date fields. Written on EVERY
+         -- conclusive result, not COALESCEd away: when a door is finally lit,
+         -- maxQual flips from 'NO QUAL' to a real qual and the stale promise
+         -- must be cleared, or the map would keep advertising a date that has
+         -- already come true. completion_* stay COALESCEd because a later
+         -- response that omits the date should not erase a known one.
+         last_max_qual=@maxQual,
+         last_validation_result=@validationResult,
+         future_qual_tech=@futureQualTech,
+         future_technology=@futureTechnology,
+         completion_text=COALESCE(@completionText, completion_text),
+         completion_date=COALESCE(@completionDate, completion_date),
+         new_const_ind=COALESCE(@newConstInd, new_const_ind),
+         competitor_company=COALESCE(@competitorCompany, competitor_company),
+         exchange_id=COALESCE(@exchangeId, exchange_id),
          converted_to_lead_id=COALESCE(@lead, converted_to_lead_id),
          last_availability_status=COALESCE(@avail, last_availability_status),
          -- first-seen-LIVE marks a proven unavailable→fiber flip (the "Newly Lit" signal).
@@ -5662,6 +5705,11 @@ export class Storage implements IStorage {
       id, fs: r.fiberStatus ?? null, nf: r.isNewFiber ? 1 : 0, bs: r.billingStatus ?? null,
       df: r.dfAddressId ?? null, accessId: r.accessId ?? null, serviceKey: r.serviceKey ?? null,
       frontierControl: r.frontierControl ?? null,
+      maxQual: r.maxQual ?? null, validationResult: r.validationResult ?? null,
+      futureQualTech: r.futureQualTech ?? null, futureTechnology: r.futureTechnology ?? null,
+      completionText: r.completionText ?? null, completionDate: r.completionDate ?? null,
+      newConstInd: r.newConstInd ?? null, competitorCompany: r.competitorCompany ?? null,
+      exchangeId: r.exchangeId ?? null,
       lead: r.convertedToLeadId ?? null,
       avail: r.availabilityStatus ?? null, newly: r.newlyLive ? 1 : 0,
       fiberAvailable: r.fiberAvailable == null ? null : (r.fiberAvailable ? 1 : 0),
