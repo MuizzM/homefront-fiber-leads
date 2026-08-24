@@ -195,3 +195,118 @@ export function isRecheckExemptKind(
     .split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
   return extra.includes(v);
 }
+
+// ── BARREN GROUND: the dead-list, and why it is OFF ─────────────────────────
+//
+// The operator's rule: if a door came back with no fiber and no coming-soon
+// promise, never pay for it again - and if the whole street reads that way,
+// stop buying the street.
+//
+// The ADDRESS half is already law and already works (SCAN_ONCE_ONLY above): a
+// conclusive answer stamps last_scanned_at and the door leaves the
+// never-scanned rotation permanently. That is where the real waste was.
+//
+// The GROUND half - refusing to buy the UNSCANNED neighbours of proven-dead
+// ground - was measured before being trusted, and it does not pay. Ordering
+// every answered NC door by scan time and asking what each rule would have
+// condemned, then weighting by the unscanned doors it would skip:
+//
+//   rule            doors skipped   of those, on ground that HAS fiber
+//   street, min 3        7,845            1,352   17.2%
+//   street, min 5        4,431              829   18.7%
+//   street, min 8        2,290              755   33.0%
+//   cell,   min 5       16,650            4,145   24.9%
+//   cell,   min 8       10,911            3,341   30.6%
+//   cell,   min 12       7,196            2,312   32.1%
+//
+// Between a sixth and a third of everything these rules skip sits on ground
+// that fiber actually reaches. More evidence makes it WORSE, not better,
+// because the units that survive a long all-dead prefix are the big ones, and
+// the big ones are exactly where the unscanned doors are.
+//
+// The cell is the worse unit despite holding more evidence: 0.01 degrees is
+// about a kilometre and crosses several streets, so it is not homogeneous. The
+// street is tighter (17-19% against 25-32%), which makes the operator's own
+// instinct the better of the two.
+//
+// Neither is worth it. The best case - street at min 3 - saves 7,845 of
+// 311,847 never-scanned NC doors, about 2.5% of the scan or 48 minutes of a
+// 32-hour run, in exchange for going blind to 1,352 doors on live fiber
+// streets. The saving is rounding; the loss is inventory.
+//
+// So both default OFF, and the real answer to "do not waste checks" is not a
+// dead-list at all: it is scanning in yield order. Doors in a cell that has
+// already produced fiber convert at about 22.5%; doors with no nearby evidence
+// at about 0.9%. Ordering the same 311,847 doors by that signal puts 42,427
+// high-yield doors in the first 4.4 hours instead of spreading them over 32.
+//
+// The machinery stays because an operator may want it for a market they have
+// deliberately written off, and because the numbers above should be re-derived
+// rather than re-guessed. NOTHING HERE DELETES: these are selector predicates.
+// A door keeps its row and its history and returns the moment real evidence
+// arrives - an FCC vintage diff, a coming-soon promise, or a rep pressing
+// Rescan, all already recheck-exempt above.
+export const BARREN_CELL_MIN_DOORS = 8;
+export const BARREN_STREET_MIN_DOORS = 5;
+
+// Both OFF by default. See the measurements above: each skips more live fiber
+// than it saves in checks.
+export function barrenCellSkipEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return String(env.SCAN_SKIP_BARREN_CELLS ?? "off").trim().toLowerCase() === "on";
+}
+export function barrenStreetSkipEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return String(env.SCAN_SKIP_BARREN_STREETS ?? "off").trim().toLowerCase() === "on";
+}
+
+/** A door carries fiber evidence. One definition, used by both predicates. */
+export const FIBER_EVIDENCE_SQL = `(
+     %A%.last_fiber_status IN ('new_fiber','tenured_fiber','existing_fiber')
+  OR %A%.last_fiber_available = 1
+  OR %A%.last_is_new_fiber = 1 )`;
+
+function fiberEvidence(alias: string): string {
+  return FIBER_EVIDENCE_SQL.replace(/%A%/g, alias);
+}
+
+/**
+ * SQL that is TRUE when this unscanned door sits on ground already proven dead.
+ * Select with `AND NOT ${barrenGroundSql("s")}` to keep it out of a rotation.
+ *
+ * "Proven dead" means: enough answered doors in the same cell (or street), and
+ * not one of them carried fiber, and none is on the coming-soon watchlist. The
+ * coming-soon clause is what keeps a promised build alive - the operator's
+ * exception is honoured at the GROUND level, not just per address.
+ */
+export function barrenGroundSql(
+  alias: string,
+  opts: { cells?: boolean; streets?: boolean; cellMin?: number; streetMin?: number } = {},
+): string {
+  const cells = opts.cells ?? true;
+  const streets = opts.streets ?? false;
+  const cellMin = opts.cellMin ?? BARREN_CELL_MIN_DOORS;
+  const streetMin = opts.streetMin ?? BARREN_STREET_MIN_DOORS;
+  const parts: string[] = [];
+  if (cells) {
+    parts.push(`(${alias}.cell_lat IS NOT NULL AND EXISTS (
+      SELECT 1 FROM scan_targets b
+       WHERE b.tenant_id = ${alias}.tenant_id
+         AND b.cell_lat = ${alias}.cell_lat AND b.cell_lng = ${alias}.cell_lng
+         AND b.last_scanned_at IS NOT NULL
+       GROUP BY b.cell_lat, b.cell_lng
+      HAVING COUNT(*) >= ${cellMin} AND SUM(CASE WHEN ${fiberEvidence("b")} THEN 1 ELSE 0 END) = 0))`);
+  }
+  if (streets) {
+    parts.push(`(${alias}.street_key IS NOT NULL AND EXISTS (
+      SELECT 1 FROM scan_targets b
+       WHERE b.tenant_id = ${alias}.tenant_id
+         AND b.street_key = ${alias}.street_key AND b.city = ${alias}.city
+         AND b.last_scanned_at IS NOT NULL
+       GROUP BY b.street_key, b.city
+      HAVING COUNT(*) >= ${streetMin} AND SUM(CASE WHEN ${fiberEvidence("b")} THEN 1 ELSE 0 END) = 0))`);
+  }
+  if (!parts.length) return "0";
+  // A promised build is never barren, whatever the ground around it says.
+  return `((${parts.join(" OR ")}) AND NOT EXISTS (
+      SELECT 1 FROM coming_soon_watchlist w
+       WHERE w.tenant_id = ${alias}.tenant_id AND w.scan_target_id = ${alias}.id))`;
+}
