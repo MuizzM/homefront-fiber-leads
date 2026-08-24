@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -221,7 +221,9 @@ async function mintRequest(transport: "direct" | "decodo"): Promise<{ token: str
     body: JSON.stringify({ brazeDeviceId: "" }),
     signal: AbortSignal.timeout(10_000),
   } as any;
-  const response = transport === "direct" ? await fetch(kineticTokenUrl(), init) : await proxyFetch(kineticTokenUrl(), init);
+  // "direct" = this box's own IP, so it goes through the gate rather than
+  // global fetch: directCarrierFetch throws unless an operator opted in.
+  const response = transport === "direct" ? await directCarrierFetch(kineticTokenUrl(), init) : await proxyFetch(kineticTokenUrl(), init);
   if (!response.ok) throw new Error(`Auto-auth blocked (${response.status} via ${transport})`);
   let data: Record<string, unknown>;
   try {
@@ -325,12 +327,23 @@ async function mintAuthorizedTokenViaLadder(): Promise<{ token: string; expiresA
     // Tokens are portable. The per-IP limit is on SEARCH volume, not on token
     // provenance - so skipping this rung disabled the best mint path for no
     // reason at all.
-    try {
-      return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
-    } catch (err) {
-      structuredLog("scan.token.mint_failed", { transport: "imp-direct", error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
+    // ...but it egresses from THIS BOX, and the owner directive is that no
+    // carrier request does. The rung is kept, behind the explicit opt-in, so
+    // the measured-best mint path is one env var away rather than deleted.
+    if (directCarrierEgressAllowed()) {
       try {
-        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, currentEgressProxyUrl());
+        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
+      } catch (err) {
+        structuredLog("scan.token.mint_failed", { transport: "imp-direct", error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
+      }
+    }
+    // No proxy resolved means no authorized egress. Passing null here would send
+    // the mint out DIRECT while the log still said "imp-proxy" - the silent leak
+    // this gate exists to prevent - so the rung is skipped instead.
+    const impProxyUrl = currentEgressProxyUrl();
+    if (impProxyUrl) {
+      try {
+        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, impProxyUrl);
       } catch (err2) {
         structuredLog("scan.token.mint_failed", { transport: "imp-proxy", error: String((err2 as any)?.message ?? err2).slice(0, 120) }, "warn");
         // fall through to the legacy paths below
@@ -338,7 +351,10 @@ async function mintAuthorizedTokenViaLadder(): Promise<{ token: string; expiresA
     }
   }
 
-  if (process.env.KFS_MINT_DIRECT !== "off") {
+  // Also this box's own IP, so also behind the opt-in. KFS_MINT_DIRECT=off still
+  // disables it independently, for an operator who wants the impersonate rung
+  // direct but not this one.
+  if (directCarrierEgressAllowed() && process.env.KFS_MINT_DIRECT !== "off") {
     try {
       return await mintRequest("direct");
     } catch (err) {

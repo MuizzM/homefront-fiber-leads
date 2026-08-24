@@ -11,6 +11,11 @@ vi.mock("../../server/proxy-fetch", () => ({
   // The handover a caller asks for when the residential IP cannot reach the
   // provider at all — the spent-IP path, not the denial path.
   advanceProxyEgress,
+  // Direct carrier egress is OFF, exactly as an unconfigured deployment has it
+  // (server/proxy-fetch.ts). directCarrierFetch throws here for the same reason
+  // it throws in production: a test that reaches it is leaking, and should say so.
+  directCarrierEgressAllowed: () => false,
+  directCarrierFetch: async () => { throw new Error("direct carrier egress is off"); },
   getProxySessionId: () => "decodo-s1",
   isProxyConnected: () => true,
   proxyUrlFromEnv: () => "http://redacted@proxy",

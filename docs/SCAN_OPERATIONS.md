@@ -382,6 +382,36 @@ Useful endpoints:
 - `GET /api/scan/:jobId?since=N` — incremental field-scan progress.
 - `GET /api/scan/runs/:id` — resumable market-run progress and cost.
 
+## Egress
+
+All carrier traffic goes through Decodo. Decodo's sticky ports are themselves
+residential IPs, so "residential" and "Decodo" name the same egress; what is not
+Decodo is the machine's own connection.
+
+`CARRIER_DIRECT_EGRESS` (default `off`) is the single switch for unproxied
+carrier requests. With it off:
+
+- both direct mint rungs in `server/scanner.ts` are skipped - the impersonate
+  ladder keeps only its proxied rung, and `mintViaImpersonate` refuses a null
+  proxy at the point of egress;
+- `server/frontierScanner.ts` no longer tries direct first (`FRONTIER_DIRECT`
+  remains an independent off-switch when the opt-in is on);
+- the Kinetic directory poll in `server/kineticMarketCatalog.ts` rides
+  `proxyFetch` like everything else. It previously had no switch at all.
+
+`CARRIER_DIRECT_EGRESS=on` restores the hybrid ladder. Its upside is measured:
+curl-impersonate minted 6/6 direct from a clean server IP, and a direct mint
+spends none of a residential IP's ~20-answer search budget. The reason it is no
+longer the default is that the leak was invisible - the logs recorded that a
+request went out, never that it went out from here - and an IP of our own that
+gets blocked cannot be rotated away from.
+
+`tests/unit/carrier-egress-is-decodo-only.test.ts` holds the line structurally:
+no module that talks to a carrier may call the global `fetch`. Route new carrier
+calls through `proxyFetch`, or through `directCarrierFetch` when the request is
+genuinely meant to leave from this box - that helper refuses unless an operator
+opted in.
+
 ## Upstream authorization and terms
 
 Use an officially licensed API, partner integration, or written authorization

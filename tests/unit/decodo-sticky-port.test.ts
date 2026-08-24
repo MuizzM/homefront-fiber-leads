@@ -195,8 +195,10 @@ describe("the mint egresses through the sticky proxy when one is in force", () =
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
     // Assert on the CALL, not on a line range: KFS_MINT_DIRECT is mentioned in a
     // comment above KFS_MINT_IMPERSONATE, so slicing between them runs backwards.
-    expect(src, "the proxied mint rung uses the sticky egress")
-      .toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, currentEgressProxyUrl())");
+    expect(src, "the proxied mint rung reads the sticky egress")
+      .toContain("const impProxyUrl = currentEgressProxyUrl();");
+    expect(src, "...and passes it, never a null - null is curl egressing from this box")
+      .toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, impProxyUrl)");
     expect(src, "and no mint egresses through the raw rotating gateway")
       .not.toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, proxyUrlFromEnv(process.env))");
   });
@@ -243,7 +245,14 @@ describe("what the measurements actually established", () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
     // imp-direct is the cleanest egress AND spends no residential budget, so it
     // must stay reachable. A revision briefly skipped it on the binding premise.
+    // It is now OPT-IN rather than default - the owner directive is that no
+    // carrier request leaves from this box - so "reachable" means one env var
+    // away, not deleted. The policy itself lives in
+    // tests/unit/carrier-egress-is-decodo-only.test.ts; what matters here is
+    // that a STICKY EGRESS is still not the thing that gates it.
     expect(src).toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null)");
+    expect(src, "and what gates it is the direct-egress opt-in, nothing else")
+      .toContain("if (directCarrierEgressAllowed()) {");
     expect(src, "no sticky-egress guard around the direct rung")
       .not.toContain("sticky egress in force");
   });

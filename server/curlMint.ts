@@ -20,6 +20,7 @@
  */
 import { execFile } from "node:child_process";
 import { unlinkSync } from "node:fs";
+import { directCarrierEgressAllowed } from "./proxy-fetch";
 
 const BIN = process.env.CURL_IMPERSONATE_BIN || "/usr/local/bin/curl-impersonate-chrome";
 
@@ -57,6 +58,12 @@ export async function mintViaImpersonate(
   timeoutMs = 15_000,
 ): Promise<{ token: string; expiresAt: number }> {
   const transport = proxyUrl ? "imp-proxy" : "imp-direct";
+  // A null proxy means curl egresses from THIS BOX. Refused at the point of
+  // egress, not only at the call site: this is the one place that can actually
+  // guarantee it, and a caller that forgets gets an error rather than a leak.
+  if (!proxyUrl && !directCarrierEgressAllowed()) {
+    throw new Error("impersonate mint refused: direct carrier egress is off (CARRIER_DIRECT_EGRESS is not \"on\")");
+  }
   // ONE-CONNECTION human session (verified live 2026-07-26: 4/4 = 100%).
   const origin = url.replace(/\/api\/.*$/, "/");
   const res = await runOneConnection(origin, url, { headers, body }, proxyUrl, timeoutMs);

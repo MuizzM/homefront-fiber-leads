@@ -361,6 +361,41 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
   return fetch(url, opts);
 }
 
+// ── NO CARRIER REQUEST LEAVES FROM THIS BOX ─────────────────────────────────
+// Owner directive 2026-08-24: all carrier traffic goes through Decodo, always.
+//
+// Decodo's sticky ports ARE residential IPs - that is what the account buys -
+// so "residential" and "Decodo" are the same egress here. What is NOT Decodo is
+// the machine's own connection, and until this gate existed three carrier paths
+// used it by DEFAULT: the two direct mint rungs in server/scanner.ts and
+// Frontier's direct-first serviceability call. A fourth, the Kinetic directory
+// poll in server/kineticMarketCatalog.ts, had no switch at all.
+//
+// Direct carrier egress is now opt-IN. A deployment that forgets to set anything
+// gets Decodo, which is the safe direction: the failure mode of the old default
+// was silent (the logs still said the request went out, never that it went out
+// from here), and a blocked home or server IP is not something you can rotate.
+//
+// CARRIER_DIRECT_EGRESS=on restores the hybrid ladder for an operator who wants
+// it back - see docs/SCAN_OPERATIONS.md. It is deliberately ONE switch: the
+// measured tradeoff (curl-impersonate direct mints 6/6 from a clean IP and spend
+// no residential search budget) applies to the whole class, not per call site.
+export function directCarrierEgressAllowed(): boolean {
+  return process.env.CARRIER_DIRECT_EGRESS === "on";
+}
+
+/**
+ * The ONE way to make an unproxied carrier request. Throws unless direct egress
+ * is explicitly allowed, so a caller cannot leak by forgetting to check - the
+ * gate lives at the point of egress rather than at each call site.
+ */
+export async function directCarrierFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  if (!directCarrierEgressAllowed()) {
+    throw new Error("[proxy-fetch] direct carrier egress is off (CARRIER_DIRECT_EGRESS is not \"on\") - route this through proxyFetch");
+  }
+  return fetch(url, init);
+}
+
 // Replace the shared dispatcher with a freshly-built one and bump the session id.
 // New requests open new connections, so Decodo's rotating residential gateway
 // assigns a fresh egress IP — a fresh authorized session.
