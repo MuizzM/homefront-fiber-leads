@@ -137,7 +137,10 @@ Current behavior measured, not assumed (2026-08-24):
 - [x] 2026-08-24 - Milestone 4: full verification, 7,359 pass. Fixed the one
       failure (a PRE-EXISTING deferred read-write transaction at
       tenuredLeadProjector.ts:139, present at 4ad92b1 and unrelated to this work).
-- [ ] FOLLOW-UP - the qualification column is contaminated; see Discoveries.
+- [x] 2026-08-24 - Milestone 5: closed the qualification hole at the ingest as
+      far as it can honestly be closed (body outranks caller), and proved the
+      49-door recovery end to end without rewriting any data.
+- [ ] NEXT - map glyphs + lead filter (qualified-only pins), then Concord.
 
 ## Validation
 
@@ -180,15 +183,43 @@ So `last_fiber_available` is a necessary gate, not a sufficient one: an ingest
 path can set it from a segment label. The remaining work is to stop that at the
 source rather than filter it downstream.
 
+## Decisions (cont.)
+
+**An ingest-level refusal of unbodied availability claims was attempted and
+REVERTED.** The first design refused any `fiberAvailable: true` that arrived
+without a raw body. It was wrong, and the suite said so: 7 tests across
+`mpbox-scan`, `scan-verdict-route` and `scanned-doors`. A second, narrower
+attempt refused only a flip OUT OF a conclusive negative; that was worse in
+principle, because a door going from `no_service` to fiber is the single most
+valuable event this system detects, and the guard would have silently suppressed
+it for every producer that does not ship the payload (MP Box, the verdict route,
+the field map all publish a classified answer without one).
+
+What shipped instead is the half that is unambiguously correct: when a body IS
+present it outranks the caller's claim, so wherever the payload travels a
+"FUTURE QUAL UP TO 1G" answer can never be recorded as available. The protection
+for LEAD PUBLICATION - the thing that actually sends a rep to a door - lives at
+publication: the ledger records the promise from stored evidence and the
+projector refuses any door holding one.
+
+The lesson worth keeping: availability cannot be validated from the observation
+alone, because the ingest cannot see whether the caller derived it from a
+qualification or from a segment label. Only the body can settle it, and only
+publication needs it settled.
+
 ## Result
 
 Milestones 1-3 shipped and verified. A door is published only when it carries a
 positive qualification and no open promise; every open promise is re-read at
 least weekly; a watched door turning on pulls its whole cluster forward.
 
-REMAINING RISK, and it is the important one: `last_fiber_available` can be
-written from a segment label by the observation-ingest path, so the 49 doors
-above still pass the new gate. The projector has no caller in `server/`, so
-nothing is published today - but this must be closed before it is wired, and
-before any large scan (e.g. Concord: 70,470 inventory doors, 67,730 never
-scanned) runs through the same ingest.
+Milestone 5 closed the exploitable half of that risk. `last_fiber_available` can
+still be set from a segment label by a caller that ships no body - that is not
+fixable at the ingest without suppressing genuine flips - but such a door can no
+longer be PUBLISHED once its promise is on the ledger, and any answer that does
+carry a body is now decided by the body.
+
+Operationally that makes the order matter: run
+`backfillFromStoredEvidence` for the tenant BEFORE wiring the projector or
+starting a large scan (Concord: 70,470 inventory doors, 67,730 never scanned),
+so the promises are on the ledger before anything reads the gate.

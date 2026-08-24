@@ -5,6 +5,7 @@ import { getDefaultTenantId, storage } from "./storage";
 import { projectConfirmedFreshLeads, type ProjectionResult } from "./freshFiberProjector";
 import { classifyCustomerOpportunity, classifyFiberAvailabilityTransition } from "@shared/opportunitySegment";
 import { normalizeKineticAddressKey } from "./addressKey";
+import { parseKineticResponse } from "./kineticResponseParser";
 import { structuredLog } from "./structuredLog";
 
 export interface KineticObservation {
@@ -108,12 +109,70 @@ function normalizeObservedAt(value: string | null | undefined): string {
   return parsed == null ? new Date().toISOString() : new Date(parsed).toISOString();
 }
 
+/**
+ * Does the raw body actually support a claim that fiber is available NOW?
+ *
+ * "absent" means no body was supplied, which is not the same as a no.
+ * "unrecognized" means a body was supplied that this parser does not model
+ * (another carrier): the caller did bring evidence, so its claim stands.
+ */
+type Corroboration = "qualified" | "unqualified" | "unrecognized" | "absent";
+
+function corroborateAvailability(raw: unknown): Corroboration {
+  if (raw == null || typeof raw !== "object") return "absent";
+  const body = raw as Record<string, unknown>;
+  const looksKinetic = "validationResult" in body || "broadbandService" in body
+    || "uqualProvisioningResult" in body || "address" in body || "techType" in body;
+  if (!looksKinetic) return "unrecognized";
+  try {
+    return parseKineticResponse(raw).fiberQualified ? "qualified" : "unqualified";
+  } catch {
+    return "unrecognized";
+  }
+}
+
+/**
+ * THE PROVIDER'S OWN WORDS OUTRANK THE CALLER'S CLAIM.
+ *
+ * When a body travels with the observation it decides availability, even if the
+ * caller says otherwise. Measured 2026-08-24: 49 doors (Georgia Oak Ln, Landis
+ * Oak Way, Sawtooth Ct, Sandhill Oak Ct in China Grove) were reported available
+ * by an ad-hoc "sawtooth-cluster" ingest that read only householdSegmentType,
+ * while the only body we hold for them says maxQual "NO QUAL", techType "" and
+ * qualDesc "FUTURE QUAL UP TO 1G" with estimatedCompletionDt NOV-2026. Wherever
+ * the payload travels, that can no longer happen.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO is refuse a claim that arrives without a
+ * body. Most legitimate producers - MP Box, the verdict route, the field map -
+ * publish a classified answer without shipping the payload, and a door going
+ * from no_service to fiber is the single most valuable event in this system.
+ * Refusing unbodied claims suppressed exactly that (7 tests, three suites), so
+ * the protection for LEAD PUBLICATION lives where it belongs instead: the
+ * coming ledger records the promise from stored evidence and the projector
+ * refuses any door holding one. See tests/integration/sawtooth-recovery.test.ts
+ * for that chain walked end to end.
+ */
 function inferAvailability(observation: KineticObservation): boolean | null {
   if (observation.checkFailed === true || observation.blocked === true || observation.apiSource === "failed") return null;
-  if (typeof observation.fiberAvailable === "boolean") return observation.fiberAvailable;
+
   // Legacy address checks may supply an explicit derived isNewFiber boolean.
   // The Sequential ID adapter never derives this from a segment label.
-  if (observation.isNewFiber === true) return true;
+  const claimsAvailable = observation.fiberAvailable === true
+    || (observation.fiberAvailable == null && observation.isNewFiber === true);
+
+  if (claimsAvailable) {
+    // When the body travels with the claim it is the authority - a caller may
+    // not out-vote the provider's own words. When it does not, the claim stands
+    // here and is checked against our stored evidence below (see
+    // needsEvidenceToFlip): most legitimate producers - MP Box, the verdict
+    // route, the field map - publish a classified answer without shipping the
+    // payload, and refusing those outright would throw away real scans.
+    const corroboration = corroborateAvailability(observation.rawResponse);
+    if (corroboration === "unqualified") return false;   // the body itself says no
+    return true;
+  }
+
+  if (typeof observation.fiberAvailable === "boolean") return observation.fiberAvailable;
   const status = clean(observation.fiberStatus).toLowerCase().replace(/[\s-]+/g, "_");
   return status === "no_service" ? false : null;
 }
