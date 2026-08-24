@@ -35,6 +35,7 @@ import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
 import { anfParkedSql } from "@shared/scanPolicy";
 import { nextRecheckAt, readFutureService, type FutureServiceInput, type FutureServiceRead } from "@shared/futureService";
+import { haversineMeters } from "@shared/knock";
 
 const HOUR_MS = 3_600_000;
 
@@ -55,6 +56,10 @@ export const LEDGER_CFG = {
   expireDays: () => bounded(process.env.COMING_SOON_EXPIRE_DAYS, 90, 7, 3650),
   /** Re-read cadence for an UNDATED promise ("Future Fiber Build Planned"). */
   undatedDays: () => bounded(process.env.COMING_LEDGER_UNDATED_DAYS, 30, 1, 365),
+  /** Ceiling on how long ANY open promise goes unread. Weekly by default: a
+   *  stated date is a plan, and a build that lights up early is invisible until
+   *  someone re-reads the door. */
+  maxWaitDays: () => bounded(process.env.COMING_LEDGER_MAX_WAIT_DAYS, 7, 1, 365),
   /** Collections allowed AFTER a promised date has passed before the promise is
    *  written off. Without a cap a provider that keeps restating a stale month is
    *  re-bought on the hot cadence forever - which is the once-only law's own
@@ -114,10 +119,23 @@ export function recordFutureService(
     // Settled, active, or lost: close the promise rather than leaving it to be
     // re-bought forever. `promoted` when fiber actually arrived, else `closed`.
     const status = opts.fiberAvailable === true ? "promoted" : read.isNowActive ? "now_active" : "closed";
-    rawDb.prepare(
+    const closed = rawDb.prepare(
       `UPDATE coming_soon_watchlist SET status=?, last_checked_at=?, updated_at=?, due_at=NULL
         WHERE tenant_id=? AND scan_target_id=? AND status='active'`,
     ).run(status, nowMs, nowMs, tenantId, target.id);
+    // A DOOR WE WERE WATCHING TURNED ON. `changes > 0` is the whole guard: it
+    // proves this door had an OPEN promise, so an ordinary live door that was
+    // never on the list cannot wake anyone's neighbours.
+    if (closed.changes > 0 && opts.fiberAvailable === true) {
+      try { propagateFlip(tenantId, target.id, nowMs); }
+      catch (e: any) {
+        // The flip is a scheduling optimisation. It must never break the write
+        // that records the flip itself.
+        structuredLog("coming_ledger.flip_failed", {
+          tenantId, targetId: target.id, error: String(e?.message ?? e).slice(0, 160),
+        }, "warn");
+      }
+    }
     return read;
   }
 
@@ -153,7 +171,7 @@ export function recordFutureService(
     promisedDate: read.promisedDate, firstSeenMs, lastCheckedMs: observedMs,
     hotHours: LEDGER_CFG.hotHours(), soonHours: LEDGER_CFG.soonHours(), watchHours: LEDGER_CFG.watchHours(),
     hotWindowDays: LEDGER_CFG.hotWindowDays(), flipFromDays: LEDGER_CFG.flipFromDays(), flipToDays: LEDGER_CFG.flipToDays(),
-    undatedDays: LEDGER_CFG.undatedDays(),
+    undatedDays: LEDGER_CFG.undatedDays(), maxWaitDays: LEDGER_CFG.maxWaitDays(),
   }, nowMs);
 
   rawDb.prepare(
@@ -204,6 +222,100 @@ export function recordFutureService(
  * it was a door somebody already bought. Closing them stops the dedup-exempt
  * recheck lane re-buying sold doors. Idempotent and cheap; safe every cycle.
  */
+// ── "If one turns on, turn the whole thing" ───────────────────────────────────
+//
+// Fiber is poured by the street, not by the door. When one WATCHED address turns
+// on, the doors around it are the best-evidenced addresses we own - and under
+// their own cadence each would still wait for its own slot. That is exactly how
+// the Georgia Oak Ln / Landis Oak Way build (32 doors across four street names)
+// stayed invisible for five weeks after it went live.
+//
+// This marks the neighbours DUE at the hot band. It does NOT call the provider:
+// dispatch stays with the sweep's coming lane under its per-cycle budget,
+// admission class, bandwidth governor and circuit breaker. Buying checks from
+// inside the write that records a flip would put provider spend on the money
+// path, where a bad day becomes an outage instead of a slow queue.
+//
+// CLUSTER = RADIUS, NOT STREET NAME. The build above spanned four street names
+// in one subdivision, so a street_key cluster would have woken a quarter of it.
+export const FLIP_CFG = {
+  enabled: () => process.env.COMING_FLIP_PROPAGATION !== "off",
+  radiusM: () => bounded(process.env.COMING_FLIP_RADIUS_M, 800, 50, 5000),
+  fanout: () => Math.floor(bounded(process.env.COMING_FLIP_FANOUT, 200, 1, 2000)),
+};
+
+export interface FlipPropagation {
+  /** Watched neighbours pulled forward to due-now. */
+  seeded: number;
+  /** In-radius neighbours the fan-out cap left behind. Never silent. */
+  dropped: number;
+  candidates: number;
+  radiusM: number;
+}
+
+/**
+ * Pull every active promise within the flip radius forward to due-now.
+ *
+ * Idempotent: a row already due (due_at <= now) is not selected, so repeated
+ * flips in one cluster cannot stack work. Tenant-scoped on both tables.
+ */
+export function propagateFlip(tenantId: number, originTargetId: number, nowMs = Date.now()): FlipPropagation {
+  const radiusM = FLIP_CFG.radiusM();
+  const out: FlipPropagation = { seeded: 0, dropped: 0, candidates: 0, radiusM };
+  if (!FLIP_CFG.enabled()) return out;
+  ensureComingLedgerSchema();
+  if (!ready) return out;
+
+  const origin = rawDb.prepare(
+    `SELECT lat, lng FROM scan_targets WHERE id=? AND tenant_id=?`,
+  ).get(originTargetId, tenantId) as { lat: number | null; lng: number | null } | undefined;
+  if (!origin || origin.lat == null || origin.lng == null) return out; // no geometry, no cluster
+
+  // Cheap bbox prefilter on the stored coordinates, then an exact haversine
+  // refine - a bbox alone over-reaches at the corners and with longitude.
+  const dLat = radiusM / 111_320;
+  const dLng = radiusM / (111_320 * Math.max(0.01, Math.abs(Math.cos((origin.lat * Math.PI) / 180))));
+  const near = rawDb.prepare(
+    `SELECT w.scan_target_id AS id, s.lat, s.lng
+       FROM coming_soon_watchlist w JOIN scan_targets s ON s.id = w.scan_target_id
+      WHERE w.tenant_id = ? AND w.status = 'active' AND w.scan_target_id <> ?
+        AND s.lat IS NOT NULL AND s.lng IS NOT NULL
+        AND s.lat BETWEEN ? AND ? AND s.lng BETWEEN ? AND ?
+        AND (w.due_at IS NULL OR w.due_at > ?)
+      ORDER BY w.promised_date IS NULL, w.promised_date ASC, w.scan_target_id ASC`,
+  ).all(tenantId, originTargetId,
+        origin.lat - dLat, origin.lat + dLat,
+        origin.lng - dLng, origin.lng + dLng, nowMs) as Array<{ id: number; lat: number; lng: number }>;
+
+  const inside = near.filter((r) =>
+    haversineMeters({ lat: origin.lat as number, lng: origin.lng as number }, { lat: r.lat, lng: r.lng }) <= radiusM);
+  out.candidates = inside.length;
+
+  const take = inside.slice(0, FLIP_CFG.fanout());
+  out.dropped = inside.length - take.length;
+
+  if (take.length) {
+    // due_at + band ONLY. `updated_at` means "last coming-soon affirmation" and
+    // drives expireStaleWatches, so bumping it here would keep a dead promise
+    // alive on the strength of a neighbour's good news.
+    const bump = rawDb.prepare(
+      `UPDATE coming_soon_watchlist SET due_at=?, band='hot'
+        WHERE tenant_id=? AND scan_target_id=? AND status='active'`);
+    const tx = rawDb.transaction((ids: number[]) => {
+      for (const id of ids) out.seeded += bump.run(nowMs, tenantId, id).changes;
+    });
+    tx.immediate(take.map((r) => r.id));
+  }
+
+  if (out.seeded > 0 || out.dropped > 0) {
+    structuredLog("coming_ledger.flip_propagated", {
+      tenantId, originTargetId, radiusM,
+      seeded: out.seeded, dropped: out.dropped, candidates: out.candidates,
+    }, out.dropped > 0 ? "warn" : "info");
+  }
+  return out;
+}
+
 export function reconcileNowActiveWatches(tenantId: number, nowMs = Date.now()): number {
   ensureComingLedgerSchema();
   if (!ready) return 0;
@@ -306,6 +418,7 @@ export function markComingChecked(tenantId: number, targetIds: number[], nowMs =
     hotHours: LEDGER_CFG.hotHours(), soonHours: LEDGER_CFG.soonHours(), watchHours: LEDGER_CFG.watchHours(),
     hotWindowDays: LEDGER_CFG.hotWindowDays(), flipFromDays: LEDGER_CFG.flipFromDays(),
     flipToDays: LEDGER_CFG.flipToDays(), undatedDays: LEDGER_CFG.undatedDays(),
+    maxWaitDays: LEDGER_CFG.maxWaitDays(),
   };
   const tx = rawDb.transaction((ids: number[]) => {
     for (const id of ids) {
