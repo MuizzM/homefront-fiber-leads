@@ -233,11 +233,40 @@ describe("what the measurements actually established", () => {
   // perfectly from another. Tokens are PORTABLE. C did worse than B only
   // because IP-2 had already served B's 20 searches - which is the per-IP wear
   // the check budget exists for, not a token problem.
-  it("does not drop the token pool when the egress IP changes", async () => {
+  it("retires the token WITH the egress IP, because the pair is what is throttled", async () => {
+    // THIS ASSERTION USED TO SAY THE OPPOSITE, and the reversal is the point.
+    // It read: invalidateAllForEgressChange - "removed: it forced a pointless
+    // re-mint on every rotation". That was correct when rotation fired every 10
+    // proxied requests (PROACTIVE_ROTATE_EVERY), nowhere near a pair boundary.
+    // It is wrong now that rotation IS the pair boundary: the arm table above
+    // says a token ridden across fresh IPs answers 20/60 while a fresh pair
+    // every 20 answers 60/60. Tokens being PORTABLE (they work from another IP)
+    // was never the same claim as a token being UNSPENT.
     const { AuthorizedTokenPool } = await import("../../server/authorizedTokenPool");
-    const pool: any = new AuthorizedTokenPool({ mint: async () => ({ token: "t", expiresAt: Date.now() + 3_600_000 }) } as any);
-    expect(typeof pool.invalidateAllForEgressChange,
-      "removed: it forced a pointless re-mint on every rotation").toBe("undefined");
+    let minted = 0;
+    const pool: any = new AuthorizedTokenPool({
+      maxSize: 4,
+      warmMinimum: 1,
+      refreshMarginMs: 60_000,
+      maintenanceIntervalMs: 60_000,   // never started; no timer to leak
+      maxChecksPerToken: 20,
+      maxLeasesPerToken: 20,
+      mint: async () => ({ token: `t${++minted}`, expiresAt: Date.now() + 3_600_000 }),
+    } as any);
+    const first = await pool.lease();
+    expect(first.token).toBe("t1");
+    first.release();
+
+    // The egress IP changed underneath us: every live token is now half of a
+    // pair that no longer exists.
+    expect(pool.retireGeneration(), "the live token is retired").toBe(1);
+    expect(pool.retireGeneration(), "and retiring twice is not a re-mint").toBe(0);
+
+    // Lazily: no mint happened at retirement, only when work next arrived.
+    expect(minted, "retirement does not mint").toBe(1);
+    const second = await pool.lease();
+    expect(second.token, "the next check mints a fresh token on the fresh IP").toBe("t2");
+    second.release();
   });
 
   it("does not disable the direct mint rung under a sticky egress", async () => {
@@ -255,6 +284,55 @@ describe("what the measurements actually established", () => {
       .toContain("if (directCarrierEgressAllowed()) {");
     expect(src, "no sticky-egress guard around the direct rung")
       .not.toContain("sticky egress in force");
+  });
+});
+
+describe("one IP, one token, twenty checks", () => {
+  // The two counters used to drift: proxy-fetch counts every proxied check while
+  // the token pool counts distinct addresses, so a "generation" was rarely one
+  // clean pair even though both budgets read 20. The egress owns the boundary
+  // now - its counter is a SUPERSET of the token's, since retries and denials
+  // spend it too, so at equal budgets the IP always trips first and one
+  // direction of coupling is enough.
+  it("fires the generation hook on every real IP change", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY_PORT_BASE = "10001";
+    process.env.DECODO_STICKY_PORT_COUNT = "100";
+    delete process.env.DECODO_STICKY;
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    const fired: string[] = [];
+    mod.setEgressGenerationHook((reason) => { fired.push(reason); });
+    try {
+      const before = mod.getProxyStickyState().port;
+      await mod.advanceProxyEgress("budget spent");
+      expect(mod.getProxyStickyState().port).not.toBe(before);
+      expect(fired, "the token generation ends with the IP").toHaveLength(1);
+      expect(fired[0]).toContain(`port ${mod.getProxyStickyState().port}`);
+
+      // A denial rotation is an IP change too, so it ends the generation as well.
+      process.env.DECODO_ROTATE_AFTER_DENIALS = "1";
+      mod.__resetRotationStateForTests();
+      await mod.rotateProxySession("403");
+      expect(fired.length, "a denial rotation retires the pair too").toBe(2);
+    } finally {
+      mod.setEgressGenerationHook(() => {});
+    }
+  });
+
+  it("does not fire when the IP did not actually change", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY = "off";   // rotating gateway: no sticky port to advance
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    const fired: string[] = [];
+    mod.setEgressGenerationHook((reason) => { fired.push(reason); });
+    try {
+      await mod.rotateProxySession("403");
+      expect(fired, "no sticky port advanced, so no generation ended").toEqual([]);
+    } finally {
+      mod.setEgressGenerationHook(() => {});
+    }
   });
 });
 

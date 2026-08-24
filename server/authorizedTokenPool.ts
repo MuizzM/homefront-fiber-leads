@@ -290,6 +290,37 @@ export class AuthorizedTokenPool {
     }
   }
 
+  /**
+   * End the current token generation: every live token was minted against an
+   * egress IP that has just been replaced, and Kinetic throttles the (token, IP)
+   * PAIR, so a token that outlives its IP is half of a pair that no longer
+   * exists. Measured: fresh token + fresh IP every 20 checks answered 60/60,
+   * against 20/60 for a token ridden across fresh IPs.
+   *
+   * LAZY on purpose. Slots go EMPTY and are re-minted on the next lease, so a
+   * rotation costs ONE mint when the next check arrives rather than a warm-pool
+   * refill. That is why the warm reserve belongs at 1 under this rule: a crowd
+   * of warm tokens would all die at the same instant, unused.
+   *
+   * An earlier revision carried invalidateAllForEgressChange and removed it as
+   * "a pointless re-mint on every rotation". That was correct THEN - rotation
+   * fired every 10 proxied requests, nowhere near a pair boundary. It is wrong
+   * now: rotation IS the pair boundary.
+   */
+  retireGeneration(): number {
+    let retired = 0;
+    for (const slot of this.slots) {
+      if (!slot.token) continue;
+      retired++;
+      slot.token = null;
+      slot.expiresAt = 0;
+      slot.state = "EMPTY";
+      slot.addressKeys.clear();
+      slot.leases = 0;
+    }
+    return retired;
+  }
+
   install(token: string, expiresAt: number): void {
     const slot = this.slots[0] ?? this.createSlot();
     slot.token = token;

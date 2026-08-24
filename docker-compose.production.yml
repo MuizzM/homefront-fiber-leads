@@ -505,6 +505,17 @@ services:
       # times later. 1000 was the setting that produced the 33% arm.
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "20"
       KFS_TOKEN_MAX_CHECKS: "20"
+      # ONE IP, ONE TOKEN, TWENTY CHECKS, then both switch. The pair is what
+      # Kinetic throttles, so DECODO_CHECKS_PER_IP above is the AUTHORITATIVE
+      # number: when the IP retires, the token retires with it (the egress
+      # counter is a superset of the token's - retries and denials spend it too -
+      # so at equal budgets the IP always trips first). The two KFS_TOKEN_MAX_*
+      # values are backstops for the rare case a token caps first, not a second
+      # schedule.
+      # Warm reserve 1: every warm token dies with the egress IP, so a reserve of
+      # 40 minted 39 tokens per generation that never answered anything. One
+      # ready token is what a leaser needs, and it carries 20 concurrent leases.
+      KFS_TOKEN_POOL_WARM_MIN: "1"
       SCAN_TARGET_MERGE: "off"
       # ── Heavy-migration gates — BOTH required to keep the app off the
       # scan_targets table rebuild (949k rows) that wedged the event loop twice.

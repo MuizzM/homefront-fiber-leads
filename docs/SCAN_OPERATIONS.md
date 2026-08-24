@@ -382,6 +382,35 @@ Useful endpoints:
 - `GET /api/scan/:jobId?since=N` — incremental field-scan progress.
 - `GET /api/scan/runs/:id` — resumable market-run progress and cost.
 
+## One IP, one token, twenty checks
+
+A residential IP answers about 20 Kinetic checks and then starts refusing, and a
+token is spent after about the same. What is actually throttled is the PAIR.
+Measured against the live search API, 60 addresses per arm, reading the response
+body rather than the status:
+
+| arm | real answers |
+| --- | --- |
+| one token, fresh IP every 20 | 20/60 (33%) |
+| one IP, fresh token every 20 | 35/60 (58%) |
+| fresh token AND fresh IP every 20 | 60/60 (100%) |
+
+So the pair is retired as a pair. `DECODO_CHECKS_PER_IP` (20) is the
+authoritative number: when the sticky IP retires, the token generation retires
+with it, wherever the change came from - the spent check budget, a denial
+streak, the sticky time window, or a transport handover. `KFS_TOKEN_MAX_CHECKS`
+and `KFS_TOKEN_MAX_LEASES_PER_SLOT` are backstops for the rare case a token caps
+first, not a second schedule; the egress counter is a superset of the token's,
+since retries and denials spend it too, so at equal budgets the IP trips first.
+
+Retirement is lazy: slots go empty and the next check mints one fresh token
+against the fresh IP. That is why `KFS_TOKEN_POOL_WARM_MIN` is 1 - a larger warm
+reserve mints tokens that die with the IP without ever answering anything.
+
+Before this, both counters read 20 but ran on different event streams, so the
+generations drifted out of phase and a "fresh" token was routinely paired with a
+half-spent IP.
+
 ## Egress
 
 All carrier traffic goes through Decodo. Decodo's sticky ports are themselves

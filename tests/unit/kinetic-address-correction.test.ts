@@ -16,6 +16,7 @@ vi.mock("../../server/proxy-fetch", () => ({
   // Direct carrier egress is OFF, exactly as an unconfigured deployment has it
   // (server/proxy-fetch.ts). directCarrierFetch throws here for the same reason
   // it throws in production: a test that reaches it is leaking, and should say so.
+  setEgressGenerationHook: () => {},
   directCarrierEgressAllowed: () => false,
   directCarrierFetch: async () => { throw new Error("direct carrier egress is off"); },
   getProxySessionId: () => "decodo-s1",

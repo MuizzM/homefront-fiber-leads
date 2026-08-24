@@ -1,7 +1,19 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
-const { proxyFetch, rotateProxySession, advanceProxyEgress } = vi.hoisted(() => ({ proxyFetch: vi.fn(), rotateProxySession: vi.fn(async () => {}), advanceProxyEgress: vi.fn(async () => {}) }));
+const { proxyFetch, rotateProxySession, advanceProxyEgress, setEgressGenerationHook, egressHook } = vi.hoisted(() => {
+  // The scanner registers its egress-change callback at IMPORT. clearMocks wipes
+  // the call record before every test, so the callback is kept here instead of
+  // being read back off the spy.
+  const egressHook: { current: ((reason: string) => void) | null } = { current: null };
+  return {
+    proxyFetch: vi.fn(),
+    rotateProxySession: vi.fn(async () => {}),
+    advanceProxyEgress: vi.fn(async () => {}),
+    egressHook,
+    setEgressGenerationHook: vi.fn((cb: (reason: string) => void) => { egressHook.current = cb; }),
+  };
+});
 vi.mock("../../server/proxy-fetch", () => ({
   // Decodo-exclusive: mint AND search both funnel through proxyFetch (the Decodo
   // transport), observable through one call log. rotateProxySession is the
@@ -14,6 +26,8 @@ vi.mock("../../server/proxy-fetch", () => ({
   // Direct carrier egress is OFF, exactly as an unconfigured deployment has it
   // (server/proxy-fetch.ts). directCarrierFetch throws here for the same reason
   // it throws in production: a test that reaches it is leaking, and should say so.
+  // Captured, so a test can fire the egress change the scanner registered for.
+  setEgressGenerationHook,
   directCarrierEgressAllowed: () => false,
   directCarrierFetch: async () => { throw new Error("direct carrier egress is off"); },
   getProxySessionId: () => "decodo-s1",
@@ -274,6 +288,35 @@ describe("Kinetic scanner transport hardening", () => {
       }
       expect(advanceProxyEgress).not.toHaveBeenCalled();
     });
+  });
+
+  it("an egress change ends the token generation: the next check mints a fresh pair", async () => {
+    // ONE IP, ONE TOKEN, TWENTY CHECKS. The scanner registers for the egress
+    // change at import; firing that callback is exactly what proxy-fetch does
+    // when the sticky port advances.
+    expect(typeof egressHook.current, "the scanner registers for egress changes").toBe("function");
+    const onEgressChange = egressHook.current!;
+
+    let mints = 0;
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/api/v1/auth/session")) {
+        mints++;
+        return json(200, { access_token: `minted-${mints}`, expires_in: 2_100 });
+      }
+      return json(200, noService);
+    });
+
+    // A healthy token is REUSED - the pool does not re-mint per check.
+    scanner.setManualToken("token-from-the-current-pair");
+    await expect(scanner.refreshTokenFromApi()).resolves.toBe("token-from-the-current-pair");
+    await expect(scanner.refreshTokenFromApi()).resolves.toBe("token-from-the-current-pair");
+    expect(mints, "reuse, not a mint per check").toBe(0);
+
+    // ...until the IP underneath it changes. That token is now half of a pair
+    // that no longer exists, so the next check mints against the fresh IP.
+    onEgressChange("egress -> port 10042");
+    await expect(scanner.refreshTokenFromApi()).resolves.toBe("minted-1");
+    expect(mints).toBe(1);
   });
 
   it("345 James Allgood Dr flows through the SHARED scanAddress path as fresh fiber (copper override ignored)", async () => {

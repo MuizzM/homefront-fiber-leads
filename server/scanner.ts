@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -34,17 +34,24 @@ import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from
 // ─────────────────────────────────────────────────────────────────────────────
 
 const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 200);
-// Keep enough authorized Decodo sessions warm to cover the full concurrent
-// workload (≈maxConcurrency 200 ÷ maxLeasesPerToken 10 = 20, plus headroom so a
-// burst never waits on a mint). Unlimited Decodo budget → mint generously; token
-// scarcity must never stall a priority check. Warm reserve 40 so the frequent
-// token switching (10 leases/token) never leaves a lease waiting on a mint.
-// MULTI-PROCESS: the pool is per-process, so N cluster workers each warm their own
-// reserve. Divide the warm budget across workers (min 4/worker) — otherwise 4 workers
-// × 40 = 160 concurrent session mints at boot, an auth-storm against Decodo's window.
+// WARM RESERVE 1, under the one-IP-one-token rule.
+//
+// The old reserve was 40 (min 4 per worker), sized to "cover the full concurrent
+// workload so a burst never waits on a mint". That reasoning assumed a token
+// outlives the egress it was minted against. It does not any more: an IP change
+// ends the generation, so a crowd of warm tokens is a crowd that dies together,
+// unused, and every one of them cost a mint through the serialized gate.
+//
+// One ready token is also all a leaser ever needs - ensureWarm in
+// authorizedTokenPool returns the moment ONE is ready, and a single token
+// carries KFS_TOKEN_MAX_LEASES_PER_SLOT concurrent leases. Raise
+// KFS_TOKEN_POOL_WARM_MIN only if leases are measurably waiting on mints.
+// MULTI-PROCESS: the pool is per-process, so the reserve is still divided across
+// cluster workers - N workers each warming a big reserve was an auth-storm
+// against Decodo's window at boot.
 const _scanWorkerCount = Math.max(1, resolveScanWorkerCount());
-const configuredWarmTokens = Math.max(4,
-  Math.floor(Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 40) / _scanWorkerCount));
+const configuredWarmTokens = Math.max(1,
+  Math.floor(Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 1) / _scanWorkerCount));
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 
@@ -490,6 +497,15 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   // did: scanAddressDirect fails CLOSED (unresolved, never a no-service verdict)
   // whenever no authorized session can actually be obtained.
   mint: () => gatedMint(),
+});
+
+// ONE IP, ONE TOKEN, TWENTY CHECKS. The egress owns the boundary (its check
+// counter is a superset of the token's - retries and denials spend it too), so
+// when the IP changes, the token generation ends with it. See the measurement
+// table at setEgressGenerationHook in server/proxy-fetch.ts.
+setEgressGenerationHook((reason) => {
+  const retired = authorizedTokenPool.retireGeneration();
+  if (retired) structuredLog("scan.token.generation_retired", { retired, reason }, "info");
 });
 
 /** Test-only: reset the module-level mint-gate state so unit tests don't leak

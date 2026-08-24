@@ -396,6 +396,29 @@ export async function directCarrierFetch(url: string, init: RequestInit = {}): P
   return fetch(url, init);
 }
 
+// ── ONE IP, ONE TOKEN, TWENTY CHECKS ────────────────────────────────────────
+// Owner directive 2026-08-24, and the measurement agrees. Against the live
+// search API, 60 addresses per arm, reading the response BODY:
+//
+//   one TOKEN, fresh IP every 20 ......... 20/60   (33%)
+//   one IP, fresh TOKEN every 20 ......... 35/60   (58%)
+//   fresh TOKEN + fresh IP every 20 ...... 60/60   (100%)
+//
+// What Kinetic throttles is the PAIR, so the pair is what has to be retired -
+// together, not on two counters that happen to share the number 20. They used
+// to drift: this module counts every proxied check, while the token pool counts
+// distinct addresses, so a generation was rarely one clean (IP, token).
+//
+// The IP is the authoritative half. Its counter is a SUPERSET of the token's -
+// retries and denials spend it too - so at equal budgets the IP always reaches
+// 20 first, and coupling in this one direction is enough. Registered by
+// server/scanner.ts; a no-op until then, and never called during a rebuild that
+// does not actually change the IP.
+let _generationHook: ((reason: string) => void) | null = null;
+export function setEgressGenerationHook(hook: (reason: string) => void): void {
+  _generationHook = hook;
+}
+
 // Replace the shared dispatcher with a freshly-built one and bump the session id.
 // New requests open new connections, so Decodo's rotating residential gateway
 // assigns a fresh egress IP — a fresh authorized session.
@@ -404,9 +427,18 @@ function rebuildDispatcher(proxyUrl: string): void {
   // A rebuild is almost always denial-driven (403/socket reset): the whole
   // point is a FRESH egress IP. Force a new sticky id here — the time-based
   // window only applies to undisturbed operation, never to a rotate.
-  if (process.env.DECODO_STICKY !== "off") advanceStickyPort();
+  const ipChanged = process.env.DECODO_STICKY !== "off";
+  if (ipChanged) advanceStickyPort();
   _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
   _sessionSeq++;
+  // A new IP ends the generation: the token minted against the old one is half
+  // of a pair that no longer exists. One call site, so the rule is structural -
+  // every path that changes the IP (budget spent, denial streak, sticky window,
+  // transport handover) retires the token with it.
+  if (ipChanged && _generationHook) {
+    try { _generationHook(`egress -> port ${currentStickyPort()}`); }
+    catch { /* the token pool must never break the transport */ }
+  }
   // Graceful, fire-and-forget close of the old pool so in-flight requests finish
   // on it while new traffic moves to the fresh session. Never awaited.
   if (old && typeof old.close === "function") { old.close().catch(() => {}); }
