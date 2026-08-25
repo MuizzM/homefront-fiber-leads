@@ -136,7 +136,11 @@ export function projectTenuredOpenLeads(
     }
   });
 
-  for (let i = 0; i < candidates.length; i += 250) run(candidates.slice(i, i + 250));
+  // .immediate(): this batch READS (existsByKey/existsByTarget) before it WRITES,
+  // and the scanners commit continuously on this box. Under a deferred BEGIN the
+  // insert would throw SQLITE_BUSY_SNAPSHOT the moment any sibling commits after
+  // the batch's read snapshot, instantly and without a busy_timeout retry.
+  for (let i = 0; i < candidates.length; i += 250) run.immediate(candidates.slice(i, i + 250));
 
   structuredLog("tenured_leads.projected", {
     tenantId, considered: res.considered, created: res.created,

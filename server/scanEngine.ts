@@ -29,6 +29,7 @@ import { rawDb } from "./db";
 import { isRecheckExemptKind } from "@shared/scanPolicy";
 import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
+import { NEEDS_FIX_NOTE, requeueReasonFor, type RequeueReason } from "@shared/scanRequeueReason";
 import {
   classifyCustomerOpportunity,
   classifyFiberAvailabilityTransition,
@@ -193,7 +194,7 @@ const PROVIDER_BLOCK_BACKOFF_MS = Math.max(0, Number(process.env.PROVIDER_BLOCK_
 // (one event per 30s fleet-wide per process — never per batch).
 const BREAKER_WAIT_MS = Math.max(50, Number(process.env.SCAN_BREAKER_WAIT_MS) || 2_000);
 let lastBreakerWaitLogAt = 0;
-function logBreakerWait(runId: string): void {
+function logBreakerWait(runId: string, tenantId: number): void {
   const now = Date.now();
   if (now - lastBreakerWaitLogAt <= 30_000) return;
   lastBreakerWaitLogAt = now;
@@ -201,6 +202,17 @@ function logBreakerWait(runId: string): void {
     runId, waitMs: BREAKER_WAIT_MS,
     reason: "shared proxy circuit COOLDOWN - yielding instead of claiming",
   }, "warn");
+  // Also into the run's DURABLE event stream, on the same 30s throttle. A run
+  // parked behind the breaker claims nothing, requeues nothing, and moves no
+  // counter — in the event log it is indistinguishable from a wedged worker
+  // unless it says so. That ambiguity is what made two live stalls (2026-08-24)
+  // take several restarts to characterise.
+  try {
+    appendFiberEvent({
+      tenantId, runId, eventType: "run.breaker_wait",
+      payload: { reason: "breaker_open" satisfies RequeueReason, waitMs: BREAKER_WAIT_MS },
+    });
+  } catch { /* diagnostics must never stop a run */ }
 }
 function dedupSkipSecondsForRun(kind: string): number {
   // One predicate decides exemption (see @shared/scanPolicy isRecheckExemptKind);
@@ -319,7 +331,7 @@ export async function runScanWorker(
       if (run.verified + run.failed >= run.budget) {
         // Budget spent — close the leftover queued tail so the stranded-tail
         // drain can't re-open this run into an infinite livelock.
-        try { terminalizeQueuedTail(runId, "superseded: run budget exhausted"); } catch { /* next tick covers it */ }
+        try { terminalizeQueuedTail(runId, "superseded: run budget exhausted", { tenantId, reason: "budget" }); } catch { /* next tick covers it */ }
         finish(run, "done");
         return;
       }
@@ -337,7 +349,7 @@ export async function runScanWorker(
       // Unlimited mode: isProxyCircuitOpen() is always false → zero change.
       if (isProxyCircuitOpen()) {
         touchRun(runId);
-        logBreakerWait(runId);
+        logBreakerWait(runId, tenantId);
         await new Promise((r) => setTimeout(r, BREAKER_WAIT_MS));
         continue; // re-check run status at the loop top (a cancel lands promptly)
       }
@@ -405,6 +417,12 @@ export async function runScanWorker(
               // returns that as a real kinetic_live answer. No retry-count limit:
               // it recurs until a valid response or an explicit cancel.
               const category = result.blocked ? "provider_blocked" : "inconclusive";
+              // The MACHINE-READABLE reason, from the scanner's own typed stamp.
+              // `category` stays the two coarse buckets operators already query;
+              // `reason` is what separates a spent residential IP from a dead
+              // egress from a failed mint — the distinction that made two live
+              // runs (2026-08-24) undiagnosable without it.
+              const reason = requeueReasonFor(result);
               if (result.blocked) blockedInBatch++; // 403/throttle — feeds storm back-off
               const attempt = targetAttempt(runId, t.targetId);
               // A throttle/transport block AND a generic transient check failure retry
@@ -414,7 +432,13 @@ export async function runScanWorker(
               // it every second is wasteful and keeps the run spinning forever. The
               // address is still preserved + retried, just on a slower cadence, so the
               // run can drain instead of stranding a perpetually-requeued tail.
-              const addressNotReady = !result.blocked && /AddressNeedsFix|AddressSuggestions/i.test(result.notes || "");
+              // Same responses as before: the scanner stamps this code on exactly
+              // the notes NEEDS_FIX_NOTE matches, and the fallback re-runs that
+              // same shared pattern for a checker that predates the stamp. The
+              // regex-on-notes this replaces was forbidden by ScanResult's own
+              // contract and could drift from the producer's test.
+              const addressNotReady = !result.blocked
+                && (reason === "inconclusive_address_needs_fix" || NEEDS_FIX_NOTE.test(result.notes || ""));
               // Target-level ledger of needs-fix non-answers. Only counts while the
               // address has never had a conclusive answer; a real answer later
               // resets it to 0 (recordScanTargetResult).
@@ -459,17 +483,19 @@ export async function runScanWorker(
                 // Unlimited budget → recheck new/not-yet-cataloged addresses far more
                 // eagerly (cap 1h, was 6h) so a NEW FIBER activation surfaces fast.
                 const backoffSec = addressNotReady ? Math.min(3600, 20 * Math.pow(2, Math.min(attempt, 8))) : 0;
-                requeueRunTarget(runId, t.targetId, backoffSec);
+                // requeueRunTarget emits the address.requeued audit event itself,
+                // so the reason can never be forgotten at a call site.
+                requeueRunTarget(runId, t.targetId, backoffSec, {
+                  tenantId, reason, category, attempt,
+                  httpStatus: result.httpStatus ?? null,
+                  detail: result.notes || "transient provider error",
+                });
                 addRunBytes(runId, bytes); // the failed attempt still cost its request bytes
                 recordFiberFailure({
                   tenantId, runId, targetId: t.targetId, category,
                   message: result.notes || "transient provider error", attempt, retryable: true,
                 });
                 recordProviderOutcome(tenantId, false, result.notes);
-                appendFiberEvent({
-                  tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
-                  payload: { category, attempt },
-                });
               }
             } else {
               // VALID provider response — a conclusive serviceability answer
@@ -487,17 +513,19 @@ export async function runScanWorker(
             // not hot-loop claim→120s wait→timeout→immediate re-claim and spin its run.
             const admissionTimedOut = err instanceof AdmissionTimeoutError || err?.name === "AdmissionTimeoutError";
             const backoffSec = admissionTimedOut ? Math.min(120, 15 * Math.max(1, attempt)) : 0;
-            requeueRunTarget(runId, t.targetId, backoffSec);
+            requeueRunTarget(runId, t.targetId, backoffSec, {
+              tenantId,
+              // A saturated coordinator and a crashed worker back off differently
+              // and are fixed differently; they must not share one code.
+              reason: admissionTimedOut ? "admission_timeout" : "worker_exception",
+              category: "provider_exception", attempt, detail: message,
+            });
             addRunBytes(runId, DEFAULT_BYTES_PER_CHECK); // request bytes were still spent
             recordFiberFailure({
               tenantId, runId, targetId: t.targetId, category: "provider_exception",
               message, attempt, retryable: true,
             });
             recordProviderOutcome(tenantId, false, message);
-            appendFiberEvent({
-              tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
-              payload: { category: "provider_exception", attempt },
-            });
             // If persistence failed after the engine emitted `saving`, make the
             // latest inspector state terminal. Otherwise a recovered/requeued
             // target looks permanently stuck at Saving even though the worker
@@ -680,7 +708,6 @@ function applyCheck(
     tenantId,
     t,
     result,
-    false,
     customer,
     fiberTransition,
     latencyMs,
@@ -899,7 +926,6 @@ function persistSnapshot(
     lng: number | null;
   },
   result: ScanResult,
-  checkFailed: boolean,
   customer: ReturnType<typeof classifyCustomerOpportunity>,
   transition: ReturnType<typeof classifyFiberAvailabilityTransition>,
   latencyMs: number,
@@ -942,17 +968,29 @@ function persistSnapshot(
   } catch {
     /* append the normalized snapshot even if the legacy evidence row fails */
   }
-  // ONE shared writer (crash-idempotent on the run/target attempt key). A failed
-  // attempt is retained here for diagnostics but conclusive=0, so it never becomes
-  // the current serviceability state (recordScanTargetResult, called only on a
-  // conclusive answer, owns that).
+  // ONE shared writer, crash-idempotent on the run/target attempt key. Every row
+  // written here is CONCLUSIVE: persistSnapshot has exactly one caller
+  // (applyCheck), and applyCheck is only reached for a valid provider response.
+  //
+  // A FAILED attempt deliberately writes NO row, and cannot be made to. The
+  // attempt key is UNIQUE — idx_availability_snapshots_attempt on
+  // (tenant_id, run_id, scan_target_id), storage.ts — and a requeued target
+  // retries inside the SAME run, so a first-attempt failure row would take the
+  // slot and the eventual conclusive answer would be silently dropped by the
+  // orIgnore insert. That is the opposite of diagnosable.
+  //
+  // Retry history therefore lives where it can be append-only, one row per
+  // attempt: fiber_job_failures (category + full message) and fiber_job_events
+  // `address.requeued` (machine-readable reason + HTTP status + detail, see
+  // shared/scanRequeueReason.ts). An operator asking "702 provider calls, zero
+  // snapshots, why?" reads those, not this table.
   recordAvailabilitySnapshot({
     tenantId,
     scanTargetId: t.targetId,
     runId,
     checkedAt: Date.now(),
-    conclusive: !checkFailed,
-    fiberAvailable: checkFailed ? null : result.fiberAvailable,
+    conclusive: true,
+    fiberAvailable: result.fiberAvailable,
     fiberStatus: result.fiberStatus,
     maxDownloadMbps: result.maxDownloadMbps,
     serviceStatus: result.notes,
@@ -969,7 +1007,7 @@ function persistSnapshot(
     competitorName: result.competitorName,
     competitorTech: result.competitorTech,
     competitorSpeedMbps: result.competitorSpeedMbps,
-    error: checkFailed ? result.notes : null,
+    error: null, // conclusive by construction — see the contract above
     blocked: result.blocked,
     latencyMs,
     orIgnore: true,
@@ -1040,7 +1078,9 @@ export function resumeInterruptedRuns(): void {
     let deferred = 0;
     for (const run of runs) {
       if (isRunActive(run.id)) continue; // a live worker already owns it
-      resetInflightTargets(run.id); // return crash-orphaned claims to the queue
+      // Return crash-orphaned claims to the queue, and say so: a run that keeps
+      // reclaiming the same targets every tick is a wedged worker, not progress.
+      resetInflightTargets(run.id, { tenantId: run.tenantId, reason: "crash_orphan_reclaim" });
       if (countQueued(run.id) === 0) {
         setRunStatus(run.id, "done");
         continue;
@@ -1069,7 +1109,7 @@ export function resumeInterruptedRuns(): void {
       // 43 runs in a re-open livelock, scanning fully stalled). Terminalize
       // the leftover tail instead of re-opening.
       if (run.verified + run.failed >= run.budget) {
-        const closed = terminalizeQueuedTail(run.id, "superseded: run budget exhausted");
+        const closed = terminalizeQueuedTail(run.id, "superseded: run budget exhausted", { tenantId: run.tenantId, reason: "budget" });
         if (closed > 0) console.log(`[scan-engine] closed budget-exhausted tail on ${run.id} (${closed} skipped)`);
         continue;
       }
@@ -1082,7 +1122,7 @@ export function resumeInterruptedRuns(): void {
       // matching the drain (one alert, not one per tick), and the addresses
       // remain in scan_targets for the next full sweep.
       if ((run.reopenCount ?? 0) >= REOPEN_BUDGET) {
-        const closed = terminalizeQueuedTail(run.id, `re-open budget exhausted (${REOPEN_BUDGET} failed re-opens)`);
+        const closed = terminalizeQueuedTail(run.id, `re-open budget exhausted (${REOPEN_BUDGET} failed re-opens)`, { tenantId: run.tenantId, reason: "superseded" });
         setRunStatus(run.id, "error", `re-open budget exhausted after ${REOPEN_BUDGET} failed re-opens - tail terminalized (${closed} skipped)`);
         structuredLog("scan.run.reopen_budget_exhausted", {
           runId: run.id, kind: run.kind, status: run.status,
@@ -1090,7 +1130,7 @@ export function resumeInterruptedRuns(): void {
         }, "error");
         continue;
       }
-      resetInflightTargets(run.id);
+      resetInflightTargets(run.id, { tenantId: run.tenantId, reason: "crash_orphan_reclaim", detail: `stranded '${run.status}' run re-opened` });
       bumpRunReopen(run.id);
       setRunStatus(run.id, "running");
       console.log(`[scan-engine] re-opening stranded '${run.status}' run ${run.id} (${countQueued(run.id)} claimable pending)`);
@@ -1117,7 +1157,7 @@ export function resumeCriticalRuns(): void {
       // 30s staleness window after a deploy. EXPANSION/MAINTENANCE resume via the reaper.
       if (!isRevenueAdmissionClass(providerPriorityForRun(run.kind))) continue;
       if (isRunActive(run.id)) continue;
-      resetInflightTargets(run.id);
+      resetInflightTargets(run.id, { tenantId: run.tenantId, reason: "crash_orphan_reclaim", detail: "fast-resume after restart" });
       if (countQueued(run.id) === 0) { setRunStatus(run.id, "done"); continue; }
       // Bounded even for revenue class: a rep's live tap goes through the
       // CRITICAL admission reserve, not through this backlog drain, so capping
