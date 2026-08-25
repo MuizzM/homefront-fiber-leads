@@ -22,6 +22,13 @@ function freshObs(address: string, city: string, state: string, zip: string, lat
       fiberStatus: "new_fiber", fiberAvailable: true, isNewFiber: true, billingStatus: "N",
       householdSegmentType: "NEW FIBER", techType: "FTTP", apiSource: "kinetic_live",
       blocked: false, discoveredAt: new Date().toISOString(),
+      // A live check carries the provider's answer with it. kineticObservation
+      // corroborates any "fiber is available" against this body, so a fixture
+      // without one is asserting serviceability with nothing behind it.
+      rawResponse: {
+        success: true, validationResult: "AddressFound", exactMatch: true, techType: "FIBER",
+        address: { householdSegmentType: "NEW FIBER", billingStatus: "N", maxQualTechnologyType: "FIBER" },
+      },
     },
   };
 }

@@ -151,4 +151,39 @@ describe("tenured lead projector", () => {
     const t = rawDb.prepare("SELECT converted_to_lead_id FROM scan_targets WHERE id=?").get(id) as any;
     expect(t.converted_to_lead_id).toBe(leadFor(id).id);
   });
+
+  it("relinks a door whose lead exists but whose link was lost, so a loop terminates", () => {
+    // The exact shape of the bug: the candidate query offers any door with
+    // converted_to_lead_id NULL. If a lead for that address already exists, the
+    // projector counted it as alreadyLead and moved on WITHOUT linking, so the
+    // door was offered again on the next pass, forever. Measured before the
+    // fix: 200 passes returned the same rows 84,901 times and the loop ended
+    // only on its own pass cap.
+    const id = door({ billing: "N" });
+    expect(mod.projectTenuredOpenLeads(TENANT).created).toBe(1);
+    // simulate the link being lost while the lead survives
+    rawDb.prepare("UPDATE scan_targets SET converted_to_lead_id=NULL WHERE id=?").run(id);
+    expect(mod.countTenuredOpenCandidates(TENANT)).toBe(1);
+
+    const r = mod.projectTenuredOpenLeads(TENANT);
+    expect(r.created).toBe(0);
+    expect(r.alreadyLead).toBe(1);
+    const after = rawDb.prepare("SELECT converted_to_lead_id FROM scan_targets WHERE id=?").get(id) as any;
+    expect(after.converted_to_lead_id).not.toBeNull();
+    // gone from the candidate set: a caller that loops until empty now ends
+    expect(mod.countTenuredOpenCandidates(TENANT)).toBe(0);
+    expect(mod.projectTenuredOpenLeads(TENANT).considered).toBe(0);
+  });
+
+  it("does not duplicate a lead that carries no canonical key", () => {
+    // A lead written by an older path may have canonical_key NULL, which the
+    // key-based check cannot see. The scan_target link is the second guard.
+    const id = door({ billing: "N" });
+    mod.projectTenuredOpenLeads(TENANT);
+    rawDb.prepare("UPDATE leads SET canonical_key=NULL").run();
+    rawDb.prepare("UPDATE scan_targets SET converted_to_lead_id=NULL WHERE id=?").run(id);
+    const r = mod.projectTenuredOpenLeads(TENANT);
+    expect(r.created).toBe(0);           // matched via source_scan_target_id
+    expect((rawDb.prepare("SELECT COUNT(*) c FROM leads").get() as any).c).toBe(1);
+  });
 });

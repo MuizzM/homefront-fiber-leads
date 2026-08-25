@@ -277,14 +277,37 @@ describe("nextRecheckAt", () => {
     expect(r.dueAtMs).toBe(NOW + 6 * 3_600_000);
   });
 
-  it("a near date is hot; a far date waits until its window opens instead of polling", () => {
+  it("a near date is hot; a far date is still read weekly, not parked", () => {
     expect(nextRecheckAt({ ...base, promisedDate: "2026-08-30" }, NOW).band).toBe("hot");
     const far = nextRecheckAt({ ...base, promisedDate: "2026-12-01" }, NOW);
     expect(far.band).toBe("soon");
     expect(far.reason).toBe("date_future");
-    // Due exactly when the hot window opens - 14 days before the promise.
-    expect(far.dueAtMs).toBe(Date.parse("2026-12-01T00:00:00Z") - 14 * DAY);
-    expect(far.dueAtMs).toBeGreaterThan(NOW + 60 * DAY);
+    // NOT the day the hot window opens. A stated date is a plan: builds light up
+    // early and silently, so the weekly floor wins while the window is far off.
+    expect(far.dueAtMs).toBe(NOW + 7 * DAY);
+    expect(far.dueAtMs).toBeLessThan(Date.parse("2026-12-01T00:00:00Z") - 14 * DAY);
+  });
+
+  it("the hot window still wins once it is nearer than a week", () => {
+    // NOW is 2026-08-22, so a 2026-09-10 promise is still outside the 14-day hot
+    // window, but its window opens on 08-27 - five days out, sooner than the
+    // weekly floor. The EARLIER of the two is always the due date.
+    const near = nextRecheckAt({ ...base, promisedDate: "2026-09-10" }, NOW);
+    expect(near.reason).toBe("date_future");
+    expect(near.dueAtMs).toBe(Date.parse("2026-09-10T00:00:00Z") - 14 * DAY);
+    expect(near.dueAtMs).toBeLessThan(NOW + 7 * DAY);
+  });
+
+  it("a JAN-2027 promise is read within a week, not in December", () => {
+    // The exact shape of the door that started this: TENURED + billing N with
+    // broadbandService.estimatedCompletionDt "JAN-2027".
+    const r = nextRecheckAt({ ...base, promisedDate: "2027-01-01" }, NOW);
+    expect(r.dueAtMs).toBe(NOW + 7 * DAY);
+  });
+
+  it("honours a configured ceiling", () => {
+    const r = nextRecheckAt({ ...base, promisedDate: "2027-01-01", maxWaitDays: 14 }, NOW);
+    expect(r.dueAtMs).toBe(NOW + 14 * DAY);
   });
 
   it("an undated watch rides the observed flip window, then drops to a slow re-read", () => {
@@ -297,11 +320,12 @@ describe("nextRecheckAt", () => {
     const old = nextRecheckAt({ ...base, promisedDate: null, firstSeenMs: NOW - 60 * DAY }, NOW);
     expect(old.band).toBe("watch");
     expect(old.reason).toBe("undated_slow");
-    expect(old.dueAtMs).toBe(NOW - 60 * DAY + 30 * DAY);
+    // Capped by the weekly floor: 7 days after the last look, not 30.
+    expect(old.dueAtMs).toBe(NOW - 60 * DAY + 7 * DAY);
   });
 
   it("schedules an undated re-read from the last check when there is one", () => {
     const r = nextRecheckAt({ ...base, promisedDate: null, firstSeenMs: NOW - 60 * DAY, lastCheckedMs: NOW - 2 * 3_600_000 }, NOW);
-    expect(r.dueAtMs).toBe(NOW - 2 * 3_600_000 + 30 * DAY);
+    expect(r.dueAtMs).toBe(NOW - 2 * 3_600_000 + 7 * DAY);
   });
 });

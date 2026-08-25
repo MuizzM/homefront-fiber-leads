@@ -101,7 +101,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const filter = ids.length ? `AND s.id IN (${ids.map(() => "?").join(",")})` : "";
   const candidates = rawDb.prepare(`
     SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,
-           s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,s.carrier,s.frontier_control,
+           s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,s.carrier,s.frontier_control,s.competitor_company,
            EXISTS(SELECT 1 FROM availability_snapshots f WHERE f.scan_target_id=s.id AND f.tenant_id=? AND f.fresh=1 AND f.conclusive=1) AS proven_flip,
            latest.max_download_mbps,latest.household_segment_type,latest.billing_status,latest.service_status,
       latest.fiber_available AS latest_fiber_available,
@@ -182,13 +182,19 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     (address,city,state,zip,lat,lng,fiber_status,max_download_mbps,is_new_deployment,is_new_fiber,is_tenured,
      household_segment_type,billing_status,lead_status,notes,deployment_notes,lead_tag,lead_score,tenant_id,
      source_scan_target_id,fresh_confirmed_at,fresh_confidence,fresh_sources,assigned_rep_id,assigned_territory_id,
-     assignment_source,assigned_at,created_at,updated_at,carrier,exchange_id,canonical_key)
+     assignment_source,assigned_at,created_at,updated_at,carrier,exchange_id,canonical_key,
+     -- The incumbent, carried from the provider's own answer. The query above
+     -- already selected it and the insert dropped it, so a rep opening a door
+     -- card saw no competitor even when we knew it was Google Fiber. Which
+     -- incumbent it is changes the pitch, so it belongs on the card.
+     competitor_name,competitor_tech)
     VALUES (?,?,?,?,?,?,?,?,1,1,0,?,?,'prospect',?,?, 'fresh_fiber_confirmed',100,?,?,?,?,?,?,?,'fresh-fiber-territory',
-      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'),?,?,?)
+      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'),?,?,?,?,?)
     ON CONFLICT(tenant_id, canonical_key) WHERE canonical_key IS NOT NULL
       DO UPDATE SET updated_at=datetime('now')
     RETURNING id`);
   const stamp = rawDb.prepare(`UPDATE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?),
+    competitor_name=COALESCE(competitor_name,?),competitor_tech=COALESCE(competitor_tech,?),
     fresh_confirmed_at=?,fresh_confidence=CASE WHEN fresh_confidence='cross_verified' THEN 'cross_verified' ELSE ? END,fresh_sources=?,lead_tag='fresh_fiber_confirmed',
     lead_score=MAX(COALESCE(lead_score,0),100),assigned_rep_id=COALESCE(assigned_rep_id,?),
     assigned_territory_id=COALESCE(assigned_territory_id,?),
@@ -404,6 +410,11 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
           // of a duplicate pin. NULL for a keyless (blank/garbage) address so two
           // DIFFERENT such leads can't false-merge into one and lose a real lead.
           kineticLeadKeyOrNull(candidate.address, candidate.city, candidate.state, candidate.zip ?? ""),
+          // Prefer the freshest snapshot's answer, falling back to whatever the
+          // target last recorded, so a lead minted from an older flip still
+          // names the incumbent.
+          (candidate as any).competitor_name ?? (candidate as any).competitor_company ?? null,
+          (candidate as any).competitor_tech ?? null,
         ) as { id: number } | undefined;
         leadId = created?.id ?? undefined;
         if (leadId == null) { result.rejected++; return; } // conflict returned no row — skip safely
@@ -415,7 +426,10 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         result.linkedExisting++;
       }
       stamp.run(
-        candidate.id, decision.confirmedAt, confidence, JSON.stringify(decision.sources),
+        candidate.id,
+        (candidate as any).competitor_name ?? (candidate as any).competitor_company ?? null,
+        (candidate as any).competitor_tech ?? null,
+        decision.confirmedAt, confidence, JSON.stringify(decision.sources),
         assignment?.repId ?? null, assignment?.territoryId ?? null,
         assignment?.repId ?? null, assignment?.repId ?? null,
         leadId, tenantId,
