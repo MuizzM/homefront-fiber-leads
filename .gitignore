@@ -88,3 +88,4 @@ lexington-newbuilds.json
 .impeccable/live/deferred-svelte-component-accepts.json
 .impeccable/live/*.png
 # impeccable-ignore-end
+.dev-verify/logs/

@@ -204,7 +204,7 @@ describe("Kinetic scanner transport hardening", () => {
 
   async function withMintEnv<T>(overrides: Record<string, string>, run: () => Promise<T>): Promise<T> {
     const keys = ["KFS_MINT_IMPERSONATE", "KFS_MINT_DIRECT", "KFS_MINT_MAX_ROTATIONS",
-      "KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES", ...Object.keys(overrides)];
+      "KFS_MINT_TRANSPORT_ROTATE_AFTER", ...Object.keys(overrides)];
     const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     // Skip the impersonate + direct rungs so the mint funnels through the Decodo
     // rung these cases observe.
@@ -219,34 +219,41 @@ describe("Kinetic scanner transport hardening", () => {
     }
   }
 
-  it("mint transport failure: one is not evidence, a STREAK hands the residential IP over and the retry mints", async () => {
-    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "3", KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "2" }, async () => {
+  it("mint transport failure: a STREAK hands the residential IP over, through the UNTHROTTLED path", async () => {
+    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "5" }, async () => {
       let mints = 0;
       proxyFetch.mockImplementation(async (url: string) => {
         if (url.includes("/api/v1/auth/session")) {
           mints++;
-          if (mints <= 2) throw transportFailure();
+          // MintTransportError is raised structurally where proxyFetch throws,
+          // so the classification never has to read an error string.
+          if (mints <= 3) throw transportFailure();
           return json(200, { access_token: "minted-on-the-next-ip", expires_in: 2_100 });
         }
         return json(200, noService);
       });
 
-      // First mint: a single "fetch failed" says nothing about the IP, so it
-      // fails closed and holds the session.
-      await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/fetch failed/);
-      expect(mints).toBe(1);
-      expect(advanceProxyEgress, "one transport failure must not move house").not.toHaveBeenCalled();
+      // One failure is not evidence: the call fails closed and the streak
+      // carries to the next mint rather than moving the IP.
+      for (let i = 0; i < 2; i++) {
+        scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
+        await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/transport/i);
+      }
+      expect(advanceProxyEgress, "two failures have not earned a handover").not.toHaveBeenCalled();
 
-      // Second mint: the streak reaches the threshold, so the scanner steps to
-      // the next residential IP and retries within the same call.
+      // The third completes the streak: hand the IP over and retry in place.
       scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
       await expect(scanner.forceFreshTokenFromApi()).resolves.toBe("minted-on-the-next-ip");
-      expect(mints).toBe(3);
+
+      // THE POINT OF THIS TEST: the handover goes through advanceProxyEgress.
+      // rotateProxySession holds the IP until DECODO_ROTATE_AFTER_DENIALS
+      // consecutive DENIALS (8 in production) and is throttled on top, so on a
+      // dead egress - which produces no denials at all - it returns early and
+      // advances nothing. The spent-IP path is neither streak-gated nor
+      // throttled, which is what actually breaks the livelock.
       expect(advanceProxyEgress).toHaveBeenCalledTimes(1);
       expect(String(advanceProxyEgress.mock.calls[0][0])).toContain("mint transport");
-      // A transport failure is NOT a denial: the reluctant denial path (a streak
-      // of 401/403s, then a min-interval throttle) is never what recovers this.
-      expect(rotateProxySession).not.toHaveBeenCalled();
+      expect(rotateProxySession, "a transport failure is not a denial").not.toHaveBeenCalled();
     });
   });
 
@@ -276,18 +283,16 @@ describe("Kinetic scanner transport hardening", () => {
     });
   });
 
-  it("mint transport failure: KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES=0 turns the handover off", async () => {
-    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "3", KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "0" }, async () => {
-      proxyFetch.mockImplementation(async (url: string) => {
-        if (url.includes("/api/v1/auth/session")) throw transportFailure();
-        return json(200, noService);
-      });
-      for (let i = 0; i < 3; i++) {
-        scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
-        await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/fetch failed/);
-      }
-      expect(advanceProxyEgress).not.toHaveBeenCalled();
-    });
+  it("the transport handover has an off switch, and it is read from one place", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
+    expect(src).toContain("KFS_MINT_TRANSPORT_ROTATE_AFTER");
+    // 0 disables it, restoring the pre-2026-08-24 fail-closed behaviour.
+    expect(src).toContain("MINT_TRANSPORT_ROTATE_AFTER > 0");
+    // ...and the handover itself must not go through the denial path.
+    expect(src, "the spent-IP path, not the streak-gated denial path")
+      .toContain('await advanceProxyEgress("mint transport');
   });
 
   it("an egress change ends the token generation: the next check mints a fresh pair", async () => {

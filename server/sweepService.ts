@@ -789,26 +789,12 @@ async function runSweep(id: string) {
       if (!batch.length) {
         updateProgress(id);
         updateJob(id, { phase: "complete", status: "done", completed_at: now(), heartbeat_at: now() });
-        // ADD THEM. New-fiber sellables are published as leads by the observation
-        // persist itself (projectConfirmedFreshLeads). TENURED sellables are not:
-        // their projector had no production caller at all, so the larger half of
-        // every city's opportunity was recorded as evidence and never reached a
-        // rep. Bounded per city and idempotent against both unique indexes.
-        // SWEEP_PUBLISH_TENURED=off leaves them as evidence only.
-        if (process.env.SWEEP_PUBLISH_TENURED !== "off" && job.city && job.state) {
-          try {
-            const { projectTenuredOpenLeads } = await import("./tenuredLeadProjector");
-            const published = projectTenuredOpenLeads(job.tenant_id, { state: job.state, city: String(job.city).toLowerCase(), limit: 50_000 });
-            if (published.created || published.errors.length) {
-              structuredLog("sweep.tenured_published", { sweepId: id, city: job.city, state: job.state,
-                created: published.created, alreadyLead: published.alreadyLead, errors: published.errors.length }, "info");
-            }
-          } catch (error: any) {
-            // Never fail a completed sweep over publication; the evidence is
-            // already durable and a later pass can publish it.
-            structuredLog("sweep.tenured_publish_failed", { sweepId: id, city: job.city, error: String(error?.message ?? error).slice(0, 160) }, "warn");
-          }
-        }
+        // Tenured sellables are published by persistKineticObservation as each
+        // door is answered (server/kineticObservation.ts), so a sweep does not
+        // publish them again here. An earlier revision on this branch ran the
+        // projector per finished city; that seam is strictly worse - it waits
+        // for the whole city and re-queries every door - and it is redundant now
+        // that the per-door caller exists on the default branch.
         const alerts = await flushFreshOpportunityAlerts(job.tenant_id);
         const completed = rawDb.prepare(`SELECT * FROM sweep_jobs WHERE id=?`).get(id) as any;
         structuredLog("sweep.completed", { sweepId: id, kind: job.kind, query: job.query, checked: completed.checked, freshFound: completed.fresh_found, opportunitiesFound: completed.opportunities_found, alerts: JSON.stringify(alerts) });

@@ -31,7 +31,7 @@ import { rawDb } from "./db";
 import { ensureComingLedgerSchema } from "./comingLedger";
 
 /** What a rep is looking at. Derived on the server so the client cannot drift. */
-export type DoorTag = "new_fiber" | "fiber_open" | "tenured_active" | "coming_soon";
+export type DoorTag = "new_fiber" | "fiber_open" | "tenured_active" | "coming_soon" | "unverified";
 
 export interface ScannedDoor {
   id: number;
@@ -61,6 +61,7 @@ export const DOOR_TAG_LABEL: Record<DoorTag, string> = {
   fiber_open: "Fiber, no account",
   tenured_active: "Already a customer",
   coming_soon: "Coming soon",
+  unverified: "Not verified",
 };
 
 // Doors with no fiber verdict (copper, no_service) are deliberately NOT
@@ -72,11 +73,25 @@ export const DOOR_TAG_LABEL: Record<DoorTag, string> = {
 // be dropped by the verdict gate below.
 const TAG_SQL = `
   CASE
-    WHEN w.scan_target_id IS NOT NULL                                      THEN 'coming_soon'
-    WHEN s.last_is_new_fiber = 1 AND COALESCE(s.last_billing_status,'') <> 'A' THEN 'new_fiber'
-    WHEN COALESCE(s.last_billing_status,'') = 'A'
-      OR s.last_customer_segment = 'existing_customer'                        THEN 'tenured_active'
-    ELSE 'fiber_open'
+    WHEN w.scan_target_id IS NOT NULL                                       THEN 'coming_soon'
+    -- A CUSTOMER IS A CUSTOMER ON EITHER VALUE. Kinetic returns BOTH 'Y' and
+    -- 'A' for an address with an active account (live-verified: 4051 Dakeita
+    -- Cir answers 'A'). Testing only 'A' left every billing-'Y' household
+    -- painted as a workable pin, which is a rep knocking a door already sold.
+    WHEN COALESCE(s.last_billing_status,'') IN ('Y','A')
+      OR s.last_customer_segment = 'existing_customer'                      THEN 'tenured_active'
+    -- A LEAD PIN CLAIMS SELLABLE TODAY, so it needs BOTH halves: nobody on the
+    -- door AND fiber actually qualified. last_fiber_status cannot carry the
+    -- second half by itself - it is derived from the household segment
+    -- (server/scanner.ts takes its TENURED branch before it ever consults
+    -- parsed.fiberQualified), which is how 49 China Grove doors read as lit
+    -- while the only body we hold for them says NOV-2026.
+    WHEN s.last_fiber_available = 1 AND s.last_is_new_fiber = 1             THEN 'new_fiber'
+    WHEN s.last_fiber_available = 1                                        THEN 'fiber_open'
+    -- Answered and fiber-shaped, but with no qualification on record. Still
+    -- drawn, because hiding it would silently shrink a street a rep already
+    -- walked - just never as a lead. The ledger's weekly lane resolves these.
+    ELSE 'unverified'
   END`;
 
 // A door earns a pin by having fiber TODAY, or by the carrier having promised

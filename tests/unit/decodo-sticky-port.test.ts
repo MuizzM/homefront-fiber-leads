@@ -144,12 +144,15 @@ describe("an IP that cannot reach the provider at all", () => {
   it("only a real transport failure reaches it: a challenge fails closed in the scanner", async () => {
     const [fs, path] = [await import("node:fs"), await import("node:path")];
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
-    // The classifier is an ALLOW-LIST over the error chain, never "anything that
-    // is not a 401/403" - otherwise a challenge, or any unfamiliar provider
-    // answer, would earn an identity change.
-    expect(src).toContain("function isMintTransportFailure(");
-    expect(src, "a Decodo 407 is an account denial for the governor, not a bad IP")
-      .toContain('if (/\\b407\\b/.test(text)) return false;');
+    // A transport failure is a TYPE, raised only where proxyFetch itself throws,
+    // never inferred from an error string. That is what keeps a challenge a
+    // challenge: a challenge can only exist once a response has been received,
+    // so it can never be mistaken for a dead egress.
+    expect(src).toContain("class MintTransportError");
+    expect(src).toContain("err instanceof MintTransportError");
+    // ...and the handover uses the spent-IP path, which is neither streak-gated
+    // nor throttled, unlike the denial rotation.
+    expect(src).toContain('await advanceProxyEgress("mint transport');
   });
 });
 

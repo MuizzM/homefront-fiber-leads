@@ -194,16 +194,15 @@ describe("a city sweep parks streets with no fiber", () => {
     expect(progress, "fresh is still the flip").toContain("s.first_seen_fiber_at>=?");
   });
 
-  it("publishes the tenured half of a finished city", async () => {
-    // Tenured sellables had no production caller at all, so the larger half of
-    // every city's opportunity was evidence a rep never saw.
+  it("does not publish tenured leads a second time", async () => {
+    // persistKineticObservation publishes each tenured door as it is answered
+    // (server/kineticObservation.ts). A per-city pass at sweep completion would
+    // re-query every door in the city to find nothing left to do.
     const fs = await import("node:fs");
     const path = await import("node:path");
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
-    expect(src).toContain("projectTenuredOpenLeads");
-    expect(src, "and it must be reversible without a deploy").toContain("SWEEP_PUBLISH_TENURED");
-    // A publication failure must never fail a sweep whose evidence is durable.
-    expect(src).toContain("sweep.tenured_publish_failed");
+    expect(src, "the sweep leaves tenured publication to the per-door caller")
+      .not.toContain("projectTenuredOpenLeads");
   });
 
   it("SWEEP_PARK_DEAD_STREETS=off checks every door", () => {

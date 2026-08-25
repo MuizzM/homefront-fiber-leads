@@ -375,6 +375,70 @@ are not logged; a short SHA-256 key correlates queued, started, completed, cache
 dedupe, and failure events. Availability evidence remains in the database under
 tenant controls.
 
+### Why a run is churning: requeue reasons
+
+A requeue is the engine's only "try again" and it moves no counter, so a run
+that requeues thousands of times still reports healthy. Every requeue therefore
+records WHY, from the closed vocabulary in `shared/scanRequeueReason.ts`.
+
+```sql
+-- What is this run actually doing?
+SELECT json_extract(payload_json,'$.reason')     AS reason,
+       json_extract(payload_json,'$.httpStatus') AS http,
+       COUNT(*)                                  AS n
+FROM fiber_job_events
+WHERE run_id = :run_id AND event_type = 'address.requeued'
+GROUP BY 1, 2 ORDER BY n DESC;
+```
+
+Read it against the run's completions: a healthy run requeues a small fraction
+of its checks. A ratio in the tens (measured: 31,777 requeues against 755
+completions) is a livelock, and the reason column names it:
+
+- `auth_denied` / `rate_limited` dominating: the residential egress IP is spent.
+  Lower `SCAN_BATCH_CONCURRENCY` under the per-IP answer budget (~20) and check
+  the sticky port.
+- `transient_transport` dominating with no HTTP status: the egress is
+  black-holing. Rotate the Decodo session / restart onto a fresh sticky port.
+- `token_unavailable` / `not_authorized`: the mint is failing or automation is
+  not authorized. No amount of retrying helps until a session exists.
+- `inconclusive_address_needs_fix`: normal for a fresh street; these back off
+  exponentially and conclude `address_not_found` at the attempt cap.
+- `worker_exception` / `admission_timeout`: our side, not the provider's.
+- `unknown`: a requeue path shipped without naming itself. Should be zero.
+
+`token_unavailable` has its own second layer, because "the mint is failing" has
+three very different causes. `scan.token.mint_failed` carries a `failure` field:
+
+- `auth_denied` - the provider answered 401/403. Rotates a fresh residential IP
+  and retries, bounded by `KFS_MINT_MAX_ROTATIONS`.
+- `provider` - the provider answered, but not with a token: a bot-wall
+  challenge, a bad body, an expiring token. Fails closed and NEVER rotates.
+  Rotating around a challenge is evasion, so this is a stop condition.
+- `transport` - no response at all: this residential IP cannot reach the token
+  endpoint. Carries `transportStreak`; after
+  `KFS_MINT_TRANSPORT_ROTATE_AFTER` (3) consecutive ones, the egress is
+  abandoned and `scan.token.mint_egress_rotated` is logged. Any successful mint
+  resets the streak, so a working IP is never moved.
+
+If you see a long run of `failure: transport` with the streak resetting to 1
+each time, the egress is flapping rather than dead. If you see
+`mint_egress_rotated` repeatedly with no successful mint after it, the problem
+is upstream of Decodo, not the IP. Set `KFS_MINT_TRANSPORT_ROTATE_AFTER=0` to
+restore the old fail-closed-without-rotating behavior.
+
+Bulk queue movements use the same vocabulary in their own run-level events:
+`run.targets_requeued` (crash-orphan reclaim, operator reset),
+`run.tail_terminalized` (`budget`, `superseded`), and `run.breaker_wait`
+(`breaker_open`, throttled to one every 30 seconds) so a run parked behind the
+proxy circuit is distinguishable from a wedged worker.
+
+Full error text for the same attempt is in `fiber_job_failures`
+(`category` + `message`) and on `scan_run_targets.last_error_*`. Note that a
+non-answer writes NO `availability_snapshots` row by design: the attempt key is
+unique per `(tenant, run, target)` and the target retries inside the same run,
+so a failure row would take the slot the conclusive answer needs.
+
 Useful endpoints:
 
 - `GET /api/scanner/state` — live queue and legacy worker metrics.
