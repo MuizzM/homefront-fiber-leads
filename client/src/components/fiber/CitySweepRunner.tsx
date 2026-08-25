@@ -53,7 +53,12 @@ export default function CitySweepRunner() {
   const queryClient = useQueryClient();
   const [city, setCity] = useState("");
   const [state, setState] = useState<SweepState>("NC");
-  const [maxChecks, setMaxChecks] = useState(5000);
+  // EMPTY MEANS THE WHOLE CITY. The 20-check budget is per (IP, token) PAIR, not
+  // a ceiling on volume: pairs rotate and scanning continues, and the Decodo
+  // plan is unlimited. So the default is no cap - omitting maxChecks lets the
+  // server queue every door - and the street skip is what keeps that efficient
+  // rather than an arbitrary number of checks.
+  const [maxChecks, setMaxChecks] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
 
   // GET /api/sweeps answers { sweeps: [...] }, not a bare array.
@@ -68,7 +73,7 @@ export default function CitySweepRunner() {
   const jobs = sweeps.data?.sweeps ?? [];
 
   const start = useMutation({
-    mutationFn: (body: { city: string; state: string; maxChecks: number }) =>
+    mutationFn: (body: { city: string; state: string; maxChecks?: number }) =>
       apiRequest("POST", "/api/sweeps/city", body).then(async (r) => {
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `Could not start the sweep (${r.status})`);
         return r.json();
@@ -83,16 +88,24 @@ export default function CitySweepRunner() {
   });
 
   const canRun = city.trim().length > 1 && !start.isPending;
-  const run = () => { if (canRun) start.mutate({ city: city.trim(), state, maxChecks }); };
+  const run = () => {
+    if (!canRun) return;
+    const limit = Number(maxChecks);
+    start.mutate({
+      city: city.trim(), state,
+      ...(Number.isFinite(limit) && limit > 0 ? { maxChecks: Math.min(100_000, Math.floor(limit)) } : {}),
+    });
+  };
 
   return (
     <section className="space-y-3" data-testid="city-sweep-runner">
       <div className="rounded-2xl border border-border bg-card p-4">
         <h3 className="text-sm font-semibold text-balance text-foreground">Run a city</h3>
         <p className="mt-1 max-w-prose text-[12px] leading-relaxed text-pretty text-muted-foreground">
-          Harvests every address in the city from OpenStreetMap, then checks it. Each street is probed
-          first: if the probes come back with no fiber, the rest of that street is parked instead of
-          checked. One token and one residential IP serve 20 checks, then both switch.
+          Harvests every address in the city from OpenStreetMap, then checks the whole of it. Each
+          street is probed first: if the probes come back with no fiber, the rest of that street is
+          parked instead of checked. One token and one residential IP serve 20 checks, then both
+          switch and scanning continues. Leave the limit empty to check every door.
         </p>
 
         <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -126,13 +139,14 @@ export default function CitySweepRunner() {
           </div>
           <div>
             <Label htmlFor="city-sweep-max" className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Max checks
+              Limit
             </Label>
             <Input
               id="city-sweep-max"
-              type="number" inputMode="numeric" min={1} max={50000} step={500}
+              type="number" inputMode="numeric" min={1} max={100000} step={500}
               value={maxChecks}
-              onChange={(e) => setMaxChecks(Math.max(1, Math.min(50000, Number(e.target.value) || 1)))}
+              onChange={(e) => setMaxChecks(e.target.value)}
+              placeholder="all"
               className="mt-1 w-28 tabular-nums"
               data-testid="city-sweep-max"
             />

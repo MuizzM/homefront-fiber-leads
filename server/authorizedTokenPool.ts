@@ -307,6 +307,23 @@ export class AuthorizedTokenPool {
    * fired every 10 proxied requests, nowhere near a pair boundary. It is wrong
    * now: rotation IS the pair boundary.
    */
+  /**
+   * Retire ONE slot's token, because the lane it was bound to just changed IP.
+   * With parallel lanes a pair is (slot, lane): lane 3 moving house says nothing
+   * about the token on lane 1, and dropping the whole pool there would throw
+   * away good tokens on every lane rotation.
+   */
+  retireSlot(slotId: number): number {
+    const slot = this.slots[slotId];
+    if (!slot?.token) return 0;
+    slot.token = null;
+    slot.expiresAt = 0;
+    slot.state = "EMPTY";
+    slot.addressKeys.clear();
+    slot.leases = 0;
+    return 1;
+  }
+
   retireGeneration(): number {
     let retired = 0;
     for (const slot of this.slots) {

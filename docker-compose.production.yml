@@ -446,6 +446,22 @@ services:
       # denials); port 10001 gave 69 of 80 (86%), longest clean streak 30.
       # PROXY_URL keeps its :10000 - the port is rewritten per sticky session.
       DECODO_STICKY: "on"
+      # PARALLEL LANES. Kinetic throttles one (IP, token) PAIR at ~20 answers, so
+      # the way to scan faster is more pairs at once, not more checks per pair.
+      # One dispatcher on one port meant every concurrent check shared a single
+      # residential IP and drained one budget together - which is why this app
+      # measured best at concurrency 5 while a 4-lane runner is comfortable.
+      #
+      # Measured 2026-08-25 on this account, all ports fired at once:
+      #   8 -> 8/8 clean      64 -> 64/64      256 -> 256/256 clean, 255 distinct IPs
+      #   16 -> 16/16        128 -> 128/128    512 -> 436/512 (local socket limits)
+      # Latency was flat from 8 to 256 (p50 ~1.2s), so Decodo was never the cap.
+      #
+      # 4 to start: it matches the standalone runner that has run this workload
+      # for weeks, and each lane costs an undici pool on this side (the pool
+      # budget divides across lanes, it does not multiply). Raise it once a full
+      # city has run clean at 4.
+      DECODO_LANES: "4"
       # ALL CARRIER TRAFFIC GOES THROUGH DECODO (owner directive 2026-08-24).
       # Decodo's sticky ports ARE residential IPs, so "residential" and "Decodo"
       # are the same egress here; what is NOT Decodo is this box's own

@@ -573,8 +573,13 @@ export function __resetEgressActivityForTests(): void {
 // counter is a superset of the token's - retries and denials spend it too), so
 // when the IP changes, the token generation ends with it. See the measurement
 // table at setEgressGenerationHook in server/proxy-fetch.ts.
-setEgressGenerationHook((reason) => {
-  const retired = authorizedTokenPool.retireGeneration();
+setEgressGenerationHook((reason, laneId) => {
+  // A lane retirement spends ONE pair: only the token bound to that lane. A
+  // process-wide rotation (no lane) still ends every generation, because that
+  // path moves the single shared IP under all of them.
+  const retired = laneId == null
+    ? authorizedTokenPool.retireGeneration()
+    : authorizedTokenPool.retireSlot(laneId);
   egressActivity.generationsRetired++;
   egressActivity.lastGenerationAt = Date.now();
   egressActivity.lastGenerationReason = reason;
@@ -1227,7 +1232,12 @@ async function scanAddressDirect(
       }),
       body: JSON.stringify({ addressLine1: address, addressLine2: "", city, state, postalCode: zip }),
       signal: AbortSignal.timeout(5_000),
-    });
+    // THE PAIR, MADE REAL. The lane is chosen by the TOKEN SLOT this check
+    // leased, so this token always leaves from its own residential IP and spends
+    // its own 20-check budget. Without it every concurrent check shares one IP
+    // and drains one budget together, which is why the app measured best at
+    // concurrency 5 while a 4-lane runner is comfortable.
+    }, tokenLease.slotId);
     const searchMs = Date.now() - searchStart;
     base.providerLatencyMs = searchMs;
 

@@ -205,6 +205,23 @@ describe("a city sweep parks streets with no fiber", () => {
       .not.toContain("projectTenuredOpenLeads");
   });
 
+  it("the 20-check budget is per PAIR, never a ceiling on how much a city may check", async () => {
+    // Decodo is unlimited, so volume is not the thing to ration: what Kinetic
+    // throttles is one (IP, token) pair at ~20 answers. Pairs rotate and
+    // scanning continues, and the street skip - not an arbitrary check count -
+    // is what keeps the volume honest.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const svc = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    expect(svc, "no per-sweep ceiling").toContain("const MAX_SWEEP_CHECKS = () => Number.MAX_SAFE_INTEGER");
+    // The UI must omit maxChecks entirely rather than sending a default cap;
+    // the server reads that as "every door in the city".
+    const ui = fs.readFileSync(path.resolve(process.cwd(), "client/src/components/fiber/CitySweepRunner.tsx"), "utf8");
+    expect(ui).toContain("maxChecks?: number");
+    expect(ui, "empty limit sends no cap at all")
+      .toContain("...(Number.isFinite(limit) && limit > 0 ? { maxChecks: Math.min(100_000, Math.floor(limit)) } : {})");
+  });
+
   it("SWEEP_PARK_DEAD_STREETS=off checks every door", () => {
     const prev = process.env.SWEEP_PARK_DEAD_STREETS;
     process.env.SWEEP_PARK_DEAD_STREETS = "off";
