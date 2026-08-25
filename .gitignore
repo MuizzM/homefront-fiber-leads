@@ -37,6 +37,10 @@ backups/
 # Browser/E2E runtime artifacts
 test-results/
 playwright-report/
+# Playwright-MCP console/page captures. These are recorded against a RUNNING
+# app, so a capture can contain the x-session-id of whoever drove the browser -
+# never release content, and never something to commit.
+.playwright-mcp/
 
 .env
 .env.*

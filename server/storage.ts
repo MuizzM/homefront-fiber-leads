@@ -13,6 +13,7 @@ import { runVendorOrderMigrations as ensureVendorOrderSchema } from "./vendorOrd
 import { runCommissionFileMigrations as ensureCommissionFileSchema } from "./commissionFileMigrations";
 import { runGuardedActionMigrations as ensureGuardedActionSchema } from "./guardedActionMigrations";
 import { recordTransition } from "./fiberTransitions";
+import { apexEmails, warnIfDefaultApex } from "./platformApex";
 import {
   leads, scanTargets, fiberChecks, teamMembers, knockLog,
   users, sessions, otpCodes, territories, repApplications,
@@ -3000,8 +3001,8 @@ export function runMigrations() {
   // that were somehow stamped — identity comes from env+restart, never from a
   // mutable user row edit).
   try {
-    const emails = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
-      .split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    warnIfDefaultApex();
+    const emails = apexEmails();
     if (emails.length) {
       const placeholders = emails.map(() => "?").join(",");
       raw.prepare(`UPDATE users SET is_super_admin = 1 WHERE lower(email) IN (${placeholders})`).run(...emails);

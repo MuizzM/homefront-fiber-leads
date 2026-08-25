@@ -844,8 +844,14 @@ export function registerVendorOrderRoutes(app: Express, deps: Deps): void {
   /** Inbound SMS webhook. UNAUTHENTICATED by necessity - a carrier posts here -
    *  so it is shared-secret gated, and it can only ever ADD a suppression. */
   app.post("/api/order-recovery/sms/inbound", (req: Request, res: Response) => {
-    const secret = process.env.RECOVERY_SMS_WEBHOOK_SECRET;
-    if (!secret || req.headers["x-webhook-secret"] !== secret) {
+    const secret = process.env.RECOVERY_SMS_WEBHOOK_SECRET ?? "";
+    const presented = String(req.headers["x-webhook-secret"] ?? "");
+    // Constant-time, exactly as the scheduled-delivery webhook above does with
+    // the same header: a plain !== short-circuits on the first differing byte
+    // and leaks the matched prefix length to a timing probe. The !secret guard
+    // stays first so an unconfigured deployment refuses everything rather than
+    // comparing "" against "".
+    if (!secret || !timingSafeEqualStr(secret, presented)) {
       return res.status(404).json({ error: "Not found" });
     }
     const from = String(req.body?.from ?? "");

@@ -182,6 +182,7 @@ import { registerNeighborhoodSweepRoutes } from "./neighborhoodSweepRoutes";
 import { accountPinForLead } from "./customerAccount";
 import { nearestAddressPoints } from "./addressPointStore";
 import { registerLeadImportRoutes } from "./leadImportRoutes";
+import { apexEmails, isApexEmail } from "./platformApex";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -8127,8 +8128,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // PATCH path enforces. Without it a tenant admin could CREATE a fresh login
     // on an apex email and inherit platform ownership at the next boot stamp.
     {
-      const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
-      if (apex.includes(email) && !(req as any).user?.isSuperAdmin) {
+      if (isApexEmail(email) && !(req as any).user?.isSuperAdmin) {
         return res.status(403).json({ error: "That email is reserved for platform ownership", code: "LOGIN_EMAIL_RESERVED" });
       }
     }
@@ -8166,9 +8166,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // P0-1 (K3 swarm): nobody may claim a platform-apex email. The apex lives in
     // the immutable is_super_admin column now; setting one of the apex emails on
     // any account is reserved for an existing apex admin only.
-    const apexEmails = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
     if (safeUpdate.email && typeof safeUpdate.email === "string") {
-      if (apexEmails.includes(safeUpdate.email.trim().toLowerCase()) && !(req as any).user?.isSuperAdmin) {
+      if (isApexEmail(safeUpdate.email) && !(req as any).user?.isSuperAdmin) {
         return res.status(403).json({ error: "That email is reserved for platform ownership", code: "LOGIN_EMAIL_RESERVED" });
       }
     }
@@ -8193,7 +8192,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
       if (Object.prototype.hasOwnProperty.call(safeUpdate, "active") && !safeUpdate.active) {
         const actor = (req as any).user;
-        const differentApex = apexEmails.length >= 2 && !!actor?.isSuperAdmin && actor?.id !== target.id;
+        const differentApex = apexEmails().length >= 2 && !!actor?.isSuperAdmin && actor?.id !== target.id;
         if (!differentApex) {
           return res.status(409).json({ error: "A platform super admin cannot be deactivated here.", code: "APEX_IMMUTABLE" });
         }
@@ -10355,8 +10354,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // left the invite approved while the application stayed pending. Hoisted
     // above both the branch and the invite mutation closes both holes at once.
     if (status === "approved") {
-      const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
-      if (apex.includes(String(application.email ?? "").trim().toLowerCase())) {
+      if (isApexEmail(application.email)) {
         return res.status(400).json({ error: "That email is reserved for platform ownership", code: "RESERVED_EMAIL" });
       }
     }
