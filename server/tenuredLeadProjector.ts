@@ -138,8 +138,15 @@ export function projectTenuredOpenLeads(
       if (c.lat == null || c.lng == null) { res.skippedNoCoords++; continue; }
       const key = normalizeKineticAddressKey(c.address, c.city, c.state, c.zip ?? "");
       if (!key) { res.skippedKeyless++; continue; }   // a keyless door cannot be deduped
-      if (existsByKey.get(tenantId, key) || existsByTarget.get(tenantId, c.id)) {
+      const existing = (existsByKey.get(tenantId, key) ?? existsByTarget.get(tenantId, c.id)) as { id: number } | undefined;
+      if (existing) {
         res.alreadyLead++;
+        // LINK IT. Without this the door keeps matching the candidate query on
+        // every pass - it is never created, so converted_to_lead_id stays NULL,
+        // so it is offered again forever. Measured: 200 passes returned the same
+        // rows 84,901 times and the loop only ended on its own pass cap. A
+        // production caller would never terminate.
+        if (!opts.dryRun) { try { link.run(existing.id, c.id, tenantId); } catch { /* raced */ } }
         continue;
       }
       if (opts.dryRun) { res.created++; continue; }
