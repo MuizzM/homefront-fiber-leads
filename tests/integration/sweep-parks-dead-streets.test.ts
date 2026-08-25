@@ -30,7 +30,15 @@ beforeAll(async () => {
     VALUES (?,?,'city','Testville, NC','Testville','NC',1000,'checking','running')`).run(JOB, TENANT);
 });
 
-/** A door on a street, optionally already answered by the provider. */
+/**
+ * A door on a street, optionally already ANSWERED by the provider.
+ *
+ * An answered door gets an availability_snapshots row, because that is what
+ * proves the provider was actually asked. Marking a target 'done' does not:
+ * a run that enqueues nothing still finishes and the sweep marks its batch done
+ * regardless, which is exactly how 106 Broadway doors were "checked" live with
+ * no provider call behind any of them.
+ */
 function door(street: string, houseNumber: number, answer: { status?: string; available?: 0 | 1 } | null): number {
   const address = `${houseNumber} ${street}`;
   const id = Number(rawDb.prepare(
@@ -39,8 +47,23 @@ function door(street: string, houseNumber: number, answer: { status?: string; av
     address, "Testville", "NC", "27000", 35.1, -80.1, TENANT, street.toLowerCase(),
     answer?.status ?? null, answer?.available ?? null, answer ? "2026-08-24 12:00:00" : null,
   ).lastInsertRowid);
+  if (answer) {
+    rawDb.prepare(`INSERT INTO availability_snapshots (tenant_id,scan_target_id,checked_at_epoch,conclusive,transition_status,evidence_hash)
+      VALUES (?,?,?,1,'baseline_unavailable',?)`).run(TENANT, id, Date.now(), `h-${id}`);
+  }
   rawDb.prepare(`INSERT INTO sweep_job_targets (sweep_job_id,target_id,seq,state) VALUES (?,?,?,?)`)
     .run(JOB, id, id, answer ? "done" : "queued");
+  return id;
+}
+
+/** A door the sweep marked done WITHOUT the provider ever answering it. */
+function unaskedDoor(street: string, houseNumber: number): number {
+  const address = `${houseNumber} ${street}`;
+  const id = Number(rawDb.prepare(
+    `INSERT INTO scan_targets (address,city,state,zip,tenant_id,source,street_key)
+     VALUES (?,?,?,?,?,'osm',?)`).run(address, "Testville", "NC", "27000", TENANT, street.toLowerCase()).lastInsertRowid);
+  rawDb.prepare(`INSERT INTO sweep_job_targets (sweep_job_id,target_id,seq,state) VALUES (?,?,?,'done')`)
+    .run(JOB, id, id);
   return id;
 }
 
@@ -50,10 +73,15 @@ describe("a city sweep parks streets with no fiber", () => {
     door("dead st", 100, { status: "no_service", available: 0 });
     door("dead st", 200, { status: "no_service", available: 0 });
     const deadQueued = [door("dead st", 300, null), door("dead st", 400, null), door("dead st", 500, null)];
-    // UNMATCHED is the other failure shape: recorded, no verdict at all.
+    // UNMATCHED is the other failure shape: the provider ANSWERED, with
+    // "we do not know this address", so there is a snapshot and no verdict.
     door("ghost ln", 10, { status: null, available: null });
     door("ghost ln", 20, { status: null, available: null });
     const ghostQueued = [door("ghost ln", 30, null)];
+    // NEVER ASKED: marked done by a run that enqueued nothing. No snapshot, so
+    // no evidence, so this street must survive.
+    unaskedDoor("phantom ct", 10); unaskedDoor("phantom ct", 20);
+    const phantomQueued = [door("phantom ct", 30, null)];
     // ALIVE: one probe found fiber, so the street is worth flooding.
     door("live ave", 100, { status: "new_fiber", available: 1 });
     door("live ave", 200, { status: "no_service", available: 0 });
@@ -73,6 +101,7 @@ describe("a city sweep parks streets with no fiber", () => {
     for (const id of liveQueued) expect(stateOf(id), "a street that answered is still checked").toBe("queued");
     for (const id of soonQueued) expect(stateOf(id), "coming soon is an answer worth having").toBe("queued");
     for (const id of unprobed) expect(stateOf(id), "a street nothing has asked about is never parked").toBe("queued");
+    for (const id of phantomQueued) expect(stateOf(id), "done without an answer is not evidence of no fiber").toBe("queued");
 
     const job = rawDb.prepare(`SELECT streets_parked AS streets, doors_skipped AS doors FROM sweep_jobs WHERE id=?`).get(JOB) as any;
     expect(job.streets, "dead st and ghost ln").toBe(2);

@@ -628,10 +628,23 @@ const PARK_DEAD_STREETS = () => process.env.SWEEP_PARK_DEAD_STREETS !== "off";
  */
 export function parkDeadStreets(id: string): void {
   if (!PARK_DEAD_STREETS()) return;
+  // EVIDENCE, not merely state='done'.
+  //
+  // A door only counts toward condemning its street if the provider actually
+  // answered it - proved by an availability_snapshots row. 'done' alone is not
+  // that: a run that enqueues nothing still finishes, and the sweep marks its
+  // targets done regardless. Observed live 2026-08-24 on this exact code: 106
+  // Broadway doors marked done with zero scan stamps and zero snapshots, and
+  // this query condemned 31 streets on the strength of them. An unanswered door
+  // is not evidence of no fiber; it is evidence of nothing.
+  //
+  // Note this cannot lean on last_scanned_at: an unmatched address deliberately
+  // leaves it NULL so the door stays scannable, and that is a REAL answer.
   const dead = rawDb.prepare(`
     SELECT s.street_key AS streetKey FROM sweep_job_targets j
       JOIN scan_targets s ON s.id=j.target_id
      WHERE j.sweep_job_id=? AND j.state='done' AND s.street_key IS NOT NULL AND s.street_key<>''
+       AND EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=s.id)
      GROUP BY s.street_key
     HAVING COUNT(*) >= ?
        AND SUM(CASE WHEN s.last_fiber_available=1
@@ -745,6 +758,18 @@ async function runSweep(id: string) {
         return;
       }
       const run = scanService.startTargetRun({ tenantId: job.tenant_id, city: job.city, state: job.state, targetIds: batch.map((r) => r.target_id), createdBy: job.created_by, runKind: "city-sweep", label: `City sweep · ${job.city}, ${job.state}` });
+      // ASSERT THE RUN ACTUALLY TOOK THE WORK. startTargetRun reports how many
+      // targets it enqueued, and it can be ZERO - a target already held by
+      // another (often long-abandoned) running run is not re-enqueued. The run
+      // then finishes immediately, the sweep marks its batch done, and the whole
+      // job reports "checked" for doors nothing ever asked about. Observed live:
+      // 300 Broadway doors and 84 Rockwell doors "checked" with no provider call
+      // behind any of them, because 715 stale running runs held 772k targets.
+      if (!run.queued) {
+        failSweep(id, new Error(
+          `NO_TARGETS_ENQUEUED: the run took 0 of ${batch.length} targets. They are held by other running runs - clear stale runs before sweeping.`));
+        return;
+      }
       const marks = batch.map(() => "?").join(",");
       rawDb.prepare(`UPDATE sweep_job_targets SET state='in_run',run_id=? WHERE sweep_job_id=? AND target_id IN (${marks})`).run(run.runId, id, ...batch.map((r) => r.target_id));
       updateJob(id, { current_run_id: run.runId, heartbeat_at: now() });

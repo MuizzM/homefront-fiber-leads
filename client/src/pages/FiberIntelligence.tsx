@@ -15,6 +15,9 @@ const RankedLeads = lazy(() => import("@/components/fiber/RankedLeads"));
 // Run a city from the UI: OSM harvest, probe each street, park the streets with
 // no fiber. Admin-only, because starting one spends provider budget.
 const CitySweepRunner = lazy(() => import("@/components/fiber/CitySweepRunner"));
+// What the transport is doing right now: which residential IP and token are in
+// use, and how much of the 20-check pair budget is left.
+const EgressLive = lazy(() => import("@/components/fiber/EgressLive"));
 // Statically imported (it's tiny) so the Coming Soon tab header can share the
 // exact watchlist query — the big "Watching" count and the list count can
 // never disagree.
@@ -640,6 +643,9 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
       {isAdmin && (
         <div className="space-y-2 pt-2">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations - run a city</div>
+          <Suspense fallback={<Skeleton className="h-44 w-full rounded-2xl" />}>
+            <EgressLive />
+          </Suspense>
           <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
             <CitySweepRunner />
           </Suspense>

@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook, getProxyStickyState, isProxyConnected } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -437,7 +437,18 @@ async function mintAuthorizedTokenViaLadder(): Promise<{ token: string; expiresA
 }
 
 async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
-  const minted = await mintAuthorizedTokenViaLadder();
+  let minted: { token: string; expiresAt: number };
+  try {
+    minted = await mintAuthorizedTokenViaLadder();
+  } catch (err) {
+    egressActivity.mintsFailed++;
+    egressActivity.lastMintAt = Date.now();
+    egressActivity.lastMintError = String((err as any)?.message ?? err).slice(0, 120);
+    throw err;
+  }
+  egressActivity.mintsOk++;
+  egressActivity.lastMintAt = Date.now();
+  egressActivity.lastMintError = null;
   // A token in hand — from ANY rung — proves the mint path is alive, so the
   // consecutive-transport-failure count starts over.
   mintTransportFailureStreak = 0;
@@ -499,12 +510,76 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   mint: () => gatedMint(),
 });
 
+// ── WHAT THE EGRESS IS DOING RIGHT NOW ──────────────────────────────────────
+// Counters for the live view, so an operator can watch the pair rule work
+// instead of inferring it from the logs. Diagnostics only: nothing here is a
+// credential, and the residential IP itself is never known to this process -
+// only the sticky PORT that selects it, and the masked session id.
+const egressActivity = {
+  mintsOk: 0, mintsFailed: 0,
+  lastMintAt: null as number | null, lastMintError: null as string | null,
+  generationsRetired: 0, lastGenerationAt: null as number | null, lastGenerationReason: null as string | null,
+};
+
+export function getEgressActivity() {
+  const sticky = getProxyStickyState();
+  const pool = authorizedTokenPool.snapshot();
+  const budget = Math.max(0, Number(process.env.DECODO_CHECKS_PER_IP ?? 20));
+  // The token actually being drained: the pool hands out the MOST-used one
+  // first (sticky reuse), so that is the one whose budget is running down.
+  const active = [...pool.slots].filter(slot => slot.state === "READY")
+    .sort((a, b) => b.checksUsed - a.checksUsed)[0] ?? null;
+  return {
+    proxy: {
+      connected: isProxyConnected(),
+      sessionId: getProxySessionId(),          // masked "decodo-sN", never a credential
+      stickyPort: sticky.port,                 // which residential IP, not the IP itself
+      checksOnThisIp: sticky.checksOnThisIp,
+      checksPerIp: budget,
+      denialStreak: sticky.denialStreak,
+      rotateAfterDenials: Math.max(1, Number(process.env.DECODO_ROTATE_AFTER_DENIALS ?? 3)),
+    },
+    token: {
+      ready: pool.ready,
+      total: pool.total,
+      warmMinimum: pool.warmMinimum,
+      maxChecksPerToken: pool.maxChecksPerToken,
+      activeChecksUsed: active?.checksUsed ?? 0,
+      activeChecksRemaining: active?.checksRemaining ?? 0,
+      inFlight: pool.activeLeases,
+      refreshing: pool.activeRefreshes,
+    },
+    mints: {
+      ok: egressActivity.mintsOk,
+      failed: egressActivity.mintsFailed,
+      lastAt: egressActivity.lastMintAt,
+      lastError: egressActivity.lastMintError,
+    },
+    pairs: {
+      retired: egressActivity.generationsRetired,
+      lastAt: egressActivity.lastGenerationAt,
+      lastReason: egressActivity.lastGenerationReason,
+    },
+  };
+}
+
+/** Test-only: zero the live counters. */
+export function __resetEgressActivityForTests(): void {
+  egressActivity.mintsOk = 0; egressActivity.mintsFailed = 0;
+  egressActivity.lastMintAt = null; egressActivity.lastMintError = null;
+  egressActivity.generationsRetired = 0; egressActivity.lastGenerationAt = null;
+  egressActivity.lastGenerationReason = null;
+}
+
 // ONE IP, ONE TOKEN, TWENTY CHECKS. The egress owns the boundary (its check
 // counter is a superset of the token's - retries and denials spend it too), so
 // when the IP changes, the token generation ends with it. See the measurement
 // table at setEgressGenerationHook in server/proxy-fetch.ts.
 setEgressGenerationHook((reason) => {
   const retired = authorizedTokenPool.retireGeneration();
+  egressActivity.generationsRetired++;
+  egressActivity.lastGenerationAt = Date.now();
+  egressActivity.lastGenerationReason = reason;
   if (retired) structuredLog("scan.token.generation_retired", { retired, reason }, "info");
 });
 
