@@ -220,6 +220,16 @@
       ],
       "port": 5085,
       "autoPort": false
+    },
+    {
+      "name": "citysweep-live",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5086 DATA_DIR=/Applications/homefront-fiber-full BACKGROUND_RESUME_DELAY_MS=86400000 FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= NEIGHBORHOOD_SWEEP=off YIELD_ROLLUPS=off ADDRESS_REPAIR_LANE=off CITY_INGEST=off SMTP_HOST=127.0.0.1 SMTP_PORT=1 SCAN_GLOBAL_CONCURRENCY=5 SCAN_BATCH_CONCURRENCY=5 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5086,
+      "autoPort": false
     }
   ]
 }

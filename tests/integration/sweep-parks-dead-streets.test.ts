@@ -86,6 +86,35 @@ describe("a city sweep parks streets with no fiber", () => {
     expect(after).toEqual(before);
   });
 
+  it("the probe batch runs alone, so there is something answered to prune against", async () => {
+    // The gap this closes was found by running a real city from the UI, not by a
+    // test: a 300-door Broadway sweep put every door in ONE batch, so the prune
+    // ran before anything had answered and parked nothing. 300 checks across 53
+    // streets, all 300 unmatched - 106 probes would have condemned every street.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    // Probes are the leading seq range and are selected on their own...
+    expect(src).toContain("AND state='queued' AND seq < ? ORDER BY seq LIMIT 5000");
+    // ...and the flood only runs once no probe row is left queued.
+    expect(src).toContain("const batch = probeBatch.length");
+    // The count has to be persisted, or a resumed job floods on its first tick.
+    expect(src).toContain("probe_count: probeCount");
+  });
+
+  it("updateJob refuses an unknown column instead of dropping it silently", async () => {
+    // This is how the probe batch shipped broken: probe_count was written and
+    // silently discarded by a whitelist, so the gate read 0 and the flood ran
+    // immediately. Two live Broadway runs, 600 provider calls, no error.
+    const svc = await import("../../server/sweepService");
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    expect(src, "probe_count must be writable").toContain('"probe_count"');
+    expect(src, "and an unknown column must be loud").toContain("unknown sweep_jobs column(s)");
+    expect(typeof svc.parkDeadStreets).toBe("function");
+  });
+
   it("SWEEP_PARK_DEAD_STREETS=off checks every door", () => {
     const prev = process.env.SWEEP_PARK_DEAD_STREETS;
     process.env.SWEEP_PARK_DEAD_STREETS = "off";

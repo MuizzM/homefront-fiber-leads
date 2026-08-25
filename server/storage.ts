@@ -1844,6 +1844,10 @@ export function runMigrations() {
     // Counters so the operator sees what the prune bought, not just what ran.
     `ALTER TABLE sweep_jobs ADD COLUMN streets_parked INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE sweep_jobs ADD COLUMN doors_skipped INTEGER NOT NULL DEFAULT 0`,
+    // How many of the queued rows are PROBES (the leading seq range). The probe
+    // batch has to run and land BEFORE the flood, or there is nothing answered
+    // to prune against - see runSweep.
+    `ALTER TABLE sweep_jobs ADD COLUMN probe_count INTEGER NOT NULL DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS sweep_job_targets (
        sweep_job_id TEXT NOT NULL REFERENCES sweep_jobs(id) ON DELETE CASCADE,
        target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,

@@ -663,6 +663,9 @@ async function runSweep(id: string) {
       updateJob(id, { phase: "harvesting", heartbeat_at: now() });
       let harvested: { addresses: any[]; inserted: number };
       let targets: Array<{ id: number }>;
+      // Probes occupy the leading seq range; 0 for a radius sweep, which has no
+      // street ordering and floods straight away.
+      let probeCount = 0;
       if (job.kind === "address") {
         const area = await searchAddressArea({ tenantId: job.tenant_id, query: job.query, radiusMeters: job.radius_meters });
         const lookup = rawDb.prepare(`SELECT id FROM scan_targets WHERE address=? AND lower(city)=lower(?) AND state=?`);
@@ -697,11 +700,13 @@ async function runSweep(id: string) {
         const streetCount = new Set(candidates.map((c) => c.streetKey || `__nostreet_${c.id}`)).size;
         const probeIds = new Set(selectProbe(candidates, Math.min(pool.length, streetCount * PROBES_PER_STREET())));
         const flood = orderFlood(candidates.filter((c) => !probeIds.has(c.id)));
-        targets = [...candidates.filter((c) => probeIds.has(c.id)), ...flood].map((c) => ({ id: c.id }));
+        const probes = candidates.filter((c) => probeIds.has(c.id));
+        probeCount = probes.length;
+        targets = [...probes, ...flood].map((c) => ({ id: c.id }));
       }
       const add = rawDb.prepare(`INSERT OR IGNORE INTO sweep_job_targets (sweep_job_id,target_id,seq) VALUES (?,?,?)`);
       rawDb.transaction(() => targets.forEach((t, seq) => add.run(id, t.id, seq)))();
-      updateJob(id, { phase: "checking", source: job.kind === "address" ? "osm_overpass_radius" : "osm_overpass", harvested: harvested.addresses.length, queued: targets.length, heartbeat_at: now() });
+      updateJob(id, { phase: "checking", source: job.kind === "address" ? "osm_overpass_radius" : "osm_overpass", harvested: harvested.addresses.length, queued: targets.length, probe_count: probeCount, heartbeat_at: now() });
       structuredLog("sweep.harvested", { sweepId: id, kind: job.kind, query: job.query, city: job.city, state: job.state, harvested: harvested.addresses.length, inserted: harvested.inserted, queued: targets.length });
     }
     for (;;) {
@@ -718,7 +723,19 @@ async function runSweep(id: string) {
       // check. Runs BEFORE the next batch is picked, so a parked street never
       // reaches the provider at all.
       parkDeadStreets(id);
-      const batch = rawDb.prepare(`SELECT target_id FROM sweep_job_targets WHERE sweep_job_id=? AND state='queued' ORDER BY seq LIMIT 5000`).all(id) as Array<{ target_id: number }>;
+      // THE PROBE BATCH RUNS ALONE. Measured live 2026-08-24: a 300-door Broadway
+      // run put every door in ONE batch, so parkDeadStreets had nothing answered
+      // to judge and parked nothing - 300 checks across 53 streets, all 300
+      // unmatched, where 106 probes would have condemned every street. Probes
+      // only ever share a batch with other probes; the flood waits for them to
+      // land and for the prune above to run.
+      const probeLimit = Number(job.probe_count ?? 0);
+      const probeBatch = probeLimit > 0
+        ? rawDb.prepare(`SELECT target_id FROM sweep_job_targets WHERE sweep_job_id=? AND state='queued' AND seq < ? ORDER BY seq LIMIT 5000`).all(id, probeLimit) as Array<{ target_id: number }>
+        : [];
+      const batch = probeBatch.length
+        ? probeBatch
+        : rawDb.prepare(`SELECT target_id FROM sweep_job_targets WHERE sweep_job_id=? AND state='queued' ORDER BY seq LIMIT 5000`).all(id) as Array<{ target_id: number }>;
       if (!batch.length) {
         updateProgress(id);
         updateJob(id, { phase: "complete", status: "done", completed_at: now(), heartbeat_at: now() });
@@ -744,12 +761,19 @@ function updateProgress(id: string) {
 }
 
 function updateJob(id: string, values: Record<string, unknown>) {
-  const allowed = ["city","state","phase","status","source","harvested","queued","checked","failed","fresh_found","opportunities_found","current_run_id","error","heartbeat_at","completed_at"];
-  const entries = Object.entries(values).filter(([key]) => allowed.includes(key)); if (!entries.length) return;
+  const allowed = ["city","state","phase","status","source","harvested","queued","checked","failed","fresh_found","opportunities_found","probe_count","current_run_id","error","heartbeat_at","completed_at"];
+  // A key that is not on the list used to be dropped in SILENCE. probe_count was
+  // written here, never stored, and the probe batch it gates read back as 0 - so
+  // a live Broadway run checked all 300 doors across 53 dead streets and parked
+  // nothing, twice, with no error anywhere. An unknown column is a programmer
+  // error, so it fails loudly now; every caller in this file passes known keys.
+  const unknown = Object.keys(values).filter((key) => !allowed.includes(key));
+  if (unknown.length) throw new Error(`updateJob: unknown sweep_jobs column(s): ${unknown.join(", ")}`);
+  const entries = Object.entries(values); if (!entries.length) return;
   rawDb.prepare(`UPDATE sweep_jobs SET ${entries.map(([key]) => `${key}=?`).join(",")},updated_at=datetime('now') WHERE id=?`).run(...entries.map(([, value]) => value), id);
 }
 function failSweep(id: string, error: any) { updateJob(id, { status: "error", phase: "error", error: String(error?.message ?? error).slice(0, 500), completed_at: now() }); structuredLog("sweep.failed", { sweepId: id, error: String(error?.message ?? error) }); }
-function mapJob(r: any) { return { id: r.id, tenantId: r.tenant_id, kind: r.kind, query: r.query, city: r.city, state: r.state, radiusMeters: r.radius_meters, phase: r.phase, status: r.status, source: r.source, harvested: r.harvested, queued: r.queued, checked: r.checked, failed: r.failed, freshFound: r.fresh_found, opportunitiesFound: r.opportunities_found, streetsParked: r.streets_parked ?? 0, doorsSkipped: r.doors_skipped ?? 0, maxChecks: r.max_checks, currentRunId: r.current_run_id, error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at }; }
+function mapJob(r: any) { return { id: r.id, tenantId: r.tenant_id, kind: r.kind, query: r.query, city: r.city, state: r.state, radiusMeters: r.radius_meters, phase: r.phase, status: r.status, source: r.source, harvested: r.harvested, queued: r.queued, checked: r.checked, failed: r.failed, freshFound: r.fresh_found, opportunitiesFound: r.opportunities_found, streetsParked: r.streets_parked ?? 0, doorsSkipped: r.doors_skipped ?? 0, probeCount: r.probe_count ?? 0, maxChecks: r.max_checks, currentRunId: r.current_run_id, error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at }; }
 function now() { return new Date().toISOString(); }
 function iso(value: string) { return new Date(String(value).includes("T") ? value : String(value).replace(" ", "T") + "Z").toISOString(); }
 function safeJson(value: string | null, fallback: any) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }

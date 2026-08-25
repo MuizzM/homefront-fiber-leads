@@ -96,9 +96,36 @@ The two columns are additive; no data is rewritten. Parked doors keep
 
 ## Result
 
-Pending until verification lands.
+Works, proven by running Broadway, NC from the UI three times against the real
+inventory and the real Decodo egress. The first two runs FAILED to prune and
+that is the value of having run it:
+
+| run | queued | probes | checked | streets parked | doors skipped |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 300 | - | 300 | 0 | 0 |
+| 2 | 300 | 0 | 300 | 0 | 0 |
+| 3 | 300 | 106 | **106** | **31** | **194 (65%)** |
+
+All 300 doors came back UNMATCHED across 53 streets, so the correct answer was
+always "probe 106 and stop". Two defects stood between the design and that:
+
+1. THE PROBE BATCH DID NOT EXIST. Probes were ordered first in the queue, but
+   the batch takes 5,000 rows at a time, so probes and flood went to the
+   provider in the same run and parkDeadStreets had nothing answered to judge.
+   Probes now form their own batch and the flood waits for the prune.
+2. updateJob DROPPED probe_count IN SILENCE. It filters writes against a column
+   whitelist and probe_count was not on it, so the gate read back 0 and run 2
+   floods exactly like run 1 - no error, no log, 300 more provider calls. The
+   whitelist now throws on an unknown column.
+
+`agent-verify full` green: 582 files, 7367 tests, build included.
 
 NOT DEPLOYED. Building it in the repository is not shipping it to production:
 that needs an explicit deploy on a settled green SHA, and it is the owner's
-call. The UI is also unexercised in a browser - the panel is typechecked and
-built, but no one has clicked Run on a real city yet.
+call.
+
+Broadway itself is a dead market for this inventory: 4,102 doors on file, 690
+never scanned, and every one of the 300 checked came back unmatched. The city
+has 2,493 doors that DID match in the past, so the streets Kinetic knows are
+already scanned and what is left is OSM filler. That is the prune working as
+intended, not a scanning failure.
