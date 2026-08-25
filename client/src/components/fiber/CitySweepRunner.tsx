@@ -53,14 +53,16 @@ export default function CitySweepRunner() {
   const [maxChecks, setMaxChecks] = useState(5000);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const sweeps = useQuery<SweepJob[]>({
+  // GET /api/sweeps answers { sweeps: [...] }, not a bare array.
+  const sweeps = useQuery<{ sweeps: SweepJob[] }>({
     queryKey: ["/api/sweeps"],
     queryFn: () => apiRequest("GET", "/api/sweeps?limit=8").then((r) => r.json()),
     // A running sweep moves; a settled list does not need the same attention.
     refetchInterval: (query) =>
-      (query.state.data ?? []).some((job) => job.status === "running") ? 3000 : 20000,
+      (query.state.data?.sweeps ?? []).some((job) => job.status === "running") ? 3000 : 20000,
     staleTime: 2000,
   });
+  const jobs = sweeps.data?.sweeps ?? [];
 
   const start = useMutation({
     mutationFn: (body: { city: string; state: string; maxChecks: number }) =>
@@ -142,7 +144,7 @@ export default function CitySweepRunner() {
         <p className="text-[12px] text-muted-foreground">Could not load recent sweeps.</p>
       ) : null}
 
-      {(sweeps.data ?? []).map((job) => {
+      {jobs.map((job) => {
         const pct = progressPct(job);
         const savedPct = job.queued ? Math.round((job.doorsSkipped / job.queued) * 100) : 0;
         return (
@@ -194,7 +196,7 @@ export default function CitySweepRunner() {
         );
       })}
 
-      {!sweeps.isLoading && !(sweeps.data ?? []).length ? (
+      {!sweeps.isLoading && !jobs.length ? (
         <p className="text-[12px] text-muted-foreground" data-testid="city-sweep-empty">
           No city sweeps yet. Enter a city above to harvest and check it.
         </p>
