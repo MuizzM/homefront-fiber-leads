@@ -446,6 +446,41 @@ services:
       # denials); port 10001 gave 69 of 80 (86%), longest clean streak 30.
       # PROXY_URL keeps its :10000 - the port is rewritten per sticky session.
       DECODO_STICKY: "on"
+      # PARALLEL LANES. Kinetic throttles one (IP, token) PAIR at ~20 answers, so
+      # the way to scan faster is more pairs at once, not more checks per pair.
+      # One dispatcher on one port meant every concurrent check shared a single
+      # residential IP and drained one budget together - which is why this app
+      # measured best at concurrency 5 while a 4-lane runner is comfortable.
+      #
+      # Measured 2026-08-25 on this account, all ports fired at once:
+      #   8 -> 8/8 clean      64 -> 64/64      256 -> 256/256 clean, 255 distinct IPs
+      #   16 -> 16/16        128 -> 128/128    512 -> 436/512 (local socket limits)
+      # Latency was flat from 8 to 256 (p50 ~1.2s), so Decodo was never the cap.
+      #
+      # 4 to start: it matches the standalone runner that has run this workload
+      # for weeks, and each lane costs an undici pool on this side (the pool
+      # budget divides across lanes, it does not multiply). Raise it once a full
+      # city has run clean at 4.
+      # Held at 1 until a full city runs clean at 4 on a box that is not a
+      # laptop. Lanes shipped broken twice tonight - the lane id was used as a
+      # token slot id, and the pool grew a slot per capped lease until maxSize
+      # refused leases (observed live: 1 -> 200 slots in eight minutes, sweep
+      # stalled). Both are fixed and covered, but "fixed and covered" is not the
+      # same as "run in anger", and this knob spends provider budget.
+      DECODO_LANES: "1"
+      # ALL CARRIER TRAFFIC GOES THROUGH DECODO (owner directive 2026-08-24).
+      # Decodo's sticky ports ARE residential IPs, so "residential" and "Decodo"
+      # are the same egress here; what is NOT Decodo is this box's own
+      # connection. Three carrier paths used it by default until this switch
+      # existed - the two direct mint rungs and Frontier's direct-first
+      # serviceability call - and the Kinetic directory poll had no switch at
+      # all. All four ride Decodo now.
+      # "on" restores the hybrid ladder, whose measured upside is real:
+      # curl-impersonate direct minted 6/6 from a clean server IP and spends no
+      # residential search budget. The cost of the default it replaced was that
+      # a leak was invisible - the logs said the request went out, never that it
+      # went out from here - and a blocked IP of our own cannot be rotated.
+      CARRIER_DIRECT_EGRESS: "off"
       DECODO_STICKY_PORT_BASE: "10001"
       # 10,000 sticky ports = 10,000 distinct residential IPs. Probed across the
       # range 10001-24999 (10001, 10100, 10500, 10999, 11000, 11500, 12000,
@@ -475,11 +510,34 @@ services:
       # denials to get ten answers - 63-73% efficiency - and each denial feeds
       # the fleet-shared 403-storm backoff. 20 stays inside the clean run.
       DECODO_CHECKS_PER_IP: "20"
+      # A residential IP that cannot REACH the Kinetic auth endpoint fails the
+      # mint with undici's bare "fetch failed" - no 401, no 403 - so the denial
+      # rotation above never fires for it. Observed live 2026-08-24 on
+      # run_1_mt7hy05z: 26 consecutive mint failures, the run stuck at
+      # verified=610, zero snapshots, until the worker was killed (which
+      # recovers only because the sticky port offset is randomised per process).
+      # After this many CONSECUTIVE mint attempts that never reach the provider,
+      # the process hands over to the next sticky IP. Any mint that reaches the
+      # provider at all - a success, a denial, a challenge - resets the count.
+      # 0 turns the handover off. This is the value the code already defaults to;
+      # it is set here so the knob is visible next to its siblings.
+      KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "2"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       # Retire the token WITH the IP (DECODO_CHECKS_PER_IP above), not fifty
       # times later. 1000 was the setting that produced the 33% arm.
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "20"
       KFS_TOKEN_MAX_CHECKS: "20"
+      # ONE IP, ONE TOKEN, TWENTY CHECKS, then both switch. The pair is what
+      # Kinetic throttles, so DECODO_CHECKS_PER_IP above is the AUTHORITATIVE
+      # number: when the IP retires, the token retires with it (the egress
+      # counter is a superset of the token's - retries and denials spend it too -
+      # so at equal budgets the IP always trips first). The two KFS_TOKEN_MAX_*
+      # values are backstops for the rare case a token caps first, not a second
+      # schedule.
+      # Warm reserve 1: every warm token dies with the egress IP, so a reserve of
+      # 40 minted 39 tokens per generation that never answered anything. One
+      # ready token is what a leaser needs, and it carries 20 concurrent leases.
+      KFS_TOKEN_POOL_WARM_MIN: "1"
       SCAN_TARGET_MERGE: "off"
       # ── Heavy-migration gates — BOTH required to keep the app off the
       # scan_targets table rebuild (949k rows) that wedged the event loop twice.

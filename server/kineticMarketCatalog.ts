@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { rawDb } from "./db";
+import { proxyFetch } from "./proxy-fetch";
 import { structuredLog } from "./structuredLog";
 
 export type KineticMarketStatus = "verified_served" | "verified_expanding" | "verified_legacy_service" | "unverified";
@@ -289,7 +290,10 @@ export async function refreshKineticLocationDirectory(force = false): Promise<{ 
     if (prior?.etag) headers["if-none-match"] = prior.etag;
     if (prior?.last_modified) headers["if-modified-since"] = prior.last_modified;
     try {
-      const response = await fetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(15_000) });
+      // Kinetic's own site, so it is carrier traffic and rides Decodo like the
+      // rest. It used to be the one carrier call with no egress switch at all.
+      // Weekly per state, so it costs a rounding error of the IP check budget.
+      const response = await proxyFetch(url, { headers, redirect: "follow", signal: AbortSignal.timeout(15_000) });
       if (response.status === 304) { recordDirectoryPoll(url, response, "not_modified", null, "+7 days"); continue; }
       if (!response.ok) throw new Error(`official directory returned ${response.status}`);
       const html = await response.text();

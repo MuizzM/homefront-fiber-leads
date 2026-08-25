@@ -9,6 +9,9 @@ import { toCsv, syncMarketState } from "./stateMonitorStore";
 import { structuredLog } from "./structuredLog";
 import { flushFreshOpportunityAlerts } from "./stateMonitorScheduler";
 import { KINETIC_MONITORED_STATES, type KineticMonitoredState } from "./kineticMarketCatalog";
+// The probe/flood ordering is the neighbourhood sweep's, reused rather than
+// re-derived: pure, deterministic, and already covered by its own tests.
+import { selectProbe, orderFlood, houseNumberOf } from "@shared/neighborhoodSweep";
 
 const active = new Set<string>();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -603,6 +606,67 @@ function mapStateSweep(r: any, cities: any[]) {
   };
 }
 
+// How many answers a street gets before it is judged. One is enough to be
+// suggestive and cheap; two is enough to be confident on a street where the
+// first address is a bad OSM record. Never zero - that would park a street
+// nothing has ever asked about.
+const PROBES_PER_STREET = () => Math.max(1, Math.min(5, Number(process.env.SWEEP_PROBES_PER_STREET ?? 2)));
+// Off-switch for the whole prune: SWEEP_PARK_DEAD_STREETS=off checks every door,
+// which is the old behaviour.
+const PARK_DEAD_STREETS = () => process.env.SWEEP_PARK_DEAD_STREETS !== "off";
+
+/**
+ * Park the remainder of every street whose probes came back with no fiber.
+ *
+ * A street is DEAD when it has at least PROBES_PER_STREET answered doors and not
+ * one of them is serviceable, coming soon, or tenured fiber - that covers both
+ * failure shapes seen live: Kinetic not recognising the address at all (an OSM
+ * grid over a city it does not serve) and recognising it with no service.
+ *
+ * Parked doors are marked 'skipped', never 'done': they carry no verdict, they
+ * are not evidence, and a later sweep may pick them up when the street lights.
+ */
+export function parkDeadStreets(id: string): void {
+  if (!PARK_DEAD_STREETS()) return;
+  // EVIDENCE, not merely state='done'.
+  //
+  // A door only counts toward condemning its street if the provider actually
+  // answered it - proved by an availability_snapshots row. 'done' alone is not
+  // that: a run that enqueues nothing still finishes, and the sweep marks its
+  // targets done regardless. Observed live 2026-08-24 on this exact code: 106
+  // Broadway doors marked done with zero scan stamps and zero snapshots, and
+  // this query condemned 31 streets on the strength of them. An unanswered door
+  // is not evidence of no fiber; it is evidence of nothing.
+  //
+  // Note this cannot lean on last_scanned_at: an unmatched address deliberately
+  // leaves it NULL so the door stays scannable, and that is a REAL answer.
+  const dead = rawDb.prepare(`
+    SELECT s.street_key AS streetKey FROM sweep_job_targets j
+      JOIN scan_targets s ON s.id=j.target_id
+     WHERE j.sweep_job_id=? AND j.state='done' AND s.street_key IS NOT NULL AND s.street_key<>''
+       AND EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=s.id)
+     GROUP BY s.street_key
+    HAVING COUNT(*) >= ?
+       AND SUM(CASE WHEN s.last_fiber_available=1
+                      OR s.last_fiber_status IN ('new_fiber','tenured_fiber','coming_soon')
+                    THEN 1 ELSE 0 END) = 0`).all(id, PROBES_PER_STREET()) as Array<{ streetKey: string }>;
+  if (!dead.length) return;
+  const park = rawDb.prepare(`UPDATE sweep_job_targets SET state='skipped'
+     WHERE sweep_job_id=? AND state='queued'
+       AND target_id IN (SELECT id FROM scan_targets WHERE street_key=?)`);
+  let skipped = 0, parked = 0;
+  rawDb.transaction(() => {
+    for (const row of dead) {
+      const changed = park.run(id, row.streetKey).changes;
+      if (changed > 0) { skipped += changed; parked++; }
+    }
+  })();
+  if (!skipped) return;
+  rawDb.prepare(`UPDATE sweep_jobs SET streets_parked=streets_parked+?, doors_skipped=doors_skipped+?,
+     updated_at=datetime('now') WHERE id=?`).run(parked, skipped, id);
+  structuredLog("sweep.streets_parked", { sweepId: id, streets: parked, doorsSkipped: skipped }, "info");
+}
+
 async function runSweep(id: string) {
   if (active.has(id)) return; active.add(id);
   try {
@@ -612,6 +676,9 @@ async function runSweep(id: string) {
       updateJob(id, { phase: "harvesting", heartbeat_at: now() });
       let harvested: { addresses: any[]; inserted: number };
       let targets: Array<{ id: number }>;
+      // Probes occupy the leading seq range; 0 for a radius sweep, which has no
+      // street ordering and floods straight away.
+      let probeCount = 0;
       if (job.kind === "address") {
         const area = await searchAddressArea({ tenantId: job.tenant_id, query: job.query, radiusMeters: job.radius_meters });
         const lookup = rawDb.prepare(`SELECT id FROM scan_targets WHERE address=? AND lower(city)=lower(?) AND state=?`);
@@ -630,11 +697,66 @@ async function runSweep(id: string) {
         const cityHarvest = await getCityAddresses(job.city, job.state);
         const inserted = await upsertHarvestChunked(await normalizeHarvestRows(cityHarvest.addresses, job.tenant_id, "osm-city-sweep"));
         harvested = { addresses: cityHarvest.addresses, inserted };
-        targets = rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=lower(?) AND state=? ORDER BY (last_scanned_at IS NOT NULL),last_scanned_at LIMIT ?`).all(job.city, job.state, job.max_checks) as Array<{ id: number }>;
+        // PROBE FIRST, FLOOD SECOND. Streets are lit together, so one answer per
+        // street is the cheapest way to learn whether the rest of it is worth
+        // checking. selectProbe takes the middle house of the largest streets
+        // first; everything else follows in flood order and is pruned as the
+        // probes come back (see parkDeadStreets below).
+        //
+        // Measured 2026-08-24 on a blind city run: 250 Charlotte doors, 250
+        // unmatched, zero answers. Ordering the same queue probe-first turns
+        // that into ~1 wasted check per street instead of a whole city.
+        // DO NOT PAY TO RE-LEARN A DEAD STREET.
+        //
+        // Parking mid-run still costs one probe per street, every run, forever.
+        // A street this tenant has ALREADY answered - repeatedly, with no fiber
+        // on any of it - does not deserve even that. Measured on this data:
+        // Statesville answered 1,775 doors "no service" and Wingate returned 52
+        // unmatched, all on streets whose verdicts were already on file.
+        //
+        // RESOLVED ONCE, NOT PER ROW. The first version expressed this as
+        // `street_key NOT IN (SELECT ... WHERE m.tenant_id=s.tenant_id ...)`,
+        // correlated to the outer row, so SQLite re-ran the whole GROUP BY /
+        // HAVING aggregation for every candidate it scanned. That aggregation
+        // takes ~3.6s on this database: a Lexington sweep sat in 'harvesting'
+        // for 14 minutes at 98% CPU and never queued a single door. The set is
+        // ~1,600 streets, so it is fetched once and applied in memory.
+        //
+        // Same evidence rule as the mid-run prune: only a door with a snapshot
+        // counts, because an unasked door is evidence of nothing.
+        // SWEEP_SKIP_KNOWN_DEAD=off queues them anyway.
+        const deadEvidence = Math.max(1, Math.min(20, Number(process.env.SWEEP_DEAD_STREET_EVIDENCE ?? 3)));
+        const deadStreets = process.env.SWEEP_SKIP_KNOWN_DEAD === "off" ? new Set<string>() : new Set(
+          (rawDb.prepare(`
+             SELECT m.street_key AS streetKey FROM scan_targets m
+              WHERE m.tenant_id=? AND m.state=? AND m.street_key IS NOT NULL AND m.street_key<>''
+                AND EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=m.id)
+              GROUP BY m.street_key
+             HAVING COUNT(*) >= ?
+                AND SUM(CASE WHEN m.last_fiber_available=1
+                               OR m.last_fiber_status IN ('new_fiber','tenured_fiber','coming_soon')
+                             THEN 1 ELSE 0 END) = 0`)
+            .all(job.tenant_id, job.state, deadEvidence) as Array<{ streetKey: string }>).map(r => r.streetKey));
+        const rawPool = rawDb.prepare(`SELECT id, street_key AS streetKey, address FROM scan_targets
+           WHERE lower(city)=lower(?) AND state=? ORDER BY (last_scanned_at IS NOT NULL),last_scanned_at LIMIT ?`)
+          .all(job.city, job.state, job.max_checks) as Array<{ id: number; streetKey: string | null; address: string }>;
+        const pool = rawPool.filter(r => !r.streetKey || !deadStreets.has(r.streetKey));
+        if (rawPool.length !== pool.length) {
+          structuredLog("sweep.known_dead_skipped", {
+            sweepId: id, city: job.city, state: job.state,
+            doors: rawPool.length - pool.length, deadStreets: deadStreets.size }, "info");
+        }
+        const candidates = pool.map((r) => ({ id: r.id, streetKey: r.streetKey ?? "", houseNumber: houseNumberOf(r.address) }));
+        const streetCount = new Set(candidates.map((c) => c.streetKey || `__nostreet_${c.id}`)).size;
+        const probeIds = new Set(selectProbe(candidates, Math.min(pool.length, streetCount * PROBES_PER_STREET())));
+        const flood = orderFlood(candidates.filter((c) => !probeIds.has(c.id)));
+        const probes = candidates.filter((c) => probeIds.has(c.id));
+        probeCount = probes.length;
+        targets = [...probes, ...flood].map((c) => ({ id: c.id }));
       }
       const add = rawDb.prepare(`INSERT OR IGNORE INTO sweep_job_targets (sweep_job_id,target_id,seq) VALUES (?,?,?)`);
       rawDb.transaction(() => targets.forEach((t, seq) => add.run(id, t.id, seq)))();
-      updateJob(id, { phase: "checking", source: job.kind === "address" ? "osm_overpass_radius" : "osm_overpass", harvested: harvested.addresses.length, queued: targets.length, heartbeat_at: now() });
+      updateJob(id, { phase: "checking", source: job.kind === "address" ? "osm_overpass_radius" : "osm_overpass", harvested: harvested.addresses.length, queued: targets.length, probe_count: probeCount, heartbeat_at: now() });
       structuredLog("sweep.harvested", { sweepId: id, kind: job.kind, query: job.query, city: job.city, state: job.state, harvested: harvested.addresses.length, inserted: harvested.inserted, queued: targets.length });
     }
     for (;;) {
@@ -647,16 +769,50 @@ async function runSweep(id: string) {
         rawDb.prepare(`UPDATE sweep_job_targets SET state=? WHERE sweep_job_id=? AND run_id=?`).run(run?.status === "done" ? "done" : "failed", id, inRun.run_id);
         updateProgress(id); continue;
       }
-      const batch = rawDb.prepare(`SELECT target_id FROM sweep_job_targets WHERE sweep_job_id=? AND state='queued' ORDER BY seq LIMIT 5000`).all(id) as Array<{ target_id: number }>;
+      // Everything the probes have already answered decides what still deserves a
+      // check. Runs BEFORE the next batch is picked, so a parked street never
+      // reaches the provider at all.
+      parkDeadStreets(id);
+      // THE PROBE BATCH RUNS ALONE. Measured live 2026-08-24: a 300-door Broadway
+      // run put every door in ONE batch, so parkDeadStreets had nothing answered
+      // to judge and parked nothing - 300 checks across 53 streets, all 300
+      // unmatched, where 106 probes would have condemned every street. Probes
+      // only ever share a batch with other probes; the flood waits for them to
+      // land and for the prune above to run.
+      const probeLimit = Number(job.probe_count ?? 0);
+      const probeBatch = probeLimit > 0
+        ? rawDb.prepare(`SELECT target_id FROM sweep_job_targets WHERE sweep_job_id=? AND state='queued' AND seq < ? ORDER BY seq LIMIT 5000`).all(id, probeLimit) as Array<{ target_id: number }>
+        : [];
+      const batch = probeBatch.length
+        ? probeBatch
+        : rawDb.prepare(`SELECT target_id FROM sweep_job_targets WHERE sweep_job_id=? AND state='queued' ORDER BY seq LIMIT 5000`).all(id) as Array<{ target_id: number }>;
       if (!batch.length) {
         updateProgress(id);
         updateJob(id, { phase: "complete", status: "done", completed_at: now(), heartbeat_at: now() });
+        // Tenured sellables are published by persistKineticObservation as each
+        // door is answered (server/kineticObservation.ts), so a sweep does not
+        // publish them again here. An earlier revision on this branch ran the
+        // projector per finished city; that seam is strictly worse - it waits
+        // for the whole city and re-queries every door - and it is redundant now
+        // that the per-door caller exists on the default branch.
         const alerts = await flushFreshOpportunityAlerts(job.tenant_id);
         const completed = rawDb.prepare(`SELECT * FROM sweep_jobs WHERE id=?`).get(id) as any;
         structuredLog("sweep.completed", { sweepId: id, kind: job.kind, query: job.query, checked: completed.checked, freshFound: completed.fresh_found, opportunitiesFound: completed.opportunities_found, alerts: JSON.stringify(alerts) });
         return;
       }
       const run = scanService.startTargetRun({ tenantId: job.tenant_id, city: job.city, state: job.state, targetIds: batch.map((r) => r.target_id), createdBy: job.created_by, runKind: "city-sweep", label: `City sweep · ${job.city}, ${job.state}` });
+      // ASSERT THE RUN ACTUALLY TOOK THE WORK. startTargetRun reports how many
+      // targets it enqueued, and it can be ZERO - a target already held by
+      // another (often long-abandoned) running run is not re-enqueued. The run
+      // then finishes immediately, the sweep marks its batch done, and the whole
+      // job reports "checked" for doors nothing ever asked about. Observed live:
+      // 300 Broadway doors and 84 Rockwell doors "checked" with no provider call
+      // behind any of them, because 715 stale running runs held 772k targets.
+      if (!run.queued) {
+        failSweep(id, new Error(
+          `NO_TARGETS_ENQUEUED: the run took 0 of ${batch.length} targets. They are held by other running runs - clear stale runs before sweeping.`));
+        return;
+      }
       const marks = batch.map(() => "?").join(",");
       rawDb.prepare(`UPDATE sweep_job_targets SET state='in_run',run_id=? WHERE sweep_job_id=? AND target_id IN (${marks})`).run(run.runId, id, ...batch.map((r) => r.target_id));
       updateJob(id, { current_run_id: run.runId, heartbeat_at: now() });
@@ -667,18 +823,63 @@ async function runSweep(id: string) {
 function updateProgress(id: string) {
   const job = rawDb.prepare(`SELECT * FROM sweep_jobs WHERE id=?`).get(id) as any; if (!job) return;
   const state = rawDb.prepare(`SELECT SUM(state='done') done,SUM(state='failed') failed FROM sweep_job_targets WHERE sweep_job_id=?`).get(id) as any;
-  const opportunity = rawDb.prepare(`SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id WHERE j.sweep_job_id=? AND s.first_seen_fiber_at>=? AND s.last_customer_segment='new_opportunity'`).get(id, job.started_at) as any;
+  // SELLABLE MEANS "a rep can knock it": fiber at the address and nobody paying
+  // for it. It does NOT mean the door flipped during this sweep - that is what
+  // fresh_found counts, and the two are different questions.
+  //
+  // This used to require first_seen_fiber_at >= started_at, so a tenured door
+  // that has had fiber for months could never qualify. Measured live: Lexington
+  // reported SELLABLE 0 while 101 of its doors came back tenured fiber with
+  // billing N, and Wingate reported 11 while holding another 106. The tile
+  // promised "fiber, nobody on it" and counted something else.
+  // THE STANDING TOTAL: every door among this sweep's targets that is sellable
+  // right now, whenever it was answered. Useful, but it is not what this run
+  // found, and a city with history shows a large number before a single check
+  // completes - which is exactly how a Broadway run displayed 675 at the moment
+  // it started checking.
+  const opportunity = rawDb.prepare(`SELECT COUNT(*) n
+     FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id
+    WHERE j.sweep_job_id=? AND s.last_billing_status='N'
+      AND (s.last_fiber_available=1 OR s.last_fiber_status IN ('new_fiber','tenured_fiber'))`).get(id) as any;
+  // WHAT THIS SWEEP ACTUALLY ASKED. A snapshot carries the run that produced it,
+  // and this sweep owns its run ids, so the join is exact. DISTINCT because a
+  // retried door writes more than one snapshot in the same run.
+  const answered = rawDb.prepare(`SELECT COUNT(DISTINCT a.scan_target_id) n
+     FROM sweep_job_targets j
+     JOIN availability_snapshots a ON a.scan_target_id=j.target_id AND a.run_id=j.run_id
+    WHERE j.sweep_job_id=? AND j.run_id IS NOT NULL`).get(id) as any;
+  // ...and what those answers found: sellable ON THIS RUN'S OWN EVIDENCE.
+  const sellableFound = rawDb.prepare(`SELECT COUNT(DISTINCT a.scan_target_id) n
+     FROM sweep_job_targets j
+     JOIN availability_snapshots a ON a.scan_target_id=j.target_id AND a.run_id=j.run_id
+    WHERE j.sweep_job_id=? AND j.run_id IS NOT NULL AND a.conclusive=1
+      AND upper(COALESCE(a.billing_status,''))='N'
+      AND (a.fiber_available=1
+           OR upper(COALESCE(a.household_segment_type,'')) IN ('NEW FIBER','TENURED'))`).get(id) as any;
   const fresh = rawDb.prepare(`SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id WHERE j.sweep_job_id=? AND s.first_seen_fiber_at>=?`).get(id, job.started_at) as any;
-  updateJob(id, { checked: Number(state.done ?? 0) + Number(state.failed ?? 0), failed: Number(state.failed ?? 0), fresh_found: fresh.n, opportunities_found: opportunity.n, heartbeat_at: now() });
+  updateJob(id, {
+    checked: Number(state.done ?? 0) + Number(state.failed ?? 0),
+    failed: Number(state.failed ?? 0),
+    answered: answered.n, sellable_found: sellableFound.n,
+    fresh_found: fresh.n, opportunities_found: opportunity.n, heartbeat_at: now(),
+  });
 }
 
 function updateJob(id: string, values: Record<string, unknown>) {
-  const allowed = ["city","state","phase","status","source","harvested","queued","checked","failed","fresh_found","opportunities_found","current_run_id","error","heartbeat_at","completed_at"];
-  const entries = Object.entries(values).filter(([key]) => allowed.includes(key)); if (!entries.length) return;
+  const allowed = ["city","state","phase","status","source","harvested","queued","checked","failed","answered","sellable_found","fresh_found","opportunities_found","probe_count","current_run_id","error","heartbeat_at","completed_at"];
+  // A key that is not on the list used to be dropped in SILENCE. probe_count was
+  // written here, never stored, and the probe batch it gates read back as 0 - so
+  // a live Broadway run checked all 300 doors across 53 dead streets and parked
+  // nothing, twice, with no error anywhere. An unknown column is a programmer
+  // error, so it fails loudly now; every caller in this file passes known keys.
+  const unknown = Object.keys(values).filter((key) => !allowed.includes(key));
+  if (unknown.length) throw new Error(`updateJob: unknown sweep_jobs column(s): ${unknown.join(", ")}`);
+  const entries = Object.entries(values); if (!entries.length) return;
   rawDb.prepare(`UPDATE sweep_jobs SET ${entries.map(([key]) => `${key}=?`).join(",")},updated_at=datetime('now') WHERE id=?`).run(...entries.map(([, value]) => value), id);
 }
 function failSweep(id: string, error: any) { updateJob(id, { status: "error", phase: "error", error: String(error?.message ?? error).slice(0, 500), completed_at: now() }); structuredLog("sweep.failed", { sweepId: id, error: String(error?.message ?? error) }); }
-function mapJob(r: any) { return { id: r.id, tenantId: r.tenant_id, kind: r.kind, query: r.query, city: r.city, state: r.state, radiusMeters: r.radius_meters, phase: r.phase, status: r.status, source: r.source, harvested: r.harvested, queued: r.queued, checked: r.checked, failed: r.failed, freshFound: r.fresh_found, opportunitiesFound: r.opportunities_found, maxChecks: r.max_checks, currentRunId: r.current_run_id, error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at }; }
+function mapJob(r: any) { return { id: r.id, tenantId: r.tenant_id, kind: r.kind, query: r.query, city: r.city, state: r.state, radiusMeters: r.radius_meters, phase: r.phase, status: r.status, source: r.source, harvested: r.harvested, queued: r.queued, checked: r.checked, failed: r.failed, freshFound: r.fresh_found, opportunitiesFound: r.opportunities_found,
+  answered: r.answered ?? 0, sellableFound: r.sellable_found ?? 0, streetsParked: r.streets_parked ?? 0, doorsSkipped: r.doors_skipped ?? 0, probeCount: r.probe_count ?? 0, maxChecks: r.max_checks, currentRunId: r.current_run_id, error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at }; }
 function now() { return new Date().toISOString(); }
 function iso(value: string) { return new Date(String(value).includes("T") ? value : String(value).replace(" ", "T") + "Z").toISOString(); }
 function safeJson(value: string | null, fallback: any) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }

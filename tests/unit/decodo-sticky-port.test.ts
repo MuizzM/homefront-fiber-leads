@@ -101,6 +101,61 @@ describe("the per-IP check budget", () => {
   });
 });
 
+describe("an IP that cannot reach the provider at all", () => {
+  // THE MINT WEDGE, observed live 2026-08-24 on run_1_mt7hy05z: a sticky IP that
+  // cannot reach the Kinetic auth endpoint fails every mint with undici's bare
+  // "fetch failed". It never DENIES us, so it never builds the denial streak
+  // rotateProxySession waits for - the run sat at verified=610 through 26
+  // consecutive mint failures and wrote zero snapshots until the worker was
+  // killed, which recovers only because the port offset is randomised per
+  // process. The handover therefore has to be the SPENT-IP path, which is
+  // neither streak-gated nor throttled.
+  it("advanceProxyEgress steps to the next residential IP, with no denial streak behind it", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY_PORT_BASE = "10001";
+    process.env.DECODO_STICKY_PORT_COUNT = "100";
+    process.env.DECODO_ROTATE_AFTER_DENIALS = "8";
+    delete process.env.DECODO_STICKY;
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    const before = mod.getProxyStickyState().port;
+    expect(mod.getProxyStickyState().denialStreak, "a dead IP has denied us nothing").toBe(0);
+
+    await mod.advanceProxyEgress("mint transport: fetch failed");
+    const after = mod.getProxyStickyState().port;
+    expect(after, "the dead IP is handed over on the spot").not.toBe(before);
+    expect(after).toBeGreaterThanOrEqual(10001);
+    expect(after).toBeLessThan(10101);
+
+    // ...and unlike a denial rotation it is not swallowed by the min-interval
+    // throttle, which would otherwise drop every handover inside 4 s.
+    await mod.advanceProxyEgress("mint transport: fetch failed");
+    expect(mod.getProxyStickyState().port, "a second handover still moves").not.toBe(after);
+  });
+
+  it("is a no-op with stickiness off - the rotating gateway already changes IP per request", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY = "off";
+    const mod = await import("../../server/proxy-fetch");
+    await expect(mod.advanceProxyEgress("mint transport: fetch failed")).resolves.toBeUndefined();
+    expect(mod.getProxyStickyState().port).toBeNull();
+  });
+
+  it("only a real transport failure reaches it: a challenge fails closed in the scanner", async () => {
+    const [fs, path] = [await import("node:fs"), await import("node:path")];
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
+    // A transport failure is a TYPE, raised only where proxyFetch itself throws,
+    // never inferred from an error string. That is what keeps a challenge a
+    // challenge: a challenge can only exist once a response has been received,
+    // so it can never be mistaken for a dead egress.
+    expect(src).toContain("class MintTransportError");
+    expect(src).toContain("err instanceof MintTransportError");
+    // ...and the handover uses the spent-IP path, which is neither streak-gated
+    // nor throttled, unlike the denial rotation.
+    expect(src).toContain('await advanceProxyEgress("mint transport');
+  });
+});
+
 describe("the mint egresses through the sticky proxy when one is in force", () => {
   // The premise of the whole sticky change is that a Kinetic bearer token is
   // bound to its minting IP - since disproved. What survives is narrower and
@@ -143,8 +198,10 @@ describe("the mint egresses through the sticky proxy when one is in force", () =
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
     // Assert on the CALL, not on a line range: KFS_MINT_DIRECT is mentioned in a
     // comment above KFS_MINT_IMPERSONATE, so slicing between them runs backwards.
-    expect(src, "the proxied mint rung uses the sticky egress")
-      .toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, currentEgressProxyUrl())");
+    expect(src, "the proxied mint rung reads the sticky egress")
+      .toContain("const impProxyUrl = currentEgressProxyUrl();");
+    expect(src, "...and passes it, never a null - null is curl egressing from this box")
+      .toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, impProxyUrl)");
     expect(src, "and no mint egresses through the raw rotating gateway")
       .not.toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, proxyUrlFromEnv(process.env))");
   });
@@ -179,11 +236,40 @@ describe("what the measurements actually established", () => {
   // perfectly from another. Tokens are PORTABLE. C did worse than B only
   // because IP-2 had already served B's 20 searches - which is the per-IP wear
   // the check budget exists for, not a token problem.
-  it("does not drop the token pool when the egress IP changes", async () => {
+  it("retires the token WITH the egress IP, because the pair is what is throttled", async () => {
+    // THIS ASSERTION USED TO SAY THE OPPOSITE, and the reversal is the point.
+    // It read: invalidateAllForEgressChange - "removed: it forced a pointless
+    // re-mint on every rotation". That was correct when rotation fired every 10
+    // proxied requests (PROACTIVE_ROTATE_EVERY), nowhere near a pair boundary.
+    // It is wrong now that rotation IS the pair boundary: the arm table above
+    // says a token ridden across fresh IPs answers 20/60 while a fresh pair
+    // every 20 answers 60/60. Tokens being PORTABLE (they work from another IP)
+    // was never the same claim as a token being UNSPENT.
     const { AuthorizedTokenPool } = await import("../../server/authorizedTokenPool");
-    const pool: any = new AuthorizedTokenPool({ mint: async () => ({ token: "t", expiresAt: Date.now() + 3_600_000 }) } as any);
-    expect(typeof pool.invalidateAllForEgressChange,
-      "removed: it forced a pointless re-mint on every rotation").toBe("undefined");
+    let minted = 0;
+    const pool: any = new AuthorizedTokenPool({
+      maxSize: 4,
+      warmMinimum: 1,
+      refreshMarginMs: 60_000,
+      maintenanceIntervalMs: 60_000,   // never started; no timer to leak
+      maxChecksPerToken: 20,
+      maxLeasesPerToken: 20,
+      mint: async () => ({ token: `t${++minted}`, expiresAt: Date.now() + 3_600_000 }),
+    } as any);
+    const first = await pool.lease();
+    expect(first.token).toBe("t1");
+    first.release();
+
+    // The egress IP changed underneath us: every live token is now half of a
+    // pair that no longer exists.
+    expect(pool.retireGeneration(), "the live token is retired").toBe(1);
+    expect(pool.retireGeneration(), "and retiring twice is not a re-mint").toBe(0);
+
+    // Lazily: no mint happened at retirement, only when work next arrived.
+    expect(minted, "retirement does not mint").toBe(1);
+    const second = await pool.lease();
+    expect(second.token, "the next check mints a fresh token on the fresh IP").toBe("t2");
+    second.release();
   });
 
   it("does not disable the direct mint rung under a sticky egress", async () => {
@@ -191,9 +277,65 @@ describe("what the measurements actually established", () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
     // imp-direct is the cleanest egress AND spends no residential budget, so it
     // must stay reachable. A revision briefly skipped it on the binding premise.
+    // It is now OPT-IN rather than default - the owner directive is that no
+    // carrier request leaves from this box - so "reachable" means one env var
+    // away, not deleted. The policy itself lives in
+    // tests/unit/carrier-egress-is-decodo-only.test.ts; what matters here is
+    // that a STICKY EGRESS is still not the thing that gates it.
     expect(src).toContain("mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null)");
+    expect(src, "and what gates it is the direct-egress opt-in, nothing else")
+      .toContain("if (directCarrierEgressAllowed()) {");
     expect(src, "no sticky-egress guard around the direct rung")
       .not.toContain("sticky egress in force");
+  });
+});
+
+describe("one IP, one token, twenty checks", () => {
+  // The two counters used to drift: proxy-fetch counts every proxied check while
+  // the token pool counts distinct addresses, so a "generation" was rarely one
+  // clean pair even though both budgets read 20. The egress owns the boundary
+  // now - its counter is a SUPERSET of the token's, since retries and denials
+  // spend it too, so at equal budgets the IP always trips first and one
+  // direction of coupling is enough.
+  it("fires the generation hook on every real IP change", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY_PORT_BASE = "10001";
+    process.env.DECODO_STICKY_PORT_COUNT = "100";
+    delete process.env.DECODO_STICKY;
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    const fired: string[] = [];
+    mod.setEgressGenerationHook((reason) => { fired.push(reason); });
+    try {
+      const before = mod.getProxyStickyState().port;
+      await mod.advanceProxyEgress("budget spent");
+      expect(mod.getProxyStickyState().port).not.toBe(before);
+      expect(fired, "the token generation ends with the IP").toHaveLength(1);
+      expect(fired[0]).toContain(`port ${mod.getProxyStickyState().port}`);
+
+      // A denial rotation is an IP change too, so it ends the generation as well.
+      process.env.DECODO_ROTATE_AFTER_DENIALS = "1";
+      mod.__resetRotationStateForTests();
+      await mod.rotateProxySession("403");
+      expect(fired.length, "a denial rotation retires the pair too").toBe(2);
+    } finally {
+      mod.setEgressGenerationHook(() => {});
+    }
+  });
+
+  it("does not fire when the IP did not actually change", async () => {
+    process.env.PROXY_URL = "http://user:pass@us.decodo.com:10000";
+    process.env.DECODO_STICKY = "off";   // rotating gateway: no sticky port to advance
+    const mod = await import("../../server/proxy-fetch");
+    mod.__resetRotationStateForTests();
+    const fired: string[] = [];
+    mod.setEgressGenerationHook((reason) => { fired.push(reason); });
+    try {
+      await mod.rotateProxySession("403");
+      expect(fired, "no sticky port advanced, so no generation ended").toEqual([]);
+    } finally {
+      mod.setEgressGenerationHook(() => {});
+    }
   });
 });
 

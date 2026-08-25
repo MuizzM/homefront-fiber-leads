@@ -345,6 +345,22 @@ projector, and outbox keys make retries idempotent.
 - Existing bounded retries use jittered exponential backoff for transient
   network failures and typed 403 backpressure.
 - A 401 refresh is attempted once inside the same queue slot.
+- A mint that never reached the provider at all (undici reports DNS, connect,
+  TLS, reset and timeout failures alike as a bare "fetch failed") is not a
+  denial and carries no 401/403, so the denial rotation cannot see it. After
+  `KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES` consecutive such failures (default
+  2) the process hands over to the next sticky residential IP, the same way a
+  spent IP is retired. Any mint that reaches the provider - a success, a denial,
+  a challenge - resets the count. Before this, a run that landed on an
+  unreachable residential IP retried the mint every few seconds indefinitely and
+  wrote nothing; only killing the worker recovered it, because the sticky port
+  offset is randomised per process (observed 2026-08-24 on `run_1_mt7hy05z`:
+  26 consecutive mint failures at verified=610). `scan.token.mint_failed` now
+  carries `kind` (`auth`, `transport`, or `answered`) and the error `cause`
+  chain, which is what makes this diagnosable from the logs alone.
+- A CAPTCHA or other non-JSON challenge remains a stop condition: it fails
+  closed without rotating the session or changing the egress IP. The transport
+  handover above fires only when nothing reached the provider.
 - Mobile polling never overlaps. After two missed progress responses the map
   displays a reconnecting warning while the server job continues.
 - Budgeted market runs are stored in `scan_runs` / `scan_run_targets` and resume
@@ -429,6 +445,65 @@ Useful endpoints:
 - `GET /api/scan/engine-status` — adaptive congestion-window metrics.
 - `GET /api/scan/:jobId?since=N` — incremental field-scan progress.
 - `GET /api/scan/runs/:id` — resumable market-run progress and cost.
+
+## One IP, one token, twenty checks
+
+A residential IP answers about 20 Kinetic checks and then starts refusing, and a
+token is spent after about the same. What is actually throttled is the PAIR.
+Measured against the live search API, 60 addresses per arm, reading the response
+body rather than the status:
+
+| arm | real answers |
+| --- | --- |
+| one token, fresh IP every 20 | 20/60 (33%) |
+| one IP, fresh token every 20 | 35/60 (58%) |
+| fresh token AND fresh IP every 20 | 60/60 (100%) |
+
+So the pair is retired as a pair. `DECODO_CHECKS_PER_IP` (20) is the
+authoritative number: when the sticky IP retires, the token generation retires
+with it, wherever the change came from - the spent check budget, a denial
+streak, the sticky time window, or a transport handover. `KFS_TOKEN_MAX_CHECKS`
+and `KFS_TOKEN_MAX_LEASES_PER_SLOT` are backstops for the rare case a token caps
+first, not a second schedule; the egress counter is a superset of the token's,
+since retries and denials spend it too, so at equal budgets the IP trips first.
+
+Retirement is lazy: slots go empty and the next check mints one fresh token
+against the fresh IP. That is why `KFS_TOKEN_POOL_WARM_MIN` is 1 - a larger warm
+reserve mints tokens that die with the IP without ever answering anything.
+
+Before this, both counters read 20 but ran on different event streams, so the
+generations drifted out of phase and a "fresh" token was routinely paired with a
+half-spent IP.
+
+## Egress
+
+All carrier traffic goes through Decodo. Decodo's sticky ports are themselves
+residential IPs, so "residential" and "Decodo" name the same egress; what is not
+Decodo is the machine's own connection.
+
+`CARRIER_DIRECT_EGRESS` (default `off`) is the single switch for unproxied
+carrier requests. With it off:
+
+- both direct mint rungs in `server/scanner.ts` are skipped - the impersonate
+  ladder keeps only its proxied rung, and `mintViaImpersonate` refuses a null
+  proxy at the point of egress;
+- `server/frontierScanner.ts` no longer tries direct first (`FRONTIER_DIRECT`
+  remains an independent off-switch when the opt-in is on);
+- the Kinetic directory poll in `server/kineticMarketCatalog.ts` rides
+  `proxyFetch` like everything else. It previously had no switch at all.
+
+`CARRIER_DIRECT_EGRESS=on` restores the hybrid ladder. Its upside is measured:
+curl-impersonate minted 6/6 direct from a clean server IP, and a direct mint
+spends none of a residential IP's ~20-answer search budget. The reason it is no
+longer the default is that the leak was invisible - the logs recorded that a
+request went out, never that it went out from here - and an IP of our own that
+gets blocked cannot be rotated away from.
+
+`tests/unit/carrier-egress-is-decodo-only.test.ts` holds the line structurally:
+no module that talks to a carrier may call the global `fetch`. Route new carrier
+calls through `proxyFetch`, or through `directCarrierFetch` when the request is
+genuinely meant to leave from this box - that helper refuses unless an operator
+opted in.
 
 ## Upstream authorization and terms
 

@@ -113,6 +113,104 @@ const stickyPortCount = () => Math.max(1, Number(process.env.DECODO_STICKY_PORT_
 let _stickyPortOffset = Math.floor(Math.random() * 100);
 let _stickyUntil = Date.now() + STICKY_MS;
 
+// ── PARALLEL EGRESS LANES ────────────────────────────────────────────────────
+//
+// Kinetic throttles one (IP, token) PAIR at about 20 answers. One dispatcher on
+// one port means every concurrent check in the process shares a single
+// residential IP and drains that single budget together - which is why the app
+// measured best at concurrency 5 while the standalone runner does 4 lanes
+// comfortably: the runner gives each lane its own port and its own token.
+//
+// A LANE IS A PORT. Lane i rides its own sticky port with its own dispatcher and
+// its own check budget, so N lanes are N independent pairs running at once.
+// Lanes are bound to TOKEN SLOTS by the caller (slot i -> lane i), which is what
+// makes the pair real rather than nominal: retiring lane i retires only the
+// token minted against it.
+//
+// HOW MANY LANES THE ACCOUNT ACTUALLY SUSTAINS, measured 2026-08-25 against
+// us.decodo.com, one request per port, all ports fired at once:
+//
+//     lanes   ok/total   distinct IPs   wall    p50      p95
+//         8       8/8              8   1.4s   1190ms   1425ms
+//        16     16/16             16   1.8s   1148ms   1786ms
+//        32     32/32             32   3.0s   1418ms   2510ms
+//        64     64/64             63   3.0s   1360ms   2057ms
+//       128   128/128            128   3.2s   1331ms   2307ms
+//       256   256/256            255   4.1s   1164ms   2231ms
+//       512   436/512            435   4.4s   1228ms   2051ms   (76 x curl rc 7)
+//
+// Flat latency to 256 and one distinct residential IP per port: Decodo was never
+// the constraint, this process holding ONE dispatcher was. The 512 failures were
+// connect errors from firing 512 concurrent curls on one laptop, so they bound
+// that machine rather than the account.
+//
+// The ceiling here is 64, well under the measured 256, because a lane is not
+// free on THIS side: each one builds its own undici pool. See POOL_SIZE below,
+// which divides across lanes for exactly that reason.
+//
+// DECODO_LANES=1 (the default) is exactly the previous behaviour: one lane,
+// lane 0, sharing the single dispatcher path below.
+const LANE_COUNT = () => boundedInt(process.env.DECODO_LANES, 1, 1, 64);
+
+interface EgressLane { id: number; offset: number; dispatcher: any; checks: number; }
+const _lanes = new Map<number, EgressLane>();
+
+/** How many lanes this process is running. */
+export function egressLaneCount(): number { return LANE_COUNT(); }
+
+/** Lane ids are dense and small; a caller's slot id maps onto one. */
+export function laneFor(key: number): number {
+  const lanes = LANE_COUNT();
+  return lanes <= 1 ? 0 : ((Math.abs(Math.floor(key)) % lanes) + lanes) % lanes;
+}
+
+/** The port a lane rides: the process offset, stepped once per lane. */
+function lanePort(lane: EgressLane): number {
+  return stickyPortBase() + ((_stickyPortOffset + lane.offset) % stickyPortCount());
+}
+
+function laneUrl(base: string, lane: EgressLane): string {
+  if (process.env.DECODO_STICKY === "off") return base;
+  try {
+    const u = new URL(base);
+    if (!u.username || u.username.includes("-session-")) return base;
+    u.port = String(lanePort(lane));
+    return u.toString();
+  } catch { return base; }
+}
+
+function getLane(id: number, proxyUrl: string): EgressLane {
+  const existing = _lanes.get(id);
+  if (existing) return existing;
+  // offset id keeps lanes on DIFFERENT ports: two lanes on one IP would halve
+  // each other's budget, which is the bug this whole design exists to avoid.
+  const lane: EgressLane = { id, offset: id, dispatcher: null, checks: 0 };
+  lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());
+  _lanes.set(id, lane);
+  return lane;
+}
+
+/** Hand lane `id` a fresh residential IP and clear its budget. */
+function retireLane(lane: EgressLane, proxyUrl: string): void {
+  const old = lane.dispatcher;
+  // Step past every lane at once so no two lanes ever collide on a port.
+  lane.offset += LANE_COUNT();
+  lane.checks = 0;
+  lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());
+  if (old && typeof old.close === "function") old.close().catch(() => {});
+  _sessionSeq++;
+  if (_generationHook) {
+    // Only this lane's token is spent, not the whole pool's.
+    try { _generationHook(`lane ${lane.id} -> port ${lanePort(lane)}`, lane.id, LANE_COUNT()); }
+    catch { /* the token pool must never break the transport */ }
+  }
+}
+
+/** Diagnostics: what every lane is riding right now. */
+export function getLaneState(): Array<{ id: number; port: number; checks: number }> {
+  return [..._lanes.values()].map(lane => ({ id: lane.id, port: lanePort(lane), checks: lane.checks }));
+}
+
 /** The sticky port this process is currently riding. */
 function currentStickyPort(): number {
   return stickyPortBase() + (_stickyPortOffset % stickyPortCount());
@@ -171,6 +269,58 @@ function isMintUrl(u: string): boolean {
   catch { return false; }
 }
 
+// WHICH RESIDENTIAL IP ARE WE ACTUALLY ON?
+//
+// The port selects one; it never tells us which. An operator watching the live
+// view wants the address itself - it is the only way to see, rather than
+// assume, that provider traffic is not leaving from this building.
+//
+// Resolved by asking Decodo's own echo endpoint THROUGH the proxy, at most once
+// per sticky port, and only when someone is actually looking (the diagnostics
+// endpoint pulls it). It is a diagnostic, not a check, so it must not spend the
+// IP's ~20-answer budget - hence the exclusion below alongside mints.
+const EGRESS_ECHO_URL = () => process.env.DECODO_ECHO_URL?.trim() || "https://ip.decodo.com/json";
+function isDiagnosticUrl(u: string): boolean {
+  try { return new URL(u).host === new URL(EGRESS_ECHO_URL()).host; }
+  catch { return false; }
+}
+let _egressIp: { port: number | null; ip: string | null; at: number; error: string | null } = { port: null, ip: null, at: 0, error: null };
+let _egressIpInFlight: Promise<void> | null = null;
+
+/** The last known public IP for the port we are on, or null until it resolves.
+ * Carries WHY when it could not: a silent null is indistinguishable from a slow
+ * one, and that ambiguity has cost this codebase enough already. */
+export function getEgressIp(): { ip: string | null; forPort: number | null; at: number | null; error: string | null } {
+  const port = process.env.DECODO_STICKY === "off" ? null : currentStickyPort();
+  if (_egressIp.port !== port) return { ip: null, forPort: port, at: null, error: null };
+  return { ip: _egressIp.ip, forPort: _egressIp.port, at: _egressIp.at || null, error: _egressIp.error };
+}
+
+/**
+ * Resolve the current egress IP if we do not already know it for this port.
+ * Single-flight, best-effort, never throws: a diagnostic that breaks scanning
+ * would be a poor trade for a label.
+ */
+export async function refreshEgressIp(): Promise<void> {
+  const port = process.env.DECODO_STICKY === "off" ? null : currentStickyPort();
+  if (_egressIp.port === port && _egressIp.ip) return;
+  if (_egressIpInFlight) return _egressIpInFlight;
+  const done = (async () => {
+    try {
+      const res = await proxyFetch(EGRESS_ECHO_URL(), { signal: AbortSignal.timeout(8_000) } as any);
+      const body: any = await res.json().catch(() => null);
+      const ip = typeof body?.proxy?.ip === "string" ? body.proxy.ip
+        : typeof body?.ip === "string" ? body.ip : null;
+      _egressIp = { port, ip, at: Date.now(), error: ip ? null : `echo ${res.status} had no ip field` };
+    } catch (err: any) {
+      _egressIp = { port, ip: null, at: Date.now(), error: String(err?.message ?? err).slice(0, 80) };
+    }
+  })();
+  _egressIpInFlight = done;
+  void done.finally(() => { if (_egressIpInFlight === done) _egressIpInFlight = null; });
+  return done;
+}
+
 /**
  * Has this IP been ridden past its time window?
  *
@@ -219,10 +369,14 @@ export function currentEgressProxyUrl(): string | null {
 
 /** Exposed for diagnostics: the current sticky session window (masked). */
 
-function buildAgent(proxyUrl: string) {
+function buildAgent(proxyUrl: string, lanes = 1) {
   return new _ProxyAgent({
     uri: proxyUrl,
-    connections: POOL_SIZE,
+    // POOL_SIZE is the budget for the PROCESS, not for each lane. Handing every
+    // lane the full 100 would open 1,600 sockets at 16 lanes; a lane only ever
+    // carries its own checks, so it needs its share. Floor of 4 so a lane can
+    // still pipeline a little.
+    connections: lanes > 1 ? Math.max(4, Math.floor(POOL_SIZE / lanes)) : POOL_SIZE,
     pipelining: PIPELINE,
     keepAliveTimeout: KEEP_ALIVE,
     keepAliveMaxTimeout: 90_000,
@@ -262,7 +416,7 @@ async function loadUndici() {
 // and (via an uncaught maintenance-timer rejection) killed the prod process.
 const undiciReady = loadUndici();
 
-export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<Response> {
+export async function proxyFetch(url: string, opts: RequestInit = {}, laneId = 0): Promise<Response> {
   const proxyUrl = configuredProxyUrl();
 
   // When an authorized proxy is configured it is required for that deployment:
@@ -274,6 +428,12 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
     // closed rather than ever sending an unproxied direct request.
     if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable - refusing an unconfigured direct request");
     if (!_sharedDispatcher) _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
+    // Multi-lane: each lane has its own port, dispatcher and budget, so N pairs
+    // run at once instead of N checks sharing one IP. One lane means the shared
+    // dispatcher, byte for byte the previous behaviour.
+    const lanesOn = LANE_COUNT() > 1;
+    const lane = lanesOn ? getLane(laneFor(laneId), proxyUrl) : null;
+    const dispatcher = lane ? lane.dispatcher : _sharedDispatcher;
     // Count this request toward the proactive-rotation cadence, but DON'T rotate
     // before dispatching it — the request that trips the counter must run on the
     // existing WARM dispatcher, and the rotation happens AFTER the response so
@@ -288,7 +448,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
       PROACTIVE_ROTATE_EVERY > 0 && ++_reqSinceRotate >= PROACTIVE_ROTATE_EVERY;
     if (shouldProactiveRotate) _reqSinceRotate = 0;
     try {
-      const res = await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
+      const res = await _undiciFetch(url, { ...opts, dispatcher } as any) as unknown as Response;
       // Bandwidth governor: ledger every proxied response; a 407 from the
       // Decodo gateway means auth/limit denial — feed the circuit breaker so
       // scanning suspends instead of hammering a dead account.
@@ -303,7 +463,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         // whose search quota is exhausted, so counting it would let one healthy
         // mint erase a run of search denials and keep a burnt IP in service
         // forever. Only a real check earns the forgiveness.
-        if (res.status >= 200 && res.status < 300 && !isMintUrl(url)) _denialStreak = 0;
+        if (res.status >= 200 && res.status < 300 && !isMintUrl(url) && !isDiagnosticUrl(url)) _denialStreak = 0;
         // ...and spend one unit of the IP's budget. Retiring on a COUNT while
         // the IP is still healthy beats discovering it is spent from a run of
         // denials (see CHECKS_PER_IP for the measurements).
@@ -320,9 +480,13 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         // The counter is also reset HERE, synchronously at the decision, rather
         // than in advanceStickyPort() inside the async retire - otherwise every
         // response landing in that gap re-arms the flag and queues another one.
-        if (process.env.DECODO_STICKY !== "off" && !isMintUrl(url)) {
+        if (process.env.DECODO_STICKY !== "off" && !isMintUrl(url) && !isDiagnosticUrl(url)) {
           const budget = CHECKS_PER_IP();
-          if (budget > 0 && ++_checksOnThisIp >= budget) {
+          if (lane) {
+            // Each lane spends its OWN budget and retires on its own, so a busy
+            // lane never shortens a quiet one.
+            if (budget > 0 && ++lane.checks >= budget) retireLane(lane, proxyUrl);
+          } else if (budget > 0 && ++_checksOnThisIp >= budget) {
             _checksOnThisIp = 0;
             _ipBudgetSpent = true;
           }
@@ -331,12 +495,24 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
       // Rotate for the NEXT request, off the hot path - never mid-request: a
       // fresh dispatcher has no warm connections, so the request that trips the
       // counter must finish on the pool it rode in on.
-      if (shouldProactiveRotate) void rotateProxySession("proactive");
-      else if (_ipBudgetSpent) { _ipBudgetSpent = false; void retireStickyIp(); }
-      else if (stickyWindowExpired()) void retireStickyIp();
+      if (!lane) {
+        if (shouldProactiveRotate) void rotateProxySession("proactive");
+        else if (_ipBudgetSpent) { _ipBudgetSpent = false; void retireStickyIp(); }
+        else if (stickyWindowExpired()) void retireStickyIp();
+      }
       return res;
     } catch (err: any) {
       if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
+        if (lane) {
+          // Rebuild THIS lane's pool on THIS lane's port. Rebuilding the shared
+          // dispatcher here fixed an egress the request never used, and going
+          // through rebuildDispatcher would advance the port for every lane.
+          // No port change: a dropped tunnel is not evidence the IP is spent.
+          const stale = lane.dispatcher;
+          lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());
+          if (stale && typeof stale.close === "function") stale.close().catch(() => {});
+          return await _undiciFetch(url, { ...opts, dispatcher: lane.dispatcher } as any) as unknown as Response;
+        }
         rebuildDispatcher(proxyUrl);
         console.log("[proxy-fetch] Pool rebuilt after socket reset");
         return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
@@ -361,6 +537,71 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
   return fetch(url, opts);
 }
 
+// ── NO CARRIER REQUEST LEAVES FROM THIS BOX ─────────────────────────────────
+// Owner directive 2026-08-24: all carrier traffic goes through Decodo, always.
+//
+// Decodo's sticky ports ARE residential IPs - that is what the account buys -
+// so "residential" and "Decodo" are the same egress here. What is NOT Decodo is
+// the machine's own connection, and until this gate existed three carrier paths
+// used it by DEFAULT: the two direct mint rungs in server/scanner.ts and
+// Frontier's direct-first serviceability call. A fourth, the Kinetic directory
+// poll in server/kineticMarketCatalog.ts, had no switch at all.
+//
+// Direct carrier egress is now opt-IN. A deployment that forgets to set anything
+// gets Decodo, which is the safe direction: the failure mode of the old default
+// was silent (the logs still said the request went out, never that it went out
+// from here), and a blocked home or server IP is not something you can rotate.
+//
+// CARRIER_DIRECT_EGRESS=on restores the hybrid ladder for an operator who wants
+// it back - see docs/SCAN_OPERATIONS.md. It is deliberately ONE switch: the
+// measured tradeoff (curl-impersonate direct mints 6/6 from a clean IP and spend
+// no residential search budget) applies to the whole class, not per call site.
+export function directCarrierEgressAllowed(): boolean {
+  return process.env.CARRIER_DIRECT_EGRESS === "on";
+}
+
+/**
+ * The ONE way to make an unproxied carrier request. Throws unless direct egress
+ * is explicitly allowed, so a caller cannot leak by forgetting to check - the
+ * gate lives at the point of egress rather than at each call site.
+ */
+export async function directCarrierFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  if (!directCarrierEgressAllowed()) {
+    throw new Error("[proxy-fetch] direct carrier egress is off (CARRIER_DIRECT_EGRESS is not \"on\") - route this through proxyFetch");
+  }
+  return fetch(url, init);
+}
+
+// ── ONE IP, ONE TOKEN, TWENTY CHECKS ────────────────────────────────────────
+// Owner directive 2026-08-24, and the measurement agrees. Against the live
+// search API, 60 addresses per arm, reading the response BODY:
+//
+//   one TOKEN, fresh IP every 20 ......... 20/60   (33%)
+//   one IP, fresh TOKEN every 20 ......... 35/60   (58%)
+//   fresh TOKEN + fresh IP every 20 ...... 60/60   (100%)
+//
+// What Kinetic throttles is the PAIR, so the pair is what has to be retired -
+// together, not on two counters that happen to share the number 20. They used
+// to drift: this module counts every proxied check, while the token pool counts
+// distinct addresses, so a generation was rarely one clean (IP, token).
+//
+// The IP is the authoritative half. Its counter is a SUPERSET of the token's -
+// retries and denials spend it too - so at equal budgets the IP always reaches
+// 20 first, and coupling in this one direction is enough. Registered by
+// server/scanner.ts; a no-op until then, and never called during a rebuild that
+// does not actually change the IP.
+// laneId is the token slot whose pair just ended; undefined means every lane
+// (the whole-process rotation paths, which retire one shared IP).
+// (reason, laneId, laneCount). laneId undefined means every lane: the shared
+// rotation paths move the whole process. When a lane IS named, laneCount comes
+// with it, because the slots riding lane L are every slot where
+// slotId % laneCount === L - the lane id alone cannot identify them, and
+// indexing the slot array with it retires an idle slot in silence.
+let _generationHook: ((reason: string, laneId?: number, laneCount?: number) => void) | null = null;
+export function setEgressGenerationHook(hook: (reason: string, laneId?: number, laneCount?: number) => void): void {
+  _generationHook = hook;
+}
+
 // Replace the shared dispatcher with a freshly-built one and bump the session id.
 // New requests open new connections, so Decodo's rotating residential gateway
 // assigns a fresh egress IP — a fresh authorized session.
@@ -369,9 +610,33 @@ function rebuildDispatcher(proxyUrl: string): void {
   // A rebuild is almost always denial-driven (403/socket reset): the whole
   // point is a FRESH egress IP. Force a new sticky id here — the time-based
   // window only applies to undisturbed operation, never to a rotate.
-  if (process.env.DECODO_STICKY !== "off") advanceStickyPort();
+  const ipChanged = process.env.DECODO_STICKY !== "off";
+  if (ipChanged) advanceStickyPort();
   _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
   _sessionSeq++;
+  // EVERY LANE MOVES, OR NONE OF THEM DOES. This is the process-wide rotation
+  // (denial streak, sticky window, mint transport handover). Before, it advanced
+  // only the shared dispatcher and then retired the whole token pool - so every
+  // token was destroyed while every lane carried on dialling the same spent IP,
+  // which is the 33% arm of the measurement table. Lanes are rebuilt here so the
+  // pool-wide retirement below is true.
+  if (ipChanged && _lanes.size) {
+    for (const lane of _lanes.values()) {
+      const old = lane.dispatcher;
+      lane.offset += LANE_COUNT();
+      lane.checks = 0;
+      lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());
+      if (old && typeof old.close === "function") old.close().catch(() => {});
+    }
+  }
+  // A new IP ends the generation: the token minted against the old one is half
+  // of a pair that no longer exists. One call site, so the rule is structural -
+  // every path that changes the IP (budget spent, denial streak, sticky window,
+  // transport handover) retires the token with it.
+  if (ipChanged && _generationHook) {
+    try { _generationHook(`egress -> port ${currentStickyPort()}`); }
+    catch { /* the token pool must never break the transport */ }
+  }
   // Graceful, fire-and-forget close of the old pool so in-flight requests finish
   // on it while new traffic moves to the fresh session. Never awaited.
   if (old && typeof old.close === "function") { old.close().catch(() => {}); }
@@ -425,7 +690,7 @@ let _ipBudgetSpent = false;
  */
 let _retireInFlight = false;
 
-async function retireStickyIp(): Promise<void> {
+async function retireStickyIp(reason = "budget"): Promise<void> {
   const proxyUrl = configuredProxyUrl();
   if (!proxyUrl || process.env.DECODO_STICKY === "off") return;
   // Single-flight, for the same reason rotateProxySession is: concurrent
@@ -438,10 +703,31 @@ async function retireStickyIp(): Promise<void> {
     _denialStreak = 0;
     _lastRotateAt = Date.now();
     rebuildDispatcher(proxyUrl); // advances the port, so a new residential IP
-    console.log(`[proxy-fetch] sticky IP retired on budget -> port ${currentStickyPort()}`);
+    console.log(`[proxy-fetch] sticky IP retired (${reason}) -> port ${currentStickyPort()}`);
   } finally {
     _retireInFlight = false;
   }
+}
+
+/**
+ * Step to the next residential IP because THIS one cannot do the work at all -
+ * not because it denied us. The caller has already established that (the mint
+ * path calls this after a streak of failures that never reached the provider:
+ * DNS, connect, TLS, reset, timeout).
+ *
+ * Deliberately the SPENT-BUDGET path, not rotateProxySession: an IP that never
+ * answers produces no denials, so the denial streak it requires would never be
+ * satisfied, and its min-interval throttle can drop the rebuild entirely. This
+ * is a planned handover, so it is neither streak-gated nor throttled - and it is
+ * still bounded by its caller, which only reaches it after N consecutive
+ * failures. A denial, a challenge, or any other real provider answer must NOT
+ * come through here; that remains rotateProxySession's or the caller's business.
+ *
+ * No-op when stickiness is off (the rotating gateway hands out a fresh IP per
+ * request anyway) or when no proxy is configured (local/dev).
+ */
+export function advanceProxyEgress(reason: string): Promise<void> {
+  return retireStickyIp(reason);
 }
 
 export async function rotateProxySession(reason?: string): Promise<void> {

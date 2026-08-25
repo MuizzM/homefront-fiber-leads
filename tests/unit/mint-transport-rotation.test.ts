@@ -20,13 +20,26 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
  *      bot wall is evasion, and no amount of livelock justifies it.
  */
 
-const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({
+const { proxyFetch, rotateProxySession, advanceProxyEgress } = vi.hoisted(() => ({
   proxyFetch: vi.fn(),
   rotateProxySession: vi.fn(async () => {}),
+  advanceProxyEgress: vi.fn(async () => {}),
 }));
 vi.mock("../../server/proxy-fetch", () => ({
   proxyFetch,
   rotateProxySession,
+  // scanner.ts registers for egress changes at module scope (one IP, one token,
+  // twenty checks), so this mock has to expose the hook or the import throws.
+  setEgressGenerationHook: () => {},
+  advanceProxyEgress,
+  directCarrierEgressAllowed: () => false,
+  directCarrierFetch: async () => { throw new Error("direct carrier egress is off"); },
+  getProxyStickyState: () => ({ port: 10001, denialStreak: 0, checksOnThisIp: 0 }),
+  isProxyConnected: () => true,
+  getEgressIp: () => ({ ip: null, forPort: 10001, at: null, error: null }),
+  refreshEgressIp: async () => {},
+  // One lane, so the scanner's lane round-robin is a no-op in these suites.
+  egressLaneCount: () => 1,
   getProxySessionId: () => "decodo-s1",
   currentEgressProxyUrl: () => "http://redacted@proxy:10001",
   isProxyConnected: () => true,
@@ -46,8 +59,20 @@ let mintAttempts = 0;
 /** Rotations THIS fix is responsible for, identified by the reason it passes.
  *  Counting by reason keeps the assertions honest when the pre-existing
  *  auth-denial rotation is also firing. */
+// The transport handover moved from rotateProxySession to advanceProxyEgress,
+// and every assertion below is unchanged by that: it still counts moves, and it
+// still expects none for a challenge.
+//
+// WHY THE MOVE. rotateProxySession holds the IP until DECODO_ROTATE_AFTER_DENIALS
+// consecutive DENIALS (8 in production) and is throttled by
+// ROTATE_MIN_INTERVAL_MS on top. A dead egress produces no denials at all - it
+// produces no responses - so the only thing that could feed that streak was this
+// call, needing ~24 consecutive transport failures to move one port, and any
+// successful search reset it. advanceProxyEgress is the spent-IP handover:
+// unthrottled and not streak-gated, because the caller has already established
+// across N failures that the IP cannot carry a request.
 const transportRotations = () =>
-  rotateProxySession.mock.calls.filter(([reason]) => String(reason) === "mint transport");
+  advanceProxyEgress.mock.calls.filter(([reason]) => String(reason).startsWith("mint transport"));
 
 const freshToken = () =>
   new Response(JSON.stringify({ token: `t${Math.random()}`.padEnd(40, "x"), success: true }), {

@@ -243,7 +243,7 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, setManualToken, getTokenStatus, forceFreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, pauseScanning, resumeScanning, isScanningPaused, type ScanResult } from "./scanner";
+import { scanAddress, setManualToken, getTokenStatus, forceFreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, pauseScanning, resumeScanning, isScanningPaused, getEgressActivity, type ScanResult } from "./scanner";
 import { getInspectorSnapshot, getAddressTimeline, onScanEvent } from "./scanEvents";
 import { scrubSecretText } from "./secretScrub";
 import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
@@ -1681,6 +1681,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Address-scanner state ──────────────────────────────────────────────────
   // Polled every 3s by the CityScanner UI to show live efficiency metrics.
+  // Live egress: which residential IP and which token the scanner is riding
+  // right now, and how much of the 20-check pair budget is left. Diagnostics
+  // ONLY - the masked session id and the sticky PORT, never a credential, never
+  // the proxy URL, and the residential IP itself is not known to this process.
+  app.get("/api/scan/egress", requireManager, (_req, res) => {
+    res.json(getEgressActivity());
+  });
+
   app.get("/api/scanner/state", requireManager, (_req, res) => {
     const stateUser = (_req as any).user;
     const activeJob = Array.from(scanJobs.values()).find(j =>
@@ -3565,9 +3573,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Full tokens / proxy credentials / auth headers are NEVER emitted.
   function inspectorHealth() {
     const token = getTokenStatus();
+    const egress = getEgressActivity();
     return {
       decodoConnected: isProxyConnected(),
       proxySessionId: getProxySessionId(),           // masked "decodo-sN"
+      // The address we are actually egressing from, so the per-address stream
+      // below can be read against the IP that produced it.
+      publicIp: egress.proxy.publicIp,
+      stickyPort: egress.proxy.stickyPort,
+      checksOnThisIp: egress.proxy.checksOnThisIp,
+      checksPerIp: egress.proxy.checksPerIp,
       tokenReady: token.hasToken,
       tokenExpiresIn: token.expiresIn,               // seconds
       tokenPool: { ready: token.readySessions, size: token.configuredSessions },
@@ -4685,6 +4700,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ sweeps: sweepService.listSweeps(tid(req), Number(req.query.limit) || 30) });
   });
 
+  // Registered AFTER every /api/sweeps/state/... route, so ":id" can never
+  // swallow "state". Admin-only, matching the route that starts a sweep: a
+  // manager may watch one, only an admin may spend or stop provider budget.
+  app.post("/api/sweeps/:id/cancel", requireAdmin, (req: any, res) => {
+    const stopped = sweepService.cancelSweep(String(req.params.id), tid(req));
+    if (!stopped) return res.status(404).json({ error: "Sweep not found or already finished" });
+    res.json({ ok: true });
+  });
   app.get("/api/sweeps/:id", requireManager, (req: any, res) => {
     const job = sweepService.getSweep(qstr(req.params.id), tid(req));
     if (!job) return res.status(404).json({ error: "Sweep not found" });

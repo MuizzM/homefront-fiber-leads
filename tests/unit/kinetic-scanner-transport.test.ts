@@ -1,13 +1,37 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
-const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({ proxyFetch: vi.fn(), rotateProxySession: vi.fn(async () => {}) }));
+const { proxyFetch, rotateProxySession, advanceProxyEgress, setEgressGenerationHook, egressHook } = vi.hoisted(() => {
+  // The scanner registers its egress-change callback at IMPORT. clearMocks wipes
+  // the call record before every test, so the callback is kept here instead of
+  // being read back off the spy.
+  const egressHook: { current: ((reason: string) => void) | null } = { current: null };
+  return {
+    proxyFetch: vi.fn(),
+    rotateProxySession: vi.fn(async () => {}),
+    advanceProxyEgress: vi.fn(async () => {}),
+    egressHook,
+    setEgressGenerationHook: vi.fn((cb: (reason: string) => void) => { egressHook.current = cb; }),
+  };
+});
 vi.mock("../../server/proxy-fetch", () => ({
   // Decodo-exclusive: mint AND search both funnel through proxyFetch (the Decodo
   // transport), observable through one call log. rotateProxySession is the
   // fresh-session hook the scanner calls on an auth denial.
   proxyFetch,
   rotateProxySession,
+  // The handover a caller asks for when the residential IP cannot reach the
+  // provider at all — the spent-IP path, not the denial path.
+  advanceProxyEgress,
+  // Direct carrier egress is OFF, exactly as an unconfigured deployment has it
+  // (server/proxy-fetch.ts). directCarrierFetch throws here for the same reason
+  // it throws in production: a test that reaches it is leaking, and should say so.
+  // Captured, so a test can fire the egress change the scanner registered for.
+  setEgressGenerationHook,
+  directCarrierEgressAllowed: () => false,
+  directCarrierFetch: async () => { throw new Error("direct carrier egress is off"); },
+  // One lane, so the scanner's lane round-robin is a no-op in these suites.
+  egressLaneCount: () => 1,
   getProxySessionId: () => "decodo-s1",
   isProxyConnected: () => true,
   proxyUrlFromEnv: () => "http://redacted@proxy",
@@ -162,6 +186,144 @@ describe("Kinetic scanner transport hardening", () => {
       process.env.KFS_MINT_MAX_ROTATIONS = prevRot;
       scanner.__resetTokenTransportStateForTests();
     }
+  });
+
+  // ── THE MINT WEDGE (observed live 2026-08-24 on run_1_mt7hy05z) ───────────
+  // A residential IP that cannot REACH the Kinetic auth endpoint fails the mint
+  // with undici's bare "fetch failed" - no 401, no 403 anywhere in it. The
+  // rotation above was gated on isAuthDenialMessage, so the scanner retried the
+  // same dead IP every ~3 s forever: 26 consecutive mint failures, the run stuck
+  // at verified=610, zero snapshots written. Killing the worker recovered it,
+  // because the sticky port offset is randomised per process - which is the
+  // proof that the IP, not Kinetic, was the problem.
+  function transportFailure(): Error {
+    // Shaped exactly like undici's: a bare message with the real reason buried
+    // one `cause` level down, which is why classification reads the chain.
+    return Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect ECONNREFUSED 32.223.187.36:443"), { code: "ECONNREFUSED" }),
+    });
+  }
+
+  async function withMintEnv<T>(overrides: Record<string, string>, run: () => Promise<T>): Promise<T> {
+    const keys = ["KFS_MINT_IMPERSONATE", "KFS_MINT_DIRECT", "KFS_MINT_MAX_ROTATIONS",
+      "KFS_MINT_TRANSPORT_ROTATE_AFTER", ...Object.keys(overrides)];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    // Skip the impersonate + direct rungs so the mint funnels through the Decodo
+    // rung these cases observe.
+    Object.assign(process.env, { KFS_MINT_IMPERSONATE: "off", KFS_MINT_DIRECT: "off" }, overrides);
+    scanner.__resetTokenTransportStateForTests();
+    advanceProxyEgress.mockClear();
+    rotateProxySession.mockClear();
+    try { return await run(); }
+    finally {
+      for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      scanner.__resetTokenTransportStateForTests();
+    }
+  }
+
+  it("mint transport failure: a STREAK hands the residential IP over, through the UNTHROTTLED path", async () => {
+    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "5" }, async () => {
+      let mints = 0;
+      proxyFetch.mockImplementation(async (url: string) => {
+        if (url.includes("/api/v1/auth/session")) {
+          mints++;
+          // MintTransportError is raised structurally where proxyFetch throws,
+          // so the classification never has to read an error string.
+          if (mints <= 3) throw transportFailure();
+          return json(200, { access_token: "minted-on-the-next-ip", expires_in: 2_100 });
+        }
+        return json(200, noService);
+      });
+
+      // One failure is not evidence: the call fails closed and the streak
+      // carries to the next mint rather than moving the IP.
+      for (let i = 0; i < 2; i++) {
+        scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
+        await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/transport/i);
+      }
+      expect(advanceProxyEgress, "two failures have not earned a handover").not.toHaveBeenCalled();
+
+      // The third completes the streak: hand the IP over and retry in place.
+      scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
+      await expect(scanner.forceFreshTokenFromApi()).resolves.toBe("minted-on-the-next-ip");
+
+      // THE POINT OF THIS TEST: the handover goes through advanceProxyEgress.
+      // rotateProxySession holds the IP until DECODO_ROTATE_AFTER_DENIALS
+      // consecutive DENIALS (8 in production) and is throttled on top, so on a
+      // dead egress - which produces no denials at all - it returns early and
+      // advances nothing. The spent-IP path is neither streak-gated nor
+      // throttled, which is what actually breaks the livelock.
+      expect(advanceProxyEgress).toHaveBeenCalledTimes(1);
+      expect(String(advanceProxyEgress.mock.calls[0][0])).toContain("mint transport");
+      expect(rotateProxySession, "a transport failure is not a denial").not.toHaveBeenCalled();
+    });
+  });
+
+  it("mint challenge: a non-JSON interstitial NEVER earns an IP change, however often it repeats", async () => {
+    await withMintEnv({ KFS_MINT_MAX_ROTATIONS: "3", KFS_MINT_ROTATE_AFTER_TRANSPORT_FAILURES: "2" }, async () => {
+      let mints = 0;
+      proxyFetch.mockImplementation(async (url: string) => {
+        if (url.includes("/api/v1/auth/session")) {
+          mints++;
+          // A bot-challenge interstitial: the provider ANSWERED, just not with JSON.
+          return new Response("<html>Attention Required</html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          });
+        }
+        return json(200, noService);
+      });
+
+      // Three in a row - past the transport threshold, had it counted them.
+      for (let i = 0; i < 3; i++) {
+        scanner.setManualToken("test-server-token-with-a-safe-fallback-expiry");
+        await expect(scanner.forceFreshTokenFromApi()).rejects.toThrow(/challenge/);
+      }
+      expect(mints, "one attempt each: a challenge is never retried").toBe(3);
+      expect(advanceProxyEgress, "the scanner never changes identity to get around a challenge").not.toHaveBeenCalled();
+      expect(rotateProxySession).not.toHaveBeenCalled();
+    });
+  });
+
+  it("the transport handover has an off switch, and it is read from one place", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/scanner.ts"), "utf8");
+    expect(src).toContain("KFS_MINT_TRANSPORT_ROTATE_AFTER");
+    // 0 disables it, restoring the pre-2026-08-24 fail-closed behaviour.
+    expect(src).toContain("MINT_TRANSPORT_ROTATE_AFTER > 0");
+    // ...and the handover itself must not go through the denial path.
+    expect(src, "the spent-IP path, not the streak-gated denial path")
+      .toContain('await advanceProxyEgress("mint transport');
+  });
+
+  it("an egress change ends the token generation: the next check mints a fresh pair", async () => {
+    // ONE IP, ONE TOKEN, TWENTY CHECKS. The scanner registers for the egress
+    // change at import; firing that callback is exactly what proxy-fetch does
+    // when the sticky port advances.
+    expect(typeof egressHook.current, "the scanner registers for egress changes").toBe("function");
+    const onEgressChange = egressHook.current!;
+
+    let mints = 0;
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/api/v1/auth/session")) {
+        mints++;
+        return json(200, { access_token: `minted-${mints}`, expires_in: 2_100 });
+      }
+      return json(200, noService);
+    });
+
+    // A healthy token is REUSED - the pool does not re-mint per check.
+    scanner.setManualToken("token-from-the-current-pair");
+    await expect(scanner.refreshTokenFromApi()).resolves.toBe("token-from-the-current-pair");
+    await expect(scanner.refreshTokenFromApi()).resolves.toBe("token-from-the-current-pair");
+    expect(mints, "reuse, not a mint per check").toBe(0);
+
+    // ...until the IP underneath it changes. That token is now half of a pair
+    // that no longer exists, so the next check mints against the fresh IP.
+    onEgressChange("egress -> port 10042");
+    await expect(scanner.refreshTokenFromApi()).resolves.toBe("minted-1");
+    expect(mints).toBe(1);
   });
 
   it("345 James Allgood Dr flows through the SHARED scanAddress path as fresh fiber (copper override ignored)", async () => {

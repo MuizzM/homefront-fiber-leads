@@ -193,8 +193,29 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     ON CONFLICT(tenant_id, canonical_key) WHERE canonical_key IS NOT NULL
       DO UPDATE SET updated_at=datetime('now')
     RETURNING id`);
+  // household_segment_type and billing_status are carried onto an EXISTING lead,
+  // not only onto a freshly inserted one.
+  //
+  // trg_leads_fresh_update_guard allows a fresh-fiber lead by EITHER path: (a)
+  // cross-verified with >=2 independent sources, or (b) the AUTHORITATIVE rule,
+  // Kinetic NEW FIBER + billing N. This UPDATE fires that guard - lead_tag is one
+  // of its watched columns - and it used to leave both segment columns untouched,
+  // so path (b) was evaluated against whatever the existing row happened to hold.
+  // For a backfilled lead that is an empty string, so the authoritative path could
+  // only ever be satisfied by an INSERT: any door that ALREADY had a lead row was
+  // permanently unpublishable, and failed with the cross-verification message even
+  // though cross-verification was never the rule it needed to meet.
+  //
+  // Measured on Salisbury 2026-08-24: 434 doors Kinetic itself answers NEW FIBER +
+  // billing N, every one already carrying a half-formed lead from an earlier
+  // backfill (no lead_tag, no score, empty segment), every one rejected.
+  //
+  // NULLIF(?,'') so a blank answer never ERASES a segment the lead already had;
+  // this only ever fills one in.
   const stamp = rawDb.prepare(`UPDATE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?),
     competitor_name=COALESCE(competitor_name,?),competitor_tech=COALESCE(competitor_tech,?),
+    household_segment_type=COALESCE(NULLIF(?,''),household_segment_type),
+    billing_status=COALESCE(NULLIF(?,''),billing_status),
     fresh_confirmed_at=?,fresh_confidence=CASE WHEN fresh_confidence='cross_verified' THEN 'cross_verified' ELSE ? END,fresh_sources=?,lead_tag='fresh_fiber_confirmed',
     lead_score=MAX(COALESCE(lead_score,0),100),assigned_rep_id=COALESCE(assigned_rep_id,?),
     assigned_territory_id=COALESCE(assigned_territory_id,?),
@@ -379,12 +400,15 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         }
       }
       const wasUnassigned = !found?.assigned_rep_id;
+      // Persist segment/billing that satisfy the DB fresh-lead guard even when the
+      // latest snapshot join is null — fall back to the target's last-conclusive
+      // signal so an authoritative lead is never blocked by a null-segment row.
+      //
+      // Hoisted out of the insert branch: the UPDATE path needs them too. See the
+      // stamp statement above for what that omission cost.
+      const leadSegment = candidate.household_segment_type ?? (authoritativeFresh ? "NEW FIBER" : candidate.last_fiber_status);
+      const leadBilling = candidate.billing_status ?? candidate.last_billing_status ?? (authoritativeFresh ? "N" : null);
       if (!leadId) {
-        // Persist segment/billing that satisfy the DB fresh-lead guard even when the
-        // latest snapshot join is null — fall back to the target's last-conclusive
-        // signal so an authoritative lead is never blocked by a null-segment row.
-        const leadSegment = candidate.household_segment_type ?? (authoritativeFresh ? "NEW FIBER" : candidate.last_fiber_status);
-        const leadBilling = candidate.billing_status ?? candidate.last_billing_status ?? (authoritativeFresh ? "N" : null);
         // Carrier-honest copy: Frontier leads were being stamped "Kinetic fiber"
         // (hardcoded below), which read as a wrong-carrier verdict on red pins.
         const carrierName = (candidate as any).carrier === "frontier" ? "Frontier" : "Kinetic";
@@ -429,6 +453,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         candidate.id,
         (candidate as any).competitor_name ?? (candidate as any).competitor_company ?? null,
         (candidate as any).competitor_tech ?? null,
+        leadSegment, leadBilling,
         decision.confirmedAt, confidence, JSON.stringify(decision.sources),
         assignment?.repId ?? null, assignment?.territoryId ?? null,
         assignment?.repId ?? null, assignment?.repId ?? null,

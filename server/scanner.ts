@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, getProxySessionId, currentEgressProxyUrl } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook, getProxyStickyState, isProxyConnected, getEgressIp, refreshEgressIp, egressLaneCount } from "./proxy-fetch";
 import { classifyServiceability } from "@shared/serviceabilityVerdict";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
@@ -36,17 +36,24 @@ import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from
 // ─────────────────────────────────────────────────────────────────────────────
 
 const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 200);
-// Keep enough authorized Decodo sessions warm to cover the full concurrent
-// workload (≈maxConcurrency 200 ÷ maxLeasesPerToken 10 = 20, plus headroom so a
-// burst never waits on a mint). Unlimited Decodo budget → mint generously; token
-// scarcity must never stall a priority check. Warm reserve 40 so the frequent
-// token switching (10 leases/token) never leaves a lease waiting on a mint.
-// MULTI-PROCESS: the pool is per-process, so N cluster workers each warm their own
-// reserve. Divide the warm budget across workers (min 4/worker) — otherwise 4 workers
-// × 40 = 160 concurrent session mints at boot, an auth-storm against Decodo's window.
+// WARM RESERVE 1, under the one-IP-one-token rule.
+//
+// The old reserve was 40 (min 4 per worker), sized to "cover the full concurrent
+// workload so a burst never waits on a mint". That reasoning assumed a token
+// outlives the egress it was minted against. It does not any more: an IP change
+// ends the generation, so a crowd of warm tokens is a crowd that dies together,
+// unused, and every one of them cost a mint through the serialized gate.
+//
+// One ready token is also all a leaser ever needs - ensureWarm in
+// authorizedTokenPool returns the moment ONE is ready, and a single token
+// carries KFS_TOKEN_MAX_LEASES_PER_SLOT concurrent leases. Raise
+// KFS_TOKEN_POOL_WARM_MIN only if leases are measurably waiting on mints.
+// MULTI-PROCESS: the pool is per-process, so the reserve is still divided across
+// cluster workers - N workers each warming a big reserve was an auth-storm
+// against Decodo's window at boot.
 const _scanWorkerCount = Math.max(1, resolveScanWorkerCount());
-const configuredWarmTokens = Math.max(4,
-  Math.floor(Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 40) / _scanWorkerCount));
+const configuredWarmTokens = Math.max(1,
+  Math.floor(Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 1) / _scanWorkerCount));
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 
@@ -196,7 +203,9 @@ async function mintRequest(transport: "direct" | "decodo"): Promise<{ token: str
     body: JSON.stringify({ brazeDeviceId: "" }),
     signal: AbortSignal.timeout(10_000),
   } as any;
-  const response = transport === "direct" ? await fetch(kineticTokenUrl(), init) : await proxyFetch(kineticTokenUrl(), init);
+  // "direct" = this box's own IP, so it goes through the gate rather than
+  // global fetch: directCarrierFetch throws unless an operator opted in.
+  const response = transport === "direct" ? await directCarrierFetch(kineticTokenUrl(), init) : await proxyFetch(kineticTokenUrl(), init);
   if (!response.ok) throw new Error(`Auto-auth blocked (${response.status} via ${transport})`);
   let data: Record<string, unknown>;
   try {
@@ -259,7 +268,7 @@ async function mintViaDecodo(): Promise<{ token: string; expiresAt: number }> {
   return { token, expiresAt };
 }
 
-async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
+async function mintAuthorizedTokenViaLadder(): Promise<{ token: string; expiresAt: number }> {
   // DECODO-EXCLUSIVE MINT. The token is minted ONLY through the authorized Decodo
   // residential proxy — the server's own IP is never used. Root cause of the
   // production stall ("8 found · 0 checked · 8 pending"): the long-lived undici
@@ -312,12 +321,23 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     // Tokens are portable. The per-IP limit is on SEARCH volume, not on token
     // provenance - so skipping this rung disabled the best mint path for no
     // reason at all.
-    try {
-      return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
-    } catch (err) {
-      structuredLog("scan.token.mint_failed", { transport: "imp-direct", error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
+    // ...but it egresses from THIS BOX, and the owner directive is that no
+    // carrier request does. The rung is kept, behind the explicit opt-in, so
+    // the measured-best mint path is one env var away rather than deleted.
+    if (directCarrierEgressAllowed()) {
       try {
-        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, currentEgressProxyUrl());
+        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
+      } catch (err) {
+        structuredLog("scan.token.mint_failed", { transport: "imp-direct", error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
+      }
+    }
+    // No proxy resolved means no authorized egress. Passing null here would send
+    // the mint out DIRECT while the log still said "imp-proxy" - the silent leak
+    // this gate exists to prevent - so the rung is skipped instead.
+    const impProxyUrl = currentEgressProxyUrl();
+    if (impProxyUrl) {
+      try {
+        return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, impProxyUrl);
       } catch (err2) {
         structuredLog("scan.token.mint_failed", { transport: "imp-proxy", error: String((err2 as any)?.message ?? err2).slice(0, 120) }, "warn");
         // fall through to the legacy paths below
@@ -325,7 +345,10 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     }
   }
 
-  if (process.env.KFS_MINT_DIRECT !== "off") {
+  // Also this box's own IP, so also behind the opt-in. KFS_MINT_DIRECT=off still
+  // disables it independently, for an operator who wants the impersonate rung
+  // direct but not this one.
+  if (directCarrierEgressAllowed() && process.env.KFS_MINT_DIRECT !== "off") {
     try {
       return await mintRequest("direct");
     } catch (err) {
@@ -384,7 +407,18 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
           after: MINT_TRANSPORT_ROTATE_AFTER,
           reason: "consecutive mint transport failures - egress cannot reach the token endpoint",
         }, "warn");
-        await rotateProxySession("mint transport");
+        // advanceProxyEgress, NOT rotateProxySession. The denial path holds the
+        // IP until DECODO_ROTATE_AFTER_DENIALS consecutive denials (8 in
+        // production) and is throttled by ROTATE_MIN_INTERVAL_MS, so it returns
+        // early having advanced nothing. A dead egress produces no denials at
+        // all - it produces no responses - so the only thing that could feed
+        // that streak is this call, which would need ~24 consecutive transport
+        // failures to move one port, and any successful search resets it.
+        //
+        // This is the SPENT-IP handover instead: unthrottled and not
+        // streak-gated, because the caller has already established across N
+        // failures that the IP cannot carry a request.
+        await advanceProxyEgress("mint transport: egress cannot reach the token endpoint");
       } else {
         // Fresh authorized Decodo session (new residential IP), then retry.
         await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
@@ -392,6 +426,25 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     }
   }
   throw lastMintErr; // fail closed — pool self-heals next tick under the fleet backoff
+}
+
+async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
+  let minted: { token: string; expiresAt: number };
+  try {
+    minted = await mintAuthorizedTokenViaLadder();
+  } catch (err) {
+    egressActivity.mintsFailed++;
+    egressActivity.lastMintAt = Date.now();
+    egressActivity.lastMintError = String((err as any)?.message ?? err).slice(0, 120);
+    throw err;
+  }
+  egressActivity.mintsOk++;
+  egressActivity.lastMintAt = Date.now();
+  egressActivity.lastMintError = null;
+  // A token in hand — from ANY rung — proves the mint path is alive, so the
+  // consecutive-transport-failure streak starts over.
+  _mintTransportStreak = 0;
+  return minted;
 }
 
 // ── Global mint gate — serialize mints, never pace them ──────────────────────
@@ -447,6 +500,96 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   // did: scanAddressDirect fails CLOSED (unresolved, never a no-service verdict)
   // whenever no authorized session can actually be obtained.
   mint: () => gatedMint(),
+});
+
+// Which lane the next check rides. Round-robin, so concurrent checks spread
+// across residential IPs instead of queueing behind one.
+let _nextLane = -1;
+
+// ── WHAT THE EGRESS IS DOING RIGHT NOW ──────────────────────────────────────
+// Counters for the live view, so an operator can watch the pair rule work
+// instead of inferring it from the logs. Diagnostics only: nothing here is a
+// credential, and the residential IP itself is never known to this process -
+// only the sticky PORT that selects it, and the masked session id.
+const egressActivity = {
+  mintsOk: 0, mintsFailed: 0,
+  lastMintAt: null as number | null, lastMintError: null as string | null,
+  generationsRetired: 0, lastGenerationAt: null as number | null, lastGenerationReason: null as string | null,
+};
+
+export function getEgressActivity() {
+  // Ask what IP we are on, at most once per port, only because someone is
+  // looking. Fire and forget: this call answers with what is known now.
+  void refreshEgressIp();
+  const egressIp = getEgressIp();
+  const sticky = getProxyStickyState();
+  const pool = authorizedTokenPool.snapshot();
+  const budget = Math.max(0, Number(process.env.DECODO_CHECKS_PER_IP ?? 20));
+  // The token actually being drained: the pool hands out the MOST-used one
+  // first (sticky reuse), so that is the one whose budget is running down.
+  const active = [...pool.slots].filter(slot => slot.state === "READY")
+    .sort((a, b) => b.checksUsed - a.checksUsed)[0] ?? null;
+  return {
+    proxy: {
+      connected: isProxyConnected(),
+      sessionId: getProxySessionId(),          // masked "decodo-sN", never a credential
+      stickyPort: sticky.port,
+      publicIp: egressIp.forPort === sticky.port ? egressIp.ip : null,   // the address itself, once known
+      publicIpError: egressIp.forPort === sticky.port ? egressIp.error : null,
+      checksOnThisIp: sticky.checksOnThisIp,
+      checksPerIp: budget,
+      denialStreak: sticky.denialStreak,
+      rotateAfterDenials: Math.max(1, Number(process.env.DECODO_ROTATE_AFTER_DENIALS ?? 3)),
+    },
+    token: {
+      ready: pool.ready,
+      total: pool.total,
+      warmMinimum: pool.warmMinimum,
+      maxChecksPerToken: pool.maxChecksPerToken,
+      activeChecksUsed: active?.checksUsed ?? 0,
+      activeChecksRemaining: active?.checksRemaining ?? 0,
+      inFlight: pool.activeLeases,
+      refreshing: pool.activeRefreshes,
+    },
+    mints: {
+      ok: egressActivity.mintsOk,
+      failed: egressActivity.mintsFailed,
+      lastAt: egressActivity.lastMintAt,
+      lastError: egressActivity.lastMintError,
+    },
+    pairs: {
+      retired: egressActivity.generationsRetired,
+      lastAt: egressActivity.lastGenerationAt,
+      lastReason: egressActivity.lastGenerationReason,
+    },
+  };
+}
+
+/** Test-only: zero the live counters. */
+export function __resetEgressActivityForTests(): void {
+  egressActivity.mintsOk = 0; egressActivity.mintsFailed = 0;
+  egressActivity.lastMintAt = null; egressActivity.lastMintError = null;
+  egressActivity.generationsRetired = 0; egressActivity.lastGenerationAt = null;
+  egressActivity.lastGenerationReason = null;
+}
+
+// ONE IP, ONE TOKEN, TWENTY CHECKS. The egress owns the boundary (its check
+// counter is a superset of the token's - retries and denials spend it too), so
+// when the IP changes, the token generation ends with it. See the measurement
+// table at setEgressGenerationHook in server/proxy-fetch.ts.
+setEgressGenerationHook((reason, laneId, laneCount) => {
+  // A lane retirement spends the pairs on THAT lane: every slot riding it, which
+  // is slot % laneCount === laneId, not slots[laneId]. A process-wide rotation
+  // (no lane) ends every generation, and now genuinely moves every lane's port
+  // first, so the pool-wide retirement is honest rather than a token cull that
+  // leaves each lane on its spent IP.
+  const retired = laneId == null || laneCount == null
+    ? authorizedTokenPool.retireGeneration()
+    : authorizedTokenPool.retireLane(laneId, laneCount);
+  egressActivity.generationsRetired++;
+  egressActivity.lastGenerationAt = Date.now();
+  egressActivity.lastGenerationReason = reason;
+  if (retired) structuredLog("scan.token.generation_retired", { retired, reason }, "info");
 });
 
 /** Test-only: reset the module-level mint-gate state so unit tests don't leak
@@ -1068,7 +1211,13 @@ async function scanAddressDirect(
     .digest("hex");
   emit("minting", { status: "info", detail: "acquiring authorized Decodo token" });
   try {
-    tokenLease = await authorizedTokenPool.lease(tokenAddressKey);
+    // ROUND-ROBIN THE LANE, then take a token that belongs to it. Deriving the
+    // lane from whichever slot sticky-reuse happened to pick collapsed every
+    // lane onto one: the pool drains the most-used token first, so one live slot
+    // meant one lane meant one residential IP, and DECODO_LANES did nothing.
+    const laneCount = egressLaneCount();
+    const lane = laneCount > 1 ? (_nextLane = (_nextLane + 1) % laneCount) : undefined;
+    tokenLease = await authorizedTokenPool.lease(tokenAddressKey, lane, laneCount > 1 ? laneCount : undefined);
   } catch (err: any) {
     // No authorized session/token could be obtained — this is NOT a Search-API
     // error, so we fail CLOSED (unresolved), never requeue-loop with no session.
@@ -1095,7 +1244,12 @@ async function scanAddressDirect(
       }),
       body: JSON.stringify({ addressLine1: address, addressLine2: "", city, state, postalCode: zip }),
       signal: AbortSignal.timeout(5_000),
-    });
+    // THE PAIR, MADE REAL. The lane is chosen by the TOKEN SLOT this check
+    // leased, so this token always leaves from its own residential IP and spends
+    // its own 20-check budget. Without it every concurrent check shares one IP
+    // and drains one budget together, which is why the app measured best at
+    // concurrency 5 while a 4-lane runner is comfortable.
+    }, tokenLease.slotId);
     const searchMs = Date.now() - searchStart;
     base.providerLatencyMs = searchMs;
 

@@ -35,7 +35,7 @@
 // `carrier: "frontier"` distinguishes it.
 
 import crypto from "node:crypto";
-import { proxyFetch, rotateProxySession, getProxySessionId } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, getProxySessionId, directCarrierEgressAllowed, directCarrierFetch } from "./proxy-fetch";
 import { structuredLog } from "./structuredLog";
 import type { ScanResult } from "./scanner";
 
@@ -151,16 +151,21 @@ export function classifyFrontierResponse(
 // requeueing without ever producing a verdict. Try DIRECT first; on a
 // transport error or a block/server status, fall back to one proxied attempt.
 // FRONTIER_DIRECT=off restores proxy-only behavior.
-const FRONTIER_DIRECT = process.env.FRONTIER_DIRECT !== "off";
+// ...and DIRECT means this box's own IP, which the owner directive forbids for
+// carrier traffic. The rung stays, behind the same single opt-in every other
+// unproxied carrier call now uses. Read at CALL time rather than at import, so
+// an operator flipping it does not need a restart and a test can set it.
+const frontierDirectAllowed = () =>
+  directCarrierEgressAllowed() && process.env.FRONTIER_DIRECT !== "off";
 const FRONTIER_BLOCK_STATUSES = new Set([401, 403, 407, 429]);
 
 async function frontierFetch(
   url: string,
   init: RequestInit,
 ): Promise<{ res: Response; via: "direct" | "proxy" }> {
-  if (FRONTIER_DIRECT) {
+  if (frontierDirectAllowed()) {
     try {
-      const res = await fetch(url, init);
+      const res = await directCarrierFetch(url, init);
       if (res.status < 500 && !FRONTIER_BLOCK_STATUSES.has(res.status)) {
         return { res, via: "direct" };
       }

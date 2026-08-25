@@ -1870,6 +1870,21 @@ export function runMigrations() {
        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
      )`,
     `CREATE INDEX IF NOT EXISTS idx_sweep_jobs_tenant ON sweep_jobs(tenant_id, started_at DESC)`,
+    // A city sweep that probes a street and finds no fiber parks the rest of it.
+    // Counters so the operator sees what the prune bought, not just what ran.
+    `ALTER TABLE sweep_jobs ADD COLUMN streets_parked INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE sweep_jobs ADD COLUMN doors_skipped INTEGER NOT NULL DEFAULT 0`,
+    // How many of the queued rows are PROBES (the leading seq range). The probe
+    // batch has to run and land BEFORE the flood, or there is nothing answered
+    // to prune against - see runSweep.
+    `ALTER TABLE sweep_jobs ADD COLUMN probe_count INTEGER NOT NULL DEFAULT 0`,
+    // What the sweep ACTUALLY asked the provider, and what THIS run found.
+    // 'checked' counts targets whose row reached a terminal state, which on a
+    // city that is mostly already scanned is wildly higher than the number of
+    // calls made: a live Broadway sweep reported 3,657 checked against 145 real
+    // provider answers.
+    `ALTER TABLE sweep_jobs ADD COLUMN answered INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE sweep_jobs ADD COLUMN sellable_found INTEGER NOT NULL DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS sweep_job_targets (
        sweep_job_id TEXT NOT NULL REFERENCES sweep_jobs(id) ON DELETE CASCADE,
        target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,
