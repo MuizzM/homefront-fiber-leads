@@ -4,19 +4,22 @@
 // switch together - that is what Kinetic throttles (60/60 answers for a fresh
 // pair every 20, against 20/60 for a token ridden across fresh IPs).
 //
-// The headline is the IP itself, because that is the question an operator
-// actually has: is this leaving from a Decodo address, or from our building?
-// Everything else is supporting detail and is sized like it.
+// The address leads, because that is the question an operator actually has: is
+// this leaving from Decodo, or from our building? Everything else is supporting
+// detail and is sized like it.
 //
 // Diagnostics only: the address Decodo hands us and a masked session id. No
 // credential, no proxy URL.
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
 
 export interface EgressActivity {
   proxy: {
     connected: boolean; sessionId: string; stickyPort: number | null; publicIp: string | null;
+    publicIpError: string | null;
     checksOnThisIp: number; checksPerIp: number; denialStreak: number; rotateAfterDenials: number;
   };
   token: {
@@ -43,32 +46,50 @@ export default function EgressLive() {
     staleTime: 0,
   });
 
-  if (isLoading) return <Skeleton className="h-36 w-full rounded-2xl" />;
-  if (isError || !data) return <p className="text-[12px] text-muted-foreground">Could not read the egress state.</p>;
+  if (isLoading) return <Skeleton className="h-40 w-full rounded-2xl" />;
+  if (isError || !data) {
+    return (
+      <div className="rounded-2xl border border-border bg-card p-4" data-testid="egress-live-error">
+        <p className="text-[13px] text-pretty text-muted-foreground">
+          Could not read the egress state. Scanning is unaffected; this panel is diagnostics only.
+        </p>
+      </div>
+    );
+  }
 
   const { proxy, token, mints, pairs } = data;
   const pct = proxy.checksPerIp > 0 ? Math.min(100, Math.round((proxy.checksOnThisIp / proxy.checksPerIp) * 100)) : 0;
   const minted = mints.ok + mints.failed;
+  const idle = proxy.checksOnThisIp === 0 && pairs.retired === 0;
+  // The last stretch of an IP's budget is where denials start, so the bar says
+  // so before the switch rather than after. Semantic tokens, not raw palette:
+  // an undefined token silently falls back to currentColor (docs/DESIGN_SYSTEM.md).
+  const barTone = pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-warning" : "bg-primary";
 
   return (
     <section className="rounded-2xl border border-border bg-card p-4" data-testid="egress-live">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Scanning from
-          </div>
-          <div className="mt-0.5 truncate text-2xl font-semibold tabular-nums text-foreground" data-testid="egress-ip">
-            {proxy.publicIp ?? (proxy.stickyPort == null ? "rotating gateway" : "resolving...")}
-          </div>
-          <div className="text-[12px] text-muted-foreground" data-testid="egress-port">
+          </h3>
+          <p
+            className="mt-0.5 truncate font-mono text-2xl font-semibold tabular-nums text-foreground"
+            data-testid="egress-ip"
+            title={proxy.publicIp ?? undefined}
+          >
+            {proxy.publicIp ?? (proxy.stickyPort == null ? "rotating gateway" : "resolving")}
+          </p>
+          <p className="text-[12px] text-pretty text-muted-foreground" data-testid="egress-port">
             {proxy.connected ? "Decodo residential" : "no proxy"}
             {proxy.stickyPort != null ? ` · port ${proxy.stickyPort}` : ""} · {proxy.sessionId}
-          </div>
+          </p>
         </div>
         <span
-          className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-            proxy.connected ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"
-          }`}
+          className={cn(
+            "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold",
+            proxy.connected ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive",
+          )}
           data-testid="egress-connected"
         >
           {proxy.connected ? "Decodo" : "direct"}
@@ -77,25 +98,27 @@ export default function EgressLive() {
 
       {/* The pair budget: the one number that explains when the IP changes. */}
       <div className="mt-4">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[12px] font-medium text-foreground">This IP and token</span>
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-[13px] font-medium text-foreground">This IP and token</span>
           <span className="text-[12px] font-semibold tabular-nums text-muted-foreground">
             {proxy.checksOnThisIp} of {proxy.checksPerIp} checks
           </span>
         </div>
-        <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
-          <div
-            className={`h-full rounded-full transition-all ${pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-amber-500" : "bg-primary"}`}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          Both switch at {proxy.checksPerIp}. Switched {pairs.retired} times, last {ago(pairs.lastAt)}.
+        <Progress
+          value={pct}
+          aria-label={`Checks spent on this residential IP: ${proxy.checksOnThisIp} of ${proxy.checksPerIp}`}
+          className="mt-1.5 h-2"
+          indicatorClassName={barTone}
+        />
+        <p className="mt-1.5 text-[12px] text-pretty text-muted-foreground">
+          {idle
+            ? `Idle. Both switch after ${proxy.checksPerIp} checks; run a city below to see it move.`
+            : `Both switch at ${proxy.checksPerIp}. Switched ${pairs.retired} times, last ${ago(pairs.lastAt)}.`}
         </p>
       </div>
 
       {/* Supporting detail, deliberately quiet. */}
-      <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 border-t border-border pt-3 text-[11px]">
+      <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 border-t border-border pt-3 text-[12px]">
         <div className="flex gap-1.5">
           <dt className="text-muted-foreground">Tokens</dt>
           <dd className="font-semibold tabular-nums text-foreground" data-testid="egress-token-ready">
@@ -118,8 +141,16 @@ export default function EgressLive() {
         </div>
       </dl>
 
+      {/* Errors name the problem, next to what they affect. */}
+      {proxy.publicIpError ? (
+        <p className="mt-2 text-[12px] text-pretty text-muted-foreground" data-testid="egress-ip-error">
+          Address unresolved ({proxy.publicIpError}). Scanning continues; the port above is authoritative.
+        </p>
+      ) : null}
       {mints.lastError ? (
-        <p className="mt-2 text-[11px] text-destructive" data-testid="egress-last-error">{mints.lastError}</p>
+        <p className="mt-1 text-[12px] text-pretty text-destructive" data-testid="egress-last-error">
+          Last mint failed: {mints.lastError}
+        </p>
       ) : null}
     </section>
   );
