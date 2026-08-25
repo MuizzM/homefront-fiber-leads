@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
+import { readBuildFlags, normalizeDate } from "@shared/futureService";
 import { rawDb } from "./db";
 import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { getDefaultTenantId, storage } from "./storage";
 import { projectConfirmedFreshLeads, type ProjectionResult } from "./freshFiberProjector";
+import { projectTenuredOpenLeads } from "./tenuredLeadProjector";
 import { classifyCustomerOpportunity, classifyFiberAvailabilityTransition } from "@shared/opportunitySegment";
 import { normalizeKineticAddressKey } from "./addressKey";
+import { parseKineticResponse } from "./kineticResponseParser";
 import { structuredLog } from "./structuredLog";
 
 export interface KineticObservation {
@@ -58,6 +61,8 @@ export interface PersistKineticObservationInput {
 }
 
 export interface PersistKineticObservationResult {
+  /** What the tenured projector did for this door: fiber lit, nobody on it. */
+  tenured: { created: number; alreadyLead: number };
   tenantId: number;
   targetId: number;
   targetCreated: boolean;
@@ -108,12 +113,70 @@ function normalizeObservedAt(value: string | null | undefined): string {
   return parsed == null ? new Date().toISOString() : new Date(parsed).toISOString();
 }
 
+/**
+ * Does the raw body actually support a claim that fiber is available NOW?
+ *
+ * "absent" means no body was supplied, which is not the same as a no.
+ * "unrecognized" means a body was supplied that this parser does not model
+ * (another carrier): the caller did bring evidence, so its claim stands.
+ */
+type Corroboration = "qualified" | "unqualified" | "unrecognized" | "absent";
+
+function corroborateAvailability(raw: unknown): Corroboration {
+  if (raw == null || typeof raw !== "object") return "absent";
+  const body = raw as Record<string, unknown>;
+  const looksKinetic = "validationResult" in body || "broadbandService" in body
+    || "uqualProvisioningResult" in body || "address" in body || "techType" in body;
+  if (!looksKinetic) return "unrecognized";
+  try {
+    return parseKineticResponse(raw).fiberQualified ? "qualified" : "unqualified";
+  } catch {
+    return "unrecognized";
+  }
+}
+
+/**
+ * THE PROVIDER'S OWN WORDS OUTRANK THE CALLER'S CLAIM.
+ *
+ * When a body travels with the observation it decides availability, even if the
+ * caller says otherwise. Measured 2026-08-24: 49 doors (Georgia Oak Ln, Landis
+ * Oak Way, Sawtooth Ct, Sandhill Oak Ct in China Grove) were reported available
+ * by an ad-hoc "sawtooth-cluster" ingest that read only householdSegmentType,
+ * while the only body we hold for them says maxQual "NO QUAL", techType "" and
+ * qualDesc "FUTURE QUAL UP TO 1G" with estimatedCompletionDt NOV-2026. Wherever
+ * the payload travels, that can no longer happen.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO is refuse a claim that arrives without a
+ * body. Most legitimate producers - MP Box, the verdict route, the field map -
+ * publish a classified answer without shipping the payload, and a door going
+ * from no_service to fiber is the single most valuable event in this system.
+ * Refusing unbodied claims suppressed exactly that (7 tests, three suites), so
+ * the protection for LEAD PUBLICATION lives where it belongs instead: the
+ * coming ledger records the promise from stored evidence and the projector
+ * refuses any door holding one. See tests/integration/sawtooth-recovery.test.ts
+ * for that chain walked end to end.
+ */
 function inferAvailability(observation: KineticObservation): boolean | null {
   if (observation.checkFailed === true || observation.blocked === true || observation.apiSource === "failed") return null;
-  if (typeof observation.fiberAvailable === "boolean") return observation.fiberAvailable;
+
   // Legacy address checks may supply an explicit derived isNewFiber boolean.
   // The Sequential ID adapter never derives this from a segment label.
-  if (observation.isNewFiber === true) return true;
+  const claimsAvailable = observation.fiberAvailable === true
+    || (observation.fiberAvailable == null && observation.isNewFiber === true);
+
+  if (claimsAvailable) {
+    // When the body travels with the claim it is the authority - a caller may
+    // not out-vote the provider's own words. When it does not, the claim stands
+    // here and is checked against our stored evidence below (see
+    // needsEvidenceToFlip): most legitimate producers - MP Box, the verdict
+    // route, the field map - publish a classified answer without shipping the
+    // payload, and refusing those outright would throw away real scans.
+    const corroboration = corroborateAvailability(observation.rawResponse);
+    if (corroboration === "unqualified") return false;   // the body itself says no
+    return true;
+  }
+
+  if (typeof observation.fiberAvailable === "boolean") return observation.fiberAvailable;
   const status = clean(observation.fiberStatus).toLowerCase().replace(/[\s-]+/g, "_");
   return status === "no_service" ? false : null;
 }
@@ -174,6 +237,49 @@ function requestImmediateAlert(tenantId: number): void {
  * is a baseline, an unavailable-to-available transition is provisional, and the
  * independent-evidence projector is the sole publisher.
  */
+/**
+ * The provider's own serviceability verdict and build date, off the raw body.
+ *
+ * These are NOT derivable from householdSegmentType. A door can read TENURED
+ * with billing 'N' - which the classifier calls a prime target - while maxQual
+ * says 'NO QUAL' and validationResult says 'AddressUnserviceableInTerritory',
+ * because TENURED is a household marketing segment, not a fiber signal. What
+ * makes such a door interesting is the OTHER half of the same response:
+ * broadbandService.estimatedCompletionDt, e.g. 'JAN-2027'.
+ *
+ * readBuildFlags already parsed all of this and the result was discarded.
+ */
+function providerServiceFields(raw: unknown) {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, any>;
+  const bb = (r.broadbandService && typeof r.broadbandService === "object" ? r.broadbandService : {}) as Record<string, any>;
+  const addr = (r.address && typeof r.address === "object" ? r.address : {}) as Record<string, any>;
+  const str = (v: unknown): string | null => { const t = String(v ?? "").trim(); return t ? t : null; };
+  const flags = readBuildFlags(raw);
+  return {
+    maxQual: str(r.maxQual),
+    validationResult: str(r.validationResult),
+    futureQualTech: str(bb.technologyType),
+    futureTechnology: flags.futureTechnology,
+    completionText: flags.completionText,
+    // Normalised so "what is due in September" is an index seek, not a text
+    // scan over 'JAN-2027' / 'NOV-2026' / sentinels. normalizeDate returns null
+    // for the sentinels, which is the honest answer for them.
+    completionDate: normalizeDate(flags.completionText),
+    newConstInd: str(addr.newConstInd),
+    // "NO COMPETITOR" is the provider's way of saying there is none. Stored
+    // verbatim it becomes a competitor named "NO COMPETITOR" on the door card,
+    // which is worse than showing nothing: 169 leads already read that way.
+    competitorCompany: (() => {
+      const v = str(addr.competitorCompanyName);
+      return v && !/^\s*(NO\s+COMPETITOR|NONE|N\/?A)\s*$/i.test(v) ? v : null;
+    })(),
+    competitorTech: str(addr.competitorTechName),
+    competitorSpeed: Number.isFinite(Number(addr.competitorQualSpeed)) && Number(addr.competitorQualSpeed) > 0
+      ? Math.round(Number(addr.competitorQualSpeed)) : null,
+    exchangeId: str(r.exchangeId) ?? str(addr.exchangeId),
+  };
+}
+
 export function persistKineticObservation(input: PersistKineticObservationInput): PersistKineticObservationResult {
   const tenantId = input.tenantId ?? getDefaultTenantId();
   if (!Number.isInteger(tenantId) || Number(tenantId) <= 0) throw new Error("KINETIC_OBSERVATION_TENANT_REQUIRED");
@@ -373,6 +479,7 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
         customerSegment: customer.segment,
         customerConfidence: customer.confidence,
         customerSignals: customer.signals,
+        ...providerServiceFields(observation.rawResponse),
       });
     } else {
       storage.bumpScanTargetInconclusive({ id: targetId });
@@ -391,11 +498,26 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
     }, "warn");
     projection = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, addressReview: 0, leadIds: [], errors: [] };
   }
-  if (projection.published > 0) requestImmediateAlert(Number(tenantId));
+  // A door with fiber lit and nobody on it is walkable too, and the fresh
+  // projector will never publish it: it only ever publishes NEW FIBER. Run the
+  // tenured projector over the SAME door, in the same guarded way - it applies
+  // its own qualification gate, so a bare TENURED segment still cannot mint a
+  // lead. Without this the projector had no production caller at all and a scan
+  // produced no tenured pins no matter how many doors it answered.
+  let tenured = { created: 0, alreadyLead: 0 };
+  try {
+    const t = projectTenuredOpenLeads(Number(tenantId), { targetIds: [targetId], limit: 1 });
+    tenured = { created: t.created, alreadyLead: t.alreadyLead };
+  } catch (error: any) {
+    structuredLog("tenured_leads.projection_failed", {
+      tenantId: Number(tenantId), targetId, error: String(error?.message ?? error),
+    }, "warn");
+  }
+  if (projection.published > 0 || tenured.created > 0) requestImmediateAlert(Number(tenantId));
   return {
     tenantId: Number(tenantId), targetId, targetCreated, conclusive, fiberAvailable,
     transition, customerSegment: conclusive ? customer.segment : "unknown",
     rawNewFiberHit: observation.isNewFiber === true,
-    projection,
+    projection, tenured,
   };
 }

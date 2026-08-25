@@ -2,6 +2,7 @@
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
 import { proxyFetch, rotateProxySession, getProxySessionId, currentEgressProxyUrl } from "./proxy-fetch";
+import { classifyServiceability } from "@shared/serviceabilityVerdict";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -1393,43 +1394,37 @@ async function scanAddressDirect(
     base.addressCatalogDate = data.address?.addressCatalogDt ?? null;
     base.billingStatus = parsed.billingStatus;
 
-    // THE KEY FIELD — household segment type
-    const segment = (parsed.householdSegmentType ?? "").toUpperCase();
+    // The household segment is RECORDED but no longer decides serviceability -
+    // classifyServiceability below owns that, and requires a qualification.
     base.householdSegmentType = parsed.householdSegmentType ?? "";
 
     // Fiber qualification is copper-override-safe (see kineticResponseParser).
     const isFiber = parsed.fiberQualified;
     base.fiberAvailable = isFiber;
 
-    if (segment === "NEW FIBER") {
-      base.fiberStatus = "new_fiber";
-      base.isNewFiber = true;
-      base.isTenured = false;
-      base.confidence = "HIGH";
-      base.notes = `New fiber deployment. ${data.address?.competitorCompanyName ? `Competitor: ${data.address.competitorCompanyName} (${data.address.competitorQualSpeed} Mbps ${data.address.competitorTechName}).` : ""} ${base.chipSetType === "FTTP" ? "FTTP confirmed." : ""}`.trim();
-    } else if (segment === "TENURED") {
-      base.fiberStatus = "tenured_fiber";
-      base.isTenured = true;
-      base.isNewFiber = false;
-      base.confidence = "HIGH";
-      // TENURED = fiber infrastructure has been at this address long-term.
-      // The resident may OR may not currently be a Kinetic subscriber.
-      // billingStatus "N" = no active account → non-subscriber with fiber available (prime target).
-      // billingStatus "Y" = active account → already a customer (low priority).
-      // dfAddressId on TENURED addresses is significantly lower (older record) than NEW FIBER.
-      const hasBilling = isActiveBilling(data.address?.billingStatus);
-      base.notes = hasBilling
-        ? `TENURED - long-established fiber address, already a Kinetic subscriber. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`
-        : `TENURED - long-established fiber address, NOT a current subscriber. Prime upgrade target. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`;
-    } else if (isFiber) {
-      base.fiberStatus = "existing_fiber";
-      base.confidence = "HIGH";
-      base.notes = `Fiber available. Segment: ${segment || "unknown"}.`;
-    } else {
-      base.fiberStatus = "copper";
-      base.confidence = "HIGH";
-      base.notes = `Legacy copper/DSL. Max qual: ${base.maxDownloadMbps} Mbps. Segment: ${segment}.`;
-    }
+    // ONE classifier, shared and pure: see shared/serviceabilityVerdict.ts for
+    // why a segment may never set a fiber status by itself. It lives there
+    // rather than here because this function is network-bound - every scanner
+    // test injects a fake checker and never reaches this line, which is exactly
+    // how the segment-only read survived.
+    const verdict = classifyServiceability({
+      householdSegmentType: parsed.householdSegmentType,
+      fiberQualified: isFiber,
+      validationResult: parsed.validationResult,
+      billingStatus: data.address?.billingStatus,
+      techType: base.techType,
+      chipSetType: base.chipSetType,
+      maxQual: base.maxQual,
+      maxDownloadMbps: base.maxDownloadMbps,
+      competitorName: data.address?.competitorCompanyName,
+      competitorSpeed: data.address?.competitorQualSpeed,
+      competitorTech: data.address?.competitorTechName,
+    });
+    base.fiberStatus = verdict.fiberStatus;
+    base.isNewFiber = verdict.isNewFiber;
+    base.isTenured = verdict.isTenured;
+    base.confidence = "HIGH";
+    base.notes = verdict.notes;
 
     // Apply smart lead scoring
     const score = scoreLead({

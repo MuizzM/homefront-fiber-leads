@@ -7,12 +7,25 @@
 // TENURED means Kinetic has plant and history at the address. It does NOT mean
 // anyone is paying, and the provider says so itself: across 2,994 tenured NC
 // doors carrying billing 'N', its own signals said "no active account" 600
-// times and "active" ZERO times. Not once contradicted. Those doors have fiber
-// at the curb and no one on it, which is a sellable door by any reading.
+// times and "active" ZERO times. Not once contradicted.
 //
-// Measured on the production-shaped copy: 8,580 such doors in NC against 3,193
-// tenured doors that DO carry an active account. Publishing the first group and
-// not the second is the whole job here.
+// THAT IS ONE CLAIM, NOT TWO. Billing 'N' proves NOBODY IS PAYING. It does not
+// prove FIBER IS LIVE, and the segment field cannot tell you. A real body
+// (2026-08-24) carried householdSegmentType TENURED and billing 'N' next to
+// maxQual "NO QUAL", validationResult "AddressUnserviceableInTerritory" and
+// broadbandService {technologyType: "FUTURE_QUAL_EXTENDED", futureTechnologyType:
+// "FIBER", estimatedCompletionDt: "JAN-2027"}. That is a door the carrier has
+// not built yet. An earlier gate here published it as a walkable prospect at
+// score 60, on the same night a sibling commit taught the map to label the very
+// same address "Coming soon, JAN-2027".
+//
+// So this module publishes a door only when fiber is SELLABLE TODAY: a positive
+// recorded qualification (last_fiber_available=1) AND no open carrier promise.
+// Measured on the local production-shaped copy, of 6,701 doors matching the old
+// segment-plus-billing gate only 1,749 carry that positive signal; 4,952 (74%)
+// have no qualification recorded at all. "We never checked" is not "it is live",
+// so those stay unpublished and are re-read by the coming ledger's weekly lane
+// (server/comingLedger.ts) instead of being sold as fiber.
 //
 // WHY THIS IS A SEPARATE MODULE, NOT A WIDER FRESH PROJECTOR.
 // A database trigger (trg_leads_fresh_* in storage.ts) refuses any lead marked
@@ -40,6 +53,9 @@ export const TENURED_LEAD_SCORE = 60;
 export const TENURED_LEAD_TAG = "tenured_open";
 
 export interface TenuredProjectionOptions {
+  /** Restrict to these doors. Used by the per-observation hook so a scan
+   *  publishes the door it just answered, instead of sweeping the table. */
+  targetIds?: number[];
   /** Cap one pass so a first run cannot mint tens of thousands of rows unasked. */
   limit?: number;
   state?: string;
@@ -67,13 +83,29 @@ export function projectTenuredOpenLeads(
     "s.tenant_id = ?",
     "s.last_scanned_at IS NOT NULL",
     "s.last_fiber_status = 'tenured_fiber'",
+    // SELLABLE AS FIBER TODAY. last_fiber_status is derived from the household
+    // segment alone (server/scanner.ts takes its TENURED branch before it ever
+    // consults parsed.fiberQualified), so it cannot carry this claim by itself.
+    // last_fiber_available is written from the qualification, so it can. A NULL
+    // is excluded on purpose: no qualification recorded is not a yes.
+    "s.last_fiber_available = 1",
     // The one signal never contradicted by the provider. Anything else -
     // including a NULL billing - is not evidence that the door is open.
     "s.last_billing_status = 'N'",
     "s.last_customer_segment <> 'existing_customer'",
     "s.account_number IS NULL",
+    // An OPEN CARRIER PROMISE outranks anything derived. While the coming ledger
+    // holds an active row for this door the carrier is still saying "later", so
+    // the door belongs on the watch lane, not in a rep's queue.
+    `NOT EXISTS (SELECT 1 FROM coming_soon_watchlist w
+                  WHERE w.scan_target_id = s.id AND w.tenant_id = s.tenant_id
+                    AND w.status = 'active')`,
   ];
   const args: any[] = [tenantId];
+  if (opts.targetIds?.length) {
+    where.push(`s.id IN (${opts.targetIds.map(() => "?").join(",")})`);
+    args.push(...opts.targetIds);
+  }
   if (opts.state) { where.push("s.state = ?"); args.push(opts.state); }
   if (opts.city) { where.push("lower(trim(s.city)) = ?"); args.push(opts.city.toLowerCase().trim()); }
 
@@ -113,8 +145,15 @@ export function projectTenuredOpenLeads(
       if (c.lat == null || c.lng == null) { res.skippedNoCoords++; continue; }
       const key = normalizeKineticAddressKey(c.address, c.city, c.state, c.zip ?? "");
       if (!key) { res.skippedKeyless++; continue; }   // a keyless door cannot be deduped
-      if (existsByKey.get(tenantId, key) || existsByTarget.get(tenantId, c.id)) {
+      const existing = (existsByKey.get(tenantId, key) ?? existsByTarget.get(tenantId, c.id)) as { id: number } | undefined;
+      if (existing) {
         res.alreadyLead++;
+        // LINK IT. Without this the door keeps matching the candidate query on
+        // every pass - it is never created, so converted_to_lead_id stays NULL,
+        // so it is offered again forever. Measured: 200 passes returned the same
+        // rows 84,901 times and the loop only ended on its own pass cap. A
+        // production caller would never terminate.
+        if (!opts.dryRun) { try { link.run(existing.id, c.id, tenantId); } catch { /* raced */ } }
         continue;
       }
       if (opts.dryRun) { res.created++; continue; }
@@ -122,8 +161,8 @@ export function projectTenuredOpenLeads(
         const row = insert.get(
           c.address, c.city, c.state, c.zip ?? "", c.lat, c.lng,
           c.last_billing_status ?? "N",
-          "Tenured. Kinetic fiber at the address with no active service on it.",
-          "TENURED + billing N: plant and history here, nobody on it.",
+          "Tenured. Kinetic fiber qualified at the address, no active service on it.",
+          "TENURED + billing N + fiber qualified: plant here, nobody on it.",
           TENURED_LEAD_TAG, TENURED_LEAD_SCORE, tenantId, c.id,
           c.carrier ?? "kinetic", key,
         ) as { id: number } | undefined;
@@ -136,10 +175,9 @@ export function projectTenuredOpenLeads(
     }
   });
 
-  // .immediate(): this batch READS (existsByKey/existsByTarget) before it WRITES,
-  // and the scanners commit continuously on this box. Under a deferred BEGIN the
-  // insert would throw SQLITE_BUSY_SNAPSHOT the moment any sibling commits after
-  // the batch's read snapshot, instantly and without a busy_timeout retry.
+  // .immediate(): this transaction READS (existsByKey/existsByTarget) before it
+  // WRITES, so under a deferred BEGIN another connection's commit turns the
+  // write into SQLITE_BUSY_SNAPSHOT instantly - busy_timeout does not cover it.
   for (let i = 0; i < candidates.length; i += 250) run.immediate(candidates.slice(i, i + 250));
 
   structuredLog("tenured_leads.projected", {
@@ -157,7 +195,11 @@ export function countTenuredOpenCandidates(tenantId: number, state?: string): nu
   return (rawDb.prepare(
     `SELECT COUNT(*) c FROM scan_targets s
       WHERE s.tenant_id = ? AND s.last_scanned_at IS NOT NULL
-        AND s.last_fiber_status = 'tenured_fiber' AND s.last_billing_status = 'N'
+        AND s.last_fiber_status = 'tenured_fiber' AND s.last_fiber_available = 1
+        AND s.last_billing_status = 'N'
         AND s.last_customer_segment <> 'existing_customer' AND s.account_number IS NULL
-        AND s.converted_to_lead_id IS NULL${extra}`).get(...args) as any).c;
+        AND s.converted_to_lead_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM coming_soon_watchlist w
+                         WHERE w.scan_target_id = s.id AND w.tenant_id = s.tenant_id
+                           AND w.status = 'active')${extra}`).get(...args) as any).c;
 }

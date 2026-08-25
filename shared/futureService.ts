@@ -386,6 +386,14 @@ export interface RecheckInput {
    *  cadence would cost ~24,000 checks a month across the undated population,
    *  far more than the once-only law saves. */
   undatedDays: number;
+  /** CEILING on how long ANY open promise may go unread, in days (default 7).
+   *  A carrier's date is a plan, not a guarantee - builds light up early and
+   *  nobody sends a notice. Measured 2026-08-23: the Georgia Oak Ln / Landis
+   *  Oak Way subdivision (32 doors on four streets) had been live since some
+   *  point after 2026-07-18 and was found only because a resident's listing
+   *  mentioned fiber. Every one of those doors was inside a window this lane
+   *  would not have opened for months. Weekly is the floor on noticing. */
+  maxWaitDays?: number;
 }
 
 /**
@@ -407,17 +415,26 @@ export function nextRecheckAt(i: RecheckInput, nowMs = Date.now()): { dueAtMs: n
   else if (hasEta) { band = "soon"; reason = "date_future"; }
   else if (inFlipWindow) { band = "soon"; reason = "flip_window"; }
 
+  // Nothing with an open promise waits longer than this, whatever its date says.
+  const since = i.lastCheckedMs ?? i.firstSeenMs;
+  const weeklyFloor = since + Math.max(1, i.maxWaitDays ?? 7) * DAY;
+
   // Undated and past the flip window: re-read on a slow cadence, not the daily
   // watch band. This is the difference between ~800 checks a month and 24,000.
+  // Capped at the weekly floor so an undated promise is still looked at.
   if (!hasEta && !inFlipWindow) {
-    const from = i.lastCheckedMs ?? i.firstSeenMs;
-    return { dueAtMs: from + i.undatedDays * DAY, band: "watch", reason: "undated_slow" };
+    return {
+      dueAtMs: Math.min(since + i.undatedDays * DAY, weeklyFloor),
+      band: "watch", reason: "undated_slow",
+    };
   }
 
-  // A far-future promise should not be polled at all until its window opens:
-  // the next check is the day it enters the hot window, not a fixed cadence.
+  // A far-future promise is not polled on the hot cadence - but it IS polled.
+  // The next check is whichever comes first: the day it enters the hot window,
+  // or one week from the last look. Waiting for the window alone is what let a
+  // whole lit subdivision sit unnoticed for five weeks.
   if (band === "soon" && reason === "date_future") {
-    return { dueAtMs: etaMs - i.hotWindowDays * DAY, band, reason };
+    return { dueAtMs: Math.min(etaMs - i.hotWindowDays * DAY, weeklyFloor), band, reason };
   }
   const hours = band === "hot" ? i.hotHours : band === "soon" ? i.soonHours : i.watchHours;
   const from = i.lastCheckedMs ?? i.firstSeenMs;

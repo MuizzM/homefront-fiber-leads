@@ -74,8 +74,12 @@ describe("recording a provider promise", () => {
       date_source: "provider", date_path: "futureServiceDate", confidence: "dated", band: "soon",
     });
     expect(JSON.parse(w.signals)).toEqual(expect.arrayContaining(["build_pending", "provider_date", "provider_future_eligible"]));
-    // A far promise waits for its window instead of being polled: due 14 days before.
-    expect(w.due_at).toBe(Date.parse("2026-09-18T00:00:00Z") - 14 * DAY);
+    // A far promise is due at the EARLIER of its window opening (14 days before
+    // the date) and the weekly floor. Here the weekly floor comes first: a
+    // stated date is a plan, and a build that lights up early is invisible
+    // until something re-reads the door.
+    expect(w.due_at).toBe(NOW + 7 * DAY);
+    expect(w.due_at).toBeLessThan(Date.parse("2026-09-18T00:00:00Z") - 14 * DAY);
   });
 
   it("a pending build with no date is still recorded, scheduled by the flip window", () => {

@@ -262,3 +262,56 @@ describe("coming soon and future qual on the map", () => {
     expect(doorOf(id)!.scannedAt).toBe("2026-08-23T12:00:00.000Z");
   });
 });
+
+/**
+ * BLUE MEANS SOLD, A PIN MEANS SELLABLE.
+ *
+ * Two rules, and both used to leak. Kinetic returns BOTH 'Y' and 'A' for an
+ * active account, but only 'A' was tested - so every billing-'Y' household was
+ * painted as a workable pin. And a pin was granted on last_fiber_status alone,
+ * which is derived from the household segment, so a door the carrier had not
+ * built yet looked identical to a lit one.
+ */
+describe("a pin claims sellable today", () => {
+  it("paints an active account BLUE on billing 'A'", () => {
+    expect(tagOf(door({ status: "tenured_fiber", billing: "A", avail: 1 }))).toBe("tenured_active");
+  });
+
+  it("paints an active account BLUE on billing 'Y' too", () => {
+    // The leak: 'Y' is just as active as 'A', and this door was a lead pin.
+    expect(tagOf(door({ status: "tenured_fiber", billing: "Y", avail: 1 }))).toBe("tenured_active");
+  });
+
+  it("paints a NEW FIBER customer BLUE rather than a fresh lead", () => {
+    // Even new fiber is not a lead when somebody is already paying for it.
+    expect(tagOf(door({ status: "new_fiber", newFiber: 1, billing: "Y", avail: 1 }))).toBe("tenured_active");
+  });
+
+  it("pins a qualified door with nobody on it", () => {
+    expect(tagOf(door({ status: "new_fiber", newFiber: 1, billing: "N", avail: 1 }))).toBe("new_fiber");
+    expect(tagOf(door({ status: "tenured_fiber", billing: "N", avail: 1 }))).toBe("fiber_open");
+  });
+
+  it("REFUSES a pin when no qualification is on record", () => {
+    // The China Grove shape: the segment says tenured, nothing says fiber.
+    expect(tagOf(door({ status: "tenured_fiber", billing: "N", avail: 0 }))).toBe("unverified");
+  });
+
+  it("REFUSES a pin to an unqualified NEW FIBER door as well", () => {
+    expect(tagOf(door({ status: "new_fiber", newFiber: 1, billing: "N", avail: 0 }))).toBe("unverified");
+  });
+
+  it("still shows the unverified door rather than hiding a walked street", () => {
+    const id = door({ status: "tenured_fiber", billing: "N", avail: 0 });
+    const d = doorOf(id);
+    expect(d).toBeTruthy();
+    expect(d!.label).toBe(mod.DOOR_TAG_LABEL.unverified);
+  });
+
+  it("lets a carrier promise outrank everything, keeping its date", () => {
+    const id = door({ status: "tenured_fiber", billing: "N", avail: 0 });
+    promise(id, { date: "2026-11-01", quote: "NOV-2026" });
+    expect(tagOf(id)).toBe("coming_soon");
+    expect(doorOf(id)!.promisedDate).toBe("2026-11-01");
+  });
+});

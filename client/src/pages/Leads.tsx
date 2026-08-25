@@ -550,6 +550,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
 
   const fiberStatusLabel: Record<string, string> = {
     new_fiber: "New Fiber Available",
+    // A TENURED LEAD IS NOT A CUSTOMER. It is a door with fiber qualified and
+    // nobody paying for it; a household that IS paying never becomes a lead.
+    tenured_fiber: "Tenured Fiber, no account",
+    existing_fiber: "Fiber Available",
     tenured: "Tenured (Existing Customer)",
     no_service: "No Fiber Service",
     copper_only: "Copper DSL Only",
@@ -1381,8 +1385,12 @@ export default function Leads() {
       ?? (lead.assignedRepId ? `Rep #${lead.assignedRepId}` : "Unassigned"),
     [nameByRepId],
   );
+  // Seeded, not just discovered. byFiberStatus only reports statuses that
+  // already exist, so a filter for tenured doors would not appear until after
+  // the first tenured lead was published - exactly when someone would go
+  // looking for it. These three are the statuses the pipeline can produce.
   const fiberStatuses = Array.from(new Set([
-    "new_fiber", "coming_soon", ...Object.keys(leadStats?.byFiberStatus ?? {}),
+    "new_fiber", "tenured_fiber", "coming_soon", ...Object.keys(leadStats?.byFiberStatus ?? {}),
   ])).sort();
 
   // Row callbacks are hoisted so the memoised rows below keep identical props

@@ -96,6 +96,22 @@ Relevant files:
   `bash scripts/agent-verify.sh full` exits 0 (581 files, 7359 tests).
 - 2026-08-24: milestone 6. `MintTransportError` + a consecutive-failure streak in
   `server/scanner.ts`; a dead mint egress is now abandoned after 3 in a row.
+- 2026-08-25: `vitest hookTimeout` 10s -> 60s. Integration `beforeAll` hooks
+  build a real SQLite database (fresh DATA_DIR + full migration chain + seed) and
+  legitimately take 5-19s, so the default failed 7 files whenever the runner was
+  loaded, all of which pass in isolation. Proven under deliberate 8-core load:
+  `lead-stream-authz` takes 19.7s and passes. `testTimeout` and the wall-clock
+  perf budgets (e.g. `kinetic-build-map-perf` holding `buildGrid` under 400ms)
+  are deliberately untouched - widening those to suit a busy laptop would be
+  weakening a gate rather than calibrating a runner.
+- 2026-08-25: merged `origin/rep-knocking-workflow` (PRs #177, #178 landed mid-
+  flight; two production deploys already shipped them). Only
+  `server/tenuredLeadProjector.ts` conflicted, and only in a comment - both sides
+  had made the same `run.immediate(...)` fix. Resolved by taking the base
+  wholesale. `server/scanner.ts` auto-merged: #178 rewrote the CONCLUSIVE
+  classification block (`classifyServiceability`) while this branch changed the
+  mint ladder and the NON-answer paths, so the two do not overlap. Re-verified:
+  `bash scripts/agent-verify.sh full` exits 0 (589 files, 7440 tests).
 
 ## Decisions
 
@@ -115,6 +131,11 @@ Relevant files:
   30s `logBreakerWait` throttle, so it is bounded at ~2 events/minute/process.
 - **A pre-existing gate failure was fixed to reach green**
   (`server/tenuredLeadProjector.ts:139`). Not part of this task; see Discoveries.
+  SUPERSEDED 2026-08-25: PR #178 landed the identical `run.immediate(...)` fix
+  on the default branch while this branch was in flight, so the merge takes the
+  base's version and this branch no longer carries that change. Two independent
+  diagnoses reaching the same remedy is corroboration, not duplication - but the
+  credit belongs to #178.
 
 ## Discoveries
 
