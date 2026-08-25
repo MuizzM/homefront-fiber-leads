@@ -151,11 +151,22 @@ describe("a city sweep parks streets with no fiber", () => {
     const path = await import("node:path");
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
     expect(src, "the queue excludes known-dead streets").toContain("SWEEP_DEAD_STREET_EVIDENCE");
-    // Same evidence rule as the mid-run prune: only an ANSWERED door counts.
     const queueBlock = src.slice(src.indexOf("DO NOT PAY TO RE-LEARN A DEAD STREET"), src.indexOf("const candidates ="));
+    // Same evidence rule as the mid-run prune: only an ANSWERED door counts.
     expect(queueBlock, "an unasked door is evidence of nothing, here too")
       .toContain("EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=m.id)");
     expect(src, "and it must be reversible without a deploy").toContain("SWEEP_SKIP_KNOWN_DEAD");
+    // RESOLVED ONCE. Correlating this aggregation to the outer row re-runs a
+    // ~3.6s GROUP BY per candidate: a Lexington sweep sat 14 minutes at 98% CPU
+    // and queued nothing. The set is fetched with explicit parameters and
+    // applied in memory, so the outer query stays a plain indexed scan.
+    expect(queueBlock, "parameterised, not correlated to the outer row")
+      .toContain(".all(job.tenant_id, job.state, deadEvidence)");
+    // The SQL itself must bind tenant and state, which a correlated subquery
+    // cannot do. (Asserted on the query text, not the file: the comment above
+    // it names the old correlated form on purpose.)
+    expect(queueBlock, "tenant and state are bound, not correlated")
+      .toContain("WHERE m.tenant_id=? AND m.state=?");
   });
 
   it("the egress diagnostic never spends the IP check budget", async () => {
@@ -166,6 +177,33 @@ describe("a city sweep parks streets with no fiber", () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), "server/proxy-fetch.ts"), "utf8");
     expect(src).toContain("function isDiagnosticUrl(");
     expect(src, "excluded from the per-IP budget").toContain('!isMintUrl(url) && !isDiagnosticUrl(url)');
+  });
+
+  it("counts a sellable door as fiber with nobody on it, not as a flip", async () => {
+    // The tile promises "fiber, nobody on it". It counted doors whose
+    // first_seen_fiber_at landed inside this sweep, so a tenured door with fiber
+    // for months never qualified: Lexington reported SELLABLE 0 while 101 of its
+    // doors answered tenured fiber with billing N.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    const progress = src.slice(src.indexOf("function updateProgress("));
+    expect(progress, "sellable is billing N plus fiber present").toContain("s.last_billing_status='N'");
+    expect(progress).toContain("s.last_fiber_status IN ('new_fiber','tenured_fiber')");
+    // ...and the flip count stays a separate question.
+    expect(progress, "fresh is still the flip").toContain("s.first_seen_fiber_at>=?");
+  });
+
+  it("publishes the tenured half of a finished city", async () => {
+    // Tenured sellables had no production caller at all, so the larger half of
+    // every city's opportunity was evidence a rep never saw.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    expect(src).toContain("projectTenuredOpenLeads");
+    expect(src, "and it must be reversible without a deploy").toContain("SWEEP_PUBLISH_TENURED");
+    // A publication failure must never fail a sweep whose evidence is durable.
+    expect(src).toContain("sweep.tenured_publish_failed");
   });
 
   it("SWEEP_PARK_DEAD_STREETS=off checks every door", () => {

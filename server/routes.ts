@@ -3573,9 +3573,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Full tokens / proxy credentials / auth headers are NEVER emitted.
   function inspectorHealth() {
     const token = getTokenStatus();
+    const egress = getEgressActivity();
     return {
       decodoConnected: isProxyConnected(),
       proxySessionId: getProxySessionId(),           // masked "decodo-sN"
+      // The address we are actually egressing from, so the per-address stream
+      // below can be read against the IP that produced it.
+      publicIp: egress.proxy.publicIp,
+      stickyPort: egress.proxy.stickyPort,
+      checksOnThisIp: egress.proxy.checksOnThisIp,
+      checksPerIp: egress.proxy.checksPerIp,
       tokenReady: token.hasToken,
       tokenExpiresIn: token.expiresIn,               // seconds
       tokenPool: { ready: token.readySessions, size: token.configuredSessions },

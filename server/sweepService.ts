@@ -708,33 +708,44 @@ async function runSweep(id: string) {
         // that into ~1 wasted check per street instead of a whole city.
         // DO NOT PAY TO RE-LEARN A DEAD STREET.
         //
-        // Parking mid-run still costs one probe per street. A street this tenant
-        // has ALREADY answered - repeatedly, with no fiber on any of it - does
-        // not deserve even that. Measured on this data: Statesville answered
-        // 1,775 doors as "no service" and Wingate returned 52 unmatched, all on
-        // streets whose verdicts were already on file.
+        // Parking mid-run still costs one probe per street, every run, forever.
+        // A street this tenant has ALREADY answered - repeatedly, with no fiber
+        // on any of it - does not deserve even that. Measured on this data:
+        // Statesville answered 1,775 doors "no service" and Wingate returned 52
+        // unmatched, all on streets whose verdicts were already on file.
         //
-        // A street is excluded when it has SWEEP_DEAD_STREET_EVIDENCE (default 3)
-        // doors carrying a real answer and not one of them is fiber. The same
-        // evidence rule as the mid-run prune: only a door with a snapshot counts,
-        // because an unasked door is evidence of nothing.
+        // RESOLVED ONCE, NOT PER ROW. The first version expressed this as
+        // `street_key NOT IN (SELECT ... WHERE m.tenant_id=s.tenant_id ...)`,
+        // correlated to the outer row, so SQLite re-ran the whole GROUP BY /
+        // HAVING aggregation for every candidate it scanned. That aggregation
+        // takes ~3.6s on this database: a Lexington sweep sat in 'harvesting'
+        // for 14 minutes at 98% CPU and never queued a single door. The set is
+        // ~1,600 streets, so it is fetched once and applied in memory.
+        //
+        // Same evidence rule as the mid-run prune: only a door with a snapshot
+        // counts, because an unasked door is evidence of nothing.
         // SWEEP_SKIP_KNOWN_DEAD=off queues them anyway.
         const deadEvidence = Math.max(1, Math.min(20, Number(process.env.SWEEP_DEAD_STREET_EVIDENCE ?? 3)));
-        const skipKnownDead = process.env.SWEEP_SKIP_KNOWN_DEAD !== "off";
-        const knownDeadSql = skipKnownDead ? `
-             AND s.street_key IS NOT NULL AND s.street_key NOT IN (
-               SELECT m.street_key FROM scan_targets m
-                WHERE m.tenant_id=s.tenant_id AND m.state=s.state AND m.street_key IS NOT NULL
-                  AND EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=m.id)
-                GROUP BY m.street_key
-               HAVING COUNT(*) >= ${deadEvidence}
-                  AND SUM(CASE WHEN m.last_fiber_available=1
-                                 OR m.last_fiber_status IN ('new_fiber','tenured_fiber','coming_soon')
-                               THEN 1 ELSE 0 END) = 0)` : "";
-        const pool = rawDb.prepare(`SELECT s.id, s.street_key AS streetKey, s.address FROM scan_targets s
-           WHERE lower(s.city)=lower(?) AND s.state=? ${knownDeadSql}
-           ORDER BY (s.last_scanned_at IS NOT NULL),s.last_scanned_at LIMIT ?`)
+        const deadStreets = process.env.SWEEP_SKIP_KNOWN_DEAD === "off" ? new Set<string>() : new Set(
+          (rawDb.prepare(`
+             SELECT m.street_key AS streetKey FROM scan_targets m
+              WHERE m.tenant_id=? AND m.state=? AND m.street_key IS NOT NULL AND m.street_key<>''
+                AND EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=m.id)
+              GROUP BY m.street_key
+             HAVING COUNT(*) >= ?
+                AND SUM(CASE WHEN m.last_fiber_available=1
+                               OR m.last_fiber_status IN ('new_fiber','tenured_fiber','coming_soon')
+                             THEN 1 ELSE 0 END) = 0`)
+            .all(job.tenant_id, job.state, deadEvidence) as Array<{ streetKey: string }>).map(r => r.streetKey));
+        const rawPool = rawDb.prepare(`SELECT id, street_key AS streetKey, address FROM scan_targets
+           WHERE lower(city)=lower(?) AND state=? ORDER BY (last_scanned_at IS NOT NULL),last_scanned_at LIMIT ?`)
           .all(job.city, job.state, job.max_checks) as Array<{ id: number; streetKey: string | null; address: string }>;
+        const pool = rawPool.filter(r => !r.streetKey || !deadStreets.has(r.streetKey));
+        if (rawPool.length !== pool.length) {
+          structuredLog("sweep.known_dead_skipped", {
+            sweepId: id, city: job.city, state: job.state,
+            doors: rawPool.length - pool.length, deadStreets: deadStreets.size }, "info");
+        }
         const candidates = pool.map((r) => ({ id: r.id, streetKey: r.streetKey ?? "", houseNumber: houseNumberOf(r.address) }));
         const streetCount = new Set(candidates.map((c) => c.streetKey || `__nostreet_${c.id}`)).size;
         const probeIds = new Set(selectProbe(candidates, Math.min(pool.length, streetCount * PROBES_PER_STREET())));
@@ -778,6 +789,26 @@ async function runSweep(id: string) {
       if (!batch.length) {
         updateProgress(id);
         updateJob(id, { phase: "complete", status: "done", completed_at: now(), heartbeat_at: now() });
+        // ADD THEM. New-fiber sellables are published as leads by the observation
+        // persist itself (projectConfirmedFreshLeads). TENURED sellables are not:
+        // their projector had no production caller at all, so the larger half of
+        // every city's opportunity was recorded as evidence and never reached a
+        // rep. Bounded per city and idempotent against both unique indexes.
+        // SWEEP_PUBLISH_TENURED=off leaves them as evidence only.
+        if (process.env.SWEEP_PUBLISH_TENURED !== "off" && job.city && job.state) {
+          try {
+            const { projectTenuredOpenLeads } = await import("./tenuredLeadProjector");
+            const published = projectTenuredOpenLeads(job.tenant_id, { state: job.state, city: String(job.city).toLowerCase(), limit: 50_000 });
+            if (published.created || published.errors.length) {
+              structuredLog("sweep.tenured_published", { sweepId: id, city: job.city, state: job.state,
+                created: published.created, alreadyLead: published.alreadyLead, errors: published.errors.length }, "info");
+            }
+          } catch (error: any) {
+            // Never fail a completed sweep over publication; the evidence is
+            // already durable and a later pass can publish it.
+            structuredLog("sweep.tenured_publish_failed", { sweepId: id, city: job.city, error: String(error?.message ?? error).slice(0, 160) }, "warn");
+          }
+        }
         const alerts = await flushFreshOpportunityAlerts(job.tenant_id);
         const completed = rawDb.prepare(`SELECT * FROM sweep_jobs WHERE id=?`).get(id) as any;
         structuredLog("sweep.completed", { sweepId: id, kind: job.kind, query: job.query, checked: completed.checked, freshFound: completed.fresh_found, opportunitiesFound: completed.opportunities_found, alerts: JSON.stringify(alerts) });
@@ -806,7 +837,19 @@ async function runSweep(id: string) {
 function updateProgress(id: string) {
   const job = rawDb.prepare(`SELECT * FROM sweep_jobs WHERE id=?`).get(id) as any; if (!job) return;
   const state = rawDb.prepare(`SELECT SUM(state='done') done,SUM(state='failed') failed FROM sweep_job_targets WHERE sweep_job_id=?`).get(id) as any;
-  const opportunity = rawDb.prepare(`SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id WHERE j.sweep_job_id=? AND s.first_seen_fiber_at>=? AND s.last_customer_segment='new_opportunity'`).get(id, job.started_at) as any;
+  // SELLABLE MEANS "a rep can knock it": fiber at the address and nobody paying
+  // for it. It does NOT mean the door flipped during this sweep - that is what
+  // fresh_found counts, and the two are different questions.
+  //
+  // This used to require first_seen_fiber_at >= started_at, so a tenured door
+  // that has had fiber for months could never qualify. Measured live: Lexington
+  // reported SELLABLE 0 while 101 of its doors came back tenured fiber with
+  // billing N, and Wingate reported 11 while holding another 106. The tile
+  // promised "fiber, nobody on it" and counted something else.
+  const opportunity = rawDb.prepare(`SELECT COUNT(*) n
+     FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id
+    WHERE j.sweep_job_id=? AND s.last_billing_status='N'
+      AND (s.last_fiber_available=1 OR s.last_fiber_status IN ('new_fiber','tenured_fiber'))`).get(id) as any;
   const fresh = rawDb.prepare(`SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id WHERE j.sweep_job_id=? AND s.first_seen_fiber_at>=?`).get(id, job.started_at) as any;
   updateJob(id, { checked: Number(state.done ?? 0) + Number(state.failed ?? 0), failed: Number(state.failed ?? 0), fresh_found: fresh.n, opportunities_found: opportunity.n, heartbeat_at: now() });
 }

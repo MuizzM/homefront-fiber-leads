@@ -47,6 +47,7 @@ interface ScanInspectorProps {
 }
 interface Health {
   decodoConnected: boolean; proxySessionId: string; tokenReady: boolean; tokenExpiresIn: number | null;
+  publicIp: string | null; stickyPort: number | null; checksOnThisIp: number; checksPerIp: number;
   tokenPool: { ready: number; size: number }; paused: boolean;
 }
 interface Counters {
@@ -292,6 +293,18 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
         </span>
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-success/25 text-success" : "border-destructive/25 text-destructive"}`}>
           {health?.decodoConnected ? null : null} Decodo {health?.decodoConnected ? "connected" : "down"}
+        </span>
+        {/* The address the rows below were answered from, and how much of its
+            20-check budget is spent. A masked session id alone never told an
+            operator whether traffic was leaving from Decodo or from here. */}
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 font-mono text-foreground"
+          data-testid="inspector-egress-ip"
+        >
+          {health?.publicIp ?? (health?.stickyPort ? `port ${health.stickyPort}` : "resolving")}
+          {health?.checksPerIp ? (
+            <span className="text-muted-foreground">· {health.checksOnThisIp}/{health.checksPerIp}</span>
+          ) : null}
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground font-mono">{health?.proxySessionId ?? "decodo-s?"}</span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground">
