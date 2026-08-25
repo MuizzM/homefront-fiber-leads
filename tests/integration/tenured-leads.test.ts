@@ -187,3 +187,53 @@ describe("tenured lead projector", () => {
     expect((rawDb.prepare("SELECT COUNT(*) c FROM leads").get() as any).c).toBe(1);
   });
 });
+
+describe("a scan publishes tenured pins by itself", () => {
+  it("persistKineticObservation creates the tenured lead for the door it answered", async () => {
+    // Before this hook the projector had no production caller: a scan could
+    // answer thousands of doors and produce zero tenured pins.
+    const { persistKineticObservation } = await import("../../server/kineticObservation");
+    const r = persistKineticObservation({
+      tenantId: TENANT, source: "test",
+      observation: {
+        address: "77 Hooked Rd", city: "Rockwell", state: "NC", zip: "28138",
+        lat: 35.551, lng: -80.42,
+        fiberStatus: "tenured_fiber", fiberAvailable: true, isNewFiber: false,
+        billingStatus: "N", householdSegmentType: "TENURED",
+        // A body that genuinely qualifies. Availability is derived from the
+        // provider's words, not from the caller's fiberAvailable flag - a guard
+        // added after an ad-hoc ingest of mine reported 49 Landis doors as
+        // available when their only stored body said "NO QUAL".
+        rawResponse: {
+          maxQual: "QUAL UP TO 2 GIG RANGE VIA FIBER", validationResult: "AddressFound",
+          techType: "FIBER",
+          broadbandService: { technologyType: "FIBER", qualSpeed: "2000000" },
+          address: { householdSegmentType: "TENURED", billingStatus: "N" },
+        },
+      } as any,
+    } as any);
+    expect(r.tenured.created).toBe(1);
+    const lead = rawDb.prepare("SELECT * FROM leads WHERE address='77 Hooked Rd'").get() as any;
+    expect(lead.lead_tag).toBe(mod.TENURED_LEAD_TAG);
+  });
+
+  it("still refuses a door the qualification does not support", async () => {
+    // TENURED + billing N, but NO QUAL: the Landis case. Must not become a pin.
+    const { persistKineticObservation } = await import("../../server/kineticObservation");
+    const r = persistKineticObservation({
+      tenantId: TENANT, source: "test",
+      observation: {
+        address: "88 Georgia Oak Ln", city: "Landis", state: "NC", zip: "28088",
+        lat: 35.5516, lng: -80.5962,
+        fiberStatus: "coming_soon", fiberAvailable: false, isNewFiber: false,
+        billingStatus: "N", householdSegmentType: "TENURED",
+        rawResponse: {
+          maxQual: "NO QUAL", validationResult: "AddressUnserviceableInTerritory",
+          broadbandService: { technologyType: "FUTURE_QUAL_EXTENDED", estimatedCompletionDt: "JAN-2027" },
+        },
+      } as any,
+    } as any);
+    expect(r.tenured.created).toBe(0);
+    expect(rawDb.prepare("SELECT COUNT(*) c FROM leads WHERE address='88 Georgia Oak Ln'").get() as any).toEqual({ c: 0 });
+  });
+});

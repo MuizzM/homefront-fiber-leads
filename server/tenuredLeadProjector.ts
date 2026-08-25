@@ -53,6 +53,9 @@ export const TENURED_LEAD_SCORE = 60;
 export const TENURED_LEAD_TAG = "tenured_open";
 
 export interface TenuredProjectionOptions {
+  /** Restrict to these doors. Used by the per-observation hook so a scan
+   *  publishes the door it just answered, instead of sweeping the table. */
+  targetIds?: number[];
   /** Cap one pass so a first run cannot mint tens of thousands of rows unasked. */
   limit?: number;
   state?: string;
@@ -99,6 +102,10 @@ export function projectTenuredOpenLeads(
                     AND w.status = 'active')`,
   ];
   const args: any[] = [tenantId];
+  if (opts.targetIds?.length) {
+    where.push(`s.id IN (${opts.targetIds.map(() => "?").join(",")})`);
+    args.push(...opts.targetIds);
+  }
   if (opts.state) { where.push("s.state = ?"); args.push(opts.state); }
   if (opts.city) { where.push("lower(trim(s.city)) = ?"); args.push(opts.city.toLowerCase().trim()); }
 

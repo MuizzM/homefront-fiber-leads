@@ -4,6 +4,7 @@ import { rawDb } from "./db";
 import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { getDefaultTenantId, storage } from "./storage";
 import { projectConfirmedFreshLeads, type ProjectionResult } from "./freshFiberProjector";
+import { projectTenuredOpenLeads } from "./tenuredLeadProjector";
 import { classifyCustomerOpportunity, classifyFiberAvailabilityTransition } from "@shared/opportunitySegment";
 import { normalizeKineticAddressKey } from "./addressKey";
 import { parseKineticResponse } from "./kineticResponseParser";
@@ -60,6 +61,8 @@ export interface PersistKineticObservationInput {
 }
 
 export interface PersistKineticObservationResult {
+  /** What the tenured projector did for this door: fiber lit, nobody on it. */
+  tenured: { created: number; alreadyLead: number };
   tenantId: number;
   targetId: number;
   targetCreated: boolean;
@@ -495,11 +498,26 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
     }, "warn");
     projection = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, addressReview: 0, leadIds: [], errors: [] };
   }
-  if (projection.published > 0) requestImmediateAlert(Number(tenantId));
+  // A door with fiber lit and nobody on it is walkable too, and the fresh
+  // projector will never publish it: it only ever publishes NEW FIBER. Run the
+  // tenured projector over the SAME door, in the same guarded way - it applies
+  // its own qualification gate, so a bare TENURED segment still cannot mint a
+  // lead. Without this the projector had no production caller at all and a scan
+  // produced no tenured pins no matter how many doors it answered.
+  let tenured = { created: 0, alreadyLead: 0 };
+  try {
+    const t = projectTenuredOpenLeads(Number(tenantId), { targetIds: [targetId], limit: 1 });
+    tenured = { created: t.created, alreadyLead: t.alreadyLead };
+  } catch (error: any) {
+    structuredLog("tenured_leads.projection_failed", {
+      tenantId: Number(tenantId), targetId, error: String(error?.message ?? error),
+    }, "warn");
+  }
+  if (projection.published > 0 || tenured.created > 0) requestImmediateAlert(Number(tenantId));
   return {
     tenantId: Number(tenantId), targetId, targetCreated, conclusive, fiberAvailable,
     transition, customerSegment: conclusive ? customer.segment : "unknown",
     rawNewFiberHit: observation.isNewFiber === true,
-    projection,
+    projection, tenured,
   };
 }
