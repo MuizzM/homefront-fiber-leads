@@ -144,31 +144,71 @@ export class AuthorizedTokenPool {
     }
   }
 
-  async lease(addressKey?: string): Promise<AuthorizedTokenLease> {
+  /**
+   * @param preferLane  With parallel egress lanes, the caller names the lane it
+   *   wants to ride and the pool answers with a token that BELONGS to that lane
+   *   (slot.id % laneCount === preferLane). Without it, sticky reuse drains one
+   *   slot at a time - which is right for token economy and fatal for lanes:
+   *   one live slot means one lane means one residential IP, and DECODO_LANES
+   *   silently does nothing. Sticky reuse still applies WITHIN a lane.
+   */
+  async lease(addressKey?: string, preferLane?: number, laneCount?: number): Promise<AuthorizedTokenLease> {
     const normalizedAddressKey = addressKey?.trim() || null;
+    const lane = Number.isInteger(preferLane) && Number.isInteger(laneCount) && (laneCount as number) > 1
+      ? { id: preferLane as number, count: laneCount as number } : null;
     // FAST PATH — an interactive check must never queue behind pool husbandry.
     // If ANY ready token exists, take it now: no ensureWarm, no due-slot
     // refresh wave (a burst that emptied 10 slots used to make the next field
     // tap wait ~10 serialized mints before its own search dispatched). pickReady
     // filters on real expiry, so a stale slot can never be returned here.
-    let slot = this.pickReady(normalizedAddressKey);
+    let slot = this.pickReady(normalizedAddressKey, lane);
     if (!slot) {
       await this.ensureWarm();
       // Bounded: mint at most ONE due slot synchronously for this lease; the
       // maintenance tick refreshes the rest in the background.
       await this.refreshDueSlots(1);
-      slot = this.pickReady(normalizedAddressKey);
+      slot = this.pickReady(normalizedAddressKey, lane);
     }
     if (slot && slot.leases >= this.maxLeasesPerToken && this.slots.length < this.maxSize) {
       const expanded = this.createSlot();
       await this.refreshSlot(expanded.id, true);
-      slot = this.pickReady(normalizedAddressKey);
+      slot = this.pickReady(normalizedAddressKey, lane);
+    }
+    // RECYCLE THE LANE'S OWN SLOT, DO NOT GROW THE POOL.
+    //
+    // A slot that has spent its address budget stays READY-but-full forever, so
+    // pickReady skips it and the old code answered by creating a NEW slot. Ids
+    // therefore climbed for the life of the process until maxSize refused
+    // leases. Measured live on Lexington: 1 -> 6 -> 24 -> 50 -> ... -> 200 slots
+    // in eight minutes, at which point the sweep stalled with the queue full and
+    // zero answers. Re-minting the lane's existing slot keeps the pool at about
+    // one slot per lane, which is the whole point of a pair.
+    if (!slot && lane) {
+      const own = this.slots.filter((candidate) => candidate.id % lane.count === lane.id);
+      const reusable = own.find((candidate) => candidate.state === "EMPTY" || candidate.state === "EXPIRED")
+        ?? own.find((candidate) => !candidate.leases)
+        ?? own[0];
+      if (reusable) {
+        await this.refreshSlot(reusable.id, true).catch(() => {});
+        slot = this.pickReady(normalizedAddressKey, lane);
+      }
     }
     if (!slot && this.slots.length < this.maxSize) {
-      slot = this.createSlot();
-      await this.refreshSlot(slot.id, true);
-      slot = this.pickReady(normalizedAddressKey);
+      // First use of a lane: grow just far enough that the lane owns an id.
+      const attempts = lane ? lane.count : 1;
+      for (let i = 0; i < attempts && this.slots.length < this.maxSize; i++) {
+        const created = this.createSlot();
+        if (!lane || created.id % lane.count === lane.id) {
+          await this.refreshSlot(created.id, true);
+          break;
+        }
+      }
+      slot = this.pickReady(normalizedAddressKey, lane);
     }
+    // Still nothing on this lane: rather than stall the check, fall back to any
+    // ready token. A borrowed token is worse than a lane's own, and far better
+    // than a refused check.
+    if (!slot && lane) slot = this.pickReady(normalizedAddressKey);
     if (!slot) {
       const refreshing = this.slots.map(item => item.refreshInFlight).filter(Boolean) as Promise<void>[];
       if (refreshing.length) await Promise.race(refreshing.map(task => task.catch(() => {})));
@@ -324,6 +364,34 @@ export class AuthorizedTokenPool {
     return 1;
   }
 
+  /**
+   * Retire every token riding one egress lane.
+   *
+   * A lane is not a slot. The scanner maps slot -> lane as `slotId % laneCount`,
+   * so lane L carries slots L, L+laneCount, L+2*laneCount... Indexing the slot
+   * array with a LANE id retires slots[L] - usually an idle slot, silently,
+   * returning 0 - while the token actually on that lane's brand-new IP keeps
+   * being leased. That is the "one token, fresh IP every 20" arm the measurement
+   * table scores at 20/60, and it also lets the pool grow unchecked: simulated
+   * at 6-way concurrency it ran to the 200-slot cap with 1,900 of 6,000 leases
+   * refused, against 5 slots and zero refusals once the right slots retire.
+   */
+  retireLane(laneId: number, laneCount: number): number {
+    if (!Number.isInteger(laneId) || !Number.isInteger(laneCount) || laneCount < 1) return 0;
+    let retired = 0;
+    for (const slot of this.slots) {
+      if (slot.id % laneCount !== laneId) continue;
+      if (!slot.token) continue;
+      slot.token = null;
+      slot.expiresAt = 0;
+      slot.state = "EMPTY";
+      slot.addressKeys.clear();
+      slot.leases = 0;
+      retired++;
+    }
+    return retired;
+  }
+
   retireGeneration(): number {
     let retired = 0;
     for (const slot of this.slots) {
@@ -474,9 +542,10 @@ export class AuthorizedTokenPool {
     }
   }
 
-  private pickReady(addressKey: string | null = null): TokenSlot | null {
+  private pickReady(addressKey: string | null = null, lane: { id: number; count: number } | null = null): TokenSlot | null {
     const now = this.now();
     const candidates = this.slots.filter(slot =>
+      (!lane || slot.id % lane.count === lane.id) &&
       slot.state === "READY"
       && !!slot.token
       && slot.expiresAt > now + this.refreshMarginMs

@@ -222,6 +222,36 @@ describe("a city sweep parks streets with no fiber", () => {
       .toContain("...(Number.isFinite(limit) && limit > 0 ? { maxChecks: Math.min(100_000, Math.floor(limit)) } : {})");
   });
 
+  it("reports what it ASKED, not how many rows it retired", async () => {
+    // Measured live: a whole-city Broadway sweep reported checked=3,657 while
+    // only 145 provider answers were written, because 3,345 of its targets
+    // already had a verdict. "checked" counts terminal rows; it is not calls.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const svc = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    // Real calls are counted from the snapshots THIS sweep's runs produced.
+    expect(svc).toContain("JOIN availability_snapshots a ON a.scan_target_id=j.target_id AND a.run_id=j.run_id");
+    expect(svc).toContain("answered: answered.n");
+    // ...and the UI leads with asked, keeping retired rows as a separate figure.
+    const ui = fs.readFileSync(path.resolve(process.cwd(), "client/src/components/fiber/CitySweepRunner.tsx"), "utf8");
+    expect(ui).toContain("Asked");
+    expect(ui).toContain("job.answered.toLocaleString()");
+  });
+
+  it("separates what this run found from what the city already held", async () => {
+    // The sellable tile showed a standing total, so Broadway displayed 675 at
+    // the instant checking began - before one answer had come back.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const svc = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    expect(svc, "found = sellable on THIS run's own evidence").toContain("sellable_found: sellableFound.n");
+    expect(svc).toContain("upper(COALESCE(a.billing_status,''))='N'");
+    const ui = fs.readFileSync(path.resolve(process.cwd(), "client/src/components/fiber/CitySweepRunner.tsx"), "utf8");
+    expect(ui, "the headline is what the run found").toContain("job.sellableFound.toLocaleString()");
+    expect(ui, "the standing total is labelled as such")
+      .toContain("sellable in this city in total, counting doors answered before this run");
+  });
+
   it("SWEEP_PARK_DEAD_STREETS=off checks every door", () => {
     const prev = process.env.SWEEP_PARK_DEAD_STREETS;
     process.env.SWEEP_PARK_DEAD_STREETS = "off";

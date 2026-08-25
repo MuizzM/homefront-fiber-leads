@@ -38,6 +38,8 @@ vi.mock("../../server/proxy-fetch", () => ({
   isProxyConnected: () => true,
   getEgressIp: () => ({ ip: null, forPort: 10001, at: null, error: null }),
   refreshEgressIp: async () => {},
+  // One lane, so the scanner's lane round-robin is a no-op in these suites.
+  egressLaneCount: () => 1,
   getProxySessionId: () => "decodo-s1",
   currentEgressProxyUrl: () => "http://redacted@proxy:10001",
   isProxyConnected: () => true,

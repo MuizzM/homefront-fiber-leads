@@ -35,6 +35,8 @@ vi.mock("../../server/proxy-fetch", () => ({
   setEgressGenerationHook: () => {},
   directCarrierEgressAllowed: () => false,
   directCarrierFetch: async () => { throw new Error("direct carrier egress is off"); },
+  // One lane, so the scanner's lane round-robin is a no-op in these suites.
+  egressLaneCount: () => 1,
   getProxySessionId: () => "decodo-s1",
   isProxyConnected: () => true,
   getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100, sessionId: "decodo-s1" }),

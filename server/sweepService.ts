@@ -832,16 +832,41 @@ function updateProgress(id: string) {
   // reported SELLABLE 0 while 101 of its doors came back tenured fiber with
   // billing N, and Wingate reported 11 while holding another 106. The tile
   // promised "fiber, nobody on it" and counted something else.
+  // THE STANDING TOTAL: every door among this sweep's targets that is sellable
+  // right now, whenever it was answered. Useful, but it is not what this run
+  // found, and a city with history shows a large number before a single check
+  // completes - which is exactly how a Broadway run displayed 675 at the moment
+  // it started checking.
   const opportunity = rawDb.prepare(`SELECT COUNT(*) n
      FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id
     WHERE j.sweep_job_id=? AND s.last_billing_status='N'
       AND (s.last_fiber_available=1 OR s.last_fiber_status IN ('new_fiber','tenured_fiber'))`).get(id) as any;
+  // WHAT THIS SWEEP ACTUALLY ASKED. A snapshot carries the run that produced it,
+  // and this sweep owns its run ids, so the join is exact. DISTINCT because a
+  // retried door writes more than one snapshot in the same run.
+  const answered = rawDb.prepare(`SELECT COUNT(DISTINCT a.scan_target_id) n
+     FROM sweep_job_targets j
+     JOIN availability_snapshots a ON a.scan_target_id=j.target_id AND a.run_id=j.run_id
+    WHERE j.sweep_job_id=? AND j.run_id IS NOT NULL`).get(id) as any;
+  // ...and what those answers found: sellable ON THIS RUN'S OWN EVIDENCE.
+  const sellableFound = rawDb.prepare(`SELECT COUNT(DISTINCT a.scan_target_id) n
+     FROM sweep_job_targets j
+     JOIN availability_snapshots a ON a.scan_target_id=j.target_id AND a.run_id=j.run_id
+    WHERE j.sweep_job_id=? AND j.run_id IS NOT NULL AND a.conclusive=1
+      AND upper(COALESCE(a.billing_status,''))='N'
+      AND (a.fiber_available=1
+           OR upper(COALESCE(a.household_segment_type,'')) IN ('NEW FIBER','TENURED'))`).get(id) as any;
   const fresh = rawDb.prepare(`SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id WHERE j.sweep_job_id=? AND s.first_seen_fiber_at>=?`).get(id, job.started_at) as any;
-  updateJob(id, { checked: Number(state.done ?? 0) + Number(state.failed ?? 0), failed: Number(state.failed ?? 0), fresh_found: fresh.n, opportunities_found: opportunity.n, heartbeat_at: now() });
+  updateJob(id, {
+    checked: Number(state.done ?? 0) + Number(state.failed ?? 0),
+    failed: Number(state.failed ?? 0),
+    answered: answered.n, sellable_found: sellableFound.n,
+    fresh_found: fresh.n, opportunities_found: opportunity.n, heartbeat_at: now(),
+  });
 }
 
 function updateJob(id: string, values: Record<string, unknown>) {
-  const allowed = ["city","state","phase","status","source","harvested","queued","checked","failed","fresh_found","opportunities_found","probe_count","current_run_id","error","heartbeat_at","completed_at"];
+  const allowed = ["city","state","phase","status","source","harvested","queued","checked","failed","answered","sellable_found","fresh_found","opportunities_found","probe_count","current_run_id","error","heartbeat_at","completed_at"];
   // A key that is not on the list used to be dropped in SILENCE. probe_count was
   // written here, never stored, and the probe batch it gates read back as 0 - so
   // a live Broadway run checked all 300 doors across 53 dead streets and parked
@@ -853,7 +878,8 @@ function updateJob(id: string, values: Record<string, unknown>) {
   rawDb.prepare(`UPDATE sweep_jobs SET ${entries.map(([key]) => `${key}=?`).join(",")},updated_at=datetime('now') WHERE id=?`).run(...entries.map(([, value]) => value), id);
 }
 function failSweep(id: string, error: any) { updateJob(id, { status: "error", phase: "error", error: String(error?.message ?? error).slice(0, 500), completed_at: now() }); structuredLog("sweep.failed", { sweepId: id, error: String(error?.message ?? error) }); }
-function mapJob(r: any) { return { id: r.id, tenantId: r.tenant_id, kind: r.kind, query: r.query, city: r.city, state: r.state, radiusMeters: r.radius_meters, phase: r.phase, status: r.status, source: r.source, harvested: r.harvested, queued: r.queued, checked: r.checked, failed: r.failed, freshFound: r.fresh_found, opportunitiesFound: r.opportunities_found, streetsParked: r.streets_parked ?? 0, doorsSkipped: r.doors_skipped ?? 0, probeCount: r.probe_count ?? 0, maxChecks: r.max_checks, currentRunId: r.current_run_id, error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at }; }
+function mapJob(r: any) { return { id: r.id, tenantId: r.tenant_id, kind: r.kind, query: r.query, city: r.city, state: r.state, radiusMeters: r.radius_meters, phase: r.phase, status: r.status, source: r.source, harvested: r.harvested, queued: r.queued, checked: r.checked, failed: r.failed, freshFound: r.fresh_found, opportunitiesFound: r.opportunities_found,
+  answered: r.answered ?? 0, sellableFound: r.sellable_found ?? 0, streetsParked: r.streets_parked ?? 0, doorsSkipped: r.doors_skipped ?? 0, probeCount: r.probe_count ?? 0, maxChecks: r.max_checks, currentRunId: r.current_run_id, error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at }; }
 function now() { return new Date().toISOString(); }
 function iso(value: string) { return new Date(String(value).includes("T") ? value : String(value).replace(" ", "T") + "Z").toISOString(); }
 function safeJson(value: string | null, fallback: any) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }

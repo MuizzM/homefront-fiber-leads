@@ -19,6 +19,8 @@ vi.mock("../../server/proxy-fetch", () => ({
   setEgressGenerationHook: () => {},
   directCarrierEgressAllowed: () => false,
   directCarrierFetch: async () => { throw new Error("direct carrier egress is off"); },
+  // One lane, so the scanner's lane round-robin is a no-op in these suites.
+  egressLaneCount: () => 1,
   getProxySessionId: () => "exact-match-gate-session",
   isProxyConnected: () => true,
   getProxyStatus: () => ({

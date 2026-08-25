@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook, getProxyStickyState, isProxyConnected, getEgressIp, refreshEgressIp } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook, getProxyStickyState, isProxyConnected, getEgressIp, refreshEgressIp, egressLaneCount } from "./proxy-fetch";
 import { classifyServiceability } from "@shared/serviceabilityVerdict";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
@@ -502,6 +502,10 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   mint: () => gatedMint(),
 });
 
+// Which lane the next check rides. Round-robin, so concurrent checks spread
+// across residential IPs instead of queueing behind one.
+let _nextLane = -1;
+
 // ── WHAT THE EGRESS IS DOING RIGHT NOW ──────────────────────────────────────
 // Counters for the live view, so an operator can watch the pair rule work
 // instead of inferring it from the logs. Diagnostics only: nothing here is a
@@ -573,13 +577,15 @@ export function __resetEgressActivityForTests(): void {
 // counter is a superset of the token's - retries and denials spend it too), so
 // when the IP changes, the token generation ends with it. See the measurement
 // table at setEgressGenerationHook in server/proxy-fetch.ts.
-setEgressGenerationHook((reason, laneId) => {
-  // A lane retirement spends ONE pair: only the token bound to that lane. A
-  // process-wide rotation (no lane) still ends every generation, because that
-  // path moves the single shared IP under all of them.
-  const retired = laneId == null
+setEgressGenerationHook((reason, laneId, laneCount) => {
+  // A lane retirement spends the pairs on THAT lane: every slot riding it, which
+  // is slot % laneCount === laneId, not slots[laneId]. A process-wide rotation
+  // (no lane) ends every generation, and now genuinely moves every lane's port
+  // first, so the pool-wide retirement is honest rather than a token cull that
+  // leaves each lane on its spent IP.
+  const retired = laneId == null || laneCount == null
     ? authorizedTokenPool.retireGeneration()
-    : authorizedTokenPool.retireSlot(laneId);
+    : authorizedTokenPool.retireLane(laneId, laneCount);
   egressActivity.generationsRetired++;
   egressActivity.lastGenerationAt = Date.now();
   egressActivity.lastGenerationReason = reason;
@@ -1205,7 +1211,13 @@ async function scanAddressDirect(
     .digest("hex");
   emit("minting", { status: "info", detail: "acquiring authorized Decodo token" });
   try {
-    tokenLease = await authorizedTokenPool.lease(tokenAddressKey);
+    // ROUND-ROBIN THE LANE, then take a token that belongs to it. Deriving the
+    // lane from whichever slot sticky-reuse happened to pick collapsed every
+    // lane onto one: the pool drains the most-used token first, so one live slot
+    // meant one lane meant one residential IP, and DECODO_LANES did nothing.
+    const laneCount = egressLaneCount();
+    const lane = laneCount > 1 ? (_nextLane = (_nextLane + 1) % laneCount) : undefined;
+    tokenLease = await authorizedTokenPool.lease(tokenAddressKey, lane, laneCount > 1 ? laneCount : undefined);
   } catch (err: any) {
     // No authorized session/token could be obtained — this is NOT a Search-API
     // error, so we fail CLOSED (unresolved), never requeue-loop with no session.

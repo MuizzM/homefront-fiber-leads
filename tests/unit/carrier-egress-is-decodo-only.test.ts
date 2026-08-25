@@ -83,7 +83,9 @@ vi.mock("../../server/proxy-fetch", async (importOriginal) => {
     proxyFetch,
     rotateProxySession: vi.fn(async () => {}),
     advanceProxyEgress: vi.fn(async () => {}),
-    getProxySessionId: () => "decodo-s1",
+    // One lane, so the scanner's lane round-robin is a no-op in these suites.
+  egressLaneCount: () => 1,
+  getProxySessionId: () => "decodo-s1",
     isProxyConnected: () => true,
     currentEgressProxyUrl: () => "http://user:pass@us.decodo.com:10001",
   };

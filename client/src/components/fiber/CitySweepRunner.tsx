@@ -34,6 +34,7 @@ export interface SweepJob {
   harvested: number; queued: number; checked: number; failed: number;
   freshFound: number; opportunitiesFound: number;
   streetsParked: number; doorsSkipped: number; probeCount: number;
+  answered: number; sellableFound: number;
   maxChecks: number; error: string | null; startedAt: string; completedAt: string | null;
 }
 
@@ -205,13 +206,22 @@ export default function CitySweepRunner() {
               ) : null}
             </header>
 
-            {/* The outcome first: doors a rep can knock. */}
+            {/* WHAT THIS RUN FOUND, not what the city already held. The standing
+                total is real but it is not an outcome of the run: a city with
+                history shows hundreds before a single check completes. */}
             <p className="mt-3 flex items-baseline gap-2">
               <span className="text-2xl font-semibold tabular-nums text-foreground" data-testid={`stat-sellable-${job.id}`}>
-                {job.opportunitiesFound.toLocaleString()}
+                {job.sellableFound.toLocaleString()}
               </span>
-              <span className="text-[13px] text-muted-foreground">sellable · fiber, nobody on it</span>
+              <span className="text-[13px] text-pretty text-muted-foreground">
+                sellable found · fiber, nobody on it
+              </span>
             </p>
+            {job.opportunitiesFound > job.sellableFound ? (
+              <p className="text-[12px] text-muted-foreground" data-testid={`stat-sellable-standing-${job.id}`}>
+                {job.opportunitiesFound.toLocaleString()} sellable in this city in total, counting doors answered before this run
+              </p>
+            ) : null}
 
             <Progress
               value={pct}
@@ -222,11 +232,24 @@ export default function CitySweepRunner() {
             {/* The mechanics, one quiet line. */}
             <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
               <div className="flex gap-1.5">
-                <dt className="text-muted-foreground">Checked</dt>
+                {/* Doors this run actually ASKED the provider about. "checked"
+                    counts rows that reached a terminal state, which on a mostly
+                    scanned city is far higher: a Broadway run retired 3,657 rows
+                    on 145 real answers. */}
+                <dt className="text-muted-foreground">Asked</dt>
                 <dd className="font-semibold tabular-nums text-foreground" data-testid={`stat-checked-${job.id}`}>
-                  {job.checked.toLocaleString()} of {job.queued.toLocaleString()}
+                  {job.answered.toLocaleString()}
+                  <span className="font-normal text-muted-foreground"> of {job.queued.toLocaleString()} queued</span>
                 </dd>
               </div>
+              {job.checked > job.answered ? (
+                <div className="flex gap-1.5">
+                  <dt className="text-muted-foreground">Already known</dt>
+                  <dd className="font-semibold tabular-nums text-foreground" data-testid={`stat-known-${job.id}`}>
+                    {(job.checked - job.answered).toLocaleString()}
+                  </dd>
+                </div>
+              ) : null}
               <div className="flex gap-1.5">
                 <dt className="text-muted-foreground">Streets parked</dt>
                 <dd className="font-semibold tabular-nums text-foreground" data-testid={`stat-parked-${job.id}`}>

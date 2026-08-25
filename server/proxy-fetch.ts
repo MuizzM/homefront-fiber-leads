@@ -155,6 +155,9 @@ const LANE_COUNT = () => boundedInt(process.env.DECODO_LANES, 1, 1, 64);
 interface EgressLane { id: number; offset: number; dispatcher: any; checks: number; }
 const _lanes = new Map<number, EgressLane>();
 
+/** How many lanes this process is running. */
+export function egressLaneCount(): number { return LANE_COUNT(); }
+
 /** Lane ids are dense and small; a caller's slot id maps onto one. */
 export function laneFor(key: number): number {
   const lanes = LANE_COUNT();
@@ -198,7 +201,7 @@ function retireLane(lane: EgressLane, proxyUrl: string): void {
   _sessionSeq++;
   if (_generationHook) {
     // Only this lane's token is spent, not the whole pool's.
-    try { _generationHook(`lane ${lane.id} -> port ${lanePort(lane)}`, lane.id); }
+    try { _generationHook(`lane ${lane.id} -> port ${lanePort(lane)}`, lane.id, LANE_COUNT()); }
     catch { /* the token pool must never break the transport */ }
   }
 }
@@ -500,9 +503,19 @@ export async function proxyFetch(url: string, opts: RequestInit = {}, laneId = 0
       return res;
     } catch (err: any) {
       if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
+        if (lane) {
+          // Rebuild THIS lane's pool on THIS lane's port. Rebuilding the shared
+          // dispatcher here fixed an egress the request never used, and going
+          // through rebuildDispatcher would advance the port for every lane.
+          // No port change: a dropped tunnel is not evidence the IP is spent.
+          const stale = lane.dispatcher;
+          lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());
+          if (stale && typeof stale.close === "function") stale.close().catch(() => {});
+          return await _undiciFetch(url, { ...opts, dispatcher: lane.dispatcher } as any) as unknown as Response;
+        }
         rebuildDispatcher(proxyUrl);
         console.log("[proxy-fetch] Pool rebuilt after socket reset");
-        return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;  // lane 0 / shared
+        return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
       }
       // Decodo rejects the CONNECT tunnel itself on auth/limit denials, so a
       // 407 surfaces here as a thrown error, never as a response above.
@@ -579,8 +592,13 @@ export async function directCarrierFetch(url: string, init: RequestInit = {}): P
 // does not actually change the IP.
 // laneId is the token slot whose pair just ended; undefined means every lane
 // (the whole-process rotation paths, which retire one shared IP).
-let _generationHook: ((reason: string, laneId?: number) => void) | null = null;
-export function setEgressGenerationHook(hook: (reason: string, laneId?: number) => void): void {
+// (reason, laneId, laneCount). laneId undefined means every lane: the shared
+// rotation paths move the whole process. When a lane IS named, laneCount comes
+// with it, because the slots riding lane L are every slot where
+// slotId % laneCount === L - the lane id alone cannot identify them, and
+// indexing the slot array with it retires an idle slot in silence.
+let _generationHook: ((reason: string, laneId?: number, laneCount?: number) => void) | null = null;
+export function setEgressGenerationHook(hook: (reason: string, laneId?: number, laneCount?: number) => void): void {
   _generationHook = hook;
 }
 
@@ -596,6 +614,21 @@ function rebuildDispatcher(proxyUrl: string): void {
   if (ipChanged) advanceStickyPort();
   _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
   _sessionSeq++;
+  // EVERY LANE MOVES, OR NONE OF THEM DOES. This is the process-wide rotation
+  // (denial streak, sticky window, mint transport handover). Before, it advanced
+  // only the shared dispatcher and then retired the whole token pool - so every
+  // token was destroyed while every lane carried on dialling the same spent IP,
+  // which is the 33% arm of the measurement table. Lanes are rebuilt here so the
+  // pool-wide retirement below is true.
+  if (ipChanged && _lanes.size) {
+    for (const lane of _lanes.values()) {
+      const old = lane.dispatcher;
+      lane.offset += LANE_COUNT();
+      lane.checks = 0;
+      lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());
+      if (old && typeof old.close === "function") old.close().catch(() => {});
+    }
+  }
   // A new IP ends the generation: the token minted against the old one is half
   // of a pair that no longer exists. One call site, so the rule is structural -
   // every path that changes the IP (budget spent, denial streak, sticky window,

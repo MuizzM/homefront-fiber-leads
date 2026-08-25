@@ -461,7 +461,13 @@ services:
       # for weeks, and each lane costs an undici pool on this side (the pool
       # budget divides across lanes, it does not multiply). Raise it once a full
       # city has run clean at 4.
-      DECODO_LANES: "4"
+      # Held at 1 until a full city runs clean at 4 on a box that is not a
+      # laptop. Lanes shipped broken twice tonight - the lane id was used as a
+      # token slot id, and the pool grew a slot per capped lease until maxSize
+      # refused leases (observed live: 1 -> 200 slots in eight minutes, sweep
+      # stalled). Both are fixed and covered, but "fixed and covered" is not the
+      # same as "run in anger", and this knob spends provider budget.
+      DECODO_LANES: "1"
       # ALL CARRIER TRAFFIC GOES THROUGH DECODO (owner directive 2026-08-24).
       # Decodo's sticky ports ARE residential IPs, so "residential" and "Decodo"
       # are the same egress here; what is NOT Decodo is this box's own

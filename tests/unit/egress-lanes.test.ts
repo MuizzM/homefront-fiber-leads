@@ -70,7 +70,76 @@ describe("egress lanes", () => {
     // rather than nominal.
     expect(src).toContain("}, tokenLease.slotId);");
     // ...and a lane rotation retires only that slot's token.
-    expect(src).toContain("authorizedTokenPool.retireSlot(laneId)");
+    expect(src).toContain("authorizedTokenPool.retireLane(laneId, laneCount)");
+  });
+
+  it("retires every slot riding a lane, never slots[laneId]", async () => {
+    // A lane is not a slot. slot -> lane is slotId % laneCount, so lane 1 of 4
+    // carries slots 1, 5, 9... Indexing the array with the LANE id retires an
+    // idle slot, silently (it returns 0, so even the log line is skipped) while
+    // the live token rides on across that lane's brand-new IP. Simulated at
+    // 6-way concurrency the mismatch grew the pool to its 200-slot cap and
+    // refused 1,900 of 6,000 leases.
+    const { AuthorizedTokenPool } = await import("../../server/authorizedTokenPool");
+    const pool: any = new AuthorizedTokenPool({
+      maxSize: 12, warmMinimum: 1, refreshMarginMs: 60_000, maintenanceIntervalMs: 60_000,
+      maxChecksPerToken: 20, maxLeasesPerToken: 20,
+      mint: async () => ({ token: "t", expiresAt: Date.now() + 3_600_000 }),
+    } as any);
+    // Twelve slots, all holding a token.
+    for (let i = 0; i < 12; i++) { const s = pool.createSlot(); s.token = `t${i}`; s.expiresAt = Date.now() + 3_600_000; s.state = "READY"; }
+
+    // Lane 1 of 4 carries slots 1, 5 and 9 - three tokens, not one.
+    expect(pool.retireLane(1, 4)).toBe(3);
+    for (const id of [1, 5, 9]) expect(pool.slots[id].token, `slot ${id} rides lane 1`).toBeNull();
+    for (const id of [0, 2, 3, 4]) expect(pool.slots[id].token, `slot ${id} is on another lane`).not.toBeNull();
+
+    // Retiring again is a no-op, and nonsense arguments retire nothing.
+    expect(pool.retireLane(1, 4)).toBe(0);
+    expect(pool.retireLane(0, 0)).toBe(0);
+  });
+
+  it("holds one slot per lane instead of growing the pool until leases are refused", async () => {
+    // A slot that has spent its address budget stays READY-but-full, so
+    // pickReady skips it; the pool used to answer by CREATING a slot, so ids
+    // climbed forever. Measured live on Lexington: 1 -> 6 -> 24 -> 50 -> 200
+    // slots in eight minutes, then the sweep stalled with the queue full and
+    // zero answers, because maxSize refuses leases.
+    const { AuthorizedTokenPool } = await import("../../server/authorizedTokenPool");
+    const LANES = 4;
+    let minted = 0;
+    const pool: any = new AuthorizedTokenPool({
+      maxSize: 50, warmMinimum: 1, refreshMarginMs: 60_000, maintenanceIntervalMs: 600_000,
+      maxChecksPerToken: 20, maxLeasesPerToken: 20,
+      mint: async () => ({ token: `tok${++minted}`, expiresAt: Date.now() + 3_600_000 }),
+    } as any);
+
+    const lanesUsed = new Set<number>();
+    for (let i = 0; i < 400; i++) {
+      const lane = i % LANES;
+      const lease = await pool.lease(`addr-${i}`, lane, LANES);
+      expect(lease.slotId % LANES, "a lease lands on the lane it asked for").toBe(lane);
+      lanesUsed.add(lane);
+      lease.release();
+    }
+    expect(lanesUsed.size, "every lane carried traffic").toBe(LANES);
+    // One slot per lane, not four hundred.
+    expect(pool.snapshot().total).toBe(LANES);
+    // 400 checks at 20 per token is 20 tokens - the pair rule, not one per check.
+    expect(minted).toBe(400 / 20);
+  });
+
+  it("a process-wide rotation moves every lane, not just the shared dispatcher", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/proxy-fetch.ts"), "utf8");
+    const rebuild = src.slice(src.indexOf("function rebuildDispatcher"), src.indexOf("async function doRotate"));
+    // Without this the pool was wiped while every lane kept dialling its spent IP.
+    expect(rebuild, "lanes advance with the process").toContain("for (const lane of _lanes.values())");
+    expect(rebuild).toContain("lane.offset += LANE_COUNT()");
+    // A socket reset rebuilds the lane that carried the request, at its own port.
+    const fetchBody = src.slice(src.indexOf("export async function proxyFetch"));
+    expect(fetchBody, "reset is lane-local").toContain("lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());");
   });
 
   it("divides the connection budget across lanes instead of multiplying it", async () => {
