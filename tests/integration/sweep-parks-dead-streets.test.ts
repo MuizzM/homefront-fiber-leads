@@ -144,6 +144,30 @@ describe("a city sweep parks streets with no fiber", () => {
     expect(typeof svc.parkDeadStreets).toBe("function");
   });
 
+  it("a street already proven dead is never queued at all", async () => {
+    // Parking mid-run still costs one probe per street. A street this tenant has
+    // already answered - repeatedly, with no fiber - should not cost even that.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/sweepService.ts"), "utf8");
+    expect(src, "the queue excludes known-dead streets").toContain("SWEEP_DEAD_STREET_EVIDENCE");
+    // Same evidence rule as the mid-run prune: only an ANSWERED door counts.
+    const queueBlock = src.slice(src.indexOf("DO NOT PAY TO RE-LEARN A DEAD STREET"), src.indexOf("const candidates ="));
+    expect(queueBlock, "an unasked door is evidence of nothing, here too")
+      .toContain("EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=m.id)");
+    expect(src, "and it must be reversible without a deploy").toContain("SWEEP_SKIP_KNOWN_DEAD");
+  });
+
+  it("the egress diagnostic never spends the IP check budget", async () => {
+    // Resolving which residential IP we are on is a diagnostic, not a check. If
+    // it counted, watching the panel would burn the pair budget it reports.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(path.resolve(process.cwd(), "server/proxy-fetch.ts"), "utf8");
+    expect(src).toContain("function isDiagnosticUrl(");
+    expect(src, "excluded from the per-IP budget").toContain('!isMintUrl(url) && !isDiagnosticUrl(url)');
+  });
+
   it("SWEEP_PARK_DEAD_STREETS=off checks every door", () => {
     const prev = process.env.SWEEP_PARK_DEAD_STREETS;
     process.env.SWEEP_PARK_DEAD_STREETS = "off";

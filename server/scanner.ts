@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook, getProxyStickyState, isProxyConnected } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, advanceProxyEgress, getProxySessionId, currentEgressProxyUrl, directCarrierEgressAllowed, directCarrierFetch, setEgressGenerationHook, getProxyStickyState, isProxyConnected, getEgressIp, refreshEgressIp } from "./proxy-fetch";
 import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
@@ -522,6 +522,10 @@ const egressActivity = {
 };
 
 export function getEgressActivity() {
+  // Ask what IP we are on, at most once per port, only because someone is
+  // looking. Fire and forget: this call answers with what is known now.
+  void refreshEgressIp();
+  const egressIp = getEgressIp();
   const sticky = getProxyStickyState();
   const pool = authorizedTokenPool.snapshot();
   const budget = Math.max(0, Number(process.env.DECODO_CHECKS_PER_IP ?? 20));
@@ -533,7 +537,9 @@ export function getEgressActivity() {
     proxy: {
       connected: isProxyConnected(),
       sessionId: getProxySessionId(),          // masked "decodo-sN", never a credential
-      stickyPort: sticky.port,                 // which residential IP, not the IP itself
+      stickyPort: sticky.port,
+      publicIp: egressIp.forPort === sticky.port ? egressIp.ip : null,   // the address itself, once known
+      publicIpError: egressIp.forPort === sticky.port ? egressIp.error : null,
       checksOnThisIp: sticky.checksOnThisIp,
       checksPerIp: budget,
       denialStreak: sticky.denialStreak,

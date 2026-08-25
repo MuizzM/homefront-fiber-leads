@@ -706,8 +706,34 @@ async function runSweep(id: string) {
         // Measured 2026-08-24 on a blind city run: 250 Charlotte doors, 250
         // unmatched, zero answers. Ordering the same queue probe-first turns
         // that into ~1 wasted check per street instead of a whole city.
-        const pool = rawDb.prepare(`SELECT id, street_key AS streetKey, address FROM scan_targets
-           WHERE lower(city)=lower(?) AND state=? ORDER BY (last_scanned_at IS NOT NULL),last_scanned_at LIMIT ?`)
+        // DO NOT PAY TO RE-LEARN A DEAD STREET.
+        //
+        // Parking mid-run still costs one probe per street. A street this tenant
+        // has ALREADY answered - repeatedly, with no fiber on any of it - does
+        // not deserve even that. Measured on this data: Statesville answered
+        // 1,775 doors as "no service" and Wingate returned 52 unmatched, all on
+        // streets whose verdicts were already on file.
+        //
+        // A street is excluded when it has SWEEP_DEAD_STREET_EVIDENCE (default 3)
+        // doors carrying a real answer and not one of them is fiber. The same
+        // evidence rule as the mid-run prune: only a door with a snapshot counts,
+        // because an unasked door is evidence of nothing.
+        // SWEEP_SKIP_KNOWN_DEAD=off queues them anyway.
+        const deadEvidence = Math.max(1, Math.min(20, Number(process.env.SWEEP_DEAD_STREET_EVIDENCE ?? 3)));
+        const skipKnownDead = process.env.SWEEP_SKIP_KNOWN_DEAD !== "off";
+        const knownDeadSql = skipKnownDead ? `
+             AND s.street_key IS NOT NULL AND s.street_key NOT IN (
+               SELECT m.street_key FROM scan_targets m
+                WHERE m.tenant_id=s.tenant_id AND m.state=s.state AND m.street_key IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=m.id)
+                GROUP BY m.street_key
+               HAVING COUNT(*) >= ${deadEvidence}
+                  AND SUM(CASE WHEN m.last_fiber_available=1
+                                 OR m.last_fiber_status IN ('new_fiber','tenured_fiber','coming_soon')
+                               THEN 1 ELSE 0 END) = 0)` : "";
+        const pool = rawDb.prepare(`SELECT s.id, s.street_key AS streetKey, s.address FROM scan_targets s
+           WHERE lower(s.city)=lower(?) AND s.state=? ${knownDeadSql}
+           ORDER BY (s.last_scanned_at IS NOT NULL),s.last_scanned_at LIMIT ?`)
           .all(job.city, job.state, job.max_checks) as Array<{ id: number; streetKey: string | null; address: string }>;
         const candidates = pool.map((r) => ({ id: r.id, streetKey: r.streetKey ?? "", houseNumber: houseNumberOf(r.address) }));
         const streetCount = new Set(candidates.map((c) => c.streetKey || `__nostreet_${c.id}`)).size;

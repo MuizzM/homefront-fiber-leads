@@ -171,6 +171,58 @@ function isMintUrl(u: string): boolean {
   catch { return false; }
 }
 
+// WHICH RESIDENTIAL IP ARE WE ACTUALLY ON?
+//
+// The port selects one; it never tells us which. An operator watching the live
+// view wants the address itself - it is the only way to see, rather than
+// assume, that provider traffic is not leaving from this building.
+//
+// Resolved by asking Decodo's own echo endpoint THROUGH the proxy, at most once
+// per sticky port, and only when someone is actually looking (the diagnostics
+// endpoint pulls it). It is a diagnostic, not a check, so it must not spend the
+// IP's ~20-answer budget - hence the exclusion below alongside mints.
+const EGRESS_ECHO_URL = () => process.env.DECODO_ECHO_URL?.trim() || "https://ip.decodo.com/json";
+function isDiagnosticUrl(u: string): boolean {
+  try { return new URL(u).host === new URL(EGRESS_ECHO_URL()).host; }
+  catch { return false; }
+}
+let _egressIp: { port: number | null; ip: string | null; at: number; error: string | null } = { port: null, ip: null, at: 0, error: null };
+let _egressIpInFlight: Promise<void> | null = null;
+
+/** The last known public IP for the port we are on, or null until it resolves.
+ * Carries WHY when it could not: a silent null is indistinguishable from a slow
+ * one, and that ambiguity has cost this codebase enough already. */
+export function getEgressIp(): { ip: string | null; forPort: number | null; at: number | null; error: string | null } {
+  const port = process.env.DECODO_STICKY === "off" ? null : currentStickyPort();
+  if (_egressIp.port !== port) return { ip: null, forPort: port, at: null, error: null };
+  return { ip: _egressIp.ip, forPort: _egressIp.port, at: _egressIp.at || null, error: _egressIp.error };
+}
+
+/**
+ * Resolve the current egress IP if we do not already know it for this port.
+ * Single-flight, best-effort, never throws: a diagnostic that breaks scanning
+ * would be a poor trade for a label.
+ */
+export async function refreshEgressIp(): Promise<void> {
+  const port = process.env.DECODO_STICKY === "off" ? null : currentStickyPort();
+  if (_egressIp.port === port && _egressIp.ip) return;
+  if (_egressIpInFlight) return _egressIpInFlight;
+  const done = (async () => {
+    try {
+      const res = await proxyFetch(EGRESS_ECHO_URL(), { signal: AbortSignal.timeout(8_000) } as any);
+      const body: any = await res.json().catch(() => null);
+      const ip = typeof body?.proxy?.ip === "string" ? body.proxy.ip
+        : typeof body?.ip === "string" ? body.ip : null;
+      _egressIp = { port, ip, at: Date.now(), error: ip ? null : `echo ${res.status} had no ip field` };
+    } catch (err: any) {
+      _egressIp = { port, ip: null, at: Date.now(), error: String(err?.message ?? err).slice(0, 80) };
+    }
+  })();
+  _egressIpInFlight = done;
+  void done.finally(() => { if (_egressIpInFlight === done) _egressIpInFlight = null; });
+  return done;
+}
+
 /**
  * Has this IP been ridden past its time window?
  *
@@ -303,7 +355,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         // whose search quota is exhausted, so counting it would let one healthy
         // mint erase a run of search denials and keep a burnt IP in service
         // forever. Only a real check earns the forgiveness.
-        if (res.status >= 200 && res.status < 300 && !isMintUrl(url)) _denialStreak = 0;
+        if (res.status >= 200 && res.status < 300 && !isMintUrl(url) && !isDiagnosticUrl(url)) _denialStreak = 0;
         // ...and spend one unit of the IP's budget. Retiring on a COUNT while
         // the IP is still healthy beats discovering it is spent from a run of
         // denials (see CHECKS_PER_IP for the measurements).
@@ -320,7 +372,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         // The counter is also reset HERE, synchronously at the decision, rather
         // than in advanceStickyPort() inside the async retire - otherwise every
         // response landing in that gap re-arms the flag and queues another one.
-        if (process.env.DECODO_STICKY !== "off" && !isMintUrl(url)) {
+        if (process.env.DECODO_STICKY !== "off" && !isMintUrl(url) && !isDiagnosticUrl(url)) {
           const budget = CHECKS_PER_IP();
           if (budget > 0 && ++_checksOnThisIp >= budget) {
             _checksOnThisIp = 0;
