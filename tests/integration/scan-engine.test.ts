@@ -558,7 +558,7 @@ describe("budgeted scan engine (replay - zero proxy)", () => {
     // Resume must find it, RESET the orphaned inflight claim to queued, and finish.
     const resumable = store.getResumableRuns(30).map((r) => r.id);
     expect(resumable).toContain(runId);
-    store.resetInflightTargets(runId);
+    store.resetInflightTargets(runId, { tenantId: TENANT, reason: "crash_orphan_reclaim" });
     await engine.runScanWorker(runId, TENANT, replay);
 
     const run = store.getRun(runId, TENANT)!;
@@ -576,7 +576,7 @@ describe("budgeted scan engine (replay - zero proxy)", () => {
     // Claim → requeue (transient, immediately claimable) → the run finishes 'done'
     // anyway (the premature-finish this fix targets): a claimable tail is stranded.
     store.claimRunTargets(runId, 1);
-    store.requeueRunTarget(runId, id);
+    store.requeueRunTarget(runId, id, 0, { tenantId: TENANT, reason: "transient_transport" });
     store.setRunStatus(runId, "done");
     expect(store.getStrandedDoneRuns(10).map((r) => r.id)).toContain(runId);
 
@@ -587,7 +587,7 @@ describe("budgeted scan engine (replay - zero proxy)", () => {
     store.createScanRun({ id: cid, tenantId: TENANT, kind: "lead_expansion", label: "Exp", city: "Strandton", state: "NC", budget: 1 });
     store.enqueueRunTargets(cid, [{ id: id2, seq: 0 }]);
     store.claimRunTargets(cid, 1);
-    store.requeueRunTarget(cid, id2);
+    store.requeueRunTarget(cid, id2, 0, { tenantId: TENANT, reason: "transient_transport" });
     store.setRunStatus(cid, "cancelled");
     expect(store.getStrandedDoneRuns(10).map((r) => r.id)).not.toContain(cid);
 
@@ -599,7 +599,7 @@ describe("budgeted scan engine (replay - zero proxy)", () => {
     store.createScanRun({ id: eid, tenantId: TENANT, kind: "discovery", label: "Err", city: "Strandton", state: "NC", budget: 1 });
     store.enqueueRunTargets(eid, [{ id: id3, seq: 0 }]);
     store.claimRunTargets(eid, 1);
-    store.requeueRunTarget(eid, id3);
+    store.requeueRunTarget(eid, id3, 0, { tenantId: TENANT, reason: "transient_transport" });
     store.setRunStatus(eid, "error", "boom");
     expect(store.getStrandedDoneRuns(10).map((r) => r.id)).toContain(eid);
 
@@ -607,7 +607,7 @@ describe("budgeted scan engine (replay - zero proxy)", () => {
     // is no longer "stranded" (it converges/drains instead of spinning).
     store.setRunStatus(runId, "running");
     store.claimRunTargets(runId, 1);
-    store.requeueRunTarget(runId, id, 3600); // 1h backoff
+    store.requeueRunTarget(runId, id, 3600, { tenantId: TENANT, reason: "inconclusive_address_needs_fix" }); // 1h backoff
     store.setRunStatus(runId, "done");
     expect(store.getStrandedDoneRuns(10).map((r) => r.id)).not.toContain(runId);
     expect(store.claimRunTargets(runId, 1).length).toBe(0); // not claimable until the backoff elapses

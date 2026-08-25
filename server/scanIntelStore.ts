@@ -6,6 +6,10 @@
 import { rawDb } from "./db";
 import type { MarketAggregate } from "@shared/marketIntel";
 import { INCONCLUSIVE_GIVEUP, anfParkedSql, answeredSql, isRecheckExemptKind, onceOnlyEnabled } from "@shared/scanPolicy";
+import { requeueDetail, type RequeueReason } from "@shared/scanRequeueReason";
+// The requeue primitives own their own audit event (see requeueRunTarget). This
+// is a one-way dependency: fiberOperationsStore imports nothing from here.
+import { appendFiberEvent } from "./fiberOperationsStore";
 
 // Quiet window for addresses concluded address_not_found (persistent needs-fix
 // non-answers with no adoptable suggestion): parked out of BULK claims this
@@ -449,20 +453,53 @@ export function finalizeRunTarget(runId: string, targetId: number, state: "verif
   _finalizeTx(runId, targetId, state, result, delta);
 }
 
-// Return orphaned 'inflight' rows to the queue (crash recovery on resume).
-export function resetInflightTargets(runId: string): number {
-  return rawDb.prepare(`UPDATE scan_run_targets SET state='queued' WHERE run_id=? AND state='inflight'`).run(runId).changes;
+// Return orphaned 'inflight' rows to the queue (crash recovery on resume, or an
+// operator reset). BULK, so it records ONE run-level event with the count rather
+// than one row per target — the reaper touches every resumable run every 60s and
+// a per-target event would flood the same log that already hit 7.7M rows. Silent
+// when nothing moved, so a quiet reaper tick stays quiet.
+export function resetInflightTargets(runId: string, diagnostic: RequeueDiagnostic): number {
+  const changes = rawDb.prepare(`UPDATE scan_run_targets SET state='queued' WHERE run_id=? AND state='inflight'`).run(runId).changes;
+  if (changes > 0) {
+    appendFiberEvent({
+      tenantId: diagnostic.tenantId,
+      runId,
+      eventType: "run.targets_requeued",
+      payload: {
+        reason: diagnostic.reason,
+        targets: changes,
+        detail: requeueDetail(diagnostic.detail),
+      },
+    });
+  }
+  return changes;
 }
 
 // Terminalize a run's remaining queued/inflight tail (e.g. when the run's
 // budget is already exhausted). Without this the tail stays 'queued' forever
 // and the stranded-tail drain re-opens the run every tick — an infinite
 // re-open livelock that stalls all scanning (observed live, 43 runs).
-export function terminalizeQueuedTail(runId: string, reason: string): number {
-  return rawDb.prepare(
+export function terminalizeQueuedTail(
+  runId: string,
+  reason: string,
+  diagnostic?: { tenantId: number; reason: RequeueReason },
+): number {
+  const changes = rawDb.prepare(
     `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
       WHERE run_id=? AND state IN ('queued','inflight')`,
   ).run(reason, runId).changes;
+  // The mirror image of a requeue: these addresses are NOT retried in this run.
+  // Same machine-readable vocabulary so one query over the run's events shows
+  // both what was retried and what was abandoned, and why.
+  if (changes > 0 && diagnostic) {
+    appendFiberEvent({
+      tenantId: diagnostic.tenantId,
+      runId,
+      eventType: "run.tail_terminalized",
+      payload: { reason: diagnostic.reason, targets: changes, detail: requeueDetail(reason) },
+    });
+  }
+  return changes;
 }
 
 // One-shot boot backfill: terminalize the ALREADY-EXHAUSTED needs-fix tail
@@ -520,9 +557,56 @@ export async function finalizeAddressNotFoundBacklog(attemptCap: number): Promis
 // (throttle/token/admission timeout) still uses delaySeconds=0 (retry promptly).
 const _requeueTarget = rawDb.prepare(`UPDATE scan_run_targets SET state='queued', next_attempt_at=NULL WHERE run_id=? AND target_id=? AND state='inflight'`);
 const _requeueTargetDelayed = rawDb.prepare(`UPDATE scan_run_targets SET state='queued', next_attempt_at=datetime('now', ?) WHERE run_id=? AND target_id=? AND state='inflight'`);
-export function requeueRunTarget(runId: string, targetId: number, delaySeconds = 0): void {
-  if (delaySeconds > 0) _requeueTargetDelayed.run(`+${Math.floor(delaySeconds)} seconds`, runId, targetId);
-  else _requeueTarget.run(runId, targetId);
+
+/** Why this address is going back on the queue, and what the provider said.
+ *  REQUIRED — an optional field is how 31,777 reasonless requeues shipped. */
+export interface RequeueDiagnostic {
+  tenantId: number;
+  /** Machine-readable code from the closed vocabulary in @shared/scanRequeueReason. */
+  reason: RequeueReason;
+  /** Claim attempt this requeue belongs to (scan_run_targets.attempt_count). */
+  attempt?: number;
+  /** Coarse bucket kept for continuity with fiber_job_failures.category. */
+  category?: string | null;
+  /** Provider HTTP status, when the non-answer came from a response. */
+  httpStatus?: number | null;
+  /** Underlying error text, truncated. */
+  detail?: string | null;
+}
+
+// Requeue ONE target and RECORD WHY, in one call. The audit event lives here
+// rather than at the call sites because a requeue that forgets to explain itself
+// is invisible: the target flips back to 'queued', no counter moves, and the run
+// keeps reporting healthy while it churns (measured: 42 requeues per completion,
+// undiagnosable for hours).
+//
+// `applied` distinguishes a requeue that actually flipped an inflight row from
+// one that matched nothing (already finalized, already queued, cancelled
+// mid-flight) — a silent no-op that used to look identical in the log.
+export function requeueRunTarget(
+  runId: string,
+  targetId: number,
+  delaySeconds: number,
+  diagnostic: RequeueDiagnostic,
+): void {
+  const changes = delaySeconds > 0
+    ? _requeueTargetDelayed.run(`+${Math.floor(delaySeconds)} seconds`, runId, targetId).changes
+    : _requeueTarget.run(runId, targetId).changes;
+  appendFiberEvent({
+    tenantId: diagnostic.tenantId,
+    runId,
+    eventType: "address.requeued",
+    targetId,
+    payload: {
+      reason: diagnostic.reason,
+      category: diagnostic.category ?? null,
+      attempt: diagnostic.attempt ?? null,
+      httpStatus: diagnostic.httpStatus ?? null,
+      detail: requeueDetail(diagnostic.detail),
+      delaySeconds: Math.max(0, Math.floor(delaySeconds)),
+      applied: changes === 1,
+    },
+  });
 }
 
 // Cost honesty for retried attempts: a transient failure still burned proxy

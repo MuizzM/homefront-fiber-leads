@@ -80,6 +80,7 @@ function baseResult(address: string, city: string, state: string, zip: string): 
     addressCatalogDate: null, householdSegmentType: null, billingStatus: null,
     exchangeId: null, dfAddressId: null, accessId: null, serviceKey: null,
     confidence: "LOW", apiSource: "failed", blocked: false, notes: "",
+    retryReason: null, httpStatus: null,
     leadTag: null, leadScore: 0,
   };
 }
@@ -196,18 +197,23 @@ export async function scanFrontierAddress(
     if (res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500) {
       if (via === "proxy") void rotateProxySession(`frontier predictive ${res.status}`);
       base.blocked = true;
+      base.retryReason = res.status === 401 || res.status === 403 ? "auth_denied"
+        : res.status === 429 ? "rate_limited" : "provider_server_error";
+      base.httpStatus = res.status;
       base.notes = `Frontier predictive ${res.status} - Decodo session rotated, address requeued`;
       return base;
     }
     if (!res.ok) {
       if (via === "proxy") void rotateProxySession(`frontier predictive ${res.status}`);
       base.blocked = true;
+      base.retryReason = "provider_bad_request"; base.httpStatus = res.status;
       base.notes = `Frontier predictive ${res.status} - session rotated, requeued`;
       return base;
     }
     preds = (await res.json()) as FrontierPrediction[];
   } catch (err: any) {
     base.blocked = true;
+    base.retryReason = "transient_transport";
     base.notes = `Frontier predictive transport error - ${String(err?.message ?? err).slice(0, 100)} (requeued)`;
     return base;
   }
@@ -248,6 +254,7 @@ export async function scanFrontierAddress(
     // a footprint verdict. Never record no_service off a direct answer; requeue.
     if (via === "direct") {
       base.blocked = true;
+      base.retryReason = "inconclusive_response";
       base.notes = "Frontier predictive returned no in-footprint candidate via direct egress (edge-poisoned response) - requeued";
       return base;
     }
@@ -260,6 +267,7 @@ export async function scanFrontierAddress(
   if (!pred.inFootprint) {
     if (via === "direct") {
       base.blocked = true;
+      base.retryReason = "inconclusive_response";
       base.notes = "Frontier predictive edge-poisoned via direct egress (exact candidate flagged out-of-footprint) - requeued";
       return base;
     }
@@ -346,6 +354,10 @@ export async function scanFrontierAddress(
     if (res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500 || !res.ok) {
       if (viaSvc === "proxy") void rotateProxySession(`frontier serviceability ${res.status}`);
       base.blocked = true;
+      base.retryReason = res.status === 401 || res.status === 403 ? "auth_denied"
+        : res.status === 429 ? "rate_limited"
+        : res.status >= 500 ? "provider_server_error" : "provider_bad_request";
+      base.httpStatus = res.status;
       base.notes = `Frontier serviceability ${res.status} - Decodo session rotated, address requeued`;
       if (res.status === 403) structuredLog("scan.provider.access_denied", { status: 403, source: "frontier" }, "warn");
       return base;
@@ -353,6 +365,7 @@ export async function scanFrontierAddress(
     svc = (await res.json()) as FrontierServiceability;
   } catch (err: any) {
     base.blocked = true;
+    base.retryReason = "transient_transport";
     base.notes = `Frontier serviceability transport error - ${String(err?.message ?? err).slice(0, 100)} (requeued)`;
     return base;
   }
@@ -372,6 +385,7 @@ export async function scanFrontierAddress(
     // recorded as no-service.
     if (viaSvc === "proxy") void rotateProxySession("frontier svc success=false");
     base.blocked = true;
+    base.retryReason = "inconclusive_response";
     base.notes = `Frontier error envelope (${String(svc.errorMessage ?? "unknown").slice(0, 90)}) - session rotated, requeued`;
     return base;
   }

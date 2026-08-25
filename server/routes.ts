@@ -3645,9 +3645,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       else if (action === "resume") { resumeScanning(); }
       else if (action === "retry-failed") {
         const { listRuns, resetInflightTargets } = await import("./scanIntelStore");
+        const tenantId = tid(req);
         let requeued = 0;
-        for (const r of listRuns(tid(req), 20)) {
-          if (r.status === "running" || r.status === "paused") requeued += resetInflightTargets(r.id);
+        for (const r of listRuns(tenantId, 20)) {
+          if (r.status === "running" || r.status === "paused")
+            requeued += resetInflightTargets(r.id, { tenantId, reason: "operator_reset" });
         }
         resumeScanning();
         return res.json({ ok: true, action, requeued });

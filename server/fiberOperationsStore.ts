@@ -39,7 +39,15 @@ function trimFiberLog(table: "fiber_job_events" | "fiber_job_failures", pk: "seq
 export type FiberEventType =
   | "job.started" | "job.progress" | "job.paused" | "job.resumed" | "job.cancelled"
   | "job.completed" | "job.failed" | "address.completed" | "address.failed" | "address.requeued"
-  | "address.not_found_terminal" | "worker.heartbeat" | "dead_letter.retried";
+  | "address.not_found_terminal" | "worker.heartbeat" | "dead_letter.retried"
+  // Bulk queue movements, one event per RUN (not per address): a crash-orphan
+  // reclaim / operator reset, and a tail closed instead of retried. Both carry a
+  // `reason` from the same vocabulary as address.requeued.
+  | "run.targets_requeued" | "run.tail_terminalized"
+  // The run is alive but deliberately claiming nothing (shared proxy circuit in
+  // COOLDOWN). Throttled to the existing 30s breaker-log cadence. Without it a
+  // breaker stall looks identical to a wedged worker in the event stream.
+  | "run.breaker_wait";
 
 export function correlationId(runId: string): string {
   const row = rawDb.prepare(`SELECT correlation_id AS correlationId FROM scan_runs WHERE id=?`).get(runId) as any;

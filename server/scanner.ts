@@ -9,6 +9,7 @@ import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
 import { classifyKineticResult, parseKineticResponse, selectReliableAddressSuggestion } from "./kineticResponseParser";
 import { isActiveBilling } from "@shared/billingStatus";
+import { NEEDS_FIX_NOTE, type RequeueReason } from "@shared/scanRequeueReason";
 import {
   ProviderRequestQueue,
   type ProviderQueueSnapshot,
@@ -120,6 +121,53 @@ function isAuthDenialMessage(message: string): boolean {
   return /\b(401|403)\b/.test(message);
 }
 
+/**
+ * A mint that never received a response at all: the egress could not reach the
+ * token endpoint (timeout, socket error, black-holed tunnel, "fetch failed").
+ *
+ * This is a THIRD class, distinct from the two the mint ladder already knew:
+ *  - an AUTH DENIAL is the provider answering 401/403 → rotate and retry;
+ *  - a CHALLENGE is the provider answering with an interstitial → fail closed,
+ *    never rotate, because rotating past a challenge is evasion.
+ * A transport failure carries NO provider verdict, because no provider was
+ * reached. It is evidence about the EGRESS, not about our authorization.
+ *
+ * It is raised structurally — only where `proxyFetch` itself throws — and never
+ * inferred from an error string. That is what keeps a challenge a challenge: a
+ * challenge can only exist once a response has been received, so it can never
+ * be mistaken for this.
+ */
+export class MintTransportError extends Error {
+  readonly code = "MINT_TRANSPORT";
+  constructor(cause: unknown) {
+    super(`Mint transport failure (via decodo) - ${String((cause as any)?.message ?? cause).slice(0, 120)}`);
+    this.name = "MintTransportError";
+  }
+}
+
+// CONSECUTIVE mint transport failures on the Decodo egress.
+//
+// WHY THIS COUNTER EXISTS. A run that lands on a sticky port whose residential
+// IP cannot reach the Kinetic auth endpoint used to retry that same dead IP
+// every ~3s forever: rotation was gated on isAuthDenialMessage, so a transport
+// failure failed closed WITHOUT advancing the port. Observed twice on
+// 2026-08-24 — the run sat at verified=610 through 26 consecutive mint failures
+// and wrote zero snapshots, and only a process restart (which picks a new random
+// port) recovered it.
+//
+// WHY IT IS A STREAK AND NOT A REFLEX. Rotating on every failure is its own
+// measured bug: moving IP mid-run correlates with collapse, which is why search
+// denials are gated behind DECODO_ROTATE_AFTER_DENIALS rather than firing on
+// each 403. So this needs N in a row before it moves, and ANY successful Decodo
+// mint forgives the streak — a working egress can never accumulate its way into
+// a rotation. No time window is needed: the 15-minute sticky window retires the
+// IP on its own under normal traffic, so a stale streak can at worst cost one
+// extra rotation.
+//
+// 0 disables the behavior entirely (restores the pre-2026-08-24 fail-closed).
+const MINT_TRANSPORT_ROTATE_AFTER = Math.max(0, Math.floor(Number(process.env.KFS_MINT_TRANSPORT_ROTATE_AFTER ?? 3)) || 0);
+let _mintTransportStreak = 0;
+
 // One mint attempt over the authorized Decodo transport. The gokinetic token
 // endpoint is a POST that authenticates with the client Basic credential
 // (KFS_AUTH_BASIC, which already carries its "Basic " prefix) and a braze device
@@ -169,18 +217,27 @@ async function mintRequest(transport: "direct" | "decodo"): Promise<{ token: str
 
 async function mintViaDecodo(): Promise<{ token: string; expiresAt: number }> {
   const basic = process.env.KFS_AUTH_BASIC?.trim() || DEFAULT_KFS_AUTH_BASIC;
-  const response = await proxyFetch(kineticTokenUrl(), {
-    method: "POST",
-    headers: providerHeaders({
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-      ...(basic ? { "Authorization": basic } : {}),
-      "Origin": KFS_ORIGIN,
-      "Referer": KFS_REFERER,
-    }),
-    body: JSON.stringify({ brazeDeviceId: "" }),
-    signal: AbortSignal.timeout(10_000),
-  });
+  // The ONLY place a MintTransportError is raised: a throw from proxyFetch means
+  // no response was ever seen. Everything below this point has a response in
+  // hand and is therefore a provider verdict (denial, challenge, bad body),
+  // which must keep failing closed exactly as before.
+  let response: Response;
+  try {
+    response = await proxyFetch(kineticTokenUrl(), {
+      method: "POST",
+      headers: providerHeaders({
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        ...(basic ? { "Authorization": basic } : {}),
+        "Origin": KFS_ORIGIN,
+        "Referer": KFS_REFERER,
+      }),
+      body: JSON.stringify({ brazeDeviceId: "" }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    throw new MintTransportError(err);
+  }
   if (!response.ok) throw new Error(`Auto-auth blocked (${response.status} via decodo)`);
   let data: Record<string, unknown>;
   try {
@@ -196,6 +253,9 @@ async function mintViaDecodo(): Promise<{ token: string; expiresAt: number }> {
   const expiresAt = jwtExpiryMs(token)
     ?? (Number.isFinite(expiresIn) && expiresIn > 0 ? now + Math.floor(expiresIn * 1000) : now + 28 * 60 * 1000);
   if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS) throw new Error("Minted token expires too soon (via decodo)");
+  // Proof this egress can reach the token endpoint — forgive any earlier
+  // transport failures so a working IP can never accumulate into a rotation.
+  _mintTransportStreak = 0;
   return { token, expiresAt };
 }
 
@@ -280,11 +340,16 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
   // 201). So when the wall hits, SWITCH THE DECODO IP and retry, up to
   // KFS_MINT_MAX_ROTATIONS fresh IPs, before deferring to the pool's next tick
   // (which is itself paced by the fleet-shared 403-storm backoff, so this can
-  // never become a hot loop). Bounded so a Kinetic-wide wall can't spin, and
-  // gated to auth denials ONLY: a non-JSON challenge or a Decodo-down transport
-  // error fails closed WITHOUT rotating — this scanner never rotates to evade a
-  // CAPTCHA/challenge. Set KFS_MINT_MAX_ROTATIONS=1 to restore the prior
-  // single-retry behavior, or 0 to disable IP switching on the mint path.
+  // never become a hot loop). Bounded so a Kinetic-wide wall can't spin.
+  //
+  // A CHALLENGE (non-JSON interstitial) still fails closed WITHOUT rotating —
+  // this scanner never rotates to evade a CAPTCHA/challenge. A TRANSPORT
+  // failure is neither: no provider was reached, so it expresses no policy to
+  // respect, and staying on an egress that cannot connect is the livelock this
+  // gate exists to break (see MINT_TRANSPORT_ROTATE_AFTER).
+  //
+  // Set KFS_MINT_MAX_ROTATIONS=1 to restore the prior single-retry behavior, or
+  // 0 to disable IP switching on the mint path.
   const maxMintRotations = Math.max(0, Math.floor(Number(process.env.KFS_MINT_MAX_ROTATIONS ?? 3)) || 0);
   let lastMintErr: unknown;
   for (let attempt = 0; ; attempt++) {
@@ -293,10 +358,37 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     } catch (err) {
       lastMintErr = err;
       const message = String((err as any)?.message ?? err);
-      structuredLog("scan.token.mint_failed", { transport: "decodo", attempt, error: message.slice(0, 120) }, "warn");
-      if (!isAuthDenialMessage(message) || attempt >= maxMintRotations) break;
-      // Fresh authorized Decodo session (new residential IP), then retry.
-      await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
+      const transportFailed = err instanceof MintTransportError;
+      // The streak counts only DEAD-EGRESS evidence. A denial or a challenge
+      // leaves it untouched: those say something about our authorization, not
+      // about whether this IP can carry a request.
+      if (transportFailed) _mintTransportStreak++;
+      const streakSpent = transportFailed
+        && MINT_TRANSPORT_ROTATE_AFTER > 0
+        && _mintTransportStreak >= MINT_TRANSPORT_ROTATE_AFTER;
+      structuredLog("scan.token.mint_failed", {
+        transport: "decodo", attempt, error: message.slice(0, 120),
+        // Name the class in the log, so "26 consecutive mint failures" is
+        // readable as a dead egress instead of guessed at from the message.
+        failure: transportFailed ? "transport" : isAuthDenialMessage(message) ? "auth_denied" : "provider",
+        ...(transportFailed ? { transportStreak: _mintTransportStreak } : {}),
+      }, "warn");
+      const rotatable = streakSpent || (!transportFailed && isAuthDenialMessage(message));
+      if (!rotatable || attempt >= maxMintRotations) break;
+      if (streakSpent) {
+        // Advance the sticky port (rotateProxySession rebuilds the dispatcher,
+        // which steps to the next residential IP). Reset the streak so this
+        // moves at most once per N failures rather than on every one after N.
+        _mintTransportStreak = 0;
+        structuredLog("scan.token.mint_egress_rotated", {
+          after: MINT_TRANSPORT_ROTATE_AFTER,
+          reason: "consecutive mint transport failures - egress cannot reach the token endpoint",
+        }, "warn");
+        await rotateProxySession("mint transport");
+      } else {
+        // Fresh authorized Decodo session (new residential IP), then retry.
+        await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
+      }
     }
   }
   throw lastMintErr; // fail closed — pool self-heals next tick under the fleet backoff
@@ -362,6 +454,7 @@ const authorizedTokenPool = new AuthorizedTokenPool({
 export function __resetTokenTransportStateForTests(): void {
   lastMintAt = 0;
   mintChain = Promise.resolve();
+  _mintTransportStreak = 0;
 }
 
 /** Called from routes.ts when user pastes a JWT from their browser */
@@ -576,6 +669,15 @@ export interface ScanResult {
   apiSource: "kinetic_live" | "knowledge_base" | "failed";
   blocked: boolean; // true ONLY for a 403 throttle — a typed back-pressure signal (NOT a no-service); consumers must never regex `notes` to detect this
   notes: string;
+  /** WHY this non-answer must be requeued, from the closed vocabulary in
+   *  `shared/scanRequeueReason.ts`. Set on every path that returns without a
+   *  conclusive verdict; null on a real answer. This is the typed replacement
+   *  for regexing `notes` — 31,777 undiagnosable requeues on one live run
+   *  (2026-08-24) are what it exists to prevent. */
+  retryReason?: RequeueReason | null;
+  /** Provider HTTP status when the non-answer came from a response; null when
+   *  no response was ever seen (transport failure, no session). */
+  httpStatus?: number | null;
   /** Provider request duration only. Kept separate from queue/admission time so
    *  the Scan Inspector never reports an 80-second queue wait as an 80-second
    *  Kinetic response. Optional for non-Kinetic/replay checkers. */
@@ -772,6 +874,15 @@ async function mintThroughApprovedFlow(invalidateFirst?: string): Promise<string
   return forceFreshTokenFromApi();
 }
 
+// Reason for a 200 whose BODY is not a verdict. The needs-fix family is the only
+// one that takes the slow lane (exponential backoff, then the `address_not_found`
+// terminal verdict), and scanEngine gates that lane on this exact pattern — so
+// derive the code from the note we just wrote instead of a second, subtly
+// different test that could drift and move addresses into a terminal verdict
+// they never earned.
+const inconclusiveReason = (note: string): RequeueReason =>
+  NEEDS_FIX_NOTE.test(note) ? "inconclusive_address_needs_fix" : "inconclusive_response";
+
 // A `blocked` ScanResult is an AUTH block (401/403 — retry after re-mint) rather
 // than a plain throttle (429/5xx) when scanAddressDirect tagged it token/session.
 function isAuthBlock(result: ScanResult): boolean {
@@ -925,6 +1036,7 @@ async function scanAddressDirect(
     addressCatalogDate: null, householdSegmentType: null, billingStatus: null,
     exchangeId: null, dfAddressId: null, accessId: null, serviceKey: null,
     confidence: "LOW", apiSource: "failed", blocked: false, notes: "",
+    retryReason: null, httpStatus: null,
     providerLatencyMs: null,
     leadTag: null, leadScore: 0,
   };
@@ -944,6 +1056,7 @@ async function scanAddressDirect(
   // recheck; zero token spend is wasted on a session that cannot exist yet.
   if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true" && authorizedTokenPool.snapshot().ready === 0) {
     base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
+    base.retryReason = "not_authorized";
     base.notes = "No authorized session - automation not authorized (unresolved, recheck)";
     emit("error", { status: "error", detail: "automation not authorized - no session, check skipped" });
     return base;
@@ -962,6 +1075,7 @@ async function scanAddressDirect(
     // The address is never marked no-fiber and never marked scanned; the next
     // run / daily recheck revisits it.
     base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
+    base.retryReason = "token_unavailable";
     base.notes = `No authorized session - ${String(err?.message ?? err)} (unresolved, recheck)`;
     emit("error", { status: "error", detail: `no authorized Decodo session - ${String(err?.message ?? err).slice(0, 80)}`, sessionId: getProxySessionId() });
     return base;
@@ -998,6 +1112,7 @@ async function scanAddressDirect(
       // rotation. Fire-and-forget — this result is already `blocked`/requeued.
       void rotateProxySession(`search ${res.status}`);
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.retryReason = "auth_denied"; base.httpStatus = res.status;
       base.notes = `Upstream ${res.status} (token/session) - token invalidated, Decodo session rotated, address requeued`;
       emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `auth ${res.status} - token invalidated, Decodo session rotated`, detail: "PENDING_AUTH - retrying same address on a fresh session" });
       if (res.status === 403) {
@@ -1016,6 +1131,8 @@ async function scanAddressDirect(
       // no-service verdict.
       void rotateProxySession(`upstream ${res.status}`);
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.retryReason = res.status === 429 ? "rate_limited" : "provider_server_error";
+      base.httpStatus = res.status;
       base.notes = `Upstream ${res.status} (transient) - Decodo session rotated, address requeued immediately`;
       emit("blocked", { status: "blocked", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `${res.status === 429 ? "rate-limited" : "server error"} - session rotated, retrying immediately on fresh IP`, detail: "transient - kept pending, NOT a no-service verdict" });
       structuredLog("scan.provider.rate_limited", { status: res.status, source }, "warn");
@@ -1040,6 +1157,7 @@ async function scanAddressDirect(
         // into ONE rotation; fire-and-forget — the result is already requeued.
         void rotateProxySession(`search ${res.status}`);
         base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
+        base.retryReason = "provider_bad_request"; base.httpStatus = res.status;
         base.notes = `Upstream ${res.status} - token invalidated + Decodo session rotated (switch ${rotations}/3), address requeued`;
         emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `HTTP ${res.status} - fresh token + session (switch ${rotations}/3), retrying same address`, detail: diag || `HTTP ${res.status}` });
         structuredLog("scan.provider.4xx_rotate", { status: res.status, source, switch: rotations }, "warn");
@@ -1050,6 +1168,7 @@ async function scanAddressDirect(
       // admin can repair the request. Unresolved (rechecked), NEVER no-service.
       fourXxRotations.delete(tokenAddressKey);
       base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.retryReason = "provider_bad_request"; base.httpStatus = res.status;
       base.notes = `API returned ${res.status} after 3 fresh-token retries (unresolved, request-contract issue)`;
       emit("bad_request", { status: "bad_request", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `HTTP ${res.status} persisted across 3 token switches - diagnose request contract`, detail: diag || `HTTP ${res.status}` });
       structuredLog("scan.provider.bad_request", { status: res.status, source, detail: diag.slice(0, 120) }, "warn");
@@ -1063,6 +1182,7 @@ async function scanAddressDirect(
     } catch {
       // 200 with an unparseable body = malformed → unresolved (recheck), not no-fiber.
       base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.retryReason = "inconclusive_response"; base.httpStatus = res.status;
       base.notes = "Malformed 200 response (unparseable) - unresolved, recheck";
       emit("error", { status: "error", httpStatus: res.status, latencyMs: searchMs, detail: "malformed 200 body (unparseable) - unresolved, recheck" });
       return base;
@@ -1095,6 +1215,7 @@ async function scanAddressDirect(
       base.fiberStatus = "unknown";
       base.confidence = "LOW";
       base.notes = `Non-conclusive response (AddressNeedsFix: successful result failed address identity; validation=${parsed.validationResult || "missing"}, exactMatch=${parsed.exactMatch}, echoedIdentity=${echoedIdentityKey ? "mismatch" : "missing"})`;
+      base.retryReason = inconclusiveReason(base.notes); base.httpStatus = 200;
       emit("error", {
         status: "error",
         httpStatus: 200,
@@ -1178,6 +1299,7 @@ async function scanAddressDirect(
               base.fiberStatus = "unknown";
               base.confidence = "LOW";
               base.notes = `Non-conclusive (${vr}); suggestion resolved a materially different address and cannot be attached to the original scan target - unresolved, recheck`;
+              base.retryReason = inconclusiveReason(base.notes); base.httpStatus = 200;
               emit("error", {
                 status: "error",
                 httpStatus: 200,
@@ -1195,6 +1317,7 @@ async function scanAddressDirect(
             base.apiSource = "failed";
             base.confidence = "LOW";
             base.notes = `Non-conclusive (${vr}); applied suggestion "${cAddress}" but it did not resolve to a serviceable answer - unresolved, recheck (NOT no-service)`;
+            base.retryReason = inconclusiveReason(base.notes); base.httpStatus = 200;
             emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `correction did not resolve (${vr}) - unresolved, NOT no-service` });
             return base;
           }
@@ -1206,6 +1329,7 @@ async function scanAddressDirect(
       base.apiSource = "failed";
       base.confidence = "LOW";
       base.notes = `Non-conclusive response (success=false, ${vr || "no validationResult"})`;
+      base.retryReason = inconclusiveReason(base.notes); base.httpStatus = 200;
       emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `non-conclusive (success=false, ${vr || "no validationResult"}) - unresolved, NOT no-service` });
       return base;
     }
@@ -1345,6 +1469,7 @@ async function scanAddressDirect(
     base.fiberStatus = "unknown";
     base.confidence = "LOW";
     base.blocked = true;
+    base.retryReason = "transient_transport";
     base.notes = `Check failed (transient) - ${err.message}`;
     emit("error", { status: "error", latencyMs: Date.now() - searchStart, retryReason: `transient - ${String(err?.message ?? err).slice(0, 60)}`, detail: "network/timeout - kept pending for retry, NOT no-service" });
   } finally {
