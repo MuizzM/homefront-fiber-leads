@@ -46,7 +46,7 @@ export const STATUS_ICON: Record<PinDisplayState | "neutral", {
 // does; the glyph vocabulary itself is unchanged, so nothing a rep learned is
 // thrown away. Center (20,20) matches the old teardrop bulb center, letting the
 // entire glyph path set below carry over verbatim.
-const CIRCLE = { cx: 20, cy: 20, r: 16 } as const;
+export const CIRCLE = { cx: 20, cy: 20, r: 16 } as const;
 
 // White badge disc anchored on the circle's top-right rim. It carries the
 // "not yet knocked" micro-glyph on unworked doors (the reference's "?"), and —
@@ -61,7 +61,7 @@ const BADGE = { cx: 32, cy: 8, r: 7 } as const;
 const UNWORKED_STROKE = 1.5;
 const WORKED_STROKE = 2.5;
 
-const GLYPHS = {
+export const GLYPHS = {
   door: `<path d="M14 11.5h12v19H14z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><path d="M17 14.5h6v16h-6z" fill="#fff"/><circle cx="21.4" cy="22.5" r="1" fill="#334155"/>`,
   star: `<path d="m20 10.5 3.05 6.18 6.82 1-4.94 4.8 1.17 6.79L20 26.06l-6.1 3.21 1.17-6.79-4.94-4.8 6.82-1L20 10.5Z" fill="#fff"/>`,
   // Vector, NOT <text>. These SVGs are rasterized as data-URL images, where font
@@ -157,7 +157,7 @@ function circlePin(status: LeadMapStatus, badge: string, ariaLabel: string): str
   </svg>`;
 }
 
-const toDataUrl = (svg: string): string =>
+export const toDataUrl = (svg: string): string =>
   `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 
 /** Seven inline SVG assets — flat circles, all sharing the (20,20) center.

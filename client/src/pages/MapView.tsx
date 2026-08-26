@@ -99,6 +99,15 @@ import {
   setRepDoorLink,
 } from "@/lib/mapPins";
 import {
+  registerDoorPinImages,
+  doorIconImageExpression,
+  doorIconSizeExpression,
+  doorSymbolSortKey,
+  DOOR_PIN_DATA_URLS,
+  type DoorImageMap,
+  type DoorTag,
+} from "@/lib/doorPins";
+import {
   MAP_VIEWPORT_MODE_THRESHOLD,
   MAP_GRID_CACHE_TTL_MS,
   currentFetchWindow,
@@ -455,6 +464,70 @@ async function addStatusIconLayer(map: FieldIconMap): Promise<void> {
   }
 }
 
+// ── Scanned-door glyph pins ──────────────────────────────────────────────────
+// The scanned-door layer shipped as colour-only circles while the lead pins beside
+// it carried glyphs, so five verdicts had to be told apart by hue alone — which
+// fails at arm's length in daylight and fails outright for a red/green-deficient
+// rep, for whom the green new_fiber dot and a green sold lead are the same dot.
+// Same treatment as the leads: one GPU symbol layer, glyph inside the verdict
+// disc, circles kept as the low-zoom carrier and the never-blank fallback.
+function showDoorCirclesFullRange(map: FieldIconMap): void {
+  try {
+    map.setLayerZoomRange?.(SCANNED_DOORS_LAYER, 0, 24);
+    map.setLayoutProperty(SCANNED_DOORS_LAYER, "visibility", "visible");
+  } catch {
+    /* not ready */
+  }
+}
+
+async function addDoorIconLayer(map: FieldIconMap): Promise<void> {
+  if (!map.getLayer(SCANNED_DOORS_LAYER)) return;
+  if (!map.getLayer(SCANNED_DOORS_ICON_LAYER)) {
+    try {
+      await registerDoorPinImages(map as unknown as DoorImageMap);
+    } catch {
+      showDoorCirclesFullRange(map);
+      return;
+    }
+    try {
+      map.addLayer({
+        id: SCANNED_DOORS_ICON_LAYER,
+        type: "symbol",
+        source: SCANNED_DOORS_SOURCE,
+        minzoom: PIN_DETAIL_MIN_ZOOM,
+        layout: {
+          "icon-image": doorIconImageExpression(),
+          "icon-size": doorIconSizeExpression(),
+          "icon-anchor": "center",
+          // Doors are dense on a walked street: never let MapLibre's collision
+          // engine drop one. A missing pin is a door a rep never sees.
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
+          // When pins do overlap, the sellable one wins the top of the stack.
+          "symbol-sort-key": doorSymbolSortKey(),
+        },
+      });
+    } catch {
+      showDoorCirclesFullRange(map);
+      return;
+    }
+  }
+  if (map.getLayer(SCANNED_DOORS_ICON_LAYER)) {
+    try {
+      // Hand off, don't hide — same reasoning as the lead pins: below z12 a
+      // 40-unit glyph is unreadable, so the circles keep carrying the overview.
+      if (map.setLayerZoomRange) {
+        map.setLayerZoomRange(SCANNED_DOORS_LAYER, 0, PIN_DETAIL_MIN_ZOOM);
+        map.setLayoutProperty(SCANNED_DOORS_LAYER, "visibility", "visible");
+      } else {
+        map.setLayoutProperty(SCANNED_DOORS_LAYER, "visibility", "none");
+      }
+    } catch {
+      /* not ready */
+    }
+  }
+}
+
 // ── Optional map perf instrument (opt-in, prod-safe) ─────────────────────────
 // The status-marker spec asks to observe map FPS / first-paint / frame p95.
 // This stack has NO external metrics sink, so rather than fabricate one we expose
@@ -629,6 +702,10 @@ const DOOR_TAG_LABEL_CLIENT: Record<string, string> = {
 };
 const SCANNED_DOORS_SOURCE = "scanned-doors";
 const SCANNED_DOORS_LAYER = "scanned-doors-points";
+// Glyph pins for the five scan verdicts. Same relationship the lead pins have
+// with `lead-unclustered`: circles carry the low zooms, glyphs take over at
+// PIN_DETAIL_MIN_ZOOM where a 40-unit mark is actually legible.
+const SCANNED_DOORS_ICON_LAYER = "scanned-doors-icons";
 const SCAN_RESULTS_CLUSTER_LAYER = "scan-results-clusters";
 const SCAN_RESULTS_COUNT_LAYER = "scan-results-count";
 const SCAN_RESULTS_POINT_LAYER = "scan-results-points";
@@ -3560,6 +3637,9 @@ export default function MapView() {
 
       // Optional glyph-pin layer — opt-in via NEW_FIELD_MAP=1; default dots.
       await addStatusIconLayer(map);
+      // Scanned-door verdicts get glyphs too, so a fiber pin and a lead pin are
+      // read the same way instead of one being a bare coloured dot.
+      await addDoorIconLayer(map);
 
       // Click unclustered pin → show popup. Bound to BOTH the circle layer and
       // the NEW_FIELD_MAP icon layer so a tap opens the same card in either mode
@@ -3629,7 +3709,10 @@ export default function MapView() {
           source: "scan",
         });
       });
-      map.on("click", SCANNED_DOORS_LAYER, (e: any) => {
+      // Bound to BOTH the circle layer and the glyph layer: above z12 the glyph
+      // layer is what the rep's thumb actually lands on, and a pin that opens no
+      // card reads as a broken map.
+      const onScannedDoorClick = (e: any) => {
         if (drawToolActive()) return;
         const p = e.features?.[0]?.properties;
         if (!p) return;
@@ -3648,9 +3731,12 @@ export default function MapView() {
           // navigates nowhere.
           leadId: p.leadId == null || p.leadId === "null" ? null : Number(p.leadId),
         });
-      });
-      map.on("mouseenter", SCANNED_DOORS_LAYER, () => hoverCursor("pointer"));
-      map.on("mouseleave", SCANNED_DOORS_LAYER, () => hoverCursor(""));
+      };
+      for (const layerId of [SCANNED_DOORS_LAYER, SCANNED_DOORS_ICON_LAYER]) {
+        map.on("click", layerId, onScannedDoorClick);
+        map.on("mouseenter", layerId, () => hoverCursor("pointer"));
+        map.on("mouseleave", layerId, () => hoverCursor(""));
+      }
       map.on("mouseenter", SCAN_RESULTS_CLUSTER_LAYER, () =>
         hoverCursor("pointer"),
       );
@@ -3704,6 +3790,7 @@ export default function MapView() {
           STATUS_ICON_LAYER,
           "lead-clusters",
           SCANNED_DOORS_LAYER,
+          SCANNED_DOORS_ICON_LAYER,
           ...territoryLayersRef.current,
         ].filter((id) => {
           try {
@@ -4855,6 +4942,8 @@ export default function MapView() {
       // wiped its images + layer). Flag-gated + idempotent, so this stays in sync
       // with the init block and is a no-op when the flag is off.
       await addStatusIconLayer(map);
+      // Same for the door glyphs: a style swap drops their images and layer too.
+      await addDoorIconLayer(map);
       // Re-trigger the lead-pin setData + territory render effects — the new
       // style starts with an empty source, so without this the pins vanish.
       setStyleEpoch((e) => e + 1);
@@ -6070,6 +6159,9 @@ export default function MapView() {
         label: DOOR_TAG_LABEL_CLIENT[t],
         color: DOOR_TAG_STYLE[t].dot,
         count: doorTagCounts[t] ?? 0,
+        // The EXACT pin the map draws, from the same generator — the legend is
+        // only useful if the mark beside the label is the mark on the street.
+        glyph: DOOR_PIN_DATA_URLS[t as DoorTag],
       }));
     return [...rows, ...doorRows];
   }, [statusCounts, legendGlyphs, doorTagCounts]);
