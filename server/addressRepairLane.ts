@@ -65,15 +65,52 @@ export function terminalParkedBatch(limit: number): RepairCandidate[] {
   ).all(TERMINAL_ATTEMPTS, limit) as RepairCandidate[];
 }
 
-/** Verified neighbours: conclusively-scanned targets on the same canonical street. */
+/**
+ * Verified neighbours: conclusively-scanned targets on the same canonical
+ * street AND in the same place.
+ *
+ * "Same street_key + same state" is NOT a neighbour relation. Measured on this
+ * database: street_key 'S MAIN ST' in NC matches 414 scanned rows spread over
+ * 14 different cities, and NOT ONE of them shares the ZIP of the Rockwell door
+ * we were trying to repair; 'N MAIN ST' matches 304 rows over 11 cities, also
+ * zero same-ZIP. Inferring a "verified city" from that pool relabelled 21
+ * Rockwell doors as Norwood / Concord / High Point / Statesville while keeping
+ * ZIP 28138 - city+ZIP pairs that do not exist, on doors that were correct
+ * before the repair.
+ *
+ * So a neighbour must also be in the same PLACE. ZIP is the primary fence.
+ * Proximity is the fallback for rows whose own ZIP is unusable (this table has
+ * 533 rows whose ZIP was overwritten with the house number - '10540 US HWY 52'
+ * stored under ZIP 10540, a New York prefix), because those are exactly the
+ * rows a ZIP fence would silently exclude.
+ *
+ * NEAR_DEG is deliberately tight (~1 mile). A rural highway runs further than
+ * that, so a long road yields fewer neighbours - correctly. Under-repairing is
+ * free; a wrong repair corrupts a real address and then costs a paid check.
+ */
+const NEAR_DEG = 0.015;
+
 function scannedNeighbours(c: RepairCandidate): Array<{ city: string; zip: string; address: string; lat: number | null; lng: number | null }> {
   if (!c.street_key) return [];
+  const zip5 = normalizeZip5(c.zip);
+  // A ZIP that repeats the house number is corruption, not a location.
+  const houseNum = String(c.address ?? "").trim().split(/\s+/)[0] ?? "";
+  const zipUsable = zip5 !== "" && zip5 !== houseNum;
+  const place = zipUsable
+    ? { clause: `AND substr(replace(COALESCE(zip,''),'-',''),1,5) = ?`, args: [zip5] }
+    : (c.lat != null && c.lng != null)
+      ? { clause: `AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`,
+          args: [c.lat - NEAR_DEG, c.lat + NEAR_DEG, c.lng - NEAR_DEG, c.lng + NEAR_DEG] }
+      : null;
+  // No ZIP and no coordinates = no way to prove same-place. Refuse to guess.
+  if (!place) return [];
   return rawDb.prepare(
     `SELECT city, zip, address, lat, lng FROM scan_targets
       WHERE street_key = ? AND upper(COALESCE(state,'')) = upper(COALESCE(?,''))
         AND last_scanned_at IS NOT NULL AND id <> ?
-      LIMIT 40`,
-  ).all(c.street_key, c.state ?? "", c.id) as any[];
+        ${place.clause}
+      ORDER BY id LIMIT 40`,
+  ).all(c.street_key, c.state ?? "", c.id, ...place.args) as any[];
 }
 
 const mode = (values: string[]): string | null => {
@@ -82,6 +119,13 @@ const mode = (values: string[]): string | null => {
   let best: string | null = null, bestN = 0;
   for (const [v, n] of counts) if (n > bestN) { best = v; bestN = n; }
   return best;
+};
+
+/** True when no token in this street spelling gets folded by the canonical
+ *  alias map — i.e. it is already the form Kinetic and our street_key use. */
+const isCanonicalSpelling = (street: string): boolean => {
+  const plain = String(street).toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  return plain !== "" && plain === canonicalAddressPart(street);
 };
 
 export interface RepairPlan {
@@ -116,16 +160,33 @@ export function planRepair(c: RepairCandidate, neighbours: ReturnType<typeof sca
   if (!normalizeZip5(c.zip) && nZip) {
     return { code: "ZIP_MISSING", patch: { zip: nZip }, detail: `adopted ZIP ${nZip} from ${neighbours.length} scanned neighbours` };
   }
-  // 3. Suffix variant — rewrite our street portion to the neighbours' spelling.
-  const nAddr = neighbours.find((n) => streetKeyOf(n.address) === c.street_key && n.address);
-  if (nAddr) {
-    const theirStreet = String(nAddr.address).trim().split(/\s+/).slice(1).join(" ");
-    const ourStreet = String(c.address).trim().split(/\s+/).slice(1).join(" ");
-    if (theirStreet && ourStreet && theirStreet.toUpperCase() !== ourStreet.toUpperCase()) {
+  // 3. Suffix variant — move TOWARDS the canonical spelling, never away from it.
+  //
+  // The original rule adopted the first neighbour's spelling whatever it was.
+  // On the Rockwell cohort that rewrote 25 doors from "1009 Quail Haven Dr" to
+  // "1009 Quail Haven Drive" — backwards. Kinetic canonicalizes street types to
+  // abbreviations (scanner.ts adopts data.address.addressLine1 for exactly that
+  // reason), and shared/addressKey folds DRIVE→DR, HIGHWAY→HWY, so the
+  // abbreviated form is both our canonical key and Kinetic's own output form.
+  // Expanding it makes a match strictly less likely.
+  //
+  // A repair is therefore only available when OUR spelling is the non-canonical
+  // one. The replacement is the modal spelling among neighbours that are
+  // themselves canonical — modal, like the city and ZIP rules above, so one odd
+  // neighbour cannot decide it.
+  const ourStreet = String(c.address).trim().split(/\s+/).slice(1).join(" ");
+  if (ourStreet && !isCanonicalSpelling(ourStreet)) {
+    const canonicalNeighbourStreets = neighbours
+      .filter((n) => streetKeyOf(n.address) === c.street_key)
+      .map((n) => String(n.address).trim().split(/\s+/).slice(1).join(" "))
+      .filter((st) => st && isCanonicalSpelling(st));
+    const theirStreet = mode(canonicalNeighbourStreets);
+    if (theirStreet && theirStreet.toUpperCase() !== ourStreet.toUpperCase()) {
       return {
         code: "SUFFIX_VARIANT",
         patch: { address: `${houseNum} ${theirStreet}` },
-        detail: `street spelling "${ourStreet}" -> verified "${theirStreet}"`,
+        detail: `street spelling "${ourStreet}" -> canonical "${theirStreet}"`
+          + ` (${canonicalNeighbourStreets.length} verified neighbours use it)`,
       };
     }
   }
@@ -140,19 +201,39 @@ export function planRepair(c: RepairCandidate, neighbours: ReturnType<typeof sca
 
 export interface RepairRunResult {
   examined: number; repaired: number; quarantined: number;
+  /** Unrepairable but still inside the park ladder — left alone, not parked. */
+  skipped: number;
   byCode: Record<string, number>; halted: string | null;
 }
 
 /**
- * One bounded pass. Repairable rows are corrected and re-armed (attempts → 0)
- * so they scan ONCE more with the fixed address; unrepairable rows are marked
- * ADDRESS_REVIEW and leave the rotation for good. Single-writer, one
- * transaction per row, sentinel-aware.
+ * Candidates named by id. Same eligibility rules as the scheduled batch minus
+ * the park threshold, which is the caller's job to justify: still unanswered,
+ * still kinetic, still never repaired. A row that already has an answer or a
+ * repair_code is silently skipped, so re-running a cohort is a no-op.
  */
-export function runAddressRepairPass(limit = 500): RepairRunResult {
-  const result: RepairRunResult = { examined: 0, repaired: 0, quarantined: 0, byCode: {}, halted: null };
-  ensureRepairSchema();
-  const batch = terminalParkedBatch(limit);
+export function targetsById(ids: number[]): RepairCandidate[] {
+  const out: RepairCandidate[] = [];
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400);
+    out.push(...rawDb.prepare(
+      `SELECT id, address, city, state, zip, lat, lng, street_key FROM scan_targets
+        WHERE id IN (${chunk.map(() => "?").join(",")})
+          AND last_scanned_at IS NULL
+          AND repair_code IS NULL
+          AND COALESCE(carrier,'kinetic')='kinetic'
+        ORDER BY id ASC`,
+    ).all(...chunk) as RepairCandidate[]);
+  }
+  return out;
+}
+
+/**
+ * The per-row decision + write, shared by every entry point so a scheduled pass
+ * and an operator-driven cohort pass can never drift apart.
+ */
+function repairBatch(batch: RepairCandidate[], opts: { quarantine: boolean } = { quarantine: true }): RepairRunResult {
+  const result: RepairRunResult = { examined: 0, repaired: 0, quarantined: 0, skipped: 0, byCode: {}, halted: null };
   if (!batch.length) return result;
 
   const applyRepair = rawDb.prepare(
@@ -176,6 +257,12 @@ export function runAddressRepairPass(limit = 500): RepairRunResult {
     result.byCode[plan.code] = (result.byCode[plan.code] ?? 0) + 1;
     try {
       if (plan.code === "UNREPAIRABLE" || plan.code === "UNIT_AMBIGUOUS" || plan.code === "GEOCODE_MISMATCH") {
+        // Quarantine is PERMANENT — the row leaves the scan rotation for good.
+        // That is only defensible once the escalating park ladder has actually
+        // finished with the address. A row still inside the ladder is due
+        // another re-probe (fabric imports DO add streets), and "our own table
+        // has no verified neighbour" is absence of evidence, not a bad address.
+        if (!opts.quarantine) { result.skipped++; continue; }
         quarantine.run({ id: c.id, code: plan.code, detail: plan.detail });
         result.quarantined++;
       } else {
@@ -186,10 +273,65 @@ export function runAddressRepairPass(limit = 500): RepairRunResult {
         result.repaired++;
       }
     } catch (e: any) {
-      structuredLog("address_repair.row_failed", { id: c.id, error: String(e?.message ?? e).slice(0, 120) }, "warn");
+      // A repair that cannot be WRITTEN must still leave the row terminal.
+      // Rewriting an address onto one that already exists trips
+      // idx_scan_targets_addr_city_state; the original code logged and moved
+      // on WITHOUT setting repair_code, so the row stayed a candidate and every
+      // later pass re-planned the same doomed UPDATE forever - the unbounded
+      // retry this lane exists to end. Mark it for review instead.
+      const detail = `repair ${plan.code} could not be applied: ${String(e?.message ?? e).slice(0, 120)}`;
+      try {
+        quarantine.run({ id: c.id, code: "UNREPAIRABLE", detail });
+        result.quarantined++;
+        result.byCode[plan.code] = (result.byCode[plan.code] ?? 1) - 1;
+        result.byCode.UNREPAIRABLE = (result.byCode.UNREPAIRABLE ?? 0) + 1;
+      } catch { /* the marker itself failed — leave it for the next pass */ }
+      structuredLog("address_repair.row_failed", { id: c.id, code: plan.code, error: String(e?.message ?? e).slice(0, 120) }, "warn");
     }
   }
+  return result;
+}
+
+/**
+ * One bounded pass. Repairable rows are corrected and re-armed (attempts → 0)
+ * so they scan ONCE more with the fixed address; unrepairable rows are marked
+ * ADDRESS_REVIEW and leave the rotation for good. Single-writer, one
+ * transaction per row, sentinel-aware.
+ */
+export function runAddressRepairPass(limit = 500): RepairRunResult {
+  ensureRepairSchema();
+  const result = repairBatch(terminalParkedBatch(limit));
   structuredLog("address_repair.pass", { ...result, byCode: JSON.stringify(result.byCode) },
     result.halted ? "warn" : "info");
+  return result;
+}
+
+/**
+ * OPERATOR-DRIVEN COHORT PASS — repair exactly the addresses named, using the
+ * same planner and the same writes as the scheduled pass.
+ *
+ * The scheduled pass only ever sees rows that survived unanswered to
+ * `INCONCLUSIVE_GIVEUP + ANF_PARK_MAX_GENERATIONS + 1` attempts. In practice
+ * almost nothing does: `ANF_TERMINAL_ATTEMPTS` (server/scanEngine.ts) concludes
+ * an address at 6, so the park ladder terminates below the repair lane's floor
+ * and its candidate query stays empty while real stuck inventory piles up at 3
+ * and 4 attempts. Until those two thresholds are reconciled, this is how the
+ * repair lane reaches a run's stuck tail: name the ids, repair once, re-scan
+ * what got corrected.
+ *
+ * Cohort membership is the caller's evidence, not a threshold — but every other
+ * guard the scheduled pass relies on still applies, so this can neither
+ * double-repair a row nor touch an address that already has an answer.
+ */
+export function runAddressRepairForTargets(ids: number[], opts: { quarantine?: boolean } = {}): RepairRunResult {
+  ensureRepairSchema();
+  // Default OFF for a cohort: the caller named these rows from a run's stuck
+  // tail, which says nothing about whether their park ladder is exhausted.
+  // Repair what we can prove; leave the rest to the ladder that already owns
+  // their re-probe schedule.
+  const result = repairBatch(targetsById(ids), { quarantine: opts.quarantine === true });
+  structuredLog("address_repair.cohort", {
+    ...result, requested: ids.length, byCode: JSON.stringify(result.byCode),
+  }, result.halted ? "warn" : "info");
   return result;
 }
