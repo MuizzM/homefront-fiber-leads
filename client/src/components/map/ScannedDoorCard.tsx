@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X, Copy, Check, ArrowUpRight } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
+import { copyText } from "@/lib/clipboard";
 
 export type DoorTag = "new_fiber" | "fiber_open" | "tenured_active" | "coming_soon" | "unverified";
 
@@ -86,7 +87,7 @@ export interface ScannedDoorCardProps {
 }
 
 export function ScannedDoorCard({ door, onClose, onOpenLead, className, style }: ScannedDoorCardProps) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<false | "ok" | "failed">(false);
   const closeRef = useRef<HTMLButtonElement | null>(null);
 
   // Escape closes, matching every other dismissible map overlay.
@@ -106,12 +107,14 @@ export function ScannedDoorCard({ door, onClose, onOpenLead, className, style }:
   const ago = scannedAgo(door.scannedAt);
   const full = [door.address, door.city].filter(Boolean).join(", ");
 
+  // Was: a bare navigator.clipboard call with a silent catch - no fallback, and
+  // on a phone where the write was refused the rep tapped Copy and NOTHING
+  // happened, not even a message. copyText adds the fallback; the failed state
+  // says so out loud.
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(full);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch { /* clipboard blocked; the address is on screen to read */ }
+    const ok = await copyText(full);
+    setCopied(ok ? "ok" : "failed");
+    window.setTimeout(() => setCopied(false), ok ? 1600 : 3000);
   };
 
   return (
@@ -182,9 +185,11 @@ export function ScannedDoorCard({ door, onClose, onOpenLead, className, style }:
           data-testid="scanned-door-copy"
           className={`relative flex-1 h-11 rounded-lg border border-border bg-secondary/40 hover:bg-secondary/70 text-xs font-medium text-foreground flex items-center justify-center gap-1.5 transition-colors ${FOCUS}`}
         >
-          {copied
+          {copied === "ok"
             ? <><Check className="w-3.5 h-3.5" aria-hidden="true" />Copied</>
-            : <><Copy className="w-3.5 h-3.5" aria-hidden="true" />Copy address</>}
+            : copied === "failed"
+              ? <span className="text-warning">Couldn't copy - read it above</span>
+              : <><Copy className="w-3.5 h-3.5" aria-hidden="true" />Copy address</>}
         </button>
         {door.leadId != null && onOpenLead ? (
           <button

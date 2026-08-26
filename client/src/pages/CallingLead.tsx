@@ -19,6 +19,7 @@ import { useTelnyxSoftphone } from "@/lib/telnyxSoftphone";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { useCan } from "@/lib/capabilities";
+import { copyText } from "@/lib/clipboard";
 
 /**
  * Every number the trace returned for this door.
@@ -472,7 +473,13 @@ export default function CallingLead() {
   const copyMutation = useMutation({ mutationFn: async () => {
     if (!activeAttempt?.phoneNumber) throw new Error("The full number is not re-exposed after a page refresh");
     await auditPhoneCopy(activeAttempt.attemptId);
-    await navigator.clipboard.writeText(activeAttempt.phoneNumber);
+    // Throw on a failed copy: the audit row above already recorded that the
+    // number was exposed, so reporting success for a copy that never landed
+    // would leave the rep dialling from memory against an audit that says
+    // otherwise.
+    if (!(await copyText(activeAttempt.phoneNumber))) {
+      throw new Error("This browser refused the copy - read the number from the screen");
+    }
   }, onSuccess: () => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); },
     onError: (error: Error) => { void detailQuery.refetch(); toast({ title: "Number was not copied", description: error.message, variant: "destructive" }); } });
   const revokeMutation = useMutation({ mutationFn: () => revokeCallingConsent(detailQuery.data!.consent.id!, {

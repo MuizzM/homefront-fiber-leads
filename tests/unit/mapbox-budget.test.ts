@@ -47,4 +47,47 @@ describe("Mapbox spend governor - the ceiling that makes grid caps removable", (
     rawDb.prepare("INSERT INTO mapbox_ledger (ts, requests) VALUES (?, ?)").run(Date.now() - 36 * 3600_000, 1000);
     expect(mbx.mapboxBudgetState().dayUsed).toBe(3); // yesterday's 1000 excluded
   });
+
+  // The free allowance is per Mapbox ACCOUNT. Rotating onto a different account
+  // used to inherit the previous account's month-to-date and trip the ceiling
+  // immediately on an account with zero usage - which is exactly what happened
+  // when the tokens moved from one Mapbox login to another.
+  describe("the meter is per Mapbox account", () => {
+    const TOKEN_A = "pk." + Buffer.from(JSON.stringify({ u: "acct-a", a: "aaa" })).toString("base64url") + ".sig";
+    const TOKEN_B = "pk." + Buffer.from(JSON.stringify({ u: "acct-b", a: "bbb" })).toString("base64url") + ".sig";
+
+    it("reads the account out of the token, and two tokens on one account share a meter", () => {
+      process.env.MAPBOX_TOKEN = TOKEN_A;
+      mbx._resetMapboxBudgetForTests();
+      expect(mbx.currentMapboxAccount()).toBe("acct-a:aaa");
+      process.env.MAPBOX_TOKEN = TOKEN_B;
+      expect(mbx.currentMapboxAccount()).toBe("acct-b:bbb"); // recomputed, no restart needed
+      delete process.env.MAPBOX_TOKEN;
+    });
+
+    it("spend on one account does not count against another", () => {
+      process.env.MAPBOX_TOKEN = TOKEN_A;
+      mbx._resetMapboxBudgetForTests();
+      for (let i = 0; i < 5; i++) mbx.recordMapboxRequests(1);
+      mbx.flushMapboxLedger();
+      expect(mbx.mapboxBudgetState().dayUsed).toBe(5);
+      expect(mbx.canSpendMapbox()).toBe(false); // account A is at its cap of 5
+
+      // Rotate to a brand-new account: a clean meter, and the old spend is
+      // still on record rather than deleted. No reset here on purpose - the
+      // account cache is keyed by the token, so the rotation alone re-reads it,
+      // and _resetMapboxBudgetForTests would DELETE the history under test.
+      process.env.MAPBOX_TOKEN = TOKEN_B;
+      const st = mbx.mapboxBudgetState();
+      expect(st.account).toBe("acct-b:bbb");
+      expect(st.dayUsed).toBe(0);
+      expect(mbx.canSpendMapbox()).toBe(true);
+
+      const kept = rawDb.prepare(
+        "SELECT COALESCE(SUM(requests),0) AS n FROM mapbox_ledger WHERE account = ?",
+      ).get("acct-a:aaa") as any;
+      expect(Number(kept.n)).toBe(5);
+      delete process.env.MAPBOX_TOKEN;
+    });
+  });
 });

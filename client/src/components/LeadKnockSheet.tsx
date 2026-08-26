@@ -27,6 +27,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Check, X, LocateFixed } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
+import { copyText } from "@/lib/clipboard";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
@@ -136,6 +137,35 @@ const COME_BACK: ReadonlySet<KnockOutcome> = new Set<KnockOutcome>(["interested"
 
 // Tap-vs-drag threshold: header taps must still land.
 const TAP_SLOP_PX = 6;
+// A finger is not a mouse. A mouse click moves 0-1px; a thumb tap on a phone
+// routinely drifts 6-10px, and every one of those pixels used to read as a
+// deliberate drag - which cancelled the tap. Touch gets the slop browsers give
+// their own tap recognizers.
+const TOUCH_SLOP_PX = 14;
+const slopFor = (pointerType: string | undefined): number =>
+  pointerType === "touch" || pointerType === "pen" ? TOUCH_SLOP_PX : TAP_SLOP_PX;
+
+// A press that lands on a CONTROL belongs to that control, never to the sheet.
+//
+// This is the fix for "the address does not copy on my phone". The Copy and
+// Close discs live INSIDE the header drag region. A tap whose finger drifted
+// past the slop promoted the press to a sheet drag, which armed suppressClick,
+// which ate the click in the CAPTURE phase - so the copy handler never ran and
+// the rep saw nothing happen. A mouse never drifts, so it only ever broke in
+// the field. Reproduced at 8px of drift in tests/rtl/LeadKnockSheet.test.tsx.
+//
+// Deny-by-default: any control added inside a drag region later is protected
+// without anyone remembering this comment. Only [data-drag-handle] opts back in
+// - the handle is a button on purpose (a tap cycles the levels) AND is the
+// primary drag affordance.
+const INTERACTIVE_TARGET =
+  "button, a, input, textarea, select, [role='button'], [contenteditable='true']";
+const pressBelongsToAControl = (target: EventTarget | null): boolean => {
+  const el = target as Element | null;
+  if (!el?.closest) return false;
+  const control = el.closest(INTERACTIVE_TARGET);
+  return Boolean(control) && !control!.closest("[data-drag-handle]");
+};
 // Dragging further than this below the peek position dismisses the sheet.
 const CLOSE_OVERDRAG_PX = 80;
 // Flick faster than this decides snap direction regardless of position.
@@ -395,6 +425,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     // Primary button / first finger only: a right-click or a second finger
     // must never start (or overwrite) a press.
     if (e.button !== 0 || !e.isPrimary) return;
+    // The press is a button's, not the sheet's: never start a drag from it.
+    if (pressBelongsToAControl(e.target)) return;
     dragRef.current = {
       pointerId: e.pointerId, startClientY: e.clientY, startOffset: liveOffset(),
       lastY: e.clientY, lastT: e.timeStamp, vy: 0, moved: false,
@@ -410,7 +442,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     // somehow still live) instead of gluing the sheet to a hovering cursor.
     if (e.buttons === 0) { abandonPress(); return; }
     const total = e.clientY - d.startClientY;
-    if (!d.moved && Math.abs(total) < TAP_SLOP_PX) return; // still a tap
+    if (!d.moved && Math.abs(total) < slopFor(e.pointerType)) return; // still a tap
     if (!d.moved) {
       d.moved = true;
       // A real drag: own the pointer now so the sheet keeps following the
@@ -923,33 +955,17 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     renderedLead.address,
     [renderedLead.city, [renderedLead.state, renderedLead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
   ].filter(Boolean).join(", ");
-  // Clipboard API first (secure contexts); on plain http (a LAN dev box) it is
-  // undefined, and a permissions policy can reject it, so fall back to a
-  // throwaway textarea + execCommand. The feedback is honest: "Address copied"
-  // only when a path reported success, "Could not copy" otherwise.
-  const copyFallback = (): boolean => {
-    try {
-      if (typeof document.execCommand !== "function") return false;
-      const ta = document.createElement("textarea");
-      ta.value = fullAddress;
-      ta.setAttribute("readonly", "");
-      ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy") === true;
-      ta.remove();
-      return ok;
-    } catch { return false; }
-  };
+  // One shared copy path (client/src/lib/clipboard.ts): Clipboard API first,
+  // then a WebKit-correct execCommand fallback for plain http and in-app
+  // browsers. The feedback stays honest - "Address copied" only when a path
+  // reported success, "Could not copy" otherwise - and the failure branch holds
+  // the message long enough to read, because a rep standing at a door needs to
+  // know to read the address off the screen instead of pasting a stale one.
   const copyAddress = async () => {
-    let ok = false;
-    try {
-      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(fullAddress); ok = true; }
-    } catch { /* rejected (policy, focus): try the fallback */ }
-    if (!ok) ok = copyFallback();
+    const ok = await copyText(fullAddress);
     setCopiedAddr(ok ? "ok" : "failed");
     setLiveMessage(ok ? "Address copied" : "Could not copy the address");
-    armTimer(() => setCopiedAddr(false), 1200);
+    armTimer(() => setCopiedAddr(false), ok ? 1200 : 3000);
   };
 
   const destination = renderedLead.lat != null && renderedLead.lng != null
@@ -1367,6 +1383,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             }
             aria-expanded={snap !== "peek"}
             data-testid="knock-sheet-handle"
+            data-drag-handle
             className="flex justify-center pt-2 pb-1 cursor-pointer bg-transparent border-0 w-full"
             onClick={() => snapTo(snap === "peek" ? "quick" : snap === "quick" ? "details" : "peek")}
           >

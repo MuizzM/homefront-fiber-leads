@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { summarizeScanYield } from "@/lib/scanYield";
 import { classifyScanIssue, scanIssueLabel } from "@/lib/scanIssue";
+import { copyText } from "@/lib/clipboard";
 
 // The pipeline the admin watches each address move through. Order matters — it
 // drives the progress rail and "blocked stage" detection.
@@ -242,9 +243,10 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
         retryReason: r.retryReason, classification: r.classification,
       })),
     };
-    navigator.clipboard?.writeText(JSON.stringify(safe, null, 2))
-      .then(() => toast({ title: "Copied safe diagnostics", description: "No tokens or credentials included." }))
-      .catch(() => toast({ title: "Copy failed", variant: "destructive" }));
+    void copyText(JSON.stringify(safe, null, 2)).then((ok) =>
+      toast(ok
+        ? { title: "Copied safe diagnostics", description: "No tokens or credentials included." }
+        : { title: "Copy failed", variant: "destructive" }));
   };
 
   const openTimeline = async (key: string) => {
@@ -453,7 +455,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
               {isOpen && (
                 <div className="border-t border-border/60 bg-background/40 px-4 py-3 pl-9">
                   <button
-                    onClick={() => { void navigator.clipboard?.writeText(r.addressKey); }}
+                    onClick={() => { void copyText(r.addressKey); }}
                     title="Copy correlation id"
                     data-testid="insp-correlation-id"
                     className="mb-2 inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-mono text-2xs text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"

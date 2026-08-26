@@ -1,8 +1,8 @@
 /**
- * Overpass API + Mapbox Geocoding — City-wide Address Puller
+ * Overpass API + geocoding — City-wide Address Puller
  *
  * Flow:
- *   1. Mapbox geocoding: "Rockwell, NC" → bounding box (south, west, north, east)
+ *   1. geocodePlace (server/geocoder.ts): "Rockwell, NC" → bounding box
  *   2. Overpass API: all addr:housenumber addresses in bbox (TILED for big cities)
  *   3. Returns structured address list ready for Kinetic scanning
  *
@@ -19,6 +19,7 @@ import {
   bboxToGeometry,
   parseOsmElements,
 } from "./addressDiscovery/overpass";
+import { geocodePlace } from "./geocoder";
 
 export interface OverpassAddress {
   address: string;
@@ -27,13 +28,6 @@ export interface OverpassAddress {
   zip: string;
   lat: number;
   lng: number;
-}
-
-interface MapboxFeature {
-  bbox?: number[]; // [west, south, east, north]
-  center: number[];
-  place_name: string;
-  context?: { id: string; text: string; short_code?: string }[];
 }
 
 // Full state name → USPS 2-letter (OSM addr:state is often the full name, which
@@ -70,7 +64,7 @@ export function normalizeState(raw: string | undefined, fallback: string): strin
 export type Bbox = { south: number; west: number; north: number; east: number };
 
 /**
- * Geocode a city name via Mapbox → returns bounding box. Cached forever.
+ * Geocode a city name → bounding box. Cached forever.
  */
 type CityGeo = { bbox: Bbox; center: [number, number]; name: string } | null;
 const cityGeoCache = new Map<string, CityGeo>();
@@ -79,46 +73,16 @@ export async function geocodeCity(city: string, state: string): Promise<CityGeo>
   const cacheKey = `${city.trim().toLowerCase()},${state.trim().toLowerCase()}`;
   if (cityGeoCache.has(cacheKey)) return cityGeoCache.get(cacheKey)!;
 
-  const token = process.env.MAPBOX_TOKEN;
-  if (!token) throw new Error("MAPBOX_TOKEN not configured");
+  // Routed through the shared provider chain (server/geocoder.ts) rather than
+  // calling Mapbox directly. This function used to throw "MAPBOX_TOKEN not
+  // configured" / "Mapbox geocoding failed: 401" the moment the token was
+  // retired, and it is the first step of every city sweep and market-inventory
+  // harvest - so one dead token silently killed all of them. A place lookup is
+  // one cached call per city; the free provider covers it perfectly well.
+  const place = await geocodePlace(city, state);
+  if (!place) { cityGeoCache.set(cacheKey, null); return null; }
 
-  const query = encodeURIComponent(`${city}, ${state}`);
-  // limit=3 + state validation so a same-named city in the wrong state can't
-  // hijack the whole scan's geography.
-  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${query}.json?access_token=${token}&types=place,locality,neighborhood&country=us&limit=3`;
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!res.ok) throw new Error(`Mapbox geocoding failed: ${res.status}`);
-
-  const data = await res.json();
-  const feats: MapboxFeature[] = data.features ?? [];
-  if (feats.length === 0) { cityGeoCache.set(cacheKey, null); return null; }
-
-  // Prefer the candidate whose region context matches the requested state.
-  const want = normalizeState(state, state);
-  const feature = feats.find((f) => {
-    const region = (f.context ?? []).find((c) => String(c.id).startsWith("region"));
-    const code = region?.short_code?.replace(/^US-/i, "") ?? region?.text ?? "";
-    return normalizeState(code, code).toUpperCase() === want.toUpperCase();
-  }) ?? feats[0];
-
-  let bbox: Bbox;
-  if (feature.bbox && feature.bbox.length === 4) {
-    bbox = { west: feature.bbox[0], south: feature.bbox[1], east: feature.bbox[2], north: feature.bbox[3] };
-    const latPad = (bbox.north - bbox.south) * 0.1;
-    const lngPad = (bbox.east - bbox.west) * 0.1;
-    bbox.south -= latPad; bbox.north += latPad; bbox.west -= lngPad; bbox.east += lngPad;
-  } else {
-    // No place bbox — scale the fallback box by feature type: a "place" (town) is
-    // bigger than a "neighborhood". Better an over-cover than clipping the city.
-    const [lng, lat] = feature.center;
-    const isPlace = /place|locality/.test(String((feature as any).place_type?.[0] ?? "place"));
-    const latDelta = isPlace ? 0.09 : 0.035; // ~10km vs ~4km
-    const lngDelta = isPlace ? 0.11 : 0.045;
-    bbox = { south: lat - latDelta, north: lat + latDelta, west: lng - lngDelta, east: lng + lngDelta };
-  }
-
-  const result: CityGeo = { bbox, center: [feature.center[0], feature.center[1]], name: feature.place_name };
+  const result: CityGeo = { bbox: place.bbox, center: place.center, name: place.name };
   cityGeoCache.set(cacheKey, result);
   return result;
 }

@@ -23,6 +23,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { copyText } from "@/lib/clipboard";
 
 type TenantStats = { reps: number; leads: number; sold: number; territories: number };
 type Tenant = {
@@ -293,11 +294,11 @@ function TenantCard({ tenant, onEdit, onDelete }: {
                 <div className="text-xs text-muted-foreground bg-secondary/50 rounded-lg p-2">{tenant.notes}</div>
               )}
               <div className="flex gap-4">
-                <button onClick={() => { navigator.clipboard.writeText(tenant.slug); toast({ title: "Slug copied" }); }}
+                <button onClick={() => { void copyText(tenant.slug).then(ok => toast({ title: ok ? "Slug copied" : "Copy failed", variant: ok ? undefined : "destructive" })); }}
                   className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
                    Copy slug
                 </button>
-                <button onClick={() => { navigator.clipboard.writeText(tenant.ownerEmail); toast({ title: "Email copied" }); }}
+                <button onClick={() => { void copyText(tenant.ownerEmail).then(ok => toast({ title: ok ? "Email copied" : "Copy failed", variant: ok ? undefined : "destructive" })); }}
                   className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
                    Copy email
                 </button>

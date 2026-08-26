@@ -181,6 +181,8 @@ import { registerAddressPointRoutes } from "./addressPointRoutes";
 import { registerNeighborhoodSweepRoutes } from "./neighborhoodSweepRoutes";
 import { accountPinForLead } from "./customerAccount";
 import { nearestAddressPoints } from "./addressPointStore";
+import { forwardGeocode, reverseGeocode, geocoderStatus } from "./geocoder";
+import { mapboxBudgetState } from "./mapboxBudget";
 import { registerLeadImportRoutes } from "./leadImportRoutes";
 import { apexEmails, isApexEmail } from "./platformApex";
 
@@ -1517,70 +1519,52 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // ── Geocode a single street/address → map coordinates (admin) ──────────────
-  // ONE Mapbox forward-geocode per UNIQUE query — results are cached in memory
-  // forever (street coordinates don't move), so repeat lookups cost nothing.
-  // Mapbox includes 100k free geocoding requests/month; this uses a handful.
-  const geocodeCache = new Map<string, { lng: number; lat: number; placeName: string }>();
-  // ONE bounded, cache-first forward geocode for server-side use (lead create
-  // fallback). Never a silent bulk path — a single call per unique address,
-  // null on any failure (the caller keeps the lead without coordinates rather
-  // than erroring). Shares the route cache above so repeats cost nothing.
+  // ONE geocode per UNIQUE query - server/geocoder.ts caches forever (street
+  // coordinates don't move), so repeat lookups cost nothing and never queue.
+  // Mapbox answers first while its token works and its spend budget allows;
+  // OSM/Nominatim answers when it does not. Mapbox includes 100k free geocoding
+  // requests/month and this uses a handful - the bulk path is
+  // server/mapbox-addresses.ts, which is separately budget-gated.
+  // ONE cache-first forward geocode for server-side use (lead create fallback).
+  // Never a silent bulk path - a single call per unique address, null on any
+  // failure (the caller keeps the lead without coordinates rather than erroring).
   async function forwardGeocodeOnce(q: string): Promise<{ lng: number; lat: number; placeName: string } | null> {
-    const trimmed = q.trim();
-    if (trimmed.length < 3) return null;
-    const key = trimmed.toLowerCase();
-    const cached = geocodeCache.get(key);
-    if (cached) return cached;
-    const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
-    if (!token) return null;
     try {
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(trimmed)}.json` +
-        `?access_token=${token}&country=us&limit=1&types=address`;
-      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!r.ok) return null;
-      const data = await r.json();
-      const f = data.features?.[0];
-      if (!f) return null;
-      const [lng, lat] = f.center;
-      const result = { lng, lat, placeName: f.place_name ?? trimmed };
-      geocodeCache.set(key, result);
-      if (geocodeCache.size > 2000) geocodeCache.delete(geocodeCache.keys().next().value!); // FIFO bound
-      return result;
+      return await forwardGeocode(q, "address");
     } catch {
-      return null;
+      return null; // every provider down: the lead is still worth creating
     }
   }
   app.get("/api/geocode", geocodeLimiter, requireCapability("scan.submit"), async (req, res) => {
     const q = String(req.query.q ?? "").trim();
     if (q.length < 3) return res.status(400).json({ error: "query too short" });
-    const key = q.toLowerCase();
-    const cached = geocodeCache.get(key);
-    if (cached) return res.json({ ...cached, cached: true });
-    const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
-    if (!token) return res.status(503).json({ error: "Geocoding not configured" });
     try {
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json` +
-        `?access_token=${token}&country=us&limit=1&types=address,neighborhood,locality,place`;
-      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!r.ok) return res.status(502).json({ error: `Mapbox geocoding failed: ${r.status}` });
-      const data = await r.json();
-      const f = data.features?.[0];
-      if (!f) return res.status(404).json({ error: `No match for “${q}”` });
-      const [lng, lat] = f.center;
-      const result = { lng, lat, placeName: f.place_name ?? q };
-      geocodeCache.set(key, result);
-      if (geocodeCache.size > 2000) geocodeCache.delete(geocodeCache.keys().next().value!); // FIFO bound
-      res.json(result);
+      const hit = await forwardGeocode(q);
+      // A miss is a 404 and an outage is a 503: the rep is told "no such
+      // address" only when a provider actually said so. The old route reported
+      // both as a failed lookup, which is how a dead token read as "not found"
+      // on every search for weeks.
+      if (!hit) return res.status(404).json({ error: `No match for \u201c${q}\u201d` });
+      res.json(hit);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(503).json({ error: e?.message ?? "Address lookup is unavailable" });
     }
+  });
+
+  // ── Geocoder health (admin) ────────────────────────────────────────────────
+  // The alarm for the failure this endpoint set was built after: both Mapbox
+  // tokens were retired, every lookup 401'd, and nothing surfaced it because
+  // each call site swallowed its own error. `usable:false` means address
+  // lookup is running on no provider at all.
+  app.get("/api/geocode/health", requireAdmin, (_req, res) => {
+    res.json({ ...geocoderStatus(), mapboxBudget: mapboxBudgetState() });
   });
 
   // ── Reverse geocode a tapped map point → an address (tap-a-house) ───────────
   // A rep taps a rooftop on the map; we turn the lat/lng into a street address so
   // they can add it as a lead without typing. Cached by ~11 m rounded point so
   // repeat taps on the same house cost nothing. requireAuth — any field user.
-  const revGeocodeCache = new Map<string, { address: string; city: string; state: string; zip: string; lat: number; lng: number; placeName: string }>();
+  const revGeocodeCache = new Map<string, { address: string; city: string; state: string; zip: string; lat: number; lng: number; placeName: string; source?: string }>();
   // requireTeamLead: only roles that can actually CREATE a lead need tap-a-house,
   // and gating it (+ the global per-IP rate limit + ~11 m cache) bounds paid
   // Mapbox exposure per the billing guardrails.
@@ -1615,35 +1599,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         return res.json(result);
       }
     } catch { /* no address file yet - fall through to the geocoder */ }
-    const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
-    if (!token) return res.status(503).json({ error: "Geocoding not configured" });
+    // No county point within 45 m: fall through to the provider chain. Mapbox
+    // first when its token works and the spend budget allows, OSM/Nominatim
+    // behind it - so a retired token or an exhausted budget costs the rep an
+    // approximate street match, never a dead "tap a house" button.
     try {
-      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
-        `?access_token=${token}&country=us&types=address&limit=1`;
-      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!r.ok) return res.status(502).json({ error: `Mapbox reverse geocode failed: ${r.status}` });
-      const data = await r.json();
-      const f = data.features?.[0];
-      if (!f) return res.status(404).json({ error: "No address at that point" });
-      const place: string = f.place_name ?? "";
-      const parts = place.split(",").map((s: string) => s.trim());
-      const zipMatch = place.match(/\b(\d{5})\b/);
-      const ctx: any[] = f.context ?? [];
-      const cityCtx = ctx.find((c) => String(c.id).startsWith("place"))?.text ?? (parts[1] ?? "");
-      const stCtx = ctx.find((c) => String(c.id).startsWith("region"))?.short_code?.replace("US-", "") ?? "";
-      const result = {
-        address: parts[0] ?? place,
-        city: cityCtx,
-        state: stCtx || "NC",
-        zip: zipMatch ? zipMatch[1] : "",
-        lat: f.center?.[1] ?? lat, lng: f.center?.[0] ?? lng,
-        placeName: place,
-      };
+      const hit = await reverseGeocode(lat, lng);
+      if (!hit) return res.status(404).json({ error: "No address at that point" });
+      const result = { ...hit, state: hit.state || "NC" };
       revGeocodeCache.set(key, result);
       if (revGeocodeCache.size > 4000) revGeocodeCache.delete(revGeocodeCache.keys().next().value!);
       res.json(result);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(503).json({ error: e?.message ?? "Reverse lookup is unavailable" });
     }
   });
 

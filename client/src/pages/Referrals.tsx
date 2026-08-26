@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Check, X, Settings } from "lucide-react";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
+import { copyText } from "@/lib/clipboard";
 
 interface Requirement {
   key: string; label: string; met: boolean; current?: number; target?: number;
@@ -207,15 +208,14 @@ function MyLinkCard() {
   if (!link) return null;
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(link.url);
+    // Clipboard is permission-gated and can fail outright; showing the URL is
+    // the fallback that always works, which is why it is on screen below.
+    if (await copyText(link.url)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard is permission-gated and fails silently in some contexts;
-      // showing the URL is the fallback that always works.
-      toast({ title: "Copy failed - select the link below instead" });
+      return;
     }
+    toast({ title: "Copy failed - select the link below instead" });
   };
 
   return (

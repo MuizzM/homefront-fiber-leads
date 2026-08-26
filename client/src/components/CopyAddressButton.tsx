@@ -4,6 +4,7 @@
 import { useState, useCallback } from "react";
 import { Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { copyText } from "@/lib/clipboard";
 
 export function CopyAddressButton({ text, label = "Copy", className = "h-11 text-[13px]" }: {
   text: string;
@@ -13,22 +14,23 @@ export function CopyAddressButton({ text, label = "Copy", className = "h-11 text
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
 
+  // The old version ignored what the fallback returned and toasted "Address
+  // copied" either way, so a phone that could not copy told the rep it had -
+  // and they pasted whatever was on the clipboard before. copyText returns an
+  // honest boolean; the confirmation follows it.
   const onCopy = useCallback(async () => {
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-      else {
-        // Fallback for non-secure contexts / older iOS webviews.
-        const ta = document.createElement("textarea");
-        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-        document.body.appendChild(ta); ta.select();
-        document.execCommand("copy"); document.body.removeChild(ta);
-      }
-      setCopied(true);
-      toast({ title: "Address copied", description: text });
-      setTimeout(() => setCopied(false), 1600);
-    } catch {
-      toast({ title: "Couldn't copy", description: "Copy the address manually.", variant: "destructive" });
+    const ok = await copyText(text);
+    if (!ok) {
+      toast({
+        title: "Couldn't copy",
+        description: "The address is on screen - read it from there.",
+        variant: "destructive",
+      });
+      return;
     }
+    setCopied(true);
+    toast({ title: "Address copied", description: text });
+    setTimeout(() => setCopied(false), 1600);
   }, [text, toast]);
 
   return (
