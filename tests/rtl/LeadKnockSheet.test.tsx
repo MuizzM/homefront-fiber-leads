@@ -1372,16 +1372,99 @@ describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
     expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
+  // ── The phone bug ─────────────────────────────────────────────────────────
+  // A mouse click moves 0-1px. A thumb tap on a phone routinely drifts 6-10px,
+  // and at TAP_SLOP_PX=6 every one of those promoted the press to a sheet drag,
+  // which armed suppressClick, which ate the click in the CAPTURE phase. The
+  // copy handler never ran: "the address is not copying on my phone", with the
+  // desktop working perfectly the whole time. Two independent guards now, and
+  // one test for each so a regression in either is named precisely.
+  it("PHONE: a copy tap whose finger drifts 8px still copies (a press on a control never drags the sheet)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    withCaptureSpy((spy) => {
+      renderSheet();
+      const copy = screen.getByTestId("knock-copy-address");
+      pointer(copy, "pointerdown", 500, { pointerType: "touch" });
+      pointer(copy, "pointermove", 508, { pointerType: "touch" }); // thumb wobble
+      pointer(copy, "pointerup", 508, { pointerType: "touch" });
+      // The press never became a drag, so nothing was captured and nothing is
+      // armed to swallow the click.
+      expect(spy).not.toHaveBeenCalled();
+      fireEvent.click(copy);
+    });
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("148 Maple St, Rockwell, NC 28138"));
+  });
+
+  it("PHONE: a close tap that drifts 8px still closes", () => {
+    withCaptureSpy(() => {
+      const { props } = renderSheet();
+      const close = screen.getByTestId("knock-sheet-close");
+      pointer(close, "pointerdown", 500, { pointerType: "touch" });
+      pointer(close, "pointermove", 508, { pointerType: "touch" });
+      pointer(close, "pointerup", 508, { pointerType: "touch" });
+      fireEvent.click(close);
+      expect(props.onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("PHONE: touch gets a bigger slop than a mouse, so a wobbly handle tap still cycles the level", () => {
+    withCaptureSpy((spy) => {
+      renderSheet();
+      const handle = screen.getByTestId("knock-sheet-handle");
+      // The handle opts back IN to dragging (data-drag-handle) - it is the
+      // primary drag affordance - so only the touch slop protects its tap.
+      pointer(handle, "pointerdown", 500, { pointerType: "touch" });
+      pointer(handle, "pointermove", 510, { pointerType: "touch" }); // 10px: a wobble, not a drag
+      expect(spy).not.toHaveBeenCalled();
+      // The same 10px from a MOUSE is a deliberate drag and still captures.
+      pointer(handle, "pointerup", 510, { pointerType: "touch" });
+      pointer(handle, "pointerdown", 500, { pointerType: "mouse", pointerId: 2 });
+      pointer(handle, "pointermove", 510, { pointerType: "mouse", pointerId: 2 });
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("the header itself still drags: only CONTROLS are exempt, not the whole region", () => {
+    withCaptureSpy((spy) => {
+      renderSheet();
+      // The address line is chrome, not a control - dragging from it must work.
+      const header = screen.getByTestId("knock-status-line");
+      pointer(header, "pointerdown", 500, { pointerType: "touch" });
+      pointer(header, "pointermove", 560, { pointerType: "touch" });
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("a real drag (past the tap slop) DOES capture, and its click is swallowed", () => {
+    withCaptureSpy((spy) => {
+      const { props } = renderSheet();
+      // Dragged from the header CHROME, not from a button. A press that starts
+      // on a control no longer drags the sheet at all (see the PHONE cases
+      // above), so the drag has to begin somewhere a drag can begin - and the
+      // invariant under test is unchanged: once a real drag happens, the click
+      // it produces must not activate whatever the pointer is over.
+      const chrome = screen.getByTestId("knock-status-line");
+      pointer(chrome, "pointerdown", 500);
+      pointer(chrome, "pointermove", 540); // 40px: a drag, not a tap
+      expect(spy).toHaveBeenCalledTimes(1);
+      pointer(chrome, "pointerup", 540);
+      fireEvent.click(screen.getByTestId("knock-sheet-close"));
+      expect(props.onClose).not.toHaveBeenCalled();
+    });
+  });
+
+  it("a press on a control never drags the sheet, however far the finger travels", () => {
     withCaptureSpy((spy) => {
       const { props } = renderSheet();
       const close = screen.getByTestId("knock-sheet-close");
       pointer(close, "pointerdown", 500);
-      pointer(close, "pointermove", 540); // 40px: a drag, not a tap
-      expect(spy).toHaveBeenCalledTimes(1);
+      pointer(close, "pointermove", 540); // 40px from a BUTTON: still not a drag
+      expect(spy).not.toHaveBeenCalled();
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
       pointer(close, "pointerup", 540);
       fireEvent.click(close);
-      expect(props.onClose).not.toHaveBeenCalled();
+      expect(props.onClose).toHaveBeenCalledTimes(1);
     });
   });
 });

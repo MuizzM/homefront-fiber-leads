@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { CompTermsEditor } from "@/components/onboarding/CompTermsEditor";
+import { copyText } from "@/lib/clipboard";
 import { DEFAULT_COMMISSION_TERMS, normalizeCommissionTerms, type CommissionTerms } from "@shared/commissionTerms";
 import type { CommissionTier } from "@shared/commissionTiers";
 import type { OnboardingDocumentType } from "@shared/onboardingDocuments";
@@ -636,7 +637,10 @@ export default function Applications() {
 
   async function copySecureLink(record: PipelineRecord) {
     if (!record.invite?.secureUrl) return;
-    await navigator.clipboard.writeText(record.invite.secureUrl);
+    if (!(await copyText(record.invite.secureUrl))) {
+      toast({ title: "Copy failed", description: "This browser refused the copy - open the link from the row instead.", variant: "destructive" });
+      return;
+    }
     setCopiedKey(record.key);
     setTimeout(() => setCopiedKey(null), 2000);
     toast({ title: "Private link copied", description: "The link is candidate-specific and expires after 14 days." });
