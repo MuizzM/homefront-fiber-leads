@@ -221,11 +221,28 @@ function repair() {
   const claimed = new Map<string, number>();
   for (const r of rows) claimed.set(idOf(r.address, r.city), r.id);
 
+  // WHICH CITY a door belongs to is E911's answer, not a blanket ZIP rule.
+  // ZIP 28088 is mostly Landis but NOT only Landis — the county file puts 6
+  // Kannapolis and 4 China Grove addresses in it, and relabelling those
+  // "Landis" because they share the ZIP is just a new wrong label replacing the
+  // old one. Two doors on N Chapel St were mislabelled exactly that way before
+  // this was keyed on the address instead. A door E911 does not know keeps
+  // whatever city it already has — guessing is what got us here.
+  const truth = new Map<string, string>();
+  for (const p of rawDb.prepare(
+    `SELECT street, city FROM address_points WHERE zip=? AND city IS NOT NULL`,
+  ).all(ZIP) as Array<{ street: string; city: string }>) {
+    truth.set(canonicalAddressPart(p.street), titleCase(p.city));
+  }
+
   const plan: Array<{ id: number; address: string; city: string }> = [];
   const dupes: Array<{ id: number; from: string; onto: string }> = [];
   let keyMoved = 0;
+  let unknown = 0;
   for (const r of rows) {
-    const newCity = r.city.toLowerCase() === CITY.toLowerCase() ? r.city : CITY;
+    const e911City = truth.get(canonicalAddressPart(r.address));
+    if (!e911City) unknown++;
+    const newCity = e911City ?? r.city;
     const newAddr = abbreviate(r.address);
     if (newCity === r.city && newAddr === r.address) continue;
     // The canonical identity must NOT move — that is what makes this safe.
@@ -250,6 +267,14 @@ function repair() {
   // healthy rows as stale.
   const staleKeys = staleKeyRows().length;
   line(`address repair: ${plan.length} rows to rewrite (city label and/or street suffix)`);
+  if (unknown) line(`  ${unknown} row(s) have no E911 counterpart in ZIP ${ZIP} — city left exactly as found`);
+  {
+    const toOther = plan.filter((p) => p.city.toLowerCase() !== CITY.toLowerCase());
+    if (toOther.length) {
+      line(`  ${toOther.length} row(s) go to a city OTHER than ${CITY}, because E911 says so:`);
+      for (const p of toOther.slice(0, 8)) line(`     #${p.id} "${p.address}" -> ${p.city}`);
+    }
+  }
   if (staleKeys) line(`  ${staleKeys} row(s) carry a canonical_key that no longer matches their address/city — re-derived on apply`);
   if (keyMoved) line(`  ${keyMoved} skipped — the canonical key would have moved`);
   if (dupes.length) {
