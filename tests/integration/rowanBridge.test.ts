@@ -171,18 +171,18 @@ describe("the dedup guards the bridge leans on", () => {
     expect(added).toBe(0);
   });
 
-  it("distinct UNITS at one premise stay distinct, street_key populated", () => {
-    // This assertion is the one thing standing between a 240-unit Salisbury
-    // complex and one door. It could not be made until 8b89a6b: streetKeyOf CUTS
-    // the address at the first unit token rather than retaining it, so every
-    // unit at a premise shared a street_key AND a house number, and one building
-    // shares a rooftop - the alias twin absorbed unit 102 into unit 101.
+  it("distinct UNITS at one premise each get their own row, with street_key populated", () => {
+    // THIS TEST FLIPPED (2026-08-27). It used to pin the opposite - "units are
+    // ABSORBED" - and said in this comment that it was the test to flip when the
+    // guard was fixed. It has been: the alias-twin guard now confirms the full
+    // canonical address (house + street + UNIT), not just street_key + house
+    // number + a ~25m box. See server/storage.ts and
+    // .agent/plans/unit-aware-premise-twin.md.
     //
-    // Two conditions have to hold together or this passes for the wrong reason,
-    // which is exactly how the defect survived review in
-    // tests/integration/anti-miss-controls.test.ts: street_key must be POPULATED
-    // (the guard cannot match on NULL), and the two rows must share the
-    // coordinates a real building has.
+    // streetKeyOf still CUTS the address at the first unit token, which is why
+    // the guard needed a second check rather than a different street key - that
+    // is the property this line pins, and it is what made the old behavior
+    // inevitable.
     expect(addressKey.streetKeyOf("2715 Statesville Blvd Unit 101"))
       .toBe(addressKey.streetKeyOf("2715 Statesville Blvd Unit 102"));
 
@@ -192,29 +192,43 @@ describe("the dedup guards the bridge leans on", () => {
     }] as any);
     rawDb.prepare(`UPDATE scan_targets SET street_key=? WHERE address LIKE '2715 Statesville%' AND street_key IS NULL`)
       .run(addressKey.streetKeyOf("2715 Statesville Blvd Unit 101"));
-    expect(rawDb.prepare(`SELECT COUNT(*) n FROM scan_targets WHERE address LIKE '2715 Statesville%' AND street_key IS NULL`).get())
-      .toMatchObject({ n: 0 });
 
+    // Same building, same rooftop, street_key filled - the shape that used to
+    // absorb. Rowan holds 6,793 of these on 1,342 premises; this one complex
+    // has 240 units at a single address.
     const added = storage.upsertScanTargets([{
       address: "2715 Statesville Blvd Unit 102", city: "Salisbury", state: "NC", zip: "28147",
       lat: 35.6700, lng: -80.5200, tenantId: TENANT, source: "e911-nc-onemap",
     }] as any);
     expect(added).toBe(1);
+    rawDb.prepare(`UPDATE scan_targets SET street_key=? WHERE address LIKE '2715 Statesville%' AND street_key IS NULL`)
+      .run(addressKey.streetKeyOf("2715 Statesville Blvd Unit 102"));
+
+    // A rooftop-width away, still inside the ~25m box, still its own door.
+    expect(storage.upsertScanTargets([{
+      address: "2715 Statesville Blvd Unit 240", city: "Salisbury", state: "NC", zip: "28147",
+      lat: 35.67015, lng: -80.52015, tenantId: TENANT, source: "e911-nc-onemap",
+    }] as any)).toBe(1);
+
     const rows = rawDb.prepare(`SELECT address FROM scan_targets WHERE address LIKE '2715 Statesville%'`).all();
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3);
   });
 
   it("the SAME unit spelled two ways still attaches, not duplicates", () => {
-    // The other half of the contract: making units distinct must not lose the
-    // spelling fold. "Unit 101" and "#101" are one premise-unit (addressKey v4
-    // folds every designator to UNIT), and E911 ships both shapes.
+    // The other half of the contract the test above pins, and the one a future
+    // change could quietly break: making units DISTINCT must not cost the
+    // spelling fold. addressKey v4 folds every designator to UNIT, so
+    // "Unit 101", "Apt 101", "Ste 101" and "#101" are one premise-unit - E911
+    // ships more than one of those shapes. A guard that matched the literal
+    // designator token instead of the canonical address would pass the test
+    // above and mint a second row here.
     const added = storage.upsertScanTargets([{
       address: "2715 Statesville Blvd #101", city: "Salisbury", state: "NC", zip: "28147",
       lat: 35.6700, lng: -80.5200, tenantId: TENANT, source: "e911-nc-onemap",
     }] as any);
     expect(added).toBe(0);
     const rows = rawDb.prepare(`SELECT address FROM scan_targets WHERE address LIKE '2715 Statesville%'`).all();
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3); // 101, 102, 240 - unchanged
   });
 
   it("genuine neighbours on the same street are never absorbed", () => {
