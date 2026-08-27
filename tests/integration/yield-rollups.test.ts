@@ -210,6 +210,74 @@ describe("planner statistics + placeholder integrity", () => {
   });
 });
 
+// The outage of 2026-08-27. `optimizePlannerStats` stamped its cursor AFTER the
+// ANALYZE, so a table whose ANALYZE THREW left the cursor untouched and the next
+// tick chose the same table again. With production's busy_timeout of 120000 that
+// is not a retry, it is a permanent outage: every 5 minutes the primary sat on
+// the busy handler for two minutes and failed. Measured live at 18:57 —
+// `ANALYZE "rep_daily_metrics"` 120167ms twice, primary event-loop lag
+// 240384ms, and every writer behind it timing out at exactly 120171ms.
+describe("planner ANALYZE cannot wedge the database", () => {
+  // A second connection holding a write transaction is what SQLITE_BUSY
+  // actually is in production; nothing here is mocked.
+  function withWriteLockHeld<T>(fn: () => T): T {
+    const Database = require("better-sqlite3");
+    const blocker = new Database(rawDb.name);
+    blocker.pragma("busy_timeout = 100");
+    blocker.exec("BEGIN IMMEDIATE");
+    try { return fn(); } finally {
+      try { blocker.exec("ROLLBACK"); } catch { /* already gone */ }
+      blocker.close();
+    }
+  }
+
+  it("a table whose ANALYZE fails is not retried forever - the cursor still advances", () => {
+    // This case is about PROGRESS, not timing, so shrink the lock wait rather
+    // than widen the suite's timeout - vitest.config.ts keeps testTimeout at the
+    // default on purpose. The realistic wait is asserted by the next test.
+    const priorEnv = process.env.ANALYZE_LOCK_WAIT_MS;
+    process.env.ANALYZE_LOCK_WAIT_MS = "300";
+    try {
+    rollups._resetPlannerStatsForTests();
+    // Read the cursor from MEMORY, not the row: while the lock is held the row
+    // cannot be written at all, which is exactly why a disk-only cursor could
+    // never advance and the sweep repeated one table forever.
+    withWriteLockHeld(() => {
+      rollups.optimizePlannerStats();
+      const first = rollups._plannerStatsCursorForTests();
+      expect(first).toBeTruthy();        // it committed to a table
+      rollups.optimizePlannerStats();
+      const second = rollups._plannerStatsCursorForTests();
+      // THE REGRESSION: before the fix both ticks picked the same table, and
+      // production never got past it.
+      expect(second).not.toBe(first);
+    });
+    } finally {
+      if (priorEnv === undefined) delete process.env.ANALYZE_LOCK_WAIT_MS;
+      else process.env.ANALYZE_LOCK_WAIT_MS = priorEnv;
+    }
+  });
+
+  it("it gives up on the lock in seconds, not the connection's full busy_timeout", () => {
+    rollups._resetPlannerStatsForTests();
+    // Production's real setting. Optional maintenance must not inherit it.
+    rawDb.pragma("busy_timeout = 120000");
+    const started = Date.now();
+    withWriteLockHeld(() => { rollups.optimizePlannerStats(); });
+    const ms = Date.now() - started;
+    expect(ms).toBeLessThan(30_000);     // was 120_000+ per blocked table
+    // and the request path keeps its full tolerance afterwards
+    expect(Number(rawDb.pragma("busy_timeout", { simple: true }))).toBe(120000);
+  }, 30_000); // deliberately waits the real lock timeout; 30s bounds it
+
+  it("with the lock free it still analyses and advances normally", () => {
+    rollups._resetPlannerStatsForTests();
+    expect(rollups.optimizePlannerStats()).toBe("full");
+    const n = (rawDb.prepare(`SELECT COUNT(*) n FROM sqlite_stat1`).get() as any).n;
+    expect(n).toBeGreaterThan(0);
+  });
+});
+
 describe("query plans", () => {
   it("the cell group rides idx_scan_targets_cell (no full-table ROUND scan)", () => {
     rollups.runYieldRollupMaintenanceToCompletion(); // order-independent: ensure indexes exist
