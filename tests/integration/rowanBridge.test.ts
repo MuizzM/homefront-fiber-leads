@@ -171,18 +171,18 @@ describe("the dedup guards the bridge leans on", () => {
     expect(added).toBe(0);
   });
 
-  it("distinct UNITS at one premise are ABSORBED once street_key is populated", () => {
-    // Documented, not desired. storage.upsertScanTargets says of the alias-twin
-    // guard "distinct units differ in street_key's retained unit token and never
-    // merge", but streetKeyOf CUTS the address at the first unit token rather
-    // than retaining it - so every unit at a premise shares a street_key and a
-    // house number, and the ~25m coordinate window does the rest.
+  it("distinct UNITS at one premise stay distinct, street_key populated", () => {
+    // This assertion is the one thing standing between a 240-unit Salisbury
+    // complex and one door. It could not be made until 8b89a6b: streetKeyOf CUTS
+    // the address at the first unit token rather than retaining it, so every
+    // unit at a premise shared a street_key AND a house number, and one building
+    // shares a rooftop - the alias twin absorbed unit 102 into unit 101.
     //
-    // tests/integration/anti-miss-controls.test.ts asserts the opposite and
-    // passes only because street_key is still NULL on its first row, where the
-    // guard cannot match. The bridge fills street_key as it writes, so it gets
-    // this behavior - which is why it holds Rowan's 6,793 unit doors back.
-    // When the guard is fixed, this test is the one that has to flip.
+    // Two conditions have to hold together or this passes for the wrong reason,
+    // which is exactly how the defect survived review in
+    // tests/integration/anti-miss-controls.test.ts: street_key must be POPULATED
+    // (the guard cannot match on NULL), and the two rows must share the
+    // coordinates a real building has.
     expect(addressKey.streetKeyOf("2715 Statesville Blvd Unit 101"))
       .toBe(addressKey.streetKeyOf("2715 Statesville Blvd Unit 102"));
 
@@ -192,14 +192,29 @@ describe("the dedup guards the bridge leans on", () => {
     }] as any);
     rawDb.prepare(`UPDATE scan_targets SET street_key=? WHERE address LIKE '2715 Statesville%' AND street_key IS NULL`)
       .run(addressKey.streetKeyOf("2715 Statesville Blvd Unit 101"));
+    expect(rawDb.prepare(`SELECT COUNT(*) n FROM scan_targets WHERE address LIKE '2715 Statesville%' AND street_key IS NULL`).get())
+      .toMatchObject({ n: 0 });
 
     const added = storage.upsertScanTargets([{
       address: "2715 Statesville Blvd Unit 102", city: "Salisbury", state: "NC", zip: "28147",
       lat: 35.6700, lng: -80.5200, tenantId: TENANT, source: "e911-nc-onemap",
     }] as any);
+    expect(added).toBe(1);
+    const rows = rawDb.prepare(`SELECT address FROM scan_targets WHERE address LIKE '2715 Statesville%'`).all();
+    expect(rows.length).toBe(2);
+  });
+
+  it("the SAME unit spelled two ways still attaches, not duplicates", () => {
+    // The other half of the contract: making units distinct must not lose the
+    // spelling fold. "Unit 101" and "#101" are one premise-unit (addressKey v4
+    // folds every designator to UNIT), and E911 ships both shapes.
+    const added = storage.upsertScanTargets([{
+      address: "2715 Statesville Blvd #101", city: "Salisbury", state: "NC", zip: "28147",
+      lat: 35.6700, lng: -80.5200, tenantId: TENANT, source: "e911-nc-onemap",
+    }] as any);
     expect(added).toBe(0);
     const rows = rawDb.prepare(`SELECT address FROM scan_targets WHERE address LIKE '2715 Statesville%'`).all();
-    expect(rows.length).toBe(1);
+    expect(rows.length).toBe(2);
   });
 
   it("genuine neighbours on the same street are never absorbed", () => {

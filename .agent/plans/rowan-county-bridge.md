@@ -63,8 +63,11 @@ Relevant files:
    `--authorize-provider-calls` is passed *and* `KFS_AUTOMATION_AUTHORIZED=true`
    *and* the proxy egress IP differs from this machine's.
 3. Dry run by default. `--apply` is the only thing that writes.
-4. Local database only. `--apply` refuses when `NODE_ENV=production` or when the
-   resolved `dbPath` is under `/data`.
+4. Local database only. A `bridge --apply` refuses when the resolved `dbPath` is
+   under `/data`, the production volume. The test is the path, NOT `NODE_ENV`:
+   this box's own `.env` sets `NODE_ENV=production`, so keying on it refused a
+   `--phase probe` run that writes no row at all. A guard that fires on the
+   wrong signal gets switched off.
 5. Never raw SQL for door inserts. Every door goes through
    `storage.upsertScanTargets` so both dedup guards apply.
 6. Non-destructive. The only writes are inserts of new doors, `canonical_key`
@@ -85,20 +88,22 @@ Relevant files:
    street_key fill.
    `npx tsx script/import-rowan.ts --phase bridge --city Spencer`
    `npx tsx script/import-rowan.ts --phase bridge --city Spencer --apply`
-4. **Regression tests.** `tests/rowanBridge.test.ts` pins the normalization and
-   the two dedup outcomes that matter.
+4. **Regression tests.** `tests/integration/rowanBridge.test.ts` pins the
+   normalization and the dedup outcomes the import leans on.
 
 ## Decisions
 
 - **Unit/comma addresses are excluded by default.** 6,793 of the 75,349 E911
   points carry a `, UNIT x` / `, BUILDING y` clause and they sit on only 1,342
   premises (one Salisbury complex has 240 units at 2715 Statesville Boulevard).
-  `streetKeyOf` cuts the address at the first unit token, so every unit at a
-  premise shares a street_key *and* a house number; the postal-city alias-twin
-  guard then matches on coordinates within ~25 m and absorbs unit 102 into unit
-  101's row. Proven, not inferred — see Discoveries. Importing them would
-  produce a partial, coordinate-ordered, non-deterministic inventory that reads
-  as complete. `--include-units` opts in once the guard is fixed.
+  Originally because the alias-twin guard absorbed one unit into another —
+  proven, not inferred, see Discoveries. **That reason expired**: 8b89a6b fixed
+  the guard. They stay opt-in behind `--include-units` for a smaller one — no
+  unit-formatted address in this database has ever had a conclusive provider
+  answer (256 held, 1 ever scanned), so whether Kinetic matches
+  `2114 Englewood St, Unit A, Building A` is unmeasured. That is a
+  `--phase probe` question, and it is the same class of risk as the unproven
+  route folds, which *are* imported and flagged.
 - **The canonical_key backfill is scoped to the cities being written**, not the
   whole tenant. The canonical-twin guard keys on `addr|city|state`, so only rows
   in a target city can collide with a door we are about to write. A tenant-wide
@@ -127,12 +132,19 @@ upsertScanTargets  "2717 Statesville Blvd"          (35.6700,-80.5200) -> 1 new 
 final table: #1 "2715 Statesville Blvd Unit 101", #2 "2717 Statesville Blvd"
 ```
 
-`server/storage.ts` says of that guard: "distinct units differ in street_key's
+`server/storage.ts` said of that guard: "distinct units differ in street_key's
 retained unit token and never merge." `streetKeyOf` does not retain the unit
 token — it cuts at it (`shared/addressKey.ts`, `STREET_UNIT_TOKENS`). The
-comment describes behavior the code does not have. Fixing it changes dedup for
-every caller of `upsertScanTargets` and is out of this task's scope; it is
-recorded here and reported to the operator.
+comment described behavior the code did not have.
+
+**Resolved the same day by #191 (8b89a6b),** which was spun off from this
+finding and turned out to be the smaller half of it: the same false premise sat
+in `server/scanTargetCanonicalMerge.ts`, where it does not merely absorb an
+un-inserted row but **DELETES** an existing one after repointing 18 FK tables,
+driven every 30s by `yieldRollups`. Both guards now compare the whole canonical
+address. This plan's job was to notice it and stay out of its way, which is why
+the unit doors were held back rather than imported into a guard that would eat
+them.
 
 **E911 distinguishes the two sides of a divided US highway by directional, and
 we hold one row for both.** Rowan E911 carries both
@@ -221,6 +233,36 @@ Quarry 54). The only two neither lookup found - `220 Pine Ridge Rd` and
 upsert enriched them instead of inserting. 57,863 tenant-1 rows carry that stale
 key format, which is a canonical-twin blind spot worth its own pass.
 
+### After #191 landed (2026-08-27, same day)
+
+`f-/gallant-almeida-1a7f0f` merged into `rep-knocking-workflow` as ee9313f while
+this PR's CI was still running, so the base branch had the alias-twin fix and
+this branch had a test pinning the defect. Merging in that order would have
+turned the base red.
+
+Base merged in, then:
+
+- `tests/integration/rowanBridge.test.ts` flipped. The units test now asserts
+  what it should always have been able to assert - two units at one premise are
+  two rows - with an explicit check that `street_key` is actually populated
+  first, since a NULL there is how the same defect hid in
+  `anti-miss-controls.test.ts`. A second test was added for the other half of
+  the contract: `Unit 101` and `#101` are still one premise-unit and still
+  attach rather than duplicate.
+- The stricter guard means the county import needed re-running: doors it
+  absorbed under the old rule now belong as distinct rows. An audit over all
+  68,556 importable doors found exactly **2** without a row carrying their
+  canonical address (`87 1/2 Central Ave` in China Grove - a fractional house
+  number the old guard read as `87` - and `804 Crown Point Dr` in Salisbury).
+  Re-ran the county import: 2 new doors, 89,837 -> 89,839. The blast radius was
+  small because non-unit E911 doors have distinct house numbers on a street,
+  which is exactly why holding the units back mattered.
+- The unit doors are no longer blocked on dedup. They remain opt-in behind
+  `--include-units` for a smaller, different reason: no unit-formatted address
+  in this database has ever had a conclusive provider answer (256 held, 1 ever
+  scanned), so whether Kinetic matches `2114 Englewood St, Unit A, Building A`
+  is unmeasured. That is a `--phase probe` question, not a dedup one.
+
 ### Probe round 1 (paid: 17 live calls, ~1 IP + token pair)
 
 `--phase probe --routes-only --apply --authorize-provider-calls`. Full results
@@ -277,3 +319,6 @@ evidence; the 765 doors stay flagged unproven until a second house is bought.
 5. Applying against the local `data.db` while another session runs a paid scan
    competes for the SQLite write lock. `--batch` / `--pause` exist for that;
    the defaults (500 / 25 ms) are deliberately small.
+6. **Nothing has been scanned.** 73,895 Rowan doors are unscanned; at ~20 checks
+   per residential IP + token pair that is roughly 3,700 pairs and wants sizing
+   before anything starts.

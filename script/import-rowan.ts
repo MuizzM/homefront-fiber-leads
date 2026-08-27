@@ -49,9 +49,13 @@
 //  2. EVERY DOOR GOES THROUGH storage.upsertScanTargets, never raw SQL. It owns
 //     the two guards that make this safe to re-run: the canonical twin (same
 //     premise, different spelling) and the postal-city alias twin (same premise
-//     under another postal city, matched on street_key + state + house number +
-//     coordinates within ~25 m). Re-implementing either here is how a second,
-//     drifting copy of a rule gets born.
+//     under another postal city, narrowed in SQL by street_key + state + house
+//     number + coordinates within ~25 m, then matched on the WHOLE canonical
+//     address so it attaches to this door and not to its neighbour or to
+//     another unit of the same building). Re-implementing either here is how a
+//     second, drifting copy of a rule gets born - and how the unit collapse
+//     below would have been re-introduced in this file after being fixed in
+//     that one.
 //
 //  3. STREET SPELLING IS NORMALIZED, AND THE UNPROVEN PARTS SAY SO. E911 ships
 //     SCREAMING CASE with full suffix words and spelled-out route names, and a
@@ -119,23 +123,30 @@
 //
 // 6,793 of the 75,349 E911 points carry a ", UNIT x" / ", BUILDING y" clause,
 // and they sit on only 1,342 premises - one Salisbury complex has 240 units at
-// 2715 Statesville Boulevard. streetKeyOf CUTS the address at the first unit
-// token rather than retaining it, so every unit at a premise shares a
-// street_key AND a house number; the alias-twin guard then matches on
-// coordinates within ~25 m and absorbs one unit into another. Reproduced on a
-// pristine DATA_DIR on 2026-08-27:
+// 2715 Statesville Boulevard.
+//
+// THE DEDUP BLOCKER IS FIXED. It was real: streetKeyOf CUTS the address at the
+// first unit token rather than retaining it, so every unit at a premise shared
+// a street_key AND a house number, and one building shares a rooftop. The
+// alias-twin guard absorbed one unit into another - measured on a pristine
+// DATA_DIR on 2026-08-27, before the fix:
 //
 //     "2715 Statesville Blvd Unit 101" (35.6700,  -80.5200)  -> 1 new row
 //     "2715 Statesville Blvd Unit 102" (35.6700,  -80.5200)  -> 0 new rows
 //     "2715 Statesville Blvd Unit 240" (35.67015, -80.52015) -> 0 new rows
 //     "2717 Statesville Blvd"          (35.6700,  -80.5200)  -> 1 new row
 //
-// storage.upsertScanTargets says of that guard "distinct units differ in
-// street_key's retained unit token and never merge". They do not. Importing
-// units through it yields a partial, coordinate-ordered, order-dependent
-// inventory that READS as complete, which is worse than not importing them, so
-// they are excluded and counted. --include-units opts in once the guard is
-// fixed.
+// 8b89a6b made both twin guards compare the whole canonical address instead of
+// the street, so units are distinct premises again and the spelling fold still
+// collapses "Unit 101" onto "#101". tests/integration/rowanBridge.test.ts pins
+// both halves.
+//
+// THEY ARE STILL OPT-IN, for a different and smaller reason: no unit-formatted
+// address in this database has ever had a conclusive answer from the provider.
+// 256 such rows are held and exactly one was ever scanned. Whether Kinetic
+// matches "2114 Englewood St, Unit A, Building A" is the same open question as
+// the unproven route folds above, and --phase probe is how it gets closed.
+// --include-units imports them; measure a handful first.
 //
 // ── USAGE - dry run is the default, nothing is written without --apply ──────
 //
@@ -545,7 +556,7 @@ function plan(cities: string[]): void {
   line(`${"TOTAL".padEnd(16)} ${String(tE).padStart(5)} ${String(tU).padStart(7)} ${String(tR).padStart(7)} ${String(tP).padStart(10)} ${String(tH).padStart(9)} ${String(tN).padStart(9)} ${String(tW).padStart(11)}`);
   line("");
   line(`E911      addressable doors the county says exist`);
-  line(`units     of those, ", Unit x" doors - ${INCLUDE_UNITS ? "INCLUDED by --include-units" : "held back; the alias-twin guard merges them (see header)"}`);
+  line(`units     of those, ", Unit x" doors - ${INCLUDE_UNITS ? "INCLUDED by --include-units" : "held back; their format is unmeasured against the provider (see header)"}`);
   line(`route     importable doors whose spelled-out route name is folded`);
   line(`unproven  of those, folded to a spelling no provider call has ever confirmed`);
   line(`held      rows already in scan_targets under this city label`);
@@ -775,7 +786,11 @@ async function bridge(cities: string[]): Promise<void> {
   }
   line("-".repeat(84));
   line(`${n(totalDoors)} doors to upsert   ${n(totalTwins)} already held by canonical key   ${n(totalDoors - totalTwins)} unmatched`);
-  if (totalUnits) line(`${n(totalUnits)} unit door(s) held back - see the UNIT ADDRESSES note in this file's header`);
+  if (totalUnits) {
+    line(`${n(totalUnits)} unit door(s) held back. The dedup blocker is fixed (8b89a6b); what is`);
+    line(`still unmeasured is whether the provider matches a ", Unit x" address at all.`);
+    line(`   Import them with --include-units once a probe says it does.`);
+  }
   if (totalUnproven) {
     line(`${n(totalUnproven)} door(s) carry a route spelling no provider call has confirmed.`);
     line(`   Measure them first:  npx tsx script/import-rowan.ts --phase probe ${cities.map((c) => `--city "${c}"`).join(" ")}`);
