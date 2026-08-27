@@ -93,3 +93,6 @@ lexington-newbuilds.json
 .impeccable/live/*.png
 # impeccable-ignore-end
 .dev-verify/logs/
+
+# Built by `npm run lint` from the vendored .ts sources (Node 20 cannot load .ts)
+tools/oxlint/anti-slop/index.mjs

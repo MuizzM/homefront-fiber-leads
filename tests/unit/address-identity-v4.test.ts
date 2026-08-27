@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalAddressPart, normalizeKineticAddressKey, kineticLeadKeyOrNull,
   normalizeZip5, splitDisplayAddress, premiseBaseKey, addressIdentityIssues,
-  NORMALIZATION_VERSION,
+  addressIdentityOf, streetKeyOf, NORMALIZATION_VERSION,
 } from "../../shared/addressKey";
 
 // v4 canonical premise identity: unit unification, ZIP+4 folding (display),
@@ -117,5 +117,62 @@ describe("address-key algorithmic fixes (audit)", () => {
     expect(kineticLeadKeyOrNull("Unit 12", "Charlotte", "NC", "28202")).toBeNull();
     // A real street still keys.
     expect(kineticLeadKeyOrNull("123 Main St", "Charlotte", "NC", "28202")).not.toBeNull();
+  });
+});
+
+// ── addressIdentityOf: which DOOR, not just which street ─────────────────────
+// streetKeyOf answers "which street" and CUTS the unit clause off. Two scan-
+// target twin guards were written as if it retained the unit and merged real
+// doors together for it (server/storage.ts, server/scanTargetCanonicalMerge.ts).
+// These are the properties those guards now depend on.
+describe("addressIdentityOf (house / street / unit)", () => {
+  it("splits the three parts a twin guard has to compare", () => {
+    expect(addressIdentityOf("2715 Statesville Blvd Unit 101"))
+      .toEqual({ house: "2715", street: "STATESVILLE BLVD", unit: "UNIT 101" });
+    expect(addressIdentityOf("123-A Bell Ridge Court"))
+      .toEqual({ house: "123 A", street: "BELL RIDGE CT", unit: "" });
+    expect(addressIdentityOf("314 322 Malcolm Way"))
+      .toEqual({ house: "314 322", street: "MALCOLM WAY", unit: "" });
+    expect(addressIdentityOf("Nard Ln"))
+      .toEqual({ house: "", street: "NARD LN", unit: "" });
+  });
+
+  it("the three parts reassemble into the canonical address, token for token", () => {
+    // This is what lets a guard compare canonicalAddressPart(a) to
+    // canonicalAddressPart(b) and know it has compared house, street AND unit.
+    for (const a of [
+      "2715 Statesville Blvd Unit 101", "123-A Bell Ridge Court", "101 N Main St",
+      "300 Main St # 12", "123 1/2 Main St", "77 Lake Vista Dr Lot 16", "Nard Ln", "123",
+    ]) {
+      const id = addressIdentityOf(a);
+      expect([id.house, id.street, id.unit].filter(Boolean).join(" "))
+        .toBe(canonicalAddressPart(a));
+    }
+  });
+
+  it("distinct doors of one building share a street but never a unit", () => {
+    const units = ["Unit 101", "Apt 102", "Ste 103", "#104", "Lot 105"]
+      .map((u) => addressIdentityOf(`2715 Statesville Blvd ${u}`));
+    expect(new Set(units.map((u) => u.street)).size).toBe(1);   // one street
+    expect(new Set(units.map((u) => u.house)).size).toBe(1);    // one house number
+    expect(new Set(units.map((u) => u.unit)).size).toBe(5);     // five doors
+  });
+
+  it("the unit-less building row is not any unit", () => {
+    expect(addressIdentityOf("2715 Statesville Blvd").unit).toBe("");
+    expect(addressIdentityOf("2715 Statesville Blvd Unit 101").unit).toBe("UNIT 101");
+  });
+
+  it("every designator spelling of one door yields ONE identity", () => {
+    const spellings = ["123 Main St Apt 4", "123 Main Street Unit 4",
+                       "123 MAIN ST STE 4", "123 Main St #4", "123 Main St # 4"];
+    expect(new Set(spellings.map((a) => JSON.stringify(addressIdentityOf(a)))).size).toBe(1);
+  });
+
+  it("streetKeyOf is exactly the street part (the two can never drift)", () => {
+    for (const a of ["17 Fiber St", "100 Oak Ridge Ct Apt 4", "123-A Bell Ridge Court",
+                     "Nard Ln", "123", "", null]) {
+      expect(streetKeyOf(a)).toBe(addressIdentityOf(a).street);
+    }
   });
 });
