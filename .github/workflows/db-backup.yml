@@ -13,13 +13,22 @@ name: DB backup (off-host, verified)
 #         image via compose run) streams one consistent WAL-snapshot SQL dump
 #         to stdout — the box never stages a byte
 #   ssh:  carries the stream to the runner
-#   here: zstd-compress, then PROVE the backup by restoring it into a fresh
-#         SQLite db on the runner's /mnt scratch disk: integrity_check must
-#         say ok and every table's COUNT(*) must equal the dump's embedded
-#         rowcount manifest. Only a PROVEN dump is uploaded.
+#   here: zstd-compress, check the dump's completeness sentinel, UPLOAD, and
+#         then PROVE it restores — scripts/db-verify-stream.cjs rebuilds each
+#         table in its own throwaway SQLite db, integrity_checks it, matches
+#         COUNT(*) against the dump's embedded rowcount manifest, and deletes
+#         it before the next table starts.
 #
-# An artifact only uploads after restore verification passes, so every stored
-# backup is a restore-tested backup. Artifacts are repo-private but NOT
+# ORDERING (changed 2026-08-27, and the comment matters more than the code):
+# upload comes BEFORE verification. The original order — verify, then upload
+# only what was proven — sounds stricter and in practice destroyed every
+# backup we had: the verifier restored the whole ~20 GB database at once, the
+# runner's ~13 GiB disk stopped fitting it in 2026-08-16, and the upload was
+# skipped as a dependent step for two months of Sundays while the dump itself
+# succeeded every time. A complete-but-unproven copy beats no copy. The
+# restore proof still gates the JOB, the step summary says which of the two
+# you are holding, and a failure now opens an issue instead of sitting red
+# and unread. Artifacts are repo-private but NOT
 # encrypted (no AGE_RECIPIENT secret exists in Actions); treat repo access as
 # backup access. Retention is short and deliberate — this is a safety net,
 # not an archive. If artifact storage quota becomes a problem, the durable
@@ -44,6 +53,7 @@ on:
 
 permissions:
   contents: read
+  issues: write        # so a failed backup can raise one — see the last step
 
 concurrency:
   group: db-backup-production
@@ -124,64 +134,28 @@ jobs:
             exit 1
           }
 
-      - name: Verify by restoring on the runner
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get -yq install sqlite3 zstd >/dev/null 2>&1 || true
-          # Restore target: whichever of /mnt and $HOME has more room. Standard
-          # runners top out around 14 GiB free per disk (run 31297982542
-          # measured both), so a ~20 GB full-fat restore fits NOWHERE — the
-          # verifier therefore restores schema + ALL data but cuts the stream
-          # at the dump's `-- section:post-data-ddl` marker, skipping index/
-          # trigger/view EXECUTION (~half the on-disk bulk; the DDL stays in
-          # the artifact for real restores). journal_mode=OFF (throwaway
-          # target, re-run not rolled back) keeps peak ≈ final size. Every
-          # table still loads completely and count-verifies; integrity_check
-          # still walks real btrees. The cut stream ends before the dump's own
-          # COMMIT, and an open transaction at sqlite3 exit ROLLS BACK — the
-          # appended COMMIT is what makes the load stick.
-          for d in /mnt "$HOME"; do echo "  $d: $(df -BG --output=avail "$d" | tail -1 | tr -dc 0-9)G free"; done
-          RESTORE_DIR="$([ "$(df -B1 --output=avail /mnt | tail -1 | tr -dc 0-9)" -ge "$(df -B1 --output=avail "$HOME" | tail -1 | tr -dc 0-9)" ] && echo /mnt || echo "$HOME")/restore"
-          AVAIL_B="$(df -B1 --output=avail "$(dirname "$RESTORE_DIR")" | tail -1 | tr -dc 0-9)"
-          if [ "$AVAIL_B" -lt $(( 12 * 1073741824 )) ]; then
-            echo "need >=12 GiB free for the data-only restore; best disk has $(( AVAIL_B / 1073741824 )) GiB" >&2
-            exit 1
-          fi
-          sudo mkdir -p "$RESTORE_DIR" && sudo chown "$(id -u)" "$RESTORE_DIR"
-          echo "restoring into $RESTORE_DIR (data only — post-data DDL skipped)"
-          time { zstdcat backup/data.sql.zst | awk '/^-- section:post-data-ddl$/{exit} {print}'; echo "COMMIT;"; } \
-            | sqlite3 -cmd "PRAGMA journal_mode=OFF" -cmd "PRAGMA synchronous=OFF" "$RESTORE_DIR/restore.db"
-          ln -sfn "$RESTORE_DIR/restore.db" /tmp/restore.db
-          IC="$(sqlite3 /tmp/restore.db 'PRAGMA integrity_check;')"
-          echo "integrity_check: $IC"
-          [ "$IC" = "ok" ] || { echo "integrity_check failed" >&2; exit 1; }
-          df -h /mnt "$HOME" | tail -2
-
-          zstdcat backup/data.sql.zst | tail -c 65536 > /tmp/manifest.tail
-          python3 - <<'PY'
-          import re, sqlite3
-          manifest = {}
-          tail = open("/tmp/manifest.tail", encoding="utf-8", errors="replace").read()
-          for m in re.finditer(r'^-- rowcount "((?:[^"]|"")*)" (\d+)$', tail, re.M):
-              manifest[m.group(1).replace('""', '"')] = int(m.group(2))
-          assert manifest, "no rowcount manifest found in dump tail"
-          db = sqlite3.connect("/tmp/restore.db")
-          bad = []
-          for t, expect in manifest.items():
-              got = db.execute(f'SELECT COUNT(*) FROM "{t.replace(chr(34), chr(34)*2)}"').fetchone()[0]
-              if got != expect:
-                  bad.append((t, expect, got))
-          rows = sum(manifest.values())
-          print(f"tables={len(manifest)} rows={rows} mismatches={len(bad)}")
-          for t, e, g in bad:
-              print(f"MISMATCH {t}: dumped {e} restored {g}")
-          if bad:
-              raise SystemExit(1)
-          open("/tmp/verify-summary", "w").write(f"{len(manifest)} tables, {rows} rows, all counts match")
-          PY
-
-      - name: Upload the proven backup
+      # UPLOAD BEFORE VERIFYING — deliberately, and this is the ordering that
+      # matters most in this file.
+      #
+      # It used to be the other way round: verify, and upload only what the
+      # verify proved. That reads well and it cost us every backup we had. The
+      # verify restored the WHOLE database into one file on the runner; when
+      # production outgrew ~13 GiB of runner disk (2026-08-16) the step died
+      # `database or disk is full`, the upload was skipped as a dependent step,
+      # and the perfectly good dump sitting right there was discarded. Runs
+      # 31935060179 and 32626895871 both dumped successfully and stored nothing.
+      # Retention then aged out the last good artifact and production had NO
+      # off-host backup at all for two weeks, discovered only when the box went
+      # unreachable.
+      #
+      # The dump has already proven it is COMPLETE (the `-- dump-complete`
+      # sentinel above; a cut stream never reaches here). Keeping a complete but
+      # not-yet-restore-tested copy beats keeping nothing, every time. The
+      # restore proof still runs, still gates the JOB's success, and still says
+      # exactly what it proved — so an artifact from a RED run is readable as
+      # "complete, not restore-tested", which is a real distinction an operator
+      # can act on, rather than an absence they cannot.
+      - name: Upload the backup (before verification — see comment)
         uses: actions/upload-artifact@v4
         with:
           name: db-backup-${{ github.run_id }}
@@ -189,14 +163,82 @@ jobs:
           retention-days: ${{ inputs.retention_days || 8 }}
           if-no-files-found: error
 
-      - name: Summary
+      - name: Verify by restoring — one table at a time
         shell: bash
         run: |
+          set -euo pipefail
+          sudo apt-get -yq install sqlite3 zstd >/dev/null 2>&1 || true
+          # The old verifier materialised the entire database at once and needed
+          # >=12 GiB. scripts/db-verify-stream.cjs restores each table into its
+          # OWN throwaway database, count- and integrity-checks it, and deletes
+          # it before the next begins, so the peak is the LARGEST SINGLE TABLE
+          # rather than the whole database — production can grow a long way
+          # before that binds again. Every row still passes through real SQLite.
+          for d in /mnt "$HOME"; do echo "  $d: $(df -BG --output=avail "$d" | tail -1 | tr -dc 0-9)G free"; done
+          WORK_ROOT="$([ "$(df -B1 --output=avail /mnt | tail -1 | tr -dc 0-9)" -ge "$(df -B1 --output=avail "$HOME" | tail -1 | tr -dc 0-9)" ] && echo /mnt || echo "$HOME")"
+          WORKDIR="$WORK_ROOT/verify"
+          sudo mkdir -p "$WORKDIR" && sudo chown "$(id -u)" "$WORKDIR"
+          echo "verifying table-by-table in $WORKDIR"
+          time zstdcat backup/data.sql.zst \
+            | node scripts/db-verify-stream.cjs --workdir "$WORKDIR" --summary /tmp/verify-summary
+          df -h "$WORK_ROOT" | tail -1
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          SIZE="$(du -h backup/data.sql.zst 2>/dev/null | cut -f1 || echo "?")"
           {
-            echo "## Off-host backup: restore-verified ✔"
-            echo ""
-            echo "- compressed size: $(du -h backup/data.sql.zst | cut -f1)"
-            echo "- verification: $(cat /tmp/verify-summary)"
+            if [ -s /tmp/verify-summary ]; then
+              echo "## Off-host backup: restore-verified ✔"
+              echo ""
+              echo "- verification: $(cat /tmp/verify-summary)"
+            else
+              echo "## Off-host backup: uploaded but NOT restore-verified ⚠"
+              echo ""
+              echo "- the dump is COMPLETE (the \`-- dump-complete\` sentinel passed) but the"
+              echo "  restore proof did not finish. Treat this artifact as a last resort:"
+              echo "  usable, not proven. Fix the verify step and re-run before relying on it."
+            fi
+            echo "- compressed size: $SIZE"
             echo "- restore recipe: \`zstdcat data.sql.zst | sqlite3 data.db\`, then place as \$DATA_DIR/data.db"
             echo "- unencrypted, repo-private artifact — repo access IS backup access"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # THE DEFECT THAT MADE A CAPACITY PROBLEM A TWO-WEEK OUTAGE OF BACKUPS:
+      # nothing told anyone. Two red scheduled runs sat unnoticed from 2026-08-16
+      # until production went down on 08-26 and someone went looking. A backup
+      # nobody is told about failing is not a backup.
+      - name: Raise an issue if the backup failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          TITLE="Off-host DB backup failed ($(date -u +%Y-%m-%d))"
+          # One open issue at a time — a weekly cron must not open a new one every
+          # week for the same unfixed cause.
+          EXISTING="$(gh issue list --state open --label backup-failure --limit 1 --json number -q '.[0].number' 2>/dev/null || true)"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Failed again: $RUN_URL" || true
+            exit 0
+          fi
+          gh label create backup-failure --description "Off-host DB backup workflow failed" --color B60205 2>/dev/null || true
+          gh issue create --title "$TITLE" --label backup-failure --body \
+            "The off-host production DB backup failed.
+
+          Run: $RUN_URL
+
+          Check in this order:
+          1. Did the **dump** step succeed? If yes an artifact was still uploaded on
+             that run — it is complete but not restore-tested, and is usable in an
+             emergency.
+          2. Did the **verify** step run out of disk? The verifier restores one table
+             at a time, so this means a SINGLE table now exceeds the runner disk.
+          3. Was it SSH/host? Then no artifact exists for this run and production has
+             no fresh off-host copy.
+
+          Production has no other backup path: the box cannot stage one itself." || true
