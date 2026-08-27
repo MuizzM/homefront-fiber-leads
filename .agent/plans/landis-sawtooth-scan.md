@@ -202,3 +202,50 @@ in the deployed image before its workflow can run.
   Landis**: E911 puts 6 Kannapolis and 4 China Grove addresses in it, and 2 real
   doors on N Chapel St got mislabelled. The city now comes from E911 per
   address; a door E911 does not know keeps the city it has.
+
+
+## PRODUCTION RESULT (2026-08-27 06:12-06:21 UTC)
+
+Chain completed unattended, in the order the operator chose (backup, deploy, data).
+
+| step | outcome |
+| --- | --- |
+| Off-host backup | **success** - 713 MB artifact, 30d retention. 254 tables, 21,869,535 rows, all `integrity=ok`. Peak verify disk 3.4 GiB (was >13 GiB and failing). FIRST verified backup since 2026-08-09. |
+| Deploy `29482ae` | **success**. Portal 200 in 158 ms, `db:up`. Carries #185, #186 and 24 previously-undeployed commits. |
+| `bridge --apply` | Rowan E911 imported (75,349 points). Landis **8 -> 2,063 doors**. 1,896 new; the rest attached via the city-alias twin guard. |
+| `mint --apply` | 3 leads (only 3 sellable doors lacked one). Landis leads 2 -> 5. |
+
+**The E911-city fix paid for itself immediately:** 16 prod rows were sent to a city
+OTHER than Landis because E911 said so. The blanket ZIP rule this replaced would
+have mislabelled every one of them. A further 17 rows had no E911 counterpart and
+were left exactly as found rather than guessed at.
+
+Also on prod: 181 address rows rewritten (city + suffix + canonical_key together),
+10 stale canonical_keys re-derived, 2 duplicate doors reported and left alone.
+
+### Unintended side effect, worth knowing
+
+`fillStreetKeys()` filled `street_key` on **1,375,602 rows**, not just Landis's. It
+selects every NULL in the tenant. Harmless and beneficial - it is what
+`streetKeyJanitorChunk` does - but at a scale I did not anticipate, in one pass, on
+production.
+
+The reason so many were NULL: prod sets `YIELD_ROLLUPS: "off"`, which returns before
+that janitor's timer is created, so it has never run there. The neighbourhood sweep
+is defensive about it (`COALESCE(NULLIF(street_key,''), sweep_street_key(address))`),
+so nothing was BROKEN - but wrapping the column in an expression means
+`idx_scan_targets_street` could not be used, so the sweep's highest-yield street
+tier was doing a full scan plus a per-row function call. That is now fixed for the
+whole table as a side effect. See [[prod-flags-that-silently-disable]].
+
+### What is NOT done
+
+**1,966 of the 2,063 Landis doors are unanswered.** No paid scan was run on prod
+deliberately: prod sets `DECODO_LANES=1` / `DECODO_CHECKS_PER_IP=20` with compose
+comments stating Kinetic throttles and those numbers are authoritative, and
+overriding tuned spend settings from a one-off script, unattended, is not a good
+trade. `NEIGHBORHOOD_SWEEP` is ON for NC (10 min, 6,000/cycle) and its
+street-completion and cell-flood tiers both target exactly these doors, so they
+should be picked up on the normal schedule. Verify by re-running
+`import-landis.yml phase=mint` as a DRY RUN and watching `answered` climb; mint again
+when it does.
