@@ -1,0 +1,190 @@
+name: Import Landis inventory (production)
+
+# Put Landis, NC's real door inventory into production, with addresses Kinetic
+# will actually match. See script/import-landis.ts for the full reasoning; the
+# short version:
+#
+#   · Landis carried THREE mapped doors. Rowan County E911 lists 2,193.
+#   · The subdivision the field reported newly lit ("the Oaks" — Sawtooth Oak
+#     Dr, English Oak Ln, Georgia Oak Ln, Landis Oak Way, Sawtooth Ct, Overcup/
+#     Pin Oak/Sandhill Oak Ct) held 53 of its 206 doors, all under the WRONG
+#     postal city.
+#   · Two address defects made even those unaskable, and both looked like
+#     "no fiber" in the logs rather than like our own bug: E911's full street
+#     suffix ("Drive" where Kinetic matches "Dr"), and a stale postal city that
+#     fails scanner.ts's echoed-identity gate. Fixing the strings took the Oaks
+#     from 0 answers to 206/206, every door fiber-qualified.
+#
+# Same rails as import-fcc-pins.yml / reset-areas.yml: the production SSH key
+# exists only as a repository secret, so Actions is the only thing that can
+# reach the box, and the importer runs from the RUNNING image via `compose run`
+# on the live /data volume — never `exec` into the serving container.
+#
+# THIS WORKFLOW NEVER BUYS A SCAN. `bridge` writes inventory and address
+# corrections; `mint` turns verdicts that ALREADY EXIST into leads. Scanning
+# those doors is a separate, separately-gated decision.
+#
+# DRY RUN IS THE DEFAULT. `apply: true` additionally requires retyping the org
+# id into `confirm`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: "Organization id to import into (prod org is 1)"
+        required: true
+        type: string
+      phase:
+        description: "bridge = inventory + address repair | mint = leads from existing verdicts"
+        required: true
+        default: bridge
+        type: choice
+        options: [bridge, mint]
+      apply:
+        description: "WRITE. Leave unchecked for a dry run that changes nothing."
+        required: false
+        default: false
+        type: boolean
+      confirm:
+        description: "Required when apply is checked: retype the tenant id exactly"
+        required: false
+        type: string
+      include_competitor_fiber:
+        description: "mint only. Also mint doors where a rival FIBER provider is present (the projector withholds these, and will retract any that carry a flip stamp)."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-landis-production
+  cancel-in-progress: false
+
+jobs:
+  import:
+    name: ${{ inputs.apply && 'APPLY' || 'Dry run' }} — Landis ${{ inputs.phase }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Validate inputs
+        env:
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+          CONFIRM: ${{ inputs.confirm }}
+          PHASE: ${{ inputs.phase }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Whitelist, not sanitize: this string is interpolated into a remote
+          # shell command, so anything but a bare id is refused outright.
+          if [[ ! "$TENANT" =~ ^[0-9]+$ ]]; then
+            echo "tenant must be a positive integer (got: $TENANT)" >&2
+            exit 1
+          fi
+          if [[ ! "$PHASE" =~ ^(bridge|mint)$ ]]; then
+            echo "phase must be bridge or mint (got: $PHASE)" >&2
+            exit 1
+          fi
+          if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "$TENANT" ]; then
+            echo "Refusing to write: 'confirm' must exactly match 'tenant' ($TENANT)." >&2
+            echo "Re-run with confirm=$TENANT, or leave 'apply' unchecked for a dry run." >&2
+            exit 1
+          fi
+          echo "tenant=$TENANT  phase=$PHASE  apply=$APPLY  include_competitor_fiber=${{ inputs.include_competitor_fiber }}"
+
+      - name: Run the importer on the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TENANT: ${{ inputs.tenant }}
+          APPLY: ${{ inputs.apply }}
+          PHASE: ${{ inputs.phase }}
+          RIVALS: ${{ inputs.include_competitor_fiber }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh -i "$HOME/.ssh/id_ed25519" \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=60 \
+              -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              bash -s -- "$TENANT" "$APPLY" "$PHASE" "$RIVALS" <<'REMOTE'
+          set -euo pipefail
+          TENANT="$1"; APPLY="$2"; PHASE="$3"; RIVALS="$4"
+          [[ "$TENANT" =~ ^[0-9]+$ ]]
+          [[ "$APPLY" =~ ^(true|false)$ ]]
+          [[ "$PHASE" =~ ^(bridge|mint)$ ]]
+
+          cd /srv/homefront
+
+          # The image tag the LIVE release is running — deploy.sh records it in
+          # .deployed-tag. Reused rather than rebuilt, so this runs the exact
+          # code serving traffic.
+          TAG="$(cat .deployed-tag 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            RUNNING="$(docker ps --filter 'ancestor=homefront-app' --format '{{.Image}}' | head -n1)"
+            TAG="${RUNNING##*:}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Could not determine the running image tag — refusing to guess" >&2
+            exit 1
+          fi
+          echo "running against image homefront-app:$TAG"
+
+          # Both compose runs get </dev/null: this script IS the remote bash's
+          # stdin, and `compose run` keeps stdin open by default — without the
+          # redirect the existence check swallows the rest of the heredoc and
+          # the importer silently never runs (bash reads EOF, exits 0).
+          if ! APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+              run --rm --no-deps --entrypoint sh app -c 'test -f dist/import-landis.cjs' </dev/null; then
+            echo "dist/import-landis.cjs is not in the running image — deploy a build containing it first (deploy.yml on a commit that has it)." >&2
+            exit 1
+          fi
+
+          ARGS=(--tenant "$TENANT" --phase "$PHASE")
+          [ "$APPLY" = "true" ] && ARGS+=(--apply)
+          [ "$PHASE" = "mint" ] && [ "$RIVALS" = "true" ] && ARGS+=(--include-competitor-fiber)
+
+          # `compose run` on the same volume, never `exec` into the live
+          # container — the app keeps serving and this cannot disturb it.
+          APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+            run --rm --no-deps --entrypoint node app \
+            dist/import-landis.cjs "${ARGS[@]}" </dev/null
+          REMOTE
+
+      - name: What to do next
+        if: success()
+        shell: bash
+        run: |
+          if [ "${{ inputs.apply }}" != "true" ]; then
+            echo "::notice::Dry run only — nothing was written. Re-run with apply checked and confirm set to the tenant id to commit."
+          elif [ "${{ inputs.phase }}" = "bridge" ]; then
+            echo "::notice::Inventory and address corrections applied. Those doors are mapped but NOT yet asked — scanning them is a separate, paid decision. Once they carry verdicts, run this workflow again with phase=mint."
+          else
+            echo "::notice::Leads minted from existing verdicts. They are live on the field map now."
+          fi

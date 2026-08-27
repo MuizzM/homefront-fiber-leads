@@ -68,7 +68,7 @@ async function buildAll() {
   // wal-maintenance is not an operator script - it is a long-lived sidecar the
   // server forks at boot (server/walMaintenance.ts). It is built here for the
   // same reason: dist/ is all that ships, so the entry must exist there.
-  for (const entry of ["reset-areas", "import-fcc-pins", "import-scan-verdicts", "load-kinetic-2026", "wal-maintenance"]) {
+  for (const entry of ["reset-areas", "import-fcc-pins", "import-scan-verdicts", "load-kinetic-2026", "wal-maintenance", "import-landis"]) {
     await esbuild({
       entryPoints: [`script/${entry}.ts`],
       platform: "node",
