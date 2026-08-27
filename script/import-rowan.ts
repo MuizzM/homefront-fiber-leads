@@ -119,23 +119,30 @@
 //
 // 6,793 of the 75,349 E911 points carry a ", UNIT x" / ", BUILDING y" clause,
 // and they sit on only 1,342 premises - one Salisbury complex has 240 units at
-// 2715 Statesville Boulevard. streetKeyOf CUTS the address at the first unit
-// token rather than retaining it, so every unit at a premise shares a
-// street_key AND a house number; the alias-twin guard then matches on
-// coordinates within ~25 m and absorbs one unit into another. Reproduced on a
-// pristine DATA_DIR on 2026-08-27:
+// 2715 Statesville Boulevard.
+//
+// THE BLOCKER IS FIXED (2026-08-27). streetKeyOf CUTS the address at the first
+// unit token rather than retaining it, so every unit at a premise shares a
+// street_key AND a house number; the alias-twin guard matched on those plus
+// coordinates within ~25 m and absorbed one unit into another. Reproduced on a
+// pristine DATA_DIR that morning:
 //
 //     "2715 Statesville Blvd Unit 101" (35.6700,  -80.5200)  -> 1 new row
 //     "2715 Statesville Blvd Unit 102" (35.6700,  -80.5200)  -> 0 new rows
 //     "2715 Statesville Blvd Unit 240" (35.67015, -80.52015) -> 0 new rows
 //     "2717 Statesville Blvd"          (35.6700,  -80.5200)  -> 1 new row
 //
-// storage.upsertScanTargets says of that guard "distinct units differ in
-// street_key's retained unit token and never merge". They do not. Importing
-// units through it yields a partial, coordinate-ordered, order-dependent
-// inventory that READS as complete, which is worse than not importing them, so
-// they are excluded and counted. --include-units opts in once the guard is
-// fixed.
+// The guard now confirms the FULL canonical address (house + street + unit),
+// not just street_key + house number + a rooftop box, so each of those rows is
+// its own door. See server/storage.ts, server/scanTargetCanonicalMerge.ts and
+// .agent/plans/unit-aware-premise-twin.md; the flip is pinned by
+// tests/integration/rowanBridge.test.ts ("distinct UNITS at one premise each
+// get their own row").
+//
+// --include-units REMAINS OPT-IN. The correctness reason for excluding them is
+// gone; what is left is a scope-and-spend decision - 6,793 more scan targets is
+// 6,793 more doors the nightly re-probes - and that belongs to whoever runs the
+// import, not to a default. Pass --include-units when that call is made.
 //
 // ── USAGE - dry run is the default, nothing is written without --apply ──────
 //
@@ -545,7 +552,7 @@ function plan(cities: string[]): void {
   line(`${"TOTAL".padEnd(16)} ${String(tE).padStart(5)} ${String(tU).padStart(7)} ${String(tR).padStart(7)} ${String(tP).padStart(10)} ${String(tH).padStart(9)} ${String(tN).padStart(9)} ${String(tW).padStart(11)}`);
   line("");
   line(`E911      addressable doors the county says exist`);
-  line(`units     of those, ", Unit x" doors - ${INCLUDE_UNITS ? "INCLUDED by --include-units" : "held back; the alias-twin guard merges them (see header)"}`);
+  line(`units     of those, ", Unit x" doors - ${INCLUDE_UNITS ? "INCLUDED by --include-units" : "held back by default; pass --include-units to import them (see header)"}`);
   line(`route     importable doors whose spelled-out route name is folded`);
   line(`unproven  of those, folded to a spelling no provider call has ever confirmed`);
   line(`held      rows already in scan_targets under this city label`);

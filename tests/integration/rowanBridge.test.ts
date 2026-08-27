@@ -171,18 +171,18 @@ describe("the dedup guards the bridge leans on", () => {
     expect(added).toBe(0);
   });
 
-  it("distinct UNITS at one premise are ABSORBED once street_key is populated", () => {
-    // Documented, not desired. storage.upsertScanTargets says of the alias-twin
-    // guard "distinct units differ in street_key's retained unit token and never
-    // merge", but streetKeyOf CUTS the address at the first unit token rather
-    // than retaining it - so every unit at a premise shares a street_key and a
-    // house number, and the ~25m coordinate window does the rest.
+  it("distinct UNITS at one premise each get their own row, with street_key populated", () => {
+    // THIS TEST FLIPPED (2026-08-27). It used to pin the opposite - "units are
+    // ABSORBED" - and said in this comment that it was the test to flip when the
+    // guard was fixed. It has been: the alias-twin guard now confirms the full
+    // canonical address (house + street + UNIT), not just street_key + house
+    // number + a ~25m box. See server/storage.ts and
+    // .agent/plans/unit-aware-premise-twin.md.
     //
-    // tests/integration/anti-miss-controls.test.ts asserts the opposite and
-    // passes only because street_key is still NULL on its first row, where the
-    // guard cannot match. The bridge fills street_key as it writes, so it gets
-    // this behavior - which is why it holds Rowan's 6,793 unit doors back.
-    // When the guard is fixed, this test is the one that has to flip.
+    // streetKeyOf still CUTS the address at the first unit token, which is why
+    // the guard needed a second check rather than a different street key - that
+    // is the property this line pins, and it is what made the old behavior
+    // inevitable.
     expect(addressKey.streetKeyOf("2715 Statesville Blvd Unit 101"))
       .toBe(addressKey.streetKeyOf("2715 Statesville Blvd Unit 102"));
 
@@ -193,13 +193,25 @@ describe("the dedup guards the bridge leans on", () => {
     rawDb.prepare(`UPDATE scan_targets SET street_key=? WHERE address LIKE '2715 Statesville%' AND street_key IS NULL`)
       .run(addressKey.streetKeyOf("2715 Statesville Blvd Unit 101"));
 
+    // Same building, same rooftop, street_key filled - the shape that used to
+    // absorb. Rowan holds 6,793 of these on 1,342 premises; this one complex
+    // has 240 units at a single address.
     const added = storage.upsertScanTargets([{
       address: "2715 Statesville Blvd Unit 102", city: "Salisbury", state: "NC", zip: "28147",
       lat: 35.6700, lng: -80.5200, tenantId: TENANT, source: "e911-nc-onemap",
     }] as any);
-    expect(added).toBe(0);
+    expect(added).toBe(1);
+    rawDb.prepare(`UPDATE scan_targets SET street_key=? WHERE address LIKE '2715 Statesville%' AND street_key IS NULL`)
+      .run(addressKey.streetKeyOf("2715 Statesville Blvd Unit 102"));
+
+    // A rooftop-width away, still inside the ~25m box, still its own door.
+    expect(storage.upsertScanTargets([{
+      address: "2715 Statesville Blvd Unit 240", city: "Salisbury", state: "NC", zip: "28147",
+      lat: 35.67015, lng: -80.52015, tenantId: TENANT, source: "e911-nc-onemap",
+    }] as any)).toBe(1);
+
     const rows = rawDb.prepare(`SELECT address FROM scan_targets WHERE address LIKE '2715 Statesville%'`).all();
-    expect(rows.length).toBe(1);
+    expect(rows.length).toBe(3);
   });
 
   it("genuine neighbours on the same street are never absorbed", () => {
