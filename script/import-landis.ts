@@ -64,7 +64,7 @@
 
 import { storage, runMigrations } from "../server/storage";
 import { rawDb } from "../server/db";
-import { canonicalAddressPart, streetKeyOf } from "@shared/addressKey";
+import { canonicalAddressPart, streetKeyOf, normalizeKineticAddressKey } from "@shared/addressKey";
 import { ensureAddressPointSchema } from "../server/addressPointStore";
 import { importCountyAddressPoints } from "../server/addressPointImport";
 
@@ -186,6 +186,26 @@ function countTargets(): number {
   ).get(TENANT, CITY, STATE) as any).n;
 }
 
+/** Re-derive any canonical_key left behind by an earlier relabel. */
+function repairStaleKeys(): void {
+  const fixes = staleKeyRows();
+  if (!fixes.length) return;
+  const k = rawDb.prepare(`UPDATE scan_targets SET canonical_key=? WHERE id=?`);
+  rawDb.transaction((batch: typeof fixes) => {
+    for (const r of batch) k.run(normalizeKineticAddressKey(r.address, r.city, STATE, ZIP), r.id);
+  }).immediate(fixes);
+  line(`  re-derived ${fixes.length} stale canonical_key(s) left by an earlier relabel`);
+}
+
+/** ZIP-28088 rows whose stored canonical_key no longer matches address|city|state. */
+function staleKeyRows(): Array<{ id: number; address: string; city: string }> {
+  const rows = rawDb.prepare(
+    `SELECT id, address, city, canonical_key AS key FROM scan_targets
+      WHERE tenant_id=? AND zip=? AND state=? AND canonical_key IS NOT NULL`,
+  ).all(TENANT, ZIP, STATE) as Array<{ id: number; address: string; city: string; key: string }>;
+  return rows.filter((r) => r.key !== normalizeKineticAddressKey(r.address, r.city, STATE, ZIP));
+}
+
 /** Fix the postal city and the street suffix on every ZIP-28088 door. */
 function repair() {
   const rows = rawDb.prepare(
@@ -225,17 +245,36 @@ function repair() {
     plan.push({ id: r.id, address: newAddr, city: newCity });
   }
 
+  // Computed in JS, never in SQL: the canonical key folds street suffixes,
+  // directionals and unit designators, so a SQL string concat would flag most
+  // healthy rows as stale.
+  const staleKeys = staleKeyRows().length;
   line(`address repair: ${plan.length} rows to rewrite (city label and/or street suffix)`);
+  if (staleKeys) line(`  ${staleKeys} row(s) carry a canonical_key that no longer matches their address/city — re-derived on apply`);
   if (keyMoved) line(`  ${keyMoved} skipped — the canonical key would have moved`);
   if (dupes.length) {
     line(`  ${dupes.length} duplicate door(s) left untouched (merging is a separate decision):`);
     for (const d of dupes.slice(0, 10)) line(`     #${d.id} "${d.from}"  ==  "${d.onto}"`);
   }
-  if (!APPLY || !plan.length) return;
+  if (!APPLY) return;
+  // NOTE the guard is on APPLY alone. Gating the whole block on `plan.length`
+  // too — as a first draft did — silently skips the stale-key repair below
+  // whenever the addresses are already correct, which is exactly the state a
+  // re-run is in.
+  if (!plan.length) { repairStaleKeys(); return; }
 
-  const upd = rawDb.prepare(`UPDATE scan_targets SET address=?, city=? WHERE id=?`);
-  rawDb.transaction((batch: typeof plan) => { for (const p of batch) upd.run(p.address, p.city, p.id); }).immediate(plan);
-  line(`  rewrote ${plan.length}`);
+  // canonical_key MUST move with the city. It is `addr|city|state`, and it is
+  // what upsertScanTargets' canonical-twin guard and the projector's lead
+  // matching both key on. Leaving it saying CHINA GROVE on a row now labelled
+  // Landis leaves the twin guard relying on its coordinate fallback, and a row
+  // with no coordinates would then duplicate.
+  const upd = rawDb.prepare(`UPDATE scan_targets SET address=?, city=?, canonical_key=? WHERE id=?`);
+  rawDb.transaction((batch: typeof plan) => {
+    for (const p of batch) upd.run(p.address, p.city, normalizeKineticAddressKey(p.address, p.city, STATE, ZIP), p.id);
+  }).immediate(plan);
+  line(`  rewrote ${plan.length} (address, city and canonical_key together)`);
+
+  repairStaleKeys();
 }
 
 // ── phase: mint ────────────────────────────────────────────────────────────
