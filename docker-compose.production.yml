@@ -289,7 +289,10 @@ services:
       # "one random door at a time" scatter. Kill-switch: "off" (no redeploy of
       # code needed). Knobs below are the documented defaults, listed so the
       # next person can see them. See docs/SCAN_OPERATIONS.md, "Neighborhood sweep".
-      NEIGHBORHOOD_SWEEP: "on"
+      # 2026-08-27 STOP (operator: "stop all scans in prod"). This is a PAID
+      # Kinetic producer on a 10-minute timer, and the 2026-08-09 portal-first
+      # stop predates it, so it was never in that inventory. Off with the rest.
+      NEIGHBORHOOD_SWEEP: "off"
       NEIGHBORHOOD_SWEEP_STATE: "NC"
       NEIGHBORHOOD_SWEEP_INTERVAL_MIN: "10"
       NEIGHBORHOOD_SWEEP_FLOOR: "600"
@@ -626,8 +629,24 @@ services:
       # flip-window sweep 2-14 days after first sighting.
       # Measured the same day on a live cluster near Landis: 28 of 43 doors that
       # read no_service five weeks earlier now have fiber. Nothing was watching.
-      COMING_SOON_PROGRAM: "on"
-      COMING_SOON_WATCHLIST: "on"
+      # 2026-08-27 STOP (operator: "stop all scans in prod"). Production served
+      # nothing in ~5-minute cycles all evening. The read-only perf report over
+      # 20:00-20:05 put these two at the top by a wide margin:
+      #   724251ms  614 calls  p95 1296ms  SELECT COUNT(*) FROM scan_targets
+      #                                    WHERE tenant_id=? AND first_seen_fiber_at
+      #                                    >= ... AND lat BETWEEN ? AND ? AND lng ...
+      #    39481ms    1 call   JOIN ... ON lower(t.address)=lower(w.address)
+      #    23833ms    1 call   NOT EXISTS ( ... lower(...) ... )
+      # countNearbyFresh (server/comingSoonProgram.ts) runs that COUNT once per
+      # watched door with no index on first_seen_fiber_at, and the two lower()
+      # joins cannot use an index at all. Everything else then timed out at the
+      # 120s busy limit - including `update sessions set expires_at`, which runs
+      # on EVERY authenticated request, which is why nothing loaded.
+      # Turn back on only with an index behind countNearbyFresh and the lower()
+      # joins rewritten; re-enable ONE producer at a time watching /api/health
+      # p95 and perf.loop_lag for a full cycle.
+      COMING_SOON_PROGRAM: "off"
+      COMING_SOON_WATCHLIST: "off"
       DAILY_MARKET_REFRESH: "off"
       NEWBUILD_RADAR: "off"
       # CLUSTER EXPANSION — ON (operator, 2026-07-21: "if we found new builds
