@@ -214,6 +214,23 @@ describe("the dedup guards the bridge leans on", () => {
     expect(rows.length).toBe(3);
   });
 
+  it("the SAME unit spelled two ways still attaches, not duplicates", () => {
+    // The other half of the contract the test above pins, and the one a future
+    // change could quietly break: making units DISTINCT must not cost the
+    // spelling fold. addressKey v4 folds every designator to UNIT, so
+    // "Unit 101", "Apt 101", "Ste 101" and "#101" are one premise-unit - E911
+    // ships more than one of those shapes. A guard that matched the literal
+    // designator token instead of the canonical address would pass the test
+    // above and mint a second row here.
+    const added = storage.upsertScanTargets([{
+      address: "2715 Statesville Blvd #101", city: "Salisbury", state: "NC", zip: "28147",
+      lat: 35.6700, lng: -80.5200, tenantId: TENANT, source: "e911-nc-onemap",
+    }] as any);
+    expect(added).toBe(0);
+    const rows = rawDb.prepare(`SELECT address FROM scan_targets WHERE address LIKE '2715 Statesville%'`).all();
+    expect(rows.length).toBe(3); // 101, 102, 240 - unchanged
+  });
+
   it("genuine neighbours on the same street are never absorbed", () => {
     storage.upsertScanTargets([{
       address: "2717 Statesville Blvd", city: "Salisbury", state: "NC", zip: "28147",
