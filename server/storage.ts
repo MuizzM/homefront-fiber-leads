@@ -69,6 +69,14 @@ import {
   type LegacyCommissionStatus,
 } from "@shared/legacyCommissionLifecycle";
 
+// Ceiling on the rows upsertScanTargets' postal-city alias guard pulls back for
+// its exact same-door check. That SQL narrows to ONE street + ONE house number
+// + ONE ~25m box, so a real candidate set is "the units of this building" — 240
+// at the largest premise measured. The cap only bounds a pathological set, and
+// truncating degrades the guard to an INSERT (a duplicate row, recoverable),
+// never to a wrong merge (a door deleted, not recoverable).
+const ALIAS_TWIN_CANDIDATE_CAP = 512;
+
 // Legacy scanner columns that exist in SQLite but predate the drizzle schema —
 // upsertLeadByAddress still persists them when a scanner payload carries them.
 type LegacyScanFields = { maxDownload?: number | null; isNewDeployment?: boolean | null };
@@ -5533,18 +5541,28 @@ export class Storage implements IStorage {
     // POSTAL-CITY ALIAS twin (the Stonewyck Salisbury/Lexington split): the
     // SAME premise geocoded under two postal cities has two canonical keys
     // (city is in the key), so the guard above misses it and spend/coverage
-    // split. Identity-first-geo-second: same normalized street (street_key) +
-    // same state + same leading house number + coordinates within ~25m. Never
-    // rounded-coordinate-only — genuine neighbors survive; distinct units
-    // differ in street_key's retained unit token and never merge.
+    // split. Identity-first-geo-second — the SQL below narrows by street_key +
+    // state + leading house token + a ~25m box (index-backed, never
+    // rounded-coordinate-only, so genuine neighbors survive), and the JS check
+    // that follows confirms the FULL canonical address matches.
+    //
+    // That second step is load-bearing and was missing until 2026-08-27. This
+    // comment used to claim "distinct units differ in street_key's retained
+    // unit token and never merge"; streetKeyOf CUTS the address at the first
+    // unit token instead of retaining it, so every unit of a building shares a
+    // street_key AND a house number AND (being one building) a rooftop. Every
+    // door but the first was silently absorbed — 6,793 of Rowan County's E911
+    // doors, and one Salisbury complex with 240 units at a single address.
+    // street_key answers "which street"; only the whole canonical address
+    // answers "which door".
     const cityAliasTwinStmt = rawDb.prepare(
-      `SELECT id FROM scan_targets
+      `SELECT id, address FROM scan_targets
         WHERE tenant_id IS @tenantId AND street_key = @streetKey
           AND upper(trim(state)) = upper(trim(@state))
           AND (address = @houseNum OR address LIKE @houseNum || ' %')
           AND lat BETWEEN @lat - 0.00023 AND @lat + 0.00023
           AND lng BETWEEN @lng - 0.00028 AND @lng + 0.00028
-        LIMIT 1`,
+        LIMIT ${ALIAS_TWIN_CANDIDATE_CAP}`,
     );
     const enrichByIdStmt = rawDb.prepare(
       `UPDATE scan_targets SET
@@ -5598,13 +5616,20 @@ export class Storage implements IStorage {
           const houseNum = r.address.trim().split(/\s+/)[0] ?? "";
           if (/^\d+[A-Za-z]?$/.test(houseNum) && r.lat != null && r.lng != null) {
             try {
-              const aliasTwin = cityAliasTwinStmt.get({
+              const candidates = cityAliasTwinStmt.all({
                 tenantId: r.tenantId ?? null,
                 streetKey: streetKeyOf(r.address),
                 state: r.state ?? "NC",
                 houseNum,
                 lat: r.lat, lng: r.lng,
-              }) as { id: number } | undefined;
+              }) as Array<{ id: number; address: string | null }>;
+              // SQL found "this street, this house number, this rooftop"; this
+              // finds THIS DOOR. streetPart is canonicalAddressPart(r.address),
+              // i.e. house + street + unit, so "…Unit 101" can only attach to
+              // "…Unit 101" (however it was spelled — Apt/Ste/# all fold), and
+              // never to "…Unit 102" or to the unit-less building row.
+              const aliasTwin = candidates.find(
+                (c) => canonicalAddressPart(c.address ?? "") === streetPart);
               if (aliasTwin) {
                 if (r.dfAddressId || r.zip) {
                   enrichByIdStmt.run({ id: aliasTwin.id, df: r.dfAddressId ?? null, lat: null, lng: null, zip: r.zip ?? "" });

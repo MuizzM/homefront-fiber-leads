@@ -181,6 +181,56 @@ export function kineticLeadKeyOrNull(address: string, city: string, state: strin
 // ── Street identity (moved from server/freshHarvest — pure, dependency-free) ──
 const STREET_DIRECTIONALS = new Set(["N", "S", "E", "W"]);
 const STREET_UNIT_TOKENS = new Set(["APT", "UNIT", "STE", "SUITE", "LOT", "TRLR", "BLDG", "FL", "RM", "BSMT", "DEPT", "OFC"]);
+/** An address split at the two boundaries streetKeyOf cuts on. The three
+ *  parts concatenate back to canonicalAddressPart(address) token for token,
+ *  so comparing all three is exactly "the same premise-unit", while comparing
+ *  `street` alone is "somewhere on this street". */
+export interface AddressIdentity {
+  /** Leading house-number tokens, including the unit letter of "123-A Main St"
+   *  ("123 A") and both halves of a range or fraction ("123 125", "123 1 2"). */
+  house: string;
+  /** Street name with house and unit removed — the value scan_targets.street_key
+   *  stores. Empty when no street name survives. */
+  street: string;
+  /** Unit clause in canonical form ("UNIT 101"); "" when the address names no
+   *  unit. Every designator already folded to the one UNIT token upstream, so
+   *  "Apt 4", "Unit 4" and "#4" all yield "UNIT 4". */
+  unit: string;
+}
+
+/**
+ * Decompose an address into house / street / unit in canonical token form.
+ *
+ * streetKeyOf CUTS the unit clause off rather than retaining it, so a street
+ * key alone cannot tell two doors of one building apart. Anything deciding
+ * whether two records are the SAME DOOR must compare `unit` (and `house` —
+ * "313-A" and "313-B" share a street key too) and not only `street`. Both
+ * scan-target twin guards learned that the hard way: see
+ * server/storage.ts (upsertScanTargets) and server/scanTargetCanonicalMerge.ts.
+ */
+export function addressIdentityOf(address: string | null | undefined): AddressIdentity {
+  if (!address) return { house: "", street: "", unit: "" };
+  const tokens = canonicalAddressPart(String(address)).split(" ").filter(Boolean);
+  let start = 0;
+  // House number: "123", "123A", and split forms like "123 125" (ranges) or
+  // "123 1 2" (fractions — "/" folds to a space in canonical form).
+  while (start < tokens.length && /^\d+[A-Z]?$/.test(tokens[start])) start++;
+  // "123-A Main St" canonicalizes to "123 A MAIN ST" — the orphaned unit
+  // letter belongs to the HOUSE, not the street, but never a directional
+  // ("101 N Main St" keeps its N on the street side).
+  if (start > 0 && start < tokens.length - 1
+      && tokens[start].length === 1 && !STREET_DIRECTIONALS.has(tokens[start])) start++;
+  let end = tokens.length;
+  for (let i = start; i < tokens.length; i++) {
+    if (tokens[i].startsWith("#") || STREET_UNIT_TOKENS.has(tokens[i])) { end = i; break; }
+  }
+  return {
+    house: tokens.slice(0, start).join(" "),
+    street: tokens.slice(start, end).join(" "),
+    unit: tokens.slice(end).join(" "),
+  };
+}
+
 /**
  * Canonical street key: house number and unit stripped, suffix/directional
  * synonyms folded (via canonicalAddressPart), so "22 Fiber Street Apt 4",
@@ -188,21 +238,10 @@ const STREET_UNIT_TOKENS = new Set(["APT", "UNIT", "STE", "SUITE", "LOT", "TRLR"
  * leading house number (brand-new streets a geocoder hasn't numbered yet)
  * keep their full name instead of losing their first word. Empty string when
  * no street name survives.
+ *
+ * STREET identity only. Two doors of one building share it — use
+ * addressIdentityOf when the question is whether two records are one door.
  */
 export function streetKeyOf(address: string | null | undefined): string {
-  if (!address) return "";
-  const tokens = canonicalAddressPart(String(address)).split(" ").filter(Boolean);
-  let start = 0;
-  // House number: "123", "123A", and split forms like "123 125" (ranges) or
-  // "123 1 2" (fractions — "/" folds to a space in canonical form).
-  while (start < tokens.length && /^\d+[A-Z]?$/.test(tokens[start])) start++;
-  // "123-A Main St" canonicalizes to "123 A MAIN ST" — drop the orphaned unit
-  // letter, but never a directional ("101 N Main St" keeps its N).
-  if (start > 0 && start < tokens.length - 1
-      && tokens[start].length === 1 && !STREET_DIRECTIONALS.has(tokens[start])) start++;
-  let end = tokens.length;
-  for (let i = start; i < tokens.length; i++) {
-    if (tokens[i].startsWith("#") || STREET_UNIT_TOKENS.has(tokens[i])) { end = i; break; }
-  }
-  return tokens.slice(start, end).join(" ");
+  return addressIdentityOf(address).street;
 }
