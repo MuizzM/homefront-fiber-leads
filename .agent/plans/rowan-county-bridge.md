@@ -99,6 +99,11 @@ Relevant files:
   101's row. Proven, not inferred — see Discoveries. Importing them would
   produce a partial, coordinate-ordered, non-deterministic inventory that reads
   as complete. `--include-units` opts in once the guard is fixed.
+  **UPDATE 2026-08-27: the guard is fixed** (PR #191,
+  `.agent/plans/unit-aware-premise-twin.md`) - it now confirms the full
+  canonical address, so units no longer absorb. `--include-units` stays opt-in,
+  but the reason is now scope and spend (6,793 more doors on the nightly
+  re-probe), not correctness.
 - **The canonical_key backfill is scoped to the cities being written**, not the
   whole tenant. The canonical-twin guard keys on `addr|city|state`, so only rows
   in a target city can collide with a door we are about to write. A tenant-wide
@@ -133,6 +138,13 @@ token — it cuts at it (`shared/addressKey.ts`, `STREET_UNIT_TOKENS`). The
 comment describes behavior the code does not have. Fixing it changes dedup for
 every caller of `upsertScanTargets` and is out of this task's scope; it is
 recorded here and reported to the operator.
+
+**RESOLVED 2026-08-27 (PR #191, `.agent/plans/unit-aware-premise-twin.md`).**
+Both twin guards now compare the full canonical address (house + street + unit).
+The same defect was found in `server/scanTargetCanonicalMerge.ts`, where it
+DELETES rows rather than skipping an insert: 943 of 6,696 queued pairs were not
+the same door, putting 655 real doors at risk. `rowanBridge.test.ts` has been
+flipped to pin the corrected behavior.
 
 **E911 distinguishes the two sides of a divided US highway by directional, and
 we hold one row for both.** Rowan E911 carries both
