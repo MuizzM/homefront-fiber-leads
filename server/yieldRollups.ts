@@ -32,6 +32,7 @@ import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
 import { readPressure, PRESSURE_ORDER } from "./resourcePressure";
 import { streetKeyOf } from "./freshHarvest";
+import { canonicalAddressPart, normalizeKineticAddressKey } from "@shared/addressKey";
 
 const NEG_STREAK_WINDOW_DAYS = 120; // backfill parity with the old CTE window
 
@@ -104,6 +105,7 @@ const INDEXES: Array<{ name: string; ddl: string }> = [
 
 const STREET_CHUNK = Math.max(500, Number(process.env.YIELD_STREET_CHUNK) || 10_000);
 const NEG_CHUNK = Math.max(500, Number(process.env.YIELD_NEG_CHUNK) || 10_000);
+const CANON_CHUNK = Math.max(500, Number(process.env.YIELD_CANON_CHUNK) || 2_000);
 
 // Fill street_key for rows that lack it (legacy rows once; brand-new inserts
 // within a couple of ticks). Returns rows processed.
@@ -118,6 +120,59 @@ export function streetKeyJanitorChunk(limit = STREET_CHUNK): number {
   });
   tx(rows);
   return rows.length;
+}
+
+/**
+ * One resumable chunk of the canonical_key backfill. Returns true when done.
+ *
+ * WHY: storage.upsertScanTargets stops a re-spelled house becoming a second row
+ * with `WHERE tenant_id IS ? AND canonical_key = ?`. That lookup cannot fire on
+ * a NULL key, so every un-keyed row is invisible to the guard and to
+ * scanTargetCanonicalMerge's duplicate manifest. Measured 2026-08-27: 292,999 of
+ * 924,104 rows un-keyed, hiding 26,131 duplicate groups — 7,163 of them a door
+ * scanned (and paid for) on two rows.
+ *
+ * Both insert paths stamp the key today, so this is a one-time drain of rows
+ * written before that, hence the cursor + done flag rather than a steady-state
+ * sweep like the street_key janitor. It must run BEFORE the alias merge and the
+ * UNIQUE promotion in step 5 — see promoteCanonicalUnique, which now refuses
+ * while any row is still un-keyed.
+ *
+ * Rows whose address has no canonical street part are SKIPPED, never stamped: a
+ * blank street yields a degenerate "|CITY|STATE" key that would make every such
+ * row in a city one another's twin. The cursor (not a bare `IS NULL LIMIT n`)
+ * is what keeps those skipped rows from trapping the loop forever.
+ */
+export function canonicalKeyBackfillChunk(chunk = CANON_CHUNK): boolean {
+  if (getState("canonkey_done") === "1") return true;
+  if (!columnExists("scan_targets", "canonical_key")) {
+    setState("canonkey_done", "1"); // replay/fresh DB without the column
+    return true;
+  }
+  const cursor = Number(getState("canonkey_cursor") ?? 0);
+  const rows = rawDb.prepare(
+    `SELECT id, address, city, state, zip FROM scan_targets
+      WHERE canonical_key IS NULL AND id > ? ORDER BY id LIMIT ?`,
+  ).all(cursor, chunk) as Array<{ id: number; address: string | null; city: string | null; state: string | null; zip: string | null }>;
+  if (!rows.length) { setState("canonkey_done", "1"); return true; }
+
+  const update = rawDb.prepare(`UPDATE scan_targets SET canonical_key=? WHERE id=? AND canonical_key IS NULL`);
+  const tx = rawDb.transaction((batch: typeof rows) => {
+    for (const r of batch) {
+      // The exact rule upsertScanTargets applies to a new row.
+      if (!canonicalAddressPart(r.address ?? "")) continue;
+      update.run(
+        normalizeKineticAddressKey(r.address ?? "", r.city ?? "", r.state ?? "NC", r.zip ?? ""),
+        r.id,
+      );
+    }
+  });
+  // .immediate() takes the write lock up front; a deferred transaction would
+  // start as a reader and upgrade on the first UPDATE, which is the shape that
+  // returns SQLITE_BUSY while a scan run holds the lock.
+  tx.immediate(rows);
+  setState("canonkey_cursor", String(rows[rows.length - 1].id));
+  return false;
 }
 
 // One resumable chunk of the neg_streak backfill: parity with the old CTE
@@ -238,11 +293,41 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         structuredLog("yield_rollups.analyze_done", { ms: Date.now() - t });
         return;
       }
-      // 5) Canonical cleanup (Slice 1): merge postal-city alias twins (live
-      // manifest: 152 pairs) then promote the canonical index to UNIQUE —
-      // bounded, idempotent, invariant-guarded, halts on any failure.
-      // Kill-switch SCAN_TARGET_MERGE=off.
-      if (process.env.SCAN_TARGET_MERGE !== "off" && getState("alias_merge_done") !== "1") {
+      // 4b) canonical_key backfill (one-time, resumable). MUST precede step 5:
+      // the merge manifest and the UNIQUE promotion both read canonical_key, so
+      // running them first would measure — and lock in — a table a third of
+      // which has no key. See canonicalKeyBackfillChunk.
+      if (getState("canonkey_done") !== "1") {
+        let done = false;
+        while (!done && Date.now() < deadline) done = canonicalKeyBackfillChunk();
+        structuredLog("yield_rollups.canonkey_chunk", { cursor: getState("canonkey_cursor"), done });
+        return;
+      }
+      // 5) Canonical cleanup (Slice 1): merge postal-city alias twins then
+      // promote the canonical index to UNIQUE — bounded, idempotent,
+      // invariant-guarded, halts on any failure.
+      //
+      // OPT-IN (SCAN_TARGET_MERGE=on), not opt-out. This step DELETES rows, and
+      // step 4b above changed how many: the alias predicate compares
+      // `b.canonical_key <> a.canonical_key`, which is NULL — never true — while
+      // either side is un-keyed, so every row the backfill keys becomes newly
+      // eligible. Measured on the live local database 2026-08-27: 2,845 pairs
+      // before the backfill, 6,677 after. Letting a background job quietly widen
+      // a destructive merge by 3,832 pairs because a repair made rows visible is
+      // exactly the surprise this flag now prevents. Turn it on deliberately,
+      // after reading the manifest.
+      if (process.env.SCAN_TARGET_MERGE !== "on" && getState("alias_merge_done") !== "1") {
+        // Say so once, cheaply. dryRunManifest() runs an unindexed self-join
+        // (~3 min on 924k rows) so it is NOT called here — only on the path that
+        // is actually going to merge.
+        if (getState("alias_merge_pending_logged") !== "1") {
+          structuredLog("yield_rollups.alias_merge_pending",
+            { reason: "SCAN_TARGET_MERGE is not 'on'; alias twins are reported, never merged", enable: "SCAN_TARGET_MERGE=on" }, "warn");
+          setState("alias_merge_pending_logged", "1");
+        }
+        // Deliberately falls through to steady state: an unmade decision must
+        // not pin this loop on step 5 forever.
+      } else if (getState("alias_merge_done") !== "1") {
         const { mergeCityAliasTwins, promoteCanonicalUnique, dryRunManifest } =
           require("./scanTargetCanonicalMerge") as typeof import("./scanTargetCanonicalMerge");
         const res = mergeCityAliasTwins({ apply: true, maxPairs: 500 });
@@ -276,6 +361,8 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
   let i = 0;
   while (streetKeyJanitorChunk() > 0 && i++ < maxIterations) { /* drain */ }
   setState("streetkey_done", "1");
+  i = 0;
+  while (!canonicalKeyBackfillChunk() && i++ < maxIterations) { /* drain */ }
   i = 0;
   while (!negStreakBackfillChunk() && i++ < maxIterations) { /* drain */ }
   rawDb.exec("ANALYZE");
