@@ -162,3 +162,43 @@ were wrong. Two causes, both ours:
 - The projector gap ([[projector-cannot-mint-already-lit-towns]]) is unfixed by
   design - fixing it globally would mint across the whole 900k-door book and
   needs its own review.
+
+
+## Production rollout (2026-08-27, operator asleep — "do what needs and push the leads to prod asap")
+
+Order is deliberate: the backup gates every bulk write, and the importer must be
+in the deployed image before its workflow can run.
+
+1. [x] **PR #185 merged** (d7d3a59) — the off-host backup had produced ZERO
+       artifacts since 2026-08-16 (whole-database restore outgrew the runner;
+       upload was a dependent step and got skipped). Upload now precedes verify,
+       verification is per-table, and a failure opens an issue. Takes effect on
+       MERGE, not on deploy — workflows run from the default branch.
+2. [~] **db-backup.yml dispatched** (run 33042578641, retention 30d) — the first
+       off-host backup since 2026-08-09. THIS GATES EVERYTHING BELOW.
+3. [ ] **PR #186** — the Landis importer. Merge once CI is green.
+4. [ ] **Deploy** the settled default-branch tip (needs green CI for that EXACT
+       sha; every push cancels the previous one's CI).
+5. [ ] **import-landis.yml phase=bridge** — dry run, read the counts, then apply.
+6. [ ] Let prod's own NEIGHBORHOOD_SWEEP scan the new doors. It is already ON
+       for NC, every 10 min, 6,000/cycle, and its street-completion tier targets
+       exactly "unscanned doors on a street that already produced fiber" —
+       which is what the Oaks streets are. NO bespoke paid-scan path was built:
+       prod runs DECODO_LANES=1 and DECODO_CHECKS_PER_IP=20 deliberately
+       ("Kinetic throttles ... AUTHORITATIVE" in compose), and overriding tuned
+       spend settings from a one-off script, unattended, is not a good trade.
+7. [ ] **import-landis.yml phase=mint** — once verdicts exist. Operator directed
+       `include_competitor_fiber=true` for Landis.
+
+### Corrections made while preparing this (both found by testing, not review)
+
+- `canonical_key` was left saying CHINA GROVE on rows relabelled to Landis (175
+  of them). It is `addr|city|state` and drives both the canonical-twin dedup
+  guard and the projector's lead matching; stale, it leaves dedup relying on its
+  coordinate fallback. Now rewritten with the city. The first fix ALSO sat
+  behind `if (!APPLY || !plan.length) return`, so it was skipped in exactly the
+  state a re-run is in — caught by applying twice.
+- The repair set city='Landis' for every ZIP-28088 row. **ZIP 28088 is not only
+  Landis**: E911 puts 6 Kannapolis and 4 China Grove addresses in it, and 2 real
+  doors on N Chapel St got mislabelled. The city now comes from E911 per
+  address; a door E911 does not know keeps the city it has.
