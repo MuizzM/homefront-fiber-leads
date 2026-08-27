@@ -42,6 +42,11 @@ on:
         description: "Required when apply is checked: retype the tenant id exactly"
         required: false
         type: string
+      verdict_file:
+        description: "Verdict file to replay, path in this repo. Blank = the batch baked into the image."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -63,6 +68,7 @@ jobs:
         env:
           TENANT: ${{ inputs.tenant }}
           APPLY: ${{ inputs.apply }}
+          VERDICT_FILE: ${{ inputs.verdict_file }}
           CONFIRM: ${{ inputs.confirm }}
         shell: bash
         run: |
@@ -108,18 +114,38 @@ jobs:
             exit 1
           }
 
+          # A verdict batch gathered AFTER the running image was built has to
+          # travel with the run — the image only carries the batch it shipped
+          # with. Sent from the checkout (so it is reviewable in git) and mounted
+          # read-only, the same shape db-backup.yml ships its dumper. Keeping the
+          # importer itself in the image means a new batch needs NO deploy.
+          SHIP=""
+          if [ -n "${VERDICT_FILE:-}" ]; then
+            case "$VERDICT_FILE" in
+              */../*|/*) echo "verdict_file must be a relative path inside the repo" >&2; exit 1 ;;
+            esac
+            [ -f "$VERDICT_FILE" ] || { echo "verdict_file not found in the checkout: $VERDICT_FILE" >&2; exit 1; }
+            python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,list) and d, 'not a non-empty JSON array'; print(f'verdict file OK: {len(d)} rows')" "$VERDICT_FILE"
+            scp -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+                "$VERDICT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/hf-verdicts.json"
+            SHIP="yes"
+          fi
+
           ssh -i "$HOME/.ssh/id_ed25519" \
               -o BatchMode=yes -o ConnectTimeout=15 \
               -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
               -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
               "$DEPLOY_USER@$DEPLOY_HOST" \
-              bash -s -- "$TENANT" "$APPLY" <<'REMOTE'
+              bash -s -- "$TENANT" "$APPLY" "$SHIP" <<'REMOTE'
           set -euo pipefail
           TENANT="$1"
           APPLY="$2"
+          SHIP="${3:-}"
           [[ "$TENANT" =~ ^[0-9]+$ ]]
           [[ "$APPLY" =~ ^(true|false)$ ]]
+          trap 'rm -f /tmp/hf-verdicts.json' EXIT
 
           cd /srv/homefront
 
@@ -152,12 +178,19 @@ jobs:
           fi
 
           if [ "$APPLY" = "true" ]; then MODE=(--apply); else MODE=(); fi
+          MOUNT=(); FILEARG=()
+          if [ "$SHIP" = "yes" ]; then
+            [ -f /tmp/hf-verdicts.json ] || { echo "verdict file did not arrive on the host" >&2; exit 1; }
+            MOUNT=(--volume /tmp/hf-verdicts.json:/app/hf-verdicts.json:ro)
+            FILEARG=(--file /app/hf-verdicts.json)
+            echo "replaying the shipped batch, not the one baked into the image"
+          fi
 
           # `compose run` on the same volume, never `exec` into the live
           # container — the app keeps serving and this cannot disturb it.
           APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
-            run --rm --no-deps --entrypoint node app \
-            dist/import-scan-verdicts.cjs --tenant "$TENANT" "${MODE[@]}" </dev/null
+            run --rm --no-deps "${MOUNT[@]}" --entrypoint node app \
+            dist/import-scan-verdicts.cjs --tenant "$TENANT" "${MODE[@]}" "${FILEARG[@]}" </dev/null
           REMOTE
 
       - name: What to do next
