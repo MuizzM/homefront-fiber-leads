@@ -15,13 +15,37 @@
  *      (tenant_id, canonical_key) partial index becomes UNIQUE (safe at zero
  *      duplicate groups; refuses loudly if groups reappear).
  *
- * Genuine neighbors (different house numbers) and distinct units (street_key
- * retains the unit token) can never pair — the twin predicate requires equal
- * street_key + state + leading house number + rooftop-range coordinates.
+ * A pair must be the SAME DOOR under two spellings: equal canonical address
+ * (house, street AND unit), differing only in the city/state the canonical key
+ * bakes in, at coordinates within rooftop range.
+ *
+ * The equal-canonical-address term was added 2026-08-27. Until then the header
+ * here claimed "genuine neighbors (different house numbers) and distinct units
+ * (street_key retains the unit token) can never pair", and neither half was
+ * true: streetKeyOf CUTS the unit clause off instead of retaining it, and
+ * CAST(address AS INTEGER) reads "313", "313A", "313-A" and "313-B" as one
+ * house. Measured against the live dev database that day, 6,696 pairs were
+ * queued for merge and 943 of them were NOT the same door — 579 differing only
+ * by unit ("77 Lake Vista Dr" vs "77 Lake Vista Dr Lot 16"), 327 differing by
+ * house letter ("313-A Charlotte Ave" vs "313-B Charlotte Ave"), 37 by a
+ * secondary number ("314 318 Malcolm Way" vs "314 322 Malcolm Way"). 655
+ * distinct real doors, each one a row this module would have DELETED.
  */
 import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
 import { readPressure, PRESSURE_ORDER } from "./resourcePressure";
+import { canonicalAddressPart } from "@shared/addressKey";
+
+// The exact same-door test, in SQL. Registered here rather than reusing
+// freshHarvest's registerHarvestSqlFunctions because this module is required
+// lazily by the yield-rollup janitor and must not drag the scanner graph in.
+// It has to live in the predicate, not in a JS filter over the results: the
+// janitor stops (and sets alias_merge_done) only when pairsFound reaches 0, so
+// pairs we refuse must leave the manifest rather than be dropped after LIMIT.
+try {
+  (rawDb as any).function("harvest_canonical_address", { deterministic: true },
+    (addr: unknown) => canonicalAddressPart(typeof addr === "string" ? addr : ""));
+} catch { /* already registered on this connection — the predicate below still resolves */ }
 
 // Every table observed (code grep + live PRAGMA sweep) that references a scan
 // target. Missing tables are skipped (bare replay DBs).
@@ -57,14 +81,30 @@ const columnExists = (t: string, c: string): boolean => {
   } catch { return false; }
 };
 
+// street_key / state / house-integer / coordinates are the CHEAP, index-friendly
+// narrowing; harvest_canonical_address is the exact test and is written last so
+// the planner evaluates it only on rows that already survived the rest. The
+// CAST terms stay: they cost nothing, and `> 0` keeps the whole predicate off
+// addresses with no house number at all.
+//
+// TENANT: this pairing had no tenant term until 2026-08-27, so two tenants
+// holding the same premise under different postal cities could pair — and the
+// merge DELETES the loser and repoints its leads/snapshots at the survivor,
+// across the boundary. `IS` (not `=`) because legacy rows carry tenant_id NULL
+// and must only ever pair with each other, which is the same operator the
+// sibling guard in storage.upsertScanTargets uses. Latent, not exercised: the
+// live database measured 0 cross-tenant pairs (one tenant), so adding this
+// changes no existing merge.
 const TWIN_PAIRS_SQL = `
   SELECT a.id AS aId, b.id AS bId FROM scan_targets a JOIN scan_targets b
     ON b.street_key = a.street_key AND b.id > a.id
+   AND b.tenant_id IS a.tenant_id
    AND upper(b.state) = upper(a.state)
    AND b.canonical_key <> a.canonical_key
    AND CAST(a.address AS INTEGER) = CAST(b.address AS INTEGER) AND CAST(a.address AS INTEGER) > 0
    AND b.lat BETWEEN a.lat - 0.00023 AND a.lat + 0.00023
    AND b.lng BETWEEN a.lng - 0.00028 AND a.lng + 0.00028
+   AND harvest_canonical_address(b.address) = harvest_canonical_address(a.address)
    WHERE a.street_key IS NOT NULL AND a.street_key <> ''`;
 
 export function dryRunManifest(): { sameCanonicalGroups: number; cityAliasPairs: number } {
