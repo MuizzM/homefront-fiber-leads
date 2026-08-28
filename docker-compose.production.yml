@@ -383,8 +383,24 @@ services:
       # dense any scan's grid is. When the ceiling is hit, paid calls stop and the
       # scan falls back to the free OSM enumeration — never a billing surprise.
       # This is what makes the per-box grid caps safe to raise. 0 = unlimited.
-      MAPBOX_DAILY_REQUEST_CAP: "100000"
-      MAPBOX_MONTHLY_REQUEST_CAP: "2000000"
+      #
+      # SIZED TO THE FREE ALLOWANCE (operator, 2026-08-28). These were 100k/day
+      # and 2M/month — twenty times a 100k-per-MONTH plan, so the "governor"
+      # could not have stopped a single overspend: the DAILY figure alone would
+      # have exhausted a month's allowance in one day, which is exactly the
+      # runaway this block exists to prevent. The monthly ceiling is now the
+      # real guard and sits UNDER the allowance, so the fallback to free OSM
+      # enumeration happens before the first billable request, not after.
+      #
+      # The daily figure is deliberately NOT allowance/30. A city harvest is
+      # ~12,800 reverse geocodes in one run, so a flat ~3k/day would refuse to
+      # let any city finish. 15k lets one city run complete in a day while the
+      # monthly ceiling still stops the month from running away.
+      #
+      # RAISE BOTH if the plan is upgraded — a paid tier makes these needlessly
+      # tight, and address search degrades to OSM once the month's ceiling hits.
+      MAPBOX_DAILY_REQUEST_CAP: "15000"
+      MAPBOX_MONTHLY_REQUEST_CAP: "90000"
       # Now that SPEND is governed above, the elected-box grid caps can be
       # generous (denser scans of a drawn area) without billing risk — the daily
       # ceiling is the real limit, not these per-box counts.
