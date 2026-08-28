@@ -1,9 +1,24 @@
 // ── The guided learning path ──────────────────────────────────────────────────
 //
-// Thirteen stages in the order a rep actually needs them, from "what am I
-// selling" to "how do I stay safe and compliant on a street". Each stage is a
-// short sequence of ACTIVITIES: a lesson to read, a reference card to know, a
-// deck to drill, a scenario to judge, a pitch to build, a door to practise on.
+// Seven stages in the order a rep actually needs them, from "what am I selling"
+// to "how do I stay safe and compliant on a street". Each stage is a short
+// sequence of ACTIVITIES: a card to scan, a deck to drill, a scenario to judge,
+// a pitch to build, a door to practise on.
+//
+// SHORT ON PURPOSE, AND MOSTLY DOING
+//   The path used to be sixty-five activities and nearly five hours, half of it
+//   reading. A new rep does not have five hours before their first street, and
+//   the reading was the half that did not change behaviour. What is left is
+//   about two hours, roughly two thirds of it out loud or under a clock. Every
+//   activity that was cut is still in the Library and the Reference, reachable
+//   and searchable; none of it was deleted.
+//
+// THE DOOR FRAMEWORK IS D2D, NOT GENERIC SALES
+//   The intro stage is built on the four-beat, forty-five-second knock, the
+//   qualifying stage on the four buying signals and the three-step answer for a
+//   household that already has a provider, and the objection stage on the five
+//   objections that actually come up at a door. Those cards live in
+//   shared/academyReference.ts under the checklist category.
 //
 // WHY A PATH ON TOP OF THE EXISTING CURRICULUM
 //   shared/trainingContent.ts holds 113 excellent lessons in 23 modules. That
@@ -25,7 +40,7 @@
 //   other; see shared/academyProgress.ts for why that is deliberate.
 
 import { getTrainingLesson } from "./trainingContent";
-import { ACADEMY_OBJECTION_KEYS, type AcademyObjectionKey } from "./academyObjections";
+import { type AcademyObjectionKey } from "./academyObjections";
 import type { PersonaId } from "./academyPersonas";
 
 export type ActivityKind =
@@ -642,154 +657,75 @@ export const PATH_STAGES: readonly PathStage[] = [
     title: "Know what you are selling",
     outcome: "You can explain what fiber is, and what it does not do, without reading anything.",
     activities: [
-      { id: "act-product-card", kind: "reference", title: "What fiber actually is", detail: "The technology, in words a homeowner uses.", minutes: 3, cardId: "product-what-fiber-is" },
-      { id: "act-fiber-simple", kind: "fiber_101", title: "Fiber, in their words", detail: "The benefits they feel, cable compared honestly, why neighbors switch, and the gig translator.", minutes: 5, fiberSection: "simple" },
-      { id: "act-fiber-journey", kind: "fiber_101", title: "How fiber gets to the house", detail: "The six-step trip from the hut to the wall, with the analogy for each step.", minutes: 4, fiberSection: "journey" },
+      { id: "act-fiber-simple", kind: "fiber_101", title: "Fiber, in their words", detail: "The benefits they feel, cable compared honestly, and the gig translator.", minutes: 5, fiberSection: "simple" },
       { id: "act-upload-card", kind: "reference", title: "Why upload is the number that matters", detail: "The one specification most households have never checked.", minutes: 3, cardId: "product-upload-explained" },
-      { id: "act-install-card", kind: "reference", title: "What the install involves", detail: "The answer behind most stalls.", minutes: 2, cardId: "product-install" },
-      { id: "act-fiber-glossary", kind: "fiber_101", title: "Talk the talk", detail: "Every term you will hear, each with the analogy that makes it land.", minutes: 6, fiberSection: "glossary" },
       { id: "act-product-scenario", kind: "scenario", title: "Product judgement", detail: "Three situations where the technically correct answer is also the honest one.", minutes: 4, scenarioId: "scn-product", passScore: 67 },
-      { id: "act-underground-scenario", kind: "scenario", title: "The build, at the door", detail: "Flags in the yard, glass in a storm, and the coil nobody came back for.", minutes: 4, scenarioId: "scn-underground", passScore: 67 },
-    ],
-  },
-  {
-    id: "stage-benefits",
-    title: "Translate features into outcomes",
-    outcome: "You can turn any specification into something a household actually feels.",
-    activities: [
-      { id: "act-problem-first", kind: "lesson", title: "Problem first", detail: "Start where their evening hurts, not where your product starts.", minutes: 5, lessonId: "m3-problem-first" },
-      { id: "act-concrete-numbers", kind: "lesson", title: "Concrete numbers", detail: "Why specifics stick and adjectives evaporate.", minutes: 5, lessonId: "m3-concrete-numbers" },
-      { id: "act-benefit-cards", kind: "flashcards", title: "Feature to outcome", detail: "Drill the translation until it is reflex.", minutes: 5 },
     ],
   },
   {
     id: "stage-intro",
-    title: "The ten-second introduction",
-    outcome: "You can open a door in ten seconds with your name, your reason, and a time boundary.",
+    title: "The 45 seconds at the door",
+    outcome: "You can open a door in four beats and end on a question, without sounding like a script.",
     activities: [
-      { id: "act-approach", kind: "lesson", title: "The approach", detail: "What happens before you say anything.", minutes: 5, lessonId: "m2-approach" },
-      { id: "act-ten-second", kind: "lesson", title: "The ten-second pitch", detail: "The whole reason for the knock, in one breath.", minutes: 5, lessonId: "m9-ten-second-pitch" },
-      { id: "act-timed-intro", kind: "timed_intro", title: "Ten seconds, out loud", detail: "Say it against the clock until it fits without rushing.", minutes: 5, passScore: 70 },
+      { id: "act-45-seconds", kind: "reference", title: "The four beats", detail: "Who you are, why you are here, what is on offer, and the question that ends it.", minutes: 3, cardId: "checklist-45-seconds" },
+      { id: "act-timed-intro", kind: "timed_intro", title: "Say it against the clock", detail: "Out loud, until it fits without rushing.", minutes: 5, passScore: 70 },
+      { id: "act-speech-trainer", kind: "speech_trainer", title: "Say it from memory", detail: "Read it, fill the gaps, then deliver it with the script hidden.", minutes: 6 },
+      { id: "act-three-sins", kind: "reference", title: "The three ways reps lose doors", detail: "Robotic, deaf, arrogant, and the fix you do between houses.", minutes: 3, cardId: "checklist-three-sins" },
     ],
   },
   {
     id: "stage-discovery",
-    title: "Ask before you pitch",
-    outcome: "You ask two questions that tell you exactly which benefit to lead with.",
+    title: "Qualify before you pitch",
+    outcome: "You can tell interest from politeness, and you ask before you present.",
     activities: [
-      { id: "act-archetypes", kind: "lesson", title: "Reading people", detail: "The households you will meet, and what each needs first.", minutes: 5, lessonId: "m4-archetypes" },
+      { id: "act-qualifying-card", kind: "reference", title: "Signals that they are qualified", detail: "Four green lights, and the three steps when they already have a provider.", minutes: 3, cardId: "checklist-qualifying" },
       { id: "act-discovery-scenario", kind: "scenario", title: "Discovery judgement", detail: "When to answer and when to ask.", minutes: 3, scenarioId: "scn-discovery", passScore: 50 },
       { id: "act-discovery-blocks", kind: "pitch_lab", title: "Build your discovery", detail: "Pick the two questions you will actually use.", minutes: 5 },
     ],
   },
   {
-    id: "stage-psychology",
-    title: "Ethical sales psychology",
-    outcome: "You can use the mechanics that move people without using the ones that pressure them.",
-    activities: [
-      { id: "act-reciprocity", kind: "lesson", title: "Reciprocity", detail: "Give first, and mean it.", minutes: 5, lessonId: "m8-reciprocity" },
-      { id: "act-social-proof", kind: "lesson", title: "Social proof mechanics", detail: "Why it works, and why it only works while it is true.", minutes: 5, lessonId: "m8-social-proof-mechanics" },
-      { id: "act-loss-framing", kind: "lesson", title: "Loss framing", detail: "Honest loss aversion, and the line it must not cross.", minutes: 5, lessonId: "m8-loss-framing" },
-      { id: "act-ethics-scenario", kind: "scenario", title: "Ethical judgement", detail: "Three moments where the profitable move and the right move separate.", minutes: 4, scenarioId: "scn-ethics", passScore: 100 },
-    ],
-  },
-  {
-    id: "stage-trust",
-    title: "Building trust at a door",
-    outcome: "A stranger believes you inside thirty seconds, for reasons they can check.",
-    activities: [
-      { id: "act-authority", kind: "lesson", title: "Authority signals", detail: "Borrowed authority is real authority.", minutes: 5, lessonId: "m8-authority-signals" },
-      { id: "act-mirroring", kind: "lesson", title: "Mirroring and pacing", detail: "Matching a person without imitating them.", minutes: 5, lessonId: "m8-mirroring-pacing" },
-      { id: "act-privacy-card", kind: "reference", title: "Customer privacy", detail: "What you hold, and what you may say out loud.", minutes: 3, cardId: "compliance-privacy" },
-      { id: "act-branch-former", kind: "branching", title: "The house that already had us", detail: "One sentence decides whether this door stays open.", minutes: 5, branchId: "branch-former-kinetic" },
-    ],
-  },
-  {
     id: "stage-pitch",
-    title: "Needs-based pitching",
-    outcome: "You have your own pitch, assembled from approved blocks, inside the time budget.",
+    title: "Build it, then say it",
+    outcome: "You have your own pitch, checked against the offer and the never-say list, and you have delivered it to somebody.",
     activities: [
-      { id: "act-skeleton", kind: "lesson", title: "The pitch skeleton", detail: "Four beats, thirty seconds.", minutes: 6, lessonId: "m3-pitch-skeleton" },
       { id: "act-pitch-lab", kind: "pitch_lab", title: "Build your pitch", detail: "Assemble it, check it, rehearse it.", minutes: 10 },
-      { id: "act-speech-trainer", kind: "speech_trainer", title: "Say it from memory", detail: "Read it, fill the gaps, then deliver it with the script hidden.", minutes: 6 },
       { id: "act-roleplay-remote", kind: "roleplay", title: "Practise on a remote worker", detail: "She has a call in ten minutes and a real upload problem.", minutes: 8, personaId: "remote_worker", passScore: 60 },
     ],
   },
   {
-    id: "stage-competitive",
-    title: "Competitive positioning",
-    outcome: "You compare honestly, on things the customer can verify, without attacking their choice.",
-    activities: [
-      { id: "act-cable-card", kind: "reference", title: "Cable, compared honestly", detail: "What is real, and what is a swipe.", minutes: 4, cardId: "competitor-cable" },
-      { id: "act-wireless-card", kind: "reference", title: "Fixed wireless and satellite", detail: "Where they genuinely win.", minutes: 3, cardId: "competitor-fixed-wireless" },
-      { id: "act-tv-bundle-card", kind: "reference", title: "Breaking the TV bundle", detail: "Layer DIRECTV on the fiber and let their own bill do the comparing.", minutes: 4, cardId: "competitor-tv-bundle" },
-      { id: "act-competitor-pivot", kind: "lesson", title: "The competitor pivot", detail: "Answering I already have fiber without calling them wrong.", minutes: 5, lessonId: "m12-competitor-pivot" },
-      { id: "act-roleplay-spectrum", kind: "roleplay", title: "Practise on a Spectrum customer", detail: "Content, under contract, quietly annoyed about upload.", minutes: 8, personaId: "spectrum_customer", passScore: 60 },
-    ],
-  },
-  {
     id: "stage-objections",
-    title: "Objection handling",
-    outcome: "You have a practised, ethical answer to every objection you will actually hear.",
-    // The drills are generated from the objection list rather than typed out,
-    // so adding a new objection can never leave a hole in the path.
+    title: "The five you will actually hear",
+    outcome: "Price, spouse, not interested, too busy and under contract each have an answer you have said out loud.",
     activities: [
-      ...ACADEMY_OBJECTION_KEYS.map((key, i): Activity => ({
-        id: `act-objection-${key}`,
-        kind: "objection_drill",
-        title: `Objection ${i + 1}`,
-        detail: "Acknowledge, then answer the question actually asked.",
-        minutes: 3,
-        objectionKey: key,
-      })),
-      { id: "act-branch-price", kind: "branching", title: "The household that only asks the price", detail: "Answer first, ask second.", minutes: 5, branchId: "branch-price-first" },
-      { id: "act-roleplay-skeptic", kind: "roleplay", title: "Practise on a skeptic", detail: "He expects you to overclaim. Do not.", minutes: 8, personaId: "skeptic", passScore: 60 },
+      { id: "act-objection-price", kind: "objection_drill", title: "It costs too much", detail: "Break the figure down to the unit they already think in.", minutes: 3, objectionKey: "price" },
+      { id: "act-objection-spouse", kind: "objection_drill", title: "I need to ask my spouse", detail: "Book the moment they can both decide, rather than arguing with an absent person.", minutes: 3, objectionKey: "spouse" },
+      { id: "act-objection-not_interested", kind: "objection_drill", title: "Not interested", detail: "The one with no stated reason. Find the real one before you answer.", minutes: 3, objectionKey: "not_interested" },
+      { id: "act-objection-too_busy", kind: "objection_drill", title: "I do not have time", detail: "Give the time back, then ask for a smaller one.", minutes: 3, objectionKey: "too_busy" },
+      { id: "act-objection-under_contract", kind: "objection_drill", title: "I am under contract", detail: "The date matters more than the argument.", minutes: 3, objectionKey: "under_contract" },
+      { id: "act-roleplay-skeptic", kind: "roleplay", title: "Practise on a skeptic", detail: "He has heard it before and he is not rude about it.", minutes: 8, personaId: "skeptic", passScore: 60 },
     ],
   },
   {
     id: "stage-closing",
-    title: "Closing",
-    outcome: "You make one concrete ask with two options, and you leave well when the answer is no.",
+    title: "Close, and leave well",
+    outcome: "You ask for the decision, and the doors you do not close stay knockable.",
     activities: [
-      { id: "act-closes", kind: "lesson", title: "The closes", detail: "The six that work, and when each one fits.", minutes: 6, lessonId: "m6-closes" },
-      { id: "act-two-day", kind: "lesson", title: "The two-day choice", detail: "Never ask whether. Ask which.", minutes: 5, lessonId: "m14-two-day-choice" },
-      { id: "act-honest-walk", kind: "lesson", title: "The honest walk-away", detail: "Leaving well is a close, and it is scored as one.", minutes: 5, lessonId: "m14-honest-walk-away" },
-      { id: "act-roleplay-satisfied", kind: "roleplay", title: "Practise leaving well", detail: "This household is genuinely happy. The right outcome may be no sale.", minutes: 6, personaId: "satisfied_customer", passScore: 60 },
-    ],
-  },
-  {
-    id: "stage-followup",
-    title: "Follow-up",
-    outcome: "The callbacks you book actually happen, and the install holds.",
-    activities: [
-      { id: "act-callback", kind: "lesson", title: "Callback architecture", detail: "Why most callbacks evaporate, and what fixes it.", minutes: 5, lessonId: "m19-callback-architecture" },
-      { id: "act-install-date", kind: "lesson", title: "Locking the install date", detail: "The sale is not the sale until the tech is in the calendar.", minutes: 5, lessonId: "m6-install-date" },
-      { id: "act-post-shift", kind: "reference", title: "After every shift", detail: "Five minutes that compound.", minutes: 2, cardId: "checklist-post-shift" },
-    ],
-  },
-  {
-    id: "stage-compliance",
-    title: "Compliance",
-    outcome: "You know what you may state as fact, and what stops the conversation entirely.",
-    activities: [
-      { id: "act-claims-card", kind: "reference", title: "What you may state as fact", detail: "The line between a benefit and a claim.", minutes: 4, cardId: "compliance-never-claim", },
-      { id: "act-dnc-card", kind: "reference", title: "Do-not-knock and do-not-call", detail: "Lists, signs, and immediate requests.", minutes: 4, cardId: "compliance-dnc" },
-      { id: "act-recording-card", kind: "reference", title: "Recording and consent", detail: "Before you press record on anything.", minutes: 3, cardId: "compliance-recording" },
-      { id: "act-escalation-card", kind: "reference", title: "When to stop and escalate", detail: "The situations that are not yours to resolve.", minutes: 3, cardId: "compliance-escalation" },
-      { id: "act-never-say", kind: "reference", title: "Never say this", detail: "Ten phrases, why each is prohibited, and what to say instead.", minutes: 5, cardId: "never-say-list" },
-      { id: "act-compliance-scenario", kind: "scenario", title: "Compliance judgement", detail: "Three doors where the rule is not obvious in the moment.", minutes: 4, scenarioId: "scn-compliance", passScore: 100 },
+      { id: "act-closes", kind: "lesson", title: "The closes", detail: "The handful that work at a door, and when each one fits.", minutes: 6, lessonId: "m6-closes" },
+      { id: "act-roleplay-satisfied", kind: "roleplay", title: "Practise leaving well", detail: "She is happy with what she has. Walk away so the street stays workable.", minutes: 6, personaId: "satisfied_customer", passScore: 60 },
     ],
   },
   {
     id: "stage-field",
-    title: "Field readiness and safety",
-    outcome: "You can work a street safely, and you know what to carry on day one.",
+    title: "Signs, safety and the law",
+    outcome: "You know what you may state as fact, what a sign means, and when the conversation is over.",
     activities: [
-      { id: "act-first-day", kind: "reference", title: "Your first day", detail: "What to have, know and do before the first knock.", minutes: 4, cardId: "checklist-first-day" },
+      { id: "act-no-soliciting", kind: "reference", title: "No-soliciting signs", detail: "What the sign means here, and the only ways to answer it.", minutes: 3, cardId: "checklist-no-soliciting" },
+      { id: "act-dnc-card", kind: "reference", title: "Do-not-knock and do-not-call", detail: "Lists, signs, and immediate requests.", minutes: 4, cardId: "compliance-dnc" },
+      { id: "act-claims-card", kind: "reference", title: "What you may state as fact", detail: "The line between a benefit and a claim.", minutes: 4, cardId: "compliance-never-claim" },
+      { id: "act-never-say", kind: "reference", title: "Never say this", detail: "The prohibited phrases, why each is prohibited, and what to say instead.", minutes: 5, cardId: "never-say-list" },
       { id: "act-safety-porch", kind: "reference", title: "On the porch", detail: "Positioning, dogs, and never entering a home.", minutes: 3, cardId: "safety-porch" },
-      { id: "act-safety-street", kind: "reference", title: "On the street", detail: "Heat, dark, traffic and other people's driveways.", minutes: 3, cardId: "safety-street" },
-      { id: "act-branch-busy", kind: "branching", title: "The door that opens mid-dinner", detail: "Give back the time you asked for.", minutes: 5, branchId: "branch-busy-dinner" },
-      { id: "act-roleplay-senior", kind: "roleplay", title: "Practise on a senior resident", detail: "Slow down. Pressure here is both wrong and a compliance problem.", minutes: 8, personaId: "senior_resident", passScore: 60 },
+      { id: "act-compliance-scenario", kind: "scenario", title: "Compliance judgement", detail: "Three doors where the rule is not obvious in the moment.", minutes: 4, scenarioId: "scn-compliance", passScore: 100 },
+      { id: "act-ethics-scenario", kind: "scenario", title: "Ethical judgement", detail: "Three moments where the profitable move and the right move separate.", minutes: 4, scenarioId: "scn-ethics", passScore: 100 },
     ],
   },
 ];
@@ -848,26 +784,26 @@ export const CERTIFICATIONS: readonly Certification[] = [
   {
     id: "cert-door-ready",
     title: "Door ready",
-    meaning: "Knows the product, can open a door in ten seconds, and knows what may not be said.",
-    stageIds: ["stage-product", "stage-intro", "stage-compliance", "stage-field"],
+    meaning: "Knows the product, can open a door in four beats, and knows what may not be said.",
+    stageIds: ["stage-product", "stage-intro", "stage-field"],
   },
   {
     id: "cert-conversation",
     title: "Conversation certified",
-    meaning: "Asks before pitching, translates features into outcomes, and builds trust honestly.",
-    stageIds: ["stage-benefits", "stage-discovery", "stage-psychology", "stage-trust"],
+    meaning: "Qualifies before pitching, and has delivered their own pitch to somebody who pushed back.",
+    stageIds: ["stage-discovery", "stage-pitch"],
   },
   {
     id: "cert-objection",
     title: "Objection certified",
-    meaning: "Has a practised, ethical answer to every field objection in the dojo and has held them under pressure.",
+    meaning: "Has a practised, ethical answer to the five objections that actually come up, and has held them under pressure.",
     stageIds: ["stage-objections"],
     minRolePlayScore: 65,
   },
   {
     id: "cert-full",
     title: "Fiber Sales Academy",
-    meaning: "Completed the whole path, including closing, follow-up and competitive positioning.",
+    meaning: "Completed the whole path, including closing and the rules that keep a street workable.",
     stageIds: PATH_STAGES.map((s) => s.id),
     minRolePlayScore: 65,
   },

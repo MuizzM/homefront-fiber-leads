@@ -526,14 +526,14 @@ describe("assignments", () => {
     const created = await request("/api/training/academy/assignments", managerSession, {
       method: "POST",
       body: JSON.stringify({
-        userId: repAUserId, targetId: "stage-compliance", targetKind: "stage",
+        userId: repAUserId, targetId: "stage-field", targetKind: "stage",
         note: "Read the never-say list before Monday.", dueOn: "2026-09-01",
       }),
     });
     expect(created.status).toBe(201);
 
     const body = await (await request("/api/training/academy/progress", repASession)).json() as any;
-    const assignment = body.assignments.find((a: any) => a.targetId === "stage-compliance");
+    const assignment = body.assignments.find((a: any) => a.targetId === "stage-field");
     expect(assignment.note).toBe("Read the never-say list before Monday.");
     expect(assignment.dueOn).toBe("2026-09-01");
     expect(assignment.completedAt).toBeNull();

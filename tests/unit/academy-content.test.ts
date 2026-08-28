@@ -192,10 +192,8 @@ describe("personas", () => {
 describe("the path", () => {
   it("covers every subject the brief lists, in teaching order", () => {
     expect(PATH_STAGES.map((s) => s.id)).toEqual([
-      "stage-product", "stage-benefits", "stage-intro", "stage-discovery",
-      "stage-psychology", "stage-trust", "stage-pitch", "stage-competitive",
-      "stage-objections", "stage-closing", "stage-followup", "stage-compliance",
-      "stage-field",
+      "stage-product", "stage-intro", "stage-discovery", "stage-pitch",
+      "stage-objections", "stage-closing", "stage-field",
     ]);
   });
 
@@ -230,10 +228,30 @@ describe("the path", () => {
     expect(TOTAL_PATH_MINUTES).toBeGreaterThan(60);
   });
 
-  it("drills every objection in the objection stage", () => {
+  // The path drills the five objections that actually come up at a door. The
+  // other six are not dropped: the Objection Dojo lists all of
+  // ACADEMY_OBJECTION_KEYS and is reachable without touching the path.
+  it("drills the five core objections in the objection stage, and only real keys", () => {
     const stage = PATH_STAGES.find((s) => s.id === "stage-objections")!;
     const drilled = stage.activities.filter((a) => a.kind === "objection_drill").map((a) => a.objectionKey);
-    expect(drilled).toEqual([...ACADEMY_OBJECTION_KEYS]);
+    expect(drilled).toEqual(["price", "spouse", "not_interested", "too_busy", "under_contract"]);
+    for (const key of drilled) expect(ACADEMY_OBJECTION_KEYS as readonly (string | undefined)[]).toContain(key);
+  });
+
+  it("keeps the path short enough to finish before a first shift", () => {
+    expect(TOTAL_ACTIVITIES).toBeLessThanOrEqual(30);
+    expect(TOTAL_PATH_MINUTES).toBeLessThanOrEqual(150);
+  });
+
+  // Reading is what a new rep skips. The majority of the path has to be
+  // something they do out loud, under a clock, or with a decision at the end.
+  it("spends most of its minutes on doing rather than reading", () => {
+    const doing = new Set([
+      "flashcards", "scenario", "timed_intro", "branching", "roleplay",
+      "pitch_lab", "objection_drill", "speech_trainer",
+    ]);
+    const doingMinutes = ALL_ACTIVITIES.filter((a) => doing.has(a.kind)).reduce((n, a) => n + a.minutes, 0);
+    expect(doingMinutes * 2).toBeGreaterThan(TOTAL_PATH_MINUTES);
   });
 
   it("locates the stage for any activity", () => {

@@ -23,11 +23,12 @@
 // wiring), flashes a confirmation, recolors the pin upstream, and collapses
 // the card to Peek. Nothing was removed — only reorganized into the levels.
 
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Check, X, LocateFixed } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { copyText } from "@/lib/clipboard";
+import { useTapAction } from "@/lib/tapAction";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
@@ -265,6 +266,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const [lastCommittedNote, setLastCommittedNote] = useState<string | null>(null); // pinned "latest note"
   const [flashKey, setFlashKey] = useState<KnockOutcome | null>(null); // brief tap-confirm flash
   const [copiedAddr, setCopiedAddr] = useState<false | "ok" | "failed">(false); // copy disc feedback
+  const copyFeedbackTimer = useRef<number | null>(null);
   // The last accepted rep mark on THIS card: drives the post-mark next step
   // (Set a time / Next door). Cleared on a card swap, an undo, or a scheduled
   // commit (the appointment IS the follow-through).
@@ -908,6 +910,14 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     liveNoteRef.current = id && v.trim() ? { leadId: id, value: v } : null;
   };
 
+  // The Copy and Close discs live inside a `touch-action: none` drag region, so
+  // a tap whose finger drifted past the browser's own slop produces NO click
+  // and nothing happens at all. They act on pointerup instead; see
+  // lib/tapAction.ts. Hooks, so they sit above the early return below.
+  const copyAddressRef = useRef<() => void>(() => {});
+  const copyTap = useTapAction(useCallback(() => { copyAddressRef.current(); }, []));
+  const closeTap = useTapAction(onClose);
+
   if (!renderedLead) return null;
 
   // ── Derived display values ───────────────────────────────────────────────────
@@ -965,8 +975,16 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     const ok = await copyText(fullAddress);
     setCopiedAddr(ok ? "ok" : "failed");
     setLiveMessage(ok ? "Address copied" : "Could not copy the address");
-    armTimer(() => setCopiedAddr(false), ok ? 1200 : 3000);
+    // Cancel the previous confirmation's timer first. Two copies inside the
+    // 1.2s window used to leave the FIRST timer running, so it cleared the
+    // SECOND copy's tick a moment after it appeared and the rep saw a copy they
+    // had just made report nothing.
+    if (copyFeedbackTimer.current != null) window.clearTimeout(copyFeedbackTimer.current);
+    copyFeedbackTimer.current = armTimer(() => setCopiedAddr(false), ok ? 1200 : 3000);
   };
+  // Assigned during render so the tap handlers hoisted above the early return
+  // always call the CURRENT copy, without the hooks depending on renderedLead.
+  copyAddressRef.current = () => { void copyAddress(); };
 
   const destination = renderedLead.lat != null && renderedLead.lng != null
     ? `${renderedLead.lat},${renderedLead.lng}`
@@ -1459,7 +1477,17 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 />
               </div>
               <div className="min-w-0 flex-1">
-                <h2 className="min-w-0 text-[20px] leading-[1.15] font-semibold tracking-[-0.01em] text-white truncate">
+                {/* Selectable on purpose. The drag region turns selection off
+                    so a drag never paints a blue smear across the sheet, but
+                    long-press-to-select is how everyone copies an address on a
+                    phone, and switching it off left the Copy disc as the only
+                    way. A native selection cancels the pointer stream, so the
+                    sheet's own drag ends itself rather than fighting it. */}
+                <h2
+                  data-testid="knock-address"
+                  style={{ userSelect: "text", WebkitUserSelect: "text", WebkitTouchCallout: "default" }}
+                  className="min-w-0 text-[20px] leading-[1.15] font-semibold tracking-[-0.01em] text-white truncate"
+                >
                   {renderedLead.address}
                 </h2>
                 {(() => {
@@ -1525,7 +1553,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                   type="button"
                   data-testid="knock-copy-address"
                   aria-label={copiedAddr === "ok" ? "Address copied" : "Copy address"}
-                  onClick={() => { void copyAddress(); }}
+                  {...copyTap}
                   className={copiedAddr === "ok"
                     ? `${circleBtn} !bg-success/[0.16] !border-success/40 !text-success`
                     : circleBtn}
@@ -1536,7 +1564,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                   type="button"
                   data-testid="knock-sheet-close"
                   aria-label="Close"
-                  onClick={onClose}
+                  {...closeTap}
                   className={circleBtn}
                 >
                   <X className="w-[17px] h-[17px]" />

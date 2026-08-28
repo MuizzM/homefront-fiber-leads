@@ -1436,6 +1436,74 @@ describe("<LeadKnockSheet /> - drag regions never capture a tap", () => {
     });
   });
 
+  // ── The second half of the phone bug ──────────────────────────────────────
+  // Guarding the drag was not enough. A browser only synthesizes a click from a
+  // touch while the finger stays inside ITS own slop (~8px in Chromium); drift
+  // further and the gesture is reclassified as a pan. These discs sit in a
+  // `touch-action: none` region, so there is nothing to pan and the tap simply
+  // evaporates - no click, no scroll, no feedback. Measured against the running
+  // app at 390x844 (verify-copy-phone.mjs): a 16px drift delivered
+  // `pointerdown touchstart pointerup touchend` to the Copy disc and no click,
+  // and the clipboard kept its previous contents. The discs act on pointerup
+  // now, so NONE of these cases fire a click at all.
+  it("PHONE: a 16px drift copies even though the browser never sends a click", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderSheet();
+    const copy = screen.getByTestId("knock-copy-address");
+    pointer(copy, "pointerdown", 500, { pointerType: "touch" });
+    pointer(copy, "pointerup", 516, { pointerType: "touch" }); // no click follows
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("148 Maple St, Rockwell, NC 28138"));
+  });
+
+  it("PHONE: a 16px drift on the close disc still closes, with no click", () => {
+    const { props } = renderSheet();
+    const close = screen.getByTestId("knock-sheet-close");
+    pointer(close, "pointerdown", 500, { pointerType: "touch" });
+    pointer(close, "pointerup", 516, { pointerType: "touch" });
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // A deliberate swipe is not a tap. The generous slop buys a drifting thumb,
+  // not every gesture that happens to start on the disc.
+  it("a swipe across the copy disc does not copy", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderSheet();
+    const copy = screen.getByTestId("knock-copy-address");
+    pointer(copy, "pointerdown", 500, { pointerType: "touch" });
+    pointer(copy, "pointerup", 560, { pointerType: "touch" });
+    await Promise.resolve();
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  // Acting on pointerup AND on click would copy twice per tap. The compat click
+  // that follows a successful touch has to be swallowed - and a real mouse or
+  // keyboard click, which sends no touch pointer at all, must still work.
+  it("copies exactly once per tap, by touch and by mouse", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderSheet();
+    const copy = screen.getByTestId("knock-copy-address");
+
+    pointer(copy, "pointerdown", 500, { pointerType: "touch" });
+    pointer(copy, "pointerup", 502, { pointerType: "touch" });
+    fireEvent.click(copy); // the browser's compatibility click
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+    pointer(copy, "pointerdown", 500);
+    pointer(copy, "pointerup", 500);
+    fireEvent.click(copy);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+  });
+
+  // Long-press-to-select is how everybody copies an address on a phone. The
+  // drag region switches selection off wholesale; the address opts back in.
+  it("the address text stays selectable inside the drag region", () => {
+    renderSheet();
+    expect(screen.getByTestId("knock-address")).toHaveStyle({ userSelect: "text" });
+  });
+
   it("a real drag (past the tap slop) DOES capture, and its click is swallowed", () => {
     withCaptureSpy((spy) => {
       const { props } = renderSheet();

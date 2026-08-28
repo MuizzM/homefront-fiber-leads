@@ -557,7 +557,11 @@ export default function Training() {
 
         {/* Hero. Three numbers a rep can move today. */}
         <div className="rounded-2xl border border-border bg-card p-4 md:p-5" data-testid="training-hero">
-          <div className="flex items-center gap-4">
+          {/* On a phone the three columns do not fit: the count wrapped with
+              "done" alone on its own line and the minutes line broke four ways.
+              The counters drop to their own row under the ring instead, which
+              gives the count and the estimate the full width. */}
+          <div className="flex flex-wrap items-center gap-4">
             <Ring
               done={academy.data?.path.done ?? 0}
               total={academy.data?.path.total ?? 0}
@@ -590,10 +594,10 @@ export default function Training() {
                 About {TOTAL_PATH_MINUTES} minutes end to end. Nothing has to be done in one sitting.
               </p>
             </div>
-            <div className="flex shrink-0 flex-col gap-2">
+            <div className="order-last flex w-full shrink-0 flex-row gap-2 sm:order-none sm:w-auto sm:flex-col">
               <div
                 className={cn(
-                  "flex flex-col items-center rounded-xl border px-3 py-2",
+                  "flex flex-1 flex-col items-center rounded-xl border px-3 py-2 sm:flex-none",
                   streak > 0 ? "border-[hsl(var(--accent-gold))]/30 bg-[hsl(var(--accent-gold-soft))]" : "border-border bg-secondary/40",
                 )}
                 data-testid="training-streak"
@@ -601,7 +605,7 @@ export default function Training() {
                 <span className="text-sm font-bold tabular-nums leading-none text-foreground">{streak}</span>
                 <span className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">day streak</span>
               </div>
-              <div className="hidden flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex" data-testid="training-lessons-done">
+              <div className="flex flex-1 flex-col items-center rounded-xl border border-border bg-secondary/40 px-3 py-2 sm:flex-none" data-testid="training-lessons-done">
                 <span className="text-sm font-bold tabular-nums leading-none text-foreground">
                   {isLoading || isError ? " - " : doneCount}
                 </span>
@@ -759,6 +763,7 @@ export default function Training() {
             <PathView
               progress={academy.data.path}
               records={academy.data.records}
+              certifications={academy.data.certifications}
               offers={offers.data?.offers ?? []}
               headline={offers.data?.headline ?? null}
               market={offers.data?.market ?? ""}

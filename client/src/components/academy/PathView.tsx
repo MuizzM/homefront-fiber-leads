@@ -1,7 +1,14 @@
 // ── The guided path ───────────────────────────────────────────────────────────
 //
-// Thirteen stages, each a short sequence of activities. This component owns two
-// things: the stage list, and running whichever activity is open.
+// Seven stages, each a short sequence of activities. This component owns three
+// things: the stage trail, running whichever activity is open, and the moment
+// after one finishes.
+//
+// EVERY ACTIVITY ENDS SOMEWHERE
+//   Finishing hands off to ActivityComplete rather than dropping the rep back
+//   on a list. That screen states what moved, reveals a stage or certification
+//   if one landed, and offers the next activity in one tap. Chaining is the
+//   difference between a rep who does one thing and a rep who does four.
 //
 // PROGRESSIVE DISCLOSURE, NOT GATES
 //   A stage the rep has not unlocked renders dimmed with its reason stated, and
@@ -14,11 +21,12 @@
 //   state restores the rep mid-quiz. Both come from the server payload, so it
 //   works across devices and not just across tabs.
 
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useLayoutEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/a11y";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { BackLink, Chip, DoneDot, Panel, PanelSkeleton, PrimaryButton, QuietButton, Ring } from "./primitives";
+import ActivityComplete, { type CelebrationTarget } from "./ActivityComplete";
 import ScenarioQuiz, { type ScenarioProgressState } from "./ScenarioQuiz";
 import TimedIntro, { type TimedIntroState } from "./TimedIntro";
 import BranchingConversation, { type BranchingState } from "./BranchingConversation";
@@ -33,7 +41,9 @@ import {
   type Activity, type PathStage,
 } from "@shared/academyPath";
 import { getReferenceCard } from "@shared/academyReference";
-import { isActivityPassed, type ActivityRecord, type PathProgress } from "@shared/academyProgress";
+import {
+  isActivityPassed, type ActivityRecord, type CertificationStatus, type PathProgress,
+} from "@shared/academyProgress";
 import type { AcademyOffer } from "@shared/academyOffers";
 import type { PersonaId } from "@shared/academyPersonas";
 
@@ -42,10 +52,11 @@ import type { PersonaId } from "@shared/academyPersonas";
 const RolePlayCoach = lazy(() => import("./RolePlayCoach"));
 
 export default function PathView({
-  progress, records, offers, headline, market, onOpenLesson, onOpenReference,
+  progress, records, certifications, offers, headline, market, onOpenLesson, onOpenReference,
 }: {
   progress: PathProgress;
   records: ActivityRecord[];
+  certifications: CertificationStatus[];
   offers: AcademyOffer[];
   headline: AcademyOffer | null;
   market: string;
@@ -55,22 +66,32 @@ export default function PathView({
 }) {
   const [openActivity, setOpenActivity] = useState<Activity | null>(null);
   const [openStageId, setOpenStageId] = useState<string | null>(null);
+  const [celebrate, setCelebrate] = useState<CelebrationTarget | null>(null);
   const complete = useCompleteActivity();
 
+  // Moving between the trail, a stage, an activity and the completion screen is
+  // navigation as far as a rep is concerned, so it starts at the top like every
+  // other screen change in the app. Without this, finishing a long reference
+  // card leaves the completion screen scrolled past its own headline.
+  useLayoutEffect(() => {
+    document.querySelector(".app-route-stage")?.scrollTo({ top: 0 });
+  }, [openActivity?.id, openStageId, celebrate?.activity.id]);
+
   function open(activity: Activity) {
+    setCelebrate(null);
     if (activity.kind === "lesson" && activity.lessonId) { onOpenLesson(activity.lessonId); return; }
-    if (activity.kind === "reference" && activity.cardId) {
-      // Opening a required card IS reading it. Mark it and hand off to the
-      // library, which is where the card actually lives.
-      complete.mutate({ activityId: activity.id });
-      onOpenReference(activity.cardId);
-      return;
-    }
     setOpenActivity(activity);
   }
 
   function finish(activity: Activity, score?: number) {
     complete.mutate({ activityId: activity.id, score: score ?? null });
+    // Snapshot what was already earned so the completion screen can tell a
+    // certification this activity produced from one the rep already had.
+    setCelebrate({
+      activity,
+      score,
+      earnedBefore: certifications.filter((c) => c.earned).map((c) => c.certification.id),
+    });
     setOpenActivity(null);
   }
 
@@ -81,8 +102,22 @@ export default function PathView({
         offers={offers}
         headline={headline}
         market={market}
+        onOpenReference={onOpenReference}
         onComplete={(score) => finish(openActivity, score)}
         onExit={() => setOpenActivity(null)}
+      />
+    );
+  }
+
+  if (celebrate) {
+    return (
+      <ActivityComplete
+        target={celebrate}
+        progress={progress}
+        certifications={certifications}
+        onNext={(activity) => open(activity)}
+        onRetry={(activity) => { setCelebrate(null); setOpenActivity(activity); }}
+        onBackToPath={() => setCelebrate(null)}
       />
     );
   }
@@ -130,19 +165,29 @@ export default function PathView({
       {/* The stages as a trail: each ring is a node, the segment between two
           nodes takes the colour of the stage above it, and the next stage to
           work carries the one gold marker on the screen. The trail is the
-          learning-path grammar every beginner app uses, in the house palette. */}
+          learning-path grammar every beginner app uses, in the house palette.
+
+          The segment is a two-layer bar rather than a single colour, so a stage
+          that is half finished shows as half finished on the way down. A rep
+          scanning the trail can see the shape of their own week in it. */}
       <div>
         {progress.stages.map((stageProgress, i) => (
           <div key={stageProgress.stage.id}>
-            {i > 0 && (
-              <div
-                aria-hidden="true"
-                className={cn(
-                  "ml-[35px] h-3.5 w-0.5 rounded-full",
-                  progress.stages[i - 1].complete ? "bg-success/50" : "bg-border",
-                )}
-              />
-            )}
+            {i > 0 && (() => {
+              const above = progress.stages[i - 1];
+              const fill = above.total > 0 ? Math.round((above.done / above.total) * 100) : 0;
+              return (
+                <div aria-hidden="true" className="ml-[35px] h-4 w-0.5 overflow-hidden rounded-full bg-border">
+                  <div
+                    className={cn(
+                      "w-full rounded-full transition-[height] duration-500 ease-out",
+                      above.complete ? "bg-success/60" : "bg-primary/50",
+                    )}
+                    style={{ height: `${fill}%` }}
+                  />
+                </div>
+              );
+            })()}
             <StageRow
               index={i}
               stageProgress={stageProgress}
@@ -163,6 +208,7 @@ function StageRow({ index, stageProgress, upNext, onOpen }: {
   onOpen: () => void;
 }) {
   const { stage, done, total, complete, locked } = stageProgress;
+  const minutes = stage.activities.reduce((n, a) => n + a.minutes, 0);
   return (
     <button
       type="button"
@@ -171,6 +217,9 @@ function StageRow({ index, stageProgress, upNext, onOpen }: {
       className={cn(
         "flex min-h-12 w-full items-center gap-3 rounded-2xl border bg-card px-4 py-3 text-left transition-colors",
         complete ? "border-success/30" : upNext ? "border-primary/40 bg-primary/[0.03]" : "border-border",
+        // The next stage carries the only gold on the screen, so a rep opening
+        // the tab with no idea what to do has exactly one thing pulling at them.
+        upNext && "ring-2 ring-[hsl(var(--accent-gold))]/30",
         locked && "opacity-60",
         "hover:bg-secondary/50",
         FOCUS,
@@ -178,12 +227,15 @@ function StageRow({ index, stageProgress, upNext, onOpen }: {
     >
       <Ring done={done} total={total} size={40} tone={complete ? "gold" : "primary"} />
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Stage {index + 1}
           </span>
           {upNext && <Chip tone="gold">Up next</Chip>}
           {complete && <Chip tone="good">Done</Chip>}
+          {!complete && !upNext && (
+            <span className="text-[11px] tabular-nums text-muted-foreground">about {minutes} min</span>
+          )}
         </span>
         <span className="block text-[14px] font-bold leading-snug text-foreground">{stage.title}</span>
         <span className="block text-xs leading-snug text-muted-foreground">{stage.outcome}</span>
@@ -224,11 +276,12 @@ function ActivityRow({ activity, done, onOpen }: { activity: Activity; done: boo
 
 // ── Running one activity ──────────────────────────────────────────────────────
 
-function ActivityRunner({ activity, offers, headline, market, onComplete, onExit }: {
+function ActivityRunner({ activity, offers, headline, market, onOpenReference, onComplete, onExit }: {
   activity: Activity;
   offers: AcademyOffer[];
   headline: AcademyOffer | null;
   market: string;
+  onOpenReference: (cardId: string) => void;
   onComplete: (score?: number) => void;
   onExit: () => void;
 }) {
@@ -380,17 +433,36 @@ function ActivityRunner({ activity, offers, headline, market, onComplete, onExit
   if (activity.kind === "reference" && activity.cardId) {
     const card = getReferenceCard(activity.cardId);
     if (!card) return <MissingActivity onExit={onExit} />;
+    // The card is READ HERE. It used to mark itself done on tap and throw the
+    // rep out into the Reference library mid-stage, which both broke the run of
+    // work and recorded a card as read that nobody had read.
     return (
       <div className="space-y-4">
         {header}
-        <ul className="space-y-2.5">
+        <p className="text-[13px] leading-relaxed text-muted-foreground">{card.summary}</p>
+        <ol className="space-y-2.5">
           {card.points.map((point, i) => (
-            <li key={i} className="rounded-xl border border-border bg-card p-3.5 text-[13px] leading-relaxed text-foreground">
-              {point}
+            <li
+              key={i}
+              className="flex gap-3 rounded-xl border border-border bg-card p-3.5"
+              data-testid={`reference-point-${i}`}
+            >
+              <span
+                aria-hidden="true"
+                className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-[11px] font-bold tabular-nums text-muted-foreground"
+              >
+                {i + 1}
+              </span>
+              <span className="text-[13px] leading-relaxed text-foreground">{point}</span>
             </li>
           ))}
-        </ul>
-        <PrimaryButton onClick={() => onComplete()} testId="reference-activity-done">Got it</PrimaryButton>
+        </ol>
+        <div className="flex flex-wrap gap-2">
+          <PrimaryButton onClick={() => onComplete()} testId="reference-activity-done">Got it</PrimaryButton>
+          <QuietButton onClick={() => onOpenReference(card.id)} testId="reference-activity-library">
+            Open in the Reference
+          </QuietButton>
+        </div>
       </div>
     );
   }

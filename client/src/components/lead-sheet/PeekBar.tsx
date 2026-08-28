@@ -1,4 +1,5 @@
 import { X, type LucideIcon } from "lucide-react";
+import { useTapAction } from "@/lib/tapAction";
 import { relativeTime } from "./utils";
 import { StatusPinChip } from "./StatusPinChip";
 
@@ -32,6 +33,9 @@ export function PeekBar(props: PeekBarProps): JSX.Element {
     address, pinColor, statusIcon, statusColor, statusLabel, lastKnockedAt, freshFiber,
     directionsHref, onClose, undo, followThrough, pop = null,
   } = props;
+  // The peek bar is a drag region with `touch-action: none`, so a tap that
+  // drifts past the browser's slop yields no click and the disc does nothing.
+  const closeTap = useTapAction(onClose);
   const lastRel = relativeTime(lastKnockedAt);
   const freshness = freshFiber ? "Fresh fiber" : lastRel ? `Last ${lastRel}` : "";
   return (
@@ -41,7 +45,11 @@ export function PeekBar(props: PeekBarProps): JSX.Element {
           <StatusPinChip color={pinColor} icon={statusIcon} size={28} data-testid="knock-peek-dot" iconTestId="knock-peek-status-icon" />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="min-w-0 text-[15px] leading-tight font-semibold text-white truncate">
+          <h2
+            data-testid="knock-peek-address"
+            style={{ userSelect: "text", WebkitUserSelect: "text", WebkitTouchCallout: "default" }}
+            className="min-w-0 text-[15px] leading-tight font-semibold text-white truncate"
+          >
             {address}
           </h2>
           <div className="mt-0.5 text-[12px] leading-tight flex items-center min-w-0">
@@ -69,7 +77,7 @@ export function PeekBar(props: PeekBarProps): JSX.Element {
           type="button"
           data-testid="knock-peek-close"
           aria-label="Close"
-          onClick={onClose}
+          {...closeTap}
           className={circleBtn}
         >
           <X className="w-[17px] h-[17px]" />

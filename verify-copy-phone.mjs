@@ -1,94 +1,208 @@
-// Real-browser verification of the phone copy fix, at a phone viewport: a tap
-// on the header Copy disc whose pointer DRIFTS past the slop must still put the
-// address on the clipboard. Before the fix the drift promoted the press to a
-// sheet drag and the click was swallowed in the capture phase, so nothing was
-// copied.
+// Reproduce "the address will not copy on my phone" against the running dev
+// server, at a real phone size, with a real thumb drift.
 //
-// Chromium, not WebKit: helmet sends HSTS, and WebKit honours it for localhost
-// too, so every Vite module request on http://localhost:5081 is upgraded to
-// https and fails. That is a dev-server artefact (prod is https) - the WebKit
-// clipboard mechanisms were verified separately at an iPhone viewport.
-// Run:
-//   1. start the dev server (launch.json `homefront-fieldmap-b`, port 5081)
-//   2. mint a rep session, then:  node verify-copy-phone.mjs <sessionId>
-// Exits non-zero if the address did not reach the clipboard.
+// Recipe (see memory drag-regions-steal-taps-on-phones): seed a DECOY string
+// into the clipboard first, then press / move 8px / release on the control, and
+// read the clipboard back. If the decoy survives, the copy never happened.
+//
+// Usage: node verify-copy-phone.mjs [port]
 import { chromium } from "playwright";
 
-const ORIGIN = "http://localhost:5081";
-const SID = process.argv[2];
+const PORT = process.argv[2] ?? "5077";
+const BASE = `http://localhost:${PORT}`;
+const EMAIL = "rex.rep@northstar.example.test";
+const DECOY = "DECOY-NOTHING-WAS-COPIED";
 
 const browser = await chromium.launch({ args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader"] });
-const ctx = await browser.newContext({
+const context = await browser.newContext({
   viewport: { width: 390, height: 844 },
-  deviceScaleFactor: 3,
-  isMobile: true,
+  deviceScaleFactor: 2,
   hasTouch: true,
+  isMobile: true,
   permissions: ["clipboard-read", "clipboard-write"],
 });
-const page = await ctx.newPage();
-await page.addInitScript((sid) => {
-  localStorage.setItem("hfs.sid", sid);
-  localStorage.setItem("hfs.sid.until", String(Date.now() + 86400000));
-}, SID);
+// Mint the session from node, then plant it before any app script runs -
+// setting localStorage from a page that already booted leaves the shell on the
+// sign-in card until a reload it never gets.
+const req = await fetch(`${BASE}/api/auth/otp/request`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ email: EMAIL }),
+});
+const reqJson = await req.json();
+if (!reqJson.developmentCode) { console.error("no developmentCode for", EMAIL, reqJson); process.exit(1); }
+const ver = await fetch(`${BASE}/api/auth/otp/verify`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ email: EMAIL, code: reqJson.developmentCode }),
+});
+const verJson = await ver.json();
+if (!verJson.sessionId) { console.error("no sessionId", verJson); process.exit(1); }
 
-page.on("console", (m) => { if (m.type() === "error") console.log("  [console error]", m.text().slice(0, 160)); });
+await context.addInitScript(([s]) => {
+  localStorage.setItem("hfs.sid", s);
+  localStorage.setItem("hfs.sid.until", String(Date.now() + 7 * 864e5));
+}, [verJson.sessionId]);
 
-await page.goto(`${ORIGIN}/#/map`, { waitUntil: "domcontentloaded" });
-await page.waitForFunction(() => typeof window.__openLeadSheet === "function", null, { timeout: 90000 });
-await page.waitForFunction(() => Array.isArray(window.__allLeads) && window.__allLeads.length > 0, null, { timeout: 90000 });
+const page = await context.newPage();
+page.on("pageerror", (e) => console.error("PAGEERROR", e.message));
+page.on("console", (m) => { if (m.type() === "error") console.error("CONSOLE", m.text().slice(0, 200)); });
+
+await page.goto(`${BASE}/#/map`);
+try {
+  await page.waitForFunction(() => (window).__allLeads?.length > 0, null, { timeout: 60_000 });
+} catch {
+  console.error("no leads on window. state:", JSON.stringify(await page.evaluate(() => ({
+    hash: location.hash,
+    hasOpen: typeof (window).__openLeadSheet,
+    allLeads: (window).__allLeads?.length ?? null,
+    rootChildren: document.getElementById("root")?.children.length ?? 0,
+    text: document.body.innerText.slice(0, 300),
+  }))));
+  await browser.close();
+  process.exit(1);
+}
 
 const lead = await page.evaluate(() => {
-  const l = window.__allLeads.find((x) => x.lat != null && x.lng != null && x.address);
-  window.__openLeadSheet(l.id);
-  return { id: l.id, address: l.address, city: l.city, state: l.state, zip: l.zip };
+  const l = (window).__allLeads[0];
+  (window).__openLeadSheet(l.id);
+  return { id: l.id, address: l.address };
 });
-console.log("lead:", JSON.stringify(lead));
+await page.waitForSelector('[data-testid="knock-sheet"]', { timeout: 15_000 });
+await page.waitForTimeout(600);
 
-const copy = page.locator("[data-testid=knock-copy-address]");
-await copy.waitFor({ state: "visible", timeout: 30000 });
+const cdp = await context.newCDPSession(page);
 
-const expected = [
-  lead.address,
-  [lead.city, [lead.state, lead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
-].filter(Boolean).join(", ");
-console.log("expected on clipboard:", JSON.stringify(expected));
+/** Seed a unique decoy and PROVE it landed, or the read-back means nothing. */
+async function seedDecoy(tag) {
+  const decoy = `${DECOY}-${tag}`;
+  await page.evaluate((d) => navigator.clipboard.writeText(d), decoy);
+  const seen = await page.evaluate(() => navigator.clipboard.readText());
+  if (seen !== decoy) throw new Error(`decoy did not land (clipboard reads ${JSON.stringify(seen)})`);
+  return decoy;
+}
 
-// Seed the clipboard with a decoy, so "copied" cannot be confused with "was
-// already there" - the exact way the old dishonest-success bug hid itself.
-await page.evaluate(() => {
-  const b = document.createElement("button");
-  b.id = "seed"; b.textContent = "seed";
-  b.style.cssText = "position:fixed;top:0;left:0;width:60px;height:30px;z-index:99999";
-  b.onclick = () => navigator.clipboard.writeText("DECOY-NOT-THE-ADDRESS");
-  document.body.appendChild(b);
+/** A real finger: touchStart, optional drift, touchEnd. */
+async function finger(x, y, drift) {
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] });
+  if (drift) {
+    for (let i = 1; i <= 4; i++) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: x + (drift * i) / 4, y: y + (drift * i) / 8, id: 1 }],
+      });
+    }
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+}
+
+// NOTE: there is no mouse case here. The context is mobile-emulated, so
+// Chromium translates page.mouse into touch and a "mouse" attempt is not a
+// faithful mouse. The mouse and keyboard paths are covered in
+// tests/rtl/LeadKnockSheet.test.tsx instead.
+async function attempt(label, drift, useTouch) {
+  const decoy = await seedDecoy(label.replace(/\W+/g, ""));
+  const btn = page.locator('[data-testid="knock-copy-address"]');
+  if (!(await btn.count())) return { label, result: "no copy control at this snap" };
+  const box = await btn.boundingBox();
+  if (!box) return { label, result: "copy control not visible" };
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  // Instrument: which events actually reach the control, and did the sheet
+  // decide this press was a drag?
+  await page.evaluate(() => {
+    const b = document.querySelector('[data-testid="knock-copy-address"]');
+    (window).__probe = [];
+    if (!(window).__probeWired) {
+      (window).__probeWired = true;
+      for (const t of ["pointerdown", "pointerup", "pointercancel", "click", "touchstart", "touchend"]) {
+        b.addEventListener(t, (e) => (window).__probe.push(t + (e.defaultPrevented ? ":prevented" : "")), true);
+      }
+    }
+  });
+  if (useTouch) {
+    await finger(x, y, drift);
+  } else {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    if (drift) await page.mouse.move(x + drift, y + drift / 2, { steps: 4 });
+    await page.mouse.up();
+  }
+  await page.waitForTimeout(400);
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  const feedback = await page.evaluate(() => ({
+    said_copied: !!document.querySelector('[data-testid="knock-address-copied"]'),
+    said_failed: !!document.querySelector('[data-testid="knock-address-copy-failed"]'),
+  }));
+  const probe = await page.evaluate(() => (window).__probe ?? []);
+  return { label, pointer: useTouch ? "touch" : "mouse", drift, copied: clip !== decoy, clip: clip.slice(0, 45), ...feedback, events: probe.join(" ") };
+}
+
+// Can a rep long-press the address and select it by hand instead?
+const selectable = await page.evaluate(() => {
+  const h2 = document.querySelector('[data-testid="knock-sheet"] h2');
+  if (!h2) return null;
+  const cs = getComputedStyle(h2);
+  return {
+    text: h2.textContent?.trim().slice(0, 40),
+    userSelect: cs.userSelect || cs.webkitUserSelect,
+    touchAction: cs.touchAction,
+  };
 });
-await page.click("#seed");
-await page.waitForTimeout(200);
-await page.evaluate(() => document.getElementById("seed").remove());
 
-// The gesture: press on the disc, DRIFT 8px, release. 8px is past the 6px
-// mouse slop, so pre-fix this became a sheet drag and the click was eaten.
-const box = await copy.boundingBox();
-const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
-await page.mouse.move(cx, cy);
-await page.mouse.down();
-await page.mouse.move(cx, cy + 4);
-await page.mouse.move(cx, cy + 8);
-await page.mouse.up();
-await page.waitForTimeout(500);
+// Regression: the header must still drag the sheet. A press on the address
+// text (now selectable) must not glue the sheet to the finger either.
+async function dragFrom(testid, dy) {
+  const el = page.locator(testid);
+  const box = await el.boundingBox();
+  if (!box) return { testid, result: "not visible" };
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.evaluate(() => {
+    (window).__pm = [];
+    document.querySelector('[data-testid="knock-sheet"]').addEventListener("pointermove", (e) => {
+      if ((window).__pm.length < 3) (window).__pm.push({ type: e.pointerType, buttons: e.buttons, isPrimary: e.isPrimary });
+    }, true);
+  });
+  const before = await page.evaluate(() => document.querySelector('[data-testid="knock-sheet"]').style.transform);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] });
+  for (let i = 1; i <= 6; i++) {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + (dy * i) / 6, id: 1 }] });
+  }
+  const during = await page.evaluate(() => document.querySelector('[data-testid="knock-sheet"]').style.transform);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(500);
+  const pm = await page.evaluate(() => (window).__pm);
+  return { testid, before, during, moved: before !== during, pointermove: pm };
+}
 
-const uiSaid = await page.evaluate(() => {
-  const ok = document.querySelector("[data-testid=knock-address-copied]");
-  const bad = document.querySelector("[data-testid=knock-address-copy-failed]");
-  return ok ? "Address copied" : bad ? "Could not copy" : "(no feedback)";
-});
+// Run AFTER the tap attempts: cycling the sheet's level mid-run changes which
+// header is mounted and makes the taps that follow it unreliable to place.
 
-// Read the clipboard back - the only honest check.
-const clip = await page.evaluate(() => navigator.clipboard.readText());
+const drags = [
+  await dragFrom('[data-testid="knock-sheet-handle"]', 120),
+];
 
-console.log("UI feedback :", uiSaid);
-console.log("clipboard   :", JSON.stringify(clip));
-const pass = clip === expected && uiSaid === "Address copied";
-console.log(pass ? "PASS - a drifting tap copied the address" : "FAIL");
+const results = {
+  lead,
+  addressText: selectable,
+  drags,
+  attempts: [
+    await attempt("touch, no drift", 0, true),
+    await attempt("touch, 8px drift", 8, true),
+    await attempt("touch, 16px drift", 16, true),
+    await attempt("touch, 22px drift", 22, true),
+    await attempt("touch, 40px swipe", 40, true),
+  ],
+};
+console.log(JSON.stringify(results, null, 2));
+
 await browser.close();
-process.exit(pass ? 0 : 1);
+
+// Non-zero when a tap inside the slop failed to copy, so this stays usable as a
+// check and not only as a report.
+const mustCopy = results.attempts.filter(a => a.drift <= 16);
+const broken = mustCopy.filter(a => !a.copied || !a.said_copied);
+if (broken.length) {
+  console.error("FAILED:", broken.map(a => a.label).join(", "));
+  process.exit(1);
+}
+
