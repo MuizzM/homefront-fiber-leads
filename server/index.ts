@@ -93,6 +93,19 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const app = express();
+
+// ── No implicit ETags ─────────────────────────────────────────────────────────
+// Express hashes every res.send/res.json body with MD5 to produce a weak ETag.
+// Every /api response here carries `no-store` (see the Cache-Control middleware
+// below), so no client is ever permitted to send the If-None-Match that would
+// make that hash useful. The worst payer was the bbox map window: up to 25,000
+// pins per pan, hashed on the single better-sqlite3 thread, for a conditional
+// request that can never arrive. Endpoints that genuinely want conditional GETs
+// set their own ETag explicitly (the full map feed, the blank W-9), and an
+// explicit header is untouched by this setting. express.static/sendFile use the
+// `send` module's own etags and are likewise unaffected.
+app.set("etag", false);
+
 const httpServer = createServer(app);
 
 // ── Trust the reverse proxy in production ─────────────────────────────────────

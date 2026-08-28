@@ -19,7 +19,7 @@ import { AGREEMENT_VERSION, buildAgreementSnapshot } from "./onboardingAgreement
 import { resolveCommissionTerms, saveRepCommissionTerms } from "./commissionTermsResolver";
 import { normalizeCommissionTerms, type CommissionTerms } from "@shared/commissionTerms";
 import { renderAgreementPreviewPdf, renderOnboardingPacketPdf, renderSignedAgreementPdf } from "./onboardingPdf";
-import { loadW9Template } from "./w9Pdf";
+import { loadW9Template, W9_TEMPLATE_SHA256 } from "./w9Pdf";
 import {
   completeSigning,
   counterSignDocument,
@@ -848,6 +848,12 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       // The template is immutable and integrity-pinned, so it is safe to cache
       // hard — this is the one PDF in the system that never varies by user.
       res.setHeader("Cache-Control", "private, max-age=86400");
+      // Explicit ETag because the app disables Express's implicit one (see
+      // server/index.ts). This is the only route that was relying on it: after
+      // the day-long max-age lapses, the browser revalidates and gets a 304
+      // instead of re-downloading the form. loadW9Template() refuses to return
+      // anything whose sha256 is not this constant, so the tag cannot go stale.
+      res.setHeader("ETag", `"${W9_TEMPLATE_SHA256}"`);
       res.send(template);
     } catch {
       res.status(503).json({ error: "The official W-9 form is unavailable on this server", code: "W9_TEMPLATE_UNAVAILABLE" });
@@ -980,7 +986,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       // BOTH signatures, rendered by the same builder from the same frozen
       // snapshot and rep evidence, so the dual-stamped copy cannot drift from
       // the rep-signed one it replaces.
-      const repEvidence = { ...(record.evidence ?? {}), signatureSha256: record.signatureSha256 } as any;
+      const repEvidence = { ...record.evidence, signatureSha256: record.signatureSha256 } as any;
       const pdf = await renderSignedAgreementPdf(record.snapshot, repEvidence, {
         companySignatureName: parsedBody.data.signatureName,
         companySignedAt: signedAt,
