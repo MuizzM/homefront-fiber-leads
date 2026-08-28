@@ -5,7 +5,7 @@
 // Coverage: the happy path (record -> stop -> playback element appears), the
 // permission-denied path (clear message, no playback), the unsupported-browser
 // path (feature hidden entirely), and unmount cleanup (tracks stopped, no hot mic).
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PitchRecorder from "../../client/src/components/training/PitchRecorder";
 

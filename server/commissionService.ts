@@ -2327,7 +2327,7 @@ export function listWeekSalesForRep(tenantId: number, repId: number, weekReferen
       { status: row.cm_status, installConfirmedAt: row.cm_install_confirmed_at, payableAfter: row.cm_payable_after },
       policy,
     );
-    const { cm_status, cm_install_confirmed_at, cm_payable_after, ...sale } = row;
+    const { cm_status: _s, cm_install_confirmed_at: _i, cm_payable_after: _p, ...sale } = row;
     return { ...sale, installHold, payableAfter: installHold ? (row.cm_payable_after ?? null) : null };
   });
 }

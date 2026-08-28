@@ -113,8 +113,8 @@ export default function MpBoxScanPanel({
       const next = { ...f, [key]: on };
       if (typeof window !== "undefined") {
         const p = new URLSearchParams(window.location.search);
-        next.tenured ? p.set("tenured", "1") : p.delete("tenured");
-        next.freshFiber ? p.set("fresh", "1") : p.delete("fresh");
+        if (next.tenured) p.set("tenured", "1"); else p.delete("tenured");
+        if (next.freshFiber) p.set("fresh", "1"); else p.delete("fresh");
         window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}`);
       }
       return next;

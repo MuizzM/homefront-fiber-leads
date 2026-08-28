@@ -5,7 +5,7 @@
 // sidecar, golden byte-stability, entry hash + control totals, reconciliation
 // against the payroll CSV Total row), the 1099 summary, and capability gates.
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -185,12 +185,12 @@ describe("W-9 lifecycle (ESIGN)", () => {
   it("refuses to guess Line 3a or the backup-withholding certification", async () => {
     // A W-9 is signed under penalty of perjury. Defaulting either of these would
     // make the company assert something on the signer's behalf.
-    const { taxClassification, ...noClass } = W9_BODY("Pay Rep One") as any;
+    const { taxClassification: _omitClass, ...noClass } = W9_BODY("Pay Rep One") as any;
     let res = await request("/api/me/w9", rep1.session, { method: "POST", body: JSON.stringify(noClass) });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/taxClassification/);
 
-    const { subjectToBackupWithholding, ...noWithholding } = W9_BODY("Pay Rep One") as any;
+    const { subjectToBackupWithholding: _omitWithholding, ...noWithholding } = W9_BODY("Pay Rep One") as any;
     res = await request("/api/me/w9", rep1.session, { method: "POST", body: JSON.stringify(noWithholding) });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/backup/i);

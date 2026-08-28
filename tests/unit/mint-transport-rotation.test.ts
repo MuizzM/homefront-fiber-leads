@@ -42,7 +42,6 @@ vi.mock("../../server/proxy-fetch", () => ({
   egressLaneCount: () => 1,
   getProxySessionId: () => "decodo-s1",
   currentEgressProxyUrl: () => "http://redacted@proxy:10001",
-  isProxyConnected: () => true,
   getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100, sessionId: "decodo-s1" }),
 }));
 

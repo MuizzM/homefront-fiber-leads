@@ -18,7 +18,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 let server: Server;
 let baseUrl: string;
 let storage: (typeof import("../../server/storage"))["storage"];
-let rawDb: import("better-sqlite3").Database;
 
 type Person = { userId: number; memberId: number; session: string };
 const fx: Record<string, Person> = {};
@@ -74,7 +73,6 @@ beforeAll(async () => {
   const mod = await import("../../server/storage");
   mod.runMigrations();
   storage = mod.storage;
-  ({ rawDb } = await import("../../server/db"));
 
   fx.admin = person("Ada Admin", "admin");
   fx.manager = person("Mona Manager", "manager");

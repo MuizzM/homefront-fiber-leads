@@ -4364,7 +4364,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             job.done = 0;
           }
           await runCityScan(jobId, newAddresses as any);
-        } catch (err: any) {
+        } catch {
           const job = scanJobs.get(jobId);
           if (job) job.status = "done";
         }
@@ -5334,7 +5334,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // `result` blob (it embeds dfAddressId/accessId/exchangeId + competitor intel).
   app.get("/api/fiber-checks", requireManager, (req, res) => {
     const rows = storage.getRecentChecks(100, (req as any).user?.tenantId);
-    res.json(rows.map(({ result, ...safe }: any) => safe));
+    res.json(rows.map(({ result: _result, ...safe }: any) => safe));
   });
 
   // ── Team Members ─────────────────────────────────────────────────────────────
@@ -8552,7 +8552,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const preview = previewNextPass(t.id, tid ?? null, { keepPendingCallbacks });
     // Only counts and reasons cross the wire. The frozen[] array carries lead ids
     // and the client has no use for them here.
-    const { frozen, reset, ...rest } = preview;
+    const { frozen: _frozen, reset: _reset, ...rest } = preview;
     res.json({ ...rest, territoryName: t.name });
   });
 

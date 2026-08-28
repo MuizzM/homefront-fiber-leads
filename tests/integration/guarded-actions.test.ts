@@ -32,7 +32,6 @@ let rawDb: import("better-sqlite3").Database;
 
 let adminSession = "", leadASession = "", leadBSession = "", repSession = "", auditorSession = "";
 let complianceSession = "";
-let leadAUserId = 0;
 let repMemberId = 0, otherRepMemberId = 0;
 let doorIds: number[] = [];
 let suppressionId = 0;
@@ -102,7 +101,6 @@ beforeAll(async () => {
   };
   adminSession = user("Gate Admin", "gate-admin@example.com", "admin").session;
   const leadA = user("Lead A", "gate-lead-a@example.com", "team_lead");
-  leadAUserId = leadA.id;
   leadASession = leadA.session;
   leadBSession = user("Lead B", "gate-lead-b@example.com", "team_lead").session;
   repSession = user("Field Rep", "gate-rep@example.com", "rep").session;

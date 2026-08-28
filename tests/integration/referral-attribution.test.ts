@@ -16,7 +16,6 @@ import { join } from "node:path";
 
 let R: typeof import("../../server/referralStore");
 let intake: typeof import("../../server/onboardingApplicationService");
-let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: import("better-sqlite3").Database;
 
 const TENANT = 1;
@@ -43,7 +42,6 @@ beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-refattr-"));
   const storageModule = await import("../../server/storage");
   storageModule.runMigrations();
-  storage = storageModule.storage;
   ({ rawDb } = await import("../../server/db"));
   R = await import("../../server/referralStore");
   intake = await import("../../server/onboardingApplicationService");

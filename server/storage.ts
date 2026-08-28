@@ -2974,7 +2974,7 @@ export function runMigrations() {
       raw.prepare("INSERT INTO commission_rates (name, role, rate_per_sale, is_active) VALUES ('Standard Rep Rate', 'rep', 50.00, 1)").run();
       raw.prepare("INSERT INTO commission_rates (name, role, rate_per_sale, is_active) VALUES ('Team Lead Bonus', 'team_lead', 75.00, 1)").run();
     }
-  } catch (_) {}
+  } catch {}
 
   // Duplicate-pin root fix: backfill canonical_key, MERGE existing duplicate
   // leads (preserving status history + child records), then add the UNIQUE index

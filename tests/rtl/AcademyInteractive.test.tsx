@@ -25,7 +25,7 @@ import PitchLab from "@/components/academy/PitchLab";
 import ReferenceLibrary from "@/components/academy/ReferenceLibrary";
 import RolePlayCoach from "@/components/academy/RolePlayCoach";
 import ActivityComplete from "@/components/academy/ActivityComplete";
-import { BRANCH_TREES, PATH_STAGES, SCENARIO_SETS, getActivity, getScenarioSet } from "@shared/academyPath";
+import { BRANCH_TREES, PATH_STAGES, getActivity, getScenarioSet } from "@shared/academyPath";
 import { certificationStatuses, computePathProgress, type ActivityRecord } from "@shared/academyProgress";
 import { ACADEMY_OBJECTIONS } from "@shared/academyObjections";
 import type { AcademyOffer } from "@shared/academyOffers";

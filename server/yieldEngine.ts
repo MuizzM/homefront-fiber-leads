@@ -143,13 +143,24 @@ function ensureTable(): void {
   } catch { /* best-effort */ }
 }
 
+/** The weight names, derived from the defaults so the two cannot drift. A row
+ *  whose name is not one of these is ignored: the table is written by the
+ *  nightly learner, but an old row for a weight that no longer exists must not
+ *  be able to add a key the scorer never reads. */
+const WEIGHT_NAMES = Object.keys(DEFAULT_WEIGHTS) as (keyof Weights)[];
+function isWeightName(name: unknown): name is keyof Weights {
+  return typeof name === "string" && (WEIGHT_NAMES as string[]).includes(name);
+}
+
 export function getWeights(): Weights {
   try {
     ensureTable();
-    const rows = rawDb.prepare("SELECT name, value FROM yield_weights").all() as any[];
-    const w = { ...DEFAULT_WEIGHTS } as any;
-    for (const r of rows) if (r.name in w && Number.isFinite(r.value)) w[r.name] = r.value;
-    return w as Weights;
+    const rows = rawDb.prepare("SELECT name, value FROM yield_weights").all() as Array<{ name: unknown; value: unknown }>;
+    const w: Weights = { ...DEFAULT_WEIGHTS };
+    for (const r of rows) {
+      if (isWeightName(r.name) && typeof r.value === "number" && Number.isFinite(r.value)) w[r.name] = r.value;
+    }
+    return w;
   } catch { return { ...DEFAULT_WEIGHTS }; }
 }
 

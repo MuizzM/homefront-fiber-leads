@@ -7,8 +7,6 @@ import {
   useReducer,
   useDeferredValue,
 } from "react";
-// mapbox-gl loaded via CDN in index.html — do not bundle
-declare const mapboxgl: any;
 import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, List, Plus, Crosshair, Users, Settings2, Filter, Landmark, Tag, Flag, Palette, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -5864,7 +5862,7 @@ export default function MapView() {
             ? "Draw a Scan-Area box here, then scan for new fiber."
             : undefined,
         });
-      } catch (e: any) {
+      } catch {
         toast({ title: "Address lookup failed", variant: "destructive" });
       } finally {
         setGeocoding(false);

@@ -812,7 +812,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       res.setHeader("Content-Disposition", `inline; filename="${record.documentType.replace(/_/g, "-")}-review.pdf"`);
       res.setHeader("Cache-Control", "no-store");
       res.send(pdf);
-    } catch (error: any) {
+    } catch {
       res.status(500).json({ error: "Could not render this document for review" });
     }
   });
