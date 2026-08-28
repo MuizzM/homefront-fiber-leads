@@ -37,7 +37,7 @@ function load(): Loaded {
     if (!dir) continue;
     try {
       for (const f of readdirSync(dir)) {
-        if (!/_gis_addresses\.json$/.test(f)) continue;
+        if (!f.endsWith('_gis_addresses.json')) continue;
         try {
           const rows = JSON.parse(readFileSync(join(dir, f), "utf-8"));
           if (Array.isArray(rows)) for (const r of rows) {

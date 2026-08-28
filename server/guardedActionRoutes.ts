@@ -29,6 +29,7 @@ import {
   type GatePolicy, type GuardedActionKind, type GuardedActionState,
 } from "@shared/guardedActions";
 import { can, type Capability } from "@shared/capabilities";
+import type { JsonValue } from "@shared/json";
 import * as store from "./guardedActionStore";
 import type { GuardedActionRow } from "./guardedActionStore";
 import {
@@ -370,6 +371,6 @@ function parseList(value: string | undefined): string[] {
   return typeof value === "string" && value ? value.split(",").map((s) => s.trim()).filter(Boolean) : [];
 }
 
-function safeParse(json: string): unknown {
+function safeParse(json: string): JsonValue {
   try { return JSON.parse(json); } catch { return null; }
 }

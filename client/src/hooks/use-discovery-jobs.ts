@@ -12,7 +12,7 @@ type JobMap = Record<string, DiscoveryJob>;
 type Listener = (event: DiscoveryEvent) => void;
 
 function mergeJob(current: DiscoveryJob | undefined, patch: Partial<DiscoveryJob> & { id: string }): DiscoveryJob {
-  const next = normalizeDiscoveryJob({ ...(current ?? {}), ...patch, id: patch.id });
+  const next = normalizeDiscoveryJob({ ...current, ...patch, id: patch.id });
   // Identity-preserving merge: SSE re-sends the same counters constantly during
   // a scan; returning the CURRENT object when nothing observable changed lets
   // the reducer's `state[id] === next` bailout actually fire (it was dead code

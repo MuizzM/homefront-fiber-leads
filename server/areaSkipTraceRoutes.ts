@@ -7,7 +7,8 @@
 // injected territory-scope gate and answers 404 — never 403 — for an area the
 // caller may not see, so ids cannot be probed.
 
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
+import type { Middleware } from "./middlewareTypes";
 import { z } from "zod";
 import type { Capability } from "@shared/capabilities";
 import { rawDb } from "./db";
@@ -19,8 +20,6 @@ import {
   latestAreaSkipTraceRun,
   startAreaSkipTraceRun,
 } from "./areaSkipTrace";
-
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
 export type AreaSkipTraceRouteDeps = {
   requireAuth: Middleware;

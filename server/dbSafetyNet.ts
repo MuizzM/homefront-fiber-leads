@@ -165,7 +165,7 @@ export function checkForSilentReset(): { lost: string[]; watermark: Watermark | 
 export function recordWatermark(): DbCensus {
   const now = census();
   const prev = readWatermark();
-  const peak: DbCensus = { ...(prev?.peak ?? {}) };
+  const peak: DbCensus = { ...prev?.peak };
   let raised = false;
   for (const t of WITNESS_TABLES) {
     if ((now[t] ?? 0) > (peak[t] ?? 0)) { peak[t] = now[t]; raised = true; }

@@ -26,7 +26,7 @@ function person(name: string, role: string, tenantId = 1) {
 }
 function req(path: string, session: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, { ...init, headers: {
-    "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...(init.headers ?? {}) } });
+    "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...init.headers } });
 }
 const hist = async (leadId: number, session: string) => (await req(`/api/leads/${leadId}/history`, session)).json();
 const central = (leadId: number, session: string, body: any) =>

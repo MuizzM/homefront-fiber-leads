@@ -44,7 +44,7 @@ function person(name: string, role: string, reportsToId: number | null = null, l
 const req = (path: string, session: string, init: RequestInit = {}) =>
   fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...init.headers },
   });
 
 const patchMember = (id: number, session: string, body: unknown) =>

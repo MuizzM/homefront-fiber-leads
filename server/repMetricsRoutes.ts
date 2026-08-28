@@ -55,6 +55,7 @@ import {
   type TerritoryFacts,
 } from "@shared/territoryHealth";
 import type { Capability } from "@shared/capabilities";
+import type { JsonValue } from "@shared/json";
 
 interface Deps {
   requireAuth: any;
@@ -1061,7 +1062,7 @@ function parseAssignees(assigneeIds: unknown, repId: unknown): number[] {
   return Number.isFinite(r) && r > 0 ? [r] : [];
 }
 
-function safeJson(v: unknown): unknown {
+function safeJson(v: unknown): JsonValue {
   if (typeof v !== "string") return null;
   try { return JSON.parse(v); } catch { return null; }
 }

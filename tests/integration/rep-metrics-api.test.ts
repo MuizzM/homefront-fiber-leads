@@ -176,7 +176,7 @@ function request(path: string, sessionId?: string, init: RequestInit = {}) {
     headers: {
       "content-type": "application/json",
       ...(sessionId ? { "x-session-id": sessionId } : {}),
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
 }

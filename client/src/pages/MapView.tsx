@@ -40,12 +40,11 @@ import {
   summarizeByDisplayState,
   BULK_STATUS_OUTCOMES,
   type KnockOutcome,
-  type RoutablePin,
   type PinDisplayState,
 } from "@shared/knock";
 import { toLeadMapStatus } from "@shared/statusConfig";
-import { rankNearestDoors, NEAREST_DOORS_LIMIT } from "@shared/nearestDoors";
-import { NearestDoorsStrip, type StripPin } from "@/components/map/NearestDoorsStrip";
+import { rankNearestDoors, NEAREST_DOORS_LIMIT, type RankedDoor } from "@shared/nearestDoors";
+import { NearestDoorsStrip } from "@/components/map/NearestDoorsStrip";
 import { LassoRepPicker, type PickerRep } from "@/components/map/LassoRepPicker";
 import { ToastAction } from "@/components/ui/toast";
 import {
@@ -105,7 +104,6 @@ import {
   doorIconSizeExpression,
   doorSymbolSortKey,
   DOOR_PIN_DATA_URLS,
-  type DoorImageMap,
   type DoorTag,
 } from "@/lib/doorPins";
 import {
@@ -485,7 +483,7 @@ async function addDoorIconLayer(map: FieldIconMap): Promise<void> {
   if (!map.getLayer(SCANNED_DOORS_LAYER)) return;
   if (!map.getLayer(SCANNED_DOORS_ICON_LAYER)) {
     try {
-      await registerDoorPinImages(map as unknown as DoorImageMap);
+      await registerDoorPinImages(map);
     } catch {
       showDoorCirclesFullRange(map);
       return;
@@ -3145,7 +3143,7 @@ export default function MapView() {
   const retryMapbox = useCallback(() => {
     setMapTokenFailed(false);
     setMapFailureKind(null);
-    (window as unknown as { __retryMapbox?: () => void }).__retryMapbox?.();
+    window.__retryMapbox?.();
     setMapboxRetry((n) => n + 1);
   }, []);
 
@@ -4075,7 +4073,7 @@ export default function MapView() {
       qc.setQueryData(["/api/leads/map"], (old: any) => {
         const pins = old?.pins ?? [];
         return {
-          ...(old ?? {}),
+          ...old,
           total: (old?.total ?? pins.length) + 1,
           pins: [...pins, tempPin],
         };
@@ -5996,12 +5994,7 @@ export default function MapView() {
             ? { lat: c.lat, lng: c.lng }
             : { lat: open[0].lat!, lng: open[0].lng! };
       const exclude = new Set(recentIdsRef.current);
-      const next =
-        (nearestUnworkedLead(
-          from,
-          open as unknown as RoutablePin[],
-          exclude,
-        ) as MapPin | null) ?? open[0];
+      const next = nearestUnworkedLead(from, open, exclude) ?? open[0];
       flyToLead(next);
     });
   }, [leads, flyToLead, toast]);
@@ -6013,14 +6006,10 @@ export default function MapView() {
   // distance that is fiction is worse than no distance.
   const nearestVisible =
     mapReady && isRep && !nearestHidden && !pinKeyOpen && selectedLeadId == null && !lassoMode && !addMode;
-  const nearest = useMemo(() => {
-    if (!nearestVisible || !repFix) return { doors: [] as ReturnType<typeof rankNearestDoors<StripPin>>, total: 0 };
+  const nearest = useMemo((): { doors: RankedDoor<MapPin>[]; total: number } => {
+    if (!nearestVisible || !repFix) return { doors: [], total: 0 };
     if (repFix.accuracy != null && repFix.accuracy > 200) return { doors: [], total: 0 };
-    const all = rankNearestDoors<StripPin>(
-      repFix,
-      leads as unknown as StripPin[],
-      { limit: 1000, excludeIds: new Set(recentIdsRef.current) },
-    );
+    const all = rankNearestDoors(repFix, leads, { limit: 1000, excludeIds: new Set(recentIdsRef.current) });
     return { doors: all.slice(0, NEAREST_DOORS_LIMIT), total: all.length };
   }, [nearestVisible, repFix, leads]);
   // The card's post-mark "Next door": the nearest open door from the rep's
@@ -6032,7 +6021,7 @@ export default function MapView() {
     if (selectedLeadId == null || !repFix) return null;
     if (repFix.accuracy != null && repFix.accuracy > 200) return null;
     const exclude = new Set<number>([...recentIdsRef.current, selectedLeadId]);
-    const [best] = rankNearestDoors<StripPin>(repFix, leads as unknown as StripPin[], { limit: 1, excludeIds: exclude });
+    const [best] = rankNearestDoors(repFix, leads, { limit: 1, excludeIds: exclude });
     return best
       ? { id: best.pin.id, address: best.pin.address, meters: best.meters, atDoor: best.atDoor }
       : null;
@@ -9450,7 +9439,7 @@ export default function MapView() {
             <NearestDoorsStrip
               doors={nearest.doors}
               nearbyTotal={nearest.total}
-              onOpen={(pin) => flyToLead(pin as unknown as MapPin)}
+              onOpen={(pin) => flyToLead(pin)}
               onHide={() => setNearestHidden(true)}
               // Above the FAB row (Locate stays put on the right), clear of the
               // home-indicator zone. The strip is the Next-door FAB's successor;

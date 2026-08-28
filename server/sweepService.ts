@@ -228,7 +228,7 @@ const reArmTimers = new Map<string, ReturnType<typeof setTimeout>>();
  */
 export function scheduleStateSweepReArm(
   parent: { tenant_id: number; state: KineticMonitoredState; created_by: number | null; max_checks_per_city: number | null },
-  start: (input: StartStateSweepInput) => unknown = startStateSweep,
+  start: (input: StartStateSweepInput) => void = startStateSweep,
 ): ReArmPlan {
   const plan = planStateSweepReArm();
   const key = `${parent.tenant_id}:${parent.state}`;

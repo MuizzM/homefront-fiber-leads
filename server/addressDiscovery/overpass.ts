@@ -67,7 +67,7 @@ function mergeOsmElements(existing: OsmElement | undefined, incoming: OsmElement
     lat: incoming.lat ?? existing.lat,
     lon: incoming.lon ?? existing.lon,
     center: incoming.center ?? existing.center,
-    tags: { ...(existing.tags ?? {}), ...(incoming.tags ?? {}) },
+    tags: { ...existing.tags, ...incoming.tags },
     nodes: (incoming.nodes?.length ?? 0) >= (existing.nodes?.length ?? 0) ? incoming.nodes : existing.nodes,
     members: (incoming.members?.length ?? 0) >= (existing.members?.length ?? 0) ? incoming.members : existing.members,
     geometry: (incoming.geometry?.length ?? 0) >= (existing.geometry?.length ?? 0) ? incoming.geometry : existing.geometry,

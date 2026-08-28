@@ -17,7 +17,8 @@
 //       is sorted by name, and the gap analysis aggregates dimensions rather
 //       than people. That is a product decision and it is enforced by shape.
 
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
+import type { Middleware } from "./middlewareTypes";
 import { rawDb } from "./db";
 import type { Capability } from "@shared/capabilities";
 import {
@@ -36,8 +37,6 @@ import {
   saveActivityState, saveOfferCatalog, saveRolePlaySession, teamProgress, teamScores,
   MAX_STATE_BYTES,
 } from "./academyStore";
-
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
 export interface AcademyRouteDeps {
   requireAuth: Middleware;

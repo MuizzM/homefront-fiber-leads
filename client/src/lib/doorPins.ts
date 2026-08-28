@@ -151,9 +151,9 @@ export function doorIconImageExpression(): MapExpr[] {
     [
       "match",
       ["get", "tag"],
-      ...DOOR_TAGS.flatMap((tag) => [tag, tag] as MapExpr[]),
+      ...DOOR_TAGS.flatMap((tag) => [tag, tag]),
       "unverified",
-    ] as unknown as MapExpr,
+    ],
   ];
 }
 
