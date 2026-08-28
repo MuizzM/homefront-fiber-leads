@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { JsonValue } from "@shared/json";
 import { rawDb } from "./db";
 
 // ── Audit-log retention (2026-07-21) ─────────────────────────────────────────
@@ -255,6 +256,6 @@ export function recordProviderOutcome(tenantId: number, success: boolean, error?
       );
 }
 
-function safeJson(value: string): unknown {
+function safeJson(value: string): JsonValue {
   try { return JSON.parse(value); } catch { return {}; }
 }

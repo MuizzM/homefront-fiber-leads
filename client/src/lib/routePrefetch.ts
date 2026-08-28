@@ -15,7 +15,7 @@
 import { queryClient } from "@/lib/queryClient";
 import { LEADS_LIST_DEFAULTS, leadsListQueryOptions } from "@/lib/leadsListQuery";
 
-type Thunk = () => Promise<unknown>;
+type Thunk = () => Promise<object>;
 
 // Exact-match routes. "/" lives here and NOT in the prefix table: every path
 // starts with "/", so a prefix entry would make an unknown route warm the
@@ -212,7 +212,7 @@ export function prefetchRoute(href: string | undefined | null): void {
   // here overlaps that ~230KB fetch with the route chunk instead of starting it
   // only once the component mounts.
   if (key === "/map" && canPrefetch()) {
-    (window as unknown as { __loadMapbox?: () => void }).__loadMapbox?.();
+    window.__loadMapbox?.();
   }
   // Never let a prefetch failure surface — the real navigation will retry the
   // import and show its own error boundary if the chunk is genuinely gone.

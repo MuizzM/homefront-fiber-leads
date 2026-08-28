@@ -187,6 +187,21 @@ describe("the official IRS Form W-9", () => {
     expect(res.headers.get("cache-control")).toContain("private");
   });
 
+  it("carries its OWN ETag, so the day-long cache still revalidates to a 304", async () => {
+    // The app disables Express's implicit MD5 ETag (server/index.ts): every
+    // /api response is no-store, so hashing each body bought a conditional
+    // request that can never arrive. This route is the one exception that was
+    // genuinely using the implicit tag - it is `private, max-age=86400`, so
+    // after a day the browser revalidates. Without an explicit ETag here that
+    // revalidation re-downloads the whole form instead of getting a 304.
+    const res = await get("/api/onboarding/w9/blank.pdf", rep.session);
+    const etag = res.headers.get("etag");
+    const { W9_TEMPLATE_SHA256 } = await import("../../server/w9Pdf");
+    // Pinned to the template's integrity hash, so it cannot drift from the
+    // bytes actually served - loadW9Template() refuses any other content.
+    expect(etag).toBe(`"${W9_TEMPLATE_SHA256}"`);
+  });
+
   it("needs a login, but not a pay capability - it carries nobody's data", async () => {
     // The FILLED W-9 holds a live SSN and stays behind payouts.pay; the blank
     // government form is a public document any rep may read.

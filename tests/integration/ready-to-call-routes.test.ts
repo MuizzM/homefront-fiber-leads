@@ -20,7 +20,7 @@ function person(name: string, role: string, tenantId = 1): Person {
   return { userId: user.id, memberId: member.id, session: storage.createSession(user.id).id };
 }
 function req(path: string, session: string, init: RequestInit = {}) {
-  return fetch(`${baseUrl}${path}`, { ...init, headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...(init.headers ?? {}) } });
+  return fetch(`${baseUrl}${path}`, { ...init, headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...init.headers } });
 }
 let seq = 900;
 function seedLead(tenantId: number, over: Record<string, any> = {}): number {

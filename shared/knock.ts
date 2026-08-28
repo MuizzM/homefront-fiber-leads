@@ -243,12 +243,12 @@ export interface RoutablePin extends LatLng {
 // Next Door candidates: unworked OR not_home (a not-home door is the highest-value
 // revisit, never a dead end). Sort: distance asc → leadScore desc → id asc (stable).
 // Returns null when everything in range is worked.
-export function nearestUnworkedLead(
+export function nearestUnworkedLead<P extends RoutablePin>(
   from: LatLng,
-  pins: RoutablePin[],
+  pins: readonly P[],
   excludeIds: ReadonlySet<number> = new Set(),
-): RoutablePin | null {
-  let best: RoutablePin | null = null;
+): P | null {
+  let best: P | null = null;
   let bestD = Infinity;
   for (const p of pins) {
     if (excludeIds.has(p.id)) continue;

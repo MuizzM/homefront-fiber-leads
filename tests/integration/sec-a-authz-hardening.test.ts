@@ -38,7 +38,7 @@ function makePerson(name: string, loginRole: string, tenantId: number, memberRol
 function request(path: string, sessionId: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, ...init.headers },
   });
 }
 const post = (path: string, session: string, body: unknown) =>

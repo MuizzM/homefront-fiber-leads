@@ -15,7 +15,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 let server: Server;
 let baseUrl: string;
@@ -35,7 +35,7 @@ function person(name: string, role: string, tenantId = 1, opts: { reportsToId?: 
 function req(path: string, session: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...init.headers },
   });
 }
 

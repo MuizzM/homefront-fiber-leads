@@ -11,7 +11,7 @@
 //
 // Neither shows up in a normal test run: the code is correct, it is just never
 // idle. These pin the accounting.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

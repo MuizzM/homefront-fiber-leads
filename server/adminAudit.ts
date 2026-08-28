@@ -18,6 +18,7 @@
 // The existing activity_log stays exactly as it is (other screens read it).
 // This is the richer, stricter stream the operations console needs, and the two
 // are written together by recordAdminAudit so no caller has to remember both.
+import type { JsonValue } from "@shared/json";
 import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
 
@@ -265,7 +266,7 @@ export function queryAdminAudit(query: AdminAuditQuery): { rows: AdminAuditRow[]
   };
 }
 
-function parseJson(raw: string | null): unknown {
+function parseJson(raw: string | null): JsonValue {
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return raw; } // truncated payloads read as text
 }

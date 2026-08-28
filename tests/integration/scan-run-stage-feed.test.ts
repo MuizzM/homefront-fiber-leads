@@ -125,7 +125,7 @@ function seedRun(runId: string) {
 function request(path: string, sessionId: string, init: RequestInit = {}) {
   return realFetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, ...init.headers },
   });
 }
 

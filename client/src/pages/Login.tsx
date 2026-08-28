@@ -6,7 +6,7 @@ import { InstallAppBanner } from "@/components/InstallAppBanner";
 
 const API_BASE = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
 
-async function apiFetch(path: string, body: object) {
+async function apiFetch(path: string, body: { email: string; code?: string }) {
   return fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

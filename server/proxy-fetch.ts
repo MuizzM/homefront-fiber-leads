@@ -307,7 +307,7 @@ export async function refreshEgressIp(): Promise<void> {
   if (_egressIpInFlight) return _egressIpInFlight;
   const done = (async () => {
     try {
-      const res = await proxyFetch(EGRESS_ECHO_URL(), { signal: AbortSignal.timeout(8_000) } as any);
+      const res = await proxyFetch(EGRESS_ECHO_URL(), { signal: AbortSignal.timeout(8_000) });
       const body: any = await res.json().catch(() => null);
       const ip = typeof body?.proxy?.ip === "string" ? body.proxy.ip
         : typeof body?.ip === "string" ? body.ip : null;
@@ -448,12 +448,12 @@ export async function proxyFetch(url: string, opts: RequestInit = {}, laneId = 0
       PROACTIVE_ROTATE_EVERY > 0 && ++_reqSinceRotate >= PROACTIVE_ROTATE_EVERY;
     if (shouldProactiveRotate) _reqSinceRotate = 0;
     try {
-      const res = await _undiciFetch(url, { ...opts, dispatcher } as any) as unknown as Response;
+      const res = await _undiciFetch(url, { ...opts, dispatcher });
       // Bandwidth governor: ledger every proxied response; a 407 from the
       // Decodo gateway means auth/limit denial — feed the circuit breaker so
       // scanning suspends instead of hammering a dead account.
       try {
-        const cl = Number((res as any).headers?.get?.("content-length") ?? 0) || 0;
+        const cl = Number(res.headers?.get?.("content-length") ?? 0) || 0;
         if (res.status === 407) noteProxyAuthFailure();
         else { noteProxySuccess(); recordProxyResponse(cl); }
         // A 2xx proves THIS egress IP is still welcome: forgive its earlier
@@ -511,11 +511,11 @@ export async function proxyFetch(url: string, opts: RequestInit = {}, laneId = 0
           const stale = lane.dispatcher;
           lane.dispatcher = buildAgent(laneUrl(proxyUrl, lane), LANE_COUNT());
           if (stale && typeof stale.close === "function") stale.close().catch(() => {});
-          return await _undiciFetch(url, { ...opts, dispatcher: lane.dispatcher } as any) as unknown as Response;
+          return await _undiciFetch(url, { ...opts, dispatcher: lane.dispatcher });
         }
         rebuildDispatcher(proxyUrl);
         console.log("[proxy-fetch] Pool rebuilt after socket reset");
-        return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
+        return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher });
       }
       // Decodo rejects the CONNECT tunnel itself on auth/limit denials, so a
       // 407 surfaces here as a thrown error, never as a response above.

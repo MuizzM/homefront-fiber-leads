@@ -40,7 +40,7 @@ function person(name: string, loginRole: string, tenantId = 1, memberRole = logi
 function call(path: string, sessionId: string, init: RequestInit = {}) {
   return realFetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, "x-csrf-token": sessionId, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, "x-csrf-token": sessionId, ...init.headers },
   });
 }
 

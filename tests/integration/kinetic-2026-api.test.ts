@@ -37,7 +37,7 @@ function req(path: string, session?: string, init: RequestInit = {}) {
     headers: {
       "content-type": "application/json",
       ...(session ? { "x-session-id": session, "x-csrf-token": session } : {}),
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
 }

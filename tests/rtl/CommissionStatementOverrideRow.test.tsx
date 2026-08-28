@@ -34,7 +34,7 @@ function doc(over: Record<string, any> = {}) {
     grossCommissionCents: 0, adjustmentCents: 0, spiffCents: 0,
     overrideCents: 37500, overrideItemCount: 5,
     hourlyPayCents: 0, earnedCents: 37500,
-    ...(over.totals ?? {}),
+    ...over.totals,
   };
   return {
     company: { name: "Northstar Fiber", supportEmail: "pay@northstar.test", logoDataUri: null },

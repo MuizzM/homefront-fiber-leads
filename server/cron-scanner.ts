@@ -21,7 +21,7 @@ function nextTwoAm():Date{
   return new Date(at);
 }
 export function getCronStatus():CronStatus{return{...status};}
-export function getEngineStatus():unknown{return{running:status.isRunning,cronRunning:status.isRunning,mode:"kinetic-address-recheck",nextRunAt:status.nextRunAt};}
+export function getEngineStatus(){return{running:status.isRunning,cronRunning:status.isRunning,mode:"kinetic-address-recheck" as const,nextRunAt:status.nextRunAt};}
 export async function triggerManualScan():Promise<void>{
   if(status.isRunning)throw new Error("Kinetic nightly recheck is already running");status.isRunning=true;status.lastRunAt=new Date().toISOString();status.totalRunCount++;
   try{const tenants=rawDb.prepare(`SELECT id FROM tenants WHERE status='active'`).all()as Array<{id:number}>;let started=0,skipped=0;for(const tenant of tenants){try{startKineticRecheck({tenantId:tenant.id});started++;}catch{skipped++;}

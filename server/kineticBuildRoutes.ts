@@ -7,7 +7,8 @@
 // The whole surface answers 404 when KINETIC_2026_BUILDS=off, so it ships dark
 // and is enabled per environment rather than by a deploy.
 
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request } from "express";
+import type { Middleware } from "./middlewareTypes";
 import { z } from "zod";
 import type { Capability } from "@shared/capabilities";
 import { getDefaultTenantId } from "./storage";
@@ -28,7 +29,6 @@ import {
 import { KINETIC_BUILD_CLASSES, TARGET_BUILD_YEAR } from "@shared/kineticBuild2026";
 import { groupIntoTerritories, routeOrder } from "@shared/kineticBuildRanking";
 
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 export interface KineticBuildRouteDeps {
   requireAuth: Middleware;
   requireCapability: (capability: Capability) => Middleware;

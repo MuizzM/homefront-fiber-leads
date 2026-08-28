@@ -27,10 +27,12 @@ const Today = lazyRoute(() => import("@/pages/Today"));
 const PropertyDetail = lazyRoute(() => import("@/pages/PropertyDetail"));
 const FollowUps = lazyRoute(() => import("@/pages/FollowUps"));
 const MapView = lazyRoute(() => {
-  // Kick the mapbox-gl CDN download (idempotent loader in index.html) the moment
-  // the route chunk is requested instead of after it parses and the component
-  // mounts — overlapping the two fetches shaves ~0.5-1.5s off time-to-map on LTE.
-  (window as unknown as { __loadMapbox?: () => void }).__loadMapbox?.();
+  // Kick the map library download (the idempotent loader installed by
+  // lib/mapLibrary.ts, which resolves an own-origin lazy maplibre-gl chunk) the
+  // moment the route chunk is requested instead of after it parses and the
+  // component mounts — overlapping the two fetches shaves ~0.5-1.5s off
+  // time-to-map on LTE.
+  window.__loadMapbox?.();
   return import("@/pages/MapView");
 });
 const Leads = lazyRoute(() => import("@/pages/Leads"));
@@ -221,9 +223,9 @@ function AppRoutes() {
       }
       if (canWarmMap && fieldRole) {
         import("@/pages/MapView");
-        // Warm the mapbox-gl CDN lib too, so a rep's first Field Map tap mounts
+        // Warm the map library chunk too, so a rep's first Field Map tap mounts
         // against an already-cached library instead of a fresh ~290KB fetch.
-        (window as unknown as { __loadMapbox?: () => void }).__loadMapbox?.();
+        window.__loadMapbox?.();
       }
     };
     const idleWindow = window as Window & {

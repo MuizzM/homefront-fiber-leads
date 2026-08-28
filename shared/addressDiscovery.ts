@@ -432,7 +432,7 @@ function canonicalTokens(value: string): string[] {
 }
 
 export function normalizeHouseNumber(value: string | undefined): string {
-  return canonicalTokens(value ?? "").join(" ").replace(/\s*([\-/])\s*/g, "$1");
+  return canonicalTokens(value ?? "").join(" ").replace(/\s*([-/])\s*/g, "$1");
 }
 
 export function normalizeStreet(value: string | undefined): string {

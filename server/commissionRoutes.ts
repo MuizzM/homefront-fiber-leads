@@ -355,7 +355,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     // clamp, the QUALIFIED-sale freeze, and the locked-week refusal all live in
     // upsertSale itself, so this route cannot reach the raw upsert without them.
     try {
-      res.status(201).json(svc.upsertSale(tid(req), uid(req), { ...(req.body || {}), serverReceivedAt: new Date().toISOString() }));
+      res.status(201).json(svc.upsertSale(tid(req), uid(req), { ...req.body, serverReceivedAt: new Date().toISOString() }));
     } catch (e) { fail(res, e); }
   });
   app.post("/api/commission/sales/:externalId/transition", requireCapability("commission.sales.write"), (req, res) => {

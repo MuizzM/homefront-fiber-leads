@@ -768,7 +768,7 @@ export function decideAddModeTap(
 // pending flag.
 export function createRafCoalescedFlush(
   flush: () => void,
-  raf: (cb: () => void) => unknown = (cb) => requestAnimationFrame(cb),
+  raf: (cb: () => void) => void = (cb) => requestAnimationFrame(cb),
 ): () => void {
   let pending = false;
   return () => {

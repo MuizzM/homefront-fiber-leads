@@ -328,5 +328,5 @@ export function setKineticEvidenceSourceForTest(
 ): void {
   if (process.env.NODE_ENV !== "test")
     throw new Error("Kinetic evidence source overrides are test-only");
-  adapter ? gateway.register(adapter) : gateway.clear();
+  if (adapter) gateway.register(adapter); else gateway.clear();
 }

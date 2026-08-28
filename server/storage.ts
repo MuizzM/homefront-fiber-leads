@@ -2974,7 +2974,7 @@ export function runMigrations() {
       raw.prepare("INSERT INTO commission_rates (name, role, rate_per_sale, is_active) VALUES ('Standard Rep Rate', 'rep', 50.00, 1)").run();
       raw.prepare("INSERT INTO commission_rates (name, role, rate_per_sale, is_active) VALUES ('Team Lead Bonus', 'team_lead', 75.00, 1)").run();
     }
-  } catch (_) {}
+  } catch {}
 
   // Duplicate-pin root fix: backfill canonical_key, MERGE existing duplicate
   // leads (preserving status history + child records), then add the UNIQUE index
@@ -4797,7 +4797,7 @@ export class Storage implements IStorage {
       tenantId,
       passNumber,
       knockedAt: safeTs,
-      ...(verdict ?? {}),
+      ...verdict,
     }).returning().get();
     bumpLeaderboardEpoch();
     // Field-metrics attribution. Deliberately AFTER the knock is durable and
@@ -5841,7 +5841,7 @@ export class Storage implements IStorage {
   findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined {
     const conds = [
       eq(commissions.leadId, leadId),
-      inArray(commissions.status, LIVE_COMMISSION_STATUSES as unknown as string[]),
+      inArray(commissions.status, [...LIVE_COMMISSION_STATUSES]),
     ];
     if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
     return db.select().from(commissions).where(and(...conds)).limit(1).get();

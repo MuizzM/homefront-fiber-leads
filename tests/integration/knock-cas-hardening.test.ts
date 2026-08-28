@@ -41,7 +41,7 @@ function makeLead(tenantId: number, assignedRepId: number) {
 function request(path: string, sessionId: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, ...init.headers },
   });
 }
 

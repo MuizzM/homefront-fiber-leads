@@ -4,23 +4,23 @@ import { rm, readFile, writeFile, copyFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-// server deps to bundle to reduce openat(2) syscalls
-// which helps cold start times
+// Server deps to bundle rather than leave external, to reduce openat(2)
+// syscalls and so help cold start times.
+//
+// Every name here must be a real dependency: the list is only ever used to
+// FILTER the package manifest (see the externals computation below), so an
+// entry for a package the repo does not have matches nothing and silently does
+// nothing. Seven such phantoms (@google/generative-ai, axios, jsonwebtoken,
+// nanoid, openai, stripe, xlsx) sat here describing a server bundle that has
+// never contained them.
 const allowlist = [
-  "@google/generative-ai",
-  "axios",
   "cors",
   "drizzle-orm",
   "drizzle-zod",
   "express",
   "express-rate-limit",
-  "jsonwebtoken",
   "multer",
-  "nanoid",
   "nodemailer",
-  "openai",
-  "stripe",
-  "xlsx",
   "zod",
 ];
 

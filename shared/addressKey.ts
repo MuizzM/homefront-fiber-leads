@@ -101,7 +101,7 @@ export function splitDisplayAddress(address: string | null | undefined): {
   const rest = houseNumber ? tokens.slice(1) : tokens;
   // The unit clause starts at the first unit designator or "#" token.
   const unitIdx = rest.findIndex((t) =>
-    /^#/.test(t) || addressTokenAliases[t.toUpperCase().replace(/[^A-Z0-9]/g, "")] === "UNIT");
+    t.startsWith('#') || addressTokenAliases[t.toUpperCase().replace(/[^A-Z0-9]/g, "")] === "UNIT");
   if (unitIdx >= 0) {
     return {
       houseNumber,

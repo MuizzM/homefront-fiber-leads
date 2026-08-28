@@ -35,7 +35,7 @@ function makePerson(name: string, loginRole: string, tenantId: number, memberRol
 }
 
 const request = (path: string, sessionId: string, init: RequestInit = {}) =>
-  fetch(`${baseUrl}${path}`, { ...init, headers: { "content-type": "application/json", "x-session-id": sessionId, ...(init.headers ?? {}) } });
+  fetch(`${baseUrl}${path}`, { ...init, headers: { "content-type": "application/json", "x-session-id": sessionId, ...init.headers } });
 const post = (path: string, session: string, body?: unknown) =>
   request(path, session, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 const put = (path: string, session: string, body: unknown) =>

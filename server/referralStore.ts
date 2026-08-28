@@ -272,7 +272,7 @@ export function migrateReferralProgramLive(nowIso: string): ReferralMigrationRec
         after = { ...DEFAULT_REFERRAL_CONFIG };
         action = "row-created";
       } else {
-        after = { ...DEFAULT_REFERRAL_CONFIG, ...(before ?? {}), enabled: true, rewardCents: 50_000, requiredApprovedSales: 6 };
+        after = { ...DEFAULT_REFERRAL_CONFIG, ...before, enabled: true, rewardCents: 50_000, requiredApprovedSales: 6 };
         action = before && before.enabled === true && before.rewardCents === 50_000 && before.requiredApprovedSales === 6
           ? "already-live" : "enabled";
       }

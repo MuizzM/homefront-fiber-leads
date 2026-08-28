@@ -41,7 +41,6 @@ vi.mock("../../server/hourlyPay", async (importOriginal) => {
 });
 
 let svc: typeof import("../../server/commissionService");
-let ov: typeof import("../../server/overrideStore");
 let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: import("better-sqlite3").Database;
 let weekBoundsFor: (typeof import("../../shared/workweek"))["weekBoundsFor"];
@@ -83,7 +82,6 @@ beforeAll(async () => {
   storage = mod.storage;
   ({ rawDb } = await import("../../server/db"));
   svc = await import("../../server/commissionService");
-  ov = await import("../../server/overrideStore");
   ({ weekBoundsFor } = await import("../../shared/workweek"));
 
   rawDb.prepare(
