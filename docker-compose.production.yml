@@ -50,7 +50,8 @@ services:
       # One-burst-per-24h: re-check legacy "green" targets that lack an authoritative
       # conclusive NEW-FIBER+N snapshot so they become real assignable pins. Runs as
       # MAINTENANCE-class recheck (share-capped; never crowds revenue checks).
-      GREEN_REVERIFY: "on"
+      # 2026-08-28 STOP — see the block below. Last automatic producer running.
+      GREEN_REVERIFY: "off"
       # Rumor-driven territory probes (bounded city sweeps, MAINTENANCE class,
       # idempotent per city, 2 starts/15min tick — see server/exploreCities.ts).
       # Durham tip 2026-07-18: research (directory + Uniti build reports + ILEC/OCN
@@ -186,7 +187,8 @@ services:
       # (d) finalizeAddressNotFoundBacklog is async + chunk-yielding. ANF_BACKFILL
       # terminalizes the exhausted needs-fix tail (the ~81%-of-checks churn);
       # FRESH_LEAD_BOOT_BACKFILL promotes existing greens straight to the map.
-      FRESH_LEAD_BOOT_BACKFILL: "on"
+      # 2026-08-28 STOP — see the block below. Full boot-time pass on the write lock.
+      FRESH_LEAD_BOOT_BACKFILL: "off"
       ANF_BACKFILL: "off"
       # ── GA / SC FEEDER ROLLOUT (partial: light feeders ON, heavy ones staged) ──
       # These producers put GA/SC addresses INTO scan_targets. Paused during the
@@ -663,6 +665,62 @@ services:
       # p95 and perf.loop_lag for a full cycle.
       COMING_SOON_PROGRAM: "off"
       COMING_SOON_WATCHLIST: "off"
+
+      # ── 2026-08-28 STOP: "shut all the scans and new things down for now" ────
+      # Logins and code-sends were taking many seconds. Cause is not the auth
+      # code (it is lean, and the OTP mail is already fire-and-forget) but the
+      # ONE SQLite write lock: better-sqlite3 is synchronous, so every write
+      # runs on the event loop, and `update sessions set expires_at` runs on
+      # EVERY authenticated request. When a background writer holds the lock,
+      # every request queues behind it up to SQLITE_BUSY_TIMEOUT_MS (120s).
+      # The 2026-08-27 stop caught the producers; these are what was left.
+      #
+      # Each line below was ON. Two were set here; the rest were ON BY DEFAULT
+      # and so appeared nowhere in this file - the same "producer nobody knew
+      # was running" shape that took production down on 08-09 and 08-27. They
+      # are now pinned explicitly so the next audit can read the state instead
+      # of inferring it.
+
+      # The last automatic scan producer still running: a 24h burst re-checking
+      # legacy greens. MAINTENANCE-class, but it still writes. Flipped at its
+      # original declaration above, not redeclared here: a duplicate YAML key
+      # resolves by parser order, which is not a thing to leave to chance in the
+      # file that configures production.
+      # Heavy synchronous boot sweep that promotes greens to the map. Deferred
+      # past the health gate and chunk-yielding, but it is still a full pass
+      # over scan_targets on the one write lock at every boot - i.e. on every
+      # deploy, exactly when the app is least able to absorb it. Also flipped at
+      # its original declaration above rather than redeclared here.
+      # A 300-row synchronous repair pass on a 120s timer, forever.
+      ADDRESS_REPAIR_LANE: "off"
+      # Walks every tenant's doors and writes three score columns, on a timer.
+      # No provider calls and no spend, but the write lock does not care.
+      BUYER_SCORE_JOB: "off"
+      # Fan-out writer (800m radius, 200 doors per flip) belonging to the same
+      # Coming-Soon machinery whose COUNT query took production down on 08-27.
+      COMING_FLIP_PROPAGATION: "off"
+      # Address-inventory harvest. Its parent ENABLE_STATE_MONITORING is off, so
+      # this should be unreachable - pinned anyway, because "gated by a parent"
+      # is exactly the assumption that has been wrong twice.
+      ENABLE_STATE_ADDRESS_HARVEST: "off"
+      # Sub-flags of already-off parents (NEIGHBORHOOD_SWEEP, EXPANSION_ENABLED).
+      # Pinned for the same reason: no producer state should be implicit.
+      NEIGHBORHOOD_SWEEP_E911: "off"
+      SWEEP_PARK_DEAD_STREETS: "off"
+      EXPANSION_OSM: "off"
+      EXPANSION_CITY_BOUNDARY: "off"
+      #
+      # DELIBERATELY LEFT ON — turning these off would HURT:
+      #   SCAN_ONCE_ONLY, SCAN_ENQUEUE_DEDUP, SCAN_EVENTS_BATCH,
+      #   SCOPE_KINETIC_NC_SC  - restraints and batching. Off = MORE work.
+      #   CALLBACK_REMINDERS   - reps' callbacks; a field promise, not a scan.
+      #   VENDOR_ORDER_WORKER, COMMISSION_FILE_WORKER, OUTBOX_PRUNE - order,
+      #                          commission and outbox delivery. Business, not scans.
+      #   RADAR_LIVE           - leaves the Kinetic adapter enabled so a manager
+      #                          can still run something deliberately. Set it to
+      #                          "off" to refuse provider calls outright.
+      # To restore: re-enable ONE at a time, watching /api/health p95 and
+      # perf.loop_lag for a full cycle, per the 08-27 note above.
       DAILY_MARKET_REFRESH: "off"
       NEWBUILD_RADAR: "off"
       # CLUSTER EXPANSION — ON (operator, 2026-07-21: "if we found new builds
