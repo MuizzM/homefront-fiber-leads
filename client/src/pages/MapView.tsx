@@ -5823,11 +5823,11 @@ export default function MapView() {
           `/api/geocode?q=${encodeURIComponent(query)}`,
         );
         const data = await res.json();
-        if (!res.ok || data.lng == null) {
-          toast({
-            title: data.error || "Address not found",
-            variant: "destructive",
-          });
+        // The ONLY failure that reaches here is a 2xx carrying no coordinates:
+        // apiRequest throws on every error status, so 404/429/503 are the
+        // catch's to report, not this branch's.
+        if (data.lng == null) {
+          toast({ title: `No match for \u201c${query}\u201d`, variant: "destructive" });
           return;
         }
         const map = mapRef.current;
@@ -5867,7 +5867,28 @@ export default function MapView() {
             : undefined,
         });
       } catch (e: any) {
-        toast({ title: "Address lookup failed", variant: "destructive" });
+        // /api/geocode separates "no such address" (404) from "every provider
+        // is down" (503) on purpose: reporting both as one failed lookup is
+        // exactly how a retired Mapbox token read as "not found" on every
+        // search for weeks. That distinction arrived here and was thrown away.
+        // ApiError.message is `"<status>: <server wording>"`, so the status
+        // picks the headline and the server's own text carries the detail.
+        const status = e?.status as number | undefined;
+        const detail = String(e?.message ?? "").replace(/^\d{3}:\s*/, "").trim();
+        toast({
+          title:
+            status === 404
+              ? `No match for \u201c${query}\u201d`
+              : status === 429
+                ? "Too many address lookups"
+                : status === 503
+                  ? "Address lookup is unavailable"
+                  : "Address lookup failed",
+          // A 404 headline already says everything; anything else owes the rep
+          // a reason they can repeat to whoever can fix it.
+          description: status === 404 ? undefined : detail || undefined,
+          variant: "destructive",
+        });
       } finally {
         setGeocoding(false);
       }
