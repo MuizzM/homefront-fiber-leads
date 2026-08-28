@@ -21,7 +21,7 @@ const roster = (over: Partial<Record<number, Partial<UplineChainMemberInput>>> =
     { id: 4, role: "rep", reportsToId: 1, active: true },
     { id: 5, role: "manager", reportsToId: null, active: true },
   ];
-  return new Map(base.map(m => [m.id, { ...m, ...(over[m.id] ?? {}) }]));
+  return new Map(base.map(m => [m.id, { ...m, ...over[m.id] }]));
 };
 
 describe("downlineOf - BFS below a root, cycle-safe", () => {

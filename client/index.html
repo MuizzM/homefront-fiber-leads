@@ -56,7 +56,12 @@
 
          Preconnects point at the tile and glyph hosts the map actually reaches
          for on its first frame. -->
-    <link rel="preconnect" href="https://mt1.google.com" />
+         Both carry crossorigin: MapLibre fetches tiles and glyphs with a
+         constructed Request, which defaults to mode 'cors', and a bare
+         preconnect warms a credentialed connection an anonymous CORS fetch
+         cannot reuse - so without it the first tile still paid full
+         DNS+TCP+TLS, which is the whole cost this tag exists to remove. -->
+    <link rel="preconnect" href="https://mt1.google.com" crossorigin />
     <link rel="preconnect" href="https://fonts.openmaptiles.org" crossorigin />
   </head>
   <body>

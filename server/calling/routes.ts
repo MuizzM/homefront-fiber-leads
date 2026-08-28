@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Express, NextFunction, Request, Response } from "express";
+import type { Middleware } from "../middlewareTypes";
 import { z } from "zod";
 import { can, type Capability, type Role } from "@shared/capabilities";
 import { CALLING_DECISIONS } from "@shared/calling";
@@ -59,8 +60,6 @@ import {
 import {
   traceLeadNow, startQueueTrace, getQueueTraceRun, latestQueueTraceRun, queueTraceMaxLeads,
 } from "./leadTracing";
-
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
 export type CallingRouteDeps = {
   requireAuth: Middleware;

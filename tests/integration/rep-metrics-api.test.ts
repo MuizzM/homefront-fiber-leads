@@ -176,7 +176,7 @@ function request(path: string, sessionId?: string, init: RequestInit = {}) {
     headers: {
       "content-type": "application/json",
       ...(sessionId ? { "x-session-id": sessionId } : {}),
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
 }
@@ -414,6 +414,25 @@ describe("supervisor scope", () => {
     const ids = rows.map((r: any) => r.repId);
     expect(ids).toContain(repA1Rep);
     expect(ids).not.toContain(repB1Rep);
+  });
+
+  it("and the same in reverse - the branch wall is symmetric, not id-ordered", async () => {
+    // managerB's fixtures existed for this case and nothing asserted it: every
+    // scope test above looks outward from managerA. A subtree walk that
+    // compared ids, or that treated the FIRST manager as privileged, would
+    // satisfy all of them and still leak here.
+    const res = await request("/api/metrics/team", managerBSession);
+    expect(res.status).toBe(200);
+    const { rows } = await res.json();
+    const ids = rows.map((r: any) => r.repId);
+    expect(ids).toContain(repB1Rep);
+    expect(ids).not.toContain(repA1Rep);
+    expect(ids).not.toContain(repA2Rep);
+  });
+
+  it("and a peer manager drilling into the other branch's rep gets the same 404", async () => {
+    const res = await request(`/api/metrics/rep/${repA1Rep}`, managerBSession);
+    expect(res.status).toBe(404);
   });
 
   it("404s, not 403s, when a manager drills into another branch's rep", async () => {

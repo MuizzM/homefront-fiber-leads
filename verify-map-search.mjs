@@ -52,7 +52,7 @@ await page.waitForTimeout(2500);
 const out = await page.evaluate((addr) => {
   const rows = [...document.querySelectorAll('[role="dialog"][aria-label="Search locations"] button')]
     .map((b) => b.textContent?.trim().slice(0, 60))
-    .filter((t) => t && !/^Close/.test(t));
+    .filter((t) => t && !t.startsWith('Close'));
   return {
     rows,
     empty: document.querySelector('[data-testid="map-search-empty"]')?.textContent?.trim() ?? null,

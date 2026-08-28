@@ -36,7 +36,8 @@
 // tick) rather than computed lazily at read time — the durable column stays
 // truthful for EVERY reader (map filters, ad-hoc SQL, future routes), not just
 // one endpoint that happens to know the lazy rule.
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
+import type { Middleware } from "./middlewareTypes";
 import { rawDb } from "./db";
 import { getDefaultTenantId } from "./storage";
 import { startTargetRun } from "./scanService";
@@ -310,7 +311,6 @@ export function startComingSoonWatchlist(): NodeJS.Timeout | null {
 /** Test/shutdown hook. */
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 export interface ComingSoonRouteDeps {
   requireAuth: Middleware;
   requireManager: Middleware;

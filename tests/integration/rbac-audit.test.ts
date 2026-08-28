@@ -47,7 +47,7 @@ const ids = {
 function req(path: string, sessionId: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, ...init.headers },
   });
 }
 
@@ -191,7 +191,7 @@ describe("reps are fail-closed on everything above their grade", () => {
   ];
   for (const [method, path, init] of denied) {
     it(`${method} ${path} → 403 for a rep`, async () => {
-      const res = await req(path, who.rep1.session, { method, ...(init ?? {}) });
+      const res = await req(path, who.rep1.session, { method, ...init });
       expect(res.status).toBe(403);
     });
   }

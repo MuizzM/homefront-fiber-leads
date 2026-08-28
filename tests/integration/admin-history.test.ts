@@ -30,7 +30,7 @@ let otherTenantId = 0;
 function req(path: string, sessionId: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, "x-csrf-token": sessionId, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, "x-csrf-token": sessionId, ...init.headers },
   });
 }
 

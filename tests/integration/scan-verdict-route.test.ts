@@ -90,7 +90,7 @@ afterAll(async () => {
 async function api(path: string, init?: RequestInit) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, ...(init?.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, ...init?.headers },
   });
 }
 

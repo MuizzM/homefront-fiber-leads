@@ -101,8 +101,8 @@ export function resolveCommissionTerms(
     ...DEFAULT_COMMISSION_TERMS,
     ...tenantDefaults(tenantId),
     ...inviteTerms(tenantId, repId),
-    ...(storedRepTerms(repId) ?? {}),
-    ...(override ?? {}),
+    ...storedRepTerms(repId),
+    ...override,
   };
   // Normalised on the way out so a stored value that has since become invalid
   // (a ladder with a gap, a negative cap) cannot reach a contract.

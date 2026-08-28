@@ -18,7 +18,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 let server: Server;
 let baseUrl: string;
 let storage: (typeof import("../../server/storage"))["storage"];
-let rawDb: import("better-sqlite3").Database;
 
 type Person = { userId: number; memberId: number; session: string };
 const fx: Record<string, Person> = {};
@@ -33,7 +32,7 @@ function person(name: string, role: string, tenantId = 1, opts: { reportsToId?: 
 function req(path: string, session: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...init.headers },
   });
 }
 
@@ -74,7 +73,6 @@ beforeAll(async () => {
   const mod = await import("../../server/storage");
   mod.runMigrations();
   storage = mod.storage;
-  ({ rawDb } = await import("../../server/db"));
 
   fx.admin = person("Ada Admin", "admin");
   fx.manager = person("Mona Manager", "manager");

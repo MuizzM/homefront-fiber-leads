@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
+import type { Middleware } from "../middlewareTypes";
 import { z } from "zod";
 import {
   geometryBbox,
@@ -31,8 +32,6 @@ import {
 } from "./store";
 import { bboxPolygon } from "./types";
 import { planDiscoveryTiles } from "@shared/addressDiscovery";
-
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 
 export interface DiscoveryRouteDeps {
   /** Body parser for the one documented large-upload surface (CSV/GeoJSON

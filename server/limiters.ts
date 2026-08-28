@@ -242,16 +242,6 @@ export const moneyExportLimiter = createPerUserLimiter({
   message: "Export budget reached. Try again in an hour.",
 });
 
-// Owner lookup rate limit: generous by default (unlimited budget posture) —
-// remains only as an abuse tripwire, never a workflow blocker. 500/hr per IP.
-export const ownerLookupLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 500,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Owner lookup limit reached. Try again in an hour." },
-});
-
 // Public rep-application form: 5 submissions / hour per IP. This endpoint is
 // unauthenticated and writes up to 20 MB of uploads to disk per request, so a
 // tight cap is the primary defense against disk-exhaustion / spam abuse.

@@ -62,16 +62,14 @@ describe("throughput-matched dispatch", () => {
     expect(total).toBeGreaterThan(600); // never collapses to the old 500-ish cap
   });
 
-  it("never freezes dispatch when the provider has completed nothing (cold start)", async () => {
-    process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-throughput-cold-"));
-    // Fresh module registry so a cold DB is used for this case.
-    const cold = await import("../../server/yieldEngine?cold" as any).catch(() => yieldEngine);
-    expect(typeof cold.runYieldCycle).toBe("function");
-    // With zero recent checks the floor (500) still applies — proven by the
-    // capacity formula, asserted directly to keep the guarantee explicit.
-    const floorApplies = Math.max(500, Math.round((0 * 2) / 1));
-    expect(floorApplies).toBe(500);
-  });
+  // The cold-start guarantee - zero completed checks must not freeze dispatch -
+  // is asserted in tests/unit/throughput-spiral.test.ts against the real
+  // provenHourlyCapacity(0, 0). It used to be restated here as
+  // `expect(Math.max(500, Math.round((0 * 2) / 1))).toBe(500)`, which is
+  // arithmetic: it passes no matter what the engine does, so it could not fail
+  // and was not coverage. The module-reload trick it used to force a cold DB
+  // did not work either - better-sqlite3's handle is already open by then, and
+  // the import fell back to the same instance.
 
   it("the kill-switch restores the configured budget", () => {
     process.env.YIELD_THROUGHPUT_MATCH = "off";

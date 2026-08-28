@@ -161,6 +161,11 @@ export function dedupeLeads<T extends DedupableLead>(
   // that sit on the same rounded rooftop with the same house number are one
   // physical door. Group survivors by rooftopKey and collapse again.
   const byRoof = new Map<string, string>(); // rooftopKey -> surviving houseKey
+  // The spread is load-bearing, not a stylistic copy: this loop calls
+  // survivors.delete() on its own map, so it must iterate a SNAPSHOT taken
+  // before the first deletion. Iterating `survivors` directly would be
+  // mutation during iteration. (A linter will offer to remove the spread as
+  // "useless" - it is not.)
   for (const [key, survivor] of [...survivors]) {
     const roof = rooftopKey(survivor);
     if (!roof) continue;

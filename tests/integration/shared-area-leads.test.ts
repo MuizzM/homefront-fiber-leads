@@ -25,7 +25,7 @@ function person(name: string, role: string, tenantId = 1, reportsToId: number | 
 }
 function req(path: string, session: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, { ...init, headers: {
-    "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...(init.headers ?? {}) } });
+    "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...init.headers } });
 }
 const SQ = [[-80.41, 35.49], [-80.39, 35.49], [-80.39, 35.51], [-80.41, 35.51], [-80.41, 35.49]];
 let n = 0;
