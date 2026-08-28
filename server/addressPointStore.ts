@@ -34,7 +34,7 @@
 
 import { rawDb } from "./db";
 import { pointInPolygon } from "@shared/geo";
-import { premiseBaseKey } from "@shared/addressKey";
+import { canonicalAddressPart, premiseBaseKey } from "@shared/addressKey";
 
 export interface AddressPoint {
   id: number;
@@ -407,4 +407,85 @@ export function streetNameOf(stAddress: string | null | undefined): string {
   return withoutNumber
     .toLowerCase()
     .replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+// ── Forward lookup: a typed address → the E911 point for that house ─────────
+//
+// The rep's search box used to depend entirely on a paid provider being alive.
+// It is not: this table already holds every addressable structure in the
+// imported counties, and `canonical_key` is already a PER-HOUSE key
+// ("117 CARRIAGE LN|SALISBURY|NC"), built by the same premiseBaseKey() the lead
+// tables use. So the exact address a rep types can be answered from our own
+// data - free, offline, and with no token to expire.
+//
+// Deliberately HOUSE-LEVEL only. The street part must begin with a house
+// number, so "Salisbury, NC" or "Carriage Ln" fall through to the geocoders
+// rather than matching some arbitrary point on the street: a confident wrong
+// pin is worse than no pin. A miss returns null and the caller pays a provider
+// exactly as before.
+
+/** A free-text address split into the parts premiseBaseKey needs. */
+export function parseAddressQuery(query: string): {
+  street: string; city: string; state: string | null; zip: string | null;
+} | null {
+  const parts = String(query ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+
+  const street = parts[0];
+  // House-level only: a leading number is what makes this lookup unambiguous.
+  if (!/^\d/.test(street)) return null;
+
+  // Everything after the street is re-joined and tokenized, so the comma-less
+  // tail ("Salisbury NC 28146") parses the same as the comma-separated one.
+  const rest = parts.slice(1).join(" ").trim().split(/\s+/).filter(Boolean);
+  let zip: string | null = null;
+  let state: string | null = null;
+  if (rest.length && /^\d{5}(-\d{4})?$/.test(rest[rest.length - 1])) {
+    zip = rest.pop()!.slice(0, 5);
+  }
+  if (rest.length && /^[A-Za-z]{2}$/.test(rest[rest.length - 1])) {
+    state = rest.pop()!.toUpperCase();
+  }
+  const city = rest.join(" ");
+  if (!city) return null;
+  return { street, city, state, zip };
+}
+
+/**
+ * The E911 point for a typed address, or null when we do not hold it.
+ *
+ * With a state, this is an equality hit on the canonical_key index. Without one
+ * ("117 Carriage Ln, Salisbury"), it is a RANGE scan over the same index rather
+ * than a LIKE: SQLite's LIKE is case-insensitive for ASCII and would refuse the
+ * index, turning a rep's keystroke into a full table scan of a million rows.
+ */
+export function lookupAddressPointByAddress(query: string): AddressPoint | null {
+  ensureAddressPointSchema();
+  const parsed = parseAddressQuery(query);
+  if (!parsed) return null;
+
+  const { street, city, state, zip } = parsed;
+  let rows: any[];
+  if (state) {
+    rows = rawDb.prepare(
+      `SELECT * FROM address_points WHERE canonical_key = ? LIMIT 25`,
+    ).all(premiseBaseKey(street, city, state));
+  } else {
+    const prefix = `${canonicalAddressPart(street)}|${canonicalAddressPart(city)}|`;
+    rows = rawDb.prepare(
+      `SELECT * FROM address_points
+        WHERE canonical_key >= ? AND canonical_key < ?
+        LIMIT 25`,
+    ).all(prefix, `${prefix}￿`);
+  }
+  if (rows.length === 0) return null;
+
+  // A typed ZIP is a tiebreaker, never a filter: the state E911 rows carry the
+  // postal ZIP and a rep may type the mailing one, so a ZIP that matches wins
+  // and a ZIP that matches nothing still returns the address.
+  if (zip) {
+    const exact = rows.find((r) => String(r.zip ?? "").slice(0, 5) === zip);
+    if (exact) return ROW_TO_POINT(exact);
+  }
+  return ROW_TO_POINT(rows[0]);
 }

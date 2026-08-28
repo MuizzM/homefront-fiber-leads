@@ -1,0 +1,166 @@
+name: Install Mapbox token (production)
+
+# Installs / rotates MAPBOX_TOKEN in /srv/homefront/.env on the production host
+# and recreates the app so the new value is live.
+#
+# WHY THIS EXISTS: address search runs SERVER-SIDE (server/geocoder.ts calls
+# api.mapbox.com from Node). When the token is retired, every lookup 401s. The
+# value lives in the host .env - never in git - so rotating it previously meant
+# an SSH session. This workflow makes it a dispatch with a repository secret,
+# so the token is pasted into GitHub's secret store and never into a commit,
+# a PR, a chat, or a log.
+#
+# THE TOKEN MUST NOT CARRY URL RESTRICTIONS. Mapbox URL-scoped tokens are
+# validated against the Referer header, and a server-side fetch from Node sends
+# none - so a URL-restricted token rejects every geocode with a 403 that looks
+# exactly like the outage it was meant to fix. (DEPLOY_HETZNER.md's suggestion
+# to scope it to https://homefrontsolutionsllc.com/* predates server-side
+# geocoding and would also miss the real host, portal.homefrontsolutionsllc.com.)
+#
+# Unlike host-env-keys.yml, this workflow DOES replace an existing value: the
+# whole point is to retire a dead token. Hence the explicit confirm input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type "install" to confirm (the app container restarts briefly)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-env-keys        # shares the lock with the other .env writer
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install the token and restart the app
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - name: Refuse without explicit confirmation
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "install" ]; then
+            echo 'Refusing: the confirm input must be exactly "install".' >&2
+            exit 1
+          fi
+
+      - name: Install the token on the production host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS MAPBOX_TOKEN; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production value $required is not configured" >&2
+              exit 1
+            fi
+          done
+          # Keep the value out of every log line, including `set -x` traces and
+          # any accidental echo in a later step.
+          echo "::add-mask::$MAPBOX_TOKEN"
+          case "$MAPBOX_TOKEN" in
+            pk.*|sk.*) : ;;
+            *) echo "Refusing: MAPBOX_TOKEN does not look like a Mapbox token (pk. or sk.)" >&2; exit 1 ;;
+          esac
+          case "$MAPBOX_TOKEN" in
+            *[![:print:]]*|*$'\n'*) echo "Refusing: MAPBOX_TOKEN contains non-printable characters" >&2; exit 1 ;;
+          esac
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          SSH=(ssh -i "$HOME/.ssh/id_ed25519"
+               -o BatchMode=yes -o ConnectTimeout=15
+               -o ServerAliveInterval=15 -o ServerAliveCountMax=12
+               -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+               -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+               "$DEPLOY_USER@$DEPLOY_HOST")
+
+          # Ship the value over STDIN, never as an argument: a command-line
+          # argument is visible in `ps` on the host for the life of the call.
+          printf '%s' "$MAPBOX_TOKEN" | "${SSH[@]}" \
+            'umask 077; cd /srv/homefront && cat > .mapbox-token.new'
+
+          "${SSH[@]}" bash -s <<'REMOTE'
+          set -euo pipefail
+          cd /srv/homefront
+          umask 077
+          touch .env
+          trap 'rm -f .mapbox-token.new' EXIT
+
+          TOKEN="$(cat .mapbox-token.new)"
+          [ -n "$TOKEN" ] || { echo "Token file arrived empty" >&2; exit 1; }
+
+          # Validate against Mapbox BEFORE touching .env: installing a token that
+          # does not work would restart the app into the same outage, and the
+          # 401 would again be indistinguishable from "address not found".
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 --get \
+                    --data-urlencode "access_token=$TOKEN" \
+                    --data 'country=us&limit=1' \
+                    'https://api.mapbox.com/geocoding/v5/mapbox.places/117%20Carriage%20Ln%2C%20Salisbury%2C%20NC%2028146.json')"
+          if [ "$CODE" != "200" ]; then
+            echo "Refusing: Mapbox rejected this token (HTTP $CODE). A 401 means it is invalid or retired; a 403 usually means it carries URL restrictions, which a server-side call can never satisfy." >&2
+            exit 1
+          fi
+          echo "Mapbox accepted the token (HTTP 200) - installing."
+
+          # Replace an existing line in place, else append. The old value is kept
+          # in a timestamped backup so a bad rotation is recoverable.
+          cp .env ".env.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+          if grep -q '^MAPBOX_TOKEN=' .env; then
+            grep -v '^MAPBOX_TOKEN=' .env > .env.next
+            ACTION="replaced"
+          else
+            cp .env .env.next
+            ACTION="added"
+          fi
+          printf 'MAPBOX_TOKEN=%s\n' "$TOKEN" >> .env.next
+          mv .env.next .env
+          echo "MAPBOX_TOKEN $ACTION in .env (value not shown)"
+
+          TAG="$(cat .deployed-tag 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            RUNNING="$(docker ps --filter 'ancestor=homefront-app' --format '{{.Image}}' | head -n1)"
+            TAG="${RUNNING##*:}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Could not determine the running image tag - refusing to guess" >&2
+            exit 1
+          fi
+
+          APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+            up -d --force-recreate --no-deps app </dev/null
+
+          # Prove the app process can see it, without printing it.
+          for i in $(seq 1 30); do
+            if APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml \
+                exec -T app sh -c '[ -n "$MAPBOX_TOKEN" ]' </dev/null; then
+              echo "The app process can see MAPBOX_TOKEN. Address search is live."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "The app did not report MAPBOX_TOKEN within 60s - check the container" >&2
+          exit 1
+          REMOTE
