@@ -235,14 +235,14 @@ const DIMENSION_REMEDY: Readonly<Record<ScoreDimension, { text: string; activity
   introduction: { text: "Run the timed ten-second practice until it fits without rushing.", activityId: "act-timed-intro" },
   clarity: { text: "Rebuild your pitch in the Pitch Lab and cut it under thirty seconds.", activityId: "act-pitch-lab" },
   discovery: { text: "Pick two discovery questions and commit to asking one before any benefit.", activityId: "act-discovery-blocks" },
-  listening: { text: "Practise labeling: name their concern out loud before you answer it.", activityId: "act-branch-price" },
-  empathy: { text: "Work the objection drills. Every one starts with acknowledgement.", activityId: "act-objection-bad_experience" },
-  benefitAlignment: { text: "Read the archetypes lesson again, then role-play the persona you scored worst against.", activityId: "act-archetypes" },
+  listening: { text: "Stop the pitch the moment they mention something specific, and ask about that instead.", activityId: "act-three-sins" },
+  empathy: { text: "Work the objection drills. Every one starts with acknowledgement.", activityId: "act-objection-too_busy" },
+  benefitAlignment: { text: "Role-play the remote worker and lead with the outcome she already feels, not the specification.", activityId: "act-roleplay-remote" },
   objectionHandling: { text: "Run the objection drills back to back.", activityId: "act-objection-not_interested" },
   accuracy: { text: "Open today's offer card before every shift and quote nothing else.", activityId: "act-claims-card" },
   compliance: { text: "Re-read the never-say list and the compliance scenarios.", activityId: "act-never-say" },
-  closing: { text: "Practise the two-slot ask, and the respectful exit that is also a close.", activityId: "act-two-day" },
-  professionalism: { text: "Role-play the senior resident. Pressure shows up there first.", activityId: "act-roleplay-senior" },
+  closing: { text: "Practise the two-slot ask, and the respectful exit that is also a close.", activityId: "act-closes" },
+  professionalism: { text: "Role-play the satisfied customer. Pressure shows up first where there is nothing to win.", activityId: "act-roleplay-satisfied" },
 };
 
 /** The dimensions this rep is weakest at, with something to do about each. */

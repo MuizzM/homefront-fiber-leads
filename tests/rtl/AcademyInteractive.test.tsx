@@ -24,7 +24,9 @@ import ObjectionDojo from "@/components/academy/ObjectionDojo";
 import PitchLab from "@/components/academy/PitchLab";
 import ReferenceLibrary from "@/components/academy/ReferenceLibrary";
 import RolePlayCoach from "@/components/academy/RolePlayCoach";
-import { BRANCH_TREES, SCENARIO_SETS, getScenarioSet } from "@shared/academyPath";
+import ActivityComplete from "@/components/academy/ActivityComplete";
+import { BRANCH_TREES, PATH_STAGES, SCENARIO_SETS, getActivity, getScenarioSet } from "@shared/academyPath";
+import { certificationStatuses, computePathProgress, type ActivityRecord } from "@shared/academyProgress";
 import { ACADEMY_OBJECTIONS } from "@shared/academyObjections";
 import type { AcademyOffer } from "@shared/academyOffers";
 
@@ -469,5 +471,96 @@ describe("role-play coach", () => {
     expect(screen.queryByTestId("score-transcript")).toBeNull();
     fireEvent.click(screen.getByTestId("score-transcript-toggle"));
     expect(screen.getByTestId("score-transcript")).toBeTruthy();
+  });
+});
+
+// ── The moment after an activity ──────────────────────────────────────────────
+//
+// The screen a new rep sees more often than any other. It has to acknowledge
+// what happened WITHOUT congratulating a failed attempt, and it has to put the
+// next thing one tap away, which is the only reason anybody does a second one.
+describe("activity complete", () => {
+  const firstStage = PATH_STAGES[0];
+  const first = firstStage.activities[0];
+  const scored = PATH_STAGES.flatMap((s) => s.activities).find((a) => a.passScore != null)!;
+
+  function done(ids: { id: string; score?: number }[]): ActivityRecord[] {
+    return ids.map(({ id, score }) => ({
+      activityId: id, completedAt: "2026-08-27T12:00:00.000Z", score: score ?? null,
+    }));
+  }
+
+  function renderComplete(records: ActivityRecord[], target: { activity: any; score?: number; earnedBefore: string[] }, handlers: any = {}) {
+    return render(
+      <ActivityComplete
+        target={target}
+        progress={computePathProgress(records)}
+        certifications={certificationStatuses(records)}
+        onNext={handlers.onNext ?? (() => {})}
+        onRetry={handlers.onRetry ?? (() => {})}
+        onBackToPath={handlers.onBackToPath ?? (() => {})}
+      />,
+    );
+  }
+
+  it("acknowledges the activity and puts the next one a single tap away", () => {
+    const onNext = vi.fn();
+    renderComplete(done([{ id: first.id }]), { activity: first, earnedBefore: [] }, { onNext });
+
+    expect(screen.getByTestId("activity-complete-title").textContent).toBe(first.title);
+    expect(screen.getByTestId("activity-complete-line").textContent).toContain("behind you");
+    expect(screen.getByTestId("activity-complete-stage-count").textContent).toContain(`1 of ${firstStage.activities.length}`);
+
+    fireEvent.click(screen.getByTestId("activity-complete-next-start"));
+    expect(onNext).toHaveBeenCalledTimes(1);
+    // The next activity offered is the path's own resume target, never a guess.
+    expect(onNext.mock.calls[0][0].id).toBe(firstStage.activities[1].id);
+  });
+
+  it("does not congratulate a score under the bar, and offers the same drill again", () => {
+    const onRetry = vi.fn();
+    const under = Math.max(0, (scored.passScore ?? 60) - 20);
+    renderComplete(done([{ id: scored.id, score: under }]), { activity: scored, score: under, earnedBefore: [] }, { onRetry });
+
+    expect(screen.getByTestId("activity-complete-head").textContent).toContain("Attempt logged");
+    expect(screen.getByTestId("activity-complete-line").textContent).toContain(`the bar is ${scored.passScore}`);
+    expect(screen.queryByTestId("activity-complete-next-start")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("activity-complete-retry"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks the stage complete only once every activity in it has passed", () => {
+    const partial = done(firstStage.activities.slice(0, -1).map((a) => ({ id: a.id, score: a.passScore ?? undefined })));
+    const { unmount } = renderComplete(partial, { activity: firstStage.activities[0], earnedBefore: [] });
+    expect(screen.queryByTestId("stage-complete-banner")).toBeNull();
+    unmount();
+
+    const all = done(firstStage.activities.map((a) => ({ id: a.id, score: a.passScore ?? undefined })));
+    renderComplete(all, { activity: firstStage.activities[firstStage.activities.length - 1], earnedBefore: [] });
+    expect(screen.getByTestId("stage-complete-banner")).toBeTruthy();
+  });
+
+  // The certification banner is the biggest moment in the tab, so it may only
+  // appear for a certification this activity actually produced.
+  it("announces only a certification the rep did not already hold", () => {
+    const doorReady = PATH_STAGES.filter((s) => ["stage-product", "stage-intro", "stage-field"].includes(s.id));
+    const records = done(doorReady.flatMap((s) => s.activities).map((a) => ({ id: a.id, score: a.passScore ?? undefined })));
+    const last = doorReady[doorReady.length - 1].activities[0];
+
+    const { unmount } = renderComplete(records, { activity: last, earnedBefore: [] });
+    expect(screen.getByTestId("certification-earned-cert-door-ready")).toBeTruthy();
+    unmount();
+
+    renderComplete(records, { activity: last, earnedBefore: ["cert-door-ready"] });
+    expect(screen.queryByTestId("certification-earned-cert-door-ready")).toBeNull();
+  });
+
+  it("has a way back to the path from every state", () => {
+    const onBackToPath = vi.fn();
+    renderComplete(done([{ id: first.id }]), { activity: first, earnedBefore: [] }, { onBackToPath });
+    fireEvent.click(screen.getByTestId("activity-complete-back"));
+    expect(onBackToPath).toHaveBeenCalledTimes(1);
+    expect(getActivity(first.id)).toBeTruthy();
   });
 });

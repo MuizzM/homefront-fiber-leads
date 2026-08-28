@@ -19,6 +19,7 @@ import { useSustained } from "@/hooks/use-sustained";
 import { LeadCard, type CardProperty } from "@/components/LeadCard";
 import { AddLeadSheet, planExistingLead, type LeadVisibility } from "@/components/AddLeadSheet";
 import { reverseGeocode } from "@/lib/reverseGeocode";
+import { mergeSearchMatches } from "@/lib/mapSearchMerge";
 import { useAuth } from "@/lib/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { TeamMember, Territory } from "@shared/schema";
@@ -6315,6 +6316,38 @@ export default function MapView() {
     return top;
   }, [searchIndex, deferredSearch]);
 
+  // ── The doors the map has NOT loaded ────────────────────────────────────────
+  // searchIndex only holds the pins currently in the map's client state. In a
+  // small market that is the whole org and every address is findable; at
+  // production scale the map loads a viewport slice, so most doors were missing
+  // from the index and the panel confidently answered "No lead in your org
+  // matches" about a door that exists. That is the "address is not searchable
+  // in prod" report, and it could never reproduce on a dev box.
+  //
+  // The server owns the real index. /api/leads?search= is the same query the
+  // Leads list uses, scoped by the same tenant and rep rules, so asking it adds
+  // no reach a rep did not already have.
+  const serverSearchQuery = deferredSearch.trim();
+  const serverSearchEnabled = searchOpen && serverSearchQuery.length >= 3;
+  const serverSearch = useQuery<{ leads: MapPin[] }>({
+    queryKey: ["/api/leads", "map-search", serverSearchQuery],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/leads?search=${encodeURIComponent(serverSearchQuery)}&limit=8`)).json(),
+    enabled: serverSearchEnabled,
+    staleTime: 30_000,
+  });
+
+  // Loaded pins first, then whatever else the server knows about; the ordering
+  // and dedupe rules live in lib/mapSearchMerge.ts so they can be tested
+  // without mounting a map.
+  const combinedMatches = useMemo(
+    () => mergeSearchMatches(searchMatches, serverSearch.data?.leads),
+    [searchMatches, serverSearch.data],
+  );
+
+  // Never answer "nothing matches" while the server is still looking.
+  const searchStillLooking = serverSearchEnabled && serverSearch.isPending;
+
   // ── Knock queue — offline-first saves, idempotent via clientId ──────────────
   // Layout's FieldStatusBar mounts this canonical hook before page content.
   // MapView consumes the same authenticated-owner singleton instead of
@@ -7733,7 +7766,7 @@ export default function MapView() {
                         e.key === "Enter" &&
                         canSubmitScan &&
                         sidebarSearch.trim().length >= 3 &&
-                        searchMatches.length === 0
+                        combinedMatches.length === 0
                       ) {
                         e.preventDefault();
                         void jumpToAddress(sidebarSearch);
@@ -7757,13 +7790,13 @@ export default function MapView() {
                     <X className="w-4 h-4" />
                   </button>
                 </div>
-                {searchMatches.length > 0 && (
+                {combinedMatches.length > 0 && (
                   // glass-opaque: text-dense + keeps the worst-case simultaneous
                   // blur count at ≤5 surfaces (review measured 6 with it blurred).
                   // Phone: column-reverse puts the BEST match at the bottom,
                   // right above the input — one thumb-length away.
                   <div className="glass-surface glass-opaque overflow-hidden max-h-[min(60vh,360px)] overflow-y-auto flex flex-col-reverse md:flex-col">
-                    {searchMatches.map((l) => {
+                    {combinedMatches.map((l) => {
                       // TRUE pin hue/label (pinDisplayState) — a callback door
                       // shows cyan "Callback" here exactly as painted on the map.
                       const ds = pinDisplayState(l);
@@ -7810,11 +7843,22 @@ export default function MapView() {
                     })}
                   </div>
                 )}
+                {searchStillLooking && combinedMatches.length === 0 && (
+                  <div
+                    className="glass-surface glass-opaque px-3 py-2 text-[12px] text-white/55"
+                    data-testid="map-search-pending"
+                  >
+                    Searching every door…
+                  </div>
+                )}
                 {sidebarSearch.trim().length >= 3 &&
-                  searchMatches.length === 0 && (
-                    <div className="glass-surface glass-opaque overflow-hidden">
+                  !searchStillLooking &&
+                  combinedMatches.length === 0 && (
+                    <div className="glass-surface glass-opaque overflow-hidden" data-testid="map-search-empty">
                       <div className="px-3 py-2.5 text-[12px] text-white/50">
-                        No lead in your org matches “{sidebarSearch}”
+                        {serverSearch.isError
+                          ? `Could not reach the door index. Check your signal and try “${sidebarSearch}” again.`
+                          : `No door you can see matches “${sidebarSearch}”`}
                       </div>
                       {canSubmitScan && (
                         <button
