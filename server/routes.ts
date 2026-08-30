@@ -5028,8 +5028,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const memberIds: number[] = Array.isArray(leadIds) ? leadIds.map(Number).filter(Number.isFinite) : [];
     let enclosed: any[];
     if (memberIds.length > 0) {
-      const idset = new Set(memberIds);
-      enclosed = storage.getLeads(t).filter((l: any) => idset.has(l.id) && l.lat != null && l.lng != null && canReassignLead(user, l));
+      // A bounded id list resolves by INDEXED SEEK with the same narrow
+      // projection as the ring branch below. This used to hydrate EVERY
+      // tenant lead (all 53 columns) and filter in JS - seconds of blocked
+      // event loop per deploy click at scale, for a list the body limit
+      // already caps in the thousands.
+      const deployCols = "id, lat, lng, tenant_id AS tenantId, assigned_rep_id AS assignedRepId, lead_score AS leadScore, competitor_name AS competitorName, lead_tag AS leadTag, fresh_confidence AS freshConfidence";
+      enclosed = [];
+      for (let i = 0; i < memberIds.length; i += 5_000) {
+        const chunk = memberIds.slice(i, i + 5_000);
+        const rows = rawDb.prepare(
+          `SELECT ${deployCols} FROM leads WHERE id IN (${chunk.map(() => "?").join(",")})${t != null ? " AND tenant_id = ?" : ""}`,
+        ).all(...chunk, ...(t != null ? [t] : []));
+        enclosed.push(...rows);
+      }
+      enclosed = enclosed.filter((l: any) => l.lat != null && l.lng != null && canReassignLead(user, l));
     } else {
       // polygonCovers, the SAME enclosure rule as assign-area and the progress
       // routes — boundary doors count within the shared epsilon. This path used
@@ -5043,7 +5056,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     if (enclosed.length === 0) return res.status(409).json({ error: "No assignable leads inside this cluster" });
 
-    const visits = storage.getVisitSummary(t);
+    // Visit context for exactly the enclosed doors - the tenant-wide summary
+    // aggregated every knock in history (plus a correlated seek per knocked
+    // lead) per deploy click.
+    const visits = storage.getVisitSummaryForLeads(enclosed.map((l: any) => l.id));
     const at = new Date().toISOString();
 
     // Partition members into one parcel per rep (compact, contiguous, balanced).
@@ -7986,7 +8002,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // busts it instantly; the 60s age cap keeps the moving 14-day "stale" window
   // honest on a quiet database. Size-capped: scopes are per-role-visibility,
   // not per-user, so this stays tiny in practice.
-  const statsMemo = new Map<string, { at: number; body: any }>();
+  const statsMemo = new Map<string, { at: number; body: any; epochPart: string; dbVer: string }>();
   app.get("/api/stats", requireAuth, (req, res) => {
     const _su = (req as any).user;
     // Aggregated IN SQL — grouped counts plus SUM(CASE) scalars — instead of
@@ -8027,13 +8043,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       sold: 0,
     };
     if (emptyScope) return res.json(stats);
-    // Same composite version the pin ETag uses: the in-process epoch busts
+    // Keyed by SCOPE, validated by version parts. The in-process epoch busts
     // instantly on this process's own writes (a mutation's invalidation
-    // refetch must never get the pre-write body back), and the DB-derived
-    // version catches cross-process writers within its 1s memo.
-    const memoKey = `${tenantId ?? "all"}|${Array.isArray(scope) ? scope.join(",") : scope ?? "-"}|${_leadsEpoch}.${_leadsBustByTenant.get(tenantId ?? 0) ?? 0}.${storage.getLeadsDataVersion(tenantId)}`;
-    const memoHit = statsMemo.get(memoKey);
-    if (memoHit && Date.now() - memoHit.at < 60_000) return res.json(memoHit.body);
+    // refetch must never get the pre-write body back). The DB version catches
+    // cross-process writers - but it moves on EVERY lead write, and during a
+    // scan import (a write every few seconds) a version-keyed memo missed on
+    // every 30s poll from every viewer, re-paying five full aggregate passes
+    // each time, at exactly the moment the DB was absorbing writes. Dashboard
+    // counters tolerate 15s of cross-process lag (the old dataVersion memo
+    // already accepted 1s), so a cross-process-only change serves the memo up
+    // to 15s before recomputing; a same-process write still busts instantly.
+    const scopeKey = `${tenantId ?? "all"}|${Array.isArray(scope) ? scope.join(",") : scope ?? "-"}`;
+    const epochPart = `${_leadsEpoch}.${_leadsBustByTenant.get(tenantId ?? 0) ?? 0}`;
+    const dbVer = storage.getLeadsDataVersion(tenantId);
+    const memoHit = statsMemo.get(scopeKey);
+    if (memoHit && memoHit.epochPart === epochPart) {
+      const age = Date.now() - memoHit.at;
+      if (age < (memoHit.dbVer === dbVer ? 60_000 : 15_000)) return res.json(memoHit.body);
+    }
     // Same 14-day boundary the loop computed, and NULLIF/COALESCE mirrors the
     // `updatedAt || createdAt` fallback (empty string falls through, both
     // missing is never stale).
@@ -8092,7 +8119,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const territory = [r.city, r.state].filter(Boolean).join(", ");
       if (territory) stats.byTerritory[territory] = (stats.byTerritory[territory] || 0) + r.n;
     }
-    statsMemo.set(memoKey, { at: Date.now(), body: stats });
+    statsMemo.set(scopeKey, { at: Date.now(), body: stats, epochPart, dbVer });
     if (statsMemo.size > 200) {
       const oldest = [...statsMemo.entries()].sort((a, b) => a[1].at - b[1].at)[0];
       if (oldest) statsMemo.delete(oldest[0]);
@@ -9753,20 +9780,64 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // most polls on the memo. Scoping stays per-caller BELOW the memo — only the
   // tenant-wide raw context is shared.
   const territoryProgressCtxMemo = new Map<string, { at: number; ctx: any }>();
+  // Grow-merge intersecting boxes until pairwise disjoint, so the per-box
+  // fetches below can never hydrate the same lead twice. O(n²) per pass over
+  // at most a few hundred territory boxes — microseconds against the reads.
+  function mergeOverlappingBoxes(boxes: Array<[number, number, number, number]>): Array<[number, number, number, number]> {
+    const out = boxes.map((b) => [...b] as [number, number, number, number]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      outer: for (let i = 0; i < out.length; i++) {
+        for (let j = i + 1; j < out.length; j++) {
+          const a = out[i], b = out[j];
+          if (a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]) {
+            out[i] = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+            out.splice(j, 1);
+            changed = true;
+            break outer;
+          }
+        }
+      }
+    }
+    return out;
+  }
   function territoryProgressContext(tid: number | undefined) {
     const key = String(tid ?? "all");
     const hit = territoryProgressCtxMemo.get(key);
     if (hit && Date.now() - hit.at < 10_000) return hit.ctx;
-    // Narrow projections (id/latlng/status + the knock verification fields) —
-    // the full getLeads/getKnocks hydration was ~520ms of this route's 596ms
-    // at 20k leads + 50k knocks, for columns the math below never read.
-    const leads = storage.getLeadsForTerritoryProgress(tid).filter((l: any) => l.lat != null && l.lng != null);
+    // BOUNDED hydration. Every row computation below filters to its own
+    // territory's padded bbox before the exact polygon test, so leads outside
+    // every territory's bbox can never contribute to any row - yet the old
+    // context hydrated EVERY tenant lead and EVERY tenant knock per memo
+    // window (a multi-second synchronous walk at the million-lead target,
+    // re-paid ~every 10s under active fieldwork on the HTTP event loop).
+    // Fetch only the union of territory bboxes (merged disjoint, one indexed
+    // range seek each) and only those leads' knocks. Same rows reach the math;
+    // the discarded ones simply never leave the B-tree.
+    const allTerritories = storage.getTerritories(tid) as any[];
+    const pad = BOUNDARY_EPSILON_DEG;
+    const rawBoxes: Array<[number, number, number, number]> = [];
+    for (const t of allTerritories) {
+      try {
+        const poly = JSON.parse(t.polygon) as [number, number][];
+        if (!Array.isArray(poly) || poly.length < 3) continue;
+        let w = Infinity, s2 = Infinity, e = -Infinity, n = -Infinity;
+        for (const [x, y] of poly) {
+          if (x < w) w = x; if (x > e) e = x;
+          if (y < s2) s2 = y; if (y > n) n = y;
+        }
+        rawBoxes.push([w - pad, s2 - pad, e + pad, n + pad]);
+      } catch { /* malformed polygon — its row computes empty, as before */ }
+    }
+    const boxes = mergeOverlappingBoxes(rawBoxes);
+    const leads = storage.getLeadsInBoxesForTerritoryProgress(boxes, tid).filter((l: any) => l.lat != null && l.lng != null);
     const members = storage.getTeamMembers(tid);
     const geoConfig = storage.getGeoConfig(tid ?? null);
-    // Group knocks by lead once (O(knocks)) so each territory is O(leads-inside).
-    // Tenant-scoped so a shared DB doesn't load every org's knocks to discard them.
+    // Group knocks by lead once (O(knocks-on-these-doors)) so each territory
+    // is O(leads-inside).
     const knocksByLead = new Map<number, any[]>();
-    for (const k of storage.getKnocksForTerritoryProgress(tid)) {
+    for (const k of storage.getKnocksForTerritoryProgressByLeads(leads.map((l: any) => l.id))) {
       const arr = knocksByLead.get(k.leadId); if (arr) arr.push(k); else knocksByLead.set(k.leadId, [k]);
     }
     const ctx = { leads, members, geoConfig, knocksByLead };
@@ -12031,6 +12102,12 @@ export function registerSaasRoutes(app: any) {
   });
 
   // ── Enhanced Stats - rep-scoped or tenant-wide ──────────────────────────────────
+  // Unlike /api/stats this endpoint had NO memo, so N dashboard viewers paid
+  // N identical six-aggregate passes (including an O(table) kinetic_addresses
+  // count) every 30 seconds. Dashboard counters tolerate 20s of lag against a
+  // 30s poll; the memo is scope-keyed so a rep, a team lead and a manager
+  // never share a body.
+  const saasStatsMemo = new Map<string, { at: number; body: any }>();
   app.get("/api/stats/saas", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
     const isRep = user?.role === "rep";
@@ -12039,6 +12116,9 @@ export function registerSaasRoutes(app: any) {
     // null for org-wide (admin/manager). Keeps knocks/commissions/hours scoped
     // to exactly the same reps as the leads above.
     const scopeIds = Array.isArray(repScope) ? repScope : null;
+    const saasMemoKey = `${user?.tenantId ?? "all"}|${scopeIds ? scopeIds.join(",") : "-"}|${isRep ? "r" : "m"}`;
+    const saasMemoHit = saasStatsMemo.get(saasMemoKey);
+    if (saasMemoHit && Date.now() - saasMemoHit.at < 20_000) return res.json(saasMemoHit.body);
 
     // Reps see their own stats; team leads their team's; admins/managers tenant-wide.
     // EVERY source is tenant-scoped so the org-wide (scopeIds===null) path can never
@@ -12075,18 +12155,24 @@ export function registerSaasRoutes(app: any) {
       ).get(...wallParams, ...scopeParams) as any)?.n,
     };
 
-    const today = new Date().toISOString().slice(0, 10);
+    // "Today" is the ORG's local day, not the UTC date prefix: knocked_at is
+    // UTC, and comparing its date slice against the UTC calendar rolled the
+    // "Knocks today" tile to zero at 5-7pm across the US every evening - the
+    // same class of drift the clock-session day label had.
+    const orgTz = orgTimezoneFor(tid ?? null);
+    const { y: ty, mo: tmo, d: td } = localYmdParts(Date.now(), orgTz);
+    const dayStartIso = new Date(localWallToUtcMs(ty, tmo, td, 0, 0, orgTz)).toISOString();
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     // knocked_at > weekAgo bounds the scan to one week of knocks (all three
-    // SUMs are week/day-bounded - today's date prefix is a subset of the
-    // week), so the aggregate rides idx_knock_log_tenant_time instead of
-    // walking the tenant's entire knock history every 30s poll.
+    // SUMs are week/day-bounded - today's window is a subset of the week), so
+    // the aggregate rides idx_knock_log_tenant_time instead of walking the
+    // tenant's entire knock history every 30s poll.
     const knockAgg = rawDb.prepare(
-      `SELECT SUM(CASE WHEN substr(knocked_at,1,10) = ? THEN 1 ELSE 0 END) AS today,
-              SUM(CASE WHEN substr(knocked_at,1,10) = ? AND outcome='sold' THEN 1 ELSE 0 END) AS todaySales,
+      `SELECT SUM(CASE WHEN knocked_at >= ? THEN 1 ELSE 0 END) AS today,
+              SUM(CASE WHEN knocked_at >= ? AND outcome='sold' THEN 1 ELSE 0 END) AS todaySales,
               SUM(CASE WHEN outcome='sold' AND knocked_at > ? THEN 1 ELSE 0 END) AS weekSales
          FROM knock_log ${wall()}${scopeSql("rep_id")} AND knocked_at > ?`,
-    ).get(today, today, weekAgo, ...wallParams, ...scopeParams, weekAgo) as any;
+    ).get(dayStartIso, dayStartIso, weekAgo, ...wallParams, ...scopeParams, weekAgo) as any;
 
     const revenueAgg = rawDb.prepare(
       `SELECT SUM(CASE WHEN status='paid' THEN amount ELSE 0 END) AS totalPaid,
@@ -12109,7 +12195,7 @@ export function registerSaasRoutes(app: any) {
         ).get(...memberIds) as any)?.n ?? 0)
       : 0;
 
-    res.json({
+    const saasBody = {
       leads: {
         newFiber: Number(leadAgg?.newFiber ?? 0),
         unassigned: Number(leadAgg?.unassigned ?? 0),
@@ -12122,7 +12208,13 @@ export function registerSaasRoutes(app: any) {
       },
       kinetic: { total: Number(kineticAddresses?.total ?? 0), live: Number(kineticAddresses?.live ?? 0) },
       revenue: { totalPaid: Number(revenueAgg?.totalPaid ?? 0), pendingPayout: Number(revenueAgg?.pendingPayout ?? 0) },
-    });
+    };
+    saasStatsMemo.set(saasMemoKey, { at: Date.now(), body: saasBody });
+    if (saasStatsMemo.size > 200) {
+      const oldest = [...saasStatsMemo.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) saasStatsMemo.delete(oldest[0]);
+    }
+    res.json(saasBody);
   });
 
   // ── Auto-commission on sold knock ─────────────────────────────────────────────

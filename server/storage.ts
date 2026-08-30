@@ -412,7 +412,9 @@ export interface IStorage {
    * computations — same rows getLeads/getKnocks return, minus the wide-column
    * hydration those O(all-rows) reads paid on every request. */
   getLeadsForTerritoryProgress(tenantId?: number): TerritoryProgressLead[];
+  getLeadsInBoxesForTerritoryProgress(boxes: Array<[number, number, number, number]>, tenantId?: number): TerritoryProgressLead[];
   getKnocksForTerritoryProgress(tenantId?: number): TerritoryProgressKnock[];
+  getKnocksForTerritoryProgressByLeads(leadIds: number[]): TerritoryProgressKnock[];
   /** Per-area activity feed rows, filtered in SQL to the given lead ids. */
   getKnocksForTerritoryActivity(tenantId: number | undefined, leadIds: number[]): TerritoryActivityKnock[];
   /** id → "address, city" pairs for a bounded id set (activity feed join). */
@@ -432,6 +434,7 @@ export interface IStorage {
   getGeoConfig(tenantId?: number | null): GeoConfig;
   overrideKnockVerification(knockId: number, newStatus: string, reason: string, actorUserId: number | null, actorName: string | null): Knock | undefined;
   getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
+  getVisitSummaryForLeads(leadIds: number[]): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
   // ── Leaderboard ────────────────────────────────────────────────────────────
   getLeaderboard(window?: { since?: string; until?: string }): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number; knocksToday: number; salesToday: number }[];
   // ── Users ──────────────────────────────────────────────────────────────────
@@ -2850,6 +2853,43 @@ export function runMigrations() {
     // contributing_sales) so a locked week's drill-down stays truthful forever.
     `ALTER TABLE commission_statements ADD COLUMN contributing_overrides TEXT`,
 
+    // ── Lead data version, maintained by triggers ─────────────────────────────
+    // getLeadsDataVersion used to run COUNT/MAX(id)/MAX(updated_at) over the
+    // whole tenant range - ~5ms at 40k leads, linear growth, re-paid once per
+    // second per tenant BEFORE the map ETag compare, so the zero-body 304 fast
+    // path itself became the O(n) cost it was built to avoid. One counter row
+    // per tenant (0 = global, -1 = NULL-tenant rows), bumped by triggers, makes
+    // the read O(1) - and unlike the JS epoch, triggers also catch raw-SQL
+    // writers (imports, scripts, another process). Recreated IF NOT EXISTS at
+    // every boot, so a future table rebuild that drops triggers self-heals on
+    // the next start.
+    `CREATE TABLE IF NOT EXISTS leads_version (tenant_id INTEGER PRIMARY KEY, counter INTEGER NOT NULL DEFAULT 0)`,
+    `CREATE TRIGGER IF NOT EXISTS trg_leads_version_ins AFTER INSERT ON leads BEGIN
+       INSERT INTO leads_version(tenant_id, counter) VALUES (COALESCE(NEW.tenant_id, -1), 1)
+         ON CONFLICT(tenant_id) DO UPDATE SET counter = counter + 1;
+       INSERT INTO leads_version(tenant_id, counter) VALUES (0, 1)
+         ON CONFLICT(tenant_id) DO UPDATE SET counter = counter + 1;
+     END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_leads_version_upd AFTER UPDATE ON leads BEGIN
+       INSERT INTO leads_version(tenant_id, counter) VALUES (COALESCE(NEW.tenant_id, -1), 1)
+         ON CONFLICT(tenant_id) DO UPDATE SET counter = counter + 1;
+       INSERT INTO leads_version(tenant_id, counter) VALUES (COALESCE(OLD.tenant_id, -1), 1)
+         ON CONFLICT(tenant_id) DO UPDATE SET counter = counter + 1;
+       INSERT INTO leads_version(tenant_id, counter) VALUES (0, 1)
+         ON CONFLICT(tenant_id) DO UPDATE SET counter = counter + 1;
+     END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_leads_version_del AFTER DELETE ON leads BEGIN
+       INSERT INTO leads_version(tenant_id, counter) VALUES (COALESCE(OLD.tenant_id, -1), 1)
+         ON CONFLICT(tenant_id) DO UPDATE SET counter = counter + 1;
+       INSERT INTO leads_version(tenant_id, counter) VALUES (0, 1)
+         ON CONFLICT(tenant_id) DO UPDATE SET counter = counter + 1;
+     END`,
+
+    // /api/stats/saas counts fresh-confirmed doors on every 30s poll from every
+    // dashboard viewer; without this partial index that COUNT planned as a full
+    // SCAN of leads (verified with EXPLAIN QUERY PLAN).
+    `CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed ON leads(tenant_id)
+       WHERE lead_tag = 'fresh_fiber_confirmed' AND fresh_confidence = 'cross_verified'`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -3754,29 +3794,19 @@ export class Storage implements IStorage {
   // auto-refresh pick up scan-added leads (the in-memory epoch alone can't see
   // writes from a separate process). Index-served via idx_leads_tenant_updated.
   getLeadsDataVersion(tenantId?: number): string {
-    // Memoised for one second. Three aggregates in one statement cannot each
-    // use an index optimisation, so SQLite walks the whole tenant range —
-    // measured ~5ms at 40k leads, and this runs BEFORE the ETag comparison, so
-    // even the zero-body 304 path (the entire point of the ETag) paid a full
-    // scan on every poll from every rep.
-    //
-    // Correctness is unchanged: the in-process epoch counters in routes.ts bust
-    // the ETag instantly for this process's own writes. This value exists only
-    // to catch CROSS-process writes (the scan runner, nightly cron), and a
-    // one-second lag on those is invisible against the 8s map cache TTL.
-    const key = tenantId ?? -1;
-    const now = Date.now();
-    const hit = this._leadsDataVersionCache.get(key);
-    if (hit && now - hit.at < 1000) return hit.value;
-    const row = (tenantId != null
-      ? rawDb.prepare("SELECT COUNT(*) c, COALESCE(MAX(id),0) mx, COALESCE(MAX(updated_at),'') mu FROM leads WHERE tenant_id = ?").get(tenantId)
-      : rawDb.prepare("SELECT COUNT(*) c, COALESCE(MAX(id),0) mx, COALESCE(MAX(updated_at),'') mu FROM leads").get()
-    ) as { c: number; mx: number; mu: string };
-    const value = `${row.c}.${row.mx}.${row.mu}`;
-    this._leadsDataVersionCache.set(key, { value, at: now });
-    return value;
+    // O(1): one counter row per tenant (0 = global), maintained by the
+    // leads_version triggers. The old form ran COUNT/MAX(id)/MAX(updated_at)
+    // over the whole tenant range once per second per tenant - the ETag 304
+    // fast path itself grew linearly with total leads. Triggers also catch
+    // raw-SQL writers (imports, scripts, other processes), which the JS epoch
+    // never could, so the 1s staleness memo is gone along with the walk.
+    if (!this._leadsVersionStmt) {
+      this._leadsVersionStmt = rawDb.prepare("SELECT counter FROM leads_version WHERE tenant_id = ?");
+    }
+    const row = this._leadsVersionStmt.get(tenantId ?? 0) as { counter: number } | undefined;
+    return `v${row?.counter ?? 0}`;
   }
-  private _leadsDataVersionCache = new Map<number, { value: string; at: number }>();
+  private _leadsVersionStmt: import("better-sqlite3").Statement | null = null;
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }> {
     const conds: string[] = [];
     const params: (number | string)[] = [];
@@ -4583,6 +4613,30 @@ export class Storage implements IStorage {
          FROM leads ${where}`
     ).all(...(tenantId != null ? [tenantId] : [])) as TerritoryProgressLead[];
   }
+  // The BOUNDED replacement for the tenant-wide progress hydration: only leads
+  // inside the given (pairwise-disjoint, pre-padded) territory bounding boxes,
+  // each box one indexed range seek. Every territory's row computation filters
+  // by its own bbox anyway, so a lead outside every box was hydrated only to
+  // be discarded — at the million-lead target that discard was a multi-second
+  // synchronous walk per 10s memo window on the HTTP event loop.
+  getLeadsInBoxesForTerritoryProgress(
+    boxes: Array<[number, number, number, number]>, // [w, s, e, n], already padded
+    tenantId?: number,
+  ): TerritoryProgressLead[] {
+    if (!boxes.length) return [];
+    const tenantAnd = tenantId != null ? " AND tenant_id = ?" : "";
+    const stmt = rawDb.prepare(
+      `SELECT id, address, city, state, zip, lat, lng,
+              lead_status AS leadStatus, do_not_knock AS doNotKnock
+         FROM leads
+        WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?${tenantAnd}`,
+    );
+    const out: TerritoryProgressLead[] = [];
+    for (const [w, s, e, n] of boxes) {
+      out.push(...(stmt.all(s, n, w, e, ...(tenantId != null ? [tenantId] : [])) as TerritoryProgressLead[]));
+    }
+    return out;
+  }
   getKnocksForTerritoryProgress(tenantId?: number): TerritoryProgressKnock[] {
     const where = tenantId != null ? "WHERE tenant_id = ?" : "";
     // Six columns, no ORDER BY: the progress math is entirely order-independent
@@ -4594,6 +4648,19 @@ export class Storage implements IStorage {
               distance_m AS distanceM
          FROM knock_log ${where}`
     ).all(...(tenantId != null ? [tenantId] : [])) as TerritoryProgressKnock[];
+  }
+  // Knocks for exactly the given doors (json_each id set — no bound-variable
+  // ceiling), replacing the every-knock-in-tenant-history walk the progress
+  // context used to pay per memo window. Rides idx_knock_log_lead.
+  getKnocksForTerritoryProgressByLeads(leadIds: number[]): TerritoryProgressKnock[] {
+    if (!leadIds.length) return [];
+    return rawDb.prepare(
+      `SELECT lead_id AS leadId, outcome, was_home AS wasHome,
+              knocked_at AS knockedAt, verification_status AS verificationStatus,
+              distance_m AS distanceM
+         FROM knock_log
+        WHERE lead_id IN (SELECT value FROM json_each(?))`,
+    ).all(JSON.stringify(leadIds)) as TerritoryProgressKnock[];
   }
   // The per-area activity feed's knock rows — filtered IN SQL to the doors
   // inside the territory polygon (json_each carries the id set, so a 20k-lead
@@ -4867,6 +4934,35 @@ export class Storage implements IStorage {
   // lead's knocks per group — O(k·per-lead sort) and it scanned every tenant's
   // knocks on every map request). The window's mixed-direction ORDER BY is
   // served by idx_knock_log_lead_time_desc; optionally joined to one tenant.
+  // The bounded twin of getVisitSummary: exactly the given doors, not every
+  // knock in tenant history. /api/scan/deploy needs visit context for the
+  // enclosed cluster only, and paying the tenant-wide grouped aggregate (plus
+  // one correlated seek per knocked lead) per deploy click is the documented
+  // event-loop stall class at scale.
+  getVisitSummaryForLeads(leadIds: number[]): Map<number, { count: number; lastOutcome: string; lastAt: string }> {
+    const m = new Map<number, { count: number; lastOutcome: string; lastAt: string }>();
+    for (let i = 0; i < leadIds.length; i += 5_000) {
+      const chunk = leadIds.slice(i, i + 5_000);
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = rawDb.prepare(
+        `SELECT g.leadId, g.count, g.lastAt,
+                (SELECT k2.outcome FROM knock_log k2
+                  WHERE k2.lead_id = g.leadId
+                  ORDER BY (k2.superseded = 0) DESC, k2.knocked_at DESC, k2.id DESC
+                  LIMIT 1) AS lastOutcome
+           FROM (
+             SELECT knock_log.lead_id AS leadId,
+                    SUM(CASE WHEN knock_log.superseded = 0 THEN 1 ELSE 0 END) AS count,
+                    MAX(knocked_at) AS lastAt
+             FROM knock_log
+             WHERE knock_log.lead_id IN (${placeholders})
+             GROUP BY knock_log.lead_id
+           ) g`
+      ).all(...chunk) as any[];
+      for (const r of rows) m.set(r.leadId, { count: r.count, lastOutcome: r.lastOutcome, lastAt: r.lastAt });
+    }
+    return m;
+  }
   getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }> {
     const tenantJoin = tenantId != null
       ? `JOIN leads ON leads.id = knock_log.lead_id AND leads.tenant_id = ?`

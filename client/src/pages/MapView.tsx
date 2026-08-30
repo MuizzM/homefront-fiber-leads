@@ -157,6 +157,7 @@ import {
   filteredLngLat,
 } from "@/lib/followCamera";
 import { useTabActive } from "@/lib/tabActivity";
+import { useDebounce } from "@/hooks/use-debounce";
 import {
   selectPointsInPolygon,
   pointInRing,
@@ -6471,7 +6472,13 @@ export default function MapView() {
   // The server owns the real index. /api/leads?search= is the same query the
   // Leads list uses, scoped by the same tenant and rep rules, so asking it adds
   // no reach a rep did not already have.
-  const serverSearchQuery = deferredSearch.trim();
+  // A TIME debounce, not just the render deferral above: useDeferredValue
+  // only delays the paint, so every committed keystroke still minted a new
+  // query key and a server round trip - typing an address issued ~10+
+  // requests, each paying the search's double full scan. Same 300ms the Leads
+  // page already applies to the very same endpoint.
+  const debouncedServerSearch = useDebounce(deferredSearch, 300);
+  const serverSearchQuery = debouncedServerSearch.trim();
   const serverSearchEnabled = searchOpen && serverSearchQuery.length >= 3;
   const serverSearch = useQuery<{ leads: MapPin[] }>({
     queryKey: ["/api/leads", "map-search", serverSearchQuery],

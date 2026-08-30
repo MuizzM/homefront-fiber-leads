@@ -111,6 +111,29 @@ E. **Final**: full `bash scripts/agent-verify.sh full`, build, browser verificat
 
 - 2026-08-30: Audit complete (8 mappers, findings verified with file:line).
   Baseline green. Plan written. Starting A1.
+- 2026-08-30: A1-A4 DONE + committed ("Make the lasso assign exactly what the
+  panel shows"): shared lens module, resolver + preview endpoint, opId
+  idempotency, undo CAS on (rep, assigned_at), partial-failure honesty,
+  repId-0/inactive-rep guards, client panel preview-driven, Add-doors assignee
+  row. 16 new integration tests + updated source-slice suites; 104 existing
+  assignment tests green.
+- 2026-08-30: A5 DONE + committed ("Territory assignment routes meet the
+  bar"): set-based stampTerritoryDoors, ring validation + candidate caps on
+  assign-area and :id/assign, archived guards on :id/assign + /share,
+  one-transaction share/unassign/reclaim, adopted-area row-tenant writes,
+  inactive-rep refusals. 8 new tests; all 135 territory tests green.
+- 2026-08-30: A6/A7 + C-cluster DONE + committed ("Fix the verified client
+  defect cluster"): AreaDetail capacity + dialog, AssignRepModal honesty,
+  CommissionDialog keyed body, override-rate strict parser, org-local clock
+  day, Dashboard/FollowUps day fixes, MapView race/notice/gesture fixes,
+  foundation fixes (boundary, SW guard, auth clears, theme chrome).
+  Full suite green (7,598).
+- 2026-08-30: B in progress: leads_version trigger table (O(1) data version,
+  new test file), stats memo split (15s cross-process floor), saas stats memo
+  + org-local today + fresh-confirmed partial index, territory progress
+  bounded to merged territory bboxes + json_each knock scoping, scan/deploy
+  narrow id-list branch + bounded visit summary, map search debounce.
+  Full suite running.
 
 ## Decisions
 
