@@ -6,7 +6,7 @@
 // bookings when another day in the strip is tapped. One tap opens the door; one
 // more logs the outcome via the SAME shared sheet + offline queue, and the door
 // drops off the list. 100% real data: GET /api/followups.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FOCUS } from "@/lib/a11y";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -72,6 +72,19 @@ export default function FollowUps() {
   const today = todayISO();
   const [selectedDay, setSelectedDay] = useState(today);
   const week = useMemo(() => weekOf(today), [today]);
+  // /followups is a keep-alive stage: this component stays mounted for the
+  // whole session, so a selectedDay seeded at mount is YESTERDAY the morning
+  // after. The rep reopening the tab then landed on yesterday's single-day
+  // agenda ("Nothing booked for Yesterday") instead of the Overdue/Today plan.
+  // Snap forward whenever the local date has advanced past the selection made
+  // on an earlier day; a deliberate pick of a past day TODAY stays put.
+  const lastSeenTodayRef = useRef(today);
+  useEffect(() => {
+    if (lastSeenTodayRef.current !== today) {
+      lastSeenTodayRef.current = today;
+      setSelectedDay(today);
+    }
+  }, [today]);
 
   // One honest GPS fix for the "how far is this door" hint on each row. Read
   // once on open (not polled): the page is a plan, not a live tracker. Hidden

@@ -547,17 +547,24 @@ function RouteTable({ location, role, isSuperAdmin }: {
 
 function App() {
   return (
-    <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
-      <AuthProvider>
-        {/* One Tooltip provider for the app; delayDuration tuned so a hint
-            appears intentionally, not on every incidental hover. */}
-        <TooltipProvider delayDuration={300} skipDelayDuration={150}>
-          <AppRoutes />
-          <Suspense fallback={null}><Toaster /></Suspense>
-          <UpdatePrompt />
-        </TooltipProvider>
-      </AuthProvider>
-    </PersistQueryClientProvider>
+    // The OUTERMOST boundary. Both routed boundaries live inside AppRoutes'
+    // stage, so Layout's own chrome (nav mapping, badge queries, the More
+    // sheet), the eager Login page, the Toaster and UpdatePrompt all rendered
+    // unprotected - a throw in any of them white-screened the app with no
+    // recovery card, the exact failure ErrorBoundary exists to prevent.
+    <ErrorBoundary>
+      <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
+        <AuthProvider>
+          {/* One Tooltip provider for the app; delayDuration tuned so a hint
+              appears intentionally, not on every incidental hover. */}
+          <TooltipProvider delayDuration={300} skipDelayDuration={150}>
+            <AppRoutes />
+            <Suspense fallback={null}><Toaster /></Suspense>
+            <UpdatePrompt />
+          </TooltipProvider>
+        </AuthProvider>
+      </PersistQueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

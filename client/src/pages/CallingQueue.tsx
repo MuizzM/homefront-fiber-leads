@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { CallingAvailability, CallingChrome, CallingUnknownState } from "@/components/calling/CallingChrome";
 import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCallingCallbacks, startQueueTrace, getLatestQueueTraceRun, type CallingCallback, type CallingCandidate } from "@/lib/callingApi";
 import { cn } from "@/lib/utils";
+import { useTabActive } from "@/lib/tabActivity";
 import { useCan } from "@/lib/capabilities";
 import { useToast } from "@/hooks/use-toast";
 
@@ -294,12 +295,18 @@ export default function CallingQueue() {
   // may dial is not automatically someone who may spend.
   const canTrace = useCan("lead.skip_trace.request");
   const { toast } = useToast();
+  // /calling is a keep-alive stage: this page stays mounted (hidden) after a
+  // visit, so an ungated interval kept polling every 4s from the background
+  // for the life of a run. Gate on tab activity like Dashboard and MapView;
+  // the keep-alive re-show revalidation catches up the moment the rep returns.
+  const tabActive = useTabActive();
   const traceRunQuery = useQuery({
     queryKey: ["calling", "trace-run"],
     queryFn: getLatestQueueTraceRun,
     enabled: canTrace,
     // Only while a run is live: a finished run's row never changes again.
     refetchInterval: (query) => {
+      if (!tabActive) return false;
       const status = query.state.data?.run?.status;
       return status === "queued" || status === "running" ? 4_000 : false;
     },

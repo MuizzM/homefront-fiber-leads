@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, ClipboardCheck, Clock3, Download, Loader2, RefreshCw, UserCheck, Users } from "lucide-react";
+import { parseOverrideDollars, centsToDollarsDraft } from "@/lib/overrideMoney";
 import { apiRequest, apiUpload, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -356,15 +357,14 @@ export default function Applications() {
   const orgOverrideTlCents = configQuery.data?.overrideTeamLeadCents ?? 0;
   const orgOverrideMgrCents = configQuery.data?.overrideManagerCents ?? 0;
   // "" = inherit (null on the wire); a value = whole dollars → integer cents,
-  // converted ONCE here at the boundary (the reserveCapDollars convention).
+  // converted ONCE at the boundary via the SHARED strict parser - an invalid
+  // draft throws (surfaced by the mutation's onError) instead of being
+  // silently coerced to "clear the override" (see lib/overrideMoney).
   const overrideDollarsToCents = (draft: string): number | null => {
-    const trimmed = draft.trim();
-    if (!trimmed) return null;
-    const dollars = Number(trimmed);
-    return Number.isFinite(dollars) && dollars >= 0 ? Math.round(dollars * 100) : null;
+    const parsed = parseOverrideDollars(draft);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    return parsed.cents;
   };
-  const centsToDollarsDraft = (cents: number | null | undefined): string =>
-    cents == null ? "" : String(cents % 100 === 0 ? cents / 100 : (cents / 100).toFixed(2));
   const team = Array.isArray(teamQuery.data) ? teamQuery.data : [];
   // Only ACTIVE members whose role ranks strictly above the chosen role may
   // supervise — the same shared-module filter the Team page and server use.

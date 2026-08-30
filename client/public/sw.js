@@ -129,7 +129,15 @@ self.addEventListener("fetch", (event) => {
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req).then((res) => {
-        caches.open(SHELL_CACHE).then((c) => c.put("/index.html", res.clone())).catch(() => {});
+        // Only a REAL shell may overwrite the cached shell. Unguarded, a proxy
+        // 502 page mid-deploy, an Express error page, or a captive portal's
+        // 200 replaced the precached index.html — and the next offline launch
+        // served that junk as the app, defeating the offline design this
+        // cache exists for. Same status+content-type bar the asset path sets.
+        const type = (res.headers.get("content-type") || "").toLowerCase();
+        if (res.ok && type.includes("text/html")) {
+          caches.open(SHELL_CACHE).then((c) => c.put("/index.html", res.clone())).catch(() => {});
+        }
         return res;
       }).catch(() => caches.match("/index.html").then((m) => m || caches.match("/"))),
     );

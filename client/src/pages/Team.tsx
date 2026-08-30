@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { parseOverrideDollars } from "@/lib/overrideMoney";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -332,15 +333,16 @@ export default function Team() {
   const overrideRatesMutation = useMutation({
     mutationFn: async () => {
       // "" = inherit (null on the wire); dollars → integer cents ONCE here.
-      const toCents = (draft: string): number | null => {
-        const trimmed = draft.trim();
-        if (!trimmed) return null;
-        const dollars = Number(trimmed);
-        return Number.isFinite(dollars) && dollars >= 0 ? Math.round(dollars * 100) : null;
-      };
+      // Invalid input REFUSES (shared parseOverrideDollars) - the old local
+      // converter coerced a typo to null, which silently cleared the rep's
+      // existing override under a success toast.
+      const tl = parseOverrideDollars(overrideTlDollars, "Team-lead override");
+      if (!tl.ok) throw new Error(tl.reason);
+      const mgr = parseOverrideDollars(overrideMgrDollars, "Manager override");
+      if (!mgr.ok) throw new Error(mgr.reason);
       const res = await apiRequest("PATCH", `/api/commission/reps/${editMember!.id}/override-rates`, {
-        overrideTeamLeadCents: toCents(overrideTlDollars),
-        overrideManagerCents: toCents(overrideMgrDollars),
+        overrideTeamLeadCents: tl.cents,
+        overrideManagerCents: mgr.cents,
       });
       return res.json();
     },
@@ -1171,6 +1173,19 @@ export default function Team() {
 // POST /api/commission/assign-structure (which closes the current period first).
 
 function CommissionDialog({ member, onClose }: { member: TeamMember | null; onClose: () => void }) {
+  return (
+    <Dialog open={!!member} onOpenChange={v => !v && onClose()}>
+      {/* Keyed by rep: EVERY field re-mounts and re-seeds per member. The old
+          single always-mounted body kept the previous rep's structure, rate,
+          ladder and reserve overrides on screen (the seed effect only
+          overwrites fields the next rep's data explicitly carries), with an
+          armed Apply - one tap booked rep A's pay plan onto rep B. */}
+      {member && <CommissionDialogBody key={member.id} member={member} onClose={onClose} />}
+    </Dialog>
+  );
+}
+
+function CommissionDialogBody({ member, onClose }: { member: TeamMember; onClose: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [structure, setStructure] = useState<"TIERED" | "FLAT">("TIERED");
@@ -1189,9 +1204,8 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
   ]);
 
   const { data: current, isLoading } = useQuery<any>({
-    queryKey: ["/api/commission/reps", member?.id, "structure"],
-    queryFn: () => apiRequest("GET", `/api/commission/reps/${member!.id}/structure`).then(r => r.json()),
-    enabled: !!member,
+    queryKey: ["/api/commission/reps", member.id, "structure"],
+    queryFn: () => apiRequest("GET", `/api/commission/reps/${member.id}/structure`).then(r => r.json()),
   });
 
   // Seed the picker from the rep's current structure when it loads.
@@ -1251,7 +1265,7 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
 
   const assignMutation = useMutation({
     mutationFn: async () => {
-      const body: any = { repId: member!.id, structure, closeExisting: true };
+      const body: any = { repId: member.id, structure, closeExisting: true };
       // Integer cents cross the wire — the dollars → cents conversion happens
       // ONCE, here. `null` explicitly clears the override back to the org default.
       body.reservePercent = reservePctValue == null ? null : Math.trunc(reservePctValue);
@@ -1267,8 +1281,8 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Commission structure updated", description: `${member?.name} is now on the ${structure === "FLAT" ? "flat per-sale" : "tiered weekly"} plan.` });
-      qc.invalidateQueries({ queryKey: ["/api/commission/reps", member?.id, "structure"] });
+      toast({ title: "Commission structure updated", description: `${member.name} is now on the ${structure === "FLAT" ? "flat per-sale" : "tiered weekly"} plan.` });
+      qc.invalidateQueries({ queryKey: ["/api/commission/reps", member.id, "structure"] });
       onClose();
     },
     onError: (err: any) => toast({ title: err.message || "Failed to update commission", variant: "destructive" }),
@@ -1277,11 +1291,10 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
   const curStruct = current?.structure as ("FLAT" | "TIERED" | undefined);
 
   return (
-    <Dialog open={!!member} onOpenChange={v => !v && onClose()}>
       <DialogContent className="bg-card border-border text-foreground max-w-md">
         <DialogHeader>
           <DialogTitle className="text-base flex items-center gap-2">
-             Commission - {member?.name}
+             Commission - {member.name}
           </DialogTitle>
         </DialogHeader>
 
@@ -1386,9 +1399,12 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
 
         <DialogFooter className="mt-2">
           <Button variant="outline" onClick={onClose} className="h-9 border-border">Cancel</Button>
-          <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending || !!blockedReason}
+          {/* Armed only once the CURRENT plan has loaded: applying while the
+              structure query is in flight would book whatever the fields
+              happen to show, not what the manager reviewed. */}
+          <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending || isLoading || !!blockedReason}
             className="h-9 bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="btn-save-commission">
-            {assignMutation.isPending ? "Saving…" : "Apply structure"}
+            {assignMutation.isPending ? "Saving…" : isLoading ? "Loading…" : "Apply structure"}
           </Button>
         </DialogFooter>
         {blockedReason && (
@@ -1397,6 +1413,5 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
           </p>
         )}
       </DialogContent>
-    </Dialog>
   );
 }

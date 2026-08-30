@@ -5440,9 +5440,16 @@ export class Storage implements IStorage {
   // ── Clock Sessions ─────────────────────────────────────────────────────────
   clockIn(repId: number, userId: number, notes?: string): ClockSession {
     const now = new Date().toISOString();
-    const date = now.slice(0, 10);
     // Tenancy: a clock session belongs to the REP's tenant.
     const tenantId = this.getTeamMemberById(repId)?.tenantId ?? null;
+    // The DAY label is the ORG's local calendar day, not the UTC slice. UTC
+    // rolls to "tomorrow" at 5-7pm across the US, so every evening session was
+    // stamped with the next day's date and the manager dashboard's "today"
+    // zeroed out mid-shift (ClockIn.tsx worked around it by re-deriving the
+    // day from the timestamp; the label now simply tells the truth). The
+    // clocked_in TIMESTAMP stays UTC and unambiguous.
+    const { y, mo, d } = localYmdParts(Date.now(), orgTimezoneFor(tenantId));
+    const date = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     return db.insert(clockSessions).values({ repId, userId, tenantId, clockedIn: now, date, notes: notes || null }).returning().get();
   }
   clockOut(sessionId: number): ClockSession | undefined {

@@ -509,10 +509,6 @@
      has ZERO call sites — the 44px floor is carried in practice by `h-11`
      (153 uses) and hand-written `min-h-[44px]` (7 uses, plus 1 `min-w-[44px]`).
      Tailwind now exposes the same value as `h-tap` / `min-h-tap`. */
-  .touch-target {
-    min-width: var(--tap-target-min);
-    min-height: var(--tap-target-min);
-  }
 }
 
 /* Mapbox overrides */
@@ -706,7 +702,6 @@
   }
   /* Hairline divider inside any glass. AUDIT: zero call sites today — the
      dividers that exist are hand-written `border-white/[0.08]` etc. */
-  .glass-hairline { height: 1px; background: var(--glass-divider); }
   /* Budget overflow / secondary banners: same look, ZERO blur cost */
   .glass-opaque {
     -webkit-backdrop-filter: none !important;

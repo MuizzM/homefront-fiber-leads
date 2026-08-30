@@ -384,7 +384,13 @@ function AssignRepModal({ lead, team, onClose }: {
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [repId, setRepId] = useState(lead.assignedRepId ? String(lead.assignedRepId) : "");
+  const initialRepId = lead.assignedRepId ? String(lead.assignedRepId) : "";
+  const [repId, setRepId] = useState(initialRepId);
+  // Nothing chosen, or the same owner re-chosen: the button stays dark. The
+  // armed empty state used to send repId:null (an unassign no-op) and toast
+  // "Lead assigned" while the table still said Unassigned.
+  const unchanged = repId === initialRepId || (repId === "0" && initialRepId === "");
+  const unassigning = repId === "0" && initialRepId !== "";
 
   const assignMutation = useMutation({
     mutationFn: async () => {
@@ -394,7 +400,11 @@ function AssignRepModal({ lead, team, onClose }: {
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Lead assigned" });
+      const repName = team.find(m => String(m.id) === repId)?.name;
+      toast({
+        title: unassigning ? "Lead returned to the pool" : `Assigned to ${repName ?? "rep"}`,
+        severity: "success",
+      });
       invalidateLeadLists(qc);
       onClose();
     },
@@ -421,9 +431,9 @@ function AssignRepModal({ lead, team, onClose }: {
       </Select>
       <DialogFooter className="mt-2">
         <Button variant="outline" onClick={onClose} className="border-border">Cancel</Button>
-        <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending}
+        <Button onClick={() => assignMutation.mutate()} disabled={unchanged || assignMutation.isPending}
           className="bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="btn-confirm-assign">
-          {assignMutation.isPending ? "Assigning..." : "Assign"}
+          {assignMutation.isPending ? "Assigning..." : unassigning ? "Unassign" : "Assign"}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -541,6 +551,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
     onSuccess: () => {
       toast({ title: "Contact saved" });
       qc.invalidateQueries({ queryKey: ["/api/leads", lead.id, "enrichment"] });
+      // The panel's own detail fetch too — the Email row reads it, and without
+      // this the row said "Not on file" until the sheet was closed and
+      // reopened from a refetched list.
+      qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}`] });
       invalidateLeadLists(qc);
       setEditContact(false);
     },
@@ -630,10 +644,12 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Fiber Status</span>
           </div>
           <div className="bg-secondary/50 rounded-lg px-3 py-1 divide-y divide-border/50">
-            <InfoRow icon={lead.isNewFiber ? Wifi : WifiOff}
+            {/* `current`, not the list-row snapshot: the panel's detail fetch
+                is fresher than the prop after any in-sheet write. */}
+            <InfoRow icon={current.isNewFiber ? Wifi : WifiOff}
               label="Service Availability"
-              value={fiberStatusLabel[lead.fiberStatus] ?? lead.fiberStatus}
-              highlight={!!lead.isNewFiber} />
+              value={fiberStatusLabel[current.fiberStatus] ?? current.fiberStatus}
+              highlight={!!current.isNewFiber} />
             {enrich?.speedTier && <InfoRow icon={Zap} label="Speed Tier" value={enrich.speedTier} />}
             {enrich?.maxDownloadMbps && <InfoRow icon={Zap} label="Max Download" value={`${enrich.maxDownloadMbps} Mbps`} />}
             {enrich?.techType && <InfoRow icon={Info} label="Technology" value={enrich.techType} />}
@@ -691,7 +707,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
             
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Neighborhood Data (ZIP {lead.zip})</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Neighborhood Data (ZIP {current.zip})</span>
             <button onClick={() => refetch()} disabled={isFetching}
               className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
               title="Refresh from Census">
@@ -743,9 +759,9 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           ) : (
             <div className="bg-secondary/50 rounded-lg px-3 py-1 divide-y divide-border/50">
               <InfoRow icon={User} label="Owner Name"
-                value={isLoading ? "Loading..." : (enrich?.ownerName ?? lead.ownerName ?? <span className="text-muted-foreground italic text-xs">Not in GIS records</span>)} />
+                value={isLoading ? "Loading..." : (enrich?.ownerName ?? current.ownerName ?? <span className="text-muted-foreground italic text-xs">Not in GIS records</span>)} />
               <InfoRow icon={Mail} label="Email"
-                value={lead.ownerEmail ?? <span className="text-muted-foreground italic text-xs">Not on file</span>} />
+                value={enrich?.ownerEmail ?? current.ownerEmail ?? <span className="text-muted-foreground italic text-xs">Not on file</span>} />
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
@@ -1294,9 +1310,13 @@ export default function Leads() {
       restoreLeadLists(ctx?.snapshots);
       toast({ title: e?.message ?? "Couldn't update lead", severity: "error" });
     },
-    onSettled: () => {
+    onSettled: (_data, _err, vars) => {
       invalidateLeadLists(qc);
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      // The IntelligencePanel's own detail fetch reads the single-lead key;
+      // list-shaped invalidation alone left the open sheet on the OLD status,
+      // so Qualify kept offering itself after a successful qualify.
+      qc.invalidateQueries({ queryKey: [`/api/leads/${vars.id}`] });
     },
   });
 

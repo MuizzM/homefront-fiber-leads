@@ -348,7 +348,11 @@ function EvidenceCenter() {
     { toast } = useToast(),
     [mode, setMode] = useState("offline"),
     [confirmed, setConfirmed] = useState(false),
-    [sourceName, setSourceName] = useState(""),
+    // TWO source names, deliberately. One state used to feed both the policy
+    // panel and the import panel: typing an import's source silently rewrote
+    // the saved policy attribution (and vice versa) - two forms, one variable.
+    [policySourceName, setPolicySourceName] = useState(""),
+    [importSourceName, setImportSourceName] = useState(""),
     [format, setFormat] = useState<"json" | "csv">("json"),
     [content, setContent] = useState(""),
     [manual, setManual] = useState({
@@ -372,14 +376,14 @@ function EvidenceCenter() {
     const configured = config?.configured;
     if (!configured) return;
     setMode(configured.mode ?? "offline");
-    setSourceName(configured.sourceName ?? "");
+    setPolicySourceName(configured.sourceName ?? "");
     setConfirmed(Boolean(configured.publicUseConfirmed));
   }, [config?.configured]);
   const save = useMutation({
     mutationFn: () =>
       kineticScannerApi.setEvidenceConfig({
         mode,
-        sourceName: sourceName || null,
+        sourceName: policySourceName || null,
         publicUseConfirmed: mode === "authorized_public_lookup" && confirmed,
       }),
     onSuccess: () => {
@@ -395,7 +399,7 @@ function EvidenceCenter() {
   });
   const upload = useMutation({
     mutationFn: () => {
-      if (!sourceName.trim())
+      if (!importSourceName.trim())
         throw new Error("Approved source name is required");
       if (format === "json") {
         const records = JSON.parse(content);
@@ -403,13 +407,13 @@ function EvidenceCenter() {
           throw new Error("JSON import must be an array");
         return kineticScannerApi.importEvidence({
           format,
-          sourceName: sourceName.trim(),
+          sourceName: importSourceName.trim(),
           records,
         });
       }
       return kineticScannerApi.importEvidence({
         format,
-        sourceName: sourceName.trim(),
+        sourceName: importSourceName.trim(),
         content,
       });
     },
@@ -501,8 +505,8 @@ function EvidenceCenter() {
             </option>
           </select>
           <input
-            value={sourceName}
-            onChange={(event) => setSourceName(event.target.value)}
+            value={policySourceName}
+            onChange={(event) => setPolicySourceName(event.target.value)}
             aria-label="Evidence source name"
             placeholder="Approved source name"
             className="h-11 rounded-xl border border-border bg-background px-3 text-xs"
@@ -542,8 +546,8 @@ function EvidenceCenter() {
         </p>
         <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
           <input
-            value={sourceName}
-            onChange={(event) => setSourceName(event.target.value)}
+            value={importSourceName}
+            onChange={(event) => setImportSourceName(event.target.value)}
             aria-label="Import source name"
             placeholder="Approved source name"
             className="h-10 rounded-xl border border-border bg-background px-3 text-xs"

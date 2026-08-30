@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth";
 import { useTabActive } from "@/lib/tabActivity";
 import { ChevronRight } from "lucide-react";
-import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
+import { OUTCOME_META, isKnockOutcome, todayISO } from "@shared/knock";
 import { KpiTile } from "@/components/KpiTile";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -221,7 +221,7 @@ export default function Dashboard() {
     refetchInterval: tabActive ? 30000 : false,
   });
 
-  const { data: activity = [], isLoading: actLoading } = useQuery<ActivityEntry[]>({
+  const { data: activity = [], isLoading: actLoading, isError: actError, refetch: refetchActivity } = useQuery<ActivityEntry[]>({
     queryKey: ["/api/activity-log"],
     queryFn: () => apiRequest("GET", "/api/activity-log?limit=20").then(r => r.json()),
     enabled: isManager,
@@ -231,7 +231,13 @@ export default function Dashboard() {
   // Every render site below filters to s.date === today, so ask the server for
   // exactly that day - the unparameterized call downloaded the tenant's entire
   // clock history to show one day's rows, and grew forever.
-  const sessionsDate = new Date().toISOString().slice(0, 10);
+  // LOCAL day, not the UTC slice: toISOString rolls to "tomorrow" at 5-7pm
+  // across the US, so every evening this card queried the wrong day and
+  // "Field hours today" zeroed out while reps were still clocked in - the
+  // exact contradiction the header badge then disputed. Today.tsx and
+  // FollowUps already use the shared local todayISO for the same reason, and
+  // the server now stamps session.date with the org-local day to match.
+  const sessionsDate = todayISO();
   const { data: clockSessions = [], isLoading: clockLoading, isError: clockError, refetch: refetchClock } = useQuery<any[]>({
     queryKey: ["/api/clock/sessions", sessionsDate],
     queryFn: () => apiRequest("GET", `/api/clock/sessions?date=${sessionsDate}`).then(r => r.json()),
@@ -265,7 +271,7 @@ export default function Dashboard() {
   const assigned = statsFailed ? " - " : (leadStats?.total ?? 0);
   const dispositioned = typeof assigned === "number" ? assigned - (leadStats?.byStatus?.prospect ?? 0) : " - ";
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = sessionsDate;
   const todayHours = clockSessions
     .filter(s => s.date === today)
     .reduce((sum: number, s: any) => sum + (s.durationMinutes ?? 0), 0);
@@ -574,6 +580,13 @@ export default function Dashboard() {
               {actLoading ? (
                 <div className="space-y-3 px-4 pb-4">
                   {[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-secondary" />)}
+                </div>
+              ) : actError ? (
+                /* An outage must never read as an idle team - the exact
+                   empty-vs-error masquerade the other cards on this page
+                   already distinguish. */
+                <div className="px-4 pb-4">
+                  <RetryRow message="Couldn't load activity." onRetry={() => refetchActivity()} testId="activity-error" />
                 </div>
               ) : activity.length === 0 ? (
                 <div className="flex items-center gap-2 px-4 pb-4 text-sm text-muted-foreground">

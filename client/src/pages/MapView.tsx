@@ -223,6 +223,7 @@ const RAIL_BTN_IDLE = "bg-card/95 border-border text-foreground hover:bg-card";
 const RAIL_BTN_ACTIVE = "bg-primary border-primary text-primary-foreground";
 import { chaikinSmooth } from "@shared/strokeSmoothing";
 import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
+import { activeAreaCountsByRep, areaCountsRecord } from "@/lib/areaCapacity";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
 import { ReclaimAllDialog } from "@/components/territory/ReclaimAllDialog";
 import { FccPurgeDialog } from "@/components/map/FccPurgeDialog";
@@ -2324,7 +2325,7 @@ export default function MapView() {
   // `pinsArrived` false and SUPPRESSES the empty state - so the rep got a map
   // with no pins, no empty state, no message and no retry, indistinguishable
   // from a territory with nothing in it.
-  const { data: mapPinData, isError: mapPinsError, refetch: refetchMapPins } = useQuery<{ pins: MapPin[]; total: number; truncated?: boolean }>({
+  const { data: mapPinData, isError: mapPinsError, refetch: refetchMapPins } = useQuery<{ pins: MapPin[]; total: number; truncated?: boolean; windowFetchFailedAt?: number }>({
     // ONE cache entry per lens pair is deliberate: the key stays
     // ["/api/leads/map"] so every optimistic update / viewport merge / SSE
     // invalidation targets it unchanged; the lens rides the URL (read from
@@ -2647,7 +2648,7 @@ export default function MapView() {
           // Nothing new and nothing pruned → keep the old reference so
           // structural sharing turns this into a no-op (no re-cluster) —
           // UNLESS the truncation flag moved, which the notice chip reads.
-          if (merged.added === 0 && merged.pruned === 0 && old?.pins && !old?.truncated) return old;
+          if (merged.added === 0 && merged.pruned === 0 && old?.pins && !old?.truncated && !old?.windowFetchFailedAt) return old;
           return {
             pins: merged.pins,
             total: merged.pins.length,
@@ -2664,6 +2665,11 @@ export default function MapView() {
         if (err?.name === "AbortError") return; // superseded by a newer pan
         if (inFlightPinKeyRef.current === fetchKey) inFlightPinKeyRef.current = null;
         // A failed window fetch must never empty the map — keep what's there.
+        // But keep it HONESTLY: stamp the failure into the cache (the blessed
+        // channel — #87 bans React state here) so the viewport notice can say
+        // "couldn't refresh" instead of stale ground reading as doorless.
+        qc.setQueryData(["/api/leads/map"], (old: any) =>
+          old?.pins ? { ...old, windowFetchFailedAt: Date.now() } : old);
       });
   }, [qc, scheduleWindowSnapshotWrite]);
   const fetchViewportPinsRef = useRef(fetchViewportPins);
@@ -2897,7 +2903,10 @@ export default function MapView() {
       // Below street zoom this is noise, and the window would be huge.
       if (map.getZoom() < 13) {
         try { src.setData(emptyFeatureCollection()); } catch {}
-        setDoorTagCounts({});
+        // Functional + shallow-guarded: below street zoom this ran on EVERY
+        // settled pan, and a fresh {} identity re-rendered the whole ~10k-line
+        // tree each time for a value that hadn't changed.
+        setDoorTagCounts((prev) => (Object.keys(prev).length === 0 ? prev : {}));
         return;
       }
       const b = map.getBounds();
@@ -2920,7 +2929,10 @@ export default function MapView() {
         const body = await r.json();
         const tally: Record<string, number> = {};
         for (const d of body.doors ?? []) tally[d.tag] = (tally[d.tag] ?? 0) + 1;
-        setDoorTagCounts(tally);
+        setDoorTagCounts((prev) => {
+          const pk = Object.keys(prev), tk = Object.keys(tally);
+          return pk.length === tk.length && tk.every((k) => prev[k] === tally[k]) ? prev : tally;
+        });
         src.setData({
           type: "FeatureCollection",
           features: (body.doors ?? []).map((d: any) => ({
@@ -2995,6 +3007,9 @@ export default function MapView() {
   // there it must reflect the raw truncated window regardless of tier, so the
   // tier gate lives only at the notice-chip call site below.
   const sampledPins = viewportMode && !!mapPinData?.truncated;
+  // Stale-window notice dismissal: keyed to the failure STAMP, so dismissing
+  // one failure never mutes the next.
+  const [staleNoticeDismissedAt, setStaleNoticeDismissedAt] = useState<number | null>(null);
   const [sampleNoticeDismissed, setSampleNoticeDismissed] = useState(false);
   useEffect(() => { if (!sampledPins) setSampleNoticeDismissed(false); }, [sampledPins]);
 
@@ -4543,8 +4558,16 @@ export default function MapView() {
         }
         if (map.getLayer(STATUS_ICON_LAYER)) map.setLayoutProperty(STATUS_ICON_LAYER, "visibility", newFieldMap() ? (showLeads ? "visible" : "none") : "none");
       }
+      // Re-assert the viewport tier's ownership of these layers. This effect
+      // was the documented visibility race's missing FOURTH writer: it set
+      // lead-unclustered/glyphs visible with no tier awareness, so toggling
+      // rep colours in the density-grid tier painted the stale loaded window's
+      // pins over the bubbles (until the next fetch callback happened to run
+      // the sync - up to a minute). The sibling "Show leads" effect ends with
+      // this same call for the same reason.
+      syncViewportTierLayers(map);
     } catch { /* style mid-load; styleEpoch re-fires this effect */ }
-  }, [repColorMode, mapReady, styleEpoch, canManage, showLeads]);
+  }, [repColorMode, mapReady, styleEpoch, canManage, showLeads, syncViewportTierLayers]);
 
   // ── Selected-pin ring + dimming — pure style-thread update, no setData, no
   //    re-cluster. With a lead selected, its pin keeps full color + the ring
@@ -4704,34 +4727,20 @@ export default function MapView() {
     [territoryProgress],
   );
 
-  // Active areas per rep, counted ONCE over the territory list instead of
-  // re-scanning it per rep. The rep picker previously did
-  // territories.filter(...) inside team.map(...) AND JSON.parsed assigneeIds on
-  // every pair: O(reps × areas) parses — 40 reps × 200 areas = 8,000 JSON.parse
-  // calls per render, on the phone, while the manager is mid-tap.
-  const activeAreaCountByRep = useMemo(() => {
-    const counts = new Map<number, number>();
-    for (const t of territories as any[]) {
-      if (t.status !== "active" && t.status !== "shared") continue;
-      const seen = new Set<number>();
-      if (t.repId != null) seen.add(t.repId);
-      try {
-        for (const id of JSON.parse(t.assigneeIds || "[]") as number[]) seen.add(id);
-      } catch { /* legacy row */ }
-      // A rep on an area as both primary and assignee still holds ONE area.
-      for (const id of seen) counts.set(id, (counts.get(id) ?? 0) + 1);
-    }
-    return counts;
-  }, [territories]);
+  // Active areas per rep — one shared computation (lib/areaCapacity) so this
+  // page and the Area Console can never disagree about who is loaded.
+  const activeAreaCountByRep = useMemo(
+    () => activeAreaCountsByRep(territories as any[]),
+    [territories],
+  );
   // Same tallies as a plain record — RepPicker's areaCounts prop takes
   // Record<number, number> and switches its rows to the assign-sheet grammar
   // (ring avatar + "Assigned to N areas" status line). One conversion, reused
   // by every RepPicker on this page.
-  const repAreaCounts = useMemo(() => {
-    const rec: Record<number, number> = {};
-    for (const [id, n] of activeAreaCountByRep) rec[id] = n;
-    return rec;
-  }, [activeAreaCountByRep]);
+  const repAreaCounts = useMemo(
+    () => areaCountsRecord(activeAreaCountByRep),
+    [activeAreaCountByRep],
+  );
 
   // ReclaimAllDialog props, memoized: these were built INLINE in the JSX, so
   // every MapView render while an admin had the page open (the map re-renders
@@ -5875,6 +5884,10 @@ export default function MapView() {
       } else if (scanDrawMode) {
         setScanDrawMode(false);
         clearDrawBox();
+      } else if (addMode) {
+        // The tap-a-house add tool was the one armed mode this hatch missed:
+        // Escape did nothing and every subsequent click kept creating leads.
+        setAddMode(false);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -5884,6 +5897,7 @@ export default function MapView() {
     leadsOpen,
     lassoMode,
     scanDrawMode,
+    addMode,
     clearDrawBox,
     exitLasso,
   ]);
@@ -7209,6 +7223,12 @@ export default function MapView() {
             : liveTestOpen && canSubmitScan
               ? "livetest"
               : "fabs";
+  // A tapped scanned door yields to the knock sheet permanently, not just
+  // visually: without this the card re-surfaced, stale, when the sheet closed.
+  // (Below the bottomSlot declaration - a dep array reads during render.)
+  useEffect(() => {
+    if (bottomSlot === "knock") setSelectedDoor(null);
+  }, [bottomSlot]);
 
   // (No secondary-chrome fade: the control rail is primary chrome and stays
   // visible through every pan/zoom — the auto-hide machinery is gone.)
@@ -7830,17 +7850,23 @@ export default function MapView() {
                  this only covers the transient where stale loaded pins are
                  known-partial while still on the pins tier. ── */}
           {mapReady && (() => {
+            const failedAt = mapPinData?.windowFetchFailedAt ?? null;
             const notice = viewportNotice({
               viewportMode,
               truncated: !!mapPinData?.truncated,
               sampleDismissed: sampleNoticeDismissed,
               tier: viewportTier,
+              fetchFailed: failedAt != null,
+              fetchFailedDismissed: failedAt != null && staleNoticeDismissedAt != null && staleNoticeDismissedAt >= failedAt,
             });
             if (!notice) return null;
             return (
               <MapViewportNotice
                 message={notice.message}
-                onDismiss={() => setSampleNoticeDismissed(true)}
+                onDismiss={() =>
+                  notice.kind === "stale"
+                    ? setStaleNoticeDismissedAt(Date.now())
+                    : setSampleNoticeDismissed(true)}
                 testId={`map-viewport-${notice.kind}-notice`}
               />
             );
@@ -8643,7 +8669,11 @@ export default function MapView() {
             if (!holders.length) return null; // pool areas assign via the card
             return (
               <AreaAssigneeBar
-                areaName={territoryLabel(t)}
+                // The area's NAME. territoryLabel(t) read fields the raw
+                // Territory row does not have (areaName/repName), so every
+                // field of its input resolved undefined and the header
+                // rendered a bare date ("Aug 12") or "Unassigned" instead.
+                areaName={t.name}
                 color={territoryPaint(
                   { color: (t as any).color, status: (t as any).status },
                   colorForRep((t as any).repId),
@@ -9222,6 +9252,12 @@ export default function MapView() {
                     setSearchOpen((o) => !o);
                     setToolsMenuOpen(false);
                     setLeadsOpen(false);
+                    // On phones the search panel is bottom-anchored at z-30 and
+                    // the knock sheet is a z-40 bottom sheet: opening search
+                    // under an open card left the input focused, invisible and
+                    // untappable behind it (and Escape then closed both). One
+                    // bottom surface at a time - the card yields.
+                    if (isMobile) setSelectedLeadId(null);
                   }}
                   aria-label="Search leads and places"
                   aria-pressed={searchOpen}
@@ -9703,13 +9739,16 @@ export default function MapView() {
           )}
 
           {/* Tapped scanned door. Bottom-right so it never covers the legend or
-              the rep's thumb reach on the primary actions at bottom-left. */}
-          <ScannedDoorCard
+              the rep's thumb reach on the primary actions at bottom-left.
+              Gated like the legend and pin key: while the knock sheet owns the
+              bottom this card is stale context, and letting it resurface after
+              the sheet closed re-showed a door the rep dismissed minutes ago. */}
+          {bottomSlot !== "knock" && <ScannedDoorCard
             door={selectedDoor}
             onClose={() => setSelectedDoor(null)}
             className="absolute right-3 z-20"
             style={{ bottom: "calc(env(safe-area-inset-bottom) + 6.5rem)" }}
-          />
+          />}
 
           {/* Pin legend + admin filter panel — bottom left, MANAGER chrome
                  (team_lead+). The floating dot-strip trigger is gone (minimal

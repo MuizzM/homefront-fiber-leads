@@ -288,9 +288,21 @@ export function viewportNotice(opts: {
   truncated: boolean;
   sampleDismissed: boolean;
   tier?: "pins" | "grid";
-}): { kind: "sample"; message: string } | null {
+  /** The latest bbox window fetch FAILED (cache marker windowFetchFailedAt).
+   *  Without this the map silently kept the previous window's pins: ground
+   *  that failed to refresh looked exactly like ground with no doors - no
+   *  error, no request, nothing in any log - and a lasso over it reported
+   *  "No mapped doors inside this loop". */
+  fetchFailed?: boolean;
+  fetchFailedDismissed?: boolean;
+}): { kind: "sample" | "stale"; message: string } | null {
   if (!opts.viewportMode) return null;
   if (opts.tier === "grid") return null;
+  // A failed refresh outranks the sample notice: known-partial beats
+  // unknowingly-stale, so say the worse thing first.
+  if (opts.fetchFailed && !opts.fetchFailedDismissed) {
+    return { kind: "stale", message: "Couldn't refresh this area's pins - showing the last loaded view" };
+  }
   if (opts.truncated && !opts.sampleDismissed) {
     return { kind: "sample", message: "Showing a sample - zoom in for all pins" };
   }

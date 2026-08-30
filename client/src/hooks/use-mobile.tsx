@@ -6,7 +6,13 @@ const MOBILE_BREAKPOINT = 768
 const DESKTOP_BREAKPOINT = 1024
 
 export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
+  // Synchronous first value, same as useIsDesktop below and for the same
+  // reason: starting undefined made the FIRST mobile frame render as desktop
+  // (!!undefined === false), so the translated-offscreen sidebar was briefly
+  // focusable and exposed to assistive tech before the effect corrected it.
+  const [isMobile, setIsMobile] = React.useState<boolean>(
+    () => typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT,
+  )
 
   React.useEffect(() => {
     const onChange = () => {
