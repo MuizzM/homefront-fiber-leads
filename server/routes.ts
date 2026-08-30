@@ -325,7 +325,7 @@ function existingAddrDedupSet(tenantId?: number): Set<string> {
 // that makes a boundary door count, so a door sitting a hair outside the box
 // but on the line is still tested. Rows with NULL coords fall out of BETWEEN
 // exactly as the callers' `lat != null && lng != null` guards dropped them.
-function leadsInRingBbox(polygon: [number, number][], tenantId: number | undefined, columns: string): any[] {
+function leadsInRingBbox(polygon: [number, number][], tenantId: number | undefined, columns: string, limit?: number): any[] {
   if (!Array.isArray(polygon) || polygon.length < 3) return [];
   let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
   for (const p of polygon) {
@@ -337,9 +337,13 @@ function leadsInRingBbox(polygon: [number, number][], tenantId: number | undefin
   }
   const pad = BOUNDARY_EPSILON_DEG;
   const tenantAnd = tenantId != null ? " AND tenant_id = ?" : "";
+  // `limit` is a REFUSAL threshold for callers that pass one (they request
+  // cap+1 and refuse on overflow) — never a silent truncation, which would
+  // silently drop doors that sit inside the ring.
+  const limitSql = limit != null ? ` LIMIT ${Math.max(1, Number(limit) | 0)}` : "";
   return rawDb.prepare(
     `SELECT ${columns} FROM leads
-      WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?${tenantAnd}`,
+      WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?${tenantAnd}${limitSql}`,
   ).all(s - pad, n + pad, w - pad, e + pad, ...(tenantId != null ? [tenantId] : []));
 }
 
@@ -6243,6 +6247,61 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     return { updated, skipped: ids.length - updated, repName, prior, appliedAt: assignedAt, incomplete };
   }
 
+  // ── Territory door stamping — the set-based twin of applyAssignment ─────────
+  // assign-area and /:id/assign hand every enclosed door to a rep AND link it
+  // to the territory. Both used to loop storage.updateLead per door inside one
+  // transaction — which is 3 statements per door PLUS a pin-cache bust and a
+  // synchronous SSE fan-out PER ROW, inside the open write transaction, on the
+  // blocked event loop (the documented prod stall class; a county import's 68k
+  // doors made one draw a multi-minute outage). This helper is 2 statements
+  // per ASSIGN_CHUNK: events first (they must see the PRE-update rows), then
+  // one set UPDATE with the tenant AND authority predicates inlined — so what
+  // another process assigned between the caller's read and this write is
+  // filtered at write time, not overwritten (the TOCTOU applyAssignment was
+  // hardened against). Runs INSIDE the caller's transaction: no cache bust, no
+  // SSE here — the caller busts once and emits after commit.
+  function stampTerritoryDoors(opts: {
+    candidateIds: number[];
+    repId: number;
+    repName: string;
+    territoryId: number;
+    user: any;
+    tid: number | undefined;
+    /** /:id/assign's contract: only doors nobody holds. assign-area uses the
+     *  caller's full reassign authority instead (unassigned or own-team). */
+    requireUnassigned: boolean;
+    at: string;
+  }): number[] {
+    const { candidateIds, repId, repName, territoryId, user, tid, requireUnassigned, at } = opts;
+    const scope = leadVisibilityScope(user);
+    const authoritySql = requireUnassigned
+      ? "assigned_rep_id IS NULL"
+      : scope === undefined
+        ? "1=1"
+        : `(assigned_rep_id IS NULL${(scope as number[]).length ? ` OR assigned_rep_id IN (${(scope as number[]).map((n) => Number(n) | 0).join(",")})` : ""})`;
+    const tenantSql = tid == null ? "1=1" : `tenant_id = ${Number(tid) | 0}`;
+    const eventDetail = JSON.stringify({ assignedTo: repName, assignedBy: user?.name ?? null });
+    const ids = [...new Set(candidateIds.map((v) => Number(v)).filter(Number.isInteger))];
+    const changed: number[] = [];
+    for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
+      const chunk = ids.slice(i, i + ASSIGN_CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      rawDb.prepare(
+        `INSERT INTO lead_events (lead_id, type, actor, detail, at)
+         SELECT id, 'assignment', ?, ?, datetime('now') FROM leads
+          WHERE id IN (${placeholders}) AND ${tenantSql} AND ${authoritySql}`,
+      ).run(user?.name ?? null, eventDetail, ...chunk);
+      const rows = rawDb.prepare(
+        `UPDATE leads SET assigned_rep_id = ?, assigned_territory_id = ?, assignment_source = 'territory-sync',
+                assigned_by = ?, assigned_at = ?, updated_at = ?
+          WHERE id IN (${placeholders}) AND ${tenantSql} AND ${authoritySql}
+      RETURNING id`,
+      ).all(repId, territoryId, user?.name ?? null, at, at, ...chunk) as Array<{ id: number }>;
+      for (const r of rows) changed.push(r.id);
+    }
+    return changed;
+  }
+
   // POST /api/leads/assign-selection/undo  { token }
   // Puts the doors of ONE recent assignment back to their previous owners.
   // Same capability as the assignment, same user, same tenant, inside the
@@ -8653,8 +8712,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/territories/assign-area", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const { polygon, name, color: requestedColor } = req.body as { polygon: [number, number][]; name?: string; color?: string };
-    if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
+    const { polygon: rawPolygon, name, color: requestedColor } = req.body as { polygon: [number, number][]; name?: string; color?: string };
+    if (!Array.isArray(rawPolygon) || rawPolygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
+    // The SAME ring bar the raw create and assign-selection apply. This route
+    // accepted any array of length >= 3 and persisted it verbatim - a 500k-point
+    // or string-bearing ring was stored as the territory's polygon and then
+    // walked by every enclosure computation that touches the area.
+    if (rawPolygon.length > MAX_ASSIGN_RING_POINTS) {
+      return res.status(400).json({ error: `That outline is too detailed - at most ${MAX_ASSIGN_RING_POINTS.toLocaleString()} points`, code: "RING_TOO_COMPLEX" });
+    }
+    if (rawPolygon.some((p: any) => !Array.isArray(p) || p.length < 2 || !Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1])))) {
+      return res.status(400).json({ error: "polygon must be [lng,lat][]", code: "BAD_POLYGON" });
+    }
+    const numericRing = rawPolygon.map((p: any) => [Number(p[0]), Number(p[1])] as [number, number]);
+    if (crossesAntimeridian(numericRing)) {
+      return res.status(400).json({ error: "polygon crosses the antimeridian", code: "BAD_POLYGON" });
+    }
+    const ringCheck = validateRing(numericRing);
+    if (!ringCheck.ok) return res.status(400).json({ error: `polygon rejected: ${ringCheck.reason}`, code: "BAD_POLYGON" });
+    const polygon = ringCheck.ring;
 
     // One crew list from either shape, deduped and order-preserving so "who I
     // picked first" survives as the primary.
@@ -8691,6 +8767,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (!member || (tid && member.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
       // A team_lead may only assign an area to one of their own reps.
       if (!repInVisibilityScope(user, id)) return res.status(403).json({ error: `${member.name} is not on your team`, code: "OUT_OF_SCOPE" });
+      // A deactivated rep cannot sign in; ground handed to one is silently
+      // parked. Same refusal the lead-assign routes give.
+      if (!member.active) return res.status(400).json({ error: `${member.name} is no longer active`, code: "REP_INACTIVE" });
       // Max-active-areas guard (company rule; recommended 3–5)
       const capMsg = repAtAreaCap(id, undefined, tid);
       if (capMsg) return res.status(409).json({ error: `${capMsg} Reclaim one first.` });
@@ -8711,19 +8790,29 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       : `${rep.name} +${crew.length - 1}`;
     // Only leads the caller may reassign (unassigned or own-team for a team_lead;
     // all for admin/manager) — an area draw never poaches another team's doors.
-    // Bbox-prefiltered candidates (indexed) before the exact enclosure test.
-    const enclosed = leadsInRingBbox(polygon, tid, "id, lat, lng, assigned_rep_id AS assignedRepId")
-      .filter((l: any) => polygonCovers(l.lat, l.lng, polygon) && canReassignLead(user, l));
+    // Bbox-prefiltered candidates (indexed) before the exact enclosure test,
+    // REFUSED past the same cap assign-selection applies (one extra row
+    // requested purely to detect the overflow — never silent truncation).
+    const candidates = leadsInRingBbox(polygon, tid, "id, lat, lng, assigned_rep_id AS assignedRepId", MAX_ASSIGN_BBOX_CANDIDATES + 1);
+    if (candidates.length > MAX_ASSIGN_BBOX_CANDIDATES) {
+      return res.status(400).json({
+        error: "That area covers too much ground to assign in one action - draw a tighter outline",
+        code: "AREA_TOO_LARGE",
+      });
+    }
+    const enclosed = candidates.filter((l: any) => polygonCovers(l.lat, l.lng, polygon) && canReassignLead(user, l));
 
     // ONE transaction for the polygon and its doors — this route's whole
-    // promise is "save the area AND assign every enclosed lead atomically", and
-    // it used to be a createTerritory followed by an N-row loop, so a crash
-    // mid-loop left an area holding some of its doors. .immediate() takes the
-    // write lock up front (reads inside otherwise deadlock-upgrade under load).
-    // SSE emission stays OUTSIDE — a rollback has no retraction.
+    // promise is "save the area AND assign every enclosed lead atomically".
+    // The doors are stamped SET-BASED (stampTerritoryDoors: two statements per
+    // chunk with the authority predicates inlined at write time), never the
+    // old per-door storage.updateLead loop, which also fired a pin-cache bust
+    // and a synchronous SSE fan-out PER ROW inside this very transaction.
+    // .immediate() takes the write lock up front (reads inside otherwise
+    // deadlock-upgrade under load). SSE and the single cache bust stay OUTSIDE
+    // — a rollback has no retraction.
     let territory!: ReturnType<typeof storage.createTerritory>;
-    let assigned = 0;
-    const movedRows: any[] = [];
+    let changedIds: number[] = [];
     rawDb.transaction(() => {
       territory = storage.createTerritory({
         tenantId: tid ?? null, name: (name && name.trim()) || autoName,
@@ -8732,20 +8821,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         assigneeIds: JSON.stringify(repIds), assignedAt: at, updatedAt: at,
       } as any);
       storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId, repIds, name: territory.name });
-      for (const l of enclosed) {
-        const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid);
-        if (moved) {
-          assigned++;
-          storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
-          if (movedRows.length < LEAD_EVENT_BULK_MAX) movedRows.push(moved);
-        }
-      }
-      storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, repIds, assigned });
+      changedIds = stampTerritoryDoors({
+        candidateIds: enclosed.map((l: any) => l.id),
+        repId, repName: rep.name, territoryId: territory.id,
+        user, tid, requireUnassigned: false, at,
+      });
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, repIds, assigned: changedIds.length });
     }).immediate();
-    for (const moved of movedRows) emitLeadChange("assignment", moved, user, tid ?? moved.tenantId);
+    if (changedIds.length > 0) bustMapCache(tid);
+    emitLeadChangesBulk("assignment", changedIds.slice(0, LEAD_EVENT_BULK_MAX), user, tid);
 
     res.status(201).json({
-      territory, assigned, total: enclosed.length,
+      territory, assigned: changedIds.length, total: enclosed.length,
       // The crew, echoed back so the client can name everyone it just put on the
       // ground rather than only the primary it happens to read off `territory`.
       repIds, repNames: crew.map((m) => m.name),
@@ -8963,49 +9050,60 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const nr = next.repIds.length ? storage.getTeamMemberById(next.repIds[0]) : null;
       newName = nr ? `${nr.name}'s area` : "Unassigned area";
     }
-    storage.updateTerritory(t.id, {
-      status: next.status, repId: newPrimary, name: newName,
-      assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: retainedAreaColor(t, newPrimary), reclaimedAt: at, updatedAt: at,
-      // Reassign starts a new tenure; returning to the pool means nobody holds
-      // it, so the "assigned since" date must not linger from the last rep.
-      assignedAt: next.repIds.length ? at : null,
-    } as any, tid);
-
-    // Persist only the leads whose rep actually changed — the DIFF, not the area.
-    //
-    // reclaimTerritory gives every door in the area the SAME destination (its
-    // own docblock is the contract):
-    //   keep_leads     → doors untouched              → nothing to write
-    //   return_to_pool → every door's rep → null      → the pool, area link cleared
-    //   reassign       → every door's rep → newRepId  → one owner
-    // A uniform destination makes the row-by-row diff a predicate, so each mode
-    // is ONE UPDATE whose WHERE selects exactly the rows the loop used to pick:
-    // "not already in the pool", "not already this rep". Doors already at the
-    // destination are not selected, so leadsAffected counts what moved and
-    // never inflates to the area's door count. The switch is exhaustive — a new
-    // ReclaimMode fails to compile here rather than silently writing nothing.
+    // ONE transaction for the territory-row flip and the door hand-off. These
+    // were two independent transactions, so a crash between them left the area
+    // "unassigned" with every door still stamped to the departed rep — the
+    // exact drift the visibility rules assume cannot happen. The set-based
+    // primitives take savepoints when nested, so wrapping here is safe for
+    // both callers (/reclaim and the reclaim-all sweep). SSE after commit.
+    // Row-tenant condition: an adopted (NULL-tenant) area authorized by
+    // sameTenantWrite must not silently no-op against strict equality.
+    const rowTenant = ((t as any).tenantId ?? undefined) as number | undefined;
     let moved: TerritoryLeadWrite = { changed: 0, leadIds: [] };
-    switch (mode) {
-      case "keep_leads": break;
-      case "return_to_pool":
-        moved = storage.bulkReturnTerritoryLeadsToPool({ territoryId: t.id, at, tenantId: tid });
-        break;
-      case "reassign":
-        // "except the doors newRepId already holds" IS the diff: re-stamping
-        // those would reset an assigned_at the loop left alone.
-        moved = storage.bulkAssignTerritoryLeadsExcept({
-          territoryId: t.id, repId: Number(newRepId), at, keepRepIds: [Number(newRepId)], tenantId: tid,
-        });
-        break;
-      default: {
-        const unreachable: never = mode;
-        throw new Error(`unknown reclaim mode: ${String(unreachable)}`);
+    rawDb.transaction(() => {
+      storage.updateTerritory(t.id, {
+        status: next.status, repId: newPrimary, name: newName,
+        assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
+        color: retainedAreaColor(t, newPrimary), reclaimedAt: at, updatedAt: at,
+        // Reassign starts a new tenure; returning to the pool means nobody holds
+        // it, so the "assigned since" date must not linger from the last rep.
+        assignedAt: next.repIds.length ? at : null,
+      } as any, rowTenant);
+
+      // Persist only the leads whose rep actually changed — the DIFF, not the area.
+      //
+      // reclaimTerritory gives every door in the area the SAME destination (its
+      // own docblock is the contract):
+      //   keep_leads     → doors untouched              → nothing to write
+      //   return_to_pool → every door's rep → null      → the pool, area link cleared
+      //   reassign       → every door's rep → newRepId  → one owner
+      // A uniform destination makes the row-by-row diff a predicate, so each mode
+      // is ONE UPDATE whose WHERE selects exactly the rows the loop used to pick:
+      // "not already in the pool", "not already this rep". Doors already at the
+      // destination are not selected, so leadsAffected counts what moved and
+      // never inflates to the area's door count. The switch is exhaustive — a new
+      // ReclaimMode fails to compile here rather than silently writing nothing.
+      switch (mode) {
+        case "keep_leads": break;
+        case "return_to_pool":
+          moved = storage.bulkReturnTerritoryLeadsToPool({ territoryId: t.id, at, tenantId: tid });
+          break;
+        case "reassign":
+          // "except the doors newRepId already holds" IS the diff: re-stamping
+          // those would reset an assigned_at the loop left alone.
+          moved = storage.bulkAssignTerritoryLeadsExcept({
+            territoryId: t.id, repId: Number(newRepId), at, keepRepIds: [Number(newRepId)], tenantId: tid,
+          });
+          break;
+        default: {
+          const unreachable: never = mode;
+          throw new Error(`unknown reclaim mode: ${String(unreachable)}`);
+        }
       }
-    }
+      storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected: moved.changed });
+    }).immediate();
     const leadsAffected = moved.changed;
     emitLeadChangesBulk("assignment", moved.leadIds, user, tid);
-    storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected });
     return { status: next.status, leadsAffected };
   }
 
@@ -9044,6 +9142,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (!Number.isInteger(target) || target <= 0) return res.status(400).json({ error: "invalid newRepId" });
       if (!repInCallerTenant(user, target) || !repInVisibilityScope(user, target)) {
         return res.status(404).json({ error: "rep not found" });
+      }
+      const targetMember = storage.getTeamMemberById(target);
+      if (targetMember && !targetMember.active) {
+        return res.status(400).json({ error: `${targetMember.name} is no longer active`, code: "REP_INACTIVE" });
       }
       const full = repAtAreaCap(target, t.id, tid);
       if (full) return res.status(409).json({ error: full });
@@ -9118,11 +9220,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Scope: a team_lead may only manage their own areas + assign to their own reps
     // (mirrors /assign-area). Prevents cross-team territory hijack + lead vacuuming.
     if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
+    // An archived area is a closed record with an outcome snapshot. /reclaim
+    // and /unassign refuse them; without the same guard here a manager could
+    // resurrect one into "active" and vacuum every unassigned door inside it.
+    if (((t as any).status ?? "active") === "archived") {
+      return res.status(409).json({ error: "cannot assign an archived area", code: "ARCHIVED" });
+    }
     const repId = Number(req.body?.repId);
     if (!repId) return res.status(400).json({ error: "repId required" });
     const rep = storage.getTeamMemberById(repId);
     if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
     if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    if (!rep.active) return res.status(400).json({ error: `${rep.name} is no longer active`, code: "REP_INACTIVE" });
 
     // Max-active-areas guard
     const capMsg = repAtAreaCap(repId, t.id, tid);
@@ -9134,37 +9243,44 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // Assign only leads inside the area that are currently UNASSIGNED — direct
     // assignments and other reps' pipelines are never touched.
-    // Bbox-prefiltered candidates (indexed) before the exact enclosure test.
-    const inside = polygon.length >= 3
-      ? leadsInRingBbox(polygon, tid, "id, lat, lng, assigned_rep_id AS assignedRepId")
-          .filter((l: any) => l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon))
+    // Bbox-prefiltered candidates (indexed) before the exact enclosure test,
+    // refused past the shared cap rather than silently truncated.
+    const candidates = polygon.length >= 3
+      ? leadsInRingBbox(polygon, tid, "id, lat, lng, assigned_rep_id AS assignedRepId", MAX_ASSIGN_BBOX_CANDIDATES + 1)
       : [];
+    if (candidates.length > MAX_ASSIGN_BBOX_CANDIDATES) {
+      return res.status(400).json({
+        error: "That area covers too much ground to assign in one action",
+        code: "AREA_TOO_LARGE",
+      });
+    }
+    const inside = candidates.filter((l: any) => l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon));
 
     // Doors + holder flip in ONE transaction (same contract as assign-area and
-    // DELETE): a crash mid-loop must not leave the area assigned with half its
-    // doors, or vice versa. SSE after commit — a rollback has no retraction.
-    let assigned = 0;
-    const movedRows: any[] = [];
+    // DELETE): a crash must not leave the area assigned with half its doors, or
+    // vice versa. Doors are stamped set-based (stampTerritoryDoors, with the
+    // unassigned-only predicate re-checked AT WRITE TIME so another process
+    // cannot lose a door it just booked). SSE and the one cache bust happen
+    // after commit — a rollback has no retraction.
+    let changedIds: number[] = [];
     rawDb.transaction(() => {
-      for (const l of inside) {
-        const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid);
-        if (moved) {
-          assigned++;
-          storage.addLeadEvent(l.id, "assignment", (req as any).user?.name ?? null, { assignedTo: rep.name, assignedBy: (req as any).user?.name ?? null });
-          if (movedRows.length < LEAD_EVENT_BULK_MAX) movedRows.push(moved);
-        }
-      }
+      changedIds = stampTerritoryDoors({
+        candidateIds: inside.map((l: any) => l.id),
+        repId, repName: rep.name, territoryId: t.id,
+        user, tid, requireUnassigned: true, at,
+      });
       // Re-badge an auto-named area with the new owner's name (custom names kept).
       const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
       storage.updateTerritory(t.id, {
         repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
         color: retainedAreaColor(t, repId), assignedAt: at, updatedAt: at,
-      } as any, tid);
-      storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
+      } as any, ((t as any).tenantId ?? undefined) as number | undefined);
+      storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned: changedIds.length });
     }).immediate();
-    for (const moved of movedRows) emitLeadChange("assignment", moved, user, tid ?? moved.tenantId);
+    if (changedIds.length > 0) bustMapCache(tid);
+    emitLeadChangesBulk("assignment", changedIds.slice(0, LEAD_EVENT_BULK_MAX), user, tid);
 
-    res.json({ ok: true, repId, assigned, status: "active" });
+    res.json({ ok: true, repId, assigned: changedIds.length, status: "active" });
   });
 
   // POST /api/territories/:id/complete { notes? }
@@ -9201,6 +9317,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // this a team lead could share another team's area to their own reps, which
     // is a territory grab wearing an assignment's clothes.
     if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
+    // Same closed-record rule as /reclaim, /unassign and /:id/assign: sharing
+    // an archived area would flip it back to shared/active — a resurrection.
+    if (((t as any).status ?? "active") === "archived") {
+      return res.status(409).json({ error: "cannot change assignees on an archived area", code: "ARCHIVED" });
+    }
     const repIds: number[] = Array.isArray(req.body?.repIds) ? req.body.repIds.map(Number) : [];
     // Every OTHER rep-taking territory route validates its input reps; this one
     // did not, so a foreign rep id could be written into assignee_ids — and
@@ -9214,9 +9335,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     // Sharing adds this area to each rep's plate; the ones already on it are
     // excluded by repAtAreaCap so re-confirming an existing share never 409s.
+    // A deactivated rep is refused only as a NEW addition — a crew that already
+    // contains one (offboarding edge) can still be edited down.
     const alreadyOn = new Set<number>(safeJson<number[]>((t as any).assigneeIds) ?? []);
     for (const r of repIds) {
       if (alreadyOn.has(r)) continue;
+      const member = storage.getTeamMemberById(r);
+      if (member && !member.active) {
+        return res.status(400).json({ error: `${member.name} is no longer active`, code: "REP_INACTIVE" });
+      }
       const full = repAtAreaCap(r, t.id, tid);
       if (full) return res.status(409).json({ error: full });
     }
@@ -9245,31 +9372,42 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       t.repId,
     ].filter(Boolean).filter((id) => !merged.includes(id as number))));
 
-    storage.updateTerritory(t.id, {
-      status: merged.length > 1 ? "shared" : "active",
-      repId: newPrimary,
-      color: retainedAreaColor(t, newPrimary),
-      assigneeIds: JSON.stringify(merged),
-      pastAssigneeIds: JSON.stringify(past),
-      assignedAt: at, updatedAt: at,
-    } as any, tid);
+    // ONE transaction for the holder flip AND the door hand-off. These were two
+    // independent transactions, so a crash (or another writer, in the
+    // multi-process prod) between them left the area's crew list and its doors
+    // disagreeing — the exact drift the visibility rules assume cannot happen.
+    // /:id/assign and assign-area already promise this contract.
+    // SSE after commit — a rollback has no retraction.
+    // Row-tenant condition for adopted areas (see /unassign).
+    const rowTenant = ((t as any).tenantId ?? undefined) as number | undefined;
+    let handover: TerritoryLeadWrite = { changed: 0, leadIds: [] };
+    rawDb.transaction(() => {
+      storage.updateTerritory(t.id, {
+        status: merged.length > 1 ? "shared" : "active",
+        repId: newPrimary,
+        color: retainedAreaColor(t, newPrimary),
+        assigneeIds: JSON.stringify(merged),
+        pastAssigneeIds: JSON.stringify(past),
+        assignedAt: at, updatedAt: at,
+      } as any, rowTenant);
 
-    // Doors follow the area. A rep dropped from the assignment must stop seeing
-    // its leads, and the incoming primary must start — otherwise the area moves
-    // but the work doesn't. The reps who STAY on the crew are the exception, and
-    // the reason this can't be a blanket update: re-stamping a co-assignee's
-    // door would steal it and restart its "assigned since" clock.
-    //
-    // ONE UPDATE for the area instead of an UPDATE + pin-cache bust per door
-    // (a 2,000-door patch used to pay 2,000 of each on the request thread); the
-    // ids come back from the same transaction, so the assignment events still
-    // name exactly the doors that moved, capped exactly as the loop capped them.
-    const handover = storage.bulkAssignTerritoryLeadsExcept({
-      territoryId: t.id, repId: newPrimary, at, keepRepIds: merged, tenantId: tid,
-    });
+      // Doors follow the area. A rep dropped from the assignment must stop seeing
+      // its leads, and the incoming primary must start — otherwise the area moves
+      // but the work doesn't. The reps who STAY on the crew are the exception, and
+      // the reason this can't be a blanket update: re-stamping a co-assignee's
+      // door would steal it and restart its "assigned since" clock.
+      //
+      // ONE UPDATE for the area instead of an UPDATE + pin-cache bust per door
+      // (a 2,000-door patch used to pay 2,000 of each on the request thread); the
+      // ids come back from the same transaction, so the assignment events still
+      // name exactly the doors that moved, capped exactly as the loop capped them.
+      handover = storage.bulkAssignTerritoryLeadsExcept({
+        territoryId: t.id, repId: newPrimary, at, keepRepIds: merged, tenantId: tid,
+      });
+      storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
+    }).immediate();
     emitLeadChangesBulk("assignment", handover.leadIds, user, tid);
 
-    storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
     res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: retainedAreaColor(t, newPrimary) });
   });
 
@@ -9284,8 +9422,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/territories/:id/unassign", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const t = storage.getTerritoryById(Number(req.params.id), tid);
-    if (!t) return res.status(404).json({ error: "not found" });
+    // Unscoped fetch + sameTenantWrite, like every sibling lifecycle route
+    // (/reclaim, /share, /:id/assign, /complete). The old tenant-scoped fetch
+    // used strict equality, so a NULL-tenant (adopted) area 404'd even for the
+    // default-org admin — the ONE lifecycle action they could not perform on
+    // adopted ground, forcing an all-or-nothing /reclaim instead.
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     // Same ownership gate the other team_lead lifecycle routes use.
     if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
     if (((t as any).status ?? "active") === "archived") {
@@ -9330,31 +9473,41 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const nr = next.repIds.length ? storage.getTeamMemberById(next.repIds[0], tid) : null;
       newName = nr ? `${nr.name}'s area` : "Unassigned area";
     }
-    storage.updateTerritory(t.id, {
-      status: next.status, repId: newPrimary, name: newName,
-      assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: retainedAreaColor(t, newPrimary), updatedAt: at,
-    } as any, tid);
+    // ONE transaction for the crew flip and the door release — split writes
+    // here could leave a removed rep still holding doors in an area whose crew
+    // list says they're gone (or vice versa). SSE after commit.
+    // The territory-row write conditions on the ROW's tenant, not the
+    // caller's: an adopted (NULL-tenant) area authorized by sameTenantWrite
+    // would otherwise silently no-op against the strict-equality condition.
+    const rowTenant = ((t as any).tenantId ?? undefined) as number | undefined;
+    let released: TerritoryLeadWrite = { changed: 0, leadIds: [] };
+    rawDb.transaction(() => {
+      storage.updateTerritory(t.id, {
+        status: next.status, repId: newPrimary, name: newName,
+        assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
+        color: retainedAreaColor(t, newPrimary), updatedAt: at,
+      } as any, rowTenant);
 
-    // Persist only the leads whose rep actually changed (the removed rep's).
-    //
-    // The released doors STAY LINKED to the area. This used to NULL
-    // assigned_territory_id along with the rep, which on a shared area threw the
-    // removed rep's doors out of the patch entirely: no rep and no territory is
-    // "open field", invisible to every co-assignee still walking that ground and
-    // to the area's own door count. Taking one person off a crew must leave the
-    // work with the crew. The link is only cleared when the AREA itself goes
-    // away (delete) or is explicitly emptied (reclaim to pool).
-    //
-    // ONE UPDATE restricted to the departing rep's doors — which is exactly the
-    // diff unassignRep computes, since a co-assignee's door is never in it — so
-    // leadsReleased is still the number of doors that actually moved. Doors the
-    // rep never held are not selected and cannot inflate it.
-    // releaseLeads:false means the hand-off already happened out of band: the
-    // transition leaves every door where it is, so there is nothing to write.
-    const released = releaseLeads
-      ? storage.bulkReleaseTerritoryLeadsFromRep({ territoryId: t.id, repId, at, tenantId: tid })
-      : { changed: 0, leadIds: [] as number[] };
+      // Persist only the leads whose rep actually changed (the removed rep's).
+      //
+      // The released doors STAY LINKED to the area. This used to NULL
+      // assigned_territory_id along with the rep, which on a shared area threw the
+      // removed rep's doors out of the patch entirely: no rep and no territory is
+      // "open field", invisible to every co-assignee still walking that ground and
+      // to the area's own door count. Taking one person off a crew must leave the
+      // work with the crew. The link is only cleared when the AREA itself goes
+      // away (delete) or is explicitly emptied (reclaim to pool).
+      //
+      // ONE UPDATE restricted to the departing rep's doors — which is exactly the
+      // diff unassignRep computes, since a co-assignee's door is never in it — so
+      // leadsReleased is still the number of doors that actually moved. Doors the
+      // rep never held are not selected and cannot inflate it.
+      // releaseLeads:false means the hand-off already happened out of band: the
+      // transition leaves every door where it is, so there is nothing to write.
+      released = releaseLeads
+        ? storage.bulkReleaseTerritoryLeadsFromRep({ territoryId: t.id, repId, at, tenantId: tid })
+        : { changed: 0, leadIds: [] as number[] };
+    }).immediate();
     const leadsReleased = released.changed;
     // Released doors go back to the pool, so the post-write row authorizes only
     // org-wide roles — the removed rep's own copy is retired by the map-changed
