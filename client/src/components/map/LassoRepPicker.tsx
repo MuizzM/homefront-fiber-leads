@@ -25,6 +25,10 @@ export interface LassoRepPickerProps {
   onChange: (id: string) => void;
   /** Doors in the refined selection: drives the "will have" preview. */
   selectionCount: number;
+  /** Doors in the selection ALREADY held by the chosen rep. Subtracted from
+   *  the projection — without it "will have N doors" counted those twice
+   *  (once in the rep's current holdings, once in the selection). */
+  ownedByChosen?: number;
 }
 
 const PALETTE = ["#38bdf8", "#34d399", "#fbbf24", "#a78bfa", "#fb7185", "#22d3ee", "#a3e635", "#e879f9"];
@@ -61,8 +65,11 @@ export const initialsOf = (name: string) =>
   name.trim().split(/\s+/).map((p) => p[0] ?? "").join("").slice(0, 2).toUpperCase() || "?";
 const fmt = (n: number) => n.toLocaleString("en-US");
 
-export function LassoRepPicker({ reps, value, onChange, selectionCount }: LassoRepPickerProps) {
+export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByChosen = 0 }: LassoRepPickerProps) {
   const chosen = reps.find((r) => String(r.id) === value) ?? null;
+  // Net new doors for the chosen rep: the selection minus what they already
+  // hold in it. Clamped — a stale count must never project a negative gain.
+  const gained = Math.max(0, selectionCount - ownedByChosen);
   return (
     <div data-testid="lasso-rep-picker">
       <div
@@ -115,7 +122,7 @@ export function LassoRepPicker({ reps, value, onChange, selectionCount }: LassoR
       </div>
       {chosen && selectionCount > 0 && (
         <p className="mt-2 text-[12px] leading-snug tabular-nums text-white/70" data-testid="lasso-assign-preview">
-          {chosen.name.split(/\s+/)[0]} will have {fmt(chosen.doors + selectionCount)} doors after this. You can undo for 30 seconds.
+          {chosen.name.split(/\s+/)[0]} will have {fmt(chosen.doors + gained)} doors after this. You can undo for 30 seconds.
         </p>
       )}
     </div>

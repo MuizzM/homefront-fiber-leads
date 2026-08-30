@@ -191,6 +191,38 @@ Request size is O(ring points), not O(doors): **about 1-4 KB whether the ring ho
 doors or 150,000.** The 64 KB ceiling stops being reachable, batching disappears from the
 UI, and unsampled doors are included because the server evaluates the polygon itself.
 
+### 2026-08-30 addendum: every lens, a preview, and retry-exact idempotency
+
+The parity contract below ("the selection the server computes has to be the
+selection the manager saw") shipped incomplete: the panel could be drawn under
+lenses the endpoint could not express. The map's rep filter, its status filter
+(when no chip was toggled), the three pin-level source lenses (`fcc_fresh`,
+`fcc_fiber`, `field_verified`), and a team lead's own-territory clip all
+narrowed what the manager SAW while the server resolved the full ring — so
+"Assign 12" under "Unassigned" could move 34 doors, including other reps'
+queues. Closed by:
+
+- **The selection body now carries every lens**: `includeStates` (status filter
+  folded in client-side), `view` (SQL lenses), `source` (pin-level lenses,
+  shared predicate in `shared/leadSource.ts`), `repFilter`, plus the team-lead
+  clip applied server-side from the same territories the client clips by.
+- **`POST /api/leads/assign-selection/preview`** resolves the identical body
+  through the identical resolver and returns `{total, byState, byOwner,
+  notMovable}` — the panel's headline count, chips and "will have N doors"
+  projection are server truth before anything commits, including doors a
+  sampled viewport never shipped. `byState` counts before the chip refinement
+  (a toggled-off chip keeps its count); `total`/`byOwner` after it.
+- **`opId`** (per-attempt idempotency key): the client's network-level retry
+  replays the FIRST attempt's response — same counts, same working undo token —
+  instead of re-executing against rows that are already assigned, which minted
+  an undo that restored nothing.
+- **Undo CAS on `(assigned_rep_id, assigned_at)`**: a door deliberately
+  re-assigned to the same rep inside the window is left alone (ABA), and a
+  mid-restore failure reports partial counts instead of a bare 500.
+
+Pinned by `tests/integration/assign-selection-lenses.test.ts` and the
+source-level suites `lasso-assign-sends-ring` / `lasso-default-action`.
+
 ### Resolution must agree with the map, by construction
 
 The selection the server computes has to be the selection the manager saw. Rather than

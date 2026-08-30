@@ -62,6 +62,7 @@ try {
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep, repColorOf } from "@shared/repColors";
+import { leadMatchesSource, isLeadSourceFilter, type LeadSourceFilter } from "@shared/leadSource";
 import { isTrainingLessonId, TOTAL_TRAINING_LESSONS } from "@shared/trainingContent";
 import { computeTerritoryMetrics } from "@shared/territoryMetrics";
 import { repCanWorkLead } from "@shared/leadVisibility";
@@ -1298,6 +1299,11 @@ interface AssignUndoEntry {
   tenantId: number | undefined;
   userId: number;
   appliedRepId: number | null;
+  /** The exact assigned_at stamp THIS assignment wrote (null for an unassign).
+   *  The restore's CAS matches rep id AND this stamp, so a door somebody
+   *  deliberately re-assigned to the SAME rep after this write (an ABA) is
+   *  left alone instead of silently reverted to its pre-lasso owner. */
+  appliedAt: string | null;
   prior: Array<{ id: number; assignedRepId: number | null; assignedBy: string | null; assignedAt: string | null; unassignedAt: string | null }>;
   expiresAt: number;
 }
@@ -1311,6 +1317,30 @@ function rememberAssignUndo(entry: Omit<AssignUndoEntry, "expiresAt">): { token:
   const expiresAt = now + ASSIGN_UNDO_TTL_MS;
   assignUndo.set(token, { ...entry, expiresAt });
   return { token, expiresAt };
+}
+// ── Assignment idempotency (client retry safety) ──────────────────────────────
+// The lasso client retries a network-dead POST (apiRequestIdempotent). Retrying
+// the WRITE is safe — same rep, same end state — but re-running the handler
+// after a committed first attempt re-reads "prior owners" from rows that are
+// already assigned, minting an undo token that restores nothing. The client
+// therefore sends a per-attempt opId; a retry whose first attempt committed
+// gets the FIRST attempt's response back verbatim (same counts, same working
+// undo token) instead of a second execution. In-memory on purpose, like the
+// undo table: the window is seconds.
+const ASSIGN_OP_TTL_MS = 60_000;
+const ASSIGN_OP_MAX_ENTRIES = 200;
+const assignOpCache = new Map<string, { expiresAt: number; payload: any }>();
+function rememberAssignOp(key: string, payload: any): void {
+  const now = Date.now();
+  for (const [k, v] of assignOpCache) if (v.expiresAt <= now) assignOpCache.delete(k);
+  while (assignOpCache.size >= ASSIGN_OP_MAX_ENTRIES) assignOpCache.delete(assignOpCache.keys().next().value!);
+  assignOpCache.set(key, { expiresAt: now + ASSIGN_OP_TTL_MS, payload });
+}
+function recallAssignOp(key: string): any | undefined {
+  const hit = assignOpCache.get(key);
+  if (!hit) return undefined;
+  if (hit.expiresAt <= Date.now()) { assignOpCache.delete(key); return undefined; }
+  return hit.payload;
 }
 // Bbox candidates examined before the exact ring test. Exceeding it REFUSES the
 // request rather than truncating: a dropped bbox row is a door inside the ring
@@ -6058,25 +6088,44 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Lead → Assign rep ─────────────────────────────────────────────────────────
   // Team lead+ can assign leads
   app.post("/api/leads/:id/assign", requireCapability("lead.assign"), (req, res) => {
-    const { repId } = req.body;
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
+    // Same positive-integer guard as assign-selection: without it repId 0 (or
+    // "0") passed every null-check as falsy-but-present and a super_admin
+    // could write assigned_rep_id = 0 — a door that is neither assigned (no
+    // rep 0 exists) nor unassigned (NOT NULL fails every IS NULL filter and
+    // the open-field rule).
+    const repId = req.body?.repId == null ? null : Number(req.body.repId);
+    if (repId != null && (!Number.isInteger(repId) || repId <= 0)) {
+      return res.status(400).json({ error: "repId must be a positive integer" });
+    }
     // Scope: a team_lead may only target their own reps and may not steal
     // another team's lead. Admin/manager pass.
-    if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    if (repId != null && !repInVisibilityScope(user, repId)) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     // Tenant: the target rep must belong to the caller's org — a foreign member
     // id is indistinguishable from a missing one (same 404 the territory
     // lifecycle routes return), never a cross-tenant assignment.
-    if (repId != null && !repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
+    if (repId != null && !repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
+    // A deactivated rep cannot sign in (requireAuth rejects inactive users),
+    // so doors routed to one leave the pool AND the field — silently parked
+    // inventory with no error at assign time. Refuse loudly instead.
+    const assignTarget = repId != null ? storage.getTeamMemberById(repId) : undefined;
+    if (assignTarget && !assignTarget.active) {
+      return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
+    }
     const existingLead = storage.getLeadById(Number(req.params.id));
     if (existingLead && (tid == null || existingLead.tenantId === tid) && !canReassignLead(user, existingLead)) {
       return res.status(403).json({ error: "That lead belongs to another team", code: "OUT_OF_SCOPE" });
     }
-    // Provenance: reps see WHO routed each door to them, and when.
+    // Provenance: reps see WHO routed each door to them, and when. An unassign
+    // stamps unassigned_at, matching applyAssignment's bulk unassign — the two
+    // routes used to disagree, so reporting keyed on unassigned_at saw doors
+    // released one-by-one as never-released.
     const updated = storage.updateLead(Number(req.params.id), {
       assignedRepId: repId ?? null,
       assignedBy: repId ? (user?.name ?? null) : null,
       assignedAt: repId ? new Date().toISOString() : null,
+      ...(repId == null ? { unassignedAt: new Date().toISOString() } : {}),
     }, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
     if (repId) {
@@ -6107,7 +6156,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     repId: number | null,
     user: any,
     tid: number | undefined,
-  ): Promise<{ updated: number; skipped: number; repName: string | null; prior: AssignUndoEntry["prior"] }> {
+  ): Promise<{ updated: number; skipped: number; repName: string | null; prior: AssignUndoEntry["prior"]; appliedAt: string | null; incomplete: boolean }> {
     const assignedAt = repId ? new Date().toISOString() : null;
     const assignedBy = repId ? (user?.name ?? null) : null;
     const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
@@ -6130,6 +6179,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const prior: AssignUndoEntry["prior"] = [];
     const snapshot = ids.length <= ASSIGN_UNDO_MAX_ROWS;
 
+    // A mid-chunk failure (SQLITE_BUSY past the timeout, disk) must not turn
+    // into a bare 500 that hides how far the write got: earlier chunks are
+    // COMMITTED. The loop stops, `incomplete` rides back to the route, and the
+    // caller reports honest counts plus an undo covering what did move.
+    let incomplete = false;
     for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
       const chunk = ids.slice(i, i + ASSIGN_CHUNK);
       const placeholders = chunk.map(() => "?").join(",");
@@ -6168,7 +6222,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         RETURNING id`,
         ).all(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk) as Array<{ id: number }>;
       });
-      const changed = applyChunk.immediate() as Array<{ id: number }>;
+      let changed: Array<{ id: number }>;
+      try {
+        changed = applyChunk.immediate() as Array<{ id: number }>;
+      } catch (err) {
+        structuredLog("lead.assign.chunk_failed", { at: i, of: ids.length, updated, error: String((err as Error)?.message ?? err) }, "error");
+        incomplete = true;
+        break;
+      }
       updated += changed.length;
       // AFTER the chunk's transaction commits — an event emitted inside it would
       // survive a rollback that erased the write it describes.
@@ -6179,7 +6240,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (i + ASSIGN_CHUNK < ids.length) await new Promise((resolve) => setImmediate(resolve));
     }
     if (updated > 0) bustMapCache(tid);
-    return { updated, skipped: ids.length - updated, repName, prior };
+    return { updated, skipped: ids.length - updated, repName, prior, appliedAt: assignedAt, incomplete };
   }
 
   // POST /api/leads/assign-selection/undo  { token }
@@ -6201,33 +6262,55 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     assignUndo.delete(token); // one redemption, even if a chunk below fails
     const tenantSql = tid == null ? "1=1" : `tenant_id = ${Number(tid) | 0}`;
     const priorName = (repId: number | null) => (repId ? (storage.getTeamMemberById(repId)?.name ?? `rep #${repId}`) : null);
-    let restored = 0, skipped = 0, emitted = 0;
+    let restored = 0, skipped = 0, emitted = 0, incomplete = false;
     for (let i = 0; i < entry.prior.length; i += ASSIGN_CHUNK) {
       const chunk = entry.prior.slice(i, i + ASSIGN_CHUNK);
       const restoreChunk = rawDb.transaction(() => {
+        // CAS on rep id AND the assigned_at stamp this assignment wrote: a door
+        // somebody moved away is skipped (as before), and so is a door somebody
+        // deliberately re-assigned to the SAME rep after this write (an ABA the
+        // rep-only guard silently reverted). Both stamps are null for an
+        // unassign, which degrades to the original rep-only behaviour.
         const put = rawDb.prepare(
           `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?, unassigned_at = ?, updated_at = datetime('now')
-            WHERE id = ? AND ${tenantSql} AND assigned_rep_id IS ?
+            WHERE id = ? AND ${tenantSql} AND assigned_rep_id IS ? AND assigned_at IS ?
         RETURNING id`,
         );
         const event = rawDb.prepare(`INSERT INTO lead_events (lead_id, type, actor, detail, at) VALUES (?, 'assignment', ?, ?, datetime('now'))`);
         const done: number[] = [];
         for (const row of chunk) {
-          const hit = put.get(row.assignedRepId, row.assignedBy, row.assignedAt, row.unassignedAt, row.id, entry.appliedRepId) as { id: number } | undefined;
+          const hit = put.get(row.assignedRepId, row.assignedBy, row.assignedAt, row.unassignedAt, row.id, entry.appliedRepId, entry.appliedAt) as { id: number } | undefined;
           if (!hit) { skipped++; continue; }
           done.push(hit.id);
           event.run(hit.id, user?.name ?? null, JSON.stringify({ assignedTo: priorName(row.assignedRepId), assignedBy: user?.name ?? null, undo: true }));
         }
         return done;
       });
-      const changed = restoreChunk.immediate() as number[];
+      let changed: number[];
+      try {
+        changed = restoreChunk.immediate() as number[];
+      } catch (err) {
+        // Committed chunks stand; the token is spent (documented single
+        // redemption). Tell the caller exactly how far the restore got instead
+        // of a bare 500 that reads as "nothing happened".
+        structuredLog("lead.assign_undo.chunk_failed", { at: i, of: entry.prior.length, restored, error: String((err as Error)?.message ?? err) }, "error");
+        incomplete = true;
+        break;
+      }
       restored += changed.length;
       emitLeadChangesBulk("assignment", changed.slice(0, Math.max(0, LEAD_EVENT_BULK_MAX - emitted)), user, tid);
       emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + changed.length);
       if (i + ASSIGN_CHUNK < entry.prior.length) await new Promise((resolve) => setImmediate(resolve));
     }
     if (restored > 0) bustMapCache(tid);
-    storage.logActivity(user.id, "lead.assign_selection.undo", "lead", undefined, { restored, skipped, appliedRepId: entry.appliedRepId });
+    storage.logActivity(user.id, "lead.assign_selection.undo", "lead", undefined, { restored, skipped, appliedRepId: entry.appliedRepId, ...(incomplete ? { incomplete: true } : {}) });
+    if (incomplete) {
+      return res.status(500).json({
+        error: `Put back ${restored.toLocaleString()} of ${entry.prior.length.toLocaleString()} doors before a database error - the rest kept their new owner`,
+        code: "UNDO_INCOMPLETE",
+        restored, skipped,
+      });
+    }
     res.json({ restored, skipped });
   });
 
@@ -6246,22 +6329,38 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
+    // Positive-integer guard + inactive-rep refusal, matching assign-selection
+    // (this route accepted repId 0 and deactivated targets before).
+    if (repId != null && (!Number.isInteger(Number(repId)) || Number(repId) <= 0)) {
+      return res.status(400).json({ error: "repId must be a positive integer" });
+    }
     if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     // Tenant: the target rep must belong to the caller's org (the scope check
     // alone passes for admin/manager, whose scope is org-wide) — a foreign
     // member id must never receive this tenant's doors.
     if (repId != null && !repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
+    const bulkTarget = repId != null ? storage.getTeamMemberById(Number(repId)) : undefined;
+    if (bulkTarget && !bulkTarget.active) {
+      return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
+    }
 
-    const { updated, skipped, repName } = await applyAssignment(leadIds, repId ?? null, user, tid);
+    const { updated, skipped, repName, incomplete } = await applyAssignment(leadIds, repId ?? null, user, tid);
     if (updated > 0) {
       storage.logActivity(user?.id ?? null, "lead.bulk_assign", "lead", undefined,
-        { repId, repName, requested: leadIds.length, updated, skipped }, req.ip);
+        { repId, repName, requested: leadIds.length, updated, skipped, ...(incomplete ? { incomplete: true } : {}) }, req.ip);
+    }
+    if (incomplete) {
+      return res.status(500).json({
+        updated, skipped, repId,
+        error: `Assigned ${updated.toLocaleString()} of ${leadIds.length.toLocaleString()} leads before a database error - the rest were not changed`,
+        code: "ASSIGN_INCOMPLETE",
+      });
     }
     res.json({ updated, skipped, repId });
   });
 
-  // POST /api/leads/assign-selection
-  //   { repId, polygon, includeStates?, excludeLeadIds?, view? }
+  // ── Selection resolution — ONE seam for preview and apply ───────────────────
+  //   { polygon, includeStates?, excludeLeadIds?, view?, source?, repFilter? }
   //
   // WHOLE-SELECTION ASSIGNMENT, described rather than enumerated.
   //
@@ -6284,8 +6383,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // SQL + knock join the map reads), through buildMapPins (the same projection,
   // including the 6dp rounding the client tested its ring against), and the
   // refinement uses pinDisplayState from shared/knock.ts - the very function the
-  // lasso chips are built from. The only rule layered on top is authority:
-  // canReassignLead, because a caller can SEE more ground than they may move.
+  // lasso chips are built from. That promise is why EVERY lens the map can draw
+  // under is expressible here — this is the fix for the day the panel said
+  // "Assign 12" under a rep filter and the server moved 34:
+  //   • includeStates — the status filter / chip refinement (shared/knock.ts).
+  //   • view          — the SQL-level source lenses (latest, kinetic_2026).
+  //   • source        — the pin-level source lenses the SQL can't express
+  //                     (fcc_fresh, fcc_fiber, field_verified; shared/leadSource.ts).
+  //   • repFilter     — the map's owner filter ("unassigned" or one rep id).
+  //   • team_lead clip — a team lead's map clips pins to areas they hold
+  //                     (MapView myTerritoryRings); the resolver applies the
+  //                     same clip so their lasso can never move ground their
+  //                     map refused to show them. No held areas = no clip,
+  //                     exactly like the client.
+  // The only rule layered on top is authority: canReassignLead, because a
+  // caller can SEE more ground than they may move.
   //
   // The converse also holds and is deliberate: a caller may be ALLOWED to move
   // ground their map does not show them. With open-field off, an unassigned,
@@ -6293,29 +6405,218 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // though canReassignLead would let them claim it. Visibility is the tighter
   // rule and it wins - the id-based path behaved the same way for the same
   // reason, since the client could only ever enumerate pins it was shown.
+  interface ResolvedAssignSelection {
+    /** Pins the caller may assign, after every lens above. */
+    movable: any[];
+    /** Doors matching every lens the caller may NOT move (another team's
+     *  booked doors) — surfaced so the preview can say so instead of the
+     *  count silently reading low. */
+    notMovable: number;
+    /** Per-display-state counts BEFORE the includeStates refinement (but after
+     *  every other lens and the authority rule). The panel's chips render from
+     *  this so a state the manager toggled OFF keeps its count and can be
+     *  toggled back on; `movable` honours the refinement, so total and chips
+     *  stay two views of one resolution. */
+    byStateUnrefined: Record<string, number>;
+    polygon: [number, number][];
+    resolveMs: number;
+  }
+  function resolveAssignSelection(
+    user: any,
+    tid: number | undefined,
+    body: Record<string, unknown>,
+  ): { fail: { status: number; payload: Record<string, unknown> } } | ResolvedAssignSelection {
+    const fail = (status: number, payload: Record<string, unknown>) => ({ fail: { status, payload } });
+
+    const rawPolygon = body.polygon;
+    if (!Array.isArray(rawPolygon) || rawPolygon.length < 3) {
+      return fail(400, { error: "polygon needs at least 3 points" });
+    }
+    if (rawPolygon.length > MAX_ASSIGN_RING_POINTS) {
+      return fail(400, { error: `That outline is too detailed - at most ${MAX_ASSIGN_RING_POINTS.toLocaleString()} points`, code: "RING_TOO_COMPLEX" });
+    }
+    // Normalized to numbers — the old path validated Number(p[0]) but handed
+    // the RAW array (possibly strings) to polygonCovers, whose arithmetic on
+    // strings is quietly wrong.
+    const polygon: [number, number][] = [];
+    for (const p of rawPolygon) {
+      if (!Array.isArray(p) || p.length < 2 || !Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1]))) {
+        return fail(400, { error: "polygon points must be [lng, lat] numbers" });
+      }
+      polygon.push([Number(p[0]), Number(p[1])]);
+    }
+
+    // Manual deselects. Small by nature (a manager un-picking a handful of
+    // doors), and bounded so this can never become the id-shipping path again.
+    const excludes = new Set<number>();
+    if (body.excludeLeadIds != null) {
+      if (!Array.isArray(body.excludeLeadIds)) {
+        return fail(400, { error: "excludeLeadIds must be an array" });
+      }
+      if (body.excludeLeadIds.length > MAX_ASSIGN_EXCLUDES) {
+        return fail(400, { error: `At most ${MAX_ASSIGN_EXCLUDES.toLocaleString()} manual deselects`, code: "TOO_MANY_EXCLUDES" });
+      }
+      for (const raw of body.excludeLeadIds) {
+        const n = Number(raw);
+        if (Number.isInteger(n)) excludes.add(n);
+      }
+    }
+    // Absent/empty = every display state. An explicit list is the lasso's
+    // status refinement, expressed the same way the chips express it.
+    const includeStates = Array.isArray(body.includeStates) && body.includeStates.length
+      ? new Set(body.includeStates.map((s) => String(s)))
+      : null;
+    // The SQL-level lens (latest / kinetic_2026) — same values ?view= takes.
+    const view = parseMapView(body.view);
+    if (view && typeof view === "object" && "error" in view) {
+      return fail(400, { error: view.error });
+    }
+    // The pin-level source lens for everything ?view= cannot express.
+    const source = body.source == null ? null : body.source;
+    if (source != null && !isLeadSourceFilter(source)) {
+      return fail(400, { error: "source must be a map source lens" });
+    }
+    // The map's owner filter: "unassigned", or one rep id.
+    const rawRepFilter = body.repFilter;
+    let repFilter: "unassigned" | number | null = null;
+    if (rawRepFilter != null) {
+      if (rawRepFilter === "unassigned") repFilter = "unassigned";
+      else if (Number.isInteger(Number(rawRepFilter)) && Number(rawRepFilter) > 0) repFilter = Number(rawRepFilter);
+      else return fail(400, { error: "repFilter must be \"unassigned\" or a rep id" });
+    }
+
+    // A team lead's map clips every pin to the areas they hold (when they hold
+    // any) — mirror it, or their lasso moves ground their map never showed.
+    type ClipRing = { ring: [number, number][]; minLng: number; maxLng: number; minLat: number; maxLat: number };
+    let clipRings: ClipRing[] | null = null;
+    if (user?.role === "team_lead" && user?.teamMemberId != null) {
+      const rings: ClipRing[] = [];
+      for (const t of storage.getTerritories(tid) as any[]) {
+        if (t.repId !== user.teamMemberId) continue;
+        try {
+          const ring = JSON.parse(t.polygon) as [number, number][];
+          if (!Array.isArray(ring) || ring.length < 3) continue;
+          let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity;
+          for (const q of ring) {
+            const lng = Number(q[0]), lat = Number(q[1]);
+            if (lng < a) a = lng; if (lng > b) b = lng;
+            if (lat < c) c = lat; if (lat > d) d = lat;
+          }
+          rings.push({ ring, minLng: a, maxLng: b, minLat: c, maxLat: d });
+        } catch { /* malformed polygon — skip, same as the client */ }
+      }
+      clipRings = rings.length ? rings : null;
+    }
+
+    // ── Resolve ──────────────────────────────────────────────────────────────
+    // Bbox first (indexed), exact ring test on the survivors only - the same
+    // two-step assign-area uses.
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    for (const p of polygon) {
+      if (p[0] < minLng) minLng = p[0];
+      if (p[0] > maxLng) maxLng = p[0];
+      if (p[1] < minLat) minLat = p[1];
+      if (p[1] > maxLat) maxLat = p[1];
+    }
+    const pad = BOUNDARY_EPSILON_DEG;
+    const scope = leadVisibilityScope(user);
+    const repScope = Array.isArray(scope) ? scope : (scope != null ? [scope] : undefined);
+    const resolveStarted = performance.now();
+    // limit is a REFUSAL threshold, never a silent truncation: the LIMIT applies
+    // to the bbox, and quietly dropping bbox rows would drop doors that sit
+    // inside the ring. One extra row is requested purely to detect the overflow.
+    const rows = storage.getLeadsForMap(tid, repScope, {
+      minLat: minLat - pad, maxLat: maxLat + pad,
+      minLng: minLng - pad, maxLng: maxLng + pad,
+      view: (view ?? undefined) as MapView | undefined,
+      limit: MAX_ASSIGN_BBOX_CANDIDATES + 1,
+    });
+    if (rows.length > MAX_ASSIGN_BBOX_CANDIDATES) {
+      return fail(400, {
+        error: "That area covers too much ground to assign in one action - draw a tighter outline",
+        code: "AREA_TOO_LARGE",
+      });
+    }
+
+    const pins = buildMapPins(rows);
+    const movable: any[] = [];
+    const byStateUnrefined: Record<string, number> = {};
+    let notMovable = 0;
+    for (const pin of pins) {
+      if (excludes.has(pin.id)) continue;
+      if (!polygonCovers(pin.lat, pin.lng, polygon)) continue;
+      if (clipRings) {
+        let inside = false;
+        for (const cr of clipRings) {
+          if (pin.lng < cr.minLng || pin.lng > cr.maxLng || pin.lat < cr.minLat || pin.lat > cr.maxLat) continue;
+          if (polygonCovers(pin.lat, pin.lng, cr.ring)) { inside = true; break; }
+        }
+        if (!inside) continue;
+      }
+      if (source != null && !leadMatchesSource(pin, source as LeadSourceFilter)) continue;
+      if (repFilter === "unassigned" && pin.assignedRepId != null) continue;
+      if (typeof repFilter === "number" && (pin.assignedRepId ?? null) !== repFilter) continue;
+      // Authority, not visibility: a team_lead may claim unassigned ground or
+      // move their own team's doors, never another team's booked doors.
+      if (!canReassignLead(user, pin)) { notMovable++; continue; }
+      const ds = pinDisplayState(pin);
+      byStateUnrefined[ds] = (byStateUnrefined[ds] ?? 0) + 1;
+      if (includeStates && !includeStates.has(ds)) continue;
+      movable.push(pin);
+    }
+    const resolveMs = Math.round(performance.now() - resolveStarted);
+
+    if (movable.length > MAX_ASSIGN_SELECTION) {
+      return fail(400, {
+        error: `That selection holds ${movable.length.toLocaleString()} doors - at most ${MAX_ASSIGN_SELECTION.toLocaleString()} at a time`,
+        code: "SELECTION_TOO_LARGE",
+        total: movable.length,
+      });
+    }
+    return { movable, notMovable, byStateUnrefined, polygon, resolveMs };
+  }
+
+  // POST /api/leads/assign-selection/preview
+  //   Same body as assign-selection, minus repId — resolves the ring under
+  //   every lens and reports what WOULD move, without writing anything. The
+  //   lasso panel's headline count, per-state chips and "will have N doors"
+  //   projection all read this, so the number a manager confirms is the
+  //   number the server computed — not the client's sampled, filtered guess.
+  //   byOwner keys are rep ids ("0" = unassigned pool) so the panel can say
+  //   "12 from the pool, 3 from Ann" before anything is committed.
+  app.post("/api/leads/assign-selection/preview", requireCapability("lead.assign"), (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const resolved = resolveAssignSelection(user, tid, (req.body ?? {}) as Record<string, unknown>);
+    if ("fail" in resolved) return res.status(resolved.fail.status).json(resolved.fail.payload);
+    const byOwner: Record<string, number> = {};
+    for (const pin of resolved.movable) {
+      const owner = String(pin.assignedRepId ?? 0);
+      byOwner[owner] = (byOwner[owner] ?? 0) + 1;
+    }
+    res.json({
+      total: resolved.movable.length,
+      // Pre-refinement by design: a chip toggled OFF keeps its count so it can
+      // be toggled back on; `total` and `byOwner` honour the refinement.
+      byState: resolved.byStateUnrefined,
+      byOwner,
+      notMovable: resolved.notMovable,
+      resolveMs: resolved.resolveMs,
+    });
+  });
+
+  // POST /api/leads/assign-selection
+  //   { repId, polygon, includeStates?, excludeLeadIds?, view?, source?,
+  //     repFilter?, opId? }
+  // The write half of the seam above. opId is the client's per-attempt
+  // idempotency key: a network-dead POST is retried by the client, and a retry
+  // whose first attempt committed gets the FIRST response back (same counts,
+  // same working undo token) instead of a second execution against rows that
+  // are already assigned.
   app.post("/api/leads/assign-selection", requireCapability("lead.assign"), async (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const body = (req.body ?? {}) as {
-      repId?: number | null;
-      polygon?: [number, number][];
-      includeStates?: string[];
-      excludeLeadIds?: number[];
-      view?: MapView;
-    };
-
-    const polygon = body.polygon;
-    if (!Array.isArray(polygon) || polygon.length < 3) {
-      return res.status(400).json({ error: "polygon needs at least 3 points" });
-    }
-    if (polygon.length > MAX_ASSIGN_RING_POINTS) {
-      return res.status(400).json({ error: `That outline is too detailed - at most ${MAX_ASSIGN_RING_POINTS.toLocaleString()} points`, code: "RING_TOO_COMPLEX" });
-    }
-    for (const p of polygon) {
-      if (!Array.isArray(p) || p.length < 2 || !Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1]))) {
-        return res.status(400).json({ error: "polygon points must be [lng, lat] numbers" });
-      }
-    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
 
     // repId null RETURNS the selection to the pool - same contract as bulk-assign.
     const repId = body.repId == null ? null : Number(body.repId);
@@ -6328,95 +6629,50 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (repId != null && !repInCallerTenant(user, repId)) {
       return res.status(404).json({ error: "Rep not found" });
     }
-
-    // Manual deselects. Small by nature (a manager un-picking a handful of
-    // doors), and bounded so this can never become the id-shipping path again.
-    const excludes = new Set<number>();
-    if (body.excludeLeadIds != null) {
-      if (!Array.isArray(body.excludeLeadIds)) {
-        return res.status(400).json({ error: "excludeLeadIds must be an array" });
-      }
-      if (body.excludeLeadIds.length > MAX_ASSIGN_EXCLUDES) {
-        return res.status(400).json({ error: `At most ${MAX_ASSIGN_EXCLUDES.toLocaleString()} manual deselects`, code: "TOO_MANY_EXCLUDES" });
-      }
-      for (const raw of body.excludeLeadIds) {
-        const n = Number(raw);
-        if (Number.isInteger(n)) excludes.add(n);
-      }
-    }
-    // Absent/empty = every display state. An explicit list is the lasso's
-    // status refinement, expressed the same way the chips express it.
-    const includeStates = Array.isArray(body.includeStates) && body.includeStates.length
-      ? new Set(body.includeStates.map((s) => String(s)))
-      : null;
-
-    // ── Resolve the selection ────────────────────────────────────────────────
-    // Bbox first (indexed), exact ring test on the survivors only - the same
-    // two-step assign-area uses.
-    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-    for (const p of polygon) {
-      const lng = Number(p[0]), lat = Number(p[1]);
-      if (lng < minLng) minLng = lng;
-      if (lng > maxLng) maxLng = lng;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    }
-    const pad = BOUNDARY_EPSILON_DEG;
-    const scope = leadVisibilityScope(user);
-    const repScope = Array.isArray(scope) ? scope : (scope != null ? [scope] : undefined);
-    const resolveStarted = performance.now();
-    // limit is a REFUSAL threshold, never a silent truncation: the LIMIT applies
-    // to the bbox, and quietly dropping bbox rows would drop doors that sit
-    // inside the ring. One extra row is requested purely to detect the overflow.
-    const rows = storage.getLeadsForMap(tid, repScope, {
-      minLat: minLat - pad, maxLat: maxLat + pad,
-      minLng: minLng - pad, maxLng: maxLng + pad,
-      view: body.view,
-      limit: MAX_ASSIGN_BBOX_CANDIDATES + 1,
-    });
-    if (rows.length > MAX_ASSIGN_BBOX_CANDIDATES) {
-      return res.status(400).json({
-        error: "That area covers too much ground to assign in one action - draw a tighter outline",
-        code: "AREA_TOO_LARGE",
-      });
+    const assignTarget = repId != null ? storage.getTeamMemberById(repId) : undefined;
+    if (assignTarget && !assignTarget.active) {
+      return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
     }
 
-    const pins = buildMapPins(rows);
-    const ids: number[] = [];
-    for (const pin of pins) {
-      if (excludes.has(pin.id)) continue;
-      if (!polygonCovers(pin.lat, pin.lng, polygon)) continue;
-      if (includeStates && !includeStates.has(pinDisplayState(pin))) continue;
-      // Authority, not visibility: a team_lead may claim unassigned ground or
-      // move their own team's doors, never another team's booked doors.
-      if (!canReassignLead(user, pin)) continue;
-      ids.push(pin.id);
+    const opId = typeof body.opId === "string" && body.opId.length > 0 && body.opId.length <= 80 ? body.opId : null;
+    const opKey = opId ? `${user.id}:${opId}` : null;
+    if (opKey) {
+      const replay = recallAssignOp(opKey);
+      if (replay !== undefined) return res.json(replay);
     }
-    const resolveMs = Math.round(performance.now() - resolveStarted);
 
-    if (ids.length > MAX_ASSIGN_SELECTION) {
-      return res.status(400).json({
-        error: `That selection holds ${ids.length.toLocaleString()} doors - at most ${MAX_ASSIGN_SELECTION.toLocaleString()} at a time`,
-        code: "SELECTION_TOO_LARGE",
-        total: ids.length,
-      });
-    }
+    const resolved = resolveAssignSelection(user, tid, body);
+    if ("fail" in resolved) return res.status(resolved.fail.status).json(resolved.fail.payload);
+    const ids = resolved.movable.map((pin) => pin.id as number);
+    const { polygon, resolveMs } = resolved;
+
     if (!ids.length) {
       return res.json({ assigned: 0, updated: 0, skipped: 0, total: 0, repId, resolveMs });
     }
 
-    const { updated, skipped, prior } = await applyAssignment(ids, repId, user, tid);
+    const { updated, skipped, prior, appliedAt, incomplete } = await applyAssignment(ids, repId, user, tid);
     storage.logActivity(user?.id ?? null, "lead.assign_selection", "lead", undefined,
-      { repId, ringPoints: polygon.length, resolved: ids.length, updated, skipped, resolveMs }, req.ip);
+      { repId, ringPoints: polygon.length, resolved: ids.length, updated, skipped, resolveMs, ...(incomplete ? { incomplete: true } : {}) }, req.ip);
     // Put-back token for the doors this write actually changed (none for a
     // selection too large to hold, or when nothing moved).
-    const undo = updated > 0 ? rememberAssignUndo({ tenantId: tid, userId: user.id, appliedRepId: repId, prior }) : null;
+    const undo = updated > 0 ? rememberAssignUndo({ tenantId: tid, userId: user.id, appliedRepId: repId, appliedAt, prior }) : null;
     // assigned mirrors updated so the field name matches assign-area's response;
     // updated/skipped match bulk-assign's. One payload serves both callers.
-    res.json({
+    const payload = {
       assigned: updated, updated, skipped, total: ids.length, repId, resolveMs,
       ...(undo ? { undoToken: undo.token, undoExpiresAt: new Date(undo.expiresAt).toISOString() } : {}),
-    });
+    };
+    if (incomplete) {
+      // Chunks that committed stand; say exactly how far it got, and the undo
+      // covers the doors that DID move.
+      return res.status(500).json({
+        ...payload,
+        error: `Assigned ${updated.toLocaleString()} of ${ids.length.toLocaleString()} doors before a database error - the rest were not changed`,
+        code: "ASSIGN_INCOMPLETE",
+      });
+    }
+    if (opKey) rememberAssignOp(opKey, payload);
+    res.json(payload);
   });
 
   // POST /api/leads/bulk-status  { leadIds: number[], outcome: KnockOutcome }

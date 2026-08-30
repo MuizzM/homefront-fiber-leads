@@ -47,9 +47,41 @@ describe("lasso Assign posts a ring", () => {
     expect(assignMutation).toContain("apiRequestIdempotent");
   });
 
-  it("still passes the rep and the map's view lens", () => {
+  it("posts the SAME selection body the preview confirmed, plus rep and opId", () => {
+    // One body serves the preview query and the apply (lassoSelectionBody), so
+    // the count shown and the set assigned cannot drift. The mutation spreads
+    // it verbatim and adds only the rep and the per-attempt idempotency key.
+    expect(assignMutation).toContain("...selection");
     expect(assignMutation).toContain("repId");
-    expect(assignMutation).toContain("sourceFilterToMapView");
+    expect(assignMutation).toContain("opId");
+  });
+});
+
+describe("the selection body carries every lens the panel can draw under", () => {
+  const bodyDecl = (() => {
+    const start = src.indexOf("const lassoSelectionBody");
+    expect(start, "lassoSelectionBody not found - did it move?").toBeGreaterThan(-1);
+    return src.slice(start, src.indexOf("const lassoPreviewQuery", start));
+  })();
+
+  it("maps the source filter to the server view and pin-source lenses", () => {
+    expect(bodyDecl).toContain("sourceFilterToMapView");
+    expect(bodyDecl).toContain("source");
+  });
+
+  it("forwards the rep filter", () => {
+    expect(bodyDecl).toContain("repFilter");
+    expect(bodyDecl).toContain('"unassigned"');
+  });
+
+  it("the preview and the mutation read one body", () => {
+    // The preview queries with the body; the mutation spreads the same object.
+    const preview = src.slice(
+      src.indexOf("const lassoPreviewQuery"),
+      src.indexOf("const lassoPreview =", src.indexOf("const lassoPreviewQuery")),
+    );
+    expect(preview).toContain("/api/leads/assign-selection/preview");
+    expect(preview).toContain("lassoSelectionBody");
   });
 });
 
@@ -62,13 +94,18 @@ describe("the status refinement survives the trip", () => {
     expect(decl).toContain("Object.keys(STATE_COLORS)");
     expect(decl).toContain("lassoDisabled");
     expect(decl).not.toContain("lassoSelected");
+    // The map's own status filter folds into the same refinement - the panel
+    // only SHOWS that state, so the server must only move that state.
+    expect(decl).toContain("filterStatus");
   });
 
   it("sends nothing at all when the manager refined nothing", () => {
     // undefined must mean "every state" server-side; sending a list built from
     // an empty refinement would mean "only these".
-    expect(src).toContain("lassoDisabled.size");
-    expect(assignMutation).toContain("...(includeStates ? { includeStates } : {})");
+    const decl = src.slice(src.indexOf("const lassoEnabledStates"), src.indexOf("const lassoActive"));
+    expect(decl).toContain("enabled.length === all.length ? undefined : enabled");
+    const bodyDecl = src.slice(src.indexOf("const lassoSelectionBody"), src.indexOf("const lassoPreviewQuery"));
+    expect(bodyDecl).toContain("...(lassoEnabledStates ? { includeStates: lassoEnabledStates } : {})");
   });
 });
 

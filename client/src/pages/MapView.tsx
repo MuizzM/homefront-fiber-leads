@@ -1613,26 +1613,30 @@ export default function MapView() {
 
   const bulkAssignMutation = useMutation({
     mutationFn: async ({
-      polygon,
       repId,
-      includeStates,
+      selection,
     }: {
-      polygon: [number, number][];
       repId: number;
-      /** Enabled display states, or undefined when nothing was refined out.
-       *  Undefined must mean "every state" rather than "the states my sample
-       *  happened to contain", or refining nothing would still drop the doors
-       *  the client never received. */
-      includeStates?: PinDisplayState[];
+      /** The SAME body the preview query confirmed — polygon plus every lens
+       *  (includeStates, view, source, repFilter) — built once in
+       *  lassoSelectionBody so the count shown and the set assigned cannot
+       *  drift. includeStates undefined means "every state" server-side,
+       *  never "the states my sample happened to contain". */
+      selection: NonNullable<typeof lassoSelectionBody>;
     }) => {
       // Idempotent by construction (same rep, same end state), so a connection
-      // that dies mid-flight is retried rather than shown to the user.
+      // that dies mid-flight is retried rather than shown to the user. The
+      // opId makes the retry exact: a repeat whose first attempt committed
+      // gets the first response back (same counts, same working undo token)
+      // instead of a second execution. Generated ONCE per mutate — the
+      // network-level retries inside apiRequestIdempotent reuse it.
       const res = await apiRequestIdempotent("POST", "/api/leads/assign-selection", {
-        polygon,
+        ...selection,
         repId,
-        ...(includeStates ? { includeStates } : {}),
-        // The lens the pins were drawn under, so the server scopes identically.
-        ...(sourceFilterToMapView(filterSource) ? { view: sourceFilterToMapView(filterSource) } : {}),
+        opId:
+          typeof crypto !== "undefined" && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `op-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       });
       return res.json();
     },
@@ -1813,13 +1817,17 @@ export default function MapView() {
   // never received. Derived from the canonical state list minus what was toggled
   // off — NOT from the states present in the selection, which would silently
   // exclude every unsampled door in a state the sample happened to miss.
-  // Undefined when nothing was refined out, which the server reads as "all".
-  const lassoEnabledStates = useMemo<PinDisplayState[] | undefined>(
-    () => (lassoDisabled.size
-      ? (Object.keys(STATE_COLORS) as PinDisplayState[]).filter((ds) => !lassoDisabled.has(ds))
-      : undefined),
-    [lassoDisabled],
-  );
+  // The map's own STATUS filter folds in the same way: with "Follow-up" active
+  // the panel only ever SHOWED follow-up doors, so the server must only move
+  // follow-up doors — leaving it out was one of the lens gaps that let
+  // "Assign 12" move every state in the ring.
+  // Undefined when nothing narrows, which the server reads as "all".
+  const lassoEnabledStates = useMemo<PinDisplayState[] | undefined>(() => {
+    const all = Object.keys(STATE_COLORS) as PinDisplayState[];
+    const base = filterStatus === "all" ? all : all.filter((ds) => ds === filterStatus);
+    const enabled = base.filter((ds) => !lassoDisabled.has(ds));
+    return enabled.length === all.length ? undefined : enabled;
+  }, [lassoDisabled, filterStatus]);
   const lassoActive = useMemo(
     () => lassoSelected.filter((l) => !lassoDisabled.has(pinDisplayState(l))),
     [lassoSelected, lassoDisabled],
@@ -1839,12 +1847,102 @@ export default function MapView() {
   // resolves to it regardless of which tab was last used — otherwise the panel
   // would open on a tab whose only control is a disabled button.
   const lassoHasLeads = lassoSelected.length > 0;
-  // "create" joins "area" as an action that works on an EMPTY loop, and for
-  // the stronger reason: a loop with no leads in it is exactly the loop a
-  // manager draws over virgin territory to turn houses into doors. Forcing it
-  // back to "area" would disable the one action they opened the panel for.
+
+  // ── The selection, described for the server ────────────────────────────────
+  // ONE body serves the preview query AND the Assign mutation, so the count the
+  // manager confirmed and the set the server assigns cannot drift (the parity
+  // contract in docs/architecture/BULK_ASSIGNMENT.md). It carries every lens
+  // the panel could have been drawn under: the ring, the status refinement,
+  // the SQL view lens, the pin-level source lens, and the rep filter.
+  const lassoSelectionBody = useMemo<{
+    polygon: [number, number][];
+    includeStates?: PinDisplayState[];
+    view?: "latest" | "kinetic_2026";
+    source?: LeadSourceFilter;
+    repFilter?: "unassigned" | number;
+  } | null>(() => {
+    if (!lassoDrawn || !canAssign) return null;
+    // Every state toggled off: nothing can move. Sending an empty list would
+    // read as "all" server-side; a null body disables the preview and the
+    // derived counts fall to zero, which is the truth.
+    if (lassoEnabledStates && lassoEnabledStates.length === 0) return null;
+    const view = sourceFilterToMapView(filterSource);
+    const pinSource =
+      !view && filterSource !== "all" ? (filterSource as LeadSourceFilter) : undefined;
+    const repFilter =
+      canAssign && filterRep !== "all"
+        ? filterRep === "unassigned"
+          ? ("unassigned" as const)
+          : Number(filterRep)
+        : undefined;
+    return {
+      polygon: lassoPoints,
+      ...(lassoEnabledStates ? { includeStates: lassoEnabledStates } : {}),
+      ...(view ? { view } : {}),
+      ...(pinSource ? { source: pinSource } : {}),
+      ...(repFilter !== undefined ? { repFilter } : {}),
+    };
+  }, [lassoDrawn, canAssign, lassoPoints, lassoEnabledStates, filterSource, filterRep]);
+
+  // Server-resolved truth of the drawn selection: what WOULD move, by state
+  // and by current owner — including doors a sampled viewport never shipped to
+  // this client. The panel confirms against this, so "Assign 12" means 12.
+  const lassoPreviewQuery = useQuery<{
+    total: number;
+    byState: Record<string, number>;
+    byOwner: Record<string, number>;
+    notMovable: number;
+    resolveMs: number;
+  }>({
+    queryKey: ["/api/leads/assign-selection/preview", lassoSelectionBody],
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/leads/assign-selection/preview", lassoSelectionBody);
+      return res.json();
+    },
+    enabled: !!lassoSelectionBody,
+    staleTime: 15_000,
+    gcTime: 60_000,
+    retry: 1,
+  });
+  const lassoPreview = lassoSelectionBody ? lassoPreviewQuery.data ?? null : null;
+  // The count Assign commits. Server truth when the preview has answered;
+  // the client sample while it loads or after it fails (the panel says which).
+  const lassoAssignCount = lassoPreview ? lassoPreview.total : lassoActiveIds.length;
+  const lassoPreviewPending = !!lassoSelectionBody && lassoPreviewQuery.isPending;
+  const lassoPreviewFailed = !!lassoSelectionBody && lassoPreviewQuery.isError;
+  // Chip rows: the server's per-state counts when it has answered (they include
+  // unsampled doors, and a toggled-off state keeps its count so it can come
+  // back), else the client sample's summary. Canonical state order either way.
+  const lassoChipRows = useMemo<Array<{ ds: PinDisplayState; count: number }>>(() => {
+    const server = lassoPreview?.byState;
+    if (server) {
+      return (Object.keys(STATE_COLORS) as PinDisplayState[])
+        .filter((ds) => (server[ds] ?? 0) > 0)
+        .map((ds) => ({ ds, count: server[ds]! }));
+    }
+    return lassoSummary;
+  }, [lassoPreview, lassoSummary]);
+  // Doors in the selection ALREADY held by the picked rep — the projection in
+  // the picker subtracts them, otherwise "will have N doors" double-counts.
+  const lassoOwnedByChosen = useMemo(() => {
+    if (!lassoRepId) return 0;
+    const server = lassoPreview?.byOwner;
+    if (server) return server[lassoRepId] ?? 0;
+    const repIdNum = Number(lassoRepId);
+    return lassoActive.reduce((acc, l) => acc + (l.assignedRepId === repIdNum ? 1 : 0), 0);
+  }, [lassoRepId, lassoPreview, lassoActive]);
+  // "create" and "area" work on an EMPTY loop (a loop with no doors is exactly
+  // what carving virgin territory looks like). Assign additionally survives an
+  // empty CLIENT sample whenever the server preview found doors — a sampled
+  // viewport ships a subset, and forcing the panel back to "area" there told
+  // the manager the ground was empty when it wasn't. Status and Mark are
+  // id-based and genuinely need client-held pins.
   const lassoEffectiveAction =
-    lassoHasLeads || lassoAction === "create" ? lassoAction : "area";
+    lassoHasLeads ||
+    lassoAction === "create" ||
+    (lassoAction === "assign" && lassoAssignCount > 0)
+      ? lassoAction
+      : "area";
 
   // Rename an area — the friendly name reps see on their map. Server keeps an
   // audit trail (territory "renamed" event) and custom names survive reassign.
@@ -3987,6 +4085,17 @@ export default function MapView() {
   useEffect(() => {
     (window as any).__visibleLeads = visibleLeads;
   }, [visibleLeads]);
+
+  // Keep a drawn lasso's CLIENT selection in step with the visible set: a
+  // filter changed mid-lasso (the sheet is reachable while a loop is up) or a
+  // fresh window landed. Without this the id-based actions (Status, Mark) and
+  // the chips kept operating on a snapshot from draw time — pins a lens change
+  // had hidden stayed in the selection, and newly loaded pins inside the loop
+  // were missing. Assign is ring-based and re-previews on its own.
+  useEffect(() => {
+    if (!lassoPoints.length) return;
+    setLassoSelected(selectPointsInPolygon(visibleLeads, lassoPoints));
+  }, [visibleLeads, lassoPoints]);
 
   // ID + content-signature cache survives API refetches, which necessarily
   // create new pin objects. A steady-state poll reuses all feature allocations.
@@ -7979,15 +8088,23 @@ export default function MapView() {
                       className="flex-1 min-w-0 text-[15px] font-bold text-white tabular-nums"
                       aria-live="polite"
                     >
-                      {lassoActive.length}{" "}
-                      {lassoActive.length === 1 ? "door" : "doors"} selected
-                      {lassoHasLeads &&
+                      {/* Server truth once the preview answers — it counts
+                          doors a sampled viewport never shipped, under every
+                          active lens. The client sample stands in while it
+                          loads (marked as still counting) or if it fails. */}
+                      {lassoPreview ? lassoPreview.total : lassoActive.length}{" "}
+                      {(lassoPreview ? lassoPreview.total : lassoActive.length) === 1 ? "door" : "doors"} selected
+                      {!lassoPreview &&
+                        lassoHasLeads &&
                         lassoActive.length !== lassoSelected.length && (
                           <span className="text-white/55 font-medium">
                             {" "}
                             of {lassoSelected.length}
                           </span>
                         )}
+                      {lassoPreviewPending && (
+                        <span className="text-white/55 font-medium"> · counting</span>
+                      )}
                     </span>
                     <button
                       type="button"
@@ -8023,18 +8140,21 @@ export default function MapView() {
                       all, or save the loop as an Area.
                     </span>
                   )}
-                  {!lassoHasLeads ? (
+                  {lassoChipRows.length === 0 ? (
                     <span
                       className="text-[12px] text-white/60 leading-tight"
                       aria-live="polite"
                       data-testid="lasso-empty-note"
                     >
-                      No mapped doors inside this loop - it can still be saved as
-                      an area.
+                      {lassoPreviewPending
+                        ? "Counting the doors inside this loop…"
+                        : lassoPreviewFailed && !lassoHasLeads
+                          ? "Couldn't count this loop's doors - the panel is working from the pins on screen."
+                          : "No mapped doors inside this loop - it can still be saved as an area."}
                     </span>
                   ) : (
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    {lassoSummary.map(({ ds, count }) => {
+                    {lassoChipRows.map(({ ds, count }) => {
                       const on = !lassoDisabled.has(ds);
                       return (
                         <button
@@ -8079,6 +8199,39 @@ export default function MapView() {
                   </div>
                   )}
 
+                  {/* Doors visible in the loop that are NOT the caller's to
+                      move (another team's booked doors) — named, so the count
+                      above never silently reads low. */}
+                  {(lassoPreview?.notMovable ?? 0) > 0 && (
+                    <span
+                      className="text-[12px] text-white/60 leading-tight"
+                      data-testid="lasso-not-movable"
+                    >
+                      {lassoPreview!.notMovable}{" "}
+                      {lassoPreview!.notMovable === 1 ? "door here belongs" : "doors here belong"}{" "}
+                      to other teams and won't move.
+                    </span>
+                  )}
+                  {/* The preview failing must never block the flow silently:
+                      say so, offer a retry, and let the id-based fallback
+                      carry on with the pins the client holds. */}
+                  {lassoPreviewFailed && lassoHasLeads && (
+                    <span
+                      className="text-[12px] text-amber-300/90 leading-tight"
+                      data-testid="lasso-preview-failed"
+                    >
+                      Couldn't verify the exact count -{" "}
+                      <button
+                        type="button"
+                        onClick={() => lassoPreviewQuery.refetch()}
+                        className="underline underline-offset-2 hover:text-amber-200"
+                      >
+                        retry
+                      </button>
+                      . Counts shown come from the pins on screen.
+                    </span>
+                  )}
+
                   {/* Action tiles — SalesRabbit grammar: icon over an 11px
                       label, outlined, one row of four. Each tile switches the
                       flow rendered below to its EXISTING controls; the wide
@@ -8094,10 +8247,18 @@ export default function MapView() {
                         ["create", "Add doors", Plus],
                       ] as const
                     ).map(([key, label]) => {
-                      // "Area" and "Add doors" work on an empty loop; the rest
-                      // need lead IDs. Add doors is the only one that works
-                      // BECAUSE the loop is empty.
-                      const disabled = !lassoHasLeads && key !== "area" && key !== "create";
+                      // "Area" and "Add doors" work on an empty loop. Status
+                      // and Mark need CLIENT-held lead ids. Assign is
+                      // ring-based: it stays live whenever the server preview
+                      // found doors — even when a sampled viewport shipped
+                      // none of them to this client (the old gate disabled it
+                      // and told the manager the ground was empty).
+                      const disabled =
+                        key === "area" || key === "create"
+                          ? false
+                          : key === "assign"
+                            ? lassoAssignCount === 0 && !lassoPreviewPending
+                            : !lassoHasLeads;
                       const active = lassoEffectiveAction === key;
                       return (
                         <button
@@ -8146,30 +8307,33 @@ export default function MapView() {
                             reps={lassoPickerReps}
                             value={lassoRepId}
                             onChange={setLassoRepId}
-                            selectionCount={lassoActiveIds.length}
+                            selectionCount={lassoAssignCount}
+                            ownedByChosen={lassoOwnedByChosen}
                           />
                         </div>
                         <Button
                           disabled={
                             !lassoRepId ||
                             !lassoDrawn ||
-                            !lassoActiveIds.length ||
+                            !lassoSelectionBody ||
+                            lassoAssignCount === 0 ||
+                            lassoPreviewPending ||
                             bulkAssignMutation.isPending
                           }
                           onClick={() =>
+                            lassoSelectionBody &&
                             bulkAssignMutation.mutate({
-                              polygon: lassoPoints,
                               repId: Number(lassoRepId),
-                              includeStates: lassoEnabledStates,
+                              selection: lassoSelectionBody,
                             })
                           }
                           type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
-                          {bulkAssignMutation.isPending
+                          {bulkAssignMutation.isPending || lassoPreviewPending
                             ? "…"
-                            : `Assign ${lassoActiveIds.length}`}
+                            : `Assign ${lassoAssignCount}`}
                         </Button>
                       </>
                     )}
@@ -8180,13 +8344,42 @@ export default function MapView() {
                           county address file. Houses that are already on the map
                           are left alone.
                         </p>
+                        {/* WHO gets the new doors, stated on THIS tab. The rep
+                            comes from the Assign tab's picker, and inheriting
+                            it silently assigned brand-new doors to whoever was
+                            last picked over there — with nothing on this tab
+                            saying so. */}
+                        <p
+                          className="text-[12px] leading-snug text-white/70"
+                          data-testid="lasso-create-assignee"
+                        >
+                          New doors go to{" "}
+                          <span className="font-semibold text-white">
+                            {lassoRepId
+                              ? (team.find((m) => m.id === Number(lassoRepId))?.name ?? "the picked rep")
+                              : "the unassigned pool"}
+                          </span>
+                          .
+                          {lassoRepId && (
+                            <>
+                              {" "}
+                              <button
+                                type="button"
+                                onClick={() => setLassoRepId("")}
+                                className="underline underline-offset-2 text-white/70 hover:text-white"
+                                data-testid="lasso-create-to-pool"
+                              >
+                                Send to the pool instead
+                              </button>
+                            </>
+                          )}
+                        </p>
                         <Button
                           disabled={!lassoDrawn || createFromSelectionMutation.isPending}
                           onClick={() =>
                             createFromSelectionMutation.mutate({
                               polygon: lassoPoints,
-                              // Optional: if a rep is picked on the Assign tab,
-                              // the new doors land on them instead of the pool.
+                              // The assignee named in the row above.
                               repId: lassoRepId ? Number(lassoRepId) : null,
                             })
                           }
