@@ -397,6 +397,45 @@ describe("retry safety and undo integrity", () => {
   });
 });
 
+describe("undo eviction is tenant-fair", () => {
+  it("one org churning lassoes cannot purge another org's live token", async () => {
+    // Tenant 2 makes ONE undoable move...
+    const rita = person("Rita Rep", "rep", 2);
+    const theirs = seedLead({ lat: 35.83, lng: -80.23, assignedRepId: rita.memberId }, 2);
+    const t2 = await post("/api/leads/assign-selection", fx.mgr2.session, {
+      polygon: RING, repId: null,
+    });
+    const { undoToken: t2Token } = await t2.json();
+    expect(t2Token).toBeTruthy();
+
+    // ...then tenant 1 churns ten of them (past the per-tenant share of 8).
+    const door = seedLead({ lat: 35.86, lng: -80.26 });
+    const t1Tokens: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const res = await post("/api/leads/assign-selection", fx.manager.session, {
+        polygon: RING, repId: i % 2 ? fx.ann.memberId : fx.bo.memberId,
+      });
+      const json = await res.json();
+      expect(json.undoToken).toBeTruthy();
+      t1Tokens.push(json.undoToken);
+    }
+
+    // Tenant 1's own oldest token was evicted by its own churn...
+    const first = await post("/api/leads/assign-selection/undo", fx.manager.session, { token: t1Tokens[0] });
+    expect(first.status).toBe(410);
+    // ...its newest still works...
+    const latest = await post("/api/leads/assign-selection/undo", fx.manager.session, { token: t1Tokens[9] });
+    expect(latest.status).toBe(200);
+    // ...and tenant 2's token SURVIVED the neighbor's churn (the global FIFO
+    // used to evict it) and still restores their door.
+    const undo2 = await post("/api/leads/assign-selection/undo", fx.mgr2.session, { token: t2Token });
+    expect(undo2.status).toBe(200);
+    expect((await undo2.json()).restored).toBe(1);
+    expect(leadById(theirs).assigned_rep_id).toBe(rita.memberId);
+    expect(leadById(door).assigned_rep_id).not.toBeNull();
+  });
+});
+
 describe("target validity", () => {
   it("refuses a deactivated rep on all three assignment routes", async () => {
     const gone = person("Gina Gone", "rep");

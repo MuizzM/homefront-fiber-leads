@@ -10072,6 +10072,10 @@ export default function MapView() {
                             <select
                               data-testid={`assign-select-${t.id}`}
                               defaultValue=""
+                              // Disabled while in flight, like the sibling
+                              // reassign select: a second change event used to
+                              // fire a concurrent POST /assign mid-request.
+                              disabled={assignTerritoryMutation.isPending}
                               onChange={(e) => {
                                 if (e.target.value) {
                                   assignTerritoryMutation.mutate({
@@ -10081,22 +10085,30 @@ export default function MapView() {
                                   setReclaimMenuId(null);
                                 }
                               }}
-                              className="w-full bg-white/10 text-white text-[12px] rounded-lg px-2 min-h-11 border border-white/20"
+                              className="w-full bg-white/10 text-white text-[12px] rounded-lg px-2 min-h-11 border border-white/20 disabled:opacity-50"
                             >
                               <option value="" className="text-slate-900">
                                 Assign to next rep…
                               </option>
+                              {/* Load + cap alongside the name, same data the
+                                  RepPicker rows carry - this select could
+                                  offer a rep the server was certain to 409. */}
                               {team
                                 .filter((m) => m.active)
-                                .map((m) => (
-                                  <option
-                                    key={m.id}
-                                    value={m.id}
-                                    className="text-slate-900"
-                                  >
-                                    {m.name}
-                                  </option>
-                                ))}
+                                .map((m) => {
+                                  const held = activeAreaCountByRep.get(m.id) ?? 0;
+                                  const atCap = held >= MAX_ACTIVE_AREAS_PER_REP;
+                                  return (
+                                    <option
+                                      key={m.id}
+                                      value={m.id}
+                                      disabled={atCap}
+                                      className="text-slate-900"
+                                    >
+                                      {m.name}{held > 0 ? ` · ${held} area${held === 1 ? "" : "s"}` : ""}{atCap ? " · at cap" : ""}
+                                    </option>
+                                  );
+                                })}
                             </select>
                           </div>
                         )}

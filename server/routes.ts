@@ -750,6 +750,24 @@ function repAtAreaCap(repId: number, excludeTerritoryId?: number, tenantId?: num
   return `${rep?.name ?? "That rep"} already has ${active.length} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}).`;
 }
 
+// The cap is enforced TWICE on the main grant paths: the friendly pre-check
+// above (fast 409 with a readable message, before any work) and a re-check as
+// the first read INSIDE the IMMEDIATE write transaction. The pre-check alone
+// was check-then-act: this prod runs multiple workers on one SQLite file, so
+// two concurrent grants for the same rep could both read four active areas
+// and both commit. Inside BEGIN IMMEDIATE the write lock serializes us
+// against every other process's commit, so the re-read is authoritative.
+// Routes catch AreaCapError and answer the same 409 the pre-check gives.
+class AreaCapError extends Error {
+  constructor(message: string) { super(message); this.name = "AreaCapError"; }
+}
+function assertRepsUnderCap(repIds: number[], excludeTerritoryId: number | undefined, tenantId: number | undefined): void {
+  for (const id of repIds) {
+    const msg = repAtAreaCap(id, excludeTerritoryId, tenantId);
+    if (msg) throw new AreaCapError(msg);
+  }
+}
+
 function canManageTerritory(user: any, terr: any): boolean {
   const scope = leadVisibilityScope(user);
   if (scope === undefined) return true;  // manager+ — unrestricted
@@ -1312,10 +1330,17 @@ interface AssignUndoEntry {
   expiresAt: number;
 }
 const assignUndo = new Map<string, AssignUndoEntry>();
+// Eviction is tenant-fair: the global FIFO alone let ONE org churning 64
+// small lassoes purge every other org's live undo tokens before their TTL.
+// An org now evicts its OWN oldest entries past its per-tenant share, so the
+// global cap is reached only when many tenants are all at theirs.
+const ASSIGN_UNDO_MAX_PER_TENANT = 8;
 function rememberAssignUndo(entry: Omit<AssignUndoEntry, "expiresAt">): { token: string; expiresAt: number } | null {
   if (!entry.prior.length || entry.prior.length > ASSIGN_UNDO_MAX_ROWS) return null;
   const now = Date.now();
   for (const [k, v] of assignUndo) if (v.expiresAt <= now) assignUndo.delete(k);
+  const mine = [...assignUndo.entries()].filter(([, v]) => v.tenantId === entry.tenantId);
+  for (let i = 0; mine.length - i >= ASSIGN_UNDO_MAX_PER_TENANT; i++) assignUndo.delete(mine[i][0]);
   while (assignUndo.size >= ASSIGN_UNDO_MAX_ENTRIES) assignUndo.delete(assignUndo.keys().next().value!);
   const token = crypto.randomBytes(18).toString("base64url");
   const expiresAt = now + ASSIGN_UNDO_TTL_MS;
@@ -8840,7 +8865,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // — a rollback has no retraction.
     let territory!: ReturnType<typeof storage.createTerritory>;
     let changedIds: number[] = [];
+    try {
     rawDb.transaction(() => {
+      // Authoritative cap re-check under the write lock (see AreaCapError).
+      assertRepsUnderCap(repIds, undefined, tid);
       territory = storage.createTerritory({
         tenantId: tid ?? null, name: (name && name.trim()) || autoName,
         repId, polygon: JSON.stringify(polygon), color,
@@ -8855,6 +8883,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
       storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, repIds, assigned: changedIds.length });
     }).immediate();
+    } catch (e) {
+      if (e instanceof AreaCapError) return res.status(409).json({ error: `${e.message} Reclaim one first.` });
+      throw e;
+    }
     if (changedIds.length > 0) bustMapCache(tid);
     emitLeadChangesBulk("assignment", changedIds.slice(0, LEAD_EVENT_BULK_MAX), user, tid);
 
@@ -9088,6 +9120,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const rowTenant = ((t as any).tenantId ?? undefined) as number | undefined;
     let moved: TerritoryLeadWrite = { changed: 0, leadIds: [] };
     rawDb.transaction(() => {
+      // Authoritative cap re-check for a reassign target under the write lock.
+      if (mode === "reassign" && newRepId != null) assertRepsUnderCap([Number(newRepId)], t.id, tid);
       storage.updateTerritory(t.id, {
         status: next.status, repId: newPrimary, name: newName,
         assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
@@ -9179,7 +9213,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const at = new Date().toISOString();
-    const result = applyReclaimTransition(t, mode, newRepId, user, tid, at);
+    let result: { status: TerritoryStatus; leadsAffected: number };
+    try {
+      result = applyReclaimTransition(t, mode, newRepId, user, tid, at);
+    } catch (e) {
+      if (e instanceof AreaCapError) return res.status(409).json({ error: e.message });
+      throw e;
+    }
 
     res.json({ ok: true, mode, status: result.status, leadsAffected: result.leadsAffected });
   });
@@ -9290,7 +9330,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // cannot lose a door it just booked). SSE and the one cache bust happen
     // after commit — a rollback has no retraction.
     let changedIds: number[] = [];
+    try {
     rawDb.transaction(() => {
+      // Authoritative cap re-check under the write lock (see AreaCapError).
+      assertRepsUnderCap([repId], t.id, tid);
       changedIds = stampTerritoryDoors({
         candidateIds: inside.map((l: any) => l.id),
         repId, repName: rep.name, territoryId: t.id,
@@ -9304,6 +9347,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       } as any, ((t as any).tenantId ?? undefined) as number | undefined);
       storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned: changedIds.length });
     }).immediate();
+    } catch (e) {
+      if (e instanceof AreaCapError) return res.status(409).json({ error: e.message });
+      throw e;
+    }
     if (changedIds.length > 0) bustMapCache(tid);
     emitLeadChangesBulk("assignment", changedIds.slice(0, LEAD_EVENT_BULK_MAX), user, tid);
 
@@ -9408,7 +9455,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Row-tenant condition for adopted areas (see /unassign).
     const rowTenant = ((t as any).tenantId ?? undefined) as number | undefined;
     let handover: TerritoryLeadWrite = { changed: 0, leadIds: [] };
+    try {
     rawDb.transaction(() => {
+      // Authoritative cap re-check for NEW members under the write lock.
+      assertRepsUnderCap(merged.filter((r) => !alreadyOn.has(r)), t.id, tid);
       storage.updateTerritory(t.id, {
         status: merged.length > 1 ? "shared" : "active",
         repId: newPrimary,
@@ -9433,6 +9483,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
       storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
     }).immediate();
+    } catch (e) {
+      if (e instanceof AreaCapError) return res.status(409).json({ error: e.message });
+      throw e;
+    }
     emitLeadChangesBulk("assignment", handover.leadIds, user, tid);
 
     res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: retainedAreaColor(t, newPrimary) });
