@@ -237,6 +237,13 @@ describe("adopted areas are fully manageable", () => {
     const admin = person("Ada Admin", "admin");
     const tId = seedArea({ status: "active" });
     rawDb.prepare("UPDATE territories SET tenant_id = NULL WHERE id = ?").run(tId);
+    // A NULL-tenant DOOR linked to the adopted area, held by the departing
+    // rep. The door half of the transaction used to filter on the CALLER's
+    // tenant, so the crew flip committed while this door silently stayed with
+    // the removed rep - the exact area/doors drift the one-transaction
+    // rewrite exists to prevent.
+    const door = seedLead({ lat: 35.85, lng: -80.25, assignedRepId: fx.ann.memberId });
+    rawDb.prepare("UPDATE leads SET tenant_id = NULL, assigned_territory_id = ? WHERE id = ?").run(tId, door);
 
     const res = await post(`/api/territories/${tId}/unassign`, admin.session, {
       repId: fx.ann.memberId,
@@ -245,9 +252,12 @@ describe("adopted areas are fully manageable", () => {
     const json = await res.json();
     expect(json.ok).toBe(true);
     expect(json.assigneeIds).toEqual([]);
+    expect(json.leadsReleased).toBe(1);
     // The territory ROW actually changed - the strict-equality tenant
     // condition used to make this write a silent no-op on adopted rows.
     const row = rawDb.prepare("SELECT status, assignee_ids FROM territories WHERE id = ?").get(tId) as any;
     expect(row.assignee_ids).toBe("[]");
+    // ...and so did its DOOR.
+    expect(leadById(door).assigned_rep_id).toBeNull();
   });
 });

@@ -67,6 +67,9 @@ beforeAll(async () => {
   // both consts are read at module load.
   process.env.MAX_ASSIGN_SELECTION = "1";
   process.env.MAX_ASSIGN_BBOX_CANDIDATES = "1";
+  // Small chunks so the in-flight-join test gets multiple event-loop yields
+  // inside applyAssignment without exceeding the floored 1,000-door cap.
+  process.env.ASSIGN_CHUNK = "100";
   const mod = await import("../../server/storage");
   mod.runMigrations();
   storage = mod.storage;
@@ -194,6 +197,39 @@ describe("lens fidelity: the server assigns exactly what the panel showed", () =
         polygon: RING,
       });
       expect((await preview.json()).total).toBe(2);
+    } finally {
+      storage.deleteTerritory(tId, 1);
+    }
+  });
+});
+
+describe("the clip mirrors the MAP's rule, not a role list", () => {
+  it("a MANAGER with a linked member row who holds areas is clipped like their map is", async () => {
+    // MapView clips for every role that is neither admin nor rep with a
+    // teamMemberId - managers included. The server resolver was team_lead-only
+    // at first, so this manager's panel counted a clipped map while Assign
+    // moved the unclipped set.
+    const held: [number, number][] = [
+      [-80.30, 35.80], [-80.26, 35.80], [-80.26, 35.84], [-80.30, 35.84],
+    ];
+    const tId = storage.createTerritory({
+      tenantId: 1, name: "Mara's Corner", repId: fx.manager.memberId,
+      polygon: JSON.stringify(held), color: "#3EA394", status: "active",
+      assigneeIds: JSON.stringify([fx.manager.memberId]),
+    } as any).id;
+    try {
+      const insideHeld = seedLead({ lat: 35.82, lng: -80.28 });
+      const outsideHeld = seedLead({ lat: 35.88, lng: -80.22 });
+
+      const preview = await post("/api/leads/assign-selection/preview", fx.manager.session, { polygon: RING });
+      expect((await preview.json()).total).toBe(1);
+
+      const res = await post("/api/leads/assign-selection", fx.manager.session, {
+        polygon: RING, repId: fx.ann.memberId,
+      });
+      expect(res.status).toBe(200);
+      expect(leadById(insideHeld).assigned_rep_id).toBe(fx.ann.memberId);
+      expect(leadById(outsideHeld).assigned_rep_id).toBeNull();
     } finally {
       storage.deleteTerritory(tId, 1);
     }
@@ -365,6 +401,52 @@ describe("retry safety and undo integrity", () => {
     expect((await undo.json()).restored).toBe(1);
     expect(leadById(door).assigned_rep_id).toBeNull();
   });
+
+  it("the same opId with a DIFFERENT selection is refused, never answered from cache", async () => {
+    seedLead({ lat: 35.865, lng: -80.265 });
+    const first = await post("/api/leads/assign-selection", fx.manager.session, {
+      polygon: RING, repId: fx.ann.memberId, opId: "op-shape-1",
+    });
+    expect(first.status).toBe(200);
+    // Same id, different ring: replaying the cached response would claim work
+    // that never ran against THIS selection.
+    const different = await post("/api/leads/assign-selection", fx.manager.session, {
+      polygon: [[-80.31, 35.79], [-80.19, 35.79], [-80.19, 35.91], [-80.31, 35.91]],
+      repId: fx.ann.memberId, opId: "op-shape-1",
+    });
+    expect(different.status).toBe(409);
+    expect((await different.json()).code).toBe("OP_REUSED");
+  });
+
+  it("a concurrent same-op retry JOINS the running attempt instead of executing twice", async () => {
+    // 900 doors at ASSIGN_CHUNK=100 = nine chunks with an event-loop yield
+    // between each - exactly the window where a network-dropped client's
+    // retry used to land, re-execute, and receive an undo built from rows the
+    // first attempt had already assigned.
+    const inside: number[] = [];
+    const tx = rawDb.transaction(() => {
+      for (let i = 0; i < 900; i++) {
+        inside.push(seedLead({ lat: 35.801 + (i % 50) * 0.0004, lng: -80.299 + Math.floor(i / 50) * 0.0004 }));
+      }
+    });
+    tx();
+    const body = { polygon: RING, repId: fx.ann.memberId, opId: "op-inflight-1" };
+    const [a, b] = await Promise.all([
+      post("/api/leads/assign-selection", fx.manager.session, body).then((r) => r.json()),
+      post("/api/leads/assign-selection", fx.manager.session, body).then((r) => r.json()),
+    ]);
+    // One execution, two identical answers - same counts, same working token.
+    expect(a.updated).toBe(900);
+    expect(b.updated).toBe(900);
+    expect(a.undoToken).toBeTruthy();
+    expect(b.undoToken).toBe(a.undoToken);
+    expect(assignEvents(inside[0])).toBe(1);
+    expect(assignEvents(inside[899])).toBe(1);
+    // And the shared token restores the true prior owners (the pool).
+    const undo = await post("/api/leads/assign-selection/undo", fx.manager.session, { token: a.undoToken });
+    expect((await undo.json()).restored).toBe(900);
+    expect(leadById(inside[0]).assigned_rep_id).toBeNull();
+  }, 30_000);
 
   it("undo skips a door that was deliberately re-assigned to the same rep since (ABA)", async () => {
     const reverted = seedLead({ lat: 35.87, lng: -80.27 });

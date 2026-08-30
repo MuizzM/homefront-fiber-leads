@@ -17,6 +17,7 @@ import { packMapPins, type PackedMapPins } from "@shared/mapPinsWire";
 import { buyerScoreBands, buyerScoreLastRun, buyerScoreRunning, rescoreLead, rescoreTenant } from "./buyerScoreJob";
 import { decideFreshFiber, type FreshFiberVerdict } from "@shared/freshFiberVerdict";
 import { structuredLog } from "./structuredLog";
+import { territoryVersionStamp } from "./territoryScopeCache";
 import { inlineScriptHashes } from "./cspHashes";
 import {
   recordAdminAudit, auditContext, queryAdminAudit, adminAuditFacets, ADMIN_AUDIT_OUTCOMES,
@@ -1358,18 +1359,42 @@ function rememberAssignUndo(entry: Omit<AssignUndoEntry, "expiresAt">): { token:
 // undo table: the window is seconds.
 const ASSIGN_OP_TTL_MS = 60_000;
 const ASSIGN_OP_MAX_ENTRIES = 200;
-const assignOpCache = new Map<string, { expiresAt: number; payload: any }>();
-function rememberAssignOp(key: string, payload: any): void {
+interface AssignOpEntry {
+  expiresAt: number;
+  /** Hash of the selection-shaping body fields — a recycled opId with a
+   *  DIFFERENT selection is refused, never answered from cache. */
+  bodyHash: string;
+  /** The finished response, for post-completion replays. */
+  outcome?: { status: number; body: any };
+  /** The RUNNING attempt, for in-flight replays: a retry that arrives while
+   *  the chunked apply is still yielding joins this promise instead of
+   *  executing a second interleaved assignment (whose per-chunk prior
+   *  snapshots would read rows the first attempt already moved, poisoning
+   *  the undo the client actually receives). */
+  pending?: Promise<{ status: number; body: any; settled: "cache" | "drop" }>;
+}
+const assignOpCache = new Map<string, AssignOpEntry>();
+function sweepAssignOps(): void {
   const now = Date.now();
   for (const [k, v] of assignOpCache) if (v.expiresAt <= now) assignOpCache.delete(k);
   while (assignOpCache.size >= ASSIGN_OP_MAX_ENTRIES) assignOpCache.delete(assignOpCache.keys().next().value!);
-  assignOpCache.set(key, { expiresAt: now + ASSIGN_OP_TTL_MS, payload });
 }
-function recallAssignOp(key: string): any | undefined {
+function registerAssignOpPending(key: string, bodyHash: string, pending: AssignOpEntry["pending"]): void {
+  sweepAssignOps();
+  // A rejection here is re-raised (and handled) by the owning request; the
+  // joiner reads it via its own .catch. Swallow so nothing is unhandled.
+  pending?.catch(() => {});
+  assignOpCache.set(key, { expiresAt: Date.now() + ASSIGN_OP_TTL_MS, bodyHash, pending });
+}
+function rememberAssignOp(key: string, bodyHash: string, outcome: { status: number; body: any }): void {
+  sweepAssignOps();
+  assignOpCache.set(key, { expiresAt: Date.now() + ASSIGN_OP_TTL_MS, bodyHash, outcome });
+}
+function recallAssignOp(key: string): AssignOpEntry | undefined {
   const hit = assignOpCache.get(key);
   if (!hit) return undefined;
   if (hit.expiresAt <= Date.now()) { assignOpCache.delete(key); return undefined; }
-  return hit.payload;
+  return hit;
 }
 // Bbox candidates examined before the exact ring test. Exceeding it REFUSES the
 // request rather than truncating: a dropped bbox row is a door inside the ring
@@ -5050,7 +5075,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // AUTHORITATIVE member set: exactly the cluster's leads (never over-enclose a
     // hull, never drop a boundary door). Fallback for lasso callers: padded ring.
-    const memberIds: number[] = Array.isArray(leadIds) ? leadIds.map(Number).filter(Number.isFinite) : [];
+    // Deduped: the old JS filter's Set semantics must survive the SQL rewrite,
+    // or a duplicated id in the payload lands the same door in `enclosed`
+    // twice (double-counted totals and duplicate parcel membership).
+    const memberIds: number[] = Array.isArray(leadIds) ? [...new Set(leadIds.map(Number).filter(Number.isFinite))] : [];
     let enclosed: any[];
     if (memberIds.length > 0) {
       // A bounded id list resolves by INDEXED SEEK with the same narrow
@@ -5099,7 +5127,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // not to be, so a crash mid-split left rep 1 fielded and rep 2 with nothing.
     // SSE after commit (a rollback has no retraction).
     const pendingEmits: any[] = [];
+    try {
     rawDb.transaction(() => {
+    // Authoritative cap re-check under the write lock (see AreaCapError).
+    assertRepsUnderCap(reps, undefined, t);
     parcelIdLists.forEach((ids, i) => {
       const rid = reps[Math.min(i, reps.length - 1)];
       const rp = storage.getTeamMemberById(rid)!;
@@ -5146,6 +5177,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       results.push({ territory, repId: rid, assigned, briefing });
     });
     }).immediate();
+    } catch (e) {
+      if (e instanceof AreaCapError) return res.status(409).json({ error: e.message });
+      throw e;
+    }
     for (const moved of pendingEmits) emitLeadChange("assignment", moved, user, t ?? moved.tenantId);
 
     if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(t);
@@ -6585,11 +6620,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       else return fail(400, { error: "repFilter must be \"unassigned\" or a rep id" });
     }
 
-    // A team lead's map clips every pin to the areas they hold (when they hold
-    // any) — mirror it, or their lasso moves ground their map never showed.
+    // The map clips pins to held areas for EVERY role that is neither admin
+    // nor rep with a linked member row (MapView myTerritoryRings: `if (isAdmin
+    // || isRep || !user?.teamMemberId) return null`, isAdmin = role "admin"
+    // only) — that includes a manager who is primary on areas, not just team
+    // leads. Mirror the client's rule LITERALLY, or that manager's panel
+    // counts a clipped map while the server assigns the unclipped set: the
+    // exact divergence this resolver exists to close.
     type ClipRing = { ring: [number, number][]; minLng: number; maxLng: number; minLat: number; maxLat: number };
     let clipRings: ClipRing[] | null = null;
-    if (user?.role === "team_lead" && user?.teamMemberId != null) {
+    if (user?.role !== "admin" && user?.role !== "rep" && user?.teamMemberId != null) {
       const rings: ClipRing[] = [];
       for (const t of storage.getTerritories(tid) as any[]) {
         if (t.repId !== user.teamMemberId) continue;
@@ -6622,15 +6662,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const scope = leadVisibilityScope(user);
     const repScope = Array.isArray(scope) ? scope : (scope != null ? [scope] : undefined);
     const resolveStarted = performance.now();
-    // limit is a REFUSAL threshold, never a silent truncation: the LIMIT applies
-    // to the bbox, and quietly dropping bbox rows would drop doors that sit
-    // inside the ring. One extra row is requested purely to detect the overflow.
-    const rows = storage.getLeadsForMap(tid, repScope, {
+    const bboxWindow = {
       minLat: minLat - pad, maxLat: maxLat + pad,
       minLng: minLng - pad, maxLng: maxLng + pad,
       view: (view ?? undefined) as MapView | undefined,
       limit: MAX_ASSIGN_BBOX_CANDIDATES + 1,
-    });
+    };
+    // limit is a REFUSAL threshold, never a silent truncation: the LIMIT applies
+    // to the bbox, and quietly dropping bbox rows would drop doors that sit
+    // inside the ring. The overflow probe is an index-only COUNT first (the
+    // same scoped window predicate the sampler's step calculation reads) -
+    // the refusal used to be discovered by hydrating up to 400k wide rows
+    // (plus their knock aggregate) and throwing them away, per draw.
+    if (storage.getLeadsMapWindowCount(tid, repScope, bboxWindow) > MAX_ASSIGN_BBOX_CANDIDATES) {
+      return fail(400, {
+        error: "That area covers too much ground to assign in one action - draw a tighter outline",
+        code: "AREA_TOO_LARGE",
+      });
+    }
+    const rows = storage.getLeadsForMap(tid, repScope, bboxWindow);
     if (rows.length > MAX_ASSIGN_BBOX_CANDIDATES) {
       return fail(400, {
         error: "That area covers too much ground to assign in one action - draw a tighter outline",
@@ -6736,43 +6786,89 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     const opId = typeof body.opId === "string" && body.opId.length > 0 && body.opId.length <= 80 ? body.opId : null;
     const opKey = opId ? `${user.id}:${opId}` : null;
+    // The op is its BODY, not just its id: replaying a cached response for a
+    // different selection under a recycled id would silently answer for work
+    // that never ran. Hash the selection-shaping fields; a mismatch refuses.
+    const opBodyHash = opKey
+      ? crypto.createHash("sha256").update(JSON.stringify({
+          repId: body.repId ?? null, polygon: body.polygon ?? null,
+          includeStates: body.includeStates ?? null, excludeLeadIds: body.excludeLeadIds ?? null,
+          view: body.view ?? null, source: body.source ?? null, repFilter: body.repFilter ?? null,
+        })).digest("hex")
+      : "";
     if (opKey) {
-      const replay = recallAssignOp(opKey);
-      if (replay !== undefined) return res.json(replay);
+      const prior = recallAssignOp(opKey);
+      if (prior !== undefined) {
+        if (prior.bodyHash !== opBodyHash) {
+          return res.status(409).json({ error: "That operation id was already used for a different selection", code: "OP_REUSED" });
+        }
+        // Completed earlier: replay the stored outcome verbatim. Still IN
+        // FLIGHT: join the running attempt instead of executing a second one -
+        // the realistic retry (connection dropped mid-request while the
+        // chunked apply is still yielding through the event loop) used to
+        // land exactly here, re-resolve the ring against rows the first
+        // attempt had already assigned, and hand back an undo that restored
+        // nothing.
+        const outcome = prior.outcome ?? (prior.pending ? await prior.pending.catch(() => null) : null);
+        if (outcome) return res.status(outcome.status).json(outcome.body);
+        return res.status(500).json({ error: "The first attempt of this operation failed - draw and assign again", code: "OP_FAILED" });
+      }
     }
 
-    const resolved = resolveAssignSelection(user, tid, body);
-    if ("fail" in resolved) return res.status(resolved.fail.status).json(resolved.fail.payload);
-    const ids = resolved.movable.map((pin) => pin.id as number);
-    const { polygon, resolveMs } = resolved;
+    const execute = async (): Promise<{ status: number; body: any; settled: "cache" | "drop" }> => {
+      const resolved = resolveAssignSelection(user, tid, body);
+      if ("fail" in resolved) return { status: resolved.fail.status, body: resolved.fail.payload, settled: "drop" };
+      const ids = resolved.movable.map((pin) => pin.id as number);
+      const { polygon, resolveMs } = resolved;
 
-    if (!ids.length) {
-      return res.json({ assigned: 0, updated: 0, skipped: 0, total: 0, repId, resolveMs });
-    }
+      if (!ids.length) {
+        return { status: 200, body: { assigned: 0, updated: 0, skipped: 0, total: 0, repId, resolveMs }, settled: "cache" };
+      }
 
-    const { updated, skipped, prior, appliedAt, incomplete } = await applyAssignment(ids, repId, user, tid);
-    storage.logActivity(user?.id ?? null, "lead.assign_selection", "lead", undefined,
-      { repId, ringPoints: polygon.length, resolved: ids.length, updated, skipped, resolveMs, ...(incomplete ? { incomplete: true } : {}) }, req.ip);
-    // Put-back token for the doors this write actually changed (none for a
-    // selection too large to hold, or when nothing moved).
-    const undo = updated > 0 ? rememberAssignUndo({ tenantId: tid, userId: user.id, appliedRepId: repId, appliedAt, prior }) : null;
-    // assigned mirrors updated so the field name matches assign-area's response;
-    // updated/skipped match bulk-assign's. One payload serves both callers.
-    const payload = {
-      assigned: updated, updated, skipped, total: ids.length, repId, resolveMs,
-      ...(undo ? { undoToken: undo.token, undoExpiresAt: new Date(undo.expiresAt).toISOString() } : {}),
+      const { updated, skipped, prior, appliedAt, incomplete } = await applyAssignment(ids, repId, user, tid);
+      storage.logActivity(user?.id ?? null, "lead.assign_selection", "lead", undefined,
+        { repId, ringPoints: polygon.length, resolved: ids.length, updated, skipped, resolveMs, ...(incomplete ? { incomplete: true } : {}) }, req.ip);
+      // Put-back token for the doors this write actually changed (none for a
+      // selection too large to hold, or when nothing moved).
+      const undo = updated > 0 ? rememberAssignUndo({ tenantId: tid, userId: user.id, appliedRepId: repId, appliedAt, prior }) : null;
+      // assigned mirrors updated so the field name matches assign-area's response;
+      // updated/skipped match bulk-assign's. One payload serves both callers.
+      const payload = {
+        assigned: updated, updated, skipped, total: ids.length, repId, resolveMs,
+        ...(undo ? { undoToken: undo.token, undoExpiresAt: new Date(undo.expiresAt).toISOString() } : {}),
+      };
+      if (incomplete) {
+        // Chunks that committed stand; say exactly how far it got, and the undo
+        // covers the doors that DID move. Not cached: a retry may finish the rest.
+        return {
+          status: 500,
+          body: {
+            ...payload,
+            error: `Assigned ${updated.toLocaleString()} of ${ids.length.toLocaleString()} doors before a database error - the rest were not changed`,
+            code: "ASSIGN_INCOMPLETE",
+          },
+          settled: "drop",
+        };
+      }
+      return { status: 200, body: payload, settled: "cache" };
     };
-    if (incomplete) {
-      // Chunks that committed stand; say exactly how far it got, and the undo
-      // covers the doors that DID move.
-      return res.status(500).json({
-        ...payload,
-        error: `Assigned ${updated.toLocaleString()} of ${ids.length.toLocaleString()} doors before a database error - the rest were not changed`,
-        code: "ASSIGN_INCOMPLETE",
-      });
+
+    const run = execute();
+    // Registered BEFORE the first await so a same-op retry arriving mid-flight
+    // joins this promise rather than starting a second execution.
+    if (opKey) registerAssignOpPending(opKey, opBodyHash, run);
+    let outcome: { status: number; body: any; settled: "cache" | "drop" };
+    try {
+      outcome = await run;
+    } catch (e) {
+      if (opKey) assignOpCache.delete(opKey);
+      throw e;
     }
-    if (opKey) rememberAssignOp(opKey, payload);
-    res.json(payload);
+    if (opKey) {
+      if (outcome.settled === "cache") rememberAssignOp(opKey, opBodyHash, { status: outcome.status, body: outcome.body });
+      else assignOpCache.delete(opKey);
+    }
+    res.status(outcome.status).json(outcome.body);
   });
 
   // POST /api/leads/bulk-status  { leadIds: number[], outcome: KnockOutcome }
@@ -9002,6 +9098,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // assignment and its doors can never disagree about which pass they're in.
         applyTerritoryAction: () => {
           if (action === "keep") return;
+          // Authoritative cap re-check under the write lock (see AreaCapError):
+          // this callback runs INSIDE startNextPass's transaction.
+          if (action === "reassign" && newRepId != null) assertRepsUnderCap([newRepId], t.id, tid);
           const nextRepIds = action === "reassign" && newRepId != null ? [newRepId] : [];
           const past = Array.from(new Set([
             ...(safeJson<number[]>((t as any).pastAssigneeIds) ?? []), t.repId,
@@ -9020,7 +9119,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             color: retainedAreaColor(t, newPrimary),
             reclaimedAt: action === "return_to_pool" ? at : (t as any).reclaimedAt ?? null,
             updatedAt: at,
-          } as any, tid);
+            // Row-tenant condition: adopted (NULL-tenant) areas no-op'd here.
+          } as any, ((t as any).tenantId ?? undefined) as number | undefined);
 
           // Detach the doors from the departing rep. Their knock history stays
           // attributed to them forever — this only changes who works it next.
@@ -9041,6 +9141,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } catch (e: any) {
       recordAdminAudit({ ...audit, action: "territory.next_pass", targetType: "territory",
         targetId: t.id, targetLabel: t.name, outcome: "failure", reason: String(e?.message ?? e).slice(0, 200) });
+      if (e instanceof AreaCapError) return res.status(409).json({ error: e.message });
       return res.status(500).json({ error: "could not start next pass" });
     }
 
@@ -9147,13 +9248,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       switch (mode) {
         case "keep_leads": break;
         case "return_to_pool":
-          moved = storage.bulkReturnTerritoryLeadsToPool({ territoryId: t.id, at, tenantId: tid });
+          // rowTenant, not the caller's: an adopted (NULL-tenant) area's doors
+          // may be NULL-tenant too, and a strict caller-tenant filter committed
+          // the crew flip while moving ZERO doors - the exact drift this
+          // transaction exists to prevent. The doors are selected by the
+          // territory link, which only tenant-scoped routes ever stamp.
+          moved = storage.bulkReturnTerritoryLeadsToPool({ territoryId: t.id, at, tenantId: rowTenant });
           break;
         case "reassign":
           // "except the doors newRepId already holds" IS the diff: re-stamping
           // those would reset an assigned_at the loop left alone.
           moved = storage.bulkAssignTerritoryLeadsExcept({
-            territoryId: t.id, repId: Number(newRepId), at, keepRepIds: [Number(newRepId)], tenantId: tid,
+            territoryId: t.id, repId: Number(newRepId), at, keepRepIds: [Number(newRepId)], tenantId: rowTenant,
           });
           break;
         default: {
@@ -9374,7 +9480,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // LEARNING LOOP: capture the field outcome and roll it into the market's
     // memory so a proven area lifts its market's priority next scan.
     const outcome = scanSvc.recordTerritoryOutcome(tid ?? getDefaultTenantId(), t.id, (t as any).createdAt ?? null);
-    storage.updateTerritory(t.id, { status: "completed", completedAt: at, updatedAt: at, completionNotes: req.body?.notes ?? null, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, tid);
+    // Row-tenant condition: adopted (NULL-tenant) areas silently no-op'd here.
+    storage.updateTerritory(t.id, { status: "completed", completedAt: at, updatedAt: at, completionNotes: req.body?.notes ?? null, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, ((t as any).tenantId ?? undefined) as number | undefined);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "completed", { notes: req.body?.notes ?? null, outcome });
     res.json({ ok: true, status: "completed", outcome });
   });
@@ -9478,8 +9585,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // (a 2,000-door patch used to pay 2,000 of each on the request thread); the
       // ids come back from the same transaction, so the assignment events still
       // name exactly the doors that moved, capped exactly as the loop capped them.
+      // rowTenant for the same adopted-area reason as the row write above.
       handover = storage.bulkAssignTerritoryLeadsExcept({
-        territoryId: t.id, repId: newPrimary, at, keepRepIds: merged, tenantId: tid,
+        territoryId: t.id, repId: newPrimary, at, keepRepIds: merged, tenantId: rowTenant,
       });
       storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
     }).immediate();
@@ -9586,7 +9694,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // releaseLeads:false means the hand-off already happened out of band: the
       // transition leaves every door where it is, so there is nothing to write.
       released = releaseLeads
-        ? storage.bulkReleaseTerritoryLeadsFromRep({ territoryId: t.id, repId, at, tenantId: tid })
+        ? storage.bulkReleaseTerritoryLeadsFromRep({ territoryId: t.id, repId, at, tenantId: rowTenant })
         : { changed: 0, leadIds: [] as number[] };
     }).immediate();
     const leadsReleased = released.changed;
@@ -9619,7 +9727,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     const at = new Date().toISOString();
     const outcome = scanSvc.recordTerritoryOutcome(tid ?? getDefaultTenantId(), t.id, (t as any).createdAt ?? null);
-    storage.updateTerritory(t.id, { status: "archived", archivedAt: at, updatedAt: at, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, tid);
+    // Row-tenant condition: adopted (NULL-tenant) areas silently no-op'd here.
+    storage.updateTerritory(t.id, { status: "archived", archivedAt: at, updatedAt: at, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, ((t as any).tenantId ?? undefined) as number | undefined);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "archived", { outcome });
     res.json({ ok: true, status: "archived", outcome });
   });
@@ -9857,7 +9966,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     return out;
   }
   function territoryProgressContext(tid: number | undefined) {
-    const key = String(tid ?? "all");
+    // The territory VERSION rides the key: the bounded fetch below depends on
+    // the territory set (its bbox union), so a freshly drawn or enlarged area
+    // must bust this memo immediately - with a tenant-only key it read ZERO
+    // doors for up to 10s right after creation, which is exactly when the
+    // manager is looking at it. Lead/knock staleness keeps the 10s TTL.
+    const key = `${tid ?? "all"}|${territoryVersionStamp()}`;
     const hit = territoryProgressCtxMemo.get(key);
     if (hit && Date.now() - hit.at < 10_000) return hit.ctx;
     // BOUNDED hydration. Every row computation below filters to its own

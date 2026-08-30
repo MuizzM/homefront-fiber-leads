@@ -95,7 +95,7 @@ describe("the action panel opens on the SHAPE, not on what it caught", () => {
     // hold none of the loop's pins while the ring still resolves thousands —
     // forcing the panel to "area" there told the manager the ground was empty.
     expect(src).toMatch(
-      /lassoHasLeads \|\|\s*lassoAction === "create" \|\|\s*\(lassoAction === "assign" && lassoAssignCount > 0\)\s*\? lassoAction\s*: "area"/,
+      /lassoHasLeads \|\|\s*lassoAction === "create" \|\|\s*\(lassoAction === "assign" && \(lassoAssignCount > 0 \|\| lassoPreviewPending\)\)\s*\? lassoAction\s*: "area"/,
     );
     for (const key of ["assign", "status", "mark", "area", "create"]) {
       expect(src).toContain(`{lassoEffectiveAction === "${key}" && (`);

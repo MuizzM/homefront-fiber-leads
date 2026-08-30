@@ -159,6 +159,49 @@ All work is on `claude/production-overhaul`; commits are per-milestone with
 explicit paths staged (shared worktree - never `git add <dir>`). Migrations are
 additive; reverting a commit reverts its behavior. No production state touched.
 
+## Adversarial review dispositions (18-agent workflow, 3 lenses + verification)
+
+15 raw findings; 12 confirmed real by independent adversarial verification
+(3 refuted). Every confirmed finding: FIXED with a regression test where a
+test can reach it. Deduplicated:
+
+1. Preview paid up to 400k-row hydration before AREA_TOO_LARGE - FIXED:
+   index-only count probe first (reuses the sampler's window-count seam).
+2. Progress-context memo missed the territory set its bounded fetch depends
+   on (new area read 0 doors for 10s) - FIXED: territoryVersionStamp in key.
+3. Lasso chips lit states the map's status filter excluded - FIXED: chips
+   render only the refinement domain.
+4. Headline used assign semantics while Status/Mark act on client ids -
+   FIXED: count follows the active action.
+5. Panel flashed to the Area flow while the preview counted - FIXED: pending
+   keeps Assign viable.
+6. Server clip was team_lead-only; the client clips ANY non-admin/non-rep
+   with a linked member row (managers included) - FIXED to mirror literally,
+   pinned by a linked-manager test.
+7. opId cache missed IN-FLIGHT duplicates (the exact retry it was built for)
+   - FIXED: a same-op retry joins the running attempt's promise; a recycled
+   opId with a different body hash is refused (OP_REUSED). Both tested,
+   including a nine-chunk concurrent join.
+8. Adopted-area transactions flipped the row but skipped NULL-tenant doors
+   (caller-tenant filter) - FIXED: door writes follow the row's tenant;
+   also closed the same latent no-op on /complete, /archive and next-pass.
+9. scan/deploy id branch lost the duplicate-id dedupe - FIXED.
+
+Directive extensions in the same batch: in-transaction cap enforcement
+extended to scan/deploy, the raw territory create, and next-pass reassign
+(all six grant paths now re-check under the write lock); auth-freshness
+tests pin that deactivation/demotion/promotion land on the next request;
+docs/OPEN_DECISIONS-2026-08-30.md holds the three deferred decisions
+(audit retention, FTS5, assigned_territory_id) as concrete proposals.
+
 ## Result
 
-(pending)
+All milestones complete. Final state: 10 commits on
+claude/production-overhaul; agent-verify full green; browser-verified lasso
+preview flow on the .dev-verify fixture (assign 34 -> undo -> byte-exact
+restoration). Remaining risks live in docs/OPEN_DECISIONS-2026-08-30.md plus:
+cross-process cap enforcement is serialized by BEGIN IMMEDIATE and verified
+by reasoning + in-process tests, not by a true two-process integration test
+(single-file SQLite makes that harness heavy); production load numbers for
+the new preview endpoint under 20-manager concurrency remain to be observed
+via the existing slow-statement log.

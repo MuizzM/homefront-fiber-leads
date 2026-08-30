@@ -29,6 +29,14 @@ export function bumpTerritoryVersion(): void {
   version++;
 }
 
+/** The current stamp, for memos whose CONTENT depends on the territory set -
+ *  the progress context's bounded lead fetch is keyed on it so a freshly
+ *  drawn or moved area is visible on the next read instead of reading zero
+ *  doors for the memo's TTL. */
+export function territoryVersionStamp(): number {
+  return version;
+}
+
 
 interface Entry {
   version: number;

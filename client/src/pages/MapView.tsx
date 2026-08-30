@@ -1916,14 +1916,19 @@ export default function MapView() {
   // unsampled doors, and a toggled-off state keeps its count so it can come
   // back), else the client sample's summary. Canonical state order either way.
   const lassoChipRows = useMemo<Array<{ ds: PinDisplayState; count: number }>>(() => {
+    // Chips are the refinement DOMAIN: with the map's status filter active the
+    // selection can only ever contain that state, so chips for other states
+    // (which the server's pre-refinement byState still counts) would light up
+    // as toggleable while toggling them changed nothing.
+    const domain = filterStatus === "all" ? null : new Set([filterStatus]);
     const server = lassoPreview?.byState;
     if (server) {
       return (Object.keys(STATE_COLORS) as PinDisplayState[])
-        .filter((ds) => (server[ds] ?? 0) > 0)
+        .filter((ds) => (server[ds] ?? 0) > 0 && (!domain || domain.has(ds)))
         .map((ds) => ({ ds, count: server[ds]! }));
     }
-    return lassoSummary;
-  }, [lassoPreview, lassoSummary]);
+    return domain ? lassoSummary.filter(({ ds }) => domain.has(ds)) : lassoSummary;
+  }, [lassoPreview, lassoSummary, filterStatus]);
   // Doors in the selection ALREADY held by the picked rep — the projection in
   // the picker subtracts them, otherwise "will have N doors" double-counts.
   const lassoOwnedByChosen = useMemo(() => {
@@ -1942,9 +1947,15 @@ export default function MapView() {
   const lassoEffectiveAction =
     lassoHasLeads ||
     lassoAction === "create" ||
-    (lassoAction === "assign" && lassoAssignCount > 0)
+    (lassoAction === "assign" && (lassoAssignCount > 0 || lassoPreviewPending))
       ? lassoAction
       : "area";
+  // The headline follows the ACTIVE action's semantics: Assign commits the
+  // server-resolved set (unsampled doors included), Status/Mark post the
+  // client-held ids - one number claiming to describe both misled whichever
+  // flow it wasn't computed for.
+  const lassoHeadlineCount =
+    lassoEffectiveAction === "assign" && lassoPreview ? lassoPreview.total : lassoActive.length;
 
   // Rename an area — the friendly name reps see on their map. Server keeps an
   // audit trail (territory "renamed" event) and custom names survive reassign.
@@ -8124,10 +8135,11 @@ export default function MapView() {
                       {/* Server truth once the preview answers — it counts
                           doors a sampled viewport never shipped, under every
                           active lens. The client sample stands in while it
-                          loads (marked as still counting) or if it fails. */}
-                      {lassoPreview ? lassoPreview.total : lassoActive.length}{" "}
-                      {(lassoPreview ? lassoPreview.total : lassoActive.length) === 1 ? "door" : "doors"} selected
-                      {!lassoPreview &&
+                          loads (marked as still counting), if it fails, or
+                          when the active action (Status/Mark) is id-based. */}
+                      {lassoHeadlineCount}{" "}
+                      {lassoHeadlineCount === 1 ? "door" : "doors"} selected
+                      {lassoHeadlineCount === lassoActive.length &&
                         lassoHasLeads &&
                         lassoActive.length !== lassoSelected.length && (
                           <span className="text-white/55 font-medium">
@@ -8135,7 +8147,7 @@ export default function MapView() {
                             of {lassoSelected.length}
                           </span>
                         )}
-                      {lassoPreviewPending && (
+                      {lassoEffectiveAction === "assign" && lassoPreviewPending && (
                         <span className="text-white/55 font-medium"> · counting</span>
                       )}
                     </span>
