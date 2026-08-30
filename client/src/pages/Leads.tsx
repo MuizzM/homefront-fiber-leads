@@ -496,7 +496,7 @@ const ONBOARDING_STAGE_LABEL: Record<string, string> = {
   failed: "Delivery failed",
 };
 
-function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign = false, onboardingStage, onAssign, onEdit, onQualify, onMap }: {
+function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign = false, onboardingStage, onAssign, onEdit, onQualify, onMap, onKnock }: {
   lead: Lead;
   open: boolean;
   onClose: () => void;
@@ -508,6 +508,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
   onEdit?: () => void;
   onQualify?: () => void;
   onMap?: () => void;
+  /** Manager quick-log. The KnockLogger dialog existed fully built (idempotent
+   *  submit, assigned-rep default) but a row-actions redesign dropped its only
+   *  entry point, leaving it unreachable dead code. */
+  onKnock?: () => void;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -626,6 +630,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
               a dead end for a rep whose only other action here is Navigate. */}
           {onMap && <button onClick={onMap} className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Field map</button>}
           {canAssign && <button onClick={onAssign} className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{current.assignedRepId ? "Reassign" : "Assign"}</button>}
+          {canEdit && onKnock && <button onClick={onKnock} data-testid="panel-log-knock" className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Log knock</button>}
           {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-11 lg:h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"> Qualify</button>}
         </div>
 
@@ -1660,6 +1665,7 @@ export default function Leads() {
           onEdit={() => { setEditLead(intelLead); setIntelLead(null); }}
           onQualify={() => updateMutation.mutate({ id: intelLead.id, data: { leadStatus: "interested" } })}
           onMap={() => { const target = intelLead; setIntelLead(null); openLeadOnMap(target); }}
+          onKnock={() => { const target = intelLead; setIntelLead(null); setKnockLead(target); }}
         />
       )}
     </div>
