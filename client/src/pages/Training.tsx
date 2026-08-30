@@ -170,7 +170,7 @@ function LessonQuiz({ lesson, onScore }: { lesson: TrainingLesson; onScore: (sco
                     <span
                       className={cn(
                         "grid h-5 w-5 shrink-0 place-items-center rounded-full border text-2xs font-bold",
-                        answered && isCorrect ? "border-success bg-success text-white"
+                        answered && isCorrect ? "border-success bg-success text-success-foreground"
                           : answered && isPicked ? "border-destructive bg-destructive text-white"
                           : "border-border text-muted-foreground",
                       )}
@@ -951,7 +951,7 @@ export default function Training() {
                           aria-hidden="true"
                           className={cn(
                             "grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[11px] font-bold",
-                            done ? "border-success bg-success text-white" : "border-border bg-background text-muted-foreground",
+                            done ? "border-success bg-success text-success-foreground" : "border-border bg-background text-muted-foreground",
                           )}
                         >
                           {done && <Check className="h-3.5 w-3.5" />}

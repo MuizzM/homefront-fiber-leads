@@ -7,6 +7,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
+import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/hooks/use-toast";
 import { Play, Square, X, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -53,14 +54,16 @@ interface ActiveScan {
   total: number; done: number; newFiber: number; error?: string;
 }
 
+// Semantic tokens: this page renders on the light default, where the raw
+// -400 steps measured 1.5-2.4:1 (the audit's step-1 blocker).
 const PRIORITY_BADGE = {
-  critical: "bg-rose-500/15 text-rose-400 border-rose-500/20",
-  high:     "bg-amber-500/15 text-amber-400 border-amber-500/20",
-  medium:   "bg-sky-500/15 text-sky-400 border-sky-500/20",
+  critical: "bg-destructive/15 text-destructive border-destructive/20",
+  high:     "bg-warning/15 text-warning border-warning/20",
+  medium:   "bg-info/15 text-info border-info/20",
 };
 const STATUS_DOT = {
-  active:  "bg-emerald-400 animate-pulse",
-  planned: "bg-amber-400",
+  active:  "bg-success animate-pulse",
+  planned: "bg-warning",
   complete: "bg-muted-foreground",
 };
 
@@ -88,7 +91,7 @@ export default function USAScanner() {
   const qc = useQueryClient();
 
   // Evidence-backed carrier market catalog
-  const { data: marketsData, isLoading: marketsLoading } = useQuery<MarketsData>({
+  const { data: marketsData, isLoading: marketsLoading, isError: marketsError, refetch: refetchMarkets } = useQuery<MarketsData>({
     queryKey: ["/api/markets/kinetic"],
     queryFn: async () => (await apiRequest("GET", "/api/markets/kinetic")).json(),
     staleTime: Infinity,
@@ -308,7 +311,7 @@ export default function USAScanner() {
           </div>
           <div className="px-4 py-3">
             <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Critical</div>
-            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-rose-400">{criticalCount.toLocaleString()}</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-destructive">{criticalCount.toLocaleString()}</div>
           </div>
           <div className="px-4 py-3">
             <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Active Builds</div>
@@ -325,8 +328,8 @@ export default function USAScanner() {
       {activeScan && (
         <Card className="border-border bg-card overflow-hidden">
           <div className={`h-0.5 w-full ${
-            activeScan.status === "error" ? "bg-rose-500" :
-            activeScan.status === "done"  ? "bg-emerald-500" :
+            activeScan.status === "error" ? "bg-destructive" :
+            activeScan.status === "done"  ? "bg-success" :
             "bg-primary"
           }`} />
           <CardContent className="pt-4 pb-4 space-y-4">
@@ -341,17 +344,17 @@ export default function USAScanner() {
                     {activeScan.status === "pulling" && <span className="text-muted-foreground ml-2 font-normal"> - harvesting addresses…</span>}
                     {activeScan.status === "scanning" && activeScan.total > 0 &&
                       <span className="text-muted-foreground ml-2 font-normal tabular-nums"> - {activeScan.done.toLocaleString()} / {activeScan.total.toLocaleString()}</span>}
-                    {activeScan.status === "done" && <span className="text-emerald-400 ml-2 font-normal"> - complete</span>}
+                    {activeScan.status === "done" && <span className="text-success ml-2 font-normal"> - complete</span>}
                   </div>
                   {activeScan.newFiber > 0 && (
                     <div className="flex items-center gap-1.5 mt-1">
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
                         {activeScan.newFiber} confirmed fresh leads
                       </span>
                       <span className="text-xs text-muted-foreground">saved to map</span>
                     </div>
                   )}
-                  {activeScan.error && <p className="text-xs text-rose-400 mt-1">{activeScan.error}</p>}
+                  {activeScan.error && <p className="text-xs text-destructive mt-1">{activeScan.error}</p>}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -390,11 +393,11 @@ export default function USAScanner() {
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground">in-flight</div>
                 </div>
                 <div className="px-3 py-2">
-                  <div className="text-lg font-semibold tracking-tight font-mono tabular-nums text-emerald-400">{scannerState.diagNewFiber}</div>
+                  <div className="text-lg font-semibold tracking-tight font-mono tabular-nums text-success">{scannerState.diagNewFiber}</div>
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground">primary matches</div>
                 </div>
                 <div className="px-3 py-2">
-                  <div className={`text-lg font-semibold tracking-tight font-mono tabular-nums ${scannerState.diagHttpError > 5 ? "text-rose-400" : "text-muted-foreground"}`}>
+                  <div className={`text-lg font-semibold tracking-tight font-mono tabular-nums ${scannerState.diagHttpError > 5 ? "text-destructive" : "text-muted-foreground"}`}>
                     {scannerState.diagHttpError}
                   </div>
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground">errors</div>
@@ -459,6 +462,9 @@ export default function USAScanner() {
         <div className="flex items-center justify-center py-12 text-muted-foreground text-sm gap-2">
           <Loader2 className="w-4 h-4 animate-spin" /> Loading verified carrier markets…
         </div>
+      ) : marketsError ? (
+        /* A failed catalog fetch must never read as an empty market list. */
+        <ErrorState title="Couldn't load the carrier markets" onRetry={() => refetchMarkets()} testId="markets-error" />
       ) : (
         <div className="space-y-3">
           {states.map(abbr => {
@@ -477,9 +483,9 @@ export default function USAScanner() {
                 >
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${
-                      hasCritical ? "bg-rose-500/10 border-rose-500/20" : "bg-secondary border-border"
+                      hasCritical ? "bg-destructive/10 border-destructive/20" : "bg-secondary border-border"
                     }`}>
-                      <span className={`text-xs font-semibold tracking-tight ${hasCritical ? "text-rose-400" : "text-muted-foreground"}`}>{abbr}</span>
+                      <span className={`text-xs font-semibold tracking-tight ${hasCritical ? "text-destructive" : "text-muted-foreground"}`}>{abbr}</span>
                     </div>
                     <div className="text-left">
                       <div className="font-semibold tracking-tight text-sm text-foreground">
@@ -492,8 +498,8 @@ export default function USAScanner() {
                   </div>
                   <div className="flex items-center gap-2">
                     {criticalInState > 0 && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-medium text-rose-400 tabular-nums">
-                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                      <span className="inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive tabular-nums">
+                        <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
                         {criticalInState} critical
                       </span>
                     )}
@@ -533,7 +539,7 @@ export default function USAScanner() {
                                   {market.addressCount.toLocaleString()} tracked · {market.freshWeek.toLocaleString()} provisional flips this week
                                 </span>
                                 <span className="tabular-nums">{market.buildDate}</span>
-                                <span className={`font-medium ${market.buildStatus === "active" ? "text-emerald-400" : "text-amber-400"}`}>
+                                <span className={`font-medium ${market.buildStatus === "active" ? "text-success" : "text-warning"}`}>
                                   {market.buildStatus}
                                 </span>
                               </div>
@@ -542,12 +548,12 @@ export default function USAScanner() {
 
                           <div className="flex items-center gap-2 flex-shrink-0">
                             {isRunning && activeScan.newFiber > 0 && (
-                              <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1 tabular-nums">
+                              <span className="text-xs text-success font-semibold flex items-center gap-1 tabular-nums">
                                 {activeScan.newFiber}
                               </span>
                             )}
                             {isDone && !isRunning && (
-                              <span className="text-xs text-emerald-400 flex items-center gap-1">
+                              <span className="text-xs text-success flex items-center gap-1">
                                  done
                               </span>
                             )}

@@ -36,6 +36,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
 import { BuyerScorePill, BuyerScoreTile, isClosedForScoring } from "@/components/BuyerScorePill";
 import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS, type PinDisplayState } from "@shared/knock";
+import { STATUS_CONFIG } from "@shared/statusConfig";
 import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 import { titleCaseAddress } from "@/lib/leadDisplay";
@@ -102,13 +103,17 @@ function leadStateChip(lead: { leadStatus: string; lastOutcome?: string | null }
   }
 }
 
+// Labels come from the canonical vocabulary (shared/statusConfig) wherever it
+// defines one - this table had drifted to a THIRD spelling of Follow-up
+// ("Follow Up" here, "Follow up" in the row hint, "Follow-up" everywhere
+// else). Only legacy `contacted` (absent from STATUS_CONFIG by design) keeps a
+// local label.
 const STATUS_LABEL: Record<string, string> = {
-  prospect: "Prospect",
   contacted: "Contacted",
-  interested: "Interested",
-  sold: "Sold",
-  not_interested: "Not Interested",
-  follow_up: "Follow Up",
+  ...Object.fromEntries(
+    (["prospect", "interested", "sold", "not_interested", "follow_up"] as const)
+      .map((k) => [k, STATUS_CONFIG[k].label]),
+  ),
 };
 
 // Fallback ramp keyed by RAW leadStatus — reached only when pinDisplayState
@@ -871,7 +876,7 @@ const leadSource = (lead: Lead) => lead.dfAddressId ? "Fiber scan" : lead.assign
 const nextAction = (lead: Lead) => {
   if (!lead.assignedRepId) return { label: "Assign owner", tone: "text-warning" };
   if (lead.leadStatus === "prospect") return { label: "First contact", tone: "text-primary" };
-  if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-warning" };
+  if (lead.leadStatus === "follow_up") return { label: STATUS_CONFIG.follow_up.label, tone: "text-warning" };
   if (lead.leadStatus === "interested") return { label: "Close sale", tone: "text-success" };
   if (lead.leadStatus === "sold") return { label: "Complete", tone: "text-muted-foreground" };
   // Closed doors ("not interested" and its "already a customer" disambiguation)

@@ -584,12 +584,12 @@ function OverrideEarningsCard() {
 // the fill stays visible against the light track.
 const RANK_TINTS: Record<string, { chip: string; bar: string }> = {
   Bronze:   { chip: "bg-warning/[0.12] text-warning",   bar: "bg-warning [.light_&]:bg-warning" },
-  Silver:   { chip: "bg-slate-400/20 text-slate-300 [.light_&]:text-slate-600",   bar: "bg-slate-300 [.light_&]:bg-slate-500" },
+  Silver:   { chip: "bg-secondary text-muted-foreground",   bar: "bg-muted-foreground" },
   Gold:     { chip: "bg-warning/[0.12] text-warning", bar: "bg-warning [.light_&]:bg-warning" },
   Platinum: { chip: "bg-info/[0.12] text-info",     bar: "bg-info [.light_&]:bg-info" },
 };
 const rankTint = (name: string) =>
-  RANK_TINTS[name] ?? { chip: "bg-violet-400/20 text-violet-300 [.light_&]:text-violet-700", bar: "bg-violet-300 [.light_&]:bg-violet-600" }; // Diamond+
+  RANK_TINTS[name] ?? { chip: "bg-primary/[0.12] text-primary", bar: "bg-primary" }; // Diamond+
 
 function RankChip({ rank, size = "md" }: { rank: Rank; size?: "sm" | "md" }) {
   const tint = rankTint(rank.name);
@@ -776,7 +776,9 @@ function WeekView({ data }: { data: WeekResponse }) {
     ? { label: "Finalized early", cls: "bg-warning/10 text-warning", icon: "lock" as const }
     : WEEK_STATE[stateKey] ?? WEEK_STATE.OPEN;
   // The rate a rep earns on their FIRST sale (never render "$0 per sale").
-  const entryRateCents = isTiered ? (tiers[0]?.rateCents ?? 15000) : (structure?.flatRateCents ?? 0);
+  // No first tier means the plan is misconfigured - say so, never fabricate a
+  // $150.00 "current rate" a rep would treat as their real pay.
+  const entryRateCents = isTiered ? (tiers[0]?.rateCents ?? null) : (structure?.flatRateCents ?? 0);
 
   return (
     <>
@@ -805,7 +807,7 @@ function WeekView({ data }: { data: WeekResponse }) {
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
             {count === 0
-              ? <>No qualified sales yet · starts at {usd(entryRateCents)} per sale</>
+              ? <>{entryRateCents == null ? "No qualified sales yet · rate not set - ask your manager" : <>No qualified sales yet · starts at {usd(entryRateCents)} per sale</>}</>
               : <>{count} qualified sale{count === 1 ? "" : "s"} · {usd(rateCents)} per sale{isTiered && comp?.tierLabel ? ` · ${comp.tierLabel}` : ""}</>}
           </div>
           {stateKey === "OPEN" && (
@@ -834,7 +836,7 @@ function WeekView({ data }: { data: WeekResponse }) {
         {/* Hairline-divided metric strip */}
         <div className="grid grid-cols-3 divide-x divide-border border-t border-border">
           <MetricCell label="Qualified" value={String(count)} />
-          <MetricCell label="Per sale" value={usd(count === 0 ? entryRateCents : rateCents)} accent />
+          <MetricCell label="Per sale" value={count === 0 ? (entryRateCents == null ? "-" : usd(entryRateCents)) : usd(rateCents)} accent />
           <MetricCell label="Gross commission" value={usd(grossCents)} />
         </div>
 
@@ -842,7 +844,7 @@ function WeekView({ data }: { data: WeekResponse }) {
         {(data.adjustments?.length ?? 0) > 0 && (
           <div className="border-t border-border p-4 space-y-1.5" data-testid="hero-adjustments">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Gross commission ({count} × {usd(rateCents || entryRateCents)})</span>
+              <span className="text-muted-foreground">Gross commission ({count} × {usd(rateCents || entryRateCents || 0)})</span>
               <span className="tabular-nums text-foreground">{usd(grossCents)}</span>
             </div>
             {data.adjustments!.map(a => (

@@ -8,6 +8,7 @@ import {
 } from "@/lib/kineticScannerApi";
 import { KineticScannerMap } from "@/components/kinetic/KineticScannerMap";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/hooks/use-toast";
 import { summarizeEvidenceWorker } from "@/lib/scanYield";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
@@ -709,7 +710,7 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
     if (filter === "copper") p.set("copperUpgradeCandidateOnly", "true");
     return p;
   }, [search, state, filter, page]);
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["kinetic-addresses", params.toString()],
     queryFn: () => kineticScannerApi.addresses(params),
   });
@@ -764,6 +765,12 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-12 rounded-lg" />
           ))}
+        </div>
+      ) : isError ? (
+        /* A failed fetch must never read as "no addresses match" - the ledger
+           below is unknown, not empty. */
+        <div className="p-3">
+          <ErrorState title="Couldn't load the address ledger" onRetry={() => refetch()} testId="kinetic-addresses-error" />
         </div>
       ) : !data?.items.length ? (
         <div className="m-3 rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
@@ -885,10 +892,12 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
   );
 }
 function Hotspots() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["kinetic-hotspots"],
     queryFn: kineticScannerApi.hotspots,
   });
+  if (isError)
+    return <ErrorState title="Couldn't load hotspots" onRetry={() => refetch()} testId="kinetic-hotspots-error" />;
   if (isLoading)
     return (
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -934,11 +943,13 @@ function Hotspots() {
   );
 }
 function Changes() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["kinetic-changes"],
     queryFn: kineticScannerApi.changes,
     refetchInterval: 15_000,
   });
+  if (isError)
+    return <ErrorState title="Couldn't load field changes" onRetry={() => refetch()} testId="kinetic-changes-error" />;
   if (isLoading)
     return (
       <div className="space-y-2">
@@ -981,11 +992,13 @@ function Changes() {
   );
 }
 function Jobs() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["kinetic-state"],
     queryFn: kineticScannerApi.state,
     refetchInterval: 5000,
   });
+  if (isError)
+    return <ErrorState title="Couldn't load scan jobs" onRetry={() => refetch()} testId="kinetic-jobs-error" />;
   if (isLoading)
     return (
       <div className="space-y-2">

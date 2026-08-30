@@ -67,8 +67,14 @@ export default {
         ring: "hsl(var(--ring) / <alpha-value>)",
         // Semantic status colors — replaces ad-hoc raw emerald/amber usage so
         // both themes stay AA (tokens defined in index.css :root/.light).
-        success: "hsl(var(--success) / <alpha-value>)",
-        warning: "hsl(var(--warning) / <alpha-value>)",
+        success: {
+          DEFAULT: "hsl(var(--success) / <alpha-value>)",
+          foreground: "hsl(var(--success-foreground) / <alpha-value>)",
+        },
+        warning: {
+          DEFAULT: "hsl(var(--warning) / <alpha-value>)",
+          foreground: "hsl(var(--warning-foreground) / <alpha-value>)",
+        },
         info: "hsl(var(--info) / <alpha-value>)",
         // No <alpha-value>: --overlay already carries its own alpha, so `bg-overlay`
         // is the whole scrim and no call site needs to pick an opacity.

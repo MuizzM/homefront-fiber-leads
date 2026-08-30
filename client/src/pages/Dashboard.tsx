@@ -524,10 +524,10 @@ export default function Dashboard() {
         <section className="space-y-2.5">
           <h2 className={EYEBROW}>Quick actions</h2>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <a href="#/city-scan" aria-label="City Scan - find new fiber" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <a href="#/fiber" aria-label="Fiber tools - scans and new fiber" className="group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               
               <div>
-                <div className="text-sm font-semibold text-foreground">City Scan</div>
+                <div className="text-sm font-semibold text-foreground">Fiber tools</div>
                 <div className="text-xs text-muted-foreground">Find new fiber</div>
               </div>
               

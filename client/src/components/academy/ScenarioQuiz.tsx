@@ -111,7 +111,7 @@ export default function ScenarioQuiz({
                   aria-hidden="true"
                   className={cn(
                     "mt-px grid h-5 w-5 shrink-0 place-items-center rounded-full border text-2xs font-bold",
-                    answered && isCorrect ? "border-success bg-success text-white"
+                    answered && isCorrect ? "border-success bg-success text-success-foreground"
                       : answered && isPicked ? "border-destructive bg-destructive text-white"
                       : "border-border text-muted-foreground",
                   )}

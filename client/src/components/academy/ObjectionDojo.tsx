@@ -87,7 +87,7 @@ export default function ObjectionDojo({
                   aria-hidden="true"
                   className={cn(
                     "grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[11px] font-bold",
-                    done ? "border-success bg-success text-white" : "border-border bg-background text-muted-foreground",
+                    done ? "border-success bg-success text-success-foreground" : "border-border bg-background text-muted-foreground",
                   )}
                 >
                   {done && <Check className="h-3.5 w-3.5" />}

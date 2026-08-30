@@ -106,6 +106,12 @@
     --success:      160 84% 42%;
     --warning:      38 92% 55%;
     --info:         202 80% 62%;
+    /* Ink ON the signal fills. Call sites guessed text-white, which measures
+       ~2.0:1 on this theme's bright success fill; the fills are light enough
+       here that dark ink is the readable pairing. Light theme overrides both
+       to white below (its fills are deep). */
+    --success-foreground: 216 22% 6%;
+    --warning-foreground: 216 22% 6%;
     /* Modal scrim. Complete colour including alpha on purpose: the opacity is
        part of the decision, and leaving it to call sites is exactly how one
        effect ended up spelled six ways (black/40 through black/90). */
@@ -230,6 +236,8 @@
 
     --success:      161 94% 22%;
     --warning:      32 95% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning-foreground: 0 0% 100%;
     /* Progress and in-flight state. Deliberately a brighter, more cyan blue
        than --primary (211 68% 26%): primary is structure, info is a signal,
        and at a 3px rail the two must not read as the same colour. 4.9:1 on
@@ -266,6 +274,8 @@
     --ring:         211 68% 26%;
     --success:      161 94% 22%;
     --warning:      32 95% 30%;
+    --success-foreground: 0 0% 100%;
+    --warning-foreground: 0 0% 100%;
     /* Progress and in-flight state. Deliberately a brighter, more cyan blue
        than --primary (211 68% 26%): primary is structure, info is a signal,
        and at a 3px rail the two must not read as the same colour. 4.9:1 on
@@ -735,6 +745,8 @@
     --ring: 172 44% 52%;
     --success: 160 84% 42%;
     --warning: 38 92% 55%;
+    --success-foreground: 216 22% 6%;
+    --warning-foreground: 216 22% 6%;
     --info: 202 80% 62%;
     --accent-gold-text: 38 92% 68%;
     --accent-gold-soft: 38 60% 14%;

@@ -4,6 +4,7 @@ import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 
 // Backend base — empty string in dev, proxy path after deploy (rewritten by deploy_website)
 const _API_BASE: string = ("__PORT_5000__" as string).startsWith("__") ? "" : ("__PORT_5000__" as string);
+import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/hooks/use-toast";
 import { RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,9 +52,13 @@ interface OverpassResult {
 }
 
 const VERDICT_CONFIG: Record<FreshFiberVerdict, { answer: string; label: string; dot: string; pill: string }> = {
-  fresh: { answer: "YES", label: "Fresh fiber", dot: "bg-emerald-400", pill: "bg-emerald-500/15 text-emerald-400 ring-emerald-500/25" },
-  not_fresh: { answer: "NO", label: "Not fresh fiber", dot: "bg-slate-400", pill: "bg-slate-500/15 text-slate-300 ring-slate-500/25" },
-  unverified: { answer: "RECHECK", label: "Couldn't verify", dot: "bg-amber-400", pill: "bg-amber-500/15 text-amber-400 ring-amber-500/25" },
+  // Semantic tokens, not raw dark-ground steps: this page renders on the
+  // light default, where text-emerald-400 measured ~2.0:1 and text-slate-300
+  // ~1.4:1 - the verdict word the tool exists to produce was the least
+  // readable thing on it.
+  fresh: { answer: "YES", label: "Fresh fiber", dot: "bg-success", pill: "bg-success/15 text-success ring-success/25" },
+  not_fresh: { answer: "NO", label: "Not fresh fiber", dot: "bg-muted-foreground", pill: "bg-secondary text-muted-foreground ring-border" },
+  unverified: { answer: "RECHECK", label: "Couldn't verify", dot: "bg-warning", pill: "bg-warning/15 text-warning ring-warning/25" },
 };
 
 type FilterKey = "all" | FreshFiberVerdict;
@@ -131,7 +136,7 @@ export default function CityScanner() {
   });
 
   // Persistent address-pool stats (harvest-once, re-scan-for-free engine)
-  const { data: poolStats } = useQuery<{ total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null }>({
+  const { data: poolStats, isError: poolStatsError, refetch: refetchPoolStats } = useQuery<{ total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null }>({
     queryKey: ["/api/scan/pool-stats"],
     queryFn: async () => (await apiRequest("GET", "/api/scan/pool-stats")).json(),
     // Pool counters only move during a scan — fast while scanning, slow when idle.
@@ -470,6 +475,11 @@ export default function CityScanner() {
       </div>
 
       {/* Address-pool metric strip */}
+      {/* A failed pool fetch renders as a failure, not as the panel silently
+          vanishing (which read as "the pool is empty"). */}
+      {poolStatsError && !poolStats && (
+        <ErrorState title="Couldn't load the address pool" onRetry={() => refetchPoolStats()} testId="pool-stats-error" />
+      )}
       {poolStats && poolStats.total > 0 && (
         <div className="rounded-xl border border-border bg-card">
           <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-border">
@@ -551,8 +561,8 @@ export default function CityScanner() {
                   <span className="text-sm font-semibold tabular-nums text-foreground">{overpassResult.count.toLocaleString()} addresses</span>
                   <span className="text-xs text-muted-foreground ml-2">in {overpassResult.cityName}</span>
                 </div>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Ready to scan
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-success/15 px-2.5 py-1 text-xs font-medium text-success">
+                  <span className="w-1.5 h-1.5 rounded-full bg-success" /> Ready to scan
                 </span>
                 {/* No static-map preview: it was a billable Mapbox Static Images
                     request (with a hardcoded token) for pure decoration. The scan
@@ -668,7 +678,7 @@ export default function CityScanner() {
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">in-flight</div>
               </div>
               <div className="px-4 py-3">
-                <div className="text-lg font-semibold font-mono tabular-nums text-emerald-400">{scannerState.diagNewFiber}</div>
+                <div className="text-lg font-semibold font-mono tabular-nums text-success">{scannerState.diagNewFiber}</div>
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">primary matches</div>
               </div>
               <div className="px-4 py-3">
@@ -693,16 +703,16 @@ export default function CityScanner() {
         <div className="overflow-hidden rounded-2xl border border-border bg-card">
           <div className="grid grid-cols-3 divide-x divide-border">
             <div className="p-4 text-center sm:p-5">
-              <div className="text-3xl font-bold tracking-tight tabular-nums text-emerald-400">{summary.fresh}</div>
-              <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-400/80">Yes · Confirmed fresh</div>
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-success">{summary.fresh}</div>
+              <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-success">Yes · Confirmed fresh</div>
             </div>
             <div className="p-4 text-center sm:p-5">
-              <div className="text-3xl font-bold tracking-tight tabular-nums text-slate-300">{summary.not_fresh}</div>
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-muted-foreground">{summary.not_fresh}</div>
               <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">No · Not fresh</div>
             </div>
             <div className="p-4 text-center sm:p-5">
-              <div className="text-3xl font-bold tracking-tight tabular-nums text-amber-400">{summary.unverified}</div>
-              <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-amber-400/80">Recheck</div>
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-warning">{summary.unverified}</div>
+              <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-warning">Recheck</div>
             </div>
           </div>
           <div className="border-t border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
@@ -747,12 +757,12 @@ export default function CityScanner() {
                 key={`${r.address}-${i}`}
                 data-testid={`result-row-${i}`}
                 data-verdict={verdict}
-                className={`render-lazy rounded-2xl border bg-card px-4 py-3.5 ${verdict === "fresh" ? "border-emerald-500/30" : verdict === "unverified" ? "border-amber-500/25" : "border-border"}`}
+                className={`render-lazy rounded-2xl border bg-card px-4 py-3.5 ${verdict === "fresh" ? "border-success/30" : verdict === "unverified" ? "border-warning/25" : "border-border"}`}
               >
                 <div className="flex items-center gap-3">
                   
                   <div className="flex-1 min-w-0">
-                    <div className={`text-[13px] font-bold tracking-wide ${verdict === "fresh" ? "text-emerald-400" : verdict === "unverified" ? "text-amber-400" : "text-slate-300"}`}>{cfg.answer} · {r.verdictLabel ?? cfg.label}</div>
+                    <div className={`text-[13px] font-bold tracking-wide ${verdict === "fresh" ? "text-success" : verdict === "unverified" ? "text-warning" : "text-muted-foreground"}`}>{cfg.answer} · {r.verdictLabel ?? cfg.label}</div>
                     <div className="mt-0.5 truncate text-sm font-semibold text-foreground">{r.address}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">{r.city}, {r.state} {r.zip}</div>
                     {r.verdictMessage && <div className="mt-1 text-[11px] leading-snug text-muted-foreground">{r.verdictMessage}</div>}
