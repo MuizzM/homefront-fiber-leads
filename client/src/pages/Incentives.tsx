@@ -170,7 +170,10 @@ function HeatMeter({ heat, testId }: { heat: number; testId?: string }) {
     <div className="flex items-center gap-2" data-testid={testId}>
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-secondary" role="meter"
            aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Heat score">
-        <div className="h-full rounded-full bg-gold" style={{ width: `${pct}%` }} />
+        {/* One gold meaning per screen: the fill earns gold only in the money
+            band, matching heatTone - a cold 8% bar in gold diluted the hero
+            total's signal on the same screen. */}
+        <div className={`h-full rounded-full ${pct >= 70 ? "bg-gold" : pct >= 40 ? "bg-warning" : "bg-muted-foreground/50"}`} style={{ width: `${pct}%` }} />
       </div>
       <span className={cn("w-9 shrink-0 text-right text-sm font-bold tabular-nums", heatTone(pct))}>{pct}</span>
     </div>

@@ -393,7 +393,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/followups" ? "Schedule"
     : location === "/mileage" ? "Mileage"
     : location === "/referrals" ? "Referrals"
-    : location === "/my-territory" ? "My territory"
     : onCalling ? "Calling"
     : location === "/profile" ? "Profile"
     : NAV_ITEMS.find(item => item.href === location)?.label ?? orgName;
@@ -711,7 +710,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
-        <main id="main-content" tabIndex={-1} className={`flex-1 overflow-hidden outline-none ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {/* Reserve tab-bar space only when the tab bar will actually render:
+            a training-gated rep gets no BottomTabs, and reserving 88px+inset
+            under the lock screen was just dead space on phones. */}
+        <main id="main-content" tabIndex={-1} className={`flex-1 overflow-hidden outline-none ${onMap || onCalling || gated ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {lockThisPage ? <TrainingLock /> : children}
         </main>
         {!onMap && !onCalling && !gated && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} moreDot={(canManage && pendingTerritoryCount > 0) || chatUnread > 0} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}

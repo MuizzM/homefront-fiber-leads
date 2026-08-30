@@ -28,11 +28,13 @@ describe("lasso: add doors from the county address file", () => {
 
   it("survives an EMPTY loop - the case it exists for", () => {
     // A loop with no leads is exactly the loop drawn over virgin territory.
+    // (Assign joined the exceptions when the server preview learned to count
+    // unsampled doors - lasso-default-action.test.ts pins the full rule.)
     expect(src).toMatch(
-      /lassoHasLeads \|\| lassoAction === "create" \? lassoAction : "area"/,
+      /lassoHasLeads \|\|\s*lassoAction === "create" \|\|/,
     );
-    // …and the tile is not disabled on an empty loop either.
-    expect(src).toMatch(/!lassoHasLeads && key !== "area" && key !== "create"/);
+    // …and the tile is never disabled on an empty loop either.
+    expect(src).toMatch(/key === "area" \|\| key === "create"\s*\? false/);
   });
 
   it("posts the RING to the create endpoint, never the assign one", () => {

@@ -36,6 +36,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
 import { BuyerScorePill, BuyerScoreTile, isClosedForScoring } from "@/components/BuyerScorePill";
 import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS, type PinDisplayState } from "@shared/knock";
+import { STATUS_CONFIG } from "@shared/statusConfig";
 import { useCan } from "@/lib/capabilities";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 import { titleCaseAddress } from "@/lib/leadDisplay";
@@ -102,13 +103,17 @@ function leadStateChip(lead: { leadStatus: string; lastOutcome?: string | null }
   }
 }
 
+// Labels come from the canonical vocabulary (shared/statusConfig) wherever it
+// defines one - this table had drifted to a THIRD spelling of Follow-up
+// ("Follow Up" here, "Follow up" in the row hint, "Follow-up" everywhere
+// else). Only legacy `contacted` (absent from STATUS_CONFIG by design) keeps a
+// local label.
 const STATUS_LABEL: Record<string, string> = {
-  prospect: "Prospect",
   contacted: "Contacted",
-  interested: "Interested",
-  sold: "Sold",
-  not_interested: "Not Interested",
-  follow_up: "Follow Up",
+  ...Object.fromEntries(
+    (["prospect", "interested", "sold", "not_interested", "follow_up"] as const)
+      .map((k) => [k, STATUS_CONFIG[k].label]),
+  ),
 };
 
 // Fallback ramp keyed by RAW leadStatus — reached only when pinDisplayState
@@ -384,7 +389,13 @@ function AssignRepModal({ lead, team, onClose }: {
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [repId, setRepId] = useState(lead.assignedRepId ? String(lead.assignedRepId) : "");
+  const initialRepId = lead.assignedRepId ? String(lead.assignedRepId) : "";
+  const [repId, setRepId] = useState(initialRepId);
+  // Nothing chosen, or the same owner re-chosen: the button stays dark. The
+  // armed empty state used to send repId:null (an unassign no-op) and toast
+  // "Lead assigned" while the table still said Unassigned.
+  const unchanged = repId === initialRepId || (repId === "0" && initialRepId === "");
+  const unassigning = repId === "0" && initialRepId !== "";
 
   const assignMutation = useMutation({
     mutationFn: async () => {
@@ -394,7 +405,11 @@ function AssignRepModal({ lead, team, onClose }: {
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Lead assigned" });
+      const repName = team.find(m => String(m.id) === repId)?.name;
+      toast({
+        title: unassigning ? "Lead returned to the pool" : `Assigned to ${repName ?? "rep"}`,
+        severity: "success",
+      });
       invalidateLeadLists(qc);
       onClose();
     },
@@ -421,9 +436,9 @@ function AssignRepModal({ lead, team, onClose }: {
       </Select>
       <DialogFooter className="mt-2">
         <Button variant="outline" onClick={onClose} className="border-border">Cancel</Button>
-        <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending}
+        <Button onClick={() => assignMutation.mutate()} disabled={unchanged || assignMutation.isPending}
           className="bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="btn-confirm-assign">
-          {assignMutation.isPending ? "Assigning..." : "Assign"}
+          {assignMutation.isPending ? "Assigning..." : unassigning ? "Unassign" : "Assign"}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -481,7 +496,7 @@ const ONBOARDING_STAGE_LABEL: Record<string, string> = {
   failed: "Delivery failed",
 };
 
-function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign = false, onboardingStage, onAssign, onEdit, onQualify, onMap }: {
+function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign = false, onboardingStage, onAssign, onEdit, onQualify, onMap, onKnock }: {
   lead: Lead;
   open: boolean;
   onClose: () => void;
@@ -493,6 +508,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
   onEdit?: () => void;
   onQualify?: () => void;
   onMap?: () => void;
+  /** Manager quick-log. The KnockLogger dialog existed fully built (idempotent
+   *  submit, assigned-rep default) but a row-actions redesign dropped its only
+   *  entry point, leaving it unreachable dead code. */
+  onKnock?: () => void;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -541,6 +560,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
     onSuccess: () => {
       toast({ title: "Contact saved" });
       qc.invalidateQueries({ queryKey: ["/api/leads", lead.id, "enrichment"] });
+      // The panel's own detail fetch too — the Email row reads it, and without
+      // this the row said "Not on file" until the sheet was closed and
+      // reopened from a refetched list.
+      qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}`] });
       invalidateLeadLists(qc);
       setEditContact(false);
     },
@@ -607,6 +630,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
               a dead end for a rep whose only other action here is Navigate. */}
           {onMap && <button onClick={onMap} className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Field map</button>}
           {canAssign && <button onClick={onAssign} className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{current.assignedRepId ? "Reassign" : "Assign"}</button>}
+          {canEdit && onKnock && <button onClick={onKnock} data-testid="panel-log-knock" className="h-11 lg:h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Log knock</button>}
           {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-11 lg:h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"> Qualify</button>}
         </div>
 
@@ -630,10 +654,12 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Fiber Status</span>
           </div>
           <div className="bg-secondary/50 rounded-lg px-3 py-1 divide-y divide-border/50">
-            <InfoRow icon={lead.isNewFiber ? Wifi : WifiOff}
+            {/* `current`, not the list-row snapshot: the panel's detail fetch
+                is fresher than the prop after any in-sheet write. */}
+            <InfoRow icon={current.isNewFiber ? Wifi : WifiOff}
               label="Service Availability"
-              value={fiberStatusLabel[lead.fiberStatus] ?? lead.fiberStatus}
-              highlight={!!lead.isNewFiber} />
+              value={fiberStatusLabel[current.fiberStatus] ?? current.fiberStatus}
+              highlight={!!current.isNewFiber} />
             {enrich?.speedTier && <InfoRow icon={Zap} label="Speed Tier" value={enrich.speedTier} />}
             {enrich?.maxDownloadMbps && <InfoRow icon={Zap} label="Max Download" value={`${enrich.maxDownloadMbps} Mbps`} />}
             {enrich?.techType && <InfoRow icon={Info} label="Technology" value={enrich.techType} />}
@@ -691,7 +717,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
             
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Neighborhood Data (ZIP {lead.zip})</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Neighborhood Data (ZIP {current.zip})</span>
             <button onClick={() => refetch()} disabled={isFetching}
               className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
               title="Refresh from Census">
@@ -743,9 +769,9 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           ) : (
             <div className="bg-secondary/50 rounded-lg px-3 py-1 divide-y divide-border/50">
               <InfoRow icon={User} label="Owner Name"
-                value={isLoading ? "Loading..." : (enrich?.ownerName ?? lead.ownerName ?? <span className="text-muted-foreground italic text-xs">Not in GIS records</span>)} />
+                value={isLoading ? "Loading..." : (enrich?.ownerName ?? current.ownerName ?? <span className="text-muted-foreground italic text-xs">Not in GIS records</span>)} />
               <InfoRow icon={Mail} label="Email"
-                value={lead.ownerEmail ?? <span className="text-muted-foreground italic text-xs">Not on file</span>} />
+                value={enrich?.ownerEmail ?? current.ownerEmail ?? <span className="text-muted-foreground italic text-xs">Not on file</span>} />
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
@@ -855,7 +881,7 @@ const leadSource = (lead: Lead) => lead.dfAddressId ? "Fiber scan" : lead.assign
 const nextAction = (lead: Lead) => {
   if (!lead.assignedRepId) return { label: "Assign owner", tone: "text-warning" };
   if (lead.leadStatus === "prospect") return { label: "First contact", tone: "text-primary" };
-  if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-warning" };
+  if (lead.leadStatus === "follow_up") return { label: STATUS_CONFIG.follow_up.label, tone: "text-warning" };
   if (lead.leadStatus === "interested") return { label: "Close sale", tone: "text-success" };
   if (lead.leadStatus === "sold") return { label: "Complete", tone: "text-muted-foreground" };
   // Closed doors ("not interested" and its "already a customer" disambiguation)
@@ -1294,9 +1320,13 @@ export default function Leads() {
       restoreLeadLists(ctx?.snapshots);
       toast({ title: e?.message ?? "Couldn't update lead", severity: "error" });
     },
-    onSettled: () => {
+    onSettled: (_data, _err, vars) => {
       invalidateLeadLists(qc);
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      // The IntelligencePanel's own detail fetch reads the single-lead key;
+      // list-shaped invalidation alone left the open sheet on the OLD status,
+      // so Qualify kept offering itself after a successful qualify.
+      qc.invalidateQueries({ queryKey: [`/api/leads/${vars.id}`] });
     },
   });
 
@@ -1635,6 +1665,7 @@ export default function Leads() {
           onEdit={() => { setEditLead(intelLead); setIntelLead(null); }}
           onQualify={() => updateMutation.mutate({ id: intelLead.id, data: { leadStatus: "interested" } })}
           onMap={() => { const target = intelLead; setIntelLead(null); openLeadOnMap(target); }}
+          onKnock={() => { const target = intelLead; setIntelLead(null); setKnockLead(target); }}
         />
       )}
     </div>

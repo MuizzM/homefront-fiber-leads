@@ -105,11 +105,15 @@ AlertDialogDescription.displayName =
 
 const AlertDialogAction = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Action>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>
->(({ className, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> &
+    { variant?: Parameters<typeof buttonVariants>[0] extends undefined ? never : NonNullable<Parameters<typeof buttonVariants>[0]>["variant"] }
+>(({ className, variant, ...props }, ref) => (
+  // `variant` forwards to buttonVariants so a destructive confirm is
+  // `variant="destructive"` - not a hand-rolled bg-destructive + text-white
+  // guess that measured 2.99:1 in dark (the audit's step-3 item).
   <AlertDialogPrimitive.Action
     ref={ref}
-    className={cn(buttonVariants(), className)}
+    className={cn(buttonVariants({ variant }), className)}
     {...props}
   />
 ))

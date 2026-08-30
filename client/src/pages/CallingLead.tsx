@@ -103,7 +103,7 @@ const DISPOSITIONS: Array<{ code: DispositionCode; label: string; tone?: string 
   { code: "VOICEMAIL_REACHED", label: "Voicemail" },
   { code: "LEFT_NO_MESSAGE", label: "Left no message" },
   { code: "BUSY", label: "Busy" },
-  { code: "INTERESTED", label: "Interested", tone: "border-violet-500/35 bg-violet-500/10 text-violet-300" },
+  { code: "INTERESTED", label: "Interested", tone: "border-info/35 bg-info/10 text-info" },
   { code: "APPOINTMENT_SCHEDULED", label: "Appointment", tone: "border-success/35 bg-success/[0.08] text-success" },
   { code: "SALE_STARTED", label: "Sale started", tone: "border-success/35 bg-success/[0.08] text-success" },
   { code: "SALE_COMPLETED", label: "Sale complete", tone: "border-success/35 bg-success/[0.08] text-success" },
@@ -689,7 +689,7 @@ export default function CallingLead() {
                         }}
                         className={cn(
                           "min-h-12 rounded-xl border border-border bg-background px-2 text-[12px] font-semibold transition-colors hover:bg-secondary active:scale-95 disabled:opacity-50",
-                          armed && "border-success bg-success/15 text-emerald-100 ring-1 ring-success",
+                          armed && "border-success bg-success/15 text-success ring-1 ring-success",
                         )}
                       >
                         {armed ? "Confirm sale?" : item.label}
@@ -703,7 +703,7 @@ export default function CallingLead() {
             {candidate.phoneId && !completed && canOptOut && (
               <section className="rounded-2xl border border-destructive/15 bg-destructive/[0.05] p-4"><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold text-destructive">STOP / do not call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Use immediately for any stop request, wrong number, or consent revocation. This permanently suppresses the number for this organization.</p></div></div>
                 <label className="mt-3 block text-xs font-semibold">Suppression reason<select value={optOutReason} onChange={event => setOptOutReason(event.target.value as typeof optOutReason)} className="mt-1 h-11 w-full rounded-xl border border-destructive/15 bg-background px-3 font-normal"><option value="stop_request">Consumer said STOP / take me off the list</option><option value="do_not_call">Do not call request</option><option value="wrong_number">Wrong number</option><option value="wrong_party">Wrong party</option><option value="consent_revoked">Consent revoked</option></select></label>
-                <AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" className="mt-3 w-full">Record STOP and suppress now</Button></AlertDialogTrigger><AlertDialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl"><AlertDialogHeader><AlertDialogTitle>Suppress this number permanently?</AlertDialogTitle><AlertDialogDescription>This immediately adds the number to the internal DNC list, cancels callbacks, and invalidates unused call authorizations. It cannot be undone by a rep.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction disabled={optOutMutation.isPending} onClick={() => optOutMutation.mutate()} className="bg-destructive text-white hover:bg-red-700">{optOutMutation.isPending ? "Suppressing…" : "Confirm STOP"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+                <AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" className="mt-3 w-full">Record STOP and suppress now</Button></AlertDialogTrigger><AlertDialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl"><AlertDialogHeader><AlertDialogTitle>Suppress this number permanently?</AlertDialogTitle><AlertDialogDescription>This immediately adds the number to the internal DNC list, cancels callbacks, and invalidates unused call authorizations. It cannot be undone by a rep.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={optOutMutation.isPending} onClick={() => optOutMutation.mutate()}>{optOutMutation.isPending ? "Suppressing…" : "Confirm STOP"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
               </section>
             )}
 

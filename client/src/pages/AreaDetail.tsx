@@ -15,7 +15,7 @@
 // Out-of-scope areas 404 by design (the API refuses to confirm they exist), so
 // "not found" and "not yours" render as ONE calm state that leaks nothing.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DoorOpen, Hand, BadgeDollarSign, CalendarClock, UserCog, ShieldCheck, AlertTriangle, Ban, History, Loader2, SearchX, type LucideIcon } from "lucide-react";
@@ -42,6 +42,7 @@ import {
   areaHolders, areaStatusMeta, initialsOf, isNotFoundError, isPoolArea,
   type AreaAssignmentRow, type AreaHistoryEvent, type AreaPassesResponse, type AreaDetailRow,
 } from "@/lib/areaProgress";
+import { activeAreaCountsByRep, areaCountsRecord, repAtCap } from "@/lib/areaCapacity";
 
 // Territory lifecycle authority lives in shared/permissions.ts, NOT in the
 // capability map: that rank model is what the Express middleware enforces on
@@ -123,9 +124,31 @@ export default function AreaDetail() {
     // Also for "Add a rep" on the crew card — without it the picker opens empty.
     enabled: canAssign && (assignOpen || nextPassOpen || addRepOpen),
   });
+  // The whole territory list, for per-rep load counts. RepPicker exists to
+  // stop a manager handing a sixth area to someone at the cap — but only when
+  // its caller supplies the data, and this screen (one of the two primary
+  // assignment surfaces) never did: the mistake surfaced as a server 409 toast
+  // AFTER the tap instead of a disabled row before it.
+  const territoriesQuery = useQuery<any[]>({
+    queryKey: ["/api/territories"],
+    enabled: canAssign && (assignOpen || addRepOpen),
+    staleTime: 30_000,
+  });
+  // "Can they take THIS area": the current area is excluded, matching the
+  // server's own cap check, so re-assigning ground a rep already holds is
+  // never refused as one-too-many.
+  const areaCountsMap = useMemo(
+    () => activeAreaCountsByRep((territoriesQuery.data ?? []) as any[], id),
+    [territoriesQuery.data, id],
+  );
+  const areaCounts = useMemo(() => areaCountsRecord(areaCountsMap), [areaCountsMap]);
   const reps = useMemo(
-    () => (teamQuery.data ?? []).filter(m => m.active !== false).map(m => ({ id: m.id, name: m.name, color: m.color })),
-    [teamQuery.data],
+    () => (teamQuery.data ?? []).filter(m => m.active !== false).map(m => ({
+      id: m.id, name: m.name, color: m.color,
+      areaCount: areaCountsMap.get(m.id) ?? 0,
+      atCap: repAtCap(areaCountsMap, m.id),
+    })),
+    [teamQuery.data, areaCountsMap],
   );
 
   const invalidateArea = () => {
@@ -606,6 +629,7 @@ export default function AreaDetail() {
                       label="Add a rep to this area"
                       disabled={shareMutation.isPending}
                       reps={reps.filter(r => !holders.some(h => h.id === r.id))}
+                      areaCounts={areaCounts}
                       onChange={(repId) => shareMutation.mutate([...holders.map(h => h.id), repId])}
                     />
                     <button
@@ -872,20 +896,23 @@ export default function AreaDetail() {
 
       {/* ── Assign / re-assign ─────────────────────────────────────────────── */}
       {assignOpen && canAssign && (
-        <div role="dialog" aria-modal="true" aria-label="Assign this area"
-             data-testid="area-assign-dialog"
-             className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-          <button
-            type="button" aria-label="Close" data-testid="area-assign-scrim"
-            disabled={assignMutation.isPending}
-            onClick={() => setAssignOpen(false)}
-            className="absolute inset-0 bg-overlay"
-          />
+        <AreaAssignDialog onClose={() => !assignMutation.isPending && setAssignOpen(false)}>
           <div className="relative max-h-[85vh] w-full space-y-3 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 text-foreground sm:max-w-md sm:rounded-2xl">
             <h2 className="text-base font-semibold">{pool ? "Assign this area" : "Hand this area to another rep"}</h2>
             <p className="text-xs text-muted-foreground">
               The chosen rep gets the area and every door inside it.
             </p>
+            {/* A shared area's re-assign REPLACES the whole crew — say so
+                before the tap, not in the aftermath. The complete-holder-set
+                edit lives on the crew card below for the other intent. */}
+            {!pool && holders.length > 1 && (
+              <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-foreground" data-testid="area-assign-crew-impact">
+                {holders.length} reps work this area today. Handing it to one rep takes the
+                other {holders.length - 1 === 1 ? "rep" : `${holders.length - 1} reps`} off it
+                and moves their doors here to the new owner. To change the crew instead,
+                use the crew card on this page.
+              </p>
+            )}
             {teamQuery.isLoading ? (
               <Skeleton className="h-32 w-full rounded-lg" />
             ) : (
@@ -895,6 +922,7 @@ export default function AreaDetail() {
                 onChange={setPickedRepId}
                 disabled={assignMutation.isPending}
                 label="Assign to"
+                areaCounts={areaCounts}
               />
             )}
             <div className="flex justify-end gap-2 pt-1">
@@ -914,7 +942,7 @@ export default function AreaDetail() {
               </button>
             </div>
           </div>
-        </div>
+        </AreaAssignDialog>
       )}
 
       {/* ── Start next pass — the existing dialog, unchanged ────────────────── */}
@@ -1014,6 +1042,39 @@ function VerifyTile({ label, value, className, testId }: {
         <span className="text-sm font-bold tabular-nums">{value.toLocaleString()}</span>
       </div>
       <div className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+// The assign dialog's shell: scrim, Escape, and initial focus. The hand-rolled
+// role=dialog markup closed only via its scrim or Cancel — no Escape handler,
+// no autofocus, no way for a keyboard user to leave without tabbing back into
+// the page behind it. Every sibling dialog (StartNextPassDialog,
+// ReclaimAllDialog, the map's share dialog) already handles Escape; the map's
+// was added precisely because its absence "reads as the dialog is stuck" on
+// phones. Focus lands on the panel itself so the first Tab hits the picker.
+function AreaAssignDialog({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Assign this area"
+         data-testid="area-assign-dialog"
+         className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <button
+        type="button" aria-label="Close" data-testid="area-assign-scrim"
+        onClick={onClose}
+        className="absolute inset-0 bg-overlay"
+      />
+      <div ref={panelRef} tabIndex={-1} className="contents">
+        {children}
+      </div>
     </div>
   );
 }

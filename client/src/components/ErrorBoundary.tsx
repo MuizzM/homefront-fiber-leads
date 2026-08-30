@@ -64,11 +64,14 @@ export class ErrorBoundary extends Component<Props, State> {
                  Reload screen
               </button>
               <a
-                href="#/today"
+                // "#/" is the role-aware redirect: /today is gated on
+                // field.app.use, so for calling and audit roles the old link
+                // led from one dead end straight into an AccessDenied card.
+                href="#/"
                 onClick={() => this.setState({ error: null, incidentId: null })}
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-secondary px-4 text-sm font-semibold text-secondary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
-                 Go to Today
+                 Go to my home screen
               </a>
             </div>
           </div>

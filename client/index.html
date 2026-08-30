@@ -15,7 +15,8 @@
     <link rel="icon" type="image/png" href="/hfs-logo.png" />
     <!-- Matches the dark ink app background (--background 216 22% 6%) so the
          browser chrome / notch area blends with the translucent status bar. -->
-    <meta name="theme-color" content="#0C0F13" />
+    <!-- LIGHT is the default appearance; use-theme keeps this in step on toggle. -->
+    <meta name="theme-color" content="#FBFAF9" />
     <!-- PWA: installable on mobile home screens, standalone launch, iOS ATHS -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -39,6 +40,13 @@
         try {
           var t = localStorage.getItem('hfs-theme');
           document.documentElement.classList.add(t === 'dark' ? 'dark' : 'light');
+          // Browser chrome follows the SAME pre-paint decision - the shipped
+          // meta is the light value, so a saved dark theme must flip it here,
+          // not a React mount later (that gap is a white status-bar flash).
+          if (t === 'dark') {
+            var m = document.querySelector('meta[name="theme-color"]');
+            if (m) m.setAttribute('content', '#0C0F13');
+          }
         } catch (e) { document.documentElement.classList.add('light'); }
       })();
     </script>

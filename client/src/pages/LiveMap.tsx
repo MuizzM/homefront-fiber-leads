@@ -303,7 +303,10 @@ export default function LiveMap() {
                           <p className="text-xs text-foreground font-medium truncate">{p.repName}</p>
                           <p className="text-xs text-muted-foreground">{timeAgo(p.pingAt)}</p>
                         </div>
-                        <div className="w-2 h-2 rounded-full bg-success flex-shrink-0" aria-hidden="true" />
+                        {/* The legend defines green as "Online (last 15 min)" -
+                            an unconditional green dot beside "6h ago" was an
+                            explicit falsehood. Grey past the window. */}
+                        <div className={`w-2 h-2 rounded-full flex-shrink-0 ${Date.now() - new Date(p.pingAt).getTime() < 15 * 60_000 ? "bg-success" : "bg-muted-foreground/40"}`} aria-hidden="true" />
                       </button>
                     ))}
                   </div>

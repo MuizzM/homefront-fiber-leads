@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient } from "@/lib/queryClient";
+import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient, bustInflightGetShare } from "@/lib/queryClient";
 import { clearPdfBlobCache } from "@/lib/pdfBlobCache";
 import { toast } from "@/hooks/use-toast";
 
@@ -208,16 +208,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // only the disk snapshot was dropped on manual logout; the whole in-memory
         // cache (leads, team, stats) survived into the next login on the same
         // device, and the 401 path cleared nothing at all.
-        try { queryClient.clear(); } catch { /* */ }
+        try { bustInflightGetShare(); queryClient.clear(); } catch { /* */ }
         clearPersistedQueryCache();
         purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
         clearPdfBlobCache(); // agreement PDFs are identity-scoped too
         setSid(null);
         syncSessionToQueryClient(null);
         setUser(null);
+        // The most important messages in the app must outlive a slow first
+        // load: default info toasts auto-dismiss in 2.5s, which on field LTE
+        // can be BEFORE the lazy Toaster chunk has even mounted.
         toast(revoked
-          ? { title: "Access removed", description: "Your account was deactivated by your team. Contact your manager if this is unexpected." }
-          : { title: "Session expired", description: "Please sign back in - anything you logged is saved and will sync." });
+          ? { title: "Access removed", description: "Your account was deactivated by your team. Contact your manager if this is unexpected.", variant: "destructive", duration: 30_000 }
+          : { title: "Session expired", description: "Please sign back in - anything you logged is saved and will sync.", variant: "destructive", duration: 30_000 });
       })().finally(() => { confirming = null; });
     });
     return () => setUnauthorizedHandler(null);
@@ -237,6 +240,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSid(existingSid);
           syncSessionToQueryClient(existingSid);
         }
+      } else if (existingSid) {
+        // The server ANSWERED and disowned this session. Clearing it matters
+        // twice over: the dead token was re-sent on every cold start until its
+        // 6-day client deadline, and the surviving offline-grace snapshot
+        // could later resurrect the signed-out identity's cached shell on an
+        // offline launch.
+        writePersistedSession(null);
+        writePersistedUser(null);
       }
     } catch {
       // NETWORK failure (dead zone / offline PWA launch) — not an auth rejection
@@ -259,8 +270,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   function login(newSid: string, u: AuthUser) {
     // P1-11: a NEW identity is arriving — evict everything the previous
-    // identity cached before the new session hydrates (user switch in one tab).
-    try { queryClient.clear(); clearPersistedQueryCache(); purgeSessionScopedKeys(); clearPdfBlobCache(); } catch { /* */ }
+    // identity cached before the new session hydrates (user switch in one tab),
+    // including any still-in-flight GETs the new identity could otherwise join.
+    try { bustInflightGetShare(); queryClient.clear(); clearPersistedQueryCache(); purgeSessionScopedKeys(); clearPdfBlobCache(); } catch { /* */ }
     _memSession = newSid;
     writePersistedSession(newSid); // persist across page reloads (sessionStorage)
     setSid(newSid);
@@ -282,7 +294,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     _memSession = null;
     writePersistedSession(null); // clear persisted session
     writePersistedUser(null); // clear the offline-grace snapshot
-    try { queryClient.clear(); } catch { /* */ }
+    try { bustInflightGetShare(); queryClient.clear(); } catch { /* */ }
     clearPersistedQueryCache(); // drop the on-disk dashboard SWR snapshot
     purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
     clearPdfBlobCache(); // agreement PDFs are identity-scoped too

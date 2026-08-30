@@ -147,7 +147,12 @@ const _inflightGets = new Map<string, Promise<Response>>();
 // later refetch found it. Busting the share map doesn't abort the underlying
 // requests (their earlier callers still get their response); it only stops
 // NEW callers from joining a response that predates the write.
-function bustInflightGetShare(): void {
+// Exported for the ONE non-mutation caller: an identity change (login /
+// logout / confirmed 401). A GET started under the old session could
+// otherwise be JOINED by the first same-URL GET of the NEW identity, handing
+// the new account a clone of the previous account's response - the exact
+// stale-share class this map exists to prevent, across an identity boundary.
+export function bustInflightGetShare(): void {
   _inflightGets.clear();
 }
 

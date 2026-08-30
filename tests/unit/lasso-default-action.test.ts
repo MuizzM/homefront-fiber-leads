@@ -84,26 +84,33 @@ describe("the action panel opens on the SHAPE, not on what it caught", () => {
     expect(src).not.toContain("lassoSelected.length === 0 ?");
   });
 
-  it("resolves an empty loop to Area - except for the action that needs one empty", () => {
+  it("resolves an empty loop to Area - except for the actions that work on one", () => {
     // Opening on "Assign" with nothing selected shows one disabled button and
     // reads as broken — the same dead end by a shorter route.
     //
-    // "create" is the deliberate exception. It adds a door for every house in
+    // "create" is a deliberate exception: it adds a door for every house in
     // the loop from the county address file, so a loop containing no leads is
-    // its PRIMARY case, not its degenerate one. Forcing that back to "area"
-    // would disable the only action the manager opened the panel for.
+    // its PRIMARY case. "assign" is the second exception, but only when the
+    // SERVER preview found doors: past the sampling threshold the client may
+    // hold none of the loop's pins while the ring still resolves thousands —
+    // forcing the panel to "area" there told the manager the ground was empty.
     expect(src).toMatch(
-      /lassoHasLeads \|\| lassoAction === "create" \? lassoAction : "area"/,
+      /lassoHasLeads \|\|\s*lassoAction === "create" \|\|\s*\(lassoAction === "assign" && \(lassoAssignCount > 0 \|\| lassoPreviewPending\)\)\s*\? lassoAction\s*: "area"/,
     );
     for (const key of ["assign", "status", "mark", "area", "create"]) {
       expect(src).toContain(`{lassoEffectiveAction === "${key}" && (`);
     }
   });
 
-  it("disables only the three actions that need lead IDs", () => {
-    // Area needs the polygon and a rep. The others operate on lassoActiveIds and
-    // would post an empty array.
-    expect(src).toContain('const disabled = !lassoHasLeads && key !== "area" && key !== "create"');
+  it("disables only the actions that genuinely need what's missing", () => {
+    // Area and Add-doors work on an empty loop. Status and Mark post
+    // client-held lead ids. Assign is ring-based: it stays live whenever the
+    // server preview found doors, and goes dark only when the resolved count
+    // is zero and no count is still loading.
+    const tile = src.slice(src.indexOf('// "Area" and "Add doors" work on an empty loop'), src.indexOf("const active = lassoEffectiveAction === key"));
+    expect(tile).toContain('key === "area" || key === "create"');
+    expect(tile).toContain("lassoAssignCount === 0 && !lassoPreviewPending");
+    expect(tile).toContain("!lassoHasLeads");
   });
 
   it("still sends the polygon, not the selection, when saving an area", () => {

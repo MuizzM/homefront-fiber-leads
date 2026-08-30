@@ -85,7 +85,11 @@ export default function CitySweepRunner() {
 
   const cancel = useMutation({
     mutationFn: (id: string) => apiRequest("POST", `/api/sweeps/${id}/cancel`, {}),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["/api/sweeps"] }),
+    onSuccess: () => { setNotice(null); void queryClient.invalidateQueries({ queryKey: ["/api/sweeps"] }); },
+    // A cancel that fails silently leaves a PAID sweep consuming checks while
+    // the operator believes they stopped it - the one outcome this control
+    // must never allow. Same notice surface the start mutation uses.
+    onError: (error: Error) => setNotice(`Cancel failed - the sweep is still running. ${error.message}`),
   });
 
   const canRun = city.trim().length > 1 && !start.isPending;
