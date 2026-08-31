@@ -240,3 +240,56 @@ only visible by comparing screens — which a test can do and a reviewer cannot.
 Nine of thirty-seven pages currently use the shared `PageHeader`; the rest
 hand-roll the same markup. The title *treatment* is consistent and tested; the
 duplication is not yet resolved.
+
+## The layering scale (added 2026-08-31)
+
+Stacking is named, never numbered. `tailwind.config.ts` defines the scale;
+reach for the layer that says what the surface IS:
+
+| Class | Value | Layer |
+| --- | --- | --- |
+| `z-nav` | 30 | persistent chrome: bottom tabs, map rail, in-page notices |
+| `z-status` | 45 | the field status bar (and the assignment result bar) |
+| `z-overlay` | 50 | every modal surface - Radix portals AND hand-rolled sheets |
+| `z-raised` | 60 | transient bars above modals (pending bar, update prompt) |
+| `z-toast` | 100 | feedback outranks everything it reports on |
+
+The magic numbers this replaced had already inverted once: the statement
+viewer sat at `z-[200]`, above the toasts confirming its own Download.
+Hand-rolled overlays share `z-overlay` with the Radix portals on purpose - a
+portal mounts later in the DOM, so a confirm opened from inside a hand-rolled
+sheet wins by document order instead of losing by 20 z-index points.
+
+## Modal behavior is a hook, not a per-file ritual
+
+`useModalA11y(panelRef, { active, onClose })` in `hooks/use-modal-a11y.ts` is
+the one modal contract for hand-rolled overlays: focus moved in, Tab
+contained, Escape in the CAPTURE phase (so the map's tool-exit hatch never
+sees the same keypress), body scroll lock, and focus restored to the opener.
+Fourteen surfaces that declared `aria-modal="true"` without any of that now
+use it. A NEW overlay should use the Radix Dialog/Sheet primitives first;
+the hook exists for surfaces with a reason to stay hand-rolled.
+
+Likewise `useRovingTabs(count, activeIndex, onSelect)` is the keyboard half
+of the `role="tablist"` / `role="radiogroup"` contract (arrow keys, one tab
+stop, Home/End). Declaring those roles without it promises AT users behavior
+that does not exist.
+
+## Small print added to the primitives
+
+- `Button` has a `loading` prop: spinner + disabled + `aria-busy`, replacing
+  the hand-rolled `{m.isPending ? <Loader2/> : null}` pattern.
+- `Checkbox` carries `tap-expand` (16px drawn, 44px hit) and is pinned by the
+  floors test alongside Switch. The floors test also fails any interactive
+  element with an arbitrary `min-h-[N px]` under 44.
+- `CardTitle` defaults to `text-base` - a card heading must never outrank the
+  page `h1` (`text-xl`); the old `text-2xl` scaffold default was overridden
+  at all 42 call sites.
+- `shadow-card` is the one card shadow (was hand-typed identically in
+  card.tsx and tooltip.tsx).
+- `AlertDialogContent` renders as a bottom sheet on phones, exactly like
+  `DialogContent`.
+- `SheetContent` takes `hideClose` for sheets that render their own close
+  control - only set it when a visible close exists inside.
+- The toaster's severity accents ride the semantic tokens; `payment` keeps a
+  violet pair because it is categorical, not a meaning.

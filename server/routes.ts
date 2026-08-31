@@ -1564,6 +1564,39 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
   });
 
+  // ── Client error beacon ─────────────────────────────────────────────────
+  // The ErrorBoundary mints an 8-char "Support code" (incidentId) - this is
+  // where it lands, so support can find the crash behind a code a rep reads
+  // off their phone. One structuredLog("client.error") line per report;
+  // aggregated by the same perf-report pipeline as http.request. Bounded:
+  // authenticated only, 10 reports per user per minute (the rest are
+  // accepted and dropped - a crash loop must not become a log flood), every
+  // field length-capped, nothing echoed back.
+  const clientErrorBudget = new Map<number, { count: number; resetAt: number }>();
+  app.post("/api/client-errors", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const now = Date.now();
+    const budget = clientErrorBudget.get(user.id);
+    if (!budget || budget.resetAt <= now) {
+      clientErrorBudget.set(user.id, { count: 1, resetAt: now + 60_000 });
+    } else if (++budget.count > 10) {
+      return res.status(202).json({ ok: true, dropped: true });
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    structuredLog("client.error", {
+      tenantId: user.tenantId ?? null,
+      userId: user.id,
+      incidentId: String(body.incidentId ?? "").slice(0, 16),
+      route: String(body.route ?? "").slice(0, 80),
+      name: String(body.name ?? "").slice(0, 80),
+      message: String(body.message ?? "").slice(0, 300),
+      stack: String(body.stack ?? "").slice(0, 600),
+      appVersion: String(body.appVersion ?? "").slice(0, 20),
+      kind: body.kind === "unhandledrejection" || body.kind === "window" ? body.kind : "boundary",
+    }, "error");
+    res.json({ ok: true });
+  });
+
   // Staged rollout of the status-marker glyph layer (see the flag in /config/map).
   // Default (env unset) enables it for admins/owners only — the spec's "internal/
   // admin tenant" canary — so a deploy ships it live for the owner to verify

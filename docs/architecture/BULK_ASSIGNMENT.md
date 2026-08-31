@@ -336,3 +336,18 @@ not slow.
 
 Deploys are a manual `deploy.yml` dispatch against a settled, CI-green SHA. See
 `DEPLOY.md`.
+
+## 2026-08-31 addendum: the result is as durable as the assignment
+
+The apply response's `undoToken` + `undoExpiresAt` now feed a persistent
+result bar on the map (`client/src/components/map/AssignResultBar.tsx`)
+instead of a 30-second toast the two-slot stack could evict. The bar holds
+the outcome breakdown (updated / skipped / changed hands - the last computed
+from the confirmed preview's `byOwner`), keeps Undo live for the server's
+full 10-minute window, becomes the put-back receipt after a successful undo,
+and states that a failed undo spent the single-redemption token rather than
+offering a retry that cannot work. Pre-confirm, the panel renders the
+`byOwner`-derived "N of these doors belong to other reps and will change
+hands" line, so reassignment is distinct from first assignment BEFORE the
+commit. No server contract changed; `undoExpiresAt` was already in the
+response and is now read.

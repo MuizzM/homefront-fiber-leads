@@ -4,6 +4,11 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { queryClient, persistOptions } from "@/lib/queryClient";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { installGlobalErrorBeacon } from "@/lib/errorBeacon";
+
+// Errors no boundary sees (sync window errors, unhandled rejections) still
+// reach the beacon - installed once at module load.
+installGlobalErrorBeacon();
 import { lazyRoute } from "@/lib/staleChunk";
 import { Suspense, useCallback, useDeferredValue, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";

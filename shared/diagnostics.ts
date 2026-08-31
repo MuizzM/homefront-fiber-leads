@@ -77,7 +77,14 @@ export function buildDiagnostics(events: RawEvent[], nowMs: number, windowHours 
 
   const denials = inWindow.filter(e => e.action === DENIAL_ACTION);
   const failures = inWindow.filter(e => FAILURE_ACTIONS.has(e.action));
-  const assignmentEvents = inWindow.filter(e => e.action.includes("assigned"));
+  // Both assignment planes: the territory events ("...assigned...") AND the
+  // lasso/bulk plane ("lead.assign_selection", its undo). The old filter
+  // missed the bulk path entirely.
+  const assignmentEvents = inWindow.filter(e => e.action.includes("assigned") || e.action.startsWith("lead.assign"));
+  // A partial write is the one assignment failure the activity log records:
+  // applyAssignment and the undo both stamp incomplete: true when a chunk
+  // died after earlier chunks committed.
+  const assignmentIncomplete = assignmentEvents.filter(e => (e.details as Record<string, unknown> | null | undefined)?.incomplete === true);
   const structureChanges = inWindow.filter(e => e.action.startsWith("commission_structure"));
 
   const sev = (n: number, warnAt: number, critAt: number): Severity =>
@@ -100,8 +107,11 @@ export function buildDiagnostics(events: RawEvent[], nowMs: number, windowHours 
       value: denials.length, hint: denials.length ? "Repeated denials can signal misconfigured access" : "No blocked actions" },
     { module: "commission", label: "Commission engine", severity: failures.length ? "critical" : "ok",
       value: failures.length, hint: failures.length ? "Sales sold with no active plan - book manually" : "All sales scored by an active plan" },
-    { module: "assignment", label: "Assignment activity", severity: "ok",
-      value: assignmentEvents.length, hint: `${assignmentEvents.length} assignments logged` },
+    { module: "assignment", label: "Assignment activity", severity: assignmentIncomplete.length ? "critical" : "ok",
+      value: assignmentEvents.length,
+      hint: assignmentIncomplete.length
+        ? `${assignmentIncomplete.length} PARTIAL write${assignmentIncomplete.length === 1 ? "" : "s"} - a bulk assignment or undo stopped mid-way`
+        : `${assignmentEvents.length} assignments logged` },
     { module: "commission", label: "Structure changes", severity: structureChanges.length ? "info" : "ok",
       value: structureChanges.length, hint: "Governed edits to commission plans" },
   ];

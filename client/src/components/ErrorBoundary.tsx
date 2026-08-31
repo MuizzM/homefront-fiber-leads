@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
+import { reportClientError } from "@/lib/errorBeacon";
 
 interface Props {
   children: ReactNode;
@@ -37,6 +38,16 @@ export class ErrorBoundary extends Component<Props, State> {
       name: error.name,
       message: error.message,
       componentStack: info.componentStack,
+    });
+    // ...and SEND the correlation: the Support code was minted and shown to
+    // the user but never transmitted, so support could not find the crash
+    // behind the code a rep read out. Best-effort, never throws.
+    reportClientError({
+      kind: "boundary",
+      incidentId: this.state.incidentId ?? undefined,
+      name: error.name,
+      message: error.message,
+      stack: typeof error.stack === "string" ? error.stack : undefined,
     });
   }
 

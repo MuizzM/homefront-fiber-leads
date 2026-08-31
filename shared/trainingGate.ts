@@ -40,6 +40,7 @@ export const TRAINING_GATE_ALLOWED_PREFIXES: readonly string[] = [
   "/api/onboarding",       // signing the packet is part of becoming a rep
   "/api/notifications",    // "your training is required" has to be able to arrive
   "/api/diagnostics",      // support can still see what a stuck phone reports
+  "/api/client-errors",    // a crash during training must still be reportable
   "/api/health",
 ];
 

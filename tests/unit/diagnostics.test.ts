@@ -80,3 +80,25 @@ describe("buildDiagnostics", () => {
     expect(empty.readModelStale).toBe(false);
   });
 });
+
+describe("assignment health card honesty", () => {
+  it("counts the bulk lasso plane, not only territory 'assigned' events", () => {
+    const model = buildDiagnostics([
+      ev("lead.assign_selection", 5, { updated: 34, skipped: 2 }),
+      ev("lead.assign_selection.undo", 4, { restored: 34, skipped: 0 }),
+      ev("lead.assigned", 3),
+    ], NOW);
+    const card = model.cards.find(c => c.module === "assignment")!;
+    expect(card.value).toBe(3);
+    expect(card.severity).toBe("ok");
+  });
+
+  it("a partial write flips the card to critical instead of the hardcoded ok", () => {
+    const model = buildDiagnostics([
+      ev("lead.assign_selection", 5, { updated: 120, skipped: 0, incomplete: true }),
+    ], NOW);
+    const card = model.cards.find(c => c.module === "assignment")!;
+    expect(card.severity).toBe("critical");
+    expect(card.hint).toContain("PARTIAL");
+  });
+});
