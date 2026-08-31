@@ -14,6 +14,8 @@ export interface AssignResultState {
   updated: number;
   /** Doors the resolver refused to move (out of the caller's scope). */
   skipped: number;
+  /** Doors already the target's - matched, deliberately untouched. */
+  alreadyAssignedToTarget?: number;
   /** Doors that changed hands from OTHER reps - what makes this a reassignment. */
   movedFromOthers: number;
   undoToken?: string;
@@ -77,6 +79,9 @@ export function AssignResultBar({
               : result.updated > 0
                 ? "All were unassigned before this"
                 : null,
+            (result.alreadyAssignedToTarget ?? 0) > 0
+              ? `${result.alreadyAssignedToTarget} already theirs - untouched`
+              : null,
             canUndo && mins != null ? `undo for ${mins} min` : null,
           ]
             .filter(Boolean)

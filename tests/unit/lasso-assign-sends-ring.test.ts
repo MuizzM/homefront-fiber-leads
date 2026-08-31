@@ -147,3 +147,31 @@ describe("the result of a bulk assignment survives the toast stack", () => {
     expect(undoDecl).toContain("undone: { restored: data.restored, skipped: data.skipped }");
   });
 });
+
+describe("lasso intelligence: composed loops and net-change confirmation", () => {
+  it("the body ships the COMPOSED rings and the chosen target", () => {
+    const decl = src.slice(src.indexOf("const lassoSelectionBody"), src.indexOf("const lassoPreviewQuery"));
+    expect(decl).toContain("polygons");
+    expect(decl).toContain('...(lassoRepId ? { targetRepId: Number(lassoRepId) } : {})');
+  });
+
+  it("the Assign button states net changes, and zero-net explains instead of erroring", () => {
+    const cta = src.slice(src.indexOf('data-testid="lasso-no-changes"') - 600, src.indexOf('data-testid="lasso-assign"') + 800);
+    expect(cta).toContain("No changes needed - all");
+    expect(cta).toContain("Assign ${net ?? lassoAssignCount}");
+  });
+
+  it("a second loop is a mode, and the delta is a report, not a refusal", () => {
+    expect(src).toContain('data-testid="lasso-mode-add"');
+    expect(src).toContain('data-testid="lasso-mode-subtract"');
+    expect(src).toContain("already selected");
+    expect(src).toContain("removed from the selection");
+    // A plain stroke still REPLACES - the one-shot ref resets after each draw.
+    expect(src).toContain('lassoNextOpRef.current = "replace"; // one-shot');
+  });
+
+  it("refining keeps the previous numbers on screen instead of blanking the panel", () => {
+    const q = src.slice(src.indexOf("const lassoPreviewQuery"), src.indexOf("const lassoPreview ="));
+    expect(q).toContain("placeholderData: keepPreviousData");
+  });
+});

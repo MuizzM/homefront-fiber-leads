@@ -11,7 +11,7 @@ import {
 declare const mapboxgl: any;
 import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, List, Plus, Crosshair, Users, Settings2, Filter, Landmark, Tag, Flag, Palette, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiRequest, apiRequestIdempotent, getStoredSessionId } from "@/lib/queryClient";
 import MpBoxScanPanel from "@/components/map/MpBoxScanPanel";
 import { useToast } from "@/hooks/use-toast";
@@ -1173,6 +1173,14 @@ export default function MapView() {
   // feedback, so add mode never shows a spinner or "finding…" phase.)
   const [lassoPoints, setLassoPoints] = useState<[number, number][]>([]);
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
+  // The COMPOSED selection: add loops union (deduped by id server-side),
+  // subtract loops carve. lassoPoints stays the latest ring (the painted
+  // outline, and the Area flow's polygon - an area is one loop by nature).
+  const [lassoRings, setLassoRings] = useState<Array<{ ring: [number, number][]; op: "add" | "subtract" }>>([]);
+  // One-shot draw intent: "add"/"subtract" arm the NEXT stroke as a
+  // refinement; anything else replaces (the default, and stated in the UI).
+  const lassoNextOpRef = useRef<"replace" | "add" | "subtract">("replace");
+  const [lassoArming, setLassoArming] = useState<"add" | "subtract" | null>(null);
   const [lassoRepId, setLassoRepId] = useState("");        // "Change Ownership" — one rep, one bulk move
   // The AREA crew, in pick order: the first is the primary. Separate from
   // lassoRepId above because they answer different questions — "hand this
@@ -1651,7 +1659,7 @@ export default function MapView() {
       });
       return res.json();
     },
-    onSuccess: (data: { updated: number; skipped: number; undoToken?: string; undoExpiresAt?: string }) => {
+    onSuccess: (data: { updated: number; skipped: number; alreadyAssignedToTarget?: number; undoToken?: string; undoExpiresAt?: string }) => {
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       const repName =
@@ -1674,6 +1682,7 @@ export default function MapView() {
         updated: data.updated,
         skipped: data.skipped,
         movedFromOthers,
+        alreadyAssignedToTarget: data.alreadyAssignedToTarget ?? 0,
         undoToken: data.undoToken,
         undoExpiresAt: Number.isFinite(expiresMs) ? expiresMs : undefined,
       });
@@ -1877,7 +1886,8 @@ export default function MapView() {
   // the panel could have been drawn under: the ring, the status refinement,
   // the SQL view lens, the pin-level source lens, and the rep filter.
   const lassoSelectionBody = useMemo<{
-    polygon: [number, number][];
+    polygons: Array<{ ring: [number, number][]; op: "add" | "subtract" }>;
+    targetRepId?: number;
     includeStates?: PinDisplayState[];
     view?: "latest" | "kinetic_2026";
     source?: LeadSourceFilter;
@@ -1897,14 +1907,20 @@ export default function MapView() {
           ? ("unassigned" as const)
           : Number(filterRep)
         : undefined;
+    const polygons = lassoRings.length
+      ? lassoRings
+      : [{ ring: lassoPoints, op: "add" as const }];
     return {
-      polygon: lassoPoints,
+      polygons,
+      // Target-aware preview: the server splits already-with-target out of
+      // the net count the Assign button states.
+      ...(lassoRepId ? { targetRepId: Number(lassoRepId) } : {}),
       ...(lassoEnabledStates ? { includeStates: lassoEnabledStates } : {}),
       ...(view ? { view } : {}),
       ...(pinSource ? { source: pinSource } : {}),
       ...(repFilter !== undefined ? { repFilter } : {}),
     };
-  }, [lassoDrawn, canAssign, lassoPoints, lassoEnabledStates, filterSource, filterRep]);
+  }, [lassoDrawn, canAssign, lassoPoints, lassoRings, lassoRepId, lassoEnabledStates, filterSource, filterRep]);
 
   // Server-resolved truth of the drawn selection: what WOULD move, by state
   // and by current owner — including doors a sampled viewport never shipped to
@@ -1915,6 +1931,15 @@ export default function MapView() {
     byOwner: Record<string, number>;
     notMovable: number;
     resolveMs: number;
+    matching: number;
+    actionable: number;
+    netChanges: number | null;
+    alreadyAssignedToTarget: number | null;
+    fromPool: number;
+    fromOtherReps: number | null;
+    excluded: { heldTerritory: number; filteredOut: number };
+    ringCount: number;
+    lastRing: { op: "add" | "subtract"; added: number; alreadySelected: number; removed: number; notInSelection: number } | null;
   }>({
     queryKey: ["/api/leads/assign-selection/preview", lassoSelectionBody],
     queryFn: async () => {
@@ -1925,6 +1950,7 @@ export default function MapView() {
     staleTime: 15_000,
     gcTime: 60_000,
     retry: 1,
+    placeholderData: keepPreviousData,
   });
   const lassoPreview = lassoSelectionBody ? lassoPreviewQuery.data ?? null : null;
   // The count Assign commits. Server truth when the preview has answered;
@@ -2274,6 +2300,9 @@ export default function MapView() {
   const exitLasso = useCallback(() => {
     setLassoMode(false);
     setLassoPoints([]);
+    setLassoRings([]);
+    lassoNextOpRef.current = "replace";
+    setLassoArming(null);
     setLassoSelected([]);
     setLassoRepId("");
     setLassoRepIds([]);
@@ -5305,14 +5334,19 @@ export default function MapView() {
       drawing = true;
       stroke = [[lngLat.lng, lngLat.lat]];
       lastPx = { x: point.x, y: point.y };
-      // A new stroke replaces the previous selection — also drop the prior loop's
-      // status refinement so a fresh loop always starts with EVERY status included
-      // (else re-drawing without Exit silently excludes the old loop's toggled-off
-      // statuses from the new one — e.g. Prospect off in loop A drops all of B's).
-      setLassoSelected([]);
-      setLassoPoints([]);
-      setLassoDisabled(new Set());
-      clearPreview();
+      if (lassoNextOpRef.current === "replace") {
+        // A new stroke replaces the previous selection — also drop the prior
+        // loop's status refinement so a fresh loop always starts with EVERY
+        // status included (else re-drawing without Exit silently excludes the
+        // old loop's toggled-off statuses from the new one).
+        setLassoSelected([]);
+        setLassoPoints([]);
+        setLassoRings([]);
+        setLassoDisabled(new Set());
+        clearPreview();
+      }
+      // An armed add/subtract stroke REFINES: the composed selection stands
+      // while the new loop is drawn - a second lasso is never an error.
     };
 
     // Mid-draw repaints are rAF-coalesced: render(false) runs chaikinSmooth
@@ -5404,8 +5438,27 @@ export default function MapView() {
       const source: MapPin[] =
         (window as any).__visibleLeads ?? (window as any).__allLeads ?? [];
       const selected = selectPointsInPolygon(source, ring);
-      setLassoPoints(ring);
-      setLassoSelected(selected);
+      const op = lassoNextOpRef.current;
+      lassoNextOpRef.current = "replace"; // one-shot: the next plain stroke replaces
+      setLassoArming(null);
+      if (op === "add") {
+        setLassoRings(prev => [...prev, { ring, op: "add" }]);
+        // Union by id - the same door in two loops counts once, everywhere.
+        setLassoSelected(prev => {
+          const seen = new Set(prev.map(pn => pn.id));
+          return [...prev, ...selected.filter(pn => !seen.has(pn.id))];
+        });
+        setLassoPoints(ring);
+      } else if (op === "subtract") {
+        setLassoRings(prev => [...prev, { ring, op: "subtract" }]);
+        const hit = new Set(selected.map(pn => pn.id));
+        setLassoSelected(prev => prev.filter(pn => !hit.has(pn.id)));
+        // The main outline stays the last ADD loop; the carve is transient.
+      } else {
+        setLassoRings([{ ring, op: "add" }]);
+        setLassoPoints(ring);
+        setLassoSelected(selected);
+      }
     };
 
     const cancelStroke = () => {
@@ -8309,18 +8362,31 @@ export default function MapView() {
                       these doors are being taken from other reps before the
                       manager confirms, from the same server preview the count
                       comes from. */}
-                  {lassoEffectiveAction === "assign" && lassoPreview?.byOwner && (() => {
-                    const fromOthers = Math.max(
+                  {lassoEffectiveAction === "assign" && lassoPreview && (() => {
+                    const fromOthers = lassoPreview.fromOtherReps ?? Math.max(
                       0,
-                      lassoPreview.total -
-                        (lassoPreview.byOwner["0"] ?? 0) -
-                        (lassoRepId ? lassoPreview.byOwner[lassoRepId] ?? 0 : 0),
+                      lassoPreview.total - (lassoPreview.byOwner?.["0"] ?? 0) - (lassoRepId ? lassoPreview.byOwner?.[lassoRepId] ?? 0 : 0),
                     );
-                    if (fromOthers === 0) return null;
+                    const already = lassoPreview.alreadyAssignedToTarget ?? 0;
+                    const filtered = lassoPreview.excluded?.filteredOut ?? 0;
                     return (
-                      <span className="text-[12px] text-white/60 leading-tight" data-testid="lasso-changes-hands">
-                        {fromOthers} of these {fromOthers === 1 ? "door belongs" : "doors belong"} to other reps and will change hands.
-                      </span>
+                      <>
+                        {fromOthers > 0 && (
+                          <span className="text-[12px] text-white/60 leading-tight" data-testid="lasso-changes-hands">
+                            {fromOthers} {fromOthers === 1 ? "door" : "doors"} will be reassigned from other reps.
+                          </span>
+                        )}
+                        {already > 0 && (
+                          <span className="text-[12px] text-white/60 leading-tight" data-testid="lasso-already-target">
+                            {already} already assigned to the chosen rep - left unchanged.
+                          </span>
+                        )}
+                        {filtered > 0 && (
+                          <span className="text-[12px] text-white/60 leading-tight" data-testid="lasso-filtered-out">
+                            {filtered} excluded by the state chips above.
+                          </span>
+                        )}
+                      </>
                     );
                   })()}
 
@@ -8423,6 +8489,63 @@ export default function MapView() {
                     </p>
                   )}
 
+                  {/* ── Loop refinement — a second lasso is a MODE, never an
+                         "overlapping selection" error: Add unions (deduped by
+                         door), Carve subtracts, plain drawing replaces. One-
+                         shot: each press arms the NEXT stroke only. ── */}
+                  {lassoDrawn && lassoEffectiveAction !== "area" && lassoEffectiveAction !== "create" && (
+                    <div className="flex flex-wrap items-center gap-1.5" data-testid="lasso-loop-modes">
+                      <button
+                        type="button"
+                        aria-pressed={lassoArming === "add"}
+                        data-testid="lasso-mode-add"
+                        onClick={() => {
+                          const on = lassoArming === "add";
+                          lassoNextOpRef.current = on ? "replace" : "add";
+                          setLassoArming(on ? null : "add");
+                        }}
+                        className={`min-h-tap rounded-full border px-3 text-[12px] font-semibold transition ${FOCUS} ${
+                          lassoArming === "add" ? "border-teal-300/70 bg-teal-500/20 text-teal-100" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+                        }`}
+                      >
+                        Add a loop
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={lassoArming === "subtract"}
+                        data-testid="lasso-mode-subtract"
+                        onClick={() => {
+                          const on = lassoArming === "subtract";
+                          lassoNextOpRef.current = on ? "replace" : "subtract";
+                          setLassoArming(on ? null : "subtract");
+                        }}
+                        className={`min-h-tap rounded-full border px-3 text-[12px] font-semibold transition ${FOCUS} ${
+                          lassoArming === "subtract" ? "border-teal-300/70 bg-teal-500/20 text-teal-100" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+                        }`}
+                      >
+                        Carve out
+                      </button>
+                      <span className="text-[11px] leading-tight text-white/50">
+                        {lassoArming === "add"
+                          ? "Draw to add to this selection."
+                          : lassoArming === "subtract"
+                            ? "Draw to remove from this selection."
+                            : lassoRings.length > 1
+                              ? `${lassoRings.length} loops - drawing plainly starts over.`
+                              : "Drawing again starts a new selection."}
+                      </span>
+                    </div>
+                  )}
+                  {/* The last loop's honest delta - dedupe is a report, not a
+                      refusal. */}
+                  {lassoPreview?.lastRing && lassoEffectiveAction === "assign" && (
+                    <span className="text-[12px] text-white/60 leading-tight" data-testid="lasso-loop-delta">
+                      {lassoPreview.lastRing.op === "add"
+                        ? `${lassoPreview.lastRing.added} added · ${lassoPreview.lastRing.alreadySelected} already selected`
+                        : `${lassoPreview.lastRing.removed} removed from the selection · ${lassoPreview.lastRing.notInSelection} were not in it`}
+                    </span>
+                  )}
+
                   {/* Mode control + Apply — the active tile's secondary flow.
                       The Area flow gets its own labeled section below. */}
                   {lassoEffectiveAction !== "area" && (
@@ -8438,30 +8561,46 @@ export default function MapView() {
                             ownedByChosen={lassoOwnedByChosen}
                           />
                         </div>
-                        <Button
-                          disabled={
-                            !lassoRepId ||
-                            !lassoDrawn ||
-                            !lassoSelectionBody ||
-                            lassoAssignCount === 0 ||
-                            lassoPreviewPending ||
-                            bulkAssignMutation.isPending
-                          }
-                          onClick={() =>
-                            lassoSelectionBody &&
-                            bulkAssignMutation.mutate({
-                              repId: Number(lassoRepId),
-                              selection: lassoSelectionBody,
-                            })
-                          }
-                          type="button"
-                          data-testid="lasso-assign"
-                          className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
-                        >
-                          {bulkAssignMutation.isPending || lassoPreviewPending
-                            ? "…"
-                            : `Assign ${lassoAssignCount}`}
-                        </Button>
+                        {(() => {
+                          const net = lassoPreview?.netChanges ?? null;
+                          const already = lassoPreview?.alreadyAssignedToTarget ?? 0;
+                          const repName = team.find((m: TeamMember) => m.id === Number(lassoRepId))?.name ?? "this rep";
+                          const zeroNet = lassoRepId !== "" && net === 0 && lassoAssignCount > 0;
+                          return (
+                            <>
+                              {zeroNet && (
+                                <p className="text-[12px] leading-snug text-white/70" data-testid="lasso-no-changes">
+                                  No changes needed - all {already} selected {already === 1 ? "door is" : "doors are"} already assigned to {repName}.
+                                </p>
+                              )}
+                              <Button
+                                disabled={
+                                  !lassoRepId ||
+                                  !lassoDrawn ||
+                                  !lassoSelectionBody ||
+                                  lassoAssignCount === 0 ||
+                                  zeroNet ||
+                                  lassoPreviewPending ||
+                                  bulkAssignMutation.isPending
+                                }
+                                onClick={() =>
+                                  lassoSelectionBody &&
+                                  bulkAssignMutation.mutate({
+                                    repId: Number(lassoRepId),
+                                    selection: lassoSelectionBody,
+                                  })
+                                }
+                                type="button"
+                                data-testid="lasso-assign"
+                                className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
+                              >
+                                {bulkAssignMutation.isPending || lassoPreviewPending
+                                  ? "…"
+                                  : `Assign ${net ?? lassoAssignCount}`}
+                              </Button>
+                            </>
+                          );
+                        })()}
                       </>
                     )}
                     {lassoEffectiveAction === "create" && (
