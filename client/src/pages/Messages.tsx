@@ -22,6 +22,7 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ErrorState } from "@/components/ErrorState";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
@@ -449,7 +450,7 @@ function BoardPanel() {
 // ── The sent log - unchanged in behavior, now living on the announcements tab ─
 /** Everything this org has broadcast, newest first, with what it reached. */
 function SentLog() {
-  const { data, isLoading } = useQuery<{ items: SentItem[] }>({ queryKey: SENT_KEY });
+  const { data, isLoading, isError, refetch } = useQuery<{ items: SentItem[] }>({ queryKey: SENT_KEY });
   // One clock for the list so every row's "2m" ages together instead of
   // freezing at whatever it was when the page mounted.
   const [now, setNow] = useState(() => Date.now());
@@ -466,7 +467,16 @@ function SentLog() {
 
       {isLoading && <Skeleton className="h-24 w-full rounded-2xl" data-testid="sent-log-loading" />}
 
-      {!isLoading && !items.length && (
+      {isError && (
+        <ErrorState
+          title="Couldn't load the sent log"
+          description="Your broadcasts are hidden until this loads - they were not deleted."
+          onRetry={() => void refetch()}
+          testId="sent-log-error"
+        />
+      )}
+
+      {!isLoading && !isError && !items.length && (
         <p className="rounded-2xl border border-border bg-card p-4 text-center text-[13px] text-muted-foreground" data-testid="sent-log-empty">
           Nothing sent yet. What you post above shows up here, with how many people read it.
         </p>

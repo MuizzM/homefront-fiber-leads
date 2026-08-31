@@ -426,7 +426,12 @@ export default function Today() {
         onClose={() => setSheetLead(null)}
         onLog={(outcome, opts) => {
           if (!sheetLead) return;
-          log({ id: sheetLead.id, leadStatus: sheetLead.leadStatus, assignedRepId: sheetLead.assignedRepId }, outcome, opts);
+          // log() returns false when NOTHING was recorded (temp pin, no
+          // credited rep, no queue - it toasts why). Removing the hero door
+          // from the route on a refusal hid it for the whole keep-alive
+          // session while the server had no knock.
+          const recorded = log({ id: sheetLead.id, leadStatus: sheetLead.leadStatus, assignedRepId: sheetLead.assignedRepId }, outcome, opts);
+          if (!recorded) return;
           setSkip(s => new Set(s).add(sheetLead.id));
           setSheetLead(null);
         }}

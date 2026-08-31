@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { RepPanel } from "@/components/liveops/RepPanel";
 import { PresenceTable } from "@/components/liveops/PresenceTable";
+import { ErrorState } from "@/components/ErrorState";
 import { StatusPill, FreshnessBadge, ageLabel } from "@/components/liveops/StatusPill";
 import { MapPin, WifiOff } from "lucide-react";
 import {
@@ -240,7 +241,17 @@ export default function LiveOps() {
         </div>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-border bg-card">
-          <PresenceTable rows={presenceQuery.data?.rows ?? []} loading={presenceQuery.isLoading} />
+          {presenceQuery.isError ? (
+            <ErrorState
+              title="Couldn't load who is signed in"
+              description="Presence is unknown until this loads - the office may not be empty."
+              onRetry={() => void presenceQuery.refetch()}
+              bordered={false}
+              testId="presence-error"
+            />
+          ) : (
+            <PresenceTable rows={presenceQuery.data?.rows ?? []} loading={presenceQuery.isLoading} />
+          )}
         </div>
       )}
     </div>
@@ -456,8 +467,9 @@ function LiveMapCanvas({
               // reported accuracy so a vague fix looks vague.
               "circle-radius": ["interpolate", ["linear"], ["get", "accuracyM"], 0, 7, 100, 14],
               "circle-color": ["case", ["get", "isRecent"], "hsl(202, 83%, 32%)", "hsl(161, 94%, 22%)"],
+              "circle-opacity": ["case", ["get", "isRecent"], 0.35, 1],
               "circle-stroke-width": 2,
-              "circle-stroke-color": "#ffffff",
+              "circle-stroke-color": ["case", ["get", "isRecent"], "hsl(202, 83%, 32%)", "#ffffff"],
             },
           });
           map.current.on("click", "live-reps-point", (e: any) => {
@@ -478,7 +490,13 @@ function LiveMapCanvas({
         setFailed(true);
       }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Destroy the GL context with the component - each visit used to leak
+      // one, and browsers cap WebGL contexts (~16) per page.
+      if (map.current) { map.current.remove(); map.current = null; }
+      setReady(false);
+    };
   }, [config?.token, onSelect]);
 
   useEffect(() => {
@@ -537,6 +555,18 @@ function LiveMapCanvas({
       {reps.length === 0 && ready && (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit rounded-full border border-border bg-card px-3 py-1.5 text-[12px] text-muted-foreground shadow-sm">
           No reps have a current position
+        </div>
+      )}
+      {ready && reps.length > 0 && (
+        <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-3 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm" data-testid="liveops-map-legend">
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-success ring-1 ring-white" />
+            Live now
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full border-2 border-info bg-info/30" />
+            Earlier position
+          </span>
         </div>
       )}
     </div>

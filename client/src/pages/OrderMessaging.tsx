@@ -86,7 +86,14 @@ export default function OrderMessaging() {
   };
 
   const flags = policy.data?.flags;
-  const blockers = config ? messagingBlockers(config, flags, templates.data?.templates ?? []) : [];
+  // Compliance status reads the SAVED policy, never the draft: toggling
+  // "Messaging is approved" used to light the green "every requirement is
+  // met" banner before Save policy was ever pressed - on the screen that
+  // decides who may be contacted. The draft's difference from saved is shown
+  // as exactly that: unsaved.
+  const savedConfig = policy.data?.config ?? null;
+  const blockers = savedConfig ? messagingBlockers(savedConfig, flags, templates.data?.templates ?? []) : [];
+  const hasUnsavedEdits = form != null && savedConfig != null && JSON.stringify(form) !== JSON.stringify(savedConfig);
 
   return (
     <div className="flex-1 overflow-y-auto px-4 pb-16 pt-5 md:px-6" data-testid="order-messaging-page">
@@ -108,7 +115,7 @@ export default function OrderMessaging() {
               decides who may be contacted, that is the worst possible default. */}
           {policy.isLoading ? (
             <Skeleton className="h-16 w-full" data-testid="sending-status-loading" />
-          ) : policy.isError || !config ? (
+          ) : policy.isError || !savedConfig ? (
             <ErrorState
               title="Can't confirm what may be sent"
               description="The messaging policy did not load, so this screen cannot tell you whether sending is allowed. Treat it as blocked until it loads."
@@ -117,10 +124,17 @@ export default function OrderMessaging() {
               testId="sending-status-error"
             />
           ) : blockers.length === 0 ? (
-            <p className="rounded-md bg-success/10 px-3 py-2 text-success" data-testid="sending-ready">
-              Every requirement is met. Reps can send approved messages, subject to each customer's consent and the
-              limits below.
-            </p>
+            <>
+              <p className="rounded-md bg-success/10 px-3 py-2 text-success" data-testid="sending-ready">
+                Every requirement is met. Reps can send approved messages, subject to each customer's consent and the
+                limits below.
+              </p>
+              {hasUnsavedEdits && (
+                <p className="rounded-md bg-warning/10 px-3 py-2 text-warning" data-testid="sending-unsaved-note">
+                  You have unsaved changes below - this status describes the saved policy, not your edits.
+                </p>
+              )}
+            </>
           ) : (
             <>
               <p className="text-muted-foreground">Messages are not being sent because:</p>
@@ -129,6 +143,11 @@ export default function OrderMessaging() {
                   <li key={b} className="break-words rounded-md bg-warning/10 px-3 py-2 text-warning [overflow-wrap:anywhere]">{b}</li>
                 ))}
               </ul>
+              {hasUnsavedEdits && (
+                <p className="text-xs text-muted-foreground" data-testid="sending-unsaved-note-blockers">
+                  This reflects the saved policy - your unsaved edits below are not in force yet.
+                </p>
+              )}
             </>
           )}
         </CardContent>

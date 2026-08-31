@@ -12,6 +12,8 @@
 // for the same reasons the API would have rejected the save.
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ErrorState } from "@/components/ErrorState";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -38,7 +40,7 @@ const toDollars = (c: number) => (c % 100 === 0 ? String(c / 100) : (c / 100).to
 export function MilestoneLadderEditor() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { data } = useQuery<{ ladder: MilestoneLadder; exposure: Exposure }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ ladder: MilestoneLadder; exposure: Exposure }>({
     queryKey: ["/api/spiff-milestones"],
   });
 
@@ -68,7 +70,19 @@ export function MilestoneLadderEditor() {
     onError: (e: any) => toast({ title: "Couldn't save", description: String(e?.message ?? e), variant: "destructive" }),
   });
 
-  if (!draft) return null;
+  if (isLoading || (!draft && !isError)) {
+    return <Skeleton className="h-40 w-full rounded-2xl" data-testid="ladder-loading" />;
+  }
+  if (!draft) {
+    return (
+      <ErrorState
+        title="Couldn't load the door bonus ladder"
+        description="The standing bonus config is hidden until this loads - it was not changed."
+        onRetry={() => void refetch()}
+        testId="ladder-error"
+      />
+    );
+  }
 
   const rungs: MilestoneRung[] = draft.rungs.map(r => ({
     doors: Math.trunc(Number(r.doors)),

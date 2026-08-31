@@ -9,6 +9,7 @@
 // lists the plan catalog, rather than faking numbers.
 
 import { useMemo, useEffect } from "react";
+import { ErrorState } from "@/components/ErrorState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -90,7 +91,7 @@ export default function Billing() {
     staleTime: 60_000,
   });
   const stripeOn = !!access?.stripe;
-  const { data: ledgerResp } = useQuery<{ events: LedgerEvent[] }>({
+  const { data: ledgerResp, isError: ledgerError, refetch: refetchLedger } = useQuery<{ events: LedgerEvent[] }>({
     queryKey: ["/api/billing/ledger"],
     queryFn: () => apiRequest("GET", "/api/billing/ledger?limit=25").then(r => r.json()),
     enabled,
@@ -242,7 +243,15 @@ export default function Billing() {
             <div className="px-4 sm:px-5 py-3.5 border-b border-border">
               <h2 className="text-[15px] font-semibold tracking-tight text-foreground">Credit activity</h2>
             </div>
-            {events.length === 0 ? (
+            {ledgerError ? (
+              <ErrorState
+                title="Couldn't load credit activity"
+                description="Your ledger is hidden until this loads - no activity was lost."
+                onRetry={() => void refetchLedger()}
+                bordered={false}
+                testId="ledger-error"
+              />
+            ) : events.length === 0 ? (
               <p className="px-4 sm:px-5 py-6 text-[13px] text-muted-foreground">No credit activity yet. Delivered qualified leads will appear here.</p>
             ) : (
               <div className="overflow-x-auto">

@@ -152,6 +152,13 @@ export default function OrderImports() {
   });
 
   const activeMapping = mapping ?? preview?.mapping ?? saved.data?.mapping ?? null;
+  // The screen's promise is "fix the mapping, then import" - but the import
+  // runs under the SAVED mapping. On-screen edits that were never saved must
+  // gate the button, or the file imports under yesterday's columns.
+  const mappingDirty =
+    activeMapping != null &&
+    saved.data?.mapping != null &&
+    JSON.stringify(activeMapping) !== JSON.stringify(saved.data.mapping);
 
   const previewMutation = useMutation({
     mutationFn: async (chosen: File) => {
@@ -493,12 +500,19 @@ export default function OrderImports() {
             <Button
               onClick={() => runImport.mutate(preview.duplicateOf != null)}
               data-testid="start-import-button"
-              disabled={runImport.isPending || errors.length > 0 || !saved.data?.version}
+              loading={runImport.isPending}
+              disabled={errors.length > 0 || !saved.data?.version || mappingDirty}
             >
               {preview.duplicateOf != null ? "Import again anyway" : "Start import"}
             </Button>
             {!saved.data?.version && (
               <p className="text-sm text-muted-foreground">Save the mapping first.</p>
+            )}
+            {mappingDirty && (
+              <p className="text-sm text-warning" data-testid="mapping-dirty-note">
+                Your mapping edits above are not saved - the import would run under the previously saved
+                mapping. Save the mapping in step 2 first.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -581,6 +595,9 @@ export default function OrderImports() {
 function ExceptionCard({ row }: { row: ExceptionRow }) {
   const { toast } = useToast();
   const [saleId, setSaleId] = useState("");
+  // "Not ours" closes the order for good - arm it so one ghost-button tap
+  // can't silently drop a real order (and its commission) from the queue.
+  const [confirmIgnore, setConfirmIgnore] = useState(false);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["/api/order-imports/exceptions/list"] });
@@ -595,7 +612,7 @@ function ExceptionCard({ row }: { row: ExceptionRow }) {
   const resolve = useMutation({
     mutationFn: async (payload: { decision: string; saleId?: number }) =>
       (await apiRequest("POST", `/api/order-imports/exceptions/${row.id}/resolve`, payload)).json(),
-    onSuccess: () => { toast({ title: "Saved" }); invalidate(); },
+    onSuccess: (_d, vars) => { toast({ title: vars.decision === "ignore" ? "Order dropped - it will not be recovered" : "Saved" }); invalidate(); },
     onError: (e: any) => toast({ title: "Not saved", description: e?.message, variant: "destructive" }),
   });
 
@@ -636,15 +653,34 @@ function ExceptionCard({ row }: { row: ExceptionRow }) {
         <Button size="sm" variant="outline" className="min-h-11 md:min-h-9" disabled={rematch.isPending} onClick={() => rematch.mutate()}>
           Re-check
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="min-h-11 md:min-h-9"
-          disabled={resolve.isPending}
-          onClick={() => resolve.mutate({ decision: "ignore" })}
-        >
-          Not ours
-        </Button>
+        {confirmIgnore ? (
+          <>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="min-h-11 md:min-h-9"
+              disabled={resolve.isPending}
+              data-testid="confirm-not-ours"
+              onClick={() => resolve.mutate({ decision: "ignore" })}
+            >
+              Drop this order
+            </Button>
+            <Button size="sm" variant="ghost" className="min-h-11 md:min-h-9" onClick={() => setConfirmIgnore(false)}>
+              Keep it
+            </Button>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="min-h-11 md:min-h-9"
+            disabled={resolve.isPending}
+            data-testid="not-ours"
+            onClick={() => setConfirmIgnore(true)}
+          >
+            Not ours
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiRequest } from "@/lib/queryClient";
 import { useCan } from "@/lib/capabilities";
-import { useToast } from "@/hooks/use-toast";
+import { useToast, toast } from "@/hooks/use-toast";
 import { usd, usdSigned } from "@/lib/money";
 import { estimateStripeConnectCost } from "@shared/payoutCosts";
 import { ChevronLeft, ChevronRight, Send, Loader2 } from "lucide-react";
@@ -102,10 +103,11 @@ export default function CommissionConsole() {
   const [anchorMs] = useState(() => Date.now());
   const weekRef = new Date(anchorMs + weekOffset * WEEK_MS).toISOString();
   const ovKey = ["/api/commission/week-overview", weekRef];
-  const { data: ov, isLoading, isError, refetch: refetchWeek } = useQuery<Overview>({
+  const { data: ov, isLoading, isError, isPlaceholderData: ovIsPrevWeek, refetch: refetchWeek } = useQuery<Overview>({
     queryKey: ovKey,
     queryFn: () => apiRequest("GET", `/api/commission/week-overview?week=${encodeURIComponent(weekRef)}`).then(r => r.json()),
     refetchInterval: weekOffset === 0 ? 60_000 : false,  // live week ticks; history is settled
+    placeholderData: keepPreviousData,
   });
 
   const transition = useMutation({
@@ -266,7 +268,7 @@ export default function CommissionConsole() {
                 <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-primary font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-primary" /> Total payroll
                 </div>
-                <div className="mt-1.5 text-3xl font-semibold tracking-tight tabular-nums text-foreground">{usd(totalPayroll)}</div>
+                <div className={`mt-1.5 text-3xl font-semibold tracking-tight tabular-nums text-gold-text ${ovIsPrevWeek ? "opacity-60" : ""}`}>{usd(totalPayroll)}</div>
                 <div className="text-[11px] text-muted-foreground mt-1">
                   {ov.totals.qualifiedSales} qualified sale{ov.totals.qualifiedSales === 1 ? "" : "s"} · {ov.totals.repsWithSales} rep{ov.totals.repsWithSales === 1 ? "" : "s"} producing
                 </div>
@@ -316,7 +318,7 @@ export default function CommissionConsole() {
                       {ex.type.replace(/_/g, " ").toLowerCase()}
                     </span>
                     <span className="text-muted-foreground">
-                      <button className="text-foreground font-medium hover:text-primary" onClick={() => { const r = ov.rows.find(x => x.repId === ex.repId); if (r) setDrillRep(r); }}>{ex.repName}</button>
+                      <button type="button" className="text-primary font-medium underline underline-offset-2 hover:text-primary/80" onClick={() => { const r = ov.rows.find(x => x.repId === ex.repId); if (r) setDrillRep(r); }}>{ex.repName}</button>
                       {" - "}{ex.detail}
                     </span>
                   </div>
@@ -622,7 +624,9 @@ function downloadCsv(weekRef: string) {
       a.href = url; a.download = `payroll-${weekRef.slice(0, 10)}.csv`;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
-    });
+    })
+    // A failed export must say so - it used to fail into nothing at all.
+    .catch((e: any) => toast({ title: "Export failed", description: String(e?.message ?? "Try again."), variant: "destructive" }));
 }
 
 // ── Chargeback reserve — the admin's MANUAL controls ─────────────────────────
@@ -651,7 +655,7 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
   const [reason, setReason] = useState("");
 
   const key = ["/api/commission/reps", repId, "reserve"];
-  const { data } = useQuery<ReserveSummary>({
+  const { data, isLoading: reserveLoading, isError: reserveError, refetch: refetchReserve } = useQuery<ReserveSummary>({
     queryKey: key,
     queryFn: () => apiRequest("GET", `/api/commission/reps/${repId}/reserve`).then(r => r.json()),
   });
@@ -676,6 +680,15 @@ function ReservePanel({ repId, repName, canMove }: { repId: number; repName: str
     onError: (e: any) => toast({ title: "Reserve action failed", description: e.message, variant: "destructive" }),
   });
 
+  if (reserveLoading) return <Skeleton className="h-16 w-full rounded-xl" data-testid="reserve-loading" />;
+  if (reserveError) {
+    return (
+      <div role="alert" className="rounded-xl border border-border p-3 text-xs text-muted-foreground" data-testid="reserve-error">
+        Couldn't load the chargeback reserve - this rep may hold one.{" "}
+        <button type="button" onClick={() => void refetchReserve()} className="text-primary underline underline-offset-2">Retry</button>
+      </div>
+    );
+  }
   if (!data || (data.reservePercent <= 0 && data.balanceCents === 0)) return null;
   const amountCents = amount.trim() === "" ? null : Math.round(parseFloat(amount) * 100);
   const blocked =
@@ -763,12 +776,12 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
   const [adjAmount, setAdjAmount] = useState("");
   const [adjReason, setAdjReason] = useState("");
 
-  const { data: sales = [] } = useQuery<any[]>({
+  const { data: sales = [], isLoading: salesLoading, isError: salesError, refetch: refetchSales } = useQuery<any[]>({
     queryKey: ["/api/commission/reps", row?.repId, "week-sales", weekRef],
     queryFn: () => apiRequest("GET", `/api/commission/reps/${row!.repId}/week-sales?week=${encodeURIComponent(weekRef)}`).then(r => r.json()),
     enabled: !!row,
   });
-  const { data: detail } = useQuery<any>({
+  const { data: detail, isLoading: detailLoading, isError: detailError } = useQuery<any>({
     queryKey: ["/api/commission/statements", row?.statementId],
     queryFn: () => apiRequest("GET", `/api/commission/statements/${row!.statementId}`).then(r => r.json()),
     enabled: !!row?.statementId,
@@ -821,10 +834,11 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
               type="button"
               onClick={() => setShowStmt(true)}
               disabled={row.statementId == null}
+              title={row.statementId == null ? "No statement yet - nothing to print until this week prices" : undefined}
               data-testid="print-rep-statement"
               className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-secondary border border-border text-xs font-semibold text-foreground active:scale-95 transition-transform shrink-0 disabled:opacity-50"
             >
-               Statement
+               Statement{row.statementId == null ? " - none yet" : ""}
             </button>
           </div>
         </DialogHeader>
@@ -865,7 +879,14 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
           <div className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
             The doors behind this number ({sales.length})
           </div>
-          {sales.length === 0 ? (
+          {salesLoading ? (
+            <Skeleton className="h-16 w-full rounded-xl" data-testid="week-sales-loading" />
+          ) : salesError ? (
+            <div role="alert" className="py-3 text-center text-sm text-muted-foreground" data-testid="week-sales-error">
+              Couldn't load the doors behind this number.{" "}
+              <button type="button" onClick={() => void refetchSales()} className="text-primary underline underline-offset-2">Retry</button>
+            </div>
+          ) : sales.length === 0 ? (
             <div className="text-sm text-muted-foreground py-3 text-center">No sales recorded this week.</div>
           ) : (
             <div className="divide-y divide-border rounded-xl border border-border overflow-hidden">
@@ -913,7 +934,13 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
               </Button>
             </div>
           )}
-          {adjustments.length === 0 ? (
+          {row.statementId && detailLoading ? (
+            <Skeleton className="h-8 w-full rounded-lg" data-testid="adjustments-loading" />
+          ) : row.statementId && detailError ? (
+            <div role="alert" className="text-xs text-muted-foreground" data-testid="adjustments-error">
+              Couldn't load adjustments - there may be some.
+            </div>
+          ) : adjustments.length === 0 ? (
             <div className="text-xs text-muted-foreground">None.</div>
           ) : (
             <div className="divide-y divide-border rounded-xl border border-border overflow-hidden">
@@ -1089,6 +1116,11 @@ function PayoutHistory() {
         <div className="p-6 text-center text-sm text-muted-foreground">No Stripe payouts have been sent yet.</div>
       ) : (
         <div className="divide-y divide-border">
+          {rows.length > 25 && (
+            <p className="px-4 py-2 text-[11px] text-muted-foreground" data-testid="payout-truncation-note">
+              Showing the newest 25 of {rows.length} transfers.
+            </p>
+          )}
           {rows.slice(0, 25).map(row => (
             <div key={row.id} className="px-4 py-3 flex items-center gap-3">
               

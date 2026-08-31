@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
+import { ErrorState } from "@/components/ErrorState";
 import type { InsightSeverity } from "@shared/coachingInsights";
 
 interface BoardInsight {
@@ -45,7 +46,7 @@ export function CoachingBoard() {
   const { toast } = useToast();
   const [showDismissed, setShowDismissed] = useState(false);
 
-  const { data, isLoading } = useQuery<{ insights: BoardInsight[] }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ insights: BoardInsight[] }>({
     queryKey: [`/api/metrics/insights${showDismissed ? "?includeDismissed=1" : ""}`],
   });
 
@@ -75,6 +76,18 @@ export function CoachingBoard() {
   }, [data?.insights]);
 
   if (isLoading) return <Skeleton className="h-64 rounded-2xl" />;
+  // An outage is not an all-clear: "No insights" plus "Nothing to flag" on a
+  // failed fetch told the supervisor their work queue was empty.
+  if (isError) {
+    return (
+      <ErrorState
+        title="Couldn't load coaching insights"
+        description="The board is hidden until this loads - it may not be empty."
+        onRetry={() => void refetch()}
+        testId="coaching-board-error"
+      />
+    );
+  }
 
   const total = data?.insights.length ?? 0;
 

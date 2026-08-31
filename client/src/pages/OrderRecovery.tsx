@@ -11,6 +11,7 @@
 // by a per-order value an admin configured.
 
 import { useQuery } from "@tanstack/react-query";
+import { ErrorState } from "@/components/ErrorState";
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,15 @@ export default function OrderRecovery() {
       />
 
       {metrics.isLoading && <Skeleton className="mb-4 h-24 w-full" />}
+      {metrics.isError && (
+        <ErrorState
+          title="Couldn't load the recovery overview"
+          description="The funnel, recovery stats, and commission exposure are hidden until this loads."
+          onRetry={() => void metrics.refetch()}
+          className="mb-4"
+          testId="recovery-metrics-error"
+        />
+      )}
 
       {r && (
         <>

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
+import { Skeleton } from "@/components/ui/skeleton";
 import { BillingOps } from "@/components/BillingOps";
 import { AdminHistory } from "@/components/AdminHistory";
 import { Building2, DollarSign, BarChart2, TrendingUp, ChevronDown, ChevronUp } from "lucide-react";
@@ -86,16 +87,16 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
           }} placeholder="Acme Fiber LLC" className="bg-secondary border-input text-sm mt-1" />
         </div>
         <div>
-          <Label htmlFor="tenant-slug" className="text-xs text-muted-foreground">URL Slug *</Label>
-          <Input id="tenant-slug" required value={form.slug} onChange={e => set("slug", e.target.value)} placeholder="acme-fiber"
+          <Label htmlFor="tenant-slug" className="text-xs text-muted-foreground">URL Slug</Label>
+          <Input id="tenant-slug" value={form.slug} onChange={e => set("slug", e.target.value)} placeholder="acme-fiber"
             className="bg-secondary border-input text-sm mt-1 font-mono" />
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <Label htmlFor="tenant-owner-name" className="text-xs text-muted-foreground">Owner Name *</Label>
-          <Input id="tenant-owner-name" required value={form.ownerName} onChange={e => set("ownerName", e.target.value)}
+          <Label htmlFor="tenant-owner-name" className="text-xs text-muted-foreground">Owner Name</Label>
+          <Input id="tenant-owner-name" value={form.ownerName} onChange={e => set("ownerName", e.target.value)}
             placeholder="John Smith" className="bg-secondary border-input text-sm mt-1" />
         </div>
         <div>
@@ -110,7 +111,7 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <Label htmlFor="tenant-brand-name" className="text-xs text-muted-foreground">Brand Name (shown in app)</Label>
+          <Label htmlFor="tenant-brand-name" className="text-xs text-muted-foreground">Brand Name (shown in app) *</Label>
           <Input id="tenant-brand-name" required value={form.brandName} onChange={e => set("brandName", e.target.value)}
             placeholder="Acme Fiber" className="bg-secondary border-input text-sm mt-1" />
         </div>
@@ -179,12 +180,22 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
           className="bg-secondary border-input text-sm mt-1 resize-none" />
       </div>
 
-      <div className="flex gap-2 pt-2">
-        <Button variant="outline" onClick={onCancel} className="border-border flex-1">Cancel</Button>
-        <Button onClick={() => onSave(form)} disabled={saving || !form.companyName || !form.ownerEmail || !form.brandName}
-          className="bg-primary hover:bg-primary/90 text-primary-foreground flex-1">
-          {saving ? "Saving..." : initial ? "Save Changes" : "Create Tenant"}
-        </Button>
+      <div className="pt-2">
+        {(!form.companyName || !form.ownerEmail || !form.brandName) && (
+          <p className="mb-2 text-xs text-warning" data-testid="tenant-form-missing">
+            Needed before saving:{" "}
+            {[!form.companyName && "company name", !form.ownerEmail && "owner email", !form.brandName && "brand name"]
+              .filter(Boolean)
+              .join(", ")}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={onCancel} className="border-border flex-1">Cancel</Button>
+          <Button onClick={() => onSave(form)} loading={saving} disabled={!form.companyName || !form.ownerEmail || !form.brandName}
+            className="bg-primary hover:bg-primary/90 text-primary-foreground flex-1">
+            {saving ? "Saving..." : initial ? "Save Changes" : "Create Tenant"}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -234,10 +245,10 @@ function TenantCard({ tenant, onEdit, onDelete }: {
         {/* Activity */}
         <td className="py-3 px-4">
           <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
-            <span className="flex items-center gap-1" title="Reps"> {tenant.stats.reps}</span>
-            <span className="flex items-center gap-1" title="Leads"> {tenant.stats.leads}</span>
-            <span className="flex items-center gap-1 text-success" title="Sold"> {tenant.stats.sold}</span>
-            <span className="flex items-center gap-1" title="Territories"> {tenant.stats.territories}</span>
+            <span className="flex items-center gap-1">{tenant.stats.reps} reps</span>
+            <span className="flex items-center gap-1">{tenant.stats.leads} leads</span>
+            <span className="flex items-center gap-1 text-success">{tenant.stats.sold} sold</span>
+            <span className="flex items-center gap-1">{tenant.stats.territories} areas</span>
           </div>
         </td>
 
@@ -365,7 +376,7 @@ export default function SuperAdmin() {
     { label: "Active Tenants", value: revenue ? revenue.tenantCount : " - ", icon: Building2, color: "text-muted-foreground" },
     { label: "Total MRR", value: revenue ? `$${revenue.totalMrr.toFixed(0)}` : " - ", icon: TrendingUp, color: "text-success" },
     { label: "Your MRR Cut", value: revenue ? `$${revenue.yourMrr.toFixed(0)}` : " - ", icon: DollarSign, color: "text-primary" },
-    { label: "Total Leads", value: tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-info" },
+    { label: "Total Leads", value: isLoading || tenantsError ? " - " : tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-info" },
   ];
 
   return (
@@ -440,7 +451,12 @@ export default function SuperAdmin() {
       <div>
         <h2 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-3">Tenants</h2>
         {isLoading ? (
-          <div className="text-center py-12 text-muted-foreground text-sm">Loading…</div>
+          <div className="space-y-2 p-4" aria-busy="true" aria-label="Loading tenants">
+            <Skeleton className="h-10 w-full rounded-lg" />
+            <Skeleton className="h-10 w-full rounded-lg" />
+            <Skeleton className="h-10 w-full rounded-lg" />
+            <Skeleton className="h-10 w-full rounded-lg" />
+          </div>
         ) : tenantsError ? (
           /* A failed fetch is NOT "no tenants yet" — that empty state invites
              creating a duplicate of a tenant that already exists. */

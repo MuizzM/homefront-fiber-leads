@@ -5,6 +5,7 @@ import { parseOverrideDollars, centsToDollarsDraft } from "@/lib/overrideMoney";
 import { apiRequest, apiUpload, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { CompTermsEditor } from "@/components/onboarding/CompTermsEditor";
 import { copyText } from "@/lib/clipboard";
@@ -159,16 +160,21 @@ function hrTone(checkpoint: HrCheckpoint) {
 // pattern used by the door-photo AuthedImg in PropertyDetail).
 function BadgePhoto({ applicationId, cacheKey, alt }: { applicationId: number; cacheKey: string; alt: string }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     let alive = true;
     let objectUrl = "";
     setUrl(null);
+    setFailed(false);
     apiRequest("GET", `/api/onboarding/applications/${applicationId}/hr/badge-photo`)
       .then(response => response.blob())
       .then(blob => { if (!alive) return; objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); })
-      .catch(() => { /* no photo yet */ });
+      .catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [applicationId, cacheKey]);
+  // A failed fetch is a state, not an eternal spinner: this tile only renders
+  // when a photo is known to exist, so "no photo yet" is not the failure mode.
+  if (failed) return <div className="grid h-16 w-16 shrink-0 place-items-center rounded-lg bg-secondary text-center text-2xs leading-tight text-muted-foreground" data-testid="badge-photo-failed">Photo didn't load</div>;
   if (!url) return <div className="grid h-16 w-16 shrink-0 place-items-center rounded-lg bg-secondary"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>;
   return <img src={url} alt={alt} className="h-16 w-16 shrink-0 rounded-lg object-cover" />;
 }
@@ -309,9 +315,9 @@ export default function Applications() {
   const [reviewDownlineIds, setReviewDownlineIds] = useState<number[]>([]);
   const [reviewNotes, setReviewNotes] = useState("");
   // Two-step reject (audit finding: reject mutated instantly and is
-  // irreversible). First tap arms the button, which auto-disarms after 3s;
-  // only a second tap while armed fires the mutation.
-  const [rejectArmed, setRejectArmed] = useState(false);
+  // irreversible). Rejecting asks for a recorded reason in a dialog; there is
+  // no reasonless close of a candidate record.
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   // Approving is the HIGHER-consequence decision on this screen — it creates
   // the account, assigns the commission plan + reserve, re-parents downline
   // members and issues four legal agreements — so it carries the same
@@ -319,15 +325,13 @@ export default function Applications() {
   const [approveArmed, setApproveArmed] = useState(false);
   const [voidTarget, setVoidTarget] = useState<{ envelopeId: number; label: string } | null>(null);
   const [voidReason, setVoidReason] = useState("");
-  const rejectTimer = useRef<number | null>(null);
   const approveTimer = useRef<number | null>(null);
   useEffect(() => {
-    setRejectArmed(false);
+    setRejectDialogOpen(false);
     setApproveArmed(false);
     setVoidTarget(null);
     setVoidReason("");
     return () => {
-      if (rejectTimer.current) window.clearTimeout(rejectTimer.current);
       if (approveTimer.current) window.clearTimeout(approveTimer.current);
     };
   }, [selectedKey]);
@@ -500,7 +504,7 @@ export default function Applications() {
   });
 
   const reviewMutation = useMutation({
-    mutationFn: ({ status }: { status: "approved" | "rejected" }) => {
+    mutationFn: ({ status, reason }: { status: "approved" | "rejected"; reason?: string }) => {
       if (!selected?.applicationId) throw new Error("Application not found");
       // The whole instrument, not the word for it: structure, the LADDER, and
       // the chargeback reserve. Sending `{ structure: "TIERED" }` alone is not
@@ -533,7 +537,7 @@ export default function Applications() {
             downlineIds: reviewRole === "rep" ? [] : reviewDownlineIds,
           }
         : undefined;
-      return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}`, { status, reviewNotes: reviewNotes || null, commission, hierarchy }).then(response => response.json());
+      return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}`, { status, reviewNotes: (reason ?? reviewNotes) || null, commission, hierarchy }).then(response => response.json());
     },
     onSuccess: (data: any, variables) => {
       refresh();
@@ -989,18 +993,19 @@ export default function Applications() {
                   if (approveTimer.current) window.clearTimeout(approveTimer.current);
                   setApproveArmed(false);
                   reviewMutation.mutate({ status: "approved" });
-                }} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} aria-label={approveArmed ? "Confirm: approve and start onboarding on the terms shown" : "Approve and start onboarding"} className={approveArmed ? "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-success text-sm font-semibold text-success-foreground hover:bg-success/90" : "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50"} data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{approveArmed ? "Confirm - assigns the plan shown & sends agreements" : "Approve & start onboarding"}</button><button onClick={() => {
-                  if (!rejectArmed) {
-                    setRejectArmed(true);
-                    if (rejectTimer.current) window.clearTimeout(rejectTimer.current);
-                    rejectTimer.current = window.setTimeout(() => setRejectArmed(false), 3000);
-                    return;
-                  }
-                  if (rejectTimer.current) window.clearTimeout(rejectTimer.current);
-                  setRejectArmed(false);
-                  reviewMutation.mutate({ status: "rejected" });
-                }} disabled={reviewMutation.isPending} aria-label={rejectArmed ? "Confirm rejecting this application" : "Reject this application"} data-testid="reject-application" className={rejectArmed ? "inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-destructive px-3 text-sm font-semibold text-white hover:bg-destructive/90" : "inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold text-destructive hover:bg-destructive/5"}>{rejectArmed ? "Confirm reject" : "Reject"}</button></div></div>}
+                }} disabled={reviewMutation.isPending || !reviewTermsCheck.ok} aria-label={approveArmed ? "Confirm: approve and start onboarding on the terms shown" : "Approve and start onboarding"} className={approveArmed ? "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-success text-sm font-semibold text-success-foreground hover:bg-success/90" : "inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-50"} data-testid="approve-start-onboarding">{reviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{approveArmed ? "Confirm - assigns the plan shown & sends agreements" : "Approve & start onboarding"}</button><button onClick={() => setRejectDialogOpen(true)} disabled={reviewMutation.isPending} aria-label="Reject this application" data-testid="reject-application" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-border px-3 text-sm font-semibold text-destructive hover:bg-destructive/5">Reject</button></div></div>}
                 {selected.stage === "under_review" && !canReview && <p className="mt-4 border-t border-border pt-4 text-xs text-muted-foreground">An administrator in this organization must approve or reject this application.</p>}
+                <RejectReasonDialog
+                  open={rejectDialogOpen}
+                  onOpenChange={setRejectDialogOpen}
+                  title="Reject this application?"
+                  description="The candidate record is closed for good, with your reason in the audit trail."
+                  label="Reason (recorded, required)"
+                  placeholder="Why this application is being rejected"
+                  confirmLabel="Reject application"
+                  busy={reviewMutation.isPending}
+                  onConfirm={(reason) => { setRejectDialogOpen(false); reviewMutation.mutate({ status: "rejected", reason }); }}
+                />
               </div>}
 
               {selected.milestones.approved && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">Account access</h3><span className={`text-[11px] font-semibold ${selected.milestones.loginCodeSent ? "text-success" : "text-warning"}`}>{selected.milestones.loginCodeSent ? "Login code sent" : "Delivery pending"}</span></div><p className="text-xs text-muted-foreground">The rep account can access My Documents while the field-sales profile stays inactive until every required agreement is signed.</p>{selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "login", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary">Send a new login code</button>}</div>}
@@ -1083,7 +1088,7 @@ export default function Applications() {
 
               <div className="rounded-xl border border-border p-4"><h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">Audit timeline</h3><div className="space-y-0">{selected.timeline.map((event, index) => <div key={event.label} className="flex gap-3"><div className="flex w-5 flex-col items-center"><span className={`mt-1.5 h-2 w-2 rounded-full ${event.done ? "bg-primary" : "bg-secondary ring-1 ring-border"}`} />{index < selected.timeline.length - 1 && <span className={`h-9 w-px ${event.done ? "bg-primary/40" : "bg-border"}`} />}</div><div className="pb-3"><p className={`text-xs font-medium ${event.done ? "text-foreground" : "text-muted-foreground"}`}>{event.label}</p><p className="mt-0.5 text-2xs text-muted-foreground">{event.done ? formatDate(event.at) : "Pending"}</p></div></div>)}</div></div>
 
-              {selected.stage === "active" && <div className="rounded-xl border border-success/15 bg-success/[0.08] p-4"><div className="flex gap-3"><div><h3 className="text-sm font-semibold text-success">Onboarding complete</h3><p className="mt-1 text-xs text-emerald-200/70">All four required agreements are signed. The rep’s field-sales profile is active.</p></div></div></div>}
+              {selected.stage === "active" && <div className="rounded-xl border border-success/15 bg-success/[0.08] p-4"><div className="flex gap-3"><div><h3 className="text-sm font-semibold text-success">Onboarding complete</h3><p className="mt-1 text-xs text-muted-foreground">All four required agreements are signed. The rep’s field-sales profile is active.</p></div></div></div>}
             </div>
           </div>}
         </section>

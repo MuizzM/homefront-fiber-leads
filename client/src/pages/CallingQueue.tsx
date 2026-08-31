@@ -1,12 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CallingAvailability, CallingChrome, CallingUnknownState } from "@/components/calling/CallingChrome";
 import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCallingCallbacks, startQueueTrace, getLatestQueueTraceRun, type CallingCallback, type CallingCandidate } from "@/lib/callingApi";
 import { cn } from "@/lib/utils";
 import { useTabActive } from "@/lib/tabActivity";
 import { useCan } from "@/lib/capabilities";
 import { useToast } from "@/hooks/use-toast";
+import { ErrorState } from "@/components/ErrorState";
 
 const STAGE_FILTERS = [
   { value: "", label: "All" },
@@ -17,10 +18,10 @@ const STAGE_FILTERS = [
 ] as const;
 
 function stageTone(stage: string): string {
-  if (stage === "ELIGIBLE_MANUAL_CALL") return "border-emerald-500/25 bg-emerald-500/10 text-success";
-  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "border-red-500/25 bg-red-500/10 text-destructive";
+  if (stage === "ELIGIBLE_MANUAL_CALL") return "border-success/25 bg-success/10 text-success";
+  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "border-destructive/25 bg-destructive/10 text-destructive";
   if (stage === "COMPLIANCE_REVIEW") return "border-amber-500/25 bg-amber-500/10 text-warning";
-  if (stage === "CALLBACK_SCHEDULED") return "border-sky-500/25 bg-sky-500/10 text-info";
+  if (stage === "CALLBACK_SCHEDULED") return "border-info/25 bg-info/10 text-info";
   return "border-border bg-secondary text-muted-foreground";
 }
 
@@ -61,10 +62,10 @@ function stageLabel(stage: string): string {
 }
 
 function stageDot(stage: string): string {
-  if (stage === "ELIGIBLE_MANUAL_CALL") return "bg-emerald-500";
-  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "bg-red-500";
+  if (stage === "ELIGIBLE_MANUAL_CALL") return "bg-success";
+  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "bg-destructive";
   if (stage === "COMPLIANCE_REVIEW") return "bg-amber-500";
-  if (stage === "CALLBACK_SCHEDULED") return "bg-sky-500";
+  if (stage === "CALLBACK_SCHEDULED") return "bg-info";
   return "bg-muted-foreground/40";
 }
 
@@ -85,13 +86,13 @@ function TracedRow({ candidate }: { candidate: CallingCandidate }) {
         aria-label={`${candidate.address} - ${candidate.tracedBadge?.label ?? "Traced"}`}
         className={cn("group flex items-center gap-3 px-4 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
           ready ? "hover:bg-secondary/40 active:bg-secondary/60" : "opacity-60 hover:bg-secondary/20")}>
-        <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ready ? "bg-emerald-500" : "bg-red-500")} />
+        <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", ready ? "bg-success" : "bg-destructive")} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-[13px] font-medium leading-5 text-foreground">{candidate.address}</span>
             <span className={cn("inline-flex max-w-[55%] shrink-0 items-center rounded-full border px-2 py-px text-2xs font-medium uppercase tracking-wide",
-              ready ? "border-emerald-500/25 bg-emerald-500/10 text-success"
-                : "border-red-500/25 bg-red-500/10 text-destructive")}>
+              ready ? "border-success/25 bg-success/10 text-success"
+                : "border-destructive/25 bg-destructive/10 text-destructive")}>
               <span className="truncate">{ready ? "Ready to dial" : "Blocked"}</span>
             </span>
           </div>
@@ -132,7 +133,7 @@ function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
             {candidate.maskedPhone ? <> <span aria-hidden="true">·</span> <span className="font-mono text-[11px] tabular-nums">{candidate.maskedPhone}</span></> : null}
             {candidate.lastDecisionStatus ? (
               Number.isFinite(Date.parse(candidate.lastDecisionExpiresAt ?? "")) && Date.parse(candidate.lastDecisionExpiresAt ?? "") <= Date.now()
-                ? <> <span aria-hidden="true">·</span> <span className="text-amber-500">Last check expired</span></>
+                ? <> <span aria-hidden="true">·</span> <span className="text-warning">Last check expired</span></>
                 : <> <span aria-hidden="true">·</span> Last check: {formatDecision(candidate.lastDecisionStatus)}</>
             ) : null}
           </p>
@@ -314,6 +315,19 @@ export default function CallingQueue() {
   const activeRun = traceRunQuery.data?.run
     && ["queued", "running"].includes(traceRunQuery.data.run.status)
     ? traceRunQuery.data.run : null;
+  // When a run leaves the live states, the queue/traced/counts data it was
+  // feeding is stale - refresh it, as the start-toast promises ("numbers
+  // appear as they come back").
+  const qcTrace = useQueryClient();
+  const runStatus = traceRunQuery.data?.run?.status;
+  const prevRunStatus = useRef(runStatus);
+  useEffect(() => {
+    const was = prevRunStatus.current;
+    prevRunStatus.current = runStatus;
+    if ((was === "queued" || was === "running") && runStatus && !["queued", "running"].includes(runStatus)) {
+      void qcTrace.invalidateQueries({ queryKey: ["/api/v1/calling/queue"] });
+    }
+  }, [runStatus, qcTrace]);
   const traceLimit = traceRunQuery.data?.limit ?? 100;
   const traceMutation = useMutation({
     mutationFn: (leadIds: number[]) => startQueueTrace(leadIds),
@@ -367,12 +381,20 @@ export default function CallingQueue() {
 
             <section aria-label="Calling queue metrics" className="grid grid-cols-3 divide-x divide-border overflow-hidden rounded-2xl border border-border bg-card">
               <MetricCell label="Open" value={chipCounts ? chipCounts[""] : null} />
-              <MetricCell label="Eligible" value={chipCounts ? eligible : null} dot="bg-emerald-500" />
-              <MetricCell label="Callbacks" value={chipCounts ? callbacks : null} dot="bg-sky-500" />
+              <MetricCell label="Eligible" value={chipCounts ? eligible : null} dot="bg-success" />
+              <MetricCell label="Callbacks" value={chipCounts ? callbacks : null} dot="bg-info" />
             </section>
 
+            {callbacksQuery.isError && (
+              <ErrorState
+                title="Couldn't load due callbacks"
+                description="Overdue and scheduled callbacks are hidden until this loads."
+                onRetry={() => void callbacksQuery.refetch()}
+                testId="callbacks-error"
+              />
+            )}
             {(callbackGroups.overdue.length + callbackGroups.today.length) > 0 && (
-              <section aria-label="Due callbacks" className="overflow-hidden rounded-2xl border border-sky-500/25 bg-card" data-testid="due-callbacks">
+              <section aria-label="Due callbacks" className="overflow-hidden rounded-2xl border border-info/25 bg-card" data-testid="due-callbacks">
                 <div className="border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-info">
                   Due callbacks - {callbackGroups.overdue.length} overdue · {callbackGroups.today.length} today
                 </div>
@@ -382,11 +404,11 @@ export default function CallingQueue() {
                     return (
                       <li key={cb.id}>
                         <Link href={`/calling/lead/${cb.leadId}`} className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40">
-                          <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${overdue ? "bg-red-500" : "bg-sky-500"}`} />
+                          <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${overdue ? "bg-destructive" : "bg-info"}`} />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center justify-between gap-2">
                               <span className="truncate text-[13px] font-medium text-foreground">{cb.address}</span>
-                              <span className={`shrink-0 text-2xs font-semibold uppercase tracking-wide ${overdue ? "text-red-500" : "text-sky-500"}`}>
+                              <span className={`shrink-0 text-2xs font-semibold uppercase tracking-wide ${overdue ? "text-destructive" : "text-info"}`}>
                                 {overdue ? "Overdue" : "Today"} · {callbackDueLabel(cb.dueAt, cb.timeZone)}
                               </span>
                             </div>
@@ -408,7 +430,7 @@ export default function CallingQueue() {
               <div className="relative">
                 
                 <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search address or resident" aria-label="Search calling queue"
-                  className="h-11 md:h-9 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-ring/30" />
+                  className="h-11 md:h-9 w-full rounded-xl border border-border bg-card px-3 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-ring/30" />
               </div>
               <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter calling queue">
                 {STAGE_FILTERS.map(filter => {
@@ -442,7 +464,13 @@ export default function CallingQueue() {
                   calling. Contract status: <span className="font-medium text-foreground">{statusQuery.data.tracedImport?.contractStatus ?? "unapproved"}</span>.
                 </p>
               </section>
-            ) : tracedQuery.isLoading ? <QueueRowsSkeleton /> : tracedLeads.length ? (
+            ) : tracedQuery.isLoading ? <QueueRowsSkeleton /> : tracedQuery.isError ? (
+              <ErrorState
+                title="Couldn't load traced numbers"
+                onRetry={() => void tracedQuery.refetch()}
+                testId="traced-error"
+              />
+            ) : tracedLeads.length ? (
               <section aria-label="Traced numbers" className="overflow-hidden rounded-2xl border border-border bg-card" data-testid="traced-leads">
                 <header className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-2.5">
                   <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Traced numbers</h2>
@@ -507,12 +535,24 @@ export default function CallingQueue() {
                 <ul className="divide-y divide-border/60">
                   {filtered.map(item => <CandidateRow key={item.queueId} candidate={item} />)}
                 </ul>
+                {((stage === "" && (countsQuery.data?.length ?? 0) > QUEUE_LIST_LIMIT) ||
+                  (stage !== "" && (queueQuery.data?.length ?? 0) >= QUEUE_LIST_LIMIT)) && (
+                  <p className="border-t border-border px-4 py-2 text-[11px] leading-4 text-muted-foreground" data-testid="queue-truncation-note">
+                    Showing the first {QUEUE_LIST_LIMIT} leads. Search looks only within these.
+                  </p>
+                )}
               </section>
             ) : (
               <div className="rounded-2xl border border-dashed border-border p-8 text-center">
                 
-                <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">No leads in this view</h2>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Fresh-fiber leads appear here only after the calling pipeline accepts them.</p>
+                <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">
+                  {search.trim() ? "No matches in the loaded leads" : "No leads in this view"}
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {search.trim()
+                    ? `Search covers the first ${QUEUE_LIST_LIMIT} leads of this view - a door past that cap won't match here.`
+                    : "Fresh-fiber leads appear here only after the calling pipeline accepts them."}
+                </p>
               </div>
             )}
           </>

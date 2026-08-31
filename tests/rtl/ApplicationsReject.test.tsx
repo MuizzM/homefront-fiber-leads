@@ -1,6 +1,8 @@
-// Reject is irreversible, so it must be a two-step arm (audit fix): the first
-// tap turns the button into a rose "Confirm reject" that auto-disarms after
-// 3 seconds; only a second tap while armed fires the mutation.
+// Reject is irreversible, so it must record WHY: tapping Reject opens the
+// app's reject-with-reason dialog (the same one Referrals and Mileage use),
+// the confirm stays dark until a reason is typed, and the reason lands in
+// reviewNotes on the PATCH. A reasonless close of a candidate record is not
+// offered.
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -122,60 +124,43 @@ const rejectButton = () => screen.getByTestId("reject-application");
 // Retrying buys CI back while that is investigated properly. It is recorded
 // here rather than hidden because a retry on a UI test can mask a real product
 // bug, and the next person needs to know this one is unexplained, not solved.
-describe("Applications - two-step reject", { retry: 2 }, () => {
-  it("first tap only arms: rose 'Confirm reject', no mutation fires", async () => {
+describe("Applications - reject with reason", () => {
+  it("tapping Reject opens the reason dialog and fires nothing", async () => {
     renderPage();
     await screen.findByTestId("reject-application");
-    vi.useFakeTimers(); // frozen from here — the 3s disarm cannot fire
-    expect(rejectButton()).toHaveTextContent("Reject");
     fireEvent.click(rejectButton());
-    expect(rejectButton()).toHaveTextContent("Confirm reject");
-    expect(rejectButton().className).toMatch(/destructive/);
+    expect(await screen.findByText("Reject this application?")).toBeInTheDocument();
     expect(apiRequest).not.toHaveBeenCalledWith("PATCH", expect.anything(), expect.anything());
   });
 
-  it("second tap while armed fires the reject PATCH exactly once", async () => {
+  it("confirm stays disabled until a reason is typed; confirming PATCHes once with the reason", async () => {
     renderPage();
     await screen.findByTestId("reject-application");
-    vi.useFakeTimers(); // frozen from here — the 3s disarm cannot fire
-    fireEvent.click(rejectButton()); // arm
-    expect(rejectButton()).toHaveTextContent("Confirm reject");
-    fireEvent.click(rejectButton()); // confirm — deterministically AFTER the arm committed
-    // Flushed with act, not waitFor: the clock is frozen, so waitFor's polling
-    // would never tick. React Query dispatches the mutation through the
-    // microtask queue, which act drains — no timers involved.
-    await act(async () => { await Promise.resolve(); });
-    expect(apiRequest).toHaveBeenCalledWith(
-      "PATCH",
-      "/api/onboarding/applications/42",
-      expect.objectContaining({ status: "rejected" }),
-    );
+    fireEvent.click(rejectButton());
+    const confirm = await screen.findByRole("button", { name: "Reject application" });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: "No local availability" } });
+    expect(confirm).not.toBeDisabled();
+    fireEvent.click(confirm);
+    await waitFor(() => {
+      expect(apiRequest).toHaveBeenCalledWith(
+        "PATCH",
+        "/api/onboarding/applications/42",
+        expect.objectContaining({ status: "rejected", reviewNotes: "No local availability" }),
+      );
+    });
     const patches = apiRequest.mock.calls.filter(c => c[0] === "PATCH");
     expect(patches).toHaveLength(1);
-    // Fired and disarmed — the button is back to its resting label.
-    expect(rejectButton()).toHaveTextContent("Reject");
-    expect(rejectButton()).not.toHaveTextContent("Confirm reject");
   });
 
-  it("auto-disarms after 3 seconds without a confirming tap", async () => {
+  it("cancel closes the dialog without firing", async () => {
     renderPage();
-    await screen.findByTestId("reject-application"); // real timers for the fetch
-    // FROZEN, not shouldAdvanceTime. The previous version let real time advance
-    // so `waitFor` could poll — which meant a stall on a loaded runner could
-    // fire the very 3s disarm this test is about BEFORE the arm was observed,
-    // and the test failed claiming the button never armed. This test owns the
-    // clock outright: nothing moves unless it says so.
-    vi.useFakeTimers();
+    await screen.findByTestId("reject-application");
     fireEvent.click(rejectButton());
-    expect(rejectButton()).toHaveTextContent("Confirm reject");
-
-    act(() => { vi.advanceTimersByTime(3100); });
-    expect(rejectButton()).toHaveTextContent("Reject");
-    expect(rejectButton()).not.toHaveTextContent("Confirm reject");
-
-    // A tap after the window has closed must only re-arm, never fire.
-    fireEvent.click(rejectButton());
-    expect(rejectButton()).toHaveTextContent("Confirm reject");
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Reject this application?")).not.toBeInTheDocument();
+    });
     expect(apiRequest).not.toHaveBeenCalledWith("PATCH", expect.anything(), expect.anything());
   });
 });

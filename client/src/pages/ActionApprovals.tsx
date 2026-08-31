@@ -274,7 +274,11 @@ export default function ActionApprovals() {
                   <AlertDialogContent className="max-w-sm">
                     <AlertDialogHeader>
                       <AlertDialogTitle>Run this {action.kindLabel.toLowerCase()}?</AlertDialogTitle>
-                      <AlertDialogDescription>It executes as soon as you approve and cannot be undone.</AlertDialogDescription>
+                      <AlertDialogDescription>
+                        {action.reversibility === "irreversible"
+                          ? "It executes as soon as you approve and cannot be undone."
+                          : "It executes as soon as you approve. An Undo appears under Recently for a limited window afterward."}
+                      </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -301,7 +305,15 @@ export default function ActionApprovals() {
         <CardHeader><CardTitle className="text-base">Recently</CardTitle></CardHeader>
         <CardContent className="space-y-2">
           {recent.isLoading && <Skeleton className="h-24 w-full" />}
-          {!recent.isLoading && history.length === 0 && (
+          {recent.isError && (
+            <ErrorState
+              title="Couldn't load the recent decisions"
+              onRetry={() => void recent.refetch()}
+              bordered={false}
+              testId="recent-actions-error"
+            />
+          )}
+          {!recent.isLoading && !recent.isError && history.length === 0 && (
             <p className="text-sm text-muted-foreground">Nothing has gone through the gate yet.</p>
           )}
           {history.map((action) => (

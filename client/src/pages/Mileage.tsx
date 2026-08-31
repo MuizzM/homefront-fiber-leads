@@ -99,6 +99,12 @@ function invalidateMileage() {
 function LocationDisclosure({ consent }: { consent: Consent }) {
   const { toast } = useToast();
   const [background, setBackground] = useState(false);
+  // An explicit "Not now" collapses the pitch to one quiet row on this device.
+  // The full card used to re-render on every visit after a decline, and the
+  // decline button itself only reset a switch - a visible no-op.
+  const [declined, setDeclined] = useState(() => {
+    try { return localStorage.getItem("hfs-mileage-consent-declined") === "1"; } catch { return false; }
+  });
 
   const accept = useMutation({
     mutationFn: (body: { accepted: boolean; backgroundOptIn: boolean }) =>
@@ -127,6 +133,28 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
                 : "Tracking is off."} You can still log trips by hand below.
             </p>
           </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!consent.disclosureAcceptedAt && declined) {
+    return (
+      <Card data-testid="mileage-consent-declined-row">
+        <CardContent className="flex items-center justify-between gap-4 py-4">
+          <div className="text-sm">
+            <p className="font-medium">Location is off - trips are logged by hand</p>
+            <p className="text-muted-foreground">GPS trip measuring stays available whenever you want it.</p>
+          </div>
+          <Button
+            variant="outline" size="sm" data-testid="mileage-consent-reopen"
+            onClick={() => {
+              setDeclined(false);
+              try { localStorage.removeItem("hfs-mileage-consent-declined"); } catch { /* fine */ }
+            }}
+          >
+            Turn on
+          </Button>
         </CardContent>
       </Card>
     );
@@ -189,7 +217,16 @@ function LocationDisclosure({ consent }: { consent: Consent }) {
           >
             Allow location for trips
           </Button>
-          <Button variant="ghost" data-testid="mileage-consent-decline" onClick={() => setBackground(false)}>
+          <Button
+            variant="ghost"
+            data-testid="mileage-consent-decline"
+            onClick={() => {
+              setBackground(false);
+              setDeclined(true);
+              try { localStorage.setItem("hfs-mileage-consent-declined", "1"); } catch { /* session-only */ }
+              toast({ title: "Okay - manual logging", description: "You can turn on GPS trips here anytime." });
+            }}
+          >
             Not now - I'll log by hand
           </Button>
         </div>

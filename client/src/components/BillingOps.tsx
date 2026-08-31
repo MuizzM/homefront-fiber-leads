@@ -7,6 +7,8 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ErrorState } from "@/components/ErrorState";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { FOCUS } from "@/lib/a11y";
@@ -37,7 +39,7 @@ type StagedChange = { kind: "plan"; value: PlanKey } | { kind: "state"; value: B
 export function BillingOps() {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { data } = useQuery<{ plans: Plan[]; tenants: Row[] }>({ queryKey: ["/api/sa/billing"] });
+  const { data, isLoading, isError, refetch } = useQuery<{ plans: Plan[]; tenants: Row[] }>({ queryKey: ["/api/sa/billing"] });
   const [busy, setBusy] = useState<number | null>(null);
   const [grant, setGrant] = useState<Record<number, string>>({});
   const [provisionPlan, setProvisionPlan] = useState<Record<number, PlanKey>>({});
@@ -72,7 +74,17 @@ export function BillingOps() {
         <span className="text-[12px] text-muted-foreground">· lead-credit metering per tenant</span>
       </div>
 
-      {rows.length === 0 ? (
+      {isLoading ? (
+        <div className="px-4 py-4"><Skeleton className="h-24 w-full rounded-xl" /></div>
+      ) : isError ? (
+        <ErrorState
+          title="Couldn't load billing"
+          description="Tenant credit balances are unknown until this loads."
+          onRetry={() => void refetch()}
+          bordered={false}
+          testId="billing-ops-error"
+        />
+      ) : rows.length === 0 ? (
         <p className="px-4 py-6 text-[13px] text-muted-foreground">No tenants yet.</p>
       ) : (
         <div className="divide-y divide-border/60">
