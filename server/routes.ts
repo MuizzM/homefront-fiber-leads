@@ -132,6 +132,7 @@ import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
 import { registerMileageRoutes } from "./mileageRoutes";
 import { registerLiveOpsRoutes, notifyLiveOpsChanged } from "./liveOpsRoutes";
 import { registerRepMetricsRoutes } from "./repMetricsRoutes";
+import { registerOpsRoutes } from "./opsRoutes";
 import { ingestFix, getLiveStates, clearLiveStateForRep } from "./liveOpsStore";
 import { liveOpsScope } from "./liveOpsScope";
 import { registerReferralRoutes } from "./referralRoutes";
@@ -1497,6 +1498,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // keeping them on separate route modules is what stops the second quietly
   // becoming a way to reach the first without an audit row.
   registerRepMetricsRoutes(app, { requireAuth, requireCapability });
+  registerOpsRoutes(app, { requireCapability, leadVisibilityScope });
   // Rep-referral program. Ships DARK (referral.program.enabled = false), so the
   // link and pipeline render but no attribution is accepted and no reward is
   // ever created until an admin turns it on.
@@ -6512,19 +6514,27 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
     }
 
-    const { updated, skipped, repName, incomplete } = await applyAssignment(leadIds, repId ?? null, user, tid);
+    const { updated, skipped, repName, prior, appliedAt, incomplete } = await applyAssignment(leadIds, repId ?? null, user, tid);
     if (updated > 0) {
       storage.logActivity(user?.id ?? null, "lead.bulk_assign", "lead", undefined,
         { repId, repName, requested: leadIds.length, updated, skipped, ...(incomplete ? { incomplete: true } : {}) }, req.ip);
     }
+    // Same put-back contract as assign-selection: applyAssignment already
+    // captures the prior owners - this route used to discard them, so the
+    // ONE id-based bulk path (and every ops-queue action built on it) had no
+    // undo while the ring path did. Same store, same TTL, same CAS restore.
+    const undo = updated > 0 && repId != null
+      ? rememberAssignUndo({ tenantId: tid, userId: user.id, appliedRepId: Number(repId), appliedAt, prior })
+      : null;
+    const undoFields = undo ? { undoToken: undo.token, undoExpiresAt: new Date(undo.expiresAt).toISOString() } : {};
     if (incomplete) {
       return res.status(500).json({
-        updated, skipped, repId,
+        updated, skipped, repId, ...undoFields,
         error: `Assigned ${updated.toLocaleString()} of ${leadIds.length.toLocaleString()} leads before a database error - the rest were not changed`,
         code: "ASSIGN_INCOMPLETE",
       });
     }
-    res.json({ updated, skipped, repId });
+    res.json({ updated, skipped, repId, ...undoFields });
   });
 
   // ── Selection resolution — ONE seam for preview and apply ───────────────────

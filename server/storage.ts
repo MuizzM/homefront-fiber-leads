@@ -2890,6 +2890,36 @@ export function runMigrations() {
     // SCAN of leads (verified with EXPLAIN QUERY PLAN).
     `CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed ON leads(tenant_id)
        WHERE lead_tag = 'fresh_fiber_confirmed' AND fresh_confidence = 'cross_verified'`,
+
+    // ── Operations command center (additive, 2026-08-31) ─────────────────────
+    // A manager's dismissal of an ops-queue row ("not actionable, here is
+    // why") must survive the next poll and the next process - the
+    // rep_coaching_insights dismissed_at pattern, generalized. One row per
+    // (tenant, queue, entity); re-dismissing upserts the reason and clock.
+    `CREATE TABLE IF NOT EXISTS ops_dismissals (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER,
+       queue_key TEXT NOT NULL,
+       entity_kind TEXT NOT NULL DEFAULT 'lead',
+       entity_id INTEGER NOT NULL,
+       reason TEXT NOT NULL,
+       dismissed_by_user_id INTEGER NOT NULL,
+       dismissed_at TEXT NOT NULL,
+       expires_at TEXT NOT NULL
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_ops_dismissals_key
+       ON ops_dismissals(tenant_id, queue_key, entity_kind, entity_id)`,
+    // The ops queues filter on "assigned and (un)worked since assigned_at".
+    // Partial index keeps the predicate off the unassigned majority.
+    `CREATE INDEX IF NOT EXISTS idx_leads_ops_assigned
+       ON leads(tenant_id, assigned_at)
+       WHERE assigned_rep_id IS NOT NULL`,
+    // Overdue follow-ups scan knocks WITH a callback date; the existing
+    // partial indexes only cover outcome='callback' while the product rule
+    // (getOpenCallbacks arm 1) also matches follow_up/go_back rows.
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_callback_due
+       ON knock_log(tenant_id, callback_date)
+       WHERE callback_date IS NOT NULL`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
