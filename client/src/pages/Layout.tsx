@@ -1,6 +1,7 @@
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import {
+  ListChecks,
   LayoutDashboard,
   Map,
   MapPin,
@@ -158,6 +159,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/commission-console", label: "Commissions & Pay", icon: Banknote, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Rep Onboarding", icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
+  { href: "/ops",          label: "Operations",      icon: ListChecks,  show: r => can(r, "dashboard.read.team"),       group: "Manage" },
   { href: "/live-ops",     label: "Live Operations", icon: Radio,       show: r => can(r, "field.location.read.team"),  group: "Manage" },
   // Order recovery is a MANAGE surface, not a governance one: it is a queue of
   // work, and the people who run it are the people who run the floor.

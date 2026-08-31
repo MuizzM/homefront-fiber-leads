@@ -30,6 +30,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 const Dashboard = lazyRoute(() => import("@/pages/Dashboard"));
 const Today = lazyRoute(() => import("@/pages/Today"));
 const PropertyDetail = lazyRoute(() => import("@/pages/PropertyDetail"));
+const Ops = lazyRoute(() => import("@/pages/Ops"));
 const FollowUps = lazyRoute(() => import("@/pages/FollowUps"));
 const MapView = lazyRoute(() => {
   // Kick the mapbox-gl CDN download (idempotent loader in index.html) the moment
@@ -441,6 +442,7 @@ function RouteTable({ location, role, isSuperAdmin }: {
           <Route path="/order-recovery">
             <CapabilityGuard role={role} capability="recovery.read.team"><OrderRecovery /></CapabilityGuard>
           </Route>
+          <Route path="/ops"><CapabilityGuard role={role} capability="dashboard.read.team"><Ops /></CapabilityGuard></Route>
           <Route path="/leads/import">
             <CapabilityGuard role={role} capability="lead.assign"><ImportLeads /></CapabilityGuard>
           </Route>
