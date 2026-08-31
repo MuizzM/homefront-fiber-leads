@@ -170,3 +170,38 @@ pool and audit queues stay manager-level.
 ## Rollback
 Additive only (new table ops_dismissals, two partial indexes, new routes,
 new page). Previous SHA redeploy fully disables it; the table is inert.
+
+---
+
+# Addendum 2 - Lasso intelligence (claude/lasso-intelligence, 2026-08-31)
+
+## What changes for managers
+- A second lasso is a choice, not an error: "Add a loop" grows the selection
+  (the panel reports "N added · M already selected" - the overlap is deduped,
+  never refused), "Carve out" removes an area ("N removed"), plain drawing
+  still starts over and the panel says so.
+- The Assign button now states the NET number that will change. Doors already
+  assigned to the chosen rep are shown ("N already assigned - left
+  unchanged") and are genuinely untouched: no timestamps rewritten, no
+  history noise, not part of the undo. If everything selected is already
+  theirs, the panel says "No changes needed" instead of offering a button
+  that would do nothing.
+- Every exclusion is named: reassignments from other reps, doors held by
+  other teams, doors filtered out by the state chips.
+
+## For support
+- "It says no changes needed" - correct: every selected door already belongs
+  to that rep. Pick a different rep or adjust the loops.
+- "My second circle didn't error about overlap" - by design now; the delta
+  line reports what was new vs already selected.
+- Undo puts back only what actually moved; "already theirs" doors were never
+  touched.
+
+## Monitoring
+- Same http.request meters on /api/leads/assign-selection[/preview].
+- activity lead.assign_selection details now carry rings, alreadyTarget -
+  the preview/apply mismatch and dedupe volumes the directive asks to watch.
+
+## Rollback
+No schema changes. The API is backward-compatible (single-polygon bodies
+still work); previous-SHA redeploy restores the old panel.

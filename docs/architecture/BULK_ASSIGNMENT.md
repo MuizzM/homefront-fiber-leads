@@ -351,3 +351,29 @@ offering a retry that cannot work. Pre-confirm, the panel renders the
 hands" line, so reassignment is distinct from first assignment BEFORE the
 commit. No server contract changed; `undoExpiresAt` was already in the
 response and is now read.
+
+## 2026-08-31 addendum 2: composed selections and net-change apply
+
+A selection is now a COMPOSITION the resolver understands natively:
+`polygons: [{ring, op: "add"|"subtract"}]` (legacy single `polygon` = one add
+ring). Add loops union with per-door dedupe; subtract loops carve; membership
+is inside-any-add AND inside-no-subtract. One point budget
+(MAX_ASSIGN_RING_POINTS) spans every loop, at most MAX_ASSIGN_RINGS=8 loops
+(TOO_MANY_RINGS / NO_ADD_RING). The opId body-hash covers the composed
+geometry.
+
+The resolver is target-aware (`targetRepId` on preview; apply's repId rides
+the same seam) and the APPLY writes only NET changes: doors already assigned
+to the target are matched, reported (`alreadyAssignedToTarget`,
+`matchedInSelection`), and deliberately untouched - no assigned_at rewrite
+(which restarted the ops-center "unworked" clock), no assignment lead_events,
+no presence in the undo snapshot. Zero net changes answers 200 with
+`noChangesNeeded: true` - an explanation, never an error.
+
+Preview's reasoned breakdown (all additive): `matching` (movable + held),
+`actionable`, `netChanges`, `alreadyAssignedToTarget`, `fromOtherReps`,
+`fromPool`, `excluded: {heldTerritory, filteredOut}`, `ringCount`, and
+`lastRing` deltas (`added`/`alreadySelected` for an add loop,
+`removed`/`notInSelection` for a subtract) - the numbers that let the panel
+say "5 added · 5 already selected" where an overlap used to read as a
+failure. Pinned by tests/integration/lasso-selection-modes.test.ts.
