@@ -88,6 +88,13 @@ beforeAll(async () => {
   server = createServer(app);
   registerRoutes(server, app);
   registerSaasRoutes(app);
+  // CI-only ECONNRESET fix: the big seeding transactions below can block the
+  // event loop longer than Node's default 5s keepAliveTimeout on a slow
+  // runner, so the server closes the idle keep-alive socket mid-seed and the
+  // NEXT post rides a dead connection (undici never retries a POST). Locally
+  // the seed finishes in well under a second, so the race is invisible.
+  server.keepAliveTimeout = 120_000;
+  server.headersTimeout = 125_000; // must exceed keepAliveTimeout
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const a = server.address();
   if (!a || typeof a === "string") throw new Error("no bind");
