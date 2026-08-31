@@ -2,6 +2,7 @@ import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useRovingTabs } from "@/hooks/use-roving-tabs";
 import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Zap, Clock, Layers, Hammer } from "lucide-react";
@@ -84,6 +85,8 @@ export default function FiberIntelligence() {
   const isManager = user?.role === "admin" || user?.role === "manager";
   const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState<TabKey>("fresh");
+  // Arrow-key movement for the tablist the role below promises.
+  const fiRoving = useRovingTabs(TABS.length, Math.max(0, TABS.findIndex(t => t.key === tab)), (i) => setTab(TABS[i].key));
 
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-4 pb-6 pt-4 sm:px-6">
@@ -93,13 +96,15 @@ export default function FiberIntelligence() {
       </header>
 
       <div className="relative sticky top-0 z-10 -mx-4 mb-4 sm:-mx-6">
-      <div role="tablist" aria-label="Fiber Intelligence sections" className="overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div role="tablist" aria-label="Fiber Intelligence sections" onKeyDown={fiRoving.onKeyDown} className="overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex gap-1">
-          {TABS.map(({ key, label, }) => (
+          {TABS.map(({ key, label, }, tabIdx) => (
             <button
               key={key}
               role="tab"
               aria-selected={tab === key}
+              tabIndex={tab === key ? 0 : -1}
+              ref={fiRoving.itemRef(tabIdx)}
               onClick={(e) => { setTab(key); (e.currentTarget as HTMLElement).scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); }}
               data-testid={`fi-tab-${key}`}
               className={`relative flex min-h-11 md:min-h-10 items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-[13px] font-semibold transition-colors ${tab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}

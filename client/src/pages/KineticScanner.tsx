@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/hooks/use-toast";
 import { useModalA11y } from "@/hooks/use-modal-a11y";
+import { useRovingTabs } from "@/hooks/use-roving-tabs";
 import { summarizeEvidenceWorker } from "@/lib/scanYield";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
@@ -59,6 +60,8 @@ function badge(address: KineticAddress) {
 export default function KineticScanner() {
   const [tab, setTab] = useState<Tab>("dashboard"),
     [selected, setSelected] = useState<number | null>(null);
+  // Arrow-key movement for the tablist the role below promises.
+  const tabsRoving = useRovingTabs(tabs.length, Math.max(0, tabs.findIndex(([id]) => id === tab)), (i) => setTab(tabs[i][0] as Tab));
   const { data: ping, isPending: pingPending } = useQuery({
     queryKey: ["kinetic-ping"],
     queryFn: kineticScannerApi.ping,
@@ -94,14 +97,17 @@ export default function KineticScanner() {
           </div>
           <nav
             role="tablist"
+            onKeyDown={tabsRoving.onKeyDown}
             className="flex items-center gap-1 overflow-x-auto border-t border-border p-1.5"
             aria-label="Kinetic Scanner sections"
           >
-            {tabs.map(([id, label]) => (
+            {tabs.map(([id, label], tabIdx) => (
               <button
                 key={id}
                 role="tab"
                 aria-selected={tab === id}
+                tabIndex={tab === id ? 0 : -1}
+                ref={tabsRoving.itemRef(tabIdx)}
                 onClick={() => setTab(id)}
                 className={`relative flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tab === id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
               >

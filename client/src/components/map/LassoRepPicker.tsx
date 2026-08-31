@@ -7,6 +7,7 @@
 // token set for anything semantic).
 import { Check } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
+import { useRovingTabs } from "@/hooks/use-roving-tabs";
 
 export interface PickerRep {
   id: number;
@@ -67,6 +68,11 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 
 export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByChosen = 0 }: LassoRepPickerProps) {
   const chosen = reps.find((r) => String(r.id) === value) ?? null;
+  // The radiogroup role promises arrow-key movement ("1 of N, use arrow
+  // keys") - deliver it. With nothing chosen yet, the first row is the
+  // tab stop.
+  const chosenIdx = reps.findIndex((r) => String(r.id) === value);
+  const roving = useRovingTabs(reps.length, Math.max(0, chosenIdx), (i) => onChange(String(reps[i].id)));
   // Net new doors for the chosen rep: the selection minus what they already
   // hold in it. Clamped — a stale count must never project a negative gain.
   const gained = Math.max(0, selectionCount - ownedByChosen);
@@ -75,6 +81,7 @@ export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByC
       <div
         role="radiogroup"
         aria-label="Assign to"
+        onKeyDown={roving.onKeyDown}
         className="flex max-h-[236px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-0.5"
       >
         {reps.length === 0 && (
@@ -91,6 +98,8 @@ export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByC
               type="button"
               role="radio"
               aria-checked={on}
+              tabIndex={on || (chosenIdx < 0 && i === 0) ? 0 : -1}
+              ref={roving.itemRef(i)}
               data-testid={`lasso-rep-${r.id}`}
               onClick={() => onChange(String(r.id))}
               className={`flex min-h-[52px] w-full items-center gap-2.5 rounded-xl border px-2 py-1.5 text-left transition active:bg-white/[0.10] ${FOCUS} ${

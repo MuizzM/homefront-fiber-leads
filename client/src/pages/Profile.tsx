@@ -1,7 +1,8 @@
-import { ChevronRight, Moon, Sun } from "lucide-react";
+import { ChevronDown, ChevronRight, Moon, Sun } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
+import { useErrorCenter } from "@/hooks/use-toast";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -123,6 +124,12 @@ export default function Profile() {
           </div>
         </section>
 
+        {/* ── Recent errors on this device ─────────────────────
+            The durable half of the 6-second error toast: every error,
+            warning, offline and payment notice from this session, so a
+            failure missed in the field is recoverable instead of gone. */}
+        <RecentErrorsSection />
+
         {/* ── Session ─────────────────────────────────────────── */}
         <section className="space-y-3">
           <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-1">
@@ -146,5 +153,47 @@ export default function Profile() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** The error center's first real consumer: the auto-dismiss policy for error
+ *  toasts (6s) was justified by this durable log existing - and it was
+ *  written to but rendered nowhere. Collapsed by default; session-only. */
+function RecentErrorsSection() {
+  const { notifications, clear } = useErrorCenter();
+  if (notifications.length === 0) return null;
+  return (
+    <section className="space-y-3" data-testid="recent-errors">
+      <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-1">
+        Recent errors on this device
+      </h2>
+      <details className="group rounded-xl bg-card border border-border overflow-hidden">
+        <summary className="flex min-h-tap cursor-pointer select-none items-center justify-between gap-3 px-5 text-[14px] font-medium text-foreground [&::-webkit-details-marker]:hidden">
+          <span>{notifications.length} since you opened the app</span>
+          <ChevronDown aria-hidden="true" className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="border-t border-border">
+          <ul className="max-h-64 divide-y divide-border/60 overflow-y-auto">
+            {notifications.map(n => (
+              <li key={n.id} className="px-5 py-2.5">
+                <div className="text-[13px] font-medium text-foreground">{n.title}</div>
+                {n.description && <div className="mt-0.5 text-xs text-muted-foreground">{n.description}</div>}
+                <div className="mt-0.5 text-2xs text-muted-foreground">
+                  {new Date(n.at).toLocaleTimeString()} · {n.severity}
+                </div>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            onClick={clear}
+            data-testid="recent-errors-clear"
+            className="w-full border-t border-border px-5 py-3 text-left text-[13px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            Clear the list
+          </button>
+        </div>
+      </details>
+    </section>
   );
 }

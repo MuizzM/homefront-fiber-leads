@@ -69,10 +69,10 @@ export function DistanceDiagram({
             <circle cx="34" cy="40" r="5" fill={m.dot} />
             <text x="34" y="64" textAnchor="middle" className="fill-muted-foreground" fontSize="9">Rep</text>
             {/* lead (right) */}
-            <circle cx="226" cy="40" r="11" fill="#f97316" opacity="0.18" />
+            <circle cx="226" cy="40" r="11" fill="hsl(var(--primary))" opacity="0.18" />
             <text x="226" y="66" textAnchor="middle" className="fill-muted-foreground" fontSize="9">Lead</text>
             {/* distance label */}
-            <rect x="96" y="14" width="68" height="18" rx="9" fill="var(--card, #0f2a44)" stroke={m.dot} strokeWidth="1" />
+            <rect x="96" y="14" width="68" height="18" rx="9" fill="hsl(var(--card))" stroke={m.dot} strokeWidth="1" />
             <text x="130" y="26" textAnchor="middle" fill={m.dot} fontSize="11" fontWeight="700">
               {distanceM! < 1000 ? `${Math.round(distanceM!)} m` : `${(distanceM! / 1000).toFixed(1)} km`}
             </text>

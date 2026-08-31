@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useRovingTabs } from "@/hooks/use-roving-tabs";
 import { apiRequest } from "@/lib/queryClient";
 import { useCan } from "@/lib/capabilities";
 import { useToast, toast } from "@/hooks/use-toast";
@@ -86,6 +87,20 @@ export default function CommissionConsole() {
   const canManageOrg = useCan("settings.manage.org");    // org settings (house amount)
   const canDownline = useCan("commission.read.downline"); // team_lead+: multi-level override sheet
   const [section, setSection] = useState<"overview" | "pay" | "downline">("overview");
+  // One list drives the workspace tabs and their keyboard contract.
+  // "Pay reps" is finalize/export/adjust - only commission.read.all roles see
+  // it; Downline is omitted (never disabled) below team lead, per the
+  // capability house rule.
+  const visibleSections: Array<{ id: typeof section; label: string }> = [
+    { id: "overview" as const, label: "Overview" },
+    ...(canReadAll ? [{ id: "pay" as const, label: "Pay reps" }] : []),
+    ...(canDownline ? [{ id: "downline" as const, label: "Downline" }] : []),
+  ];
+  const sectionsRoving = useRovingTabs(
+    visibleSections.length,
+    Math.max(0, visibleSections.findIndex(x => x.id === section)),
+    (i) => setSection(visibleSections[i].id),
+  );
   const [weekOffset, setWeekOffset] = useState(0);       // 0 = current, -1 = last week…
   const [drillRep, setDrillRep] = useState<OverviewRow | null>(null);
   const [confirmAction, setConfirmAction] = useState<"FINALIZE" | "MARK_PAID" | null>(null);
@@ -202,46 +217,22 @@ export default function CommissionConsole() {
         </div>
       </div>
 
-      <div className="inline-flex w-full sm:w-auto rounded-xl border border-border bg-card p-1" role="tablist" aria-label="Commission workspace">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={section === "overview"}
-          onClick={() => setSection("overview")}
-          className={`h-11 md:h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors ${section === "overview" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-          data-testid="commission-tab-overview"
-        >
-          Overview
-        </button>
-        {/* "Pay reps" is finalize/export/adjust — only roles with
-            commission.read.all can act there. Hiding it for team leads (who get
-            a read-only Overview) avoids a tab that opens a blank panel. */}
-        {canReadAll && (
+      <div className="inline-flex w-full sm:w-auto rounded-xl border border-border bg-card p-1" role="tablist" aria-label="Commission workspace" onKeyDown={sectionsRoving.onKeyDown}>
+        {visibleSections.map((sec, secIdx) => (
           <button
+            key={sec.id}
             type="button"
             role="tab"
-            aria-selected={section === "pay"}
-            onClick={() => setSection("pay")}
-            className={`h-11 md:h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "pay" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-            data-testid="commission-tab-pay"
+            aria-selected={section === sec.id}
+            tabIndex={section === sec.id ? 0 : -1}
+            ref={sectionsRoving.itemRef(secIdx)}
+            onClick={() => setSection(sec.id)}
+            className={`h-11 md:h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === sec.id ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            data-testid={`commission-tab-${sec.id}`}
           >
-             Pay reps
+            {sec.label}
           </button>
-        )}
-        {/* Downline overrides — multi-level pay visibility. Omitted (never
-            disabled) below team lead, per the capability house rule. */}
-        {canDownline && (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={section === "downline"}
-            onClick={() => setSection("downline")}
-            className={`h-11 md:h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "downline" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-            data-testid="commission-tab-downline"
-          >
-             Downline
-          </button>
-        )}
+        ))}
       </div>
 
       {isError && (
@@ -468,12 +459,19 @@ export default function CommissionConsole() {
                   <tbody className="divide-y divide-border">
                     {visibleRows.map(r => (
                       <tr key={r.repId} className="hover:bg-secondary/40 cursor-pointer transition-colors focus:outline-none focus:bg-secondary/60 focus-visible:ring-1 focus-visible:ring-primary"
-                        role="button" tabIndex={0} aria-label={`Explain ${r.repName}'s ${usd(r.finalCommissionCents)}`}
-                        onClick={() => setDrillRep(r)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDrillRep(r); } }}
+                        onClick={() => setDrillRep(r)}
                         data-testid={`row-rep-${r.repId}`}>
                         <td className="px-4 py-2.5">
                           <div className="font-medium text-foreground flex items-center gap-1.5">
-                            {r.repName}
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setDrillRep(r); }}
+                              aria-label={`Explain ${r.repName}'s ${usd(r.finalCommissionCents)}`}
+                              className="tap-expand rounded-sm text-left font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              data-testid={`open-rep-${r.repId}`}
+                            >
+                              {r.repName}
+                            </button>
                             {r.structure && !r.planAccepted && (
                               <span className="text-2xs font-bold uppercase text-warning bg-warning/[0.08] border border-warning/25 rounded px-1 py-0.5">plan not accepted</span>
                             )}

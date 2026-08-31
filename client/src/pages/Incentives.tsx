@@ -42,6 +42,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { useRovingTabs } from "@/hooks/use-roving-tabs";
 import { CampaignBoard } from "@/components/CampaignBoard";
 import { MilestoneSection } from "@/components/MilestoneCard";
 import { DoorDropSection } from "@/components/DoorDropCard";
@@ -805,14 +806,17 @@ function ManageTab() {
 // ── The page ──────────────────────────────────────────────────────────────────
 type TabKey = "earn" | "activity" | "team" | "manage";
 
-function TabButton({ id, label, active, onSelect, badge }: {
+function TabButton({ id, label, active, onSelect, badge, buttonRef }: {
   id: TabKey; label: string; active: boolean; onSelect: (id: TabKey) => void; badge?: number;
+  buttonRef?: (el: HTMLElement | null) => void;
 }) {
   return (
     <button
       type="button"
       role="tab"
       aria-selected={active}
+      tabIndex={active ? 0 : -1}
+      ref={buttonRef}
       onClick={() => onSelect(id)}
       data-testid={`tab-${id}`}
       className={cn(
@@ -863,6 +867,18 @@ export default function Incentives() {
   // viewer does not have. Snap back rather than rendering an empty pane.
   const available: TabKey[] = ["earn", "activity", ...(isManager ? ["team" as const] : []), ...(canLaunch ? ["manage" as const] : [])];
   const activeTab = available.includes(tab) ? tab : "earn";
+  // One list drives the tab row AND its keyboard contract.
+  const visibleTabs: Array<{ id: TabKey; label: string; badge?: number }> = [
+    { id: "earn", label: "Earn" },
+    { id: "activity", label: "Activity" },
+    ...(isManager ? [{ id: "team" as const, label: "Team", badge: openCount }] : []),
+    ...(canLaunch ? [{ id: "manage" as const, label: "Manage" }] : []),
+  ];
+  const tabsRoving = useRovingTabs(
+    visibleTabs.length,
+    Math.max(0, visibleTabs.findIndex(t => t.id === activeTab)),
+    (i) => setTab(visibleTabs[i].id),
+  );
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-4 p-4 pt-5 pb-24 md:p-6">
@@ -880,15 +896,11 @@ export default function Incentives() {
       <MoneyHero data={mine.data} isLoading={mine.isLoading} isError={mine.isError} />
 
       <div className="inline-flex w-full rounded-xl border border-border bg-card p-1"
-           role="tablist" aria-label="Incentives sections">
-        <TabButton id="earn" label="Earn" active={activeTab === "earn"} onSelect={setTab} />
-        <TabButton id="activity" label="Activity" active={activeTab === "activity"} onSelect={setTab} />
-        {isManager && (
-          <TabButton id="team" label="Team" active={activeTab === "team"} onSelect={setTab} badge={openCount} />
-        )}
-        {canLaunch && (
-          <TabButton id="manage" label="Manage" active={activeTab === "manage"} onSelect={setTab} />
-        )}
+           role="tablist" aria-label="Incentives sections" onKeyDown={tabsRoving.onKeyDown}>
+        {visibleTabs.map((t, tabIdx) => (
+          <TabButton key={t.id} id={t.id} label={t.label} active={activeTab === t.id} onSelect={setTab}
+                     badge={t.badge} buttonRef={tabsRoving.itemRef(tabIdx)} />
+        ))}
       </div>
 
       {activeTab === "earn" && <EarnTab band={band} />}
