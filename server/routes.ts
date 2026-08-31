@@ -247,7 +247,7 @@ function stripProviderIds<T extends Record<string, any>>(lead: T, user?: any): T
 function isAutoAreaName(name?: string | null): boolean {
   if (!name || !name.trim()) return true;
   const n = name.trim();
-  return /'s area$/.test(n) || n === "Unassigned area";
+  return n.endsWith('\'s area') || n === "Unassigned area";
 }
 import { scanAddress, setManualToken, getTokenStatus, forceFreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, pauseScanning, resumeScanning, isScanningPaused, getEgressActivity, type ScanResult } from "./scanner";
 import { getInspectorSnapshot, getAddressTimeline, onScanEvent } from "./scanEvents";
@@ -1071,7 +1071,15 @@ function scanSummary(job: ScanJob): ScanSummary {
 import { readFileSync } from "fs";
 import { join } from "path";
 
-let _gisAddresses: { address: string; city: string; state: string; zip: string; lat: number; lng: number; }[] | null = null;
+// The owner columns are optional because the file carries them under four
+// different spellings depending on the export vintage; the enrichment endpoint
+// is the only reader that needs them, and it tries all four in order.
+interface GisAddress {
+  address: string; city: string; state: string; zip: string; lat: number; lng: number;
+  ownerName?: string; owner?: string; parcelOwner?: string; owner_name?: string;
+}
+
+let _gisAddresses: GisAddress[] | null = null;
 function loadGisAddresses() {
   if (_gisAddresses) return _gisAddresses;
   try {
@@ -1088,6 +1096,16 @@ function loadGisAddresses() {
   }
   return _gisAddresses!;
 }
+
+// ── Census ACS demographics, cached per ZIP ──────────────────────────────────
+// The enrichment endpoint asks Census for a FIXED 2022 vintage keyed only by
+// ZIP, so every lead on a street produces the identical request. It runs on
+// Census's shared DEMO_KEY, which a knocking crew can get rate-blocked, and the
+// call is awaited with an 8s timeout in front of the rep's card. Cache the
+// answer, never the failure: a throttled miss must be retried, not remembered.
+interface CensusZipDemographics { incomeRange: string | null; homeValue: string | null }
+const CENSUS_ZIP_TTL_MS = 24 * 60 * 60 * 1000;
+const _censusByZip = new Map<string, { at: number; value: CensusZipDemographics }>();
 
 function generateAddresses(zip = "28138", _city = "Rockwell") {
   // Return real parcel addresses with GIS coordinates
@@ -2049,7 +2067,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   }
   function parseMapTag(raw: unknown): string | undefined | { error: string } {
     if (raw == null || raw === "") return undefined;
-    if (typeof raw !== "string" || raw.length > 64 || !/^[a-z0-9_\-]+$/i.test(raw)) {
+    if (typeof raw !== "string" || raw.length > 64 || !/^[a-z0-9_-]+$/i.test(raw)) {
       return { error: "tag must be a lead_tag value or prefix (letters, digits, _, -)" };
     }
     return raw;
@@ -3035,7 +3053,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (buyerScoreRunning(tid)) return res.status(409).json({ error: "A rescore is already running" });
     try {
       const summary = await rescoreTenant(tid);
-      res.json({ ok: true, ...(summary ?? {}), bands: buyerScoreBands(tid) });
+      res.json({ ok: true, ...summary, bands: buyerScoreBands(tid) });
     } catch (e: any) {
       console.error("[buyer-score] run failed:", e);
       res.status(500).json({ error: "Rescore failed" });
@@ -4470,7 +4488,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             job.done = 0;
           }
           await runCityScan(jobId, newAddresses as any);
-        } catch (err: any) {
+        } catch {
           const job = scanJobs.get(jobId);
           if (job) job.status = "done";
         }
@@ -5354,7 +5372,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
+    // no-transform is what makes the global compression() middleware skip this
+    // response. Without it zlib buffers the 1s progress frames instead of
+    // delivering them, so the live scan view sat silent until the stream ended.
+    // X-Accel-Buffering only tells nginx; it does not reach the in-process
+    // compressor. Every other SSE endpoint here already opts out this way.
+    res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
@@ -5461,7 +5484,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // `result` blob (it embeds dfAddressId/accessId/exchangeId + competitor intel).
   app.get("/api/fiber-checks", requireManager, (req, res) => {
     const rows = storage.getRecentChecks(100, (req as any).user?.tenantId);
-    res.json(rows.map(({ result, ...safe }: any) => safe));
+    res.json(rows.map(({ result: _result, ...safe }: any) => safe));
   });
 
   // ── Team Members ─────────────────────────────────────────────────────────────
@@ -7150,22 +7173,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     //    The GIS file has raw parcel data; we do a fuzzy number+street match.
     let ownerName: string | null = null;
     try {
-      const gisPath = path.join(__dirname, "rockwell_gis_addresses.json");
-      if (fs.existsSync(gisPath)) {
-        const gisData = JSON.parse(fs.readFileSync(gisPath, "utf8")) as Array<{
-          address: string; city: string; state: string; zip: string;
-          lat?: number; lng?: number; ownerName?: string; owner?: string;
-          parcelOwner?: string; owner_name?: string;
-        }>;
-        // Normalize the lead address for comparison
-        const normLead = lead.address.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
-        const match = gisData.find(g => {
-          const normGis = g.address.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
-          return normGis === normLead;
-        });
-        if (match) {
-          ownerName = match.ownerName ?? match.owner ?? match.parcelOwner ?? match.owner_name ?? null;
-        }
+      // loadGisAddresses() parses the 188 KB file once per process and memoizes
+      // it. This handler used to re-read and re-JSON.parse the whole file on
+      // every request, blocking the event loop each time a rep opened a card.
+      const gisData = loadGisAddresses();
+      // Normalize the lead address for comparison
+      const normLead = lead.address.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+      const match = gisData.find(g => {
+        const normGis = g.address.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+        return normGis === normLead;
+      });
+      if (match) {
+        ownerName = match.ownerName ?? match.owner ?? match.parcelOwner ?? match.owner_name ?? null;
       }
     } catch (e) { console.warn("GIS owner lookup failed:", e); }
 
@@ -7174,29 +7193,39 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     //    This is a single call for the whole ZIP (not per-address — same data for all leads in 28138)
     let incomeRange: string | null = null;
     let homeValue: string | null = null;
-    try {
-      const zip = encodeURIComponent(lead.zip || "28138");
-      const censusUrl = `https://api.census.gov/data/2022/acs/acs5?get=B19013_001E,B25077_001E&for=zip+code+tabulation+area:${zip}&key=DEMO_KEY`;
-      const resp = await fetch(censusUrl, { signal: AbortSignal.timeout(8000) });
-      if (resp.ok) {
-        const data = await resp.json() as string[][];
-        if (data.length >= 2) {
-          const medIncome = parseInt(data[1][0], 10);
-          const medHome = parseInt(data[1][1], 10);
-          if (!isNaN(medIncome) && medIncome > 0) {
-            // Bucket into range
-            const lo = Math.floor(medIncome / 10000) * 10000;
-            const hi = lo + 10000;
-            incomeRange = `$${(lo / 1000).toFixed(0)}k-$${(hi / 1000).toFixed(0)}k`;
+    const zipKey = lead.zip || "28138";
+    const cachedCensus = _censusByZip.get(zipKey);
+    if (cachedCensus && Date.now() - cachedCensus.at < CENSUS_ZIP_TTL_MS) {
+      incomeRange = cachedCensus.value.incomeRange;
+      homeValue = cachedCensus.value.homeValue;
+    } else {
+      try {
+        const zip = encodeURIComponent(zipKey);
+        const censusUrl = `https://api.census.gov/data/2022/acs/acs5?get=B19013_001E,B25077_001E&for=zip+code+tabulation+area:${zip}&key=DEMO_KEY`;
+        const resp = await fetch(censusUrl, { signal: AbortSignal.timeout(8000) });
+        if (resp.ok) {
+          const data = await resp.json() as string[][];
+          if (data.length >= 2) {
+            const medIncome = parseInt(data[1][0], 10);
+            const medHome = parseInt(data[1][1], 10);
+            if (!isNaN(medIncome) && medIncome > 0) {
+              // Bucket into range
+              const lo = Math.floor(medIncome / 10000) * 10000;
+              const hi = lo + 10000;
+              incomeRange = `$${(lo / 1000).toFixed(0)}k-$${(hi / 1000).toFixed(0)}k`;
+            }
+            if (!isNaN(medHome) && medHome > 0) {
+              const lo = Math.floor(medHome / 25000) * 25000;
+              const hi = lo + 25000;
+              homeValue = `$${lo.toLocaleString()}\u2013$${hi.toLocaleString()}`;
+            }
           }
-          if (!isNaN(medHome) && medHome > 0) {
-            const lo = Math.floor(medHome / 25000) * 25000;
-            const hi = lo + 25000;
-            homeValue = `$${lo.toLocaleString()}\u2013$${hi.toLocaleString()}`;
-          }
+          // Only a response we actually parsed is worth remembering. A timeout,
+          // a 429, or a 5xx falls through and will be retried next time.
+          _censusByZip.set(zipKey, { at: Date.now(), value: { incomeRange, homeValue } });
         }
-      }
-    } catch (e) { console.warn("Census API failed:", e); }
+      } catch (e) { console.warn("Census API failed:", e); }
+    }
 
     // 3. Persist enrichment data to lead row (only update fields we got)
     const enrichmentUpdate: Record<string, unknown> = { enrichedAt: new Date().toISOString() };
@@ -9203,7 +9232,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const preview = previewNextPass(t.id, tid ?? null, { keepPendingCallbacks });
     // Only counts and reasons cross the wire. The frozen[] array carries lead ids
     // and the client has no use for them here.
-    const { frozen, reset, ...rest } = preview;
+    const { frozen: _frozen, reset: _reset, ...rest } = preview;
     res.json({ ...rest, territoryName: t.name });
   });
 

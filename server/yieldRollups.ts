@@ -32,6 +32,7 @@ import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
 import { readPressure, PRESSURE_ORDER } from "./resourcePressure";
 import { streetKeyOf } from "./freshHarvest";
+import { canonicalAddressPart, normalizeKineticAddressKey } from "@shared/addressKey";
 
 const NEG_STREAK_WINDOW_DAYS = 120; // backfill parity with the old CTE window
 
@@ -104,6 +105,7 @@ const INDEXES: Array<{ name: string; ddl: string }> = [
 
 const STREET_CHUNK = Math.max(500, Number(process.env.YIELD_STREET_CHUNK) || 10_000);
 const NEG_CHUNK = Math.max(500, Number(process.env.YIELD_NEG_CHUNK) || 10_000);
+const CANON_CHUNK = Math.max(500, Number(process.env.YIELD_CANON_CHUNK) || 2_000);
 
 // Fill street_key for rows that lack it (legacy rows once; brand-new inserts
 // within a couple of ticks). Returns rows processed.
@@ -118,6 +120,59 @@ export function streetKeyJanitorChunk(limit = STREET_CHUNK): number {
   });
   tx(rows);
   return rows.length;
+}
+
+/**
+ * One resumable chunk of the canonical_key backfill. Returns true when done.
+ *
+ * WHY: storage.upsertScanTargets stops a re-spelled house becoming a second row
+ * with `WHERE tenant_id IS ? AND canonical_key = ?`. That lookup cannot fire on
+ * a NULL key, so every un-keyed row is invisible to the guard and to
+ * scanTargetCanonicalMerge's duplicate manifest. Measured 2026-08-27: 292,999 of
+ * 924,104 rows un-keyed, hiding 26,131 duplicate groups — 7,163 of them a door
+ * scanned (and paid for) on two rows.
+ *
+ * Both insert paths stamp the key today, so this is a one-time drain of rows
+ * written before that, hence the cursor + done flag rather than a steady-state
+ * sweep like the street_key janitor. It must run BEFORE the alias merge and the
+ * UNIQUE promotion in step 5 — see promoteCanonicalUnique, which now refuses
+ * while any row is still un-keyed.
+ *
+ * Rows whose address has no canonical street part are SKIPPED, never stamped: a
+ * blank street yields a degenerate "|CITY|STATE" key that would make every such
+ * row in a city one another's twin. The cursor (not a bare `IS NULL LIMIT n`)
+ * is what keeps those skipped rows from trapping the loop forever.
+ */
+export function canonicalKeyBackfillChunk(chunk = CANON_CHUNK): boolean {
+  if (getState("canonkey_done") === "1") return true;
+  if (!columnExists("scan_targets", "canonical_key")) {
+    setState("canonkey_done", "1"); // replay/fresh DB without the column
+    return true;
+  }
+  const cursor = Number(getState("canonkey_cursor") ?? 0);
+  const rows = rawDb.prepare(
+    `SELECT id, address, city, state, zip FROM scan_targets
+      WHERE canonical_key IS NULL AND id > ? ORDER BY id LIMIT ?`,
+  ).all(cursor, chunk) as Array<{ id: number; address: string | null; city: string | null; state: string | null; zip: string | null }>;
+  if (!rows.length) { setState("canonkey_done", "1"); return true; }
+
+  const update = rawDb.prepare(`UPDATE scan_targets SET canonical_key=? WHERE id=? AND canonical_key IS NULL`);
+  const tx = rawDb.transaction((batch: typeof rows) => {
+    for (const r of batch) {
+      // The exact rule upsertScanTargets applies to a new row.
+      if (!canonicalAddressPart(r.address ?? "")) continue;
+      update.run(
+        normalizeKineticAddressKey(r.address ?? "", r.city ?? "", r.state ?? "NC", r.zip ?? ""),
+        r.id,
+      );
+    }
+  });
+  // .immediate() takes the write lock up front; a deferred transaction would
+  // start as a reader and upgrade on the first UPDATE, which is the shape that
+  // returns SQLITE_BUSY while a scan run holds the lock.
+  tx.immediate(rows);
+  setState("canonkey_cursor", String(rows[rows.length - 1].id));
+  return false;
 }
 
 // One resumable chunk of the neg_streak backfill: parity with the old CTE
@@ -238,11 +293,41 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         structuredLog("yield_rollups.analyze_done", { ms: Date.now() - t });
         return;
       }
-      // 5) Canonical cleanup (Slice 1): merge postal-city alias twins (live
-      // manifest: 152 pairs) then promote the canonical index to UNIQUE —
-      // bounded, idempotent, invariant-guarded, halts on any failure.
-      // Kill-switch SCAN_TARGET_MERGE=off.
-      if (process.env.SCAN_TARGET_MERGE !== "off" && getState("alias_merge_done") !== "1") {
+      // 4b) canonical_key backfill (one-time, resumable). MUST precede step 5:
+      // the merge manifest and the UNIQUE promotion both read canonical_key, so
+      // running them first would measure — and lock in — a table a third of
+      // which has no key. See canonicalKeyBackfillChunk.
+      if (getState("canonkey_done") !== "1") {
+        let done = false;
+        while (!done && Date.now() < deadline) done = canonicalKeyBackfillChunk();
+        structuredLog("yield_rollups.canonkey_chunk", { cursor: getState("canonkey_cursor"), done });
+        return;
+      }
+      // 5) Canonical cleanup (Slice 1): merge postal-city alias twins then
+      // promote the canonical index to UNIQUE — bounded, idempotent,
+      // invariant-guarded, halts on any failure.
+      //
+      // OPT-IN (SCAN_TARGET_MERGE=on), not opt-out. This step DELETES rows, and
+      // step 4b above changed how many: the alias predicate compares
+      // `b.canonical_key <> a.canonical_key`, which is NULL — never true — while
+      // either side is un-keyed, so every row the backfill keys becomes newly
+      // eligible. Measured on the live local database 2026-08-27: 2,845 pairs
+      // before the backfill, 6,677 after. Letting a background job quietly widen
+      // a destructive merge by 3,832 pairs because a repair made rows visible is
+      // exactly the surprise this flag now prevents. Turn it on deliberately,
+      // after reading the manifest.
+      if (process.env.SCAN_TARGET_MERGE !== "on" && getState("alias_merge_done") !== "1") {
+        // Say so once, cheaply. dryRunManifest() runs an unindexed self-join
+        // (~3 min on 924k rows) so it is NOT called here — only on the path that
+        // is actually going to merge.
+        if (getState("alias_merge_pending_logged") !== "1") {
+          structuredLog("yield_rollups.alias_merge_pending",
+            { reason: "SCAN_TARGET_MERGE is not 'on'; alias twins are reported, never merged", enable: "SCAN_TARGET_MERGE=on" }, "warn");
+          setState("alias_merge_pending_logged", "1");
+        }
+        // Deliberately falls through to steady state: an unmade decision must
+        // not pin this loop on step 5 forever.
+      } else if (getState("alias_merge_done") !== "1") {
         const { mergeCityAliasTwins, promoteCanonicalUnique, dryRunManifest } =
           require("./scanTargetCanonicalMerge") as typeof import("./scanTargetCanonicalMerge");
         const res = mergeCityAliasTwins({ apply: true, maxPairs: 500 });
@@ -276,6 +361,8 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
   let i = 0;
   while (streetKeyJanitorChunk() > 0 && i++ < maxIterations) { /* drain */ }
   setState("streetkey_done", "1");
+  i = 0;
+  while (!canonicalKeyBackfillChunk() && i++ < maxIterations) { /* drain */ }
   i = 0;
   while (!negStreakBackfillChunk() && i++ < maxIterations) { /* drain */ }
   rawDb.exec("ANALYZE");
@@ -347,12 +434,26 @@ export function startPlannerStatsMaintenance(): NodeJS.Timeout | null {
 // run here - see the write-lock note in optimizePlannerStats.
 const ANALYSIS_LIMIT = () => Math.max(100, Number(process.env.ANALYZE_ANALYSIS_LIMIT) || 1000);
 const OPTIMIZE_PERIOD_H = Math.max(1, Number(process.env.ANALYZE_MAX_AGE_HOURS) || 24);
+// How long a maintenance ANALYZE may WAIT for the database write lock. This is
+// deliberately NOT the connection's busy_timeout, which production sets to
+// 120000 (docker-compose.production.yml) so that real request work rides out a
+// long writer. Planner upkeep is optional work: if the lock is busy it should
+// come back in five minutes, not sit on the busy handler for two minutes.
+const ANALYZE_LOCK_WAIT_MS = () => Math.max(100, Number(process.env.ANALYZE_LOCK_WAIT_MS) || 2000);
+// A single table's ANALYZE that exceeds this is pathological and gets reported.
+const ANALYZE_TABLE_BUDGET_MS = () => Math.max(500, Number(process.env.ANALYZE_TABLE_BUDGET_MS) || 5000);
 
 /** Returns what it did, for logging and tests. */
 export function optimizePlannerStats(nowMs = Date.now()): "full" | "incremental" | null {
   if (process.env.ANALYZE_MAINTENANCE === "off") return null;
-  const t = Date.now();
+  // Bound the WHOLE tick, not just the ANALYZE. setState is a write too, so at
+  // production's busy_timeout of 120000 the cursor stamp blocked for two
+  // minutes before the ANALYZE was even reached — lowering the wait around only
+  // the ANALYZE fixed nothing. Restored in the finally below so request-path
+  // statements keep their full tolerance.
+  const priorWait = Number(rawDb.pragma("busy_timeout", { simple: true }) ?? 0);
   try {
+    rawDb.pragma(`busy_timeout = ${ANALYZE_LOCK_WAIT_MS()}`);
     // ── Why ONE TABLE PER TICK, and why bounded ─────────────────────────────
     // PRAGMA optimize runs its ANALYZE as a SINGLE write transaction across
     // every table it touches, and SQLite's write lock is database-wide ACROSS
@@ -379,9 +480,39 @@ export function optimizePlannerStats(nowMs = Date.now()): "full" | "incremental"
 
     const table = nextTableToAnalyse();
     if (table) {
-      rawDb.exec(`ANALYZE "${table.replace(/"/g, '""')}"`);
-      setState(STAT_CURSOR_KEY, table);
-      structuredLog("yield_rollups.analyze_table", { table, ms: Date.now() - t });
+      // ── WHY THE CURSOR ADVANCES BEFORE THE ANALYZE, AND NOT AFTER ─────────
+      // It used to advance after, so a table whose ANALYZE THREW left the
+      // cursor untouched and the next tick chose the SAME table again. With
+      // production's busy_timeout of 120000 that is not a retry, it is a
+      // permanent outage: every 5 minutes this connection sat on the busy
+      // handler for two full minutes and then failed, forever. Measured live
+      // 2026-08-27 18:57 — `ANALYZE "rep_daily_metrics"` 120167ms x2, primary
+      // event-loop lag 240384ms, and every writer queued behind it timing out
+      // at exactly 120171ms (rep_metrics_dirty_days, resource_pressure — the
+      // pressure sentinel itself could not record that there was pressure).
+      //
+      // Stamping the cursor FIRST makes the sweep monotonic: each table gets
+      // at most one attempt per pass, a failure costs one tick instead of
+      // every future tick, and the next daily pass retries it from scratch.
+      // Statistics are an optimization; skipping one table's is survivable,
+      // wedging the box is not.
+      attemptedTable = table;                        // in memory: cannot fail
+      try { setState(STAT_CURSOR_KEY, table); }      // on disk: may fail, fine
+      catch { /* lock held; attemptedTable already guarantees progress */ }
+      const started = Date.now();
+      try {
+        rawDb.exec(`ANALYZE "${table.replace(/"/g, '""')}"`);
+      } catch (e: any) {
+        // Almost always SQLITE_BUSY. Not worth alarming on: the table keeps the
+        // statistics it had and the next daily pass retries it. What matters is
+        // that we do NOT come back to this same table in five minutes.
+        structuredLog("yield_rollups.analyze_skipped",
+          { table, ms: Date.now() - started, error: String(e?.message ?? e).slice(0, 120) }, "warn");
+        return "full";
+      }
+      const ms = Date.now() - started;
+      structuredLog("yield_rollups.analyze_table", { table, ms },
+        ms > ANALYZE_TABLE_BUDGET_MS() ? "warn" : "info");
       return "full";
     }
 
@@ -399,15 +530,28 @@ export function optimizePlannerStats(nowMs = Date.now()): "full" | "incremental"
     else if (nowMs - last >= OPTIMIZE_PERIOD_H * 3_600_000) {
       setState(key, String(nowMs));
       setState(STAT_CURSOR_KEY, ""); // a fresh bounded sweep tomorrow
+      // BOTH copies, or the sweep never restarts: nextTableToAnalyse prefers
+      // the in-memory cursor, so clearing only the row would leave this process
+      // pinned at the last table it reached and freeze statistics for good.
+      attemptedTable = null;
     }
     return "incremental";
   } catch (e: any) {
     structuredLog("yield_rollups.optimize_failed", { error: String(e?.message ?? e).slice(0, 120) }, "warn");
     return null;
+  } finally {
+    if (priorWait > 0) rawDb.pragma(`busy_timeout = ${priorWait}`);
   }
 }
 
 const STAT_CURSOR_KEY = "analyze_table_cursor";
+// The cursor ALSO lives in memory, because persisting it is itself a write and
+// the case that matters is precisely the one where writes are failing. If the
+// lock is held, setState throws too — so a disk-only cursor leaves the sweep
+// choosing the same table on every tick, which is the loop that took production
+// down. The row is the restart-durable copy; this is the one that guarantees
+// forward progress inside a process.
+let attemptedTable: string | null = null;
 
 /**
  * The next table to analyse this tick, biggest-impact first, or null once the
@@ -417,7 +561,7 @@ const STAT_CURSOR_KEY = "analyze_table_cursor";
 function nextTableToAnalyse(): string | null {
   const PRIORITY = ["scan_targets", "leads", "availability_snapshots", "fiber_checks",
                     "scan_run_targets", "scan_runs", "coming_soon_watchlist"];
-  const done = String(getState(STAT_CURSOR_KEY) ?? "");
+  const done = attemptedTable ?? String(getState(STAT_CURSOR_KEY) ?? "");
   const all = (rawDb.prepare(
     `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
     .all() as Array<{ name: string }>).map((r) => r.name);
@@ -429,4 +573,12 @@ function nextTableToAnalyse(): string | null {
 }
 
 /** Test hook: forget that the full pass ran in this process. */
-export function _resetPlannerStatsForTests(): void { setState(STAT_CURSOR_KEY, ""); }
+export function _resetPlannerStatsForTests(): void {
+  attemptedTable = null;
+  try { setState(STAT_CURSOR_KEY, ""); } catch { /* lock held — the in-memory reset is what matters */ }
+}
+
+/** Test hook: the table this process last committed to analysing. Read from
+ *  memory on purpose — the persisted row is unwritable exactly when the lock is
+ *  held, which is the scenario worth testing. */
+export function _plannerStatsCursorForTests(): string | null { return attemptedTable; }

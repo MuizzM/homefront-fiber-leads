@@ -94,7 +94,7 @@ const door = (extra: Record<string, unknown> = {}) =>
 const req = async (path: string, session: string, init: RequestInit = {}) => {
   const res = await realFetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": session, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": session, ...init.headers },
   });
   return res;
 };

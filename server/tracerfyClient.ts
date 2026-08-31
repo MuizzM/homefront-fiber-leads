@@ -87,7 +87,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     headers: {
       authorization: `Bearer ${apiKey()}`,
       accept: "application/json",
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
   if (!res.ok) throw new Error(`Tracerfy ${path} → HTTP ${res.status}`);

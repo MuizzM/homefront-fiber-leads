@@ -1,4 +1,5 @@
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request } from "express";
+import type { Middleware } from "./middlewareTypes";
 import { z } from "zod";
 import type { Capability } from "@shared/capabilities";
 import { rawDb } from "./db";
@@ -10,7 +11,6 @@ import {
   operationsDashboard, providerConfigs, retryDeadLetter,
 } from "./fiberOperationsStore";
 
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 export interface FiberOperationsRouteDeps {
   requireAuth: Middleware;
   requireCapability: (capability: Capability) => Middleware;

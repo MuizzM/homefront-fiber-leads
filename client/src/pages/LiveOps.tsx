@@ -412,7 +412,7 @@ function LiveMapCanvas({
   useEffect(() => {
     if (!container.current || map.current) return; // no token gate - MapLibre needs none
     let cancelled = false;
-    (window as any).__loadMapbox?.();
+    window.__loadMapbox?.();
     (window as any).__onMapboxReady?.((err?: Error) => {
       if (cancelled || !container.current || map.current) return;
       // Honour the error the loader hands us instead of falling through and

@@ -133,14 +133,38 @@ const PUBLIC_DOCUMENT_KEYS = [
   "createdAt", "updatedAt",
 ] as const satisfies readonly (keyof OnboardingDocumentRecord)[];
 
-export function toPublicRecord(record: PrivateOnboardingDocument): OnboardingDocumentRecord {
-  const out = {} as Record<string, unknown>;
-  for (const key of PUBLIC_DOCUMENT_KEYS) out[key] = record[key];
-  return out as unknown as OnboardingDocumentRecord;
+type PublicKey = (typeof PUBLIC_DOCUMENT_KEYS)[number];
+
+/** What a rep or manager is allowed to see: every allowlisted field and,
+ *  provably, not companySignerUserId — the one record field held back. This
+ *  type is derived FROM the allowlist, so the projection cannot drift from it:
+ *  add a key there and it appears here, remove one and every reader of it stops
+ *  compiling. (The previous signature claimed a full OnboardingDocumentRecord,
+ *  which promised callers a companySignerUserId that is never actually sent.) */
+export type PublicOnboardingDocument = Pick<OnboardingDocumentRecord, PublicKey>;
+
+export function toPublicRecord(record: PrivateOnboardingDocument): PublicOnboardingDocument {
+  const out: Partial<PublicOnboardingDocument> = {};
+  for (const key of PUBLIC_DOCUMENT_KEYS) copyPublicKey(out, record, key);
+  // SAFETY: the loop above assigned every key in PUBLIC_DOCUMENT_KEYS, and
+  // PublicOnboardingDocument is a Pick over exactly that list, so the object is
+  // complete by construction.
+  return out as PublicOnboardingDocument;
+}
+
+// PrivateOnboardingDocument extends OnboardingDocumentRecord, so for a public
+// key the source and target field types are identical; the generic keeps the
+// per-key assignment checked instead of laundering through a string record.
+function copyPublicKey<K extends PublicKey>(
+  out: Partial<PublicOnboardingDocument>,
+  record: PrivateOnboardingDocument,
+  key: K,
+): void {
+  out[key] = record[key];
 }
 
 /** Rep/manager-facing history — public projection only. */
-export function listRepDocuments(tenantId: number, repId: number): OnboardingDocumentRecord[] {
+export function listRepDocuments(tenantId: number, repId: number): PublicOnboardingDocument[] {
   return listRepDocumentsPrivate(tenantId, repId).map(toPublicRecord);
 }
 
@@ -591,7 +615,7 @@ export function counterSignDocument(input: {
 
 /** The manager's counter-sign queue: completed-by-the-rep documents in this
  *  tenant still waiting on the company. Grandfathered 'none' rows never appear. */
-export function listCounterSignQueue(tenantId: number): OnboardingDocumentRecord[] {
+export function listCounterSignQueue(tenantId: number): PublicOnboardingDocument[] {
   return rawDb.prepare(
     `SELECT * FROM onboarding_signing_documents
       WHERE tenant_id = ? AND counter_sign_status = 'pending'

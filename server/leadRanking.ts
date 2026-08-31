@@ -17,6 +17,7 @@
 //                        cluster's fresh_found is evidence the street is hot
 //   • territory fit    — already routed (rep or territory) = actionable now
 import type { Express, NextFunction, Request, Response } from "express";
+import type { Middleware } from "./middlewareTypes";
 import { rawDb } from "./db";
 import { getDefaultTenantId, storage } from "./storage";
 import { haversineMeters } from "@shared/freshFiberClusters";
@@ -446,7 +447,6 @@ export function rankLeads(
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 export interface LeadRankingRouteDeps {
   requireAuth?: Middleware;
   // The shared leadVisibilityScope from routes.ts (admin/manager → undefined =

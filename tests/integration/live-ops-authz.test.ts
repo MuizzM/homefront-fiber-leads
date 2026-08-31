@@ -56,7 +56,7 @@ function req(path: string, session: string, init: RequestInit = {}) {
       "content-type": "application/json",
       "x-session-id": session,
       "x-csrf-token": session,
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
 }

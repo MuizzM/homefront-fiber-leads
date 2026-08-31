@@ -1,4 +1,5 @@
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
+import type { Middleware } from "./middlewareTypes";
 import { z } from "zod";
 import type { Capability } from "@shared/capabilities";
 import { rawDb } from "./db";
@@ -40,7 +41,6 @@ import {
 export const KINETIC_EXPORT_MAX_ROWS = 50_000;
 export const KINETIC_EXPORT_CHUNK = 5_000;
 
-type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 interface Deps {
   requireCapability: (capability: Capability) => Middleware;
   requireScanningAllowed: Middleware;

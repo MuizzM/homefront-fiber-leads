@@ -31,8 +31,11 @@
 
 import { structuredLog } from "./structuredLog";
 import { mapboxFetch, MapboxBudgetExhaustedError } from "./mapboxBudget";
+import { countAddressPoints, lookupAddressPointByAddress } from "./addressPointStore";
 
-export type GeoSource = "mapbox" | "nominatim";
+// "address-points" is our OWN county E911 table (server/addressPointStore),
+// not a network provider: free, offline, and unaffected by any token.
+export type GeoSource = "mapbox" | "nominatim" | "address-points";
 
 export interface GeoPoint {
   lng: number;
@@ -274,6 +277,25 @@ export async function forwardGeocode(
   const cached = forwardCache.get(key);
   if (cached) return cached;
 
+  // Our own E911 address points first. A house we already hold needs no
+  // provider at all, so the rep's search keeps working when the Mapbox token is
+  // retired - the failure that made every lookup read as "address not found"
+  // for weeks. Deliberately OUTSIDE the provider loop below: it cannot error,
+  // and counting it as a provider would dilute the "every provider failed"
+  // test that separates a 404 (no such address) from a 503 (lookup is down).
+  const localHit = lookupAddressPointByAddress(trimmed);
+  if (localHit) {
+    const point: GeoPoint = {
+      lng: localHit.lng,
+      lat: localHit.lat,
+      placeName: localHit.fullAddress || trimmed,
+      source: "address-points",
+    };
+    forwardCache.set(key, point);
+    bounded(forwardCache, 2000);
+    return point;
+  }
+
   const errors: string[] = [];
   const providers: Array<[GeoSource, () => Promise<GeoPoint | null>]> = [];
   if (mapboxAvailable()) providers.push(["mapbox", () => mapboxForward(trimmed, types)]);
@@ -514,5 +536,25 @@ export function geocoderStatus(): {
     },
     { name: "nominatim" as const, configured: true, available: true, note: "free fallback, <1 req/s" },
   ];
-  return { usable: providers.some((p) => p.available), providers };
+  // Our own E911 table answers house-level searches with no network call, so it
+  // is reported alongside the providers: an admin reading this endpoint during
+  // a token outage needs to see WHAT is still answering, not just what is down.
+  // `configured` is false on an install that has imported no county yet, which
+  // is the difference between "search still works locally" and "search is
+  // entirely on the providers".
+  let pointCount = 0;
+  try {
+    pointCount = countAddressPoints();
+  } catch {
+    // The diagnostic endpoint must never be the thing that throws.
+  }
+  const local = {
+    name: "address-points" as const,
+    configured: pointCount > 0,
+    available: pointCount > 0,
+    note: pointCount > 0
+      ? `${pointCount.toLocaleString("en-US")} county E911 points - exact house lookups, no network, no token`
+      : "no county address points imported",
+  };
+  return { usable: [local, ...providers].some((p) => p.available), providers: [local, ...providers] };
 }

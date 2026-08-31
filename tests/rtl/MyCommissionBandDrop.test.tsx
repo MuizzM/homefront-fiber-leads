@@ -6,7 +6,7 @@
 // "claws back the whole week's difference"); this suite pins the panel that
 // explains it, because an unexplained $525 hole in yesterday's number is an
 // angry call to a manager.
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 

@@ -6,7 +6,7 @@
 // commission.read.all holders (a team lead gets their own tree and no picker —
 // unauthorized controls are omitted, never disabled); and "no downline" is a
 // different empty state from "downline, but nobody sold".
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 

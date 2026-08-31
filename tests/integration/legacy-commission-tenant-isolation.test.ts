@@ -148,7 +148,7 @@ function request(path: string, init: RequestInit = {}, sessionId = managerSessio
     headers: {
       "content-type": "application/json",
       "x-session-id": sessionId,
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
 }

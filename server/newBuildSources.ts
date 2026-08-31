@@ -84,7 +84,7 @@ export async function pollNcOneMapCounty(
   cursor: string,
   opts: { fetchImpl?: FetchLike; now?: () => number; limit?: number } = {},
 ): Promise<SourcePollResult> {
-  const fetchImpl = (opts.fetchImpl ?? (fetch as unknown as FetchLike));
+  const fetchImpl: FetchLike = opts.fetchImpl ?? fetch;
   const now = opts.now ?? Date.now;
   const limit = Math.min(2000, opts.limit ?? 1000);
   const where = encodeURIComponent(`county='${county.toUpperCase().replace(/'/g, "''")}'`);
@@ -205,7 +205,7 @@ export async function pollScCountyAddresses(
   cursor: string,
   opts: { fetchImpl?: FetchLike; now?: () => number; limit?: number } = {},
 ): Promise<SourcePollResult> {
-  const fetchImpl = (opts.fetchImpl ?? (fetch as unknown as FetchLike));
+  const fetchImpl: FetchLike = opts.fetchImpl ?? fetch;
   const now = opts.now ?? Date.now;
   const limit = Math.min(src.pageSize, Math.max(1, opts.limit ?? src.pageSize));
   const base = `${src.layerUrl}/query`;
@@ -307,7 +307,7 @@ export async function pollOverpassArea(
   cursor: string,
   opts: { fetchImpl?: FetchLike; now?: () => number; endpoint?: string } = {},
 ): Promise<SourcePollResult> {
-  const fetchImpl = (opts.fetchImpl ?? (fetch as unknown as FetchLike));
+  const fetchImpl: FetchLike = opts.fetchImpl ?? fetch;
   const now = opts.now ?? Date.now;
   const endpoint = opts.endpoint ?? "https://overpass-api.de/api/interpreter";
   const nowIso = new Date(now()).toISOString();
@@ -346,7 +346,7 @@ export async function fetchNcOneMapRecent(
   lookback: number,
   opts: { fetchImpl?: FetchLike; now?: () => number } = {},
 ): Promise<SourcePollResult> {
-  const fetchImpl = (opts.fetchImpl ?? (fetch as unknown as FetchLike));
+  const fetchImpl: FetchLike = opts.fetchImpl ?? fetch;
   const clamp = Math.min(50, Math.max(1, Math.floor(lookback)));
   // Seed to (max - clamp) then run the normal incremental poll → the clamp
   // most-recent additions come back as candidates.

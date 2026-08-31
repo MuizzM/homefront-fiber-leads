@@ -15,13 +15,37 @@
  *      (tenant_id, canonical_key) partial index becomes UNIQUE (safe at zero
  *      duplicate groups; refuses loudly if groups reappear).
  *
- * Genuine neighbors (different house numbers) and distinct units (street_key
- * retains the unit token) can never pair — the twin predicate requires equal
- * street_key + state + leading house number + rooftop-range coordinates.
+ * A pair must be the SAME DOOR under two spellings: equal canonical address
+ * (house, street AND unit), differing only in the city/state the canonical key
+ * bakes in, at coordinates within rooftop range.
+ *
+ * The equal-canonical-address term was added 2026-08-27. Until then the header
+ * here claimed "genuine neighbors (different house numbers) and distinct units
+ * (street_key retains the unit token) can never pair", and neither half was
+ * true: streetKeyOf CUTS the unit clause off instead of retaining it, and
+ * CAST(address AS INTEGER) reads "313", "313A", "313-A" and "313-B" as one
+ * house. Measured against the live dev database that day, 6,696 pairs were
+ * queued for merge and 943 of them were NOT the same door — 579 differing only
+ * by unit ("77 Lake Vista Dr" vs "77 Lake Vista Dr Lot 16"), 327 differing by
+ * house letter ("313-A Charlotte Ave" vs "313-B Charlotte Ave"), 37 by a
+ * secondary number ("314 318 Malcolm Way" vs "314 322 Malcolm Way"). 655
+ * distinct real doors, each one a row this module would have DELETED.
  */
 import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
 import { readPressure, PRESSURE_ORDER } from "./resourcePressure";
+import { canonicalAddressPart } from "@shared/addressKey";
+
+// The exact same-door test, in SQL. Registered here rather than reusing
+// freshHarvest's registerHarvestSqlFunctions because this module is required
+// lazily by the yield-rollup janitor and must not drag the scanner graph in.
+// It has to live in the predicate, not in a JS filter over the results: the
+// janitor stops (and sets alias_merge_done) only when pairsFound reaches 0, so
+// pairs we refuse must leave the manifest rather than be dropped after LIMIT.
+try {
+  (rawDb as any).function("harvest_canonical_address", { deterministic: true },
+    (addr: unknown) => canonicalAddressPart(typeof addr === "string" ? addr : ""));
+} catch { /* already registered on this connection — the predicate below still resolves */ }
 
 // Every table observed (code grep + live PRAGMA sweep) that references a scan
 // target. Missing tables are skipped (bare replay DBs).
@@ -57,21 +81,61 @@ const columnExists = (t: string, c: string): boolean => {
   } catch { return false; }
 };
 
+// street_key / state / house-integer / coordinates are the CHEAP, index-friendly
+// narrowing; harvest_canonical_address is the exact test and is written last so
+// the planner evaluates it only on rows that already survived the rest. The
+// CAST terms stay: they cost nothing, and `> 0` keeps the whole predicate off
+// addresses with no house number at all.
+//
+// TENANT: this pairing had no tenant term until 2026-08-27, so two tenants
+// holding the same premise under different postal cities could pair — and the
+// merge DELETES the loser and repoints its leads/snapshots at the survivor,
+// across the boundary. `IS` (not `=`) because legacy rows carry tenant_id NULL
+// and must only ever pair with each other, which is the same operator the
+// sibling guard in storage.upsertScanTargets uses. Latent, not exercised: the
+// live database measured 0 cross-tenant pairs (one tenant), so adding this
+// changes no existing merge.
 const TWIN_PAIRS_SQL = `
   SELECT a.id AS aId, b.id AS bId FROM scan_targets a JOIN scan_targets b
     ON b.street_key = a.street_key AND b.id > a.id
+   AND b.tenant_id IS a.tenant_id
    AND upper(b.state) = upper(a.state)
    AND b.canonical_key <> a.canonical_key
    AND CAST(a.address AS INTEGER) = CAST(b.address AS INTEGER) AND CAST(a.address AS INTEGER) > 0
    AND b.lat BETWEEN a.lat - 0.00023 AND a.lat + 0.00023
    AND b.lng BETWEEN a.lng - 0.00028 AND a.lng + 0.00028
+   AND harvest_canonical_address(b.address) = harvest_canonical_address(a.address)
    WHERE a.street_key IS NOT NULL AND a.street_key <> ''`;
 
-export function dryRunManifest(): { sameCanonicalGroups: number; cityAliasPairs: number } {
+export function dryRunManifest(): { sameCanonicalGroups: number; cityAliasPairs: number; unkeyedRows: number } {
   const g = rawDb.prepare(`SELECT COUNT(*) g FROM (SELECT 1 FROM scan_targets
     WHERE canonical_key IS NOT NULL GROUP BY tenant_id, canonical_key HAVING COUNT(*) > 1)`).get() as any;
   const p = rawDb.prepare(`SELECT COUNT(*) p FROM (${TWIN_PAIRS_SQL})`).get() as any;
-  return { sameCanonicalGroups: Number(g?.g ?? 0), cityAliasPairs: Number(p?.p ?? 0) };
+  // HOW BLIND THIS MANIFEST IS, AND WHY THE COUNT ABOVE IS NOT ENOUGH.
+  // Both detectors above only see KEYED rows: the group-by filters
+  // `canonical_key IS NOT NULL`, and TWIN_PAIRS_SQL compares
+  // `b.canonical_key <> a.canonical_key`, which is NULL (never true) whenever
+  // either side is un-keyed. On 2026-08-27 that made the manifest report 240
+  // duplicate groups on a table holding 26,371 — 292,999 of 924,104 rows were
+  // un-keyed and every duplicate behind them was invisible.
+  //
+  // That mattered because promoteCanonicalUnique() is gated on this count
+  // reaching zero: an all-clear read off a blind detector would have made the
+  // index UNIQUE while thousands of collisions were still latent, and the next
+  // write to stamp any of those keys — this module's own backfill, or the
+  // ordinary `canonical_key = COALESCE(canonical_key, ?)` enrich in
+  // upsertScanTargets — would have failed with UNIQUE constraint violations
+  // mid-harvest. So the manifest now reports what it cannot see.
+  return { sameCanonicalGroups: Number(g?.g ?? 0), cityAliasPairs: Number(p?.p ?? 0), unkeyedRows: unkeyedRowCount() };
+}
+
+/** Rows the manifest above cannot reason about. Cheap on purpose: SQLite
+ *  skip-scans idx_scan_targets_canonical for this, so it is sub-millisecond even
+ *  on ~1M rows, which lets promoteCanonicalUnique refuse without first paying
+ *  for TWIN_PAIRS_SQL (an unindexed self-join measured at ~3 min on 924k rows). */
+export function unkeyedRowCount(): number {
+  const u = rawDb.prepare(`SELECT COUNT(*) u FROM scan_targets WHERE canonical_key IS NULL`).get() as any;
+  return Number(u?.u ?? 0);
 }
 
 // Survivor rank: conclusive (has a fiber verdict) > lead-linked > most recent
@@ -143,8 +207,20 @@ export function mergeCityAliasTwins(opts: { apply: boolean; maxPairs?: number } 
   return result;
 }
 
-/** Structural regrowth prevention — only when zero duplicate groups remain. */
+/** Structural regrowth prevention — only when zero duplicate groups remain AND
+ *  every row is keyed, so "zero groups" is a measurement rather than a blind
+ *  spot. Fails closed: an un-keyed row is an unknown, not an absence. */
 export function promoteCanonicalUnique(): { promoted: boolean; reason?: string } {
+  // Cheap gate first: while anything is un-keyed the duplicate count below is a
+  // lower bound, not a measurement, so there is no reason to spend the self-join
+  // to reach a refusal we already know.
+  const unkeyed = unkeyedRowCount();
+  if (unkeyed > 0) {
+    return {
+      promoted: false,
+      reason: `refusing: ${unkeyed} row(s) have no canonical_key, so the duplicate count above them is unknown — backfill first`,
+    };
+  }
   const m = dryRunManifest();
   if (m.sameCanonicalGroups > 0) {
     return { promoted: false, reason: `refusing: ${m.sameCanonicalGroups} duplicate group(s) present` };

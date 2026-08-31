@@ -122,10 +122,19 @@ export function getSweepResults(id: string, tenantId: number, filters: { stage?:
   const job = getSweep(id, tenantId); if (!job) return null;
   const where = ["j.sweep_job_id=?"];
   const args: any[] = [id];
-  if (filters.stage === "fresh") where.push("s.first_seen_fiber_at >= ?"), args.push(job.startedAt);
+  // Each clause and its bound argument must be pushed together - they are
+  // positional. Written as blocks rather than comma expressions so a later
+  // edit cannot add a third statement that silently falls outside the `if`.
+  if (filters.stage === "fresh") {
+    where.push("s.first_seen_fiber_at >= ?");
+    args.push(job.startedAt);
+  }
   if (filters.stage === "available") where.push("s.last_fiber_available=1");
   if (filters.stage === "unavailable") where.push("s.last_fiber_available=0");
-  if (filters.customer) where.push("s.last_customer_segment=?"), args.push(filters.customer);
+  if (filters.customer) {
+    where.push("s.last_customer_segment=?");
+    args.push(filters.customer);
+  }
   const total = (rawDb.prepare(`SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id WHERE ${where.join(" AND ")}`).get(...args) as any).n;
   const limit = Math.max(1, Math.min(5_000, filters.limit ?? 500)), offset = Math.max(0, filters.offset ?? 0);
   const rows = rawDb.prepare(`SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.last_fiber_status AS fiberStatus,
@@ -228,7 +237,7 @@ const reArmTimers = new Map<string, ReturnType<typeof setTimeout>>();
  */
 export function scheduleStateSweepReArm(
   parent: { tenant_id: number; state: KineticMonitoredState; created_by: number | null; max_checks_per_city: number | null },
-  start: (input: StartStateSweepInput) => unknown = startStateSweep,
+  start: (input: StartStateSweepInput) => void = startStateSweep,
 ): ReArmPlan {
   const plan = planStateSweepReArm();
   const key = `${parent.tenant_id}:${parent.state}`;

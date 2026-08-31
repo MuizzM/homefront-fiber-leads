@@ -885,7 +885,7 @@ export function createFetchEventSource(opts: FetchEventSourceOptions = {}): Lead
       try {
         const headers: Record<string, string> = {
           Accept: "text/event-stream",
-          ...(opts.headers?.() ?? {}),
+          ...opts.headers?.(),
         };
         // The server reads this BEFORE ?since= — same value, so the preference is
         // harmless, and it is the only cursor a transport-level retry could carry.

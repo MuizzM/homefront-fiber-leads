@@ -137,7 +137,9 @@ export function installSlowStatementLog(db: Database.Database, opts: SlowStateme
         const ms = now() - started;
         if (ms >= threshold) report(kind, sqlOf(this, args), ms, null);
       }
-    } as unknown as T;
+      // SAFETY: the wrapper forwards this/args to `fn` unchanged and returns
+      // its result; timing is observation-only, so callers still see a T.
+    } as T;
 
   for (const op of ["all", "get", "run"] as const) {
     const orig = stmtProto[op];

@@ -42,7 +42,7 @@ function makePerson(name: string, role: string, opts: { reportsToId?: number | n
 function request(path: string, sessionId: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", "x-session-id": sessionId, ...(init.headers ?? {}) },
+    headers: { "content-type": "application/json", "x-session-id": sessionId, ...init.headers },
   });
 }
 

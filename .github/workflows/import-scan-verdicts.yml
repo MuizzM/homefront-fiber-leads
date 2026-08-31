@@ -59,7 +59,20 @@ jobs:
   import:
     name: ${{ inputs.apply && 'APPLY — import scan verdicts' || 'Dry run — import scan verdicts' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 180, not 30. The importer resolves each verdict with
+    #   SELECT ... WHERE lower(trim(address))=lower(trim(?)) AND lower(trim(city))=...
+    # which cannot use an index, and production measured ~700ms PER VERDICT on
+    # 2026-08-28 (run 33132605872). At 8,131 verdicts that is ~95 minutes, so a
+    # 30-minute cap killed the job mid-run every time - three attempts, all read
+    # as "cancelled", none of them cancelled by a person. An APPLY dying at the
+    # cap is worse than a dry run dying: it leaves a partially imported batch.
+    #
+    # This is the cap, not the fix. The fix is to try `byCanonical` (indexed)
+    # BEFORE `byIdentity` - it was written identity-first because canonical_key
+    # was NULL on ~293k of 924k rows, which the canonical-key backfill shipped
+    # 2026-08-27 now drains. Once that has run in production, invert the order
+    # and this import takes minutes.
+    timeout-minutes: 180
     environment:
       name: production
       url: https://portal.homefrontsolutionsllc.com

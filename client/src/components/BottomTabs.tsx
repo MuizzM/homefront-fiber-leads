@@ -144,8 +144,8 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
   const tabHrefs = visibleTabs.map(t => t.href).join(",");
   useEffect(() => {
     if (!canPrefetchRouteChunks()) return;
-    // The map chunk is ~10x the size of the other tabs (284KB + the mapbox CDN
-    // lib its loader kicks) — it keeps the strict data gate; the small tab
+    // The map chunk is ~10x the size of the other tabs (284KB + the maplibre-gl
+    // chunk its loader kicks) — it keeps the strict data gate; the small tab
     // chunks warm even on 3G, where paying tens of KB idle beats paying them
     // at tap time.
     const warm = () => {
