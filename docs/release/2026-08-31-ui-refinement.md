@@ -132,3 +132,41 @@ same "update" feed channel if a rollback removes the result bar mid-day.
 - KeepAliveStages hidden-tab refetch ride-along (documented trade).
 - The docs/OPEN_DECISIONS-2026-08-30.md trio (audit retention, FTS5,
   assigned_territory_id) is unchanged by this release.
+
+---
+
+# Addendum - Operations command center (claude/ops-intelligence, 2026-08-31)
+
+## What ships
+A new Operations page (Manage group, team leads and up): eight queues that
+each print the exact rule they run - assigned-but-not-worked, unassigned
+priority leads, overdue follow-ups, gone-quiet, doors held by deactivated
+reps, broken territory links (read-only), partial bulk writes, and a
+workload-by-rep table. Managers select rows and assign them in bulk with the
+same 10-minute undo the map has (the id-based assign path now returns its
+undo token); rows can be dismissed for 30 days with a required, audited
+reason; every list exports to CSV. Team leads see their own team's work;
+pool and audit queues stay manager-level.
+
+## For support
+- "Why is this lead in the queue?" - the reason line under each row and the
+  rule under the queue title are the complete answer; nothing is scored.
+- "I dismissed something by mistake" - dismissals lapse on their own in 30
+  days; POST /api/ops/undismiss restores immediately (a UI affordance for
+  this lists under future increments; the audit trail names who dismissed
+  what and why).
+- "The counts look stale" - overview counts are cached for 30 seconds.
+
+## Monitoring
+- /api/ops/* rides http.request (adoption + latency; watch p95 on
+  /api/ops/overview - eight COUNT queries behind a 30s memo).
+- Dismissals and restores land in activity_log as ops.queue.dismissed /
+  ops.queue.restored with the reason.
+- Baselines to record in week one (per success-metrics directive):
+  assigned_unworked count, followups_overdue count, and weekly dismiss +
+  assign volumes from activity_log - improvement claims wait for a
+  before/after on these.
+
+## Rollback
+Additive only (new table ops_dismissals, two partial indexes, new routes,
+new page). Previous SHA redeploy fully disables it; the table is inert.
