@@ -446,6 +446,97 @@ export function validateRing(ring: Ring, opts: ValidateRingOptions = {}): RingVa
   return { ok: true, ring: cleaned };
 }
 
+// ── 5b. Self-intersection healing ────────────────────────────────────────────
+
+/**
+ * Where do segments A1A2 and B1B2 cross? Null for parallel/collinear pairs -
+ * the touching cases have no single crossing point, and the caller falls back
+ * to a shared endpoint.
+ */
+function segmentIntersectionPoint(
+  a1: [number, number], a2: [number, number], b1: [number, number], b2: [number, number],
+): [number, number] | null {
+  const d = (a2[0] - a1[0]) * (b2[1] - b1[1]) - (a2[1] - a1[1]) * (b2[0] - b1[0]);
+  if (d === 0) return null;
+  const t = ((b1[0] - a1[0]) * (b2[1] - b1[1]) - (b1[1] - a1[1]) * (b2[0] - b1[0])) / d;
+  return [a1[0] + t * (a2[0] - a1[0]), a1[1] + t * (a2[1] - a1[1])];
+}
+
+export interface HealRingResult {
+  ring: Ring;
+  /** Did healing change the ring at all? */
+  healed: boolean;
+  /** The largest single cut, as smaller-lobe / larger-lobe area. ~0 for a
+   *  seam overshoot; approaches 1 for a genuine figure-eight. */
+  discardedAreaRatio: number;
+}
+
+/**
+ * Heal the self-intersections a HAND produces, so only the ones a hand
+ * cannot mean are ever reported.
+ *
+ * A freehand loop is stored open and closed by an implicit chord - and a
+ * person closing a loop almost always overshoots the start by a few pixels,
+ * so the stroke's tail genuinely crosses its own first segment. Geometrically
+ * that is a self-intersection; humanly it is "I closed the loop." validateRing
+ * alone therefore rejected nearly EVERY carefully drawn ring with "that loop
+ * crosses over itself" - the failure managers read as "you circled your own
+ * territory or overlapped," every draw.
+ *
+ * At each crossing the ring splits into two simple lobes. The hand's intent
+ * is the big one: keep it, drop the sliver (the overshoot tail, a wobble
+ * pigtail), and repeat for up to `maxPasses` crossings. The caller decides
+ * what ratio of discarded area still counts as intent - a genuine bowtie of
+ * two comparable lobes should still be REJECTED, because picking either half
+ * would silently assign ground the manager can see is outside their loop.
+ */
+export function healSelfIntersections(
+  ring: Ring,
+  opts: { epsilon?: number; maxPasses?: number } = {},
+): HealRingResult {
+  const epsilon = opts.epsilon ?? BOUNDARY_EPSILON_DEG;
+  const maxPasses = opts.maxPasses ?? 4;
+  let current = dedupeVertices(ring, epsilon);
+  let healed = false;
+  let worstRatio = 0;
+
+  for (let pass = 0; pass < maxPasses; pass++) {
+    const n = current.length;
+    if (n < 4) break;
+    let cut: { i: number; j: number; x: [number, number] } | null = null;
+    outer: for (let i = 0; i < n; i++) {
+      const a1 = current[i];
+      const a2 = current[(i + 1) % n];
+      for (let j = i + 1; j < n; j++) {
+        if (j === i + 1) continue;            // consecutive edges share a vertex
+        if (i === 0 && j === n - 1) continue; // first and closing edge share ring[0]
+        const b1 = current[j];
+        const b2 = current[(j + 1) % n];
+        if (!segmentsIntersect(a1, a2, b1, b2)) continue;
+        cut = { i, j, x: segmentIntersectionPoint(a1, a2, b1, b2) ?? b1 };
+        break outer;
+      }
+    }
+    if (!cut) break;
+
+    // The crossing splits the ring into two simple lobes:
+    //   inner - the vertices strictly between edge i and edge j
+    //   outer - the rest, wrapping through the seam
+    const inner: Ring = [cut.x, ...current.slice(cut.i + 1, cut.j + 1)];
+    const outerLobe: Ring = [cut.x, ...current.slice(cut.j + 1), ...current.slice(0, cut.i + 1)];
+    const innerArea = inner.length >= 3 ? ringAreaSqMeters(inner) : 0;
+    const outerArea = outerLobe.length >= 3 ? ringAreaSqMeters(outerLobe) : 0;
+    const keep = innerArea >= outerArea ? inner : outerLobe;
+    const larger = Math.max(innerArea, outerArea);
+    const smaller = Math.min(innerArea, outerArea);
+    if (larger > 0) worstRatio = Math.max(worstRatio, smaller / larger);
+    current = dedupeVertices(keep, epsilon);
+    healed = true;
+  }
+
+  return { ring: current, healed, discardedAreaRatio: worstRatio };
+}
+
 // ── 6. Antimeridian ──────────────────────────────────────────────────────────
 
 /**

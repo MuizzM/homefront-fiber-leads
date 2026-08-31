@@ -175,3 +175,23 @@ describe("lasso intelligence: composed loops and net-change confirmation", () =>
     expect(q).toContain("placeholderData: keepPreviousData");
   });
 });
+
+describe("freehand seam healing: a careful draw is never rejected as self-crossing", () => {
+  it("finish() heals the ring BEFORE validating, and rejects only comparable lobes", () => {
+    // The bug this pins against returning: rings are stored open, and closing
+    // a loop by hand overshoots the start - a genuine geometric
+    // self-intersection - so validateRing alone rejected nearly every draw
+    // with "that loop crosses over itself".
+    const start = src.indexOf("const heal = healSelfIntersections(cleaned)");
+    expect(start).toBeGreaterThan(-1);
+    const finishSlice = src.slice(start, start + 900);
+    // The ambiguity gate sits between healing and validation, and the ring
+    // that goes on to validate (and render, and preview) is the HEALED one.
+    expect(finishSlice).toContain("heal.discardedAreaRatio > 0.25");
+    expect(finishSlice).toContain("validateRing(heal.ring)");
+    expect(src.indexOf("validateRing(heal.ring)")).toBeGreaterThan(start);
+    // The rejection copy now describes the only case that still rejects.
+    expect(src).toContain("That shape makes two loops");
+    expect(src).not.toContain("Draw one clean loop without crossing back over your own line");
+  });
+});

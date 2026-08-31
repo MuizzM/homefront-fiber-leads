@@ -185,6 +185,7 @@ import {
   dedupeVertices,
   simplifyRing,
   validateRing,
+  healSelfIntersections,
   crossesAntimeridian,
   type RingValidationFailure,
 } from "@shared/polygonGeometry";
@@ -761,9 +762,9 @@ const LASSO_RING_REJECTION: Record<
       "The stroke went out and came back along itself without enclosing any ground. Draw a loop that curves around and closes.",
   },
   "self-intersecting": {
-    title: "That loop crosses over itself",
+    title: "That shape makes two loops",
     description:
-      "Where the line crosses, there is no single inside - some doors would land outside the area you can see. Draw one clean loop without crossing back over your own line.",
+      "The line crosses itself into two areas of similar size, so there is no single inside to assign. Small overlaps where you close the loop are fine and fixed automatically - this one is ambiguous. Draw one loop around the ground you want.",
   },
   "too-small": {
     title: "That area is too small to assign",
@@ -5410,7 +5411,25 @@ export default function MapView() {
 
       const cleaned = simplifyRing(deduped, LASSO_SIMPLIFY_TOLERANCE_DEG);
 
-      const verdict = validateRing(cleaned);
+      // Heal before judging: closing a loop by hand almost always overshoots
+      // the start by a few pixels, and that overshoot is a GENUINE geometric
+      // self-intersection - so validateRing alone rejected nearly every
+      // careful draw with "that loop crosses over itself." Healing keeps the
+      // big lobe (the intent) and drops the sliver; only a shape whose lobes
+      // are comparable - a real figure-eight, where guessing either half
+      // would assign ground the manager can see is outside - still rejects.
+      const heal = healSelfIntersections(cleaned);
+      if (heal.discardedAreaRatio > 0.25) {
+        stroke = [];
+        clearPreview();
+        setLassoPoints([]);
+        setLassoSelected([]);
+        const message = LASSO_RING_REJECTION["self-intersecting"];
+        toast({ title: message.title, description: message.description, variant: "destructive" });
+        return;
+      }
+
+      const verdict = validateRing(heal.ring);
       if (!verdict.ok) {
         stroke = [];
         clearPreview();

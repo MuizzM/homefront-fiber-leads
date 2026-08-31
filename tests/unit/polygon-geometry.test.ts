@@ -5,6 +5,7 @@ import {
   crossesAntimeridian,
   dedupeVertices,
   hasSelfIntersection,
+  healSelfIntersections,
   ringAreaSqMeters,
   simplifyRing,
   validateRing,
@@ -596,5 +597,61 @@ describe("crossesAntimeridian flags rings the planar maths cannot handle", () =>
   it("returns false for inputs with no edges", () => {
     expect(crossesAntimeridian([])).toBe(false);
     expect(crossesAntimeridian([[0, 0]])).toBe(false);
+  });
+});
+
+describe("healSelfIntersections keeps the hand's intent and rejects only ambiguity", () => {
+  // The failure this heals: rings are stored open, and a hand closing a loop
+  // almost always overshoots the start by a few pixels — so the stroke's tail
+  // GENUINELY crosses its own first segment, and validateRing alone rejected
+  // nearly every careful draw with "that loop crosses over itself".
+  const SQUARE: Ring = [[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01]];
+
+  it("a closing-seam overshoot heals to the intended loop, and the healed ring validates", () => {
+    // The square, drawn by hand: the last stroke sails past the start point,
+    // crossing the first edge. This is the every-draw case.
+    const overshoot: Ring = [[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01], [0.0005, -0.0008]];
+    expect(hasSelfIntersection(overshoot)).toBe(true);
+
+    const res = healSelfIntersections(overshoot);
+    expect(res.healed).toBe(true);
+    expect(res.discardedAreaRatio).toBeLessThan(0.05); // the sliver, not a lobe
+    expect(hasSelfIntersection(res.ring)).toBe(false);
+    // The kept loop is the square the hand meant, give or take the sliver.
+    const ratio = ringAreaSqMeters(res.ring) / ringAreaSqMeters(SQUARE);
+    expect(ratio).toBeGreaterThan(0.95);
+    expect(ratio).toBeLessThanOrEqual(1.000001);
+    expect(validateRing(res.ring).ok).toBe(true);
+  });
+
+  it("a mid-stroke pigtail (wobble loop) heals away", () => {
+    // A tiny loop-the-loop drawn along the bottom edge.
+    const pigtail: Ring = [
+      [0, 0], [0.005, 0], [0.006, 0.001], [0.0055, 0.0015], [0.005, 0.0008],
+      [0.0065, 0], [0.01, 0], [0.01, 0.01], [0, 0.01],
+    ];
+    expect(hasSelfIntersection(pigtail)).toBe(true);
+
+    const res = healSelfIntersections(pigtail);
+    expect(res.healed).toBe(true);
+    expect(res.discardedAreaRatio).toBeLessThan(0.05);
+    expect(hasSelfIntersection(res.ring)).toBe(false);
+    expect(ringAreaSqMeters(res.ring) / ringAreaSqMeters(SQUARE)).toBeGreaterThan(0.9);
+  });
+
+  it("a genuine figure-eight reports comparable lobes — the caller's cue to still reject", () => {
+    // Two lobes of equal area: keeping either half would silently assign
+    // ground the manager can see is outside their loop.
+    const bowtie: Ring = [[0, 0], [0.01, 0.01], [0.01, 0], [0, 0.01]];
+    const res = healSelfIntersections(bowtie);
+    expect(res.healed).toBe(true);
+    expect(res.discardedAreaRatio).toBeGreaterThan(0.9);
+  });
+
+  it("a clean ring passes through untouched", () => {
+    const res = healSelfIntersections(SQUARE);
+    expect(res.healed).toBe(false);
+    expect(res.discardedAreaRatio).toBe(0);
+    expect(res.ring).toEqual(SQUARE);
   });
 });

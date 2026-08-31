@@ -95,8 +95,15 @@ describe("the simplification tolerance cannot visibly move the boundary", () => 
 });
 
 describe("a ring that fails validation is not saved", () => {
-  it("runs validateRing on the cleaned ring", () => {
-    expect(finishBody).toContain("validateRing(cleaned)");
+  it("runs validateRing on the HEALED ring - after seam healing, never before", () => {
+    // The cleaned ring goes through healSelfIntersections first: a hand
+    // closing a loop overshoots the start, which is a genuine geometric
+    // self-intersection, and validating the raw cleaned ring rejected nearly
+    // every careful draw. Validation must judge what healing kept.
+    expect(finishBody).toContain("healSelfIntersections(cleaned)");
+    expect(finishBody).toContain("validateRing(heal.ring)");
+    expect(finishBody.indexOf("healSelfIntersections(cleaned)"))
+      .toBeLessThan(finishBody.indexOf("validateRing(heal.ring)"));
   });
 
   it("returns out of finish() on failure, before anything is selected or stored", () => {
