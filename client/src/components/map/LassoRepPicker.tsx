@@ -121,8 +121,14 @@ export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByC
         })}
       </div>
       {chosen && selectionCount > 0 && (
+        // Only server-authoritative numbers: the gain comes from the preview
+        // (total minus doors already theirs). The old "will have N doors"
+        // added that gain to a VIEWPORT-SAMPLED holdings figure, so it read
+        // as the rep's total while undercounting exactly when selections were
+        // large. And the undo window is the server's 10 minutes, not 30s.
         <p className="mt-2 text-[12px] leading-snug tabular-nums text-white/70" data-testid="lasso-assign-preview">
-          {chosen.name.split(/\s+/)[0]} will have {fmt(chosen.doors + gained)} doors after this. You can undo for 30 seconds.
+          {chosen.name.split(/\s+/)[0]} gains {fmt(gained)} {gained === 1 ? "door" : "doors"}
+          {ownedByChosen > 0 ? ` (${fmt(ownedByChosen)} here already theirs)` : ""}. You can undo for 10 minutes after.
         </p>
       )}
     </div>

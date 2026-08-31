@@ -122,3 +122,28 @@ describe("the sampled-window warning tells the truth", () => {
     expect(warn).not.toContain("Assign, Status and Mark apply only");
   });
 });
+
+describe("the result of a bulk assignment survives the toast stack", () => {
+  it("success feeds the persistent bar, not a toast, and keeps the server's undo window", () => {
+    const onSuccess = src.slice(
+      src.indexOf("undoExpiresAt?: string }) => {"),
+      src.indexOf("exitLasso();", src.indexOf("undoExpiresAt?: string }) => {")),
+    );
+    // The bar replaces the evictable 30s toast as the undo's home.
+    expect(onSuccess).toContain("setAssignResult({");
+    expect(onSuccess).not.toContain("toast({");
+    // The window shown is the SERVER's (10 min), parsed from undoExpiresAt.
+    expect(onSuccess).toContain("Date.parse(data.undoExpiresAt)");
+    // Reassignment context comes from the confirmed preview's byOwner.
+    expect(onSuccess).toContain("movedFromOthers");
+  });
+
+  it("a failed undo never offers a retry - redemption spends the token", () => {
+    const undoDecl = src.slice(
+      src.indexOf("const undoAssignMutation"),
+      src.indexOf("const bulkStatusMutation"),
+    );
+    expect(undoDecl).toContain("undoError");
+    expect(undoDecl).toContain("undone: { restored: data.restored, skipped: data.skipped }");
+  });
+});

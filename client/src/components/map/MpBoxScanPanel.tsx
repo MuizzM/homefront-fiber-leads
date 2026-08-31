@@ -115,7 +115,7 @@ export default function MpBoxScanPanel({
         const p = new URLSearchParams(window.location.search);
         next.tenured ? p.set("tenured", "1") : p.delete("tenured");
         next.freshFiber ? p.set("fresh", "1") : p.delete("fresh");
-        window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}`);
+        window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}${window.location.hash}`);
       }
       return next;
     });
@@ -125,7 +125,7 @@ export default function MpBoxScanPanel({
     if (typeof window !== "undefined") {
       const p = new URLSearchParams(window.location.search);
       p.delete("tenured"); p.delete("fresh");
-      window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}`);
+      window.history.replaceState(null, "", `${window.location.pathname}${p.toString() ? `?${p}` : ""}${window.location.hash}`);
     }
   }, []);
 

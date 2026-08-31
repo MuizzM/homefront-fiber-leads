@@ -428,15 +428,17 @@ function AssignRepModal({ lead, team, onClose }: {
           <SelectValue placeholder="Select rep..." />
         </SelectTrigger>
         <SelectContent className="bg-card border-border">
-          <SelectItem value="0">Unassigned</SelectItem>
+          <SelectItem value="0">Unassigned{initialRepId === "" ? " (current)" : ""}</SelectItem>
           {team.filter(m => m.active).map(m => (
-            <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>
+            <SelectItem key={m.id} value={String(m.id)}>
+              {m.name}{String(m.id) === initialRepId ? " (current)" : ""}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
       <DialogFooter className="mt-2">
         <Button variant="outline" onClick={onClose} className="border-border">Cancel</Button>
-        <Button onClick={() => assignMutation.mutate()} disabled={unchanged || assignMutation.isPending}
+        <Button onClick={() => assignMutation.mutate()} disabled={unchanged} loading={assignMutation.isPending}
           className="bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="btn-confirm-assign">
           {assignMutation.isPending ? "Assigning..." : unassigning ? "Unassign" : "Assign"}
         </Button>

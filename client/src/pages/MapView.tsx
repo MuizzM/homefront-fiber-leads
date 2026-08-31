@@ -47,7 +47,6 @@ import { toLeadMapStatus } from "@shared/statusConfig";
 import { rankNearestDoors, NEAREST_DOORS_LIMIT } from "@shared/nearestDoors";
 import { NearestDoorsStrip, type StripPin } from "@/components/map/NearestDoorsStrip";
 import { LassoRepPicker, type PickerRep } from "@/components/map/LassoRepPicker";
-import { ToastAction } from "@/components/ui/toast";
 import {
   saveLeadNote,
   flushPendingNotes,
@@ -224,10 +223,11 @@ const RAIL_BTN_IDLE = "bg-card/95 border-border text-foreground hover:bg-card";
 const RAIL_BTN_ACTIVE = "bg-primary border-primary text-primary-foreground";
 import { chaikinSmooth } from "@shared/strokeSmoothing";
 import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
-import { activeAreaCountsByRep, areaCountsRecord } from "@/lib/areaCapacity";
+import { activeAreaCountsByRep, areaCountsRecord, repAtCap } from "@/lib/areaCapacity";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
 import { ReclaimAllDialog } from "@/components/territory/ReclaimAllDialog";
 import { FccPurgeDialog } from "@/components/map/FccPurgeDialog";
+import { AssignResultBar, type AssignResultState } from "@/components/map/AssignResultBar";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
   discoveryApi,
@@ -1613,6 +1613,15 @@ export default function MapView() {
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  // The persistent post-commit record (and the undo's home). Survives toast
+  // traffic and lasso exit; replaced by the next assignment.
+  const [assignResult, setAssignResult] = useState<AssignResultState | null>(null);
+  const assignResultDismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearAssignResultTimer = () => {
+    if (assignResultDismissTimer.current) { clearTimeout(assignResultDismissTimer.current); assignResultDismissTimer.current = null; }
+  };
+  const dismissAssignResult = () => { clearAssignResultTimer(); setAssignResult(null); };
+
   const bulkAssignMutation = useMutation({
     mutationFn: async ({
       repId,
@@ -1642,26 +1651,31 @@ export default function MapView() {
       });
       return res.json();
     },
-    onSuccess: (data: { updated: number; skipped: number; undoToken?: string }) => {
+    onSuccess: (data: { updated: number; skipped: number; undoToken?: string; undoExpiresAt?: string }) => {
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       const repName =
         team.find((m: TeamMember) => m.id === Number(lassoRepId))?.name ??
         "rep";
-      // The put-back lives on the toast for 30 seconds: the server holds the
-      // prior owners under a one-use token and restores each door to its own.
-      toast({
-        title: `${data.updated} reassigned to ${repName}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
-        ...(data.undoToken
-          ? {
-              duration: 30_000,
-              action: (
-                <ToastAction altText="Put these doors back" onClick={() => undoAssignMutation.mutate(data.undoToken!)}>
-                  Undo
-                </ToastAction>
-              ),
-            }
-          : {}),
+      // The result lives on a persistent bar, not a toast: the toast stack
+      // holds two and evicts the oldest, which used to take the ONLY undo
+      // affordance with it - while the server honors the token for 10 minutes
+      // (undoExpiresAt). movedFromOthers comes from the preview the manager
+      // just confirmed against: it is what makes a reassignment read
+      // differently from a first assignment.
+      const byOwner = lassoPreview?.byOwner;
+      const movedFromOthers = byOwner
+        ? Math.max(0, (lassoPreview?.total ?? 0) - (byOwner["0"] ?? 0) - (lassoRepId ? byOwner[lassoRepId] ?? 0 : 0))
+        : 0;
+      const expiresMs = data.undoExpiresAt ? Date.parse(data.undoExpiresAt) : NaN;
+      clearAssignResultTimer();
+      setAssignResult({
+        repName,
+        updated: data.updated,
+        skipped: data.skipped,
+        movedFromOthers,
+        undoToken: data.undoToken,
+        undoExpiresAt: Number.isFinite(expiresMs) ? expiresMs : undefined,
       });
       exitLasso();
     },
@@ -1674,15 +1688,21 @@ export default function MapView() {
       const res = await apiRequest("POST", "/api/leads/assign-selection/undo", { token });
       return res.json() as Promise<{ restored: number; skipped: number }>;
     },
+    onMutate: () => setAssignResult(r => (r ? { ...r, undoPending: true } : r)),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      toast({
-        title: `${data.restored} put back${data.skipped ? ` · ${data.skipped} left as someone else moved them` : ""}`,
-        severity: "success",
-      });
+      // The bar becomes the put-back receipt, then leaves on its own - the
+      // reversal is complete and holds nothing further to act on.
+      setAssignResult(r => (r ? { ...r, undoPending: false, undone: { restored: data.restored, skipped: data.skipped } } : r));
+      clearAssignResultTimer();
+      assignResultDismissTimer.current = setTimeout(() => setAssignResult(null), 8_000);
     },
-    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+    onError: (e: any) => {
+      // The token is spent on redemption (documented single use), so there is
+      // no retry to offer - the bar states what happened instead.
+      setAssignResult(r => (r ? { ...r, undoPending: false, undoError: String(e?.message ?? "The undo did not complete") } : r));
+    },
   });
 
   // Lasso "Modify Status" — set the refined selection to one disposition at once
@@ -7569,7 +7589,7 @@ export default function MapView() {
         {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
 
         {canManage && pendingRequests.length > 0 && (
-          <div className="glass-surface glass-opaque border-amber-500/40 overflow-hidden">
+          <div className="glass-surface glass-opaque glass-ink-scope border-amber-500/40 overflow-hidden">
             <button
               className="w-full flex items-center gap-2 px-3 min-h-[44px] text-[11px] font-medium text-amber-400 hover:bg-amber-500/10"
               onClick={() => setShowTerritoryRequests((v) => !v)}
@@ -7600,7 +7620,7 @@ export default function MapView() {
                     )}
                     <Button
                       size="sm"
-                      className="relative min-h-9 text-[12px] px-3 after:absolute after:-inset-1.5 bg-purple-600 hover:bg-purple-700 text-white"
+                      className="relative min-h-9 text-[12px] px-3 after:absolute after:-inset-1.5"
                       disabled={fulfillRequestMutation.isPending && fulfillRequestMutation.variables?.id === req.id}
                       onClick={() =>
                         fulfillRequestMutation.mutate({
@@ -7877,30 +7897,46 @@ export default function MapView() {
               fetchFailed: failedAt != null,
               fetchFailedDismissed: failedAt != null && staleNoticeDismissedAt != null && staleNoticeDismissedAt >= failedAt,
             });
-            if (!notice) return null;
-            return (
-              <MapViewportNotice
-                message={notice.message}
-                onDismiss={() =>
-                  notice.kind === "stale"
-                    ? setStaleNoticeDismissedAt(Date.now())
-                    : setSampleNoticeDismissed(true)}
-                testId={`map-viewport-${notice.kind}-notice`}
-              />
-            );
+            if (notice) {
+              return (
+                <MapViewportNotice
+                  message={notice.message}
+                  onDismiss={() =>
+                    notice.kind === "stale"
+                      ? setStaleNoticeDismissedAt(Date.now())
+                      : setSampleNoticeDismissed(true)}
+                  testId={`map-viewport-${notice.kind}-notice`}
+                />
+              );
+            }
+            {/* ── Lens-hiding notice — the source lens is filtering doors out
+                   of THIS viewer's own scope. Both capsules share one anchor,
+                   so they take turns with a fixed priority: a partial or stale
+                   map (above) outranks the lens hint - the lens capsule used
+                   to render on top and bury the only warning that the map was
+                   incomplete. ── */}
+            if (showLensNotice) {
+              return (
+                <MapLensNotice
+                  hiddenCount={hiddenByLens}
+                  lensLabel={LEAD_SOURCE_OPTIONS.find(o => o.key === filterSource)?.label ?? "this filter"}
+                  onShowAll={() => setFilterSource("all")}
+                  onDismiss={() => setLensNoticeDismissedFor(filterSource)}
+                />
+              );
+            }
+            return null;
           })()}
 
-          {/* ── Lens-hiding notice — the source lens is filtering doors out of
-                 THIS viewer's own scope. Silent filtering is the failure this
-                 fixes: an assigned FCC-footprint block behind the default
-                 "Latest fiber" lens looked to the rep exactly like never having
-                 been assigned anything at all. ── */}
-          {mapReady && showLensNotice && (
-            <MapLensNotice
-              hiddenCount={hiddenByLens}
-              lensLabel={LEAD_SOURCE_OPTIONS.find(o => o.key === filterSource)?.label ?? "this filter"}
-              onShowAll={() => setFilterSource("all")}
-              onDismiss={() => setLensNoticeDismissedFor(filterSource)}
+          {/* ── Assignment result bar — the persistent record of the last bulk
+                 assignment and the home of its undo (the server honors the
+                 token for 10 minutes; a toast held it for 30 evictable
+                 seconds). ── */}
+          {assignResult && (
+            <AssignResultBar
+              result={assignResult}
+              onUndo={() => { if (assignResult.undoToken) undoAssignMutation.mutate(assignResult.undoToken); }}
+              onDismiss={dismissAssignResult}
             />
           )}
 
@@ -7930,18 +7966,30 @@ export default function MapView() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="relative">
-                  
+                  <span className="sr-only" aria-live="polite">
+                    {sidebarSearch.trim().length >= 2
+                      ? `${combinedMatches.length} ${combinedMatches.length === 1 ? "match" : "matches"}`
+                      : ""}
+                  </span>
                   <input
                     ref={searchInputRef}
                     value={sidebarSearch}
                     onChange={(e) => setSidebarSearch(e.target.value)}
                     onKeyDown={(e) => {
-                      if (
-                        e.key === "Enter" &&
-                        canSubmitScan &&
-                        sidebarSearch.trim().length >= 3 &&
-                        combinedMatches.length === 0
-                      ) {
+                      if (e.key !== "Enter") return;
+                      // Enter commits the BEST match (first in the list - the
+                      // row rendered nearest the input on phones). It used to
+                      // be a dead key whenever results were visible, forcing a
+                      // thumb-lift to tap a row one step away.
+                      if (combinedMatches.length > 0) {
+                        e.preventDefault();
+                        flyToLead(combinedMatches[0]);
+                        setSearchOpen(false);
+                        setSidebarSearch("");
+                        searchBtnRef.current?.focus();
+                        return;
+                      }
+                      if (canSubmitScan && sidebarSearch.trim().length >= 3) {
                         e.preventDefault();
                         void jumpToAddress(sidebarSearch);
                       }
@@ -8079,7 +8127,7 @@ export default function MapView() {
                     ? "calc(env(safe-area-inset-top) + 4rem)"
                     : "calc(env(safe-area-inset-top) + 0.75rem)",
               }}
-              className={`glass-capsule glass-opaque absolute ${isRep && isMobile ? "right-3" : "right-[76px]"} z-20 flex items-center gap-1.5 h-9 px-3 border-amber-500/40 text-amber-300 text-xs font-semibold tabular-nums`}
+              className="glass-capsule glass-opaque absolute right-3 z-20 flex items-center gap-1.5 h-9 px-3 border-amber-500/40 text-amber-300 text-xs font-semibold tabular-nums"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
               {queueSnap.pendingCount} to sync
@@ -8257,6 +8305,25 @@ export default function MapView() {
                       to other teams and won't move.
                     </span>
                   )}
+                  {/* Reassignment is not first assignment: say how many of
+                      these doors are being taken from other reps before the
+                      manager confirms, from the same server preview the count
+                      comes from. */}
+                  {lassoEffectiveAction === "assign" && lassoPreview?.byOwner && (() => {
+                    const fromOthers = Math.max(
+                      0,
+                      lassoPreview.total -
+                        (lassoPreview.byOwner["0"] ?? 0) -
+                        (lassoRepId ? lassoPreview.byOwner[lassoRepId] ?? 0 : 0),
+                    );
+                    if (fromOthers === 0) return null;
+                    return (
+                      <span className="text-[12px] text-white/60 leading-tight" data-testid="lasso-changes-hands">
+                        {fromOthers} of these {fromOthers === 1 ? "door belongs" : "doors belong"} to other reps and will change hands.
+                      </span>
+                    );
+                  })()}
+
                   {/* The preview failing must never block the flow silently:
                       say so, offer a retry, and let the id-based fallback
                       carry on with the pins the client holds. */}
@@ -8304,13 +8371,21 @@ export default function MapView() {
                           : key === "assign"
                             ? lassoAssignCount === 0 && !lassoPreviewPending
                             : !lassoHasLeads;
+                      const disabledReason = !disabled
+                        ? undefined
+                        : key === "assign"
+                          ? (Object.values(lassoPreview?.byState ?? {}).some(n => (n ?? 0) > 0)
+                              ? "Every door here is toggled off by the state chips"
+                              : "No doors in this loop")
+                          : "Needs doors loaded on screen - zoom in to load them";
                       const active = lassoEffectiveAction === key;
                       return (
                         <button
                           key={key}
                           type="button"
                           disabled={disabled}
-                          title={disabled ? "No doors in this loop" : undefined}
+                          aria-label={disabledReason ? `${label} - ${disabledReason}` : undefined}
+                          title={disabledReason}
                           onClick={() => setLassoAction(key)}
                           data-testid={`lasso-action-${key}`}
                           aria-pressed={active}
@@ -8332,7 +8407,7 @@ export default function MapView() {
                       onClick={exitLasso}
                       aria-label="Clear selection and exit"
                       data-testid="lasso-clear"
-                      className={`col-span-4 h-16 rounded-xl border border-border flex flex-col items-center justify-center gap-1 text-white/80 hover:text-white hover:bg-white/[0.06] active:scale-95 transition ${FOCUS}`}
+                      className={`col-span-5 h-16 rounded-xl border border-border flex flex-col items-center justify-center gap-1 text-white/80 hover:text-white hover:bg-white/[0.06] active:scale-95 transition ${FOCUS}`}
                     >
                       
                       <span className="text-[11px] font-semibold leading-none">
@@ -8340,6 +8415,13 @@ export default function MapView() {
                       </span>
                     </button>
                   </div>
+                  {lassoAssignCount === 0 && !lassoPreviewPending && canAssign && (
+                    <p className="text-[11px] leading-tight text-white/50" data-testid="lasso-assign-disabled-reason">
+                      {Object.values(lassoPreview?.byState ?? {}).some(n => (n ?? 0) > 0)
+                        ? "Assign is off - every door here is toggled off by the state chips above."
+                        : "Assign is off - no doors in this loop."}
+                    </p>
+                  )}
 
                   {/* Mode control + Apply — the active tile's secondary flow.
                       The Area flow gets its own labeled section below. */}
@@ -8617,12 +8699,16 @@ export default function MapView() {
                           {team.filter((m) => m.active).map((m: TeamMember) => {
                             const idx = lassoRepIds.indexOf(m.id);
                             const on = idx >= 0;
+                            const load = activeAreaCountByRep.get(m.id) ?? 0;
+                            const atCap = !on && repAtCap(activeAreaCountByRep, m.id);
                             return (
                               <button
                                 key={m.id}
                                 type="button"
                                 aria-pressed={on}
-                                disabled={assignAreaMutation.isPending}
+                                disabled={assignAreaMutation.isPending || atCap}
+                                aria-label={atCap ? `${m.name} - at the area cap (${load} areas)` : undefined}
+                                title={atCap ? `At the area cap (${load} areas)` : undefined}
                                 data-testid={`lasso-area-rep-${m.id}`}
                                 onClick={() => toggleLassoRep(m.id)}
                                 className={`inline-flex h-11 items-center gap-1.5 rounded-full border px-3 text-[12px] font-semibold transition disabled:opacity-40 ${
@@ -8632,6 +8718,12 @@ export default function MapView() {
                                 } ${FOCUS}`}
                               >
                                 {m.name}
+                                <span className="text-2xs font-bold tabular-nums text-white/50">{load}</span>
+                                {atCap && (
+                                  <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide text-white/60">
+                                    At cap
+                                  </span>
+                                )}
                                 {idx === 0 && lassoRepIds.length > 1 && (
                                   <span className="rounded-full bg-teal-400/30 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide">
                                     1st
@@ -9093,7 +9185,7 @@ export default function MapView() {
                 {shareRepIds.length === 0 && (
                   // The API refuses an empty set; say why here rather than let them press
                   // Save and get an error. Emptying an area is Reclaim's job.
-                  <p className="text-xs text-amber-500">
+                  <p className="text-xs text-warning">
                     Pick at least one rep - to empty the area entirely, use Reclaim.
                   </p>
                 )}
@@ -10248,7 +10340,11 @@ export default function MapView() {
             // In viewport mode the merged cache total is just the accumulated
             // window subset — the honest org total is the count probe's.
             orgTotal={mapPinCount?.total ?? mapPinData?.total ?? 0}
-            filtered={mapTotalLeads.length !== (mapPinCount?.total ?? mapPinData?.total ?? 0)}
+            // "filtered" means a LENS is narrowing the map - never the
+            // loaded-window-vs-org-total gap, which lit the badge permanently
+            // for big orgs with zero filters active.
+            filtered={filterStatus !== "all" || filterRep !== "all" || filterSource !== "all"}
+            windowed={viewportMode}
             showLeadsLayer={showLeads}
             onShowLeadsLayer={() => setShowLeads(true)}
             onRowTap={onLeadsRowTap}

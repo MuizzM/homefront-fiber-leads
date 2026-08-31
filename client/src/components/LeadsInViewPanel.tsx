@@ -68,7 +68,7 @@ function useWindowedList<T>(items: T[], rowH: number, overscan = 8, active = tru
 }
 
 export function LeadsInViewPanel({
-  open, onClose, leads, totalOnMap, orgTotal, filtered,
+  open, onClose, leads, totalOnMap, orgTotal, filtered, windowed = false,
   showLeadsLayer, onShowLeadsLayer, onRowTap, onFitAll, onClearFilters,
   repNameById,
 }: {
@@ -77,7 +77,9 @@ export function LeadsInViewPanel({
   leads: PanelLead[];        // in-view, sorted nearest-to-center
   totalOnMap: number;        // what the map paints (post-filter, has coords)
   orgTotal: number;          // unfiltered org total from the server
-  filtered: boolean;         // totalOnMap !== orgTotal
+  filtered: boolean;         // an actual lens (status/rep/source) is active
+  /** Viewport mode: totalOnMap is the loaded WINDOW, not the org - label it so. */
+  windowed?: boolean;
   showLeadsLayer: boolean;
   onShowLeadsLayer: () => void;
   onRowTap: (id: number) => void;
@@ -122,7 +124,7 @@ export function LeadsInViewPanel({
           
           <h2 className="text-[13px] font-semibold text-white flex-1 truncate" data-testid="leads-panel-count">
             {leads.length.toLocaleString()} in view
-            <span className="text-white/50 font-normal"> · {totalOnMap.toLocaleString()} total</span>
+            <span className="text-white/50 font-normal"> · {totalOnMap.toLocaleString()} {windowed ? "loaded here" : "total"}</span>
             {filtered && <span className="ml-1.5 text-2xs font-semibold text-teal-300">filtered</span>}
           </h2>
           <button

@@ -19,7 +19,9 @@ describe("<LassoRepPicker />", () => {
     expect(screen.getByTestId("lasso-rep-1")).toHaveTextContent("1,034 doors · 38 knocked today");
     expect(screen.getByTestId("lasso-rep-3")).toHaveTextContent("0 doors");
     expect(screen.getByTestId("lasso-rep-3")).not.toHaveTextContent("knocked today");
-    expect(screen.getByTestId("lasso-assign-preview")).toHaveTextContent("Jordan will have 1,052 doors after this");
+    // Only server-authoritative numbers in the projection: the gain (and any
+    // doors already theirs), never a total built on viewport-sampled holdings.
+    expect(screen.getByTestId("lasso-assign-preview")).toHaveTextContent("Jordan gains 18 doors. You can undo for 10 minutes after.");
   });
 
   it("a tap chooses a rep; no preview until one is chosen", () => {
