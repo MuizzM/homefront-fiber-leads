@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
+import { RepPicker } from "@/components/territory/RepPicker";
 import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -223,16 +224,11 @@ export function StartNextPassDialog({
                   </label>
                 ))}
                 {action === "reassign" && (
-                  <select
-                    aria-label="Rep to hand the area to"
-                    data-testid="pass-reassign-select"
-                    className={`h-11 w-full rounded-lg border border-border bg-secondary px-3 text-sm text-foreground ${FOCUS}`}
-                    value={newRepId ?? ""}
-                    onChange={e => setNewRepId(e.target.value ? Number(e.target.value) : undefined)}
-                  >
-                    <option value="">Choose a rep…</option>
-                    {reps.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                  </select>
+                  // The searchable picker, inline - this used to be a native
+                  // select, which at a 300-rep org is an unsearchable wheel.
+                  <div data-testid="pass-reassign-select" aria-label="Rep to hand the area to">
+                    <RepPicker reps={reps} value={newRepId ?? null} onChange={(id) => setNewRepId(id)} />
+                  </div>
                 )}
               </fieldset>
 

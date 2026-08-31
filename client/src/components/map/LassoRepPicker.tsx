@@ -5,9 +5,17 @@
 // radio mark on the chosen one. Sits on the lasso panel's dark glass, so the
 // chrome is white-alpha like its neighbours (the panel re-asserts the dark
 // token set for anything semantic).
-import { Check } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Check, X } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 import { useRovingTabs } from "@/hooks/use-roving-tabs";
+import {
+  matchPerson,
+  withRecentsFirst,
+  ROSTER_SEARCH_THRESHOLD,
+  ROSTER_MAX_ROWS,
+} from "@/lib/rosterSearch";
+import { useRecentReps, recordRecentRep } from "@/hooks/use-recent-reps";
 
 export interface PickerRep {
   id: number;
@@ -68,16 +76,59 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 
 export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByChosen = 0 }: LassoRepPickerProps) {
   const chosen = reps.find((r) => String(r.id) === value) ?? null;
+  // The scale contract (lib/rosterSearch): past ROSTER_SEARCH_THRESHOLD reps a
+  // search box appears, at most ROSTER_MAX_ROWS rows render (with an honest
+  // count of the rest), and with an empty query the reps this device assigned
+  // to recently float to the top. A 6-rep crew sees exactly the old picker;
+  // a 300-rep org types three letters instead of scroll-hunting 15,000px.
+  const [q, setQ] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const recents = useRecentReps();
+  const showSearch = reps.length > ROSTER_SEARCH_THRESHOLD;
+  const { shown, hidden } = useMemo(() => {
+    let ordered = reps.filter((r) => matchPerson(r.name, q));
+    if (!q.trim() && showSearch && recents.length) ordered = withRecentsFirst(ordered, recents);
+    const shown = ordered.slice(0, ROSTER_MAX_ROWS);
+    return { shown, hidden: ordered.length - shown.length };
+  }, [reps, q, showSearch, recents]);
+  const pick = (id: number) => {
+    recordRecentRep(id);
+    onChange(String(id));
+  };
   // The radiogroup role promises arrow-key movement ("1 of N, use arrow
-  // keys") - deliver it. With nothing chosen yet, the first row is the
-  // tab stop.
-  const chosenIdx = reps.findIndex((r) => String(r.id) === value);
-  const roving = useRovingTabs(reps.length, Math.max(0, chosenIdx), (i) => onChange(String(reps[i].id)));
+  // keys") - deliver it over the RENDERED rows. With nothing chosen yet,
+  // the first row is the tab stop.
+  const chosenIdx = shown.findIndex((r) => String(r.id) === value);
+  const roving = useRovingTabs(shown.length, Math.max(0, chosenIdx), (i) => pick(shown[i].id));
   // Net new doors for the chosen rep: the selection minus what they already
   // hold in it. Clamped — a stale count must never project a negative gain.
   const gained = Math.max(0, selectionCount - ownedByChosen);
   return (
     <div data-testid="lasso-rep-picker">
+      {showSearch && (
+        <div className="relative mb-1.5">
+          <input
+            ref={inputRef}
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search reps…"
+            aria-label="Search reps"
+            data-testid="lasso-rep-search"
+            className={`h-10 w-full rounded-lg border border-white/15 bg-white/5 px-3 pr-8 text-[13px] text-white placeholder:text-white/40 ${FOCUS}`}
+          />
+          {q && (
+            <button
+              type="button"
+              onClick={() => { setQ(""); inputRef.current?.focus(); }}
+              aria-label="Clear search"
+              className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded text-white/50 hover:text-white ${FOCUS}`}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
       <div
         role="radiogroup"
         aria-label="Assign to"
@@ -87,7 +138,12 @@ export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByC
         {reps.length === 0 && (
           <p className="px-2 py-3 text-[12px] text-white/60">No active reps on your team yet.</p>
         )}
-        {reps.map((r, i) => {
+        {reps.length > 0 && shown.length === 0 && (
+          <p role="status" className="px-2 py-3 text-[12px] text-white/60">
+            No rep matches “{q.trim()}”.
+          </p>
+        )}
+        {shown.map((r, i) => {
           const on = String(r.id) === value;
           const load = r.knockedToday != null
             ? `${fmt(r.doors)} doors · ${fmt(r.knockedToday)} knocked today`
@@ -101,7 +157,7 @@ export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByC
               tabIndex={on || (chosenIdx < 0 && i === 0) ? 0 : -1}
               ref={roving.itemRef(i)}
               data-testid={`lasso-rep-${r.id}`}
-              onClick={() => onChange(String(r.id))}
+              onClick={() => pick(r.id)}
               className={`flex min-h-[52px] w-full items-center gap-2.5 rounded-xl border px-2 py-1.5 text-left transition active:bg-white/[0.10] ${FOCUS} ${
                 on ? "border-teal-300/55 bg-teal-500/[0.14]" : "border-transparent hover:bg-white/[0.05]"
               }`}
@@ -129,6 +185,13 @@ export function LassoRepPicker({ reps, value, onChange, selectionCount, ownedByC
           );
         })}
       </div>
+      {hidden > 0 && (
+        // Never silently truncate: a manager who can't find someone must learn
+        // the list is cut, not conclude the rep doesn't exist.
+        <p className="mt-1 px-1 text-[11px] tabular-nums text-white/50" data-testid="lasso-rep-hidden">
+          {hidden} more {hidden === 1 ? "rep" : "reps"} - keep typing to narrow the list.
+        </p>
+      )}
       {chosen && selectionCount > 0 && (
         // Only server-authoritative numbers: the gain comes from the preview
         // (total minus doors already theirs). The old "will have N doors"

@@ -208,6 +208,8 @@ import { can as roleCan } from "@shared/permissions";
 import { resolveCreditedRepId } from "@/features/knocking/savedKnockReconciliation";
 import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
 import { RepPicker } from "@/components/territory/RepPicker";
+import { RepDialogSelect } from "@/components/people/RepDialogSelect";
+import { matchPerson, ROSTER_SEARCH_THRESHOLD, ROSTER_MAX_ROWS } from "@/lib/rosterSearch";
 import { MapFilterSheet } from "@/components/map/MapFilterSheet";
 import { MapViewportNotice } from "@/components/map/MapViewportNotice";
 import { MapLensNotice } from "@/components/map/MapLensNotice";
@@ -1231,6 +1233,8 @@ export default function MapView() {
   // takes its assigned rep's color so managers see at a glance WHO owns each
   // area; legend below lists reps with counts and click-to-filter.
   const [repColorMode, setRepColorMode] = useState<boolean>(false);
+  // Legend assignment-list search: 300 reps used to render ~11,000px of rows.
+  const [legendRepQuery, setLegendRepQuery] = useState("");
   const territoryLayersRef = useRef<string[]>([]);
 
   const { toast } = useToast();
@@ -8848,48 +8852,60 @@ export default function MapView() {
                         >
                           Assign to {lassoRepIds.length > 1 ? `${lassoRepIds.length} reps` : "rep"}
                         </span>
+                        {/* The picked crew stays visible as chips (bounded by
+                            the SELECTION, never the roster), then the roster
+                            itself lives in the searchable picker below - the
+                            old chip-per-rep cloud put ~300 wrap chips between
+                            the color swatches and Save at a big org, pushing
+                            the primary action off-screen. */}
                         <div
                           role="group"
                           aria-labelledby="lasso-area-rep-label"
                           data-testid="lasso-area-rep-picker"
-                          className="flex flex-wrap gap-1.5"
+                          className="flex flex-col gap-1.5"
                         >
-                          {team.filter((m) => m.active).map((m: TeamMember) => {
-                            const idx = lassoRepIds.indexOf(m.id);
-                            const on = idx >= 0;
-                            const load = activeAreaCountByRep.get(m.id) ?? 0;
-                            const atCap = !on && repAtCap(activeAreaCountByRep, m.id);
-                            return (
-                              <button
-                                key={m.id}
-                                type="button"
-                                aria-pressed={on}
-                                disabled={assignAreaMutation.isPending || atCap}
-                                aria-label={atCap ? `${m.name} - at the area cap (${load} areas)` : undefined}
-                                title={atCap ? `At the area cap (${load} areas)` : undefined}
-                                data-testid={`lasso-area-rep-${m.id}`}
-                                onClick={() => toggleLassoRep(m.id)}
-                                className={`inline-flex h-11 items-center gap-1.5 rounded-full border px-3 text-[12px] font-semibold transition disabled:opacity-40 ${
-                                  on
-                                    ? "border-teal-400 bg-teal-500/25 text-white"
-                                    : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-                                } ${FOCUS}`}
-                              >
-                                {m.name}
-                                <span className="text-2xs font-bold tabular-nums text-white/50">{load}</span>
-                                {atCap && (
-                                  <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide text-white/60">
-                                    At cap
-                                  </span>
-                                )}
-                                {idx === 0 && lassoRepIds.length > 1 && (
-                                  <span className="rounded-full bg-teal-400/30 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide">
-                                    1st
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
+                          {lassoRepIds.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5" data-testid="lasso-area-crew">
+                              {lassoRepIds.map((id, idx) => {
+                                const m = team.find((t) => t.id === id);
+                                if (!m) return null;
+                                return (
+                                  <button
+                                    key={id}
+                                    type="button"
+                                    aria-label={`Remove ${m.name} from this area`}
+                                    disabled={assignAreaMutation.isPending}
+                                    data-testid={`lasso-area-rep-${id}`}
+                                    onClick={() => toggleLassoRep(id)}
+                                    className={`inline-flex h-11 items-center gap-1.5 rounded-full border border-teal-400 bg-teal-500/25 px-3 text-[12px] font-semibold text-white transition disabled:opacity-40 ${FOCUS}`}
+                                  >
+                                    {m.name}
+                                    {idx === 0 && lassoRepIds.length > 1 && (
+                                      <span className="rounded-full bg-teal-400/30 px-1.5 py-0.5 text-2xs font-bold uppercase tracking-wide">
+                                        1st
+                                      </span>
+                                    )}
+                                    <X className="h-3 w-3 opacity-70" aria-hidden="true" />
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <RepPicker
+                            tone="glass"
+                            multiple
+                            selected={lassoRepIds}
+                            onToggle={(_, next) => {
+                              if (!assignAreaMutation.isPending) setLassoRepIds(next);
+                            }}
+                            reps={team.filter((m) => m.active).map((m) => ({
+                              id: m.id,
+                              name: m.name,
+                              color: (m as any).color ?? null,
+                              areaCount: activeAreaCountByRep.get(m.id) ?? 0,
+                              atCap: repAtCap(activeAreaCountByRep, m.id),
+                            }))}
+                          />
                         </div>
                       </div>
 
@@ -9255,32 +9271,23 @@ export default function MapView() {
                             </span>
                           </span>
                         </button>
-                        <select
-                          defaultValue=""
-                          aria-label="Reassign this area to another rep"
-                          data-testid="panel-reassign-select"
+                        <RepDialogSelect
+                          testId="panel-reassign-select"
+                          triggerLabel={reclaimPendingMode === "reassign" ? "Reassigning…" : "Reassign to rep…"}
+                          title="Reassign this area"
                           disabled={reclaimMutation.isPending}
-                          onChange={(e) => {
-                            if (e.target.value)
-                              reclaimMutation.mutate({
-                                id: t.id,
-                                mode: "reassign",
-                                newRepId: Number(e.target.value),
-                              });
-                          }}
-                          className={`min-h-11 bg-secondary border border-border rounded-lg px-2 text-xs text-foreground disabled:opacity-50 ${FOCUS}`}
-                        >
-                          <option value="">
-                            {reclaimPendingMode === "reassign" ? "Reassigning…" : "Reassign to rep…"}
-                          </option>
-                          {team
+                          reps={team
                             .filter((m) => m.active && m.id !== t.repId)
-                            .map((m) => (
-                              <option key={m.id} value={m.id}>
-                                {m.name}
-                              </option>
-                            ))}
-                        </select>
+                            .map((m) => ({
+                              id: m.id,
+                              name: m.name,
+                              color: (m as any).color ?? null,
+                              areaCount: activeAreaCountByRep.get(m.id) ?? 0,
+                            }))}
+                          onPick={(newRepId) =>
+                            reclaimMutation.mutate({ id: t.id, mode: "reassign", newRepId })
+                          }
+                        />
                       </div>
                     )}
                     </div>
@@ -10075,21 +10082,52 @@ export default function MapView() {
                     <span className="text-white/80 flex-1 truncate">Unassigned</span>
                     <span className="text-white/40">{repLeadCounts.unassigned}</span>
                   </button>
-                  {team.map((m: TeamMember) => {
-                    const active = filterRep === String(m.id);
+                  {team.length > ROSTER_SEARCH_THRESHOLD && (
+                    <input
+                      type="text"
+                      value={legendRepQuery}
+                      onChange={(e) => setLegendRepQuery(e.target.value)}
+                      placeholder="Search reps…"
+                      aria-label="Search reps"
+                      data-testid="legend-rep-search"
+                      className="mb-1 h-10 w-full rounded-md border border-white/20 bg-white/10 px-2 text-[12px] text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-teal-400"
+                    />
+                  )}
+                  {(() => {
+                    // Search + honest cap; the chosen rep always stays visible
+                    // even when the query would hide them.
+                    const hits = legendRepQuery.trim()
+                      ? team.filter((m) => matchPerson(m.name, legendRepQuery))
+                      : team;
+                    const shown = hits.slice(0, ROSTER_MAX_ROWS);
+                    const hiddenCount = hits.length - shown.length;
+                    const chosen = team.find((m) => String(m.id) === filterRep);
+                    const rows = chosen && !shown.some((m) => m.id === chosen.id) ? [chosen, ...shown] : shown;
                     return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setFilterRep(active ? "all" : String(m.id))}
-                        className={`w-full flex items-center gap-2 h-9 px-1.5 rounded-md text-[12px] text-left ${active ? "bg-white/20" : "hover:bg-white/10"}`}
-                      >
-                        <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: repColorFor(m.id) }} />
-                        <span className="text-white/80 flex-1 truncate">{m.name}</span>
-                        <span className="text-white/40">{repLeadCounts.counts.get(m.id) ?? 0}</span>
-                      </button>
+                      <>
+                        {rows.map((m: TeamMember) => {
+                          const active = filterRep === String(m.id);
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() => setFilterRep(active ? "all" : String(m.id))}
+                              className={`w-full flex items-center gap-2 h-9 px-1.5 rounded-md text-[12px] text-left ${active ? "bg-white/20" : "hover:bg-white/10"}`}
+                            >
+                              <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: repColorFor(m.id) }} />
+                              <span className="text-white/80 flex-1 truncate">{m.name}</span>
+                              <span className="text-white/40">{repLeadCounts.counts.get(m.id) ?? 0}</span>
+                            </button>
+                          );
+                        })}
+                        {hiddenCount > 0 && (
+                          <p className="px-1.5 py-1 text-[11px] tabular-nums text-white/40" data-testid="legend-rep-hidden">
+                            {hiddenCount} more {hiddenCount === 1 ? "rep" : "reps"} - keep typing to narrow the list.
+                          </p>
+                        )}
+                      </>
                     );
-                  })}
+                  })()}
                 </div>
               ) : null}
               {canAssign && (
@@ -10097,23 +10135,28 @@ export default function MapView() {
                   <span className="block text-2xs text-white/40 uppercase tracking-wider font-semibold mb-1">
                     Rep
                   </span>
-                  <select
-                    value={filterRep}
-                    onChange={(e) => setFilterRep(e.target.value)}
-                    data-testid="map-filter-rep"
+                  <RepDialogSelect
+                    testId="map-filter-rep"
                     title="Show only leads for a rep"
-                    className="w-full h-11 bg-white/10 border border-white/20 rounded-lg px-1.5 text-[12px] text-white focus:outline-none focus:ring-1 focus:ring-teal-400"
-                  >
-                    <option value="all">All reps</option>
-                    <option value="unassigned">
-                      Unassigned ({repLeadCounts.unassigned})
-                    </option>
-                    {team.map((m: TeamMember) => (
-                      <option key={m.id} value={String(m.id)}>
-                        {m.name} ({repLeadCounts.counts.get(m.id) ?? 0})
-                      </option>
-                    ))}
-                  </select>
+                    triggerClassName="flex w-full h-11 items-center justify-between gap-2 bg-white/10 border border-white/20 rounded-lg px-1.5 text-[12px] text-white"
+                    triggerLabel={
+                      filterRep === "all" ? "All reps"
+                      : filterRep === "unassigned" ? `Unassigned (${repLeadCounts.unassigned})`
+                      : (team.find((m) => String(m.id) === filterRep)?.name ?? "Rep")
+                    }
+                    extraRows={[
+                      { key: "all", label: "All reps", active: filterRep === "all", onPick: () => setFilterRep("all") },
+                      { key: "unassigned", label: `Unassigned (${repLeadCounts.unassigned})`, active: filterRep === "unassigned", onPick: () => setFilterRep("unassigned") },
+                    ]}
+                    value={/^\d+$/.test(filterRep) ? Number(filterRep) : null}
+                    reps={team.map((m: TeamMember) => ({
+                      id: m.id,
+                      name: m.name,
+                      color: (m as any).color ?? null,
+                      detail: `${repLeadCounts.counts.get(m.id) ?? 0} doors on this map`,
+                    }))}
+                    onPick={(id) => setFilterRep(String(id))}
+                  />
                 </div>
               )}
               <div className="flex items-center justify-between mb-2">

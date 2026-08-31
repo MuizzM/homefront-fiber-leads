@@ -11,9 +11,7 @@ import {
   type DownlineSheetResponse, type DownlineTreeResponse,
   type OverrideLedgerStatus, type OverrideRowWire,
 } from "@shared/commissionOverrides";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+import { RepDialogSelect } from "@/components/people/RepDialogSelect";
 import type { TeamMember } from "@shared/schema";
 
 // ── Downline override sheet — the console's third tab ─────────────────────────
@@ -127,22 +125,16 @@ export function DownlineSheet({ weekRef, weekLabel }: { weekRef: string; weekLab
         {canViewAs && (
           <div className="flex items-center gap-2" data-testid="downline-viewas">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sheet for</span>
-            <Select
-              value={repId != null ? String(repId) : "me"}
-              onValueChange={v => { setRepId(v === "me" ? null : Number(v)); setOpenRep(null); }}
-            >
-              <SelectTrigger className="h-9 w-56 bg-secondary border-border" data-testid="downline-viewas-trigger">
-                <SelectValue placeholder="Select member" />
-              </SelectTrigger>
-              <SelectContent className="bg-card border-border">
-                <SelectItem value="me">Me</SelectItem>
-                {leaders.map(m => (
-                  <SelectItem key={m.id} value={String(m.id)}>
-                    {m.name} · {roleShort(m.role)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <RepDialogSelect
+              testId="downline-viewas-trigger"
+              title="Sheet for"
+              triggerClassName="flex h-9 w-56 items-center justify-between gap-2 rounded-md border border-border bg-secondary px-3 text-sm"
+              triggerLabel={repId != null ? (leaders.find(m => m.id === repId)?.name ?? "Select member") : "Me"}
+              extraRows={[{ key: "me", label: "Me", active: repId == null, onPick: () => { setRepId(null); setOpenRep(null); } }]}
+              value={repId ?? null}
+              reps={leaders.map(m => ({ id: m.id, name: m.name, detail: roleShort(m.role) }))}
+              onPick={(id) => { setRepId(id); setOpenRep(null); }}
+            />
           </div>
         )}
         <div className="ml-auto flex items-center gap-2">

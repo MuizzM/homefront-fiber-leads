@@ -42,8 +42,10 @@ describe("lead-card assignment state", () => {
   });
 
   it("sends the selected representative when idle", async () => {
+    // The control is the searchable dialog picker now - open it, click a row.
     const onAssign = renderAssignment(false);
-    await userEvent.selectOptions(screen.getByTestId("card-assign-select"), "2");
+    await userEvent.click(screen.getByTestId("card-assign-select"));
+    await userEvent.click(await screen.findByTestId("rep-option-2"));
     expect(onAssign).toHaveBeenCalledWith(2);
   });
 });

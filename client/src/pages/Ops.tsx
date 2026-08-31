@@ -19,6 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { RejectReasonDialog } from "@/components/RejectReasonDialog";
+import { RepDialogSelect } from "@/components/people/RepDialogSelect";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -297,16 +298,28 @@ export default function Ops() {
                       </label>
                       {canAssignFrom && checked.size > 0 && (
                         <span className="flex items-center gap-2">
-                          <Select value={assignRepId} onValueChange={setAssignRepId}>
-                            <SelectTrigger className="h-9 w-52 md:h-8" data-testid="ops-assign-rep"><SelectValue placeholder="Assign to..." /></SelectTrigger>
-                            <SelectContent>
-                              {(workload.data?.rows ?? []).map(r => (
-                                <SelectItem key={r.repId} value={String(r.repId)}>
-                                  {r.name} · {r.activeLeads} active{r.unworked ? `, ${r.unworked} unworked` : ""}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          {/* Searchable, NAME-ordered picker. The old Select
+                              mounted 300 items in workload order, which
+                              reshuffles every 60s poll - a name never stayed
+                              where you learned it. Load stays visible per row;
+                              order stays learnable. */}
+                          <RepDialogSelect
+                            testId="ops-assign-rep"
+                            title="Assign to"
+                            triggerClassName="inline-flex h-9 w-52 md:h-8 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm"
+                            triggerLabel={
+                              assignRepId
+                                ? (workload.data?.rows.find(r => String(r.repId) === assignRepId)?.name ?? "Assign to...")
+                                : "Assign to..."
+                            }
+                            value={assignRepId ? Number(assignRepId) : null}
+                            reps={(workload.data?.rows ?? []).map(r => ({
+                              id: r.repId,
+                              name: r.name,
+                              detail: `${r.activeLeads} active${r.unworked ? ` · ${r.unworked} unworked` : ""}`,
+                            }))}
+                            onPick={(id) => setAssignRepId(String(id))}
+                          />
                           <Button size="sm" loading={assignMutation.isPending} disabled={!assignRepId} data-testid="ops-assign"
                             onClick={() => assignMutation.mutate({ leadIds: [...checked], repId: Number(assignRepId) })}>
                             Assign {checked.size}

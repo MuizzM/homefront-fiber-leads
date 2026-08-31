@@ -42,6 +42,9 @@ import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 import { titleCaseAddress } from "@/lib/leadDisplay";
 import { metaFor, formatDistance, DistanceDiagram } from "@/components/verification";
 import { consumeLeadsFilterHandoff, consumeLeadsAddIntent } from "@/lib/leadsFilterHandoff";
+import { RepPicker } from "@/components/territory/RepPicker";
+import { RepDialogSelect } from "@/components/people/RepDialogSelect";
+import { FOCUS } from "@/lib/a11y";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -314,18 +317,20 @@ function KnockLogger({ lead, team }: {
       <div className="space-y-3">
         <div>
           <Label className="text-xs text-muted-foreground">Credit rep *</Label>
-          <Select value={repId} onValueChange={setRepId}>
-            <SelectTrigger className="bg-secondary border-input mt-1" data-testid="knock-rep-select">
-              <SelectValue placeholder="Select rep..." />
-            </SelectTrigger>
-            <SelectContent className="bg-card border-border">
-              {team.filter(m => m.active).map(m => (
-                <SelectItem key={m.id} value={String(m.id)}>
-                  {m.name}{lead.assignedRepId === m.id ? " · assigned" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {/* Searchable picker - the credit rep on an unassigned door meant
+              scrolling a 300-item Select at a big org. */}
+          <div className="mt-1" data-testid="knock-rep-select">
+            <RepPicker
+              value={repId ? Number(repId) : null}
+              onChange={(id) => setRepId(String(id))}
+              reps={team.filter(m => m.active).map(m => ({
+                id: m.id,
+                name: m.name,
+                color: (m as any).color ?? null,
+                detail: lead.assignedRepId === m.id ? "Assigned to this door" : undefined,
+              }))}
+            />
+          </div>
         </div>
 
         {/* One-tap outcomes use the same shared model AND the same surface as
@@ -423,19 +428,31 @@ function AssignRepModal({ lead, team, onClose }: {
         <DialogTitle className="text-base">Assign Rep</DialogTitle>
       </DialogHeader>
       <p className="text-xs text-muted-foreground">{titleCaseAddress(lead.address)}, {titleCaseAddress(lead.city)}</p>
-      <Select value={repId} onValueChange={setRepId}>
-        <SelectTrigger className="bg-secondary border-input" data-testid="assign-rep-select">
-          <SelectValue placeholder="Select rep..." />
-        </SelectTrigger>
-        <SelectContent className="bg-card border-border">
-          <SelectItem value="0">Unassigned{initialRepId === "" ? " (current)" : ""}</SelectItem>
-          {team.filter(m => m.active).map(m => (
-            <SelectItem key={m.id} value={String(m.id)}>
-              {m.name}{String(m.id) === initialRepId ? " (current)" : ""}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {/* The searchable picker, inline in the modal - a 300-item Radix Select
+          mounts every option per open and offers no search. Same contract:
+          pick sets state, the Assign button commits. */}
+      <div data-testid="assign-rep-select">
+        <button
+          type="button"
+          data-testid="assign-rep-unassigned"
+          onClick={() => setRepId("0")}
+          className={`mb-2 w-full min-h-11 rounded-lg border px-3 text-left text-sm transition ${
+            repId === "0" ? "border-primary bg-primary/10" : "border-dashed border-border text-muted-foreground hover:bg-secondary"
+          } ${FOCUS}`}
+        >
+          Unassigned{initialRepId === "" ? " (current)" : ""}
+        </button>
+        <RepPicker
+          value={repId && repId !== "0" ? Number(repId) : null}
+          onChange={(id) => setRepId(String(id))}
+          reps={team.filter(m => m.active).map(m => ({
+            id: m.id,
+            name: m.name,
+            color: (m as any).color ?? null,
+            detail: String(m.id) === initialRepId ? "Current" : undefined,
+          }))}
+        />
+      </div>
       <DialogFooter className="mt-2">
         <Button variant="outline" onClick={onClose} className="border-border">Cancel</Button>
         <Button onClick={() => assignMutation.mutate()} disabled={unchanged} loading={assignMutation.isPending}
@@ -1541,7 +1558,27 @@ export default function Leads() {
             </div>
             <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-11 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2">Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
             <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 lg:flex lg:flex-wrap gap-2`}>
-              {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
+              {!isRep && (
+                // Searchable rep filter - the old Select mounted ~300 items per
+                // open with no way to type a name.
+                <RepDialogSelect
+                  testId="filter-rep"
+                  title="Filter by rep"
+                  triggerClassName="inline-flex h-10 lg:h-9 lg:w-[150px] items-center justify-between gap-2 rounded-md border border-input bg-card px-3 text-sm"
+                  triggerLabel={
+                    filterRep === "all" ? "All reps"
+                    : filterRep === "unassigned" ? "Unassigned"
+                    : (team.find(m => String(m.id) === filterRep)?.name ?? "Rep")
+                  }
+                  extraRows={[
+                    { key: "all", label: "All reps", active: filterRep === "all", onPick: () => handleRepChange("all") },
+                    { key: "unassigned", label: "Unassigned", active: filterRep === "unassigned", onPick: () => handleRepChange("unassigned") },
+                  ]}
+                  value={/^\d+$/.test(filterRep) ? Number(filterRep) : null}
+                  reps={team.filter(m => m.active).map(m => ({ id: m.id, name: m.name, color: (m as any).color ?? null }))}
+                  onPick={(id) => handleRepChange(String(id))}
+                />
+              )}
               <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
               <Select value={filterCity} onValueChange={handleCityChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-city"><SelectValue placeholder="Territory" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="all">All territories</SelectItem>{cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
               <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>

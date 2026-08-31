@@ -9,6 +9,7 @@
 import { Link } from "wouter";
 import { FOCUS } from "@/lib/a11y";
 import { useState } from "react";
+import { RepDialogSelect } from "@/components/people/RepDialogSelect";
 import { VerificationBadge, DistanceDiagram, formatDistance } from "@/components/verification";
 import { isKnockOutcome, OUTCOME_META, type KnockOutcome } from "@shared/knock";
 import { relativeTime, shortRepName, MUTED, BODY_TEXT } from "./utils";
@@ -127,19 +128,24 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           <span className={`${SECTION_LABEL} shrink-0`} style={{ color: MUTED }}>
             Assigned to
           </span>
-          <select
-            value={assignedRepId ?? ""}
-            onChange={e => onAssign(e.target.value ? Number(e.target.value) : null)}
-            disabled={assigning}
-            aria-busy={assigning}
-            data-testid="card-assign-select"
-            className="flex-1 h-11 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60 disabled:cursor-wait disabled:opacity-60"
-          >
-            <option value="" className="text-slate-900">Unassigned</option>
-            {team.filter(m => m.active).map(m => (
-              <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
-            ))}
-          </select>
+          {/* The searchable picker behind a trigger - the old native select is
+              an unsearchable full-screen wheel at a 300-rep org. The trigger
+              keeps the select's testid, glass styling, and busy semantics. */}
+          <div className="flex-1 min-w-0">
+            <RepDialogSelect
+              testId="card-assign-select"
+              disabled={assigning}
+              busy={assigning}
+              triggerLabel={team.find(m => m.id === assignedRepId)?.name ?? "Unassigned"}
+              title="Assign this door"
+              triggerClassName="flex w-full h-11 min-w-0 items-center justify-between gap-2 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white disabled:cursor-wait disabled:opacity-60"
+              value={assignedRepId ?? null}
+              noneLabel="Unassigned"
+              onNone={() => onAssign(null)}
+              reps={team.filter(m => m.active).map(m => ({ id: m.id, name: m.name, color: (m as any).color ?? null }))}
+              onPick={(id) => onAssign(id)}
+            />
+          </div>
           {assigning && <span className="sr-only" role="status">Saving assignment</span>}
         </div>
       )}

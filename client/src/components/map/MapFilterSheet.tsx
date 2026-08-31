@@ -1,8 +1,9 @@
-import { useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { STATE_COLORS, STATE_LABELS } from "@shared/knock";
 import { FOCUS } from "@/lib/a11y";
 import { useModalA11y } from "@/hooks/use-modal-a11y";
+import { matchPerson, ROSTER_SEARCH_THRESHOLD, ROSTER_MAX_ROWS } from "@/lib/rosterSearch";
 import type { LeadSourceFilter, LeadSourceOption } from "@/lib/leadSourceFilter";
 
 export interface MapFilterSheetProps {
@@ -52,6 +53,14 @@ export function MapFilterSheet({
   // Escape closes (capture, so the map's tool-exit hatch never sees it),
   // focus restored to the rail button on close.
   useModalA11y(panelRef, { active: open, onClose, initialFocus: '[data-testid="map-filter-close"]' });
+  // Rep search + honest cap (hooks live above the early return).
+  const [repQuery, setRepQuery] = useState("");
+  const { shownReps, hiddenReps } = useMemo(() => {
+    const all = reps ?? [];
+    const hits = repQuery.trim() ? all.filter((r) => matchPerson(r.name, repQuery)) : all;
+    const shownReps = hits.slice(0, ROSTER_MAX_ROWS);
+    return { shownReps, hiddenReps: hits.length - shownReps.length };
+  }, [reps, repQuery]);
   if (!open) return null;
 
   const colors = STATE_COLORS as Record<string, string>;
@@ -189,22 +198,40 @@ export function MapFilterSheet({
           </div>
         )}
 
-        {/* Rep — only when the caller has reps to filter by */}
+        {/* Rep — only when the caller has reps to filter by. Past the search
+            threshold the list gets a filter box and an honest row cap: 300
+            reps used to mean 13,000px of rows in this 256px window. */}
         {reps && (
           <div className="mt-4">
             <div className={EYEBROW}>Rep</div>
-            <div className="mt-2 max-h-64 overflow-y-auto rounded-xl border border-border divide-y divide-border">
+            {reps.length > ROSTER_SEARCH_THRESHOLD && (
+              <input
+                type="text"
+                value={repQuery}
+                onChange={(e) => setRepQuery(e.target.value)}
+                placeholder="Search reps…"
+                aria-label="Search reps"
+                data-testid="map-filter-rep-search"
+                className={`mt-2 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm ${FOCUS}`}
+              />
+            )}
+            <div className="mt-2 max-h-64 overflow-y-auto overscroll-contain rounded-xl border border-border divide-y divide-border">
               {repRow(
                 "unassigned", "Unassigned", unassignedCount ?? 0,
                 <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-muted-foreground/50" aria-hidden="true" />,
               )}
-              {reps.map((r) =>
+              {shownReps.map((r) =>
                 repRow(
                   String(r.id), r.name, r.count,
                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${REP_DOT_CLASSES[Math.abs(r.id) % REP_DOT_CLASSES.length]}`} aria-hidden="true" />,
                 ),
               )}
             </div>
+            {hiddenReps > 0 && (
+              <p className="mt-1 text-[11px] tabular-nums text-muted-foreground" data-testid="map-filter-rep-hidden">
+                {hiddenReps} more {hiddenReps === 1 ? "rep" : "reps"} - keep typing to narrow the list.
+              </p>
+            )}
           </div>
         )}
 

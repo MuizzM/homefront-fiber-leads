@@ -230,6 +230,16 @@
       ],
       "port": 5086,
       "autoPort": false
+    },
+    {
+      "name": "homefront-scale",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "PORT=5078 BACKGROUND_RESUME_DELAY_MS=86400000 KFS_MINT_IMPERSONATE=off KFS_MINT_DIRECT=off SMTP_HOST=127.0.0.1 SMTP_PORT=1 PROXY_URL=http://noop:noop@127.0.0.1:1 DECODO_HOST=127.0.0.1 DECODO_PORT=1 DECODO_USER=noop DECODO_PASS=noop KFS_TOKEN_MAINTENANCE_MS=3600000 DATA_DIR=/private/tmp/claude-501/-Applications-homefront-fiber-full/5dec78ac-f25a-4e47-92e7-90a564b27f4a/scratchpad/scale-data FRESH_HARVEST=off HOT_MARKETS=off KEEPWARM_SCAN=off DAILY_MARKET_REFRESH=off COMING_SOON_PROGRAM=off COMING_SOON_WATCHLIST=off NEWBUILD_RADAR=off EXPANSION_ENABLED=off BUILD_INTEL=off EXPLORE_CITIES= SCAN_GLOBAL_CONCURRENCY=1 SCAN_BATCH_CONCURRENCY=1 RESEND_DELIVERY_MODE=log npm run dev"
+      ],
+      "port": 5078,
+      "autoPort": false
     }
   ]
 }

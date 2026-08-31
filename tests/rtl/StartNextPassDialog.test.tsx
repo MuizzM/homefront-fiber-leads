@@ -105,7 +105,9 @@ describe("StartNextPassDialog", () => {
     const confirm = screen.getByRole("button", { name: "Start pass 2" });
     expect(confirm).toBeDisabled();
 
-    await user.selectOptions(screen.getByLabelText(/rep to hand the area to/i), "5");
+    // The rep control is the searchable picker now, not a native select -
+    // choosing is a row click.
+    await user.click(screen.getByTestId("rep-option-5"));
     expect(confirm).toBeEnabled();
     await user.click(confirm);
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ territoryAction: "reassign", newRepId: 5 }));

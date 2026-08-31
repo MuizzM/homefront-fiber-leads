@@ -18,9 +18,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
-} from "@/components/ui/select";
+import { RepDialogSelect } from "@/components/people/RepDialogSelect";
 import type { TeamMember, InsertTeamMember } from "@shared/schema";
 
 // ── Role definitions ──────────────────────────────────────────────────────────
@@ -234,22 +232,29 @@ function MemberFormUI({
           <Label htmlFor="form-rep-reports-to" className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Reports to {form.role === "rep" ? "(team lead or manager)" : "(manager)"}
           </Label>
-          <Select
-            value={form.reportsToId != null ? String(form.reportsToId) : "none"}
-            onValueChange={v => setForm({ ...form, reportsToId: v === "none" ? null : Number(v) })}
-          >
-            <SelectTrigger id="form-rep-reports-to" className="h-9 bg-secondary border-input" data-testid="form-rep-reports-to">
-              <SelectValue placeholder="Select supervisor" />
-            </SelectTrigger>
-            <SelectContent className="bg-card border-border">
-              <SelectItem value="none"> - None (reports to Admin) - </SelectItem>
-              {supervisors.map(m => (
-                <SelectItem key={m.id} value={String(m.id)}>
-                  {m.name} · {roleInfo(m.role).short}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <RepDialogSelect
+            testId="form-rep-reports-to"
+            title="Reports to"
+            triggerClassName="flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-secondary px-3 text-sm"
+            triggerLabel={
+              form.reportsToId != null
+                ? (supervisors.find(m => m.id === form.reportsToId)?.name ?? "Select supervisor")
+                : "None (reports to Admin)"
+            }
+            extraRows={[{
+              key: "none",
+              label: "None (reports to Admin)",
+              active: form.reportsToId == null,
+              onPick: () => setForm({ ...form, reportsToId: null }),
+            }]}
+            value={form.reportsToId ?? null}
+            reps={supervisors.map(m => ({
+              id: m.id,
+              name: m.name,
+              detail: roleInfo(m.role).short,
+            }))}
+            onPick={(id) => setForm({ ...form, reportsToId: id })}
+          />
           {supervisors.length === 0 && (
             <p className="text-xs text-muted-foreground mt-1">
               No {form.role === "rep" ? "team leads or managers" : "managers"} added yet - leave as top-level for now.

@@ -79,10 +79,10 @@ describe("<Ops />", () => {
     renderOps();
     await screen.findByTestId("ops-row-11");
     fireEvent.click(screen.getByTestId("ops-select-all"));
-    // Rep picker is a Radix select - drive the mutation via its state by
-    // picking through keyboard-free direct interaction: open + choose.
+    // Rep picker is the searchable dialog picker - open it, click Dana's row
+    // (name and load render as separate lines now).
     fireEvent.click(screen.getByTestId("ops-assign-rep"));
-    fireEvent.click(await screen.findByText(/Dana Doors · 12 active/));
+    fireEvent.click(await screen.findByTestId("rep-option-6"));
     fireEvent.click(screen.getByTestId("ops-assign"));
     await waitFor(() => {
       expect(apiRequest).toHaveBeenCalledWith("POST", "/api/leads/bulk-assign", { leadIds: [11, 12], repId: 6 });
