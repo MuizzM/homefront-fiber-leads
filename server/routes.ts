@@ -1405,6 +1405,11 @@ const MAX_ASSIGN_BBOX_CANDIDATES = Math.max(10_000, Number(process.env.MAX_ASSIG
 // stops a hand-written caller from posting a ring that costs more to test than
 // the doors it encloses.
 const MAX_ASSIGN_RING_POINTS = 10_000;
+// A selection can be built from several loops (add) with carve-outs
+// (subtract) - the modes that make a second lasso a refinement instead of an
+// "overlapping selection" error. Bounded so geometry stays a sketch, not a
+// payload: the POINT budget above is shared across every ring.
+const MAX_ASSIGN_RINGS = 8;
 // Manual deselects are small by nature. Bounded so assign-selection can never
 // quietly become the id-shipping path this route exists to replace.
 const MAX_ASSIGN_EXCLUDES = 5_000;
@@ -6597,6 +6602,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
      *  stay two views of one resolution. */
     byStateUnrefined: Record<string, number>;
     polygon: [number, number][];
+    /** Every ring in the composed selection (add unions, subtract carves). */
+    ringCount: number;
+    totalRingPoints: number;
+    /** Of `movable`, how many already belong to the target rep - they are
+     *  real matches but NOT changes, and the apply skips them so a re-assign
+     *  never rewrites assigned_at on doors that are already the target's. */
+    alreadyTarget: number;
+    /** movable minus already-target: the ids the apply actually writes. */
+    netIds: number[];
+    /** Doors passing every lens and the authority rule but toggled off by the
+     *  state chips - "excluded by current filters", never silently dropped. */
+    filteredOut: number;
+    /** Delta of the LAST ring vs the selection without it - the "34 added ·
+     *  12 already selected" / "18 removed · 6 were not in the selection"
+     *  numbers. Null for a single-ring selection. */
+    lastRing: { op: "add" | "subtract"; added: number; alreadySelected: number; removed: number; notInSelection: number } | null;
     resolveMs: number;
   }
   function resolveAssignSelection(
@@ -6606,23 +6627,52 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   ): { fail: { status: number; payload: Record<string, unknown> } } | ResolvedAssignSelection {
     const fail = (status: number, payload: Record<string, unknown>) => ({ fail: { status, payload } });
 
-    const rawPolygon = body.polygon;
-    if (!Array.isArray(rawPolygon) || rawPolygon.length < 3) {
-      return fail(400, { error: "polygon needs at least 3 points" });
+    // One selection, possibly several loops: `polygons` is the composed form
+    // ([{ring, op:"add"|"subtract"}]); the legacy single `polygon` still works
+    // as one add-ring. Membership = inside at least one add ring AND inside no
+    // subtract ring. Points are normalized to numbers - the old path validated
+    // Number(p[0]) but handed the RAW array (possibly strings) to
+    // polygonCovers, whose arithmetic on strings is quietly wrong.
+    type SelRing = { ring: [number, number][]; op: "add" | "subtract" };
+    const rawRings: Array<{ ring: unknown; op: unknown }> = Array.isArray(body.polygons)
+      ? (body.polygons as Array<{ ring: unknown; op: unknown }>)
+      : [{ ring: body.polygon, op: "add" }];
+    if (rawRings.length === 0) return fail(400, { error: "polygon needs at least 3 points" });
+    if (rawRings.length > MAX_ASSIGN_RINGS) {
+      return fail(400, { error: `A selection holds at most ${MAX_ASSIGN_RINGS} loops - clear it and start again`, code: "TOO_MANY_RINGS" });
     }
-    if (rawPolygon.length > MAX_ASSIGN_RING_POINTS) {
-      return fail(400, { error: `That outline is too detailed - at most ${MAX_ASSIGN_RING_POINTS.toLocaleString()} points`, code: "RING_TOO_COMPLEX" });
-    }
-    // Normalized to numbers — the old path validated Number(p[0]) but handed
-    // the RAW array (possibly strings) to polygonCovers, whose arithmetic on
-    // strings is quietly wrong.
-    const polygon: [number, number][] = [];
-    for (const p of rawPolygon) {
-      if (!Array.isArray(p) || p.length < 2 || !Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1]))) {
-        return fail(400, { error: "polygon points must be [lng, lat] numbers" });
+    const rings: SelRing[] = [];
+    let totalRingPoints = 0;
+    for (const rr of rawRings) {
+      const rawPolygon = rr?.ring;
+      const op = rr?.op === "subtract" ? "subtract" as const : "add" as const;
+      if (!Array.isArray(rawPolygon) || rawPolygon.length < 3) {
+        return fail(400, { error: "polygon needs at least 3 points" });
       }
-      polygon.push([Number(p[0]), Number(p[1])]);
+      totalRingPoints += rawPolygon.length;
+      if (totalRingPoints > MAX_ASSIGN_RING_POINTS) {
+        return fail(400, { error: `That outline is too detailed - at most ${MAX_ASSIGN_RING_POINTS.toLocaleString()} points across every loop`, code: "RING_TOO_COMPLEX" });
+      }
+      const ring: [number, number][] = [];
+      for (const p of rawPolygon) {
+        if (!Array.isArray(p) || p.length < 2 || !Number.isFinite(Number(p[0])) || !Number.isFinite(Number(p[1]))) {
+          return fail(400, { error: "polygon points must be [lng, lat] numbers" });
+        }
+        ring.push([Number(p[0]), Number(p[1])]);
+      }
+      rings.push({ ring, op });
     }
+    const addRings = rings.filter(r => r.op === "add");
+    if (!addRings.length) {
+      return fail(400, { error: "A selection needs at least one added loop - subtract loops only carve from one", code: "NO_ADD_RING" });
+    }
+    // Legacy field consumers (activity log point count, undo docs) read the
+    // first add ring.
+    const polygon = addRings[0].ring;
+    // The target rep, when the caller has picked one: preview sends
+    // targetRepId, apply's repId rides the same seam via the route below.
+    const rawTarget = body.targetRepId ?? null;
+    const targetRepId = rawTarget != null && Number.isInteger(Number(rawTarget)) && Number(rawTarget) > 0 ? Number(rawTarget) : null;
 
     // Manual deselects. Small by nature (a manager un-picking a handful of
     // doors), and bounded so this can never become the id-shipping path again.
@@ -6695,11 +6745,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Bbox first (indexed), exact ring test on the survivors only - the same
     // two-step assign-area uses.
     let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-    for (const p of polygon) {
-      if (p[0] < minLng) minLng = p[0];
-      if (p[0] > maxLng) maxLng = p[0];
-      if (p[1] < minLat) minLat = p[1];
-      if (p[1] > maxLat) maxLat = p[1];
+    for (const r of addRings) {
+      for (const p of r.ring) {
+        if (p[0] < minLng) minLng = p[0];
+        if (p[0] > maxLng) maxLng = p[0];
+        if (p[1] < minLat) minLat = p[1];
+        if (p[1] > maxLat) maxLat = p[1];
+      }
     }
     const pad = BOUNDARY_EPSILON_DEG;
     const scope = leadVisibilityScope(user);
@@ -6735,9 +6787,35 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const movable: any[] = [];
     const byStateUnrefined: Record<string, number> = {};
     let notMovable = 0;
+    let filteredOut = 0;
+    let alreadyTarget = 0;
+    const netIds: number[] = [];
+    // Delta bookkeeping: the last ring's contribution versus the selection
+    // without it - this is what lets Add say "34 added · 12 already selected"
+    // and Subtract say "18 removed · 6 were not in the selection" instead of
+    // an overlap error.
+    const lastIdx = rings.length - 1;
+    const trackDelta = rings.length > 1;
+    const lastOp = rings[lastIdx].op;
+    let dAdded = 0, dAlready = 0, dRemoved = 0, dMiss = 0;
+    const memberOf = (pin: any, upTo: number): boolean => {
+      let inAdd = false;
+      for (let i = 0; i < upTo; i++) {
+        const r = rings[i];
+        if (r.op === "add" && polygonCovers(pin.lat, pin.lng, r.ring)) { inAdd = true; break; }
+      }
+      if (!inAdd) return false;
+      for (let i = 0; i < upTo; i++) {
+        const r = rings[i];
+        if (r.op === "subtract" && polygonCovers(pin.lat, pin.lng, r.ring)) return false;
+      }
+      return true;
+    };
     for (const pin of pins) {
       if (excludes.has(pin.id)) continue;
-      if (!polygonCovers(pin.lat, pin.lng, polygon)) continue;
+      const inFull = memberOf(pin, rings.length);
+      const inLast = trackDelta ? polygonCovers(pin.lat, pin.lng, rings[lastIdx].ring) : false;
+      if (!inFull && !(trackDelta && inLast)) continue;
       if (clipRings) {
         let inside = false;
         for (const cr of clipRings) {
@@ -6751,22 +6829,44 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (typeof repFilter === "number" && (pin.assignedRepId ?? null) !== repFilter) continue;
       // Authority, not visibility: a team_lead may claim unassigned ground or
       // move their own team's doors, never another team's booked doors.
-      if (!canReassignLead(user, pin)) { notMovable++; continue; }
+      if (!canReassignLead(user, pin)) { if (inFull) notMovable++; continue; }
       const ds = pinDisplayState(pin);
-      byStateUnrefined[ds] = (byStateUnrefined[ds] ?? 0) + 1;
-      if (includeStates && !includeStates.has(ds)) continue;
+      if (inFull) byStateUnrefined[ds] = (byStateUnrefined[ds] ?? 0) + 1;
+      if (includeStates && !includeStates.has(ds)) { if (inFull) filteredOut++; continue; }
+      // Deltas count the ACTIONABLE population - the same set the panel's
+      // headline counts, under every lens above.
+      if (trackDelta) {
+        const inPrev = memberOf(pin, lastIdx);
+        if (lastOp === "add") {
+          if (inFull && !inPrev) dAdded++;
+          else if (inLast && inPrev) dAlready++;
+        } else {
+          if (inPrev && !inFull) dRemoved++;
+          else if (inLast && !inPrev) dMiss++;
+        }
+      }
+      if (!inFull) continue;
       movable.push(pin);
+      if (targetRepId != null && (pin.assignedRepId ?? null) === targetRepId) alreadyTarget++;
+      else netIds.push(pin.id as number);
     }
     const resolveMs = Math.round(performance.now() - resolveStarted);
 
     if (movable.length > MAX_ASSIGN_SELECTION) {
       return fail(400, {
-        error: `That selection holds ${movable.length.toLocaleString()} doors - at most ${MAX_ASSIGN_SELECTION.toLocaleString()} at a time`,
+        error: `That selection holds ${movable.length.toLocaleString()} doors - at most ${MAX_ASSIGN_SELECTION.toLocaleString()} at a time. Narrow the loops, apply filters, or assign in smaller sections`,
         code: "SELECTION_TOO_LARGE",
         total: movable.length,
       });
     }
-    return { movable, notMovable, byStateUnrefined, polygon, resolveMs };
+    return {
+      movable, notMovable, byStateUnrefined, polygon,
+      ringCount: rings.length, totalRingPoints,
+      alreadyTarget, netIds: targetRepId != null ? netIds : movable.map(pn => pn.id as number),
+      filteredOut,
+      lastRing: trackDelta ? { op: lastOp, added: dAdded, alreadySelected: dAlready, removed: dRemoved, notInSelection: dMiss } : null,
+      resolveMs,
+    };
   }
 
   // POST /api/leads/assign-selection/preview
@@ -6787,6 +6887,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const owner = String(pin.assignedRepId ?? 0);
       byOwner[owner] = (byOwner[owner] ?? 0) + 1;
     }
+    const rawTarget = Number((req.body as any)?.targetRepId);
+    const targetRepId = Number.isInteger(rawTarget) && rawTarget > 0 ? rawTarget : null;
+    const fromPool = byOwner["0"] ?? 0;
     res.json({
       total: resolved.movable.length,
       // Pre-refinement by design: a chip toggled OFF keeps its count so it can
@@ -6795,6 +6898,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       byOwner,
       notMovable: resolved.notMovable,
       resolveMs: resolved.resolveMs,
+      // ── The reasoned breakdown (2026-08-31): never conflate the counts ──
+      // matching   - doors in the geometry passing every lens (movable + held)
+      // actionable - the caller may assign these (movable)
+      // netChanges - actionable minus already-with-target: what Assign writes
+      matching: resolved.movable.length + resolved.notMovable,
+      actionable: resolved.movable.length,
+      netChanges: targetRepId != null ? resolved.netIds.length : null,
+      alreadyAssignedToTarget: targetRepId != null ? resolved.alreadyTarget : null,
+      fromPool,
+      fromOtherReps: targetRepId != null
+        ? Math.max(0, resolved.movable.length - fromPool - resolved.alreadyTarget)
+        : null,
+      excluded: {
+        heldTerritory: resolved.notMovable,
+        filteredOut: resolved.filteredOut,
+      },
+      ringCount: resolved.ringCount,
+      lastRing: resolved.lastRing,
     });
   });
 
@@ -6835,6 +6956,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const opBodyHash = opKey
       ? crypto.createHash("sha256").update(JSON.stringify({
           repId: body.repId ?? null, polygon: body.polygon ?? null,
+          polygons: body.polygons ?? null,
           includeStates: body.includeStates ?? null, excludeLeadIds: body.excludeLeadIds ?? null,
           view: body.view ?? null, source: body.source ?? null, repFilter: body.repFilter ?? null,
         })).digest("hex")
@@ -6859,18 +6981,33 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const execute = async (): Promise<{ status: number; body: any; settled: "cache" | "drop" }> => {
-      const resolved = resolveAssignSelection(user, tid, body);
+      // The resolver splits already-with-target rows out of the write set:
+      // re-assigning Dana's own doors to Dana is a no-op the engine should
+      // never perform - it used to rewrite assigned_at (restarting the ops
+      // "unworked" clock) and mint assignment events for nothing.
+      const resolved = resolveAssignSelection(user, tid, { ...body, targetRepId: repId });
       if ("fail" in resolved) return { status: resolved.fail.status, body: resolved.fail.payload, settled: "drop" };
-      const ids = resolved.movable.map((pin) => pin.id as number);
-      const { polygon, resolveMs } = resolved;
+      const ids = resolved.netIds;
+      const { resolveMs, alreadyTarget } = resolved;
 
       if (!ids.length) {
-        return { status: 200, body: { assigned: 0, updated: 0, skipped: 0, total: 0, repId, resolveMs }, settled: "cache" };
+        // Zero NET changes is an answer, not an error: say what was matched
+        // and why nothing needs to move.
+        return {
+          status: 200,
+          body: {
+            assigned: 0, updated: 0, skipped: 0, total: 0, repId, resolveMs,
+            alreadyAssignedToTarget: alreadyTarget,
+            matchedInSelection: resolved.movable.length,
+            ...(alreadyTarget > 0 ? { noChangesNeeded: true } : {}),
+          },
+          settled: "cache",
+        };
       }
 
       const { updated, skipped, prior, appliedAt, incomplete } = await applyAssignment(ids, repId, user, tid);
       storage.logActivity(user?.id ?? null, "lead.assign_selection", "lead", undefined,
-        { repId, ringPoints: polygon.length, resolved: ids.length, updated, skipped, resolveMs, ...(incomplete ? { incomplete: true } : {}) }, req.ip);
+        { repId, ringPoints: resolved.totalRingPoints, rings: resolved.ringCount, resolved: ids.length, alreadyTarget, updated, skipped, resolveMs, ...(incomplete ? { incomplete: true } : {}) }, req.ip);
       // Put-back token for the doors this write actually changed (none for a
       // selection too large to hold, or when nothing moved).
       const undo = updated > 0 ? rememberAssignUndo({ tenantId: tid, userId: user.id, appliedRepId: repId, appliedAt, prior }) : null;
@@ -6878,6 +7015,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // updated/skipped match bulk-assign's. One payload serves both callers.
       const payload = {
         assigned: updated, updated, skipped, total: ids.length, repId, resolveMs,
+        alreadyAssignedToTarget: alreadyTarget,
+        matchedInSelection: resolved.movable.length,
         ...(undo ? { undoToken: undo.token, undoExpiresAt: new Date(undo.expiresAt).toISOString() } : {}),
       };
       if (incomplete) {
