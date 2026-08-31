@@ -1,4 +1,5 @@
 import { Link } from "wouter";
+import { ChevronDown } from "lucide-react";
 import { useHashLocation } from "wouter/use-hash-location";
 import { cn } from "@/lib/utils";
 import { useCan } from "@/lib/capabilities";
@@ -100,7 +101,7 @@ export function CallingAvailability({ status }: { status: { callable: boolean; b
     // dead when most of it is not. The detail is one tap away for whoever is
     // actually working through the checklist.
     <details data-testid="calling-blocked" className="group overflow-hidden rounded-2xl border border-border bg-card">
-      <summary className="flex cursor-pointer list-none items-start gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+      <summary className="group flex cursor-pointer list-none items-start gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden"><ChevronDown aria-hidden="true" className="order-last ml-auto mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform [details[open]>summary>&]:rotate-180" />
         <div className="min-w-0 flex-1">
           <h2 className="text-[13px] font-semibold leading-5 text-foreground">Dialing is locked</h2>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">

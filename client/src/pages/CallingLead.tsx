@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Clipboard, Phone, PhoneOff, Mic, MicOff } from "lucide-react";
+import { Check, Clipboard, Phone, PhoneOff, Mic, MicOff, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
@@ -222,7 +222,7 @@ function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; eval
         </ul>
       )}
       <details className="group rounded-xl border border-border bg-background/40">
-        <summary className="flex min-h-11 cursor-pointer select-none items-center px-3 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">Rule evidence ({decision.rules.length})</summary>
+        <summary className="flex min-h-11 cursor-pointer select-none items-center px-3 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">Rule evidence ({decision.rules.length})<ChevronDown aria-hidden="true" className="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" /></summary>
         <div className="divide-y divide-border/70 border-t border-border px-3">
           {decision.rules.map(rule => (
             <div key={rule.rule} className="flex min-h-10 items-center gap-2 py-2 text-xs">
@@ -265,13 +265,21 @@ function ConsentForm({ detail, attempt, onSaved }: {
     onSuccess: () => { toast({ title: "Consent evidence saved", description: "The immutable evidence record was added to the audit trail." }); onSaved(); },
     onError: (error: Error) => toast({ title: "Consent not saved", description: error.message, variant: "destructive" }),
   });
-  const valid = Boolean(candidate.phoneId && consumerIdentity.trim() && scope.trim() && affirmativeAction.trim() && disclosureVersion.trim()
-    && /^[a-f0-9]{64}$/i.test(disclosureHash.trim()) && /^[a-f0-9-]{36}$/i.test(evidenceRef.trim())
-    && capturedAt && Number.isFinite(Date.parse(capturedAt)));
+  const missing = [
+    !candidate.phoneId && "a dialable phone",
+    !consumerIdentity.trim() && "consumer identity",
+    !scope.trim() && "scope",
+    !affirmativeAction.trim() && "affirmative action",
+    !disclosureVersion.trim() && "disclosure version",
+    !/^[a-f0-9]{64}$/i.test(disclosureHash.trim()) && "a 64-character SHA-256 disclosure hash",
+    !/^[a-f0-9-]{36}$/i.test(evidenceRef.trim()) && "a valid evidence artifact UUID",
+    !(capturedAt && Number.isFinite(Date.parse(capturedAt))) && "a capture date and time",
+  ].filter(Boolean) as string[];
+  const valid = missing.length === 0;
 
   return (
-    <details className="rounded-2xl border border-border bg-card">
-      <summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Record verified consent evidence</summary>
+    <details className="group rounded-2xl border border-border bg-card">
+      <summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Record verified consent evidence<ChevronDown aria-hidden="true" className="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" /></summary>
       <form className="space-y-3 border-t border-border p-4" onSubmit={event => { event.preventDefault(); if (valid) mutation.mutate(); }}>
         <p className="text-xs leading-relaxed text-muted-foreground">This stores evidence; it does not create consent by itself. The artifact ID must already be hash-verified by a compliance administrator and retained for at least five years.</p>
         <label className="block text-xs font-semibold">Consumer identity stated on the evidence<input required value={consumerIdentity} onChange={event => setConsumerIdentity(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-normal" /></label>
@@ -285,6 +293,11 @@ function ConsentForm({ detail, attempt, onSaved }: {
         <label className="block text-xs font-semibold">Verified evidence artifact ID<input required value={evidenceRef} onChange={event => setEvidenceRef(event.target.value)} placeholder="UUID issued by compliance evidence registry" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label>
         <label className="block text-xs font-semibold">Artifact capture date and local time<input required type="datetime-local" value={capturedAt} onChange={event => setCapturedAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-normal" /></label>
         <div className="rounded-xl bg-secondary/70 p-3 text-[11px] leading-relaxed text-muted-foreground">{timeZone} · Manual voice-call channel · Service address, phone, approved disclosure, and evidence artifact are server-bound.</div>
+        {!valid && (
+          <p className="text-[11px] leading-relaxed text-warning" data-testid="consent-missing">
+            Still needed: {missing.join(", ")}.
+          </p>
+        )}
         <Button type="submit" disabled={!valid || mutation.isPending} className="w-full">{mutation.isPending ? "Saving evidence…" : "Save consent evidence"}</Button>
       </form>
     </details>
@@ -313,6 +326,9 @@ export default function CallingLead() {
   // used to fire on a single thumb-tap mid-call - one slip permanently burns a
   // number. These four now arm first ("Confirm?"), fire on second tap.
   const SUPPRESSING: ReadonlySet<DispositionCode> = new Set(["DO_NOT_CALL", "CONSENT_REVOKED", "WRONG_NUMBER", "WRONG_PARTY"]);
+  // Commission-bearing outcomes get the same arm-then-confirm the sticky bar
+  // gives Sale complete - one mistap must not book a sale or an appointment.
+  const COMMISSION_BEARING: ReadonlySet<DispositionCode> = new Set(["SALE_COMPLETED", "SALE_STARTED", "APPOINTMENT_SCHEDULED"]);
   const [armedDisposition, setArmedDisposition] = useState<DispositionCode | null>(null);
   const [callbackEvidenceRef, setCallbackEvidenceRef] = useState("");
   const [showCallback, setShowCallback] = useState(false);
@@ -621,7 +637,7 @@ export default function CallingLead() {
                         disabled={dispositionMutation.isPending}
                         aria-pressed={armed}
                         onClick={() => {
-                          if (SUPPRESSING.has(item.code) && !armed) {
+                          if ((SUPPRESSING.has(item.code) || COMMISSION_BEARING.has(item.code)) && !armed) {
                             setArmedDisposition(item.code);
                             window.setTimeout(() => setArmedDisposition(a => (a === item.code ? null : a)), 4000);
                             return;
@@ -640,14 +656,23 @@ export default function CallingLead() {
                           // the button they were about to press twice. The
                           // semantic token is designed to sit on its own tint
                           // and measures 4.69:1.
-                          armed && "border-destructive bg-destructive/15 text-destructive ring-1 ring-destructive",
+                          armed && (COMMISSION_BEARING.has(item.code)
+                            ? "border-success bg-success/15 text-success ring-1 ring-success"
+                            : "border-destructive bg-destructive/15 text-destructive ring-1 ring-destructive"),
                         )}
                       >
                         {armed ? `Confirm: ${item.label}?` : item.label}
                       </button>
                     );
                   })}</div>
-                  {!showCallback ? <button type="button" onClick={() => setShowCallback(true)} className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-info/25 bg-info/[0.08] text-xs font-semibold text-info"> Customer requested callback</button> : <div className="mt-2 space-y-3 rounded-xl border border-info/15 bg-info/[0.06] p-3"><label className="block text-xs font-semibold">Callback date and local time<input type="datetime-local" value={callbackAt} onChange={event => setCallbackAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3" /></label><label className="block text-xs font-semibold">Verified callback evidence artifact ID<input value={callbackEvidenceRef} onChange={event => setCallbackEvidenceRef(event.target.value)} placeholder="UUID bound to this exact call attempt" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label><p className="text-[11px] leading-relaxed text-muted-foreground">The server accepts only a retained, verified evidence artifact bound to this tenant, lead, phone, and call attempt. A free-form note cannot authorize a callback.</p><Button variant="outline" className="w-full border-info/25 text-info" disabled={!callbackValid || dispositionMutation.isPending} onClick={() => dispositionMutation.mutate("CALLBACK_REQUESTED")}>Save requested callback</Button></div>}
+                  {!showCallback ? <button type="button" onClick={() => setShowCallback(true)} className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-info/25 bg-info/[0.08] text-xs font-semibold text-info"> Customer requested callback</button> : <div className="mt-2 space-y-3 rounded-xl border border-info/15 bg-info/[0.06] p-3"><label className="block text-xs font-semibold">Callback date and local time<input type="datetime-local" value={callbackAt} onChange={event => setCallbackAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3" /></label><label className="block text-xs font-semibold">Verified callback evidence artifact ID<input value={callbackEvidenceRef} onChange={event => setCallbackEvidenceRef(event.target.value)} placeholder="UUID bound to this exact call attempt" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label><p className="text-[11px] leading-relaxed text-muted-foreground">The server accepts only a retained, verified evidence artifact bound to this tenant, lead, phone, and call attempt. A free-form note cannot authorize a callback.</p>{!callbackValid && (
+                  <p className="text-[11px] leading-relaxed text-warning" data-testid="callback-missing">
+                    Still needed: {[
+                      !(callbackAt && Date.parse(callbackAt) > Date.now()) && "a future callback date and time",
+                      !/^[a-f0-9]{8}-[a-f0-9-]{27}$/i.test(callbackEvidenceRef.trim()) && "a valid callback evidence UUID",
+                    ].filter(Boolean).join(", ")}.
+                  </p>
+                )}<Button variant="outline" className="w-full border-info/25 text-info" disabled={!callbackValid || dispositionMutation.isPending} onClick={() => dispositionMutation.mutate("CALLBACK_REQUESTED")}>Save requested callback</Button></div>}
                 </section>
                 <ConsentForm detail={detailQuery.data} attempt={activeAttempt} onSaved={() => void detailQuery.refetch()} />
               </>
@@ -711,8 +736,8 @@ export default function CallingLead() {
               <section className="rounded-2xl border border-destructive/15 bg-card p-4"><h2 className="text-sm font-semibold">Revoke recorded consent</h2><p className="mt-1 text-xs text-muted-foreground">Records an immutable revocation and permanent internal DNC suppression in one transaction.</p><label className="mt-3 block text-xs font-semibold">Revocation evidence reference<input value={revocationEvidence} onChange={event => setRevocationEvidence(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-normal" /></label><Button variant="destructive" className="mt-3 w-full" disabled={revocationEvidence.trim().length < 3 || revokeMutation.isPending} onClick={() => revokeMutation.mutate()}>{revokeMutation.isPending ? "Revoking…" : "Revoke consent and suppress"}</Button></section>
             )}
 
-            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Immutable activity trail ({detailQuery.data.timeline.length})</summary><div className="max-h-80 divide-y divide-border overflow-y-auto border-t border-border px-4">{detailQuery.data.timeline.length ? detailQuery.data.timeline.map(event => <div key={event.id} className="py-3"><div className="flex items-baseline justify-between gap-3"><span className="text-xs font-semibold">{formatDecision(event.eventType)}</span><time className="shrink-0 text-2xs text-muted-foreground">{dateLabel(event.createdAt)}</time></div><div className="mt-1 truncate font-mono text-2xs text-muted-foreground">{event.eventSha256}</div></div>) : <p className="py-4 text-xs text-muted-foreground">No calling activity yet.</p>}</div></details></section>
-            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Attempts and callbacks ({attempts.length + callbacks.length})</summary><div className="divide-y divide-border border-t border-border px-4">{attempts.map(attempt => <div key={attempt.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">{attempt.dispositionCode ? formatDecision(attempt.dispositionCode) : "Open manual attempt"}</span><time className="text-2xs text-muted-foreground">{dateLabel(attempt.startedAt)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">Rep #{attempt.representativeUserId} · script {attempt.scriptVersion}</div></div>)}{callbacks.map(callback => <div key={callback.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">Callback · {formatDecision(callback.status)}</span><time className="text-2xs text-muted-foreground">{dateLabelTz(callback.dueAt, callback.timeZone)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">{callback.timeZone}</div></div>)}{!attempts.length && !callbacks.length && <p className="py-4 text-xs text-muted-foreground">No attempts or callbacks yet.</p>}</div></details></section>
+            <section className="rounded-2xl border border-border bg-card"><details className="group"><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Immutable activity trail ({detailQuery.data.timeline.length})<ChevronDown aria-hidden="true" className="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" /></summary><div className="max-h-80 divide-y divide-border overflow-y-auto border-t border-border px-4">{detailQuery.data.timeline.length ? detailQuery.data.timeline.map(event => <div key={event.id} className="py-3"><div className="flex items-baseline justify-between gap-3"><span className="text-xs font-semibold">{formatDecision(event.eventType)}</span><time className="shrink-0 text-2xs text-muted-foreground">{dateLabel(event.createdAt)}</time></div><div className="mt-1 truncate font-mono text-2xs text-muted-foreground">{event.eventSha256}</div></div>) : <p className="py-4 text-xs text-muted-foreground">No calling activity yet.</p>}</div></details></section>
+            <section className="rounded-2xl border border-border bg-card"><details className="group"><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"> Attempts and callbacks ({attempts.length + callbacks.length})<ChevronDown aria-hidden="true" className="ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" /></summary><div className="divide-y divide-border border-t border-border px-4">{attempts.map(attempt => <div key={attempt.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">{attempt.dispositionCode ? formatDecision(attempt.dispositionCode) : "Open manual attempt"}</span><time className="text-2xs text-muted-foreground">{dateLabel(attempt.startedAt)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">Rep #{attempt.representativeUserId} · script {attempt.scriptVersion}</div></div>)}{callbacks.map(callback => <div key={callback.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">Callback · {formatDecision(callback.status)}</span><time className="text-2xs text-muted-foreground">{dateLabelTz(callback.dueAt, callback.timeZone)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">{callback.timeZone}</div></div>)}{!attempts.length && !callbacks.length && <p className="py-4 text-xs text-muted-foreground">No attempts or callbacks yet.</p>}</div></details></section>
           </div>
         )}
       </div>

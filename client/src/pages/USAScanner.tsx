@@ -50,8 +50,11 @@ interface ScannerState {
 
 interface ActiveScan {
   jobId: string; city: string; state: string;
-  status: "pulling" | "scanning" | "done" | "error";
+  status: "pulling" | "scanning" | "done" | "stopped" | "error";
   total: number; done: number; newFiber: number; error?: string;
+  /** Re-attached to a run the server was already working - progress comes
+   *  from the scanner-state poll instead of this tab's own SSE stream. */
+  reattached?: boolean;
 }
 
 // Semantic tokens: this page renders on the light default, where the raw
@@ -84,6 +87,26 @@ export default function USAScanner() {
   const [filterState, setFilterState] = useState<string>("all");
   const [expandedState, setExpandedState] = useState<string | null>("NC");
   const [activeScan, setActiveScan] = useState<ActiveScan | null>(null);
+  // Re-attach on mount: switching scanner tabs used to orphan a live run -
+  // the scan kept going server-side while the remounted tab showed nothing
+  // and re-enabled every Scan button.
+  const reattachProbed = useRef(false);
+  useEffect(() => {
+    if (reattachProbed.current || activeScan) return;
+    reattachProbed.current = true;
+    apiRequest("GET", "/api/scanner/state")
+      .then(r => r.json())
+      .then((s: ScannerState) => {
+        if (!s?.activeJob) return;
+        setActiveScan(prev => prev ?? {
+          jobId: s.activeJob!.id, city: s.activeJob!.city, state: "",
+          status: "scanning", total: s.activeJob!.total, done: s.activeJob!.done,
+          newFiber: s.activeJob!.newFiber, reattached: true,
+        });
+      })
+      .catch(() => { /* no live run, or state unavailable - nothing to re-attach */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [completedScans, setCompletedScans] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -104,6 +127,20 @@ export default function USAScanner() {
     refetchInterval: activeScan?.status === "scanning" ? 3000 : false,
     enabled: activeScan?.status === "scanning",
   });
+
+  // A re-attached run has no SSE stream in this tab: mirror the state poll
+  // into the card, and close it out when the server reports the job gone.
+  useEffect(() => {
+    if (!activeScan?.reattached || activeScan.status !== "scanning" || !scannerState) return;
+    const job = scannerState.activeJob;
+    if (job && job.id === activeScan.jobId) {
+      setActiveScan(prev => prev && prev.jobId === job.id
+        ? { ...prev, total: job.total, done: job.done, newFiber: job.newFiber }
+        : prev);
+    } else if (!job) {
+      setActiveScan(prev => prev?.reattached ? { ...prev, status: "done" } : prev);
+    }
+  }, [scannerState, activeScan?.reattached, activeScan?.status, activeScan?.jobId]);
 
   const stopAll = useCallback(() => {
     abortRef.current?.abort();
@@ -228,7 +265,7 @@ export default function USAScanner() {
     if (activeScan?.jobId) {
       try { await apiRequest("DELETE", `/api/scan/${activeScan.jobId}`); } catch {}
     }
-    setActiveScan(prev => prev ? { ...prev, status: "done" } : null);
+    setActiveScan(prev => prev ? { ...prev, status: "stopped" } : null);
   }, [stopAll, activeScan]);
 
   const markets = marketsData?.markets ?? EMPTY_MARKETS;
@@ -329,6 +366,7 @@ export default function USAScanner() {
         <Card className="border-border bg-card overflow-hidden">
           <div className={`h-0.5 w-full ${
             activeScan.status === "error" ? "bg-destructive" :
+            activeScan.status === "stopped" ? "bg-warning" :
             activeScan.status === "done"  ? "bg-success" :
             "bg-primary"
           }`} />
@@ -340,11 +378,12 @@ export default function USAScanner() {
                  null}
                 <div>
                   <div className="font-semibold tracking-tight text-sm text-foreground">
-                    {activeScan.city}, {activeScan.state}
+                    {activeScan.city}{activeScan.state ? `, ${activeScan.state}` : ""}
                     {activeScan.status === "pulling" && <span className="text-muted-foreground ml-2 font-normal"> - harvesting addresses…</span>}
                     {activeScan.status === "scanning" && activeScan.total > 0 &&
                       <span className="text-muted-foreground ml-2 font-normal tabular-nums"> - {activeScan.done.toLocaleString()} / {activeScan.total.toLocaleString()}</span>}
                     {activeScan.status === "done" && <span className="text-success ml-2 font-normal"> - complete</span>}
+                    {activeScan.status === "stopped" && <span className="text-warning ml-2 font-normal"> - stopped early, {activeScan.done.toLocaleString()} of {activeScan.total.toLocaleString()} checked</span>}
                   </div>
                   {activeScan.newFiber > 0 && (
                     <div className="flex items-center gap-1.5 mt-1">

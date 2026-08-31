@@ -165,10 +165,17 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        // Indeterminate progress: a third-width segment sweeping the track.
+        // The alternative - a full bar pulsing at 100% - reads as "complete".
+        indeterminate: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(300%)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        indeterminate: "indeterminate 1.4s ease-in-out infinite",
       },
     },
   },

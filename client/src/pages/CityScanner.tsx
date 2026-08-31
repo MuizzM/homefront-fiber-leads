@@ -659,7 +659,7 @@ export default function CityScanner() {
               
               <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Worker State</span>
               {scannerState.isStuck ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/15 px-2.5 py-0.5 text-xs font-medium text-rose-400">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive">
                    Stuck - no heartbeat {scannerState.secondsSinceHeartbeat}s
                 </span>
               ) : scannerState.isRunning && (
@@ -682,7 +682,7 @@ export default function CityScanner() {
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">primary matches</div>
               </div>
               <div className="px-4 py-3">
-                <div className={`text-lg font-semibold font-mono tabular-nums ${scannerState.diagHttpError > 0 ? "text-rose-400" : "text-muted-foreground"}`}>
+                <div className={`text-lg font-semibold font-mono tabular-nums ${scannerState.diagHttpError > 0 ? "text-destructive" : "text-muted-foreground"}`}>
                   {scannerState.diagHttpError}
                 </div>
                 <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">errors</div>

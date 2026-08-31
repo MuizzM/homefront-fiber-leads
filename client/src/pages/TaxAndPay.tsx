@@ -402,7 +402,14 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
     event.preventDefault();
     setSubmitted(true);
     setServerError(null);
-    if (errorCount > 0) return;
+    if (errorCount > 0) {
+      // The rep tapped File at the BOTTOM of a long form - bring the first
+      // invalid field to them instead of appearing to do nothing.
+      setTimeout(() => {
+        document.querySelector('[data-testid^="error-"]')?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 60);
+      return;
+    }
     mutation.mutate();
   };
 
@@ -776,6 +783,11 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
         </Field>
       </fieldset>
 
+      {submitted && errorCount > 0 && (
+        <p role="alert" className="text-sm font-medium text-destructive" data-testid="w9-error-summary">
+          {errorCount} field{errorCount === 1 ? " needs" : "s need"} attention above - each is marked in red.
+        </p>
+      )}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         {showCancel && (
           <Button type="button" variant="ghost" onClick={onCancel} data-testid="w9-cancel">Cancel</Button>

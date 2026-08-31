@@ -61,8 +61,8 @@ const STAGE_TONE: Record<string, string> = {
   saving: "bg-success/[0.08] text-success border-success/[0.12]",
   searching: "bg-info/10 text-info border-info/25",
   parsing: "bg-info/[0.08] text-info border-info/[0.12]",
-  minting: "bg-violet-500/15 text-violet-300 border-violet-500/30",
-  token_ready: "bg-violet-500/10 text-violet-300 border-violet-500/20",
+  minting: "bg-info/10 text-info border-info/25",
+  token_ready: "bg-info/[0.06] text-info border-info/20",
   queued: "bg-muted text-muted-foreground border-border",
   discovered: "bg-muted text-muted-foreground border-border",
   retry: "bg-warning/10 text-warning border-warning/25",
@@ -122,9 +122,20 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
   }, [city, state]);
 
   // Live SSE via fetch (EventSource can't send the x-session-id auth header).
+  // retryTick re-runs this effect 5s after a stream dies: the old loop ran
+  // once and never reconnected, freezing the rows behind a permanent
+  // "Connecting…" spinner that implied progress.
+  const [retryTick, setRetryTick] = useState(0);
+  // Stop halts EVERY running scan tenant-wide - one tap arms, the second fires.
+  const [stopArmed, setStopArmed] = useState(false);
   useEffect(() => {
     if (!sessionId) return;
     let closed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRetry = () => {
+      if (closed || retryTimer) return;
+      retryTimer = setTimeout(() => setRetryTick(t => t + 1), 5_000);
+    };
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     (async () => {
@@ -136,7 +147,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
           headers: { "x-session-id": sessionId },
           signal: ctrl.signal,
         });
-        if (!res.ok || !res.body) { setConnected(false); return; }
+        if (!res.ok || !res.body) { setConnected(false); scheduleRetry(); return; }
         setConnected(true);
         const reader = res.body.getReader();
         const dec = new TextDecoder();
@@ -170,10 +181,10 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
             } catch { /* skip malformed frame */ }
           }
         }
-      } catch { /* aborted or network */ } finally { if (!closed) setConnected(false); }
+      } catch { /* aborted or network */ } finally { if (!closed) { setConnected(false); scheduleRetry(); } }
     })();
-    return () => { closed = true; ctrl.abort(); };
-  }, [sessionId, applyEvent, city, state]);
+    return () => { closed = true; if (retryTimer) clearTimeout(retryTimer); ctrl.abort(); };
+  }, [sessionId, applyEvent, city, state, retryTick]);
 
   // Recompute counters from live rows so the accounting invariant always holds:
   // found = checked + queued + checking + retrying + unresolved.
@@ -291,7 +302,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
       {/* Health + connection */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-success/25 bg-success/[0.08] text-success" : "border-warning/25 bg-warning/[0.08] text-warning"}`}>
-          {connected ? null : <Loader2 className="h-3.5 w-3.5 animate-spin" />} {connected ? "Live" : "Connecting…"}
+          {connected ? null : <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />} {connected ? "Live" : retryTick > 0 ? "Reconnecting - rows may be stale" : "Connecting…"}
         </span>
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-success/25 text-success" : "border-destructive/25 text-destructive"}`}>
           {health?.decodoConnected ? null : null} Decodo {health?.decodoConnected ? "connected" : "down"}
@@ -366,10 +377,17 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
       {/* Controls */}
       <div className="flex flex-wrap gap-2">
         {health?.paused
-          ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-success px-3 py-2 text-[13px] font-semibold text-[#04241f] hover:bg-success"> Resume</button>
+          ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-success px-3 py-2 text-[13px] font-semibold text-success-foreground hover:bg-success/90"> Resume</button>
           : <button onClick={() => control("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Pause</button>}
         <button onClick={() => control("retry-failed")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Retry failed</button>
-        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-card px-3 py-2 text-[13px] font-semibold text-destructive hover:bg-destructive/[0.08]"> Stop</button>
+        {stopArmed ? (
+          <>
+            <button onClick={() => { setStopArmed(false); control("stop"); }} data-testid="inspector-stop-confirm" className="inline-flex items-center gap-1.5 rounded-lg bg-destructive px-3 py-2 text-[13px] font-semibold text-destructive-foreground hover:bg-destructive/90"> Stop every running scan</button>
+            <button onClick={() => setStopArmed(false)} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold text-foreground hover:bg-secondary"> Keep running</button>
+          </>
+        ) : (
+          <button onClick={() => setStopArmed(true)} data-testid="inspector-stop" className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-card px-3 py-2 text-[13px] font-semibold text-destructive hover:bg-destructive/[0.08]"> Stop</button>
+        )}
         <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"> Copy diagnostics</button>
       </div>
 

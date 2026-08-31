@@ -605,7 +605,7 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest {scopeLabel} scan</div>
               <div className="mt-1 text-[13px] font-medium text-foreground">{latestRun?.label ?? "No scan run recorded for this market"}</div>
             </div>
-            {latestRun && <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${latestRun.status === "running" || latestRun.active ? "bg-success/10 text-success" : latestRun.status === "error" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>{latestRun.active ? "running" : latestRun.status}</span>}
+            {latestRun && <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${latestRun.status === "running" || latestRun.active ? "bg-info/10 text-info" : latestRun.status === "error" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>{latestRun.active ? "running" : latestRun.status}</span>}
           </div>
           {latestRun && (
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
@@ -634,7 +634,7 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
               </div>
               <div className="text-[11px] text-muted-foreground">{s.citiesCompleted}/{s.citiesTotal} cities · {s.checked} checked · {s.freshLeads} fresh</div>
             </div>
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${s.status === "running" ? "bg-success/10 text-success" : "bg-muted text-muted-foreground"}`}>{s.status}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${s.status === "running" ? "bg-info/10 text-info" : "bg-muted text-muted-foreground"}`}>{s.status}</span>
           </div>
         ))}
       </div>
@@ -729,7 +729,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
           ["New builds", data?.counts.total ?? 0, "text-foreground"],
           ["Addressed", data?.counts.addressed ?? 0, "text-info"],
           ["Monitored", data?.counts.monitored ?? 0, "text-warning"],
-          ["Checked", data?.counts.checked ?? 0, "text-violet-500 dark:text-violet-300"],
+          ["Checked", data?.counts.checked ?? 0, "text-foreground"],
           ["Leads", data?.counts.leads ?? 0, "text-success"],
           ["Clusters", data?.counts.clusters ?? 0, "text-primary"],
         ].map(([l, v, t]) => (

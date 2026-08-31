@@ -59,7 +59,7 @@ function badge(address: KineticAddress) {
 export default function KineticScanner() {
   const [tab, setTab] = useState<Tab>("dashboard"),
     [selected, setSelected] = useState<number | null>(null);
-  const { data: ping } = useQuery({
+  const { data: ping, isPending: pingPending } = useQuery({
     queryKey: ["kinetic-ping"],
     queryFn: kineticScannerApi.ping,
     refetchInterval: 30_000,
@@ -80,14 +80,16 @@ export default function KineticScanner() {
               </p>
             </div>
             <div
-              className={`ml-auto flex items-center gap-2 rounded-full px-2 py-0.5 text-2xs font-semibold ${ping?.ok ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}
+              className={`ml-auto flex items-center gap-2 rounded-full px-2 py-0.5 text-2xs font-semibold ${pingPending ? "bg-secondary text-muted-foreground" : ping?.ok ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}
             >
               <i
-                className={`h-2 w-2 rounded-full ${ping?.ok ? "bg-success" : "bg-warning"}`}
+                className={`h-2 w-2 rounded-full ${pingPending ? "bg-muted-foreground/50" : ping?.ok ? "bg-success" : "bg-warning"}`}
               />
-              {ping?.ok
-                ? `${ping.source} · ${ping.latencyMs}ms`
-                : `${String(ping?.mode ?? "offline").replaceAll("_", " ")} · safe`}
+              {pingPending
+                ? "checking…"
+                : ping?.ok
+                  ? `${ping.source} · ${ping.latencyMs}ms`
+                  : `${String(ping?.mode ?? "offline").replaceAll("_", " ")} · safe`}
             </div>
           </div>
           <nav
@@ -277,7 +279,9 @@ function Worker({
       </div>
       <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-secondary">
         <div
-          className={`h-full rounded-full bg-primary ${running ? "w-full animate-pulse" : "w-0"}`}
+          role={running ? "progressbar" : undefined}
+          aria-label={running ? "Recheck running - progress unknown" : undefined}
+          className={`h-full w-1/3 rounded-full bg-primary ${running ? "animate-indeterminate motion-reduce:animate-pulse" : "hidden"}`}
         />
       </div>
       <div className="mt-4 grid grid-cols-2 gap-1 sm:grid-cols-5">
@@ -698,6 +702,7 @@ function EvidenceCenter() {
 
 function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
   const [, navigate] = useLocation();
+  const { toast } = useToast();
   const [search, setSearch] = useState(""),
     [state, setState] = useState(""),
     [filter, setFilter] = useState("all"),
@@ -754,8 +759,12 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
           <option value="copper">Copper Upgrade Candidate only</option>
         </select>
         <button
-          onClick={() => void kineticScannerApi.downloadExport()}
-          className="h-10 rounded-xl border border-border px-3 text-xs font-semibold"
+          onClick={() => {
+            kineticScannerApi.downloadExport().catch((e: any) =>
+              toast({ title: "Export failed", description: String(e?.message ?? "Try again."), variant: "destructive" }),
+            );
+          }}
+          className="min-h-tap rounded-xl border border-border px-3 text-xs font-semibold"
         >
           
           Export

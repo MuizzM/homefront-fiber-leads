@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
+import { ErrorState } from "@/components/ErrorState";
 import { CampaignBoard } from "@/components/CampaignBoard";
 import { MilestoneSection } from "@/components/MilestoneCard";
 import { DoorDropSection } from "@/components/DoorDropCard";
@@ -383,7 +384,7 @@ function EarnTab({ band }: { band: AwardBand }) {
 
 // ── Activity: the ledger ──────────────────────────────────────────────────────
 function ActivityTab({ band }: { band: AwardBand }) {
-  const { data, isLoading, isError } = useMine();
+  const { data, isLoading, isError, refetch } = useMine();
   return (
     <div className="space-y-2" data-testid="my-spiffs">
       <SectionLabel>Recent bonuses</SectionLabel>
@@ -392,8 +393,9 @@ function ActivityTab({ band }: { band: AwardBand }) {
           {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[72px] w-full rounded-2xl" />)}
         </div>
       ) : isError ? (
-        <EmptyState icon={AlertTriangle} title="Couldn't load your bonuses" bordered testId="my-spiffs-error"
-          description="Something went wrong reading the bonus ledger. Pull to refresh, or try again in a moment." />
+        <ErrorState title="Couldn't load your bonuses" testId="my-spiffs-error"
+          description="Something went wrong reading the bonus ledger."
+          onRetry={() => void refetch()} />
       ) : !data || data.spiffs.length === 0 ? (
         <EmptyState icon={Gift} title="No bonuses yet" bordered testId="my-spiffs-empty"
           description={`Log a sale and you're in the running for a ${usd(band.minCents)}-${usd(band.maxCents)} bonus. Some drop at random; the rest come from streaks, milestones, and beating your own average.`} />
