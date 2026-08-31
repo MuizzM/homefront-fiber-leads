@@ -68,7 +68,10 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
   // Reps land on "/" (App redirects to /today) — light the Today tab for
   // either location so the home screen always has an active tab.
   const isActive = (href: string) =>
-    href === "/today" ? location === "/today" || location === "/" : location === href;
+    href === "/today" ? location === "/today" || location === "/"
+    : href === "/leads" ? location === "/leads" || location.startsWith("/lead/") || location.startsWith("/property/")
+    : href === "/my-commission" ? location === "/my-commission" || location.startsWith("/statements/")
+    : location === href;
   const activeIndex = visibleTabs.findIndex(tab => isActive(tab.href));
   const activeHref = activeIndex >= 0 ? visibleTabs[activeIndex].href : null;
 
@@ -204,7 +207,7 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
         type="button"
         ref={moreButtonRef}
         data-testid="tab-more"
-        aria-label="Open more navigation"
+        aria-label={moreDot ? "Open more navigation - new activity waiting" : "Open more navigation"}
         aria-expanded={moreOpen}
         aria-controls="mobile-more-sheet"
         onClick={() => onMore ? onMore() : window.dispatchEvent(new CustomEvent("hfs:open-menu"))}
@@ -216,7 +219,7 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, more
             <span
               data-testid="tab-more-dot"
               aria-hidden="true"
-              className="absolute right-1.5 top-0 h-2 w-2 rounded-full bg-red-500 ring-2 ring-[hsl(var(--card))]"
+              className="absolute right-1.5 top-0 h-2 w-2 rounded-full bg-warning ring-2 ring-card"
             />
           )}
         </span>

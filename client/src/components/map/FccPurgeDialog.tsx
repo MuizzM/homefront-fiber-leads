@@ -5,12 +5,13 @@
 // a typed confirmation before the destructive button arms, lock every close path
 // while committing, fail loudly. Worked doors are never touched — the copy says
 // so with numbers, not adjectives.
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { FOCUS } from "@/lib/a11y";
 import { Loader2, RefreshCw } from "lucide-react";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 
 interface FccPurgePreview {
   total: number;      // every fcc-tagged lead in the tenant
@@ -66,13 +67,10 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
     onClose();
   };
 
-  // Escape closes, like the scrim and Cancel.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  });
+  // Full modal contract: Escape (still guarded by the close ritual), focus
+  // moved in, Tab contained, focus restored to the opener.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: open, onClose: close });
 
   if (!open) return null;
 
@@ -80,11 +78,11 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
   const nothingToRemove = p != null && p.removable === 0;
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="fcc-purge-title" data-testid="fcc-purge-dialog">
+    <div className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="fcc-purge-title" data-testid="fcc-purge-dialog">
       {/* Scrim — a real close control, locked while committing. */}
       <button type="button" aria-label="Close" onClick={close} disabled={purge.isPending} className="absolute inset-0 bg-overlay" data-testid="fcc-purge-scrim" />
 
-      <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
+      <div ref={panelRef} className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200 motion-reduce:animate-none">
         <div className="flex items-start gap-3">
           
           <div className="min-w-0">
@@ -111,7 +109,7 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
               <dt className="text-muted-foreground">FCC-imported doors</dt>
               <dd className="text-right font-bold tabular-nums text-foreground" data-testid="fcc-purge-total">{p!.total}</dd>
               <dt className="text-muted-foreground">Unworked - will be removed</dt>
-              <dd className="text-right font-bold tabular-nums text-rose-400" data-testid="fcc-purge-removable">{p!.removable}</dd>
+              <dd className="text-right font-bold tabular-nums text-destructive" data-testid="fcc-purge-removable">{p!.removable}</dd>
               <dt className="text-muted-foreground">Worked - protected, stay</dt>
               <dd className="text-right font-bold tabular-nums text-foreground" data-testid="fcc-purge-protected">{p!.protected}</dd>
             </dl>
@@ -145,7 +143,7 @@ export function FccPurgeDialog({ open, onClose }: { open: boolean; onClose: () =
             onClick={() => purge.mutate()}
             disabled={p == null || nothingToRemove || !armed || purge.isPending}
             data-testid="fcc-purge-submit"
-            className={`flex-1 h-11 rounded-xl bg-rose-600 text-white text-[14px] font-semibold active:scale-[.98] transition-transform hover:bg-rose-600/90 disabled:opacity-40 disabled:pointer-events-none inline-flex items-center justify-center gap-2 ${FOCUS}`}
+            className={`flex-1 h-11 rounded-xl bg-destructive text-destructive-foreground text-[14px] font-semibold active:scale-[.98] transition-transform hover:bg-destructive/90 disabled:opacity-40 disabled:pointer-events-none inline-flex items-center justify-center gap-2 ${FOCUS}`}
           >
             {purge.isPending
               ? <><RefreshCw className="w-4 h-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Removing…</>

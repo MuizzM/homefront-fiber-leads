@@ -122,6 +122,44 @@ describe("shared control primitives clear the tap floor", () => {
     expect(block).toContain("min-width: var(--tap-target-min)");
     expect(block).toContain("min-height: var(--tap-target-min)");
   });
+
+  it("Checkbox keeps a 16px box and a 44px hit area", () => {
+    // Same shape as Switch: the drawn control stays small (a 44px checkbox
+    // stops reading as one), the hit area comes from tap-expand. Found on the
+    // Incentives money-approval queue, where the per-row checkbox is the ONLY
+    // way to select a bonus and admins were aiming at 16px on phones.
+    const cb = read("components/ui/checkbox.tsx");
+    expect(cb).toContain("h-4 w-4");
+    expect(cb, "Checkbox needs tap-expand, or its hit area is its 16px box").toContain("tap-expand");
+  });
+});
+
+describe("arbitrary min-h values do not undercut the tap floor", () => {
+  // min-h-[36px] on a button passes every primitive-level check while sitting
+  // 8px under the floor. Any interactive element that reaches for an arbitrary
+  // min-height must reach AT LEAST the token value - or use min-h-tap, which
+  // says what it means.
+  it("no interactive element declares an arbitrary min-h below 44px", () => {
+    const violations: string[] = [];
+    for (const { file, text } of files) {
+      const lines = text.split("\n");
+      lines.forEach((line, i) => {
+        const m = line.match(/min-h-\[(\d+(?:\.\d+)?)(px|rem)\]/);
+        if (!m) return;
+        const px = m[2] === "rem" ? parseFloat(m[1]) * 16 : parseFloat(m[1]);
+        if (px >= 44) return;
+        // Only interactive elements: a short message bubble or meta row may be
+        // any height it likes.
+        const window = lines.slice(Math.max(0, i - 7), i + 2).join(" ");
+        const interactive = /<button|<a\b|onClick|role="button"|<Link|type="button"|type="submit"/.test(window);
+        if (interactive) violations.push(`${file}:${i + 1}  ${line.trim().slice(0, 120)}`);
+      });
+    }
+    expect(
+      violations,
+      `Interactive element with an arbitrary min-h under the 44px floor. Use min-h-tap (or pair the small drawn size with .tap-expand):\n${violations.join("\n")}`,
+    ).toEqual([]);
+  });
 });
 
 describe("touch reachability", () => {

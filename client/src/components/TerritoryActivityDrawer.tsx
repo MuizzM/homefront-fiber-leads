@@ -5,13 +5,14 @@
 // for admins — a reason-gated override. Filter by verdict/rep, sort by time or
 // distance, and export what you can see.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { X, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { FOCUS } from "@/lib/a11y";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { VerificationBadge, DistanceDiagram, formatDistance, type VStatus } from "@/components/verification";
 import { ErrorState } from "@/components/ErrorState";
 
@@ -66,13 +67,10 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
-  // Escape closes the drawer, matching the scrim tap and the X — keyboard users
-  // and hardware-keyboard tablets get the same exit everyone else has.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Full modal contract (Escape, focus in, contained Tab, focus restore) —
+  // replaces the drawer's old Escape-only listener.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: true, onClose, initialFocus: '[data-testid="close-activity"]' });
 
   const reps = useMemo(() => {
     const s = new Set<string>();
@@ -111,11 +109,13 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
   return (
     // Scrim is blur-FREE: a full-viewport backdrop-filter over the WebGL map
     // is the single most expensive composite a phone GPU can be asked for.
-    <div className="fixed inset-0 z-50 flex justify-end bg-overlay" onClick={onClose} data-testid="activity-drawer">
+    <div className="fixed inset-0 z-overlay flex justify-end bg-overlay" onClick={onClose} data-testid="activity-drawer">
       <div
-        className="flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-2xl animate-in slide-in-from-right duration-200"
+        ref={panelRef}
+        className="flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-2xl animate-in slide-in-from-right duration-200 motion-reduce:animate-none"
         onClick={e => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label="Territory activity history"
       >
         {/* Header */}

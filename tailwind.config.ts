@@ -127,6 +127,29 @@ export default {
       spacing: {
         tap: "2.75rem", // 44px — matches --tap-target-min
       },
+      // The layering scale. Stacking was hand-picked per file (z-30 tabs,
+      // z-[45] status bar, z-50 portals, z-[60] scrim, z-[70] x6 hand-rolled
+      // dialogs, z-[100] toasts, z-[200] statement) and the magic numbers had
+      // already drifted into inversions - a full-screen viewer above the
+      // toasts that report on it. Name the layer, never the number:
+      //   nav     - persistent chrome: bottom tabs, map rail, in-page notices
+      //   status  - the field status bar riding above nav
+      //   overlay - every modal surface: Radix portals AND hand-rolled sheets
+      //   raised  - transient bars above modals (pending bar, update prompt)
+      //   toast   - feedback outranks everything it reports on
+      zIndex: {
+        nav: "30",
+        status: "45",
+        overlay: "50",
+        raised: "60",
+        toast: "100",
+      },
+      // The one card shadow, previously hand-typed identically in card.tsx and
+      // tooltip.tsx - the exact "typed twice, drifts later" failure tokens
+      // exist to prevent.
+      boxShadow: {
+        card: "0 1px 2px hsl(216 30% 3%/0.16), 0 10px 30px -24px hsl(216 60% 2%/0.55)",
+      },
       fontFamily: {
         /* Real stacks — the old var(--font-*) custom properties were never defined */
         sans: ["Geist Variable", "system-ui", "-apple-system", "sans-serif"],

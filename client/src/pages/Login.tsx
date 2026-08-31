@@ -83,6 +83,7 @@ export default function Login() {
     try {
       const { code: developmentCode, emailDelivered } = await requestCode();
       setCode(developmentCode ?? "");
+      setFormError(null); // a fresh code invalidates the old "Invalid code"
       setResendIn(30);
       toast({ title: developmentCode ? "New local code filled in - tap Verify & sign in."
         : emailDelivered ? "New code sent - check your email."
@@ -101,6 +102,7 @@ export default function Login() {
   async function verify(codeToUse: string) {
     if (codeToUse.length < 6 || loading) return;
     setLoading(true);
+    setFormError(null);
     // The code is only WRONG when the server rejected it (401/400). A 429 or a
     // 5xx (the server is briefly busy) says nothing about the digits the rep
     // just read off their phone — wiping the boxes there makes them re-type a
@@ -194,7 +196,7 @@ export default function Login() {
                   autoComplete="email"
                   autoFocus
                   data-testid="input-email"
-                  className={`h-11 px-3 text-sm ${inputClasses}`}
+                  className={`h-11 px-3 text-base sm:text-sm ${inputClasses}`}
                 />
               </div>
 

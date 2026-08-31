@@ -607,7 +607,7 @@ function TeamHeat({ isAdmin }: { isAdmin: boolean }) {
                     onClick={() => setConfirmPaid({ ids: selectedApproved.map((s) => s.id), totalCents: sumCents(selectedApproved), bulk: true })}
                     data-testid="bulk-paid"
                     className={cn(
-                      "inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-secondary px-3 text-[13px] font-semibold text-foreground disabled:opacity-50",
+                      "inline-flex min-h-tap items-center gap-1.5 rounded-xl bg-secondary px-3 text-[13px] font-semibold text-foreground disabled:opacity-50",
                       FOCUS,
                     )}
                   >

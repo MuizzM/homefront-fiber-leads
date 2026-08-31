@@ -15,13 +15,14 @@
 // so" is not something they should have to say.
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { useCan } from "@/lib/capabilities";
 import { CountCard } from "./MetricCard";
 import { METRICS_REFETCH_MS, MetricsErrorState } from "./MetricsDataState";
@@ -216,6 +217,10 @@ const DECISIONS = [
 
 function ReclaimReviewDialog({ row, onClose }: { row: TerritoryRow; onClose: () => void }) {
   const { toast } = useToast();
+  // Modal contract for the aria-modal claim: focus in, Tab contained,
+  // Escape closes, focus restored to the opener.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: true, onClose });
   const [decision, setDecision] = useState<string>("kept");
   const [note, setNote] = useState("");
 
@@ -242,11 +247,11 @@ function ReclaimReviewDialog({ row, onClose }: { row: TerritoryRow; onClose: () 
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true"
+    <div className="fixed inset-0 z-overlay flex items-end justify-center sm:items-center" role="dialog" aria-modal="true"
          aria-label="Record a reclaim decision">
       <button type="button" className="absolute inset-0 bg-overlay backdrop-blur-[2px]" onClick={onClose}
               aria-label="Close" />
-      <div className="relative w-full max-w-lg rounded-t-2xl border border-border bg-background p-4 sm:rounded-2xl">
+      <div ref={panelRef} className="relative w-full max-w-lg rounded-t-2xl border border-border bg-background p-4 sm:rounded-2xl">
         <h2 className="text-lg font-bold tracking-tight text-foreground">{row.territoryName}</h2>
         <p className="mt-1 text-xs text-muted-foreground">{row.health.reclaimRationale}</p>
 

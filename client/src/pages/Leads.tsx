@@ -599,9 +599,12 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
-      <SheetContent className="bg-card border-border text-foreground w-full sm:max-w-xl overflow-y-auto p-0">
+      {/* hideClose: this sheet keeps its close in the sticky header so it
+          stays reachable while the panel scrolls - the built-in absolute X
+          would scroll away AND stack a second Close on top of this one. */}
+      <SheetContent hideClose className="bg-card border-border text-foreground w-full sm:max-w-xl overflow-y-auto p-0">
         <SheetHeader className="sticky top-0 z-10 bg-card/95 backdrop-blur border-b border-border px-5 py-4 text-left">
-          <button type="button" onClick={onClose} aria-label="Close lead details" className="absolute right-4 top-4 z-20 w-8 h-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+          <button type="button" onClick={onClose} aria-label="Close lead details" className="absolute right-2.5 top-2.5 z-20 w-11 h-11 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
             <X className="w-4 h-4" />
           </button>
           <div className="flex items-center gap-2 pr-8">

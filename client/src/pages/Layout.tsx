@@ -53,6 +53,7 @@ import {
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { BottomTabs } from "@/components/BottomTabs";
 import { PaywallBanner } from "@/components/PaywallBanner";
 import { FieldStatusBar } from "@/components/FieldStatusBar";
@@ -93,7 +94,7 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   // ── Core ──────────────────────────────────────────────────────────────────
-  { href: "/today", label: "Dashboard",    icon: LayoutDashboard, show: (r: AppRole) => r === "rep",                       group: "Core" },
+  { href: "/today", label: "Today",        icon: LayoutDashboard, show: (r: AppRole) => r === "rep",                       group: "Core" },
   { href: "/",      label: "Dashboard",    icon: LayoutDashboard, show: (r: AppRole) => isFieldRole(r) && r !== "rep",       group: "Core" },
   { href: "/map",   label: "Field Map",    icon: Map,             show: isFieldRole,                                   group: "Core" },
   { href: "/leads", label: "Leads",        icon: MapPin,          show: isFieldRole,                                   group: "Core" },
@@ -269,6 +270,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     return activeGroup && activeGroup !== "Core" ? { [activeGroup]: true } : {};
   });
   const moreSheetRef = useRef<HTMLDivElement | null>(null);
+  const asideRef = useRef<HTMLElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
   // Cmd-K palette: every page this role can open, plus the common actions.
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -352,6 +354,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     };
   }, [moreOpen, closeMore]);
 
+  // The mobile nav drawer gets the same modal treatment as the More sheet:
+  // focus moved in, Escape, contained Tab, scroll lock, focus restored.
+  useModalA11y(asideRef, { active: isMobile && mobileOpen, onClose: () => setMobileOpen(false) });
+
   // Territory request pending count (admin/manager only)
   const canManage = hasRole(role, "admin", "manager");
   const { data: territoryRequests } = useQuery<{ id: number; status: string }[]>({
@@ -381,7 +387,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   });
   const orgName = tenantMe?.tenant?.companyName || "Home Front Solutions";
   const orgTagline = tenantMe?.tenant?.tagline || null;
-  const mobileTitle = location === "/today" || location === "/" ? "Today"
+  const mobileTitle = location === "/today" ? "Today"
+    : location === "/" ? "Dashboard"
     : location === "/map" ? "Field map"
     : location === "/leads" || location.startsWith("/lead/") ? (role === "rep" ? "My leads" : "Leads")
     : location === "/my-commission" ? "My pay"
@@ -395,6 +402,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/referrals" ? "Referrals"
     : onCalling ? "Calling"
     : location === "/profile" ? "Profile"
+    : location.startsWith("/areas/") ? "Areas"
+    : location.startsWith("/statements/") ? "Statement"
+    : location.startsWith("/property/") ? "Property"
+    : location === "/metrics" ? "Metrics"
+    : location === "/token" ? "Scanner setup"
     : NAV_ITEMS.find(item => item.href === location)?.label ?? orgName;
 
   // While gated, the sidebar shows only what the server would actually answer.
@@ -499,6 +511,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </a>
       {/* Sidebar */}
       <aside
+        ref={asideRef}
         aria-hidden={isMobile && !mobileOpen ? true : undefined}
         // A translated off-canvas drawer is still focusable and exposed to
         // assistive technology. `inert` closes both paths while the phone nav
@@ -574,6 +587,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         key={href}
                         href={href}
                         onClick={() => setMobileOpen(false)}
+                        aria-current={isActive ? "page" : undefined}
                         {...navIntentHandlers(href)}
                         className={cn(
                           "relative flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition-[color,background-color,box-shadow] md:min-h-10 md:rounded-lg md:py-2",
@@ -587,7 +601,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         <Icon aria-hidden="true" className={cn("w-[18px] h-[18px] md:w-4 md:h-4 flex-shrink-0", isActive && "text-primary")} />
                         <span className="flex-1">{label}</span>
                         {badgeCount > 0 && (
-                          <span className="min-w-[18px] h-[18px] rounded-full bg-warning text-2xs font-bold text-background flex items-center justify-center px-1">
+                          <span className="min-w-[18px] h-[18px] rounded-full bg-warning text-2xs font-bold text-warning-foreground flex items-center justify-center px-1">
                             {badgeCount > 9 ? "9+" : badgeCount}
                           </span>
                         )}
@@ -602,7 +616,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
           {/* Territory Requests alert */}
           {canManage && pendingTerritoryCount > 0 && (
-            <div className="mt-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/20">
+            <div className="mt-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/20">
               <div className="flex items-center gap-2 text-xs text-warning font-medium">
                 <Bell className="w-3.5 h-3.5 flex-shrink-0" />
                 <span className="flex-1">{pendingTerritoryCount} territory request{pendingTerritoryCount !== 1 ? "s" : ""}</span>
@@ -658,7 +672,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Mobile overlay */}
       {mobileOpen && (
-        <div className="fixed inset-0 z-40 bg-overlay backdrop-blur-[2px] md:hidden animate-in fade-in duration-200 motion-reduce:duration-0" onClick={() => setMobileOpen(false)} />
+        <button type="button" aria-label="Close navigation menu" className="fixed inset-0 z-40 bg-overlay backdrop-blur-[2px] md:hidden animate-in fade-in duration-200 motion-reduce:duration-0" onClick={() => setMobileOpen(false)} />
       )}
 
       {/* Main content */}

@@ -15,7 +15,7 @@ const ToastViewport = React.forwardRef<
   <ToastPrimitives.Viewport
     ref={ref}
     className={cn(
-      "fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 pt-[max(1rem,calc(env(safe-area-inset-top)+0.25rem))] sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col sm:pt-4 md:max-w-[420px]",
+      "fixed top-0 z-toast flex max-h-screen w-full flex-col-reverse p-4 pt-[max(1rem,calc(env(safe-area-inset-top)+0.25rem))] sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col sm:pt-4 md:max-w-[420px]",
       className
     )}
     {...props}
@@ -64,7 +64,7 @@ const ToastAction = React.forwardRef<
   <ToastPrimitives.Action
     ref={ref}
     className={cn(
-      "inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent px-3 text-xs font-medium ring-offset-background transition-colors hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+      "inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-transparent px-3 text-xs font-medium ring-offset-background transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
       className
     )}
     {...props}
@@ -79,7 +79,7 @@ const ToastClose = React.forwardRef<
   <ToastPrimitives.Close
     ref={ref}
     className={cn(
-      "absolute right-0.5 top-0.5 inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-secondary hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-inset",
+      "absolute right-0.5 top-0.5 inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
       className
     )}
     aria-label="Dismiss notification"
@@ -97,7 +97,7 @@ const ToastTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <ToastPrimitives.Title
     ref={ref}
-    className={cn("text-[13px] font-medium leading-snug", className)}
+    className={cn("text-sm-minus font-medium leading-snug", className)}
     {...props}
   />
 ))

@@ -15,7 +15,7 @@
 // Out-of-scope areas 404 by design (the API refuses to confirm they exist), so
 // "not found" and "not yours" render as ONE calm state that leaks nothing.
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DoorOpen, Hand, BadgeDollarSign, CalendarClock, UserCog, ShieldCheck, AlertTriangle, Ban, History, Loader2, SearchX, type LucideIcon } from "lucide-react";
@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { EmptyState } from "@/components/EmptyState";
@@ -1055,18 +1056,14 @@ function VerifyTile({ label, value, className, testId }: {
 // phones. Focus lands on the panel itself so the first Tab hits the picker.
 function AreaAssignDialog({ onClose, children }: { onClose: () => void; children: ReactNode }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    panelRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Full modal contract via the shared hook: Escape (capture), focus moved to
+  // the first control, Tab contained, focus restored to the opener - the
+  // aria-modal claim was only half-true with the old Escape-only handler.
+  useModalA11y(panelRef, { active: true, onClose });
   return (
     <div role="dialog" aria-modal="true" aria-label="Assign this area"
          data-testid="area-assign-dialog"
-         className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+         className="fixed inset-0 z-overlay flex items-end justify-center sm:items-center">
       <button
         type="button" aria-label="Close" data-testid="area-assign-scrim"
         onClick={onClose}

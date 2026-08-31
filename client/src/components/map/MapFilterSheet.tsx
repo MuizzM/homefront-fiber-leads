@@ -1,6 +1,8 @@
+import { useRef } from "react";
 import { X } from "lucide-react";
 import { STATE_COLORS, STATE_LABELS } from "@shared/knock";
 import { FOCUS } from "@/lib/a11y";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import type { LeadSourceFilter, LeadSourceOption } from "@/lib/leadSourceFilter";
 
 export interface MapFilterSheetProps {
@@ -45,6 +47,11 @@ export function MapFilterSheet({
   zoomedOutNote = null,
   onClearAll, shown, total,
 }: MapFilterSheetProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Real modal behavior for the aria-modal claim: focus in, Tab contained,
+  // Escape closes (capture, so the map's tool-exit hatch never sees it),
+  // focus restored to the rail button on close.
+  useModalA11y(panelRef, { active: open, onClose, initialFocus: '[data-testid="map-filter-close"]' });
   if (!open) return null;
 
   const colors = STATE_COLORS as Record<string, string>;
@@ -83,11 +90,11 @@ export function MapFilterSheet({
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="map-filter-title" data-testid="map-filter-sheet">
+    <div className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="map-filter-title" data-testid="map-filter-sheet">
       {/* Scrim */}
       <button aria-label="Close" onClick={onClose} className={`absolute inset-0 bg-overlay ${FOCUS}`} data-testid="map-filter-scrim" />
 
-      <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
+      <div ref={panelRef} className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200 motion-reduce:animate-none">
         {/* Header */}
         <div className="flex items-center gap-1.5">
           <h2 id="map-filter-title" className="flex-1 min-w-0 text-[16px] font-bold text-foreground leading-tight">Filters</h2>

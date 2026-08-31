@@ -1,4 +1,6 @@
 import { Link } from "wouter";
+import { useAuth } from "@/lib/auth";
+import { can } from "@shared/capabilities";
 
 /**
  * 404 — the only screen a lost user ever sees, so it gets the same treatment as
@@ -8,6 +10,9 @@ import { Link } from "wouter";
  * shown to customers, and no way back to the product.
  */
 export default function NotFound() {
+  const { user } = useAuth();
+  // Same gate as the tab bar: a role the map 403s never gets pointed at it.
+  const canUseMap = can(user?.role, "field.app.use");
   return (
     <div className="flex min-h-[70dvh] w-full items-center justify-center px-6 py-12">
       <div className="w-full max-w-md text-center">
@@ -33,14 +38,14 @@ export default function NotFound() {
             
             Back to dashboard
           </Link>
-          <Link
+          {canUseMap && <Link
             href="/map"
             className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-border bg-card px-5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             data-testid="notfound-map"
           >
             
             Open Field Map
-          </Link>
+          </Link>}
         </div>
       </div>
     </div>

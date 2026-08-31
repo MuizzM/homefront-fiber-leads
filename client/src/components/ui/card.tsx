@@ -9,7 +9,7 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-2xl border bg-card border-card-border text-card-foreground shadow-[0_1px_2px_hsl(216_30%_3%/0.16),0_10px_30px_-24px_hsl(216_60%_2%/0.55)] md:rounded-xl",
+      "rounded-2xl border bg-card border-card-border text-card-foreground shadow-card md:rounded-xl",
       className
     )}
     {...props}
@@ -36,7 +36,10 @@ const CardTitle = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "text-2xl font-semibold leading-none tracking-tight",
+      // text-base, not the scaffold's text-2xl: a card heading must never
+      // outrank the app-wide page title (h1 = text-xl). Every call site was
+      // already overriding this down - the default now matches the system.
+      "text-base font-semibold leading-none tracking-tight",
       className
     )}
     {...props}

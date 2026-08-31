@@ -259,7 +259,9 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
         >
           <div className="p-5 pb-3">
             <div className="mx-auto mb-4 h-1.5 w-10 rounded-full bg-white/40" aria-hidden="true" />
-            <div className="flex items-center gap-2">
+            {/* pr-12 clears the sheet's built-in absolute close button, which
+                otherwise overlaps the location pill's corner. */}
+            <div className="flex items-center gap-2 pr-12">
               {/* SheetTitle (not a bare h2) wires the dialog's accessible name. */}
               <SheetTitle className="text-[19px] font-bold tracking-tight text-foreground flex items-center gap-2 flex-1">
                 

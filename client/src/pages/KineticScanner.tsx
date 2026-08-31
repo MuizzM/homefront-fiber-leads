@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Database, Gauge, History, Loader2, Map as MapIcon, RefreshCw, ShieldCheck, Zap } from "lucide-react";
@@ -10,6 +10,7 @@ import { KineticScannerMap } from "@/components/kinetic/KineticScannerMap";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/hooks/use-toast";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { summarizeEvidenceWorker } from "@/lib/scanYield";
 import { openLeadOnFieldMap } from "@/lib/leadMapNavigation";
 
@@ -1043,6 +1044,11 @@ function Jobs() {
   );
 }
 function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
+  // A drawer over the whole page is a dialog: give it the semantics and the
+  // modal contract (focus in, Tab contained, Escape, focus restore) instead
+  // of a bare div only a mouse can leave.
+  const panelRef = useRef<HTMLElement>(null);
+  useModalA11y(panelRef, { active: true, onClose });
   const qc = useQueryClient(),
     { toast } = useToast(),
     [, navigate] = useLocation(),
@@ -1083,16 +1089,17 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   };
   return (
     <div
-      className="fixed inset-0 z-50 bg-overlay"
+      className="fixed inset-0 z-overlay bg-overlay"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <aside className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-border bg-card p-4 pb-[max(1rem,calc(env(safe-area-inset-bottom)+0.5rem))] text-foreground shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none sm:pb-4">
+      <aside ref={panelRef} role="dialog" aria-modal="true" aria-label="Address detail" className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-border bg-card p-4 pb-[max(1rem,calc(env(safe-area-inset-bottom)+0.5rem))] text-foreground shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none sm:pb-4">
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted-foreground/30 sm:hidden" />
         <button
+          type="button"
           onClick={onClose}
-          className="float-right h-10 rounded-xl border border-border px-3 text-xs"
+          className="float-right min-h-tap rounded-xl border border-border px-3 text-xs"
         >
           Close
         </button>

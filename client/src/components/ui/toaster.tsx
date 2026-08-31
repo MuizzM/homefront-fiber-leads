@@ -11,13 +11,17 @@ import { CheckCircle2, Info, AlertTriangle, XCircle, WifiOff, CreditCard, Loader
 // longer beat) — timing lives in use-toast. Severity is conveyed by a SLIM
 // left accent on the card, never a loud fill. Reduced-motion is honored by
 // the animation classes; the viewport is safe-area padded.
+// Accents and icons wear the semantic tokens, not raw palette steps: the
+// tokens are the single source both themes read (DESIGN_SYSTEM.md). `payment`
+// has no semantic token - it is categorical, not a meaning - so it keeps a
+// violet pair tuned for each ground.
 const META: Record<NotificationSeverity, { politeness: "foreground" | "background"; accent: string; Icon: any; iconClass: string }> = {
-  success: { politeness: "background", accent: "border-l-emerald-500", Icon: CheckCircle2, iconClass: "text-emerald-500" },
-  info:    { politeness: "background", accent: "border-l-sky-500",     Icon: Info,        iconClass: "text-sky-500" },
-  warning: { politeness: "foreground", accent: "border-l-amber-500",   Icon: AlertTriangle, iconClass: "text-amber-500" },
-  error:   { politeness: "foreground", accent: "border-l-rose-500",    Icon: XCircle,     iconClass: "text-rose-500" },
-  offline: { politeness: "foreground", accent: "border-l-amber-500",   Icon: WifiOff,     iconClass: "text-amber-500" },
-  payment: { politeness: "foreground", accent: "border-l-violet-500",  Icon: CreditCard,  iconClass: "text-violet-500" },
+  success: { politeness: "background", accent: "border-l-success",     Icon: CheckCircle2, iconClass: "text-success" },
+  info:    { politeness: "background", accent: "border-l-info",        Icon: Info,        iconClass: "text-info" },
+  warning: { politeness: "foreground", accent: "border-l-warning",     Icon: AlertTriangle, iconClass: "text-warning" },
+  error:   { politeness: "foreground", accent: "border-l-destructive", Icon: XCircle,     iconClass: "text-destructive" },
+  offline: { politeness: "foreground", accent: "border-l-warning",     Icon: WifiOff,     iconClass: "text-warning" },
+  payment: { politeness: "foreground", accent: "border-l-violet-600 dark:border-l-violet-400", Icon: CreditCard, iconClass: "text-violet-600 dark:text-violet-400" },
   loading: { politeness: "foreground", accent: "border-l-transparent", Icon: Loader2,     iconClass: "text-muted-foreground animate-spin motion-reduce:animate-none" },
 }
 

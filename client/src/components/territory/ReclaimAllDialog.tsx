@@ -4,11 +4,12 @@
 // project transfer): state the exact blast radius up front, make the operator
 // choose what happens to the leads, and require a typed confirmation before
 // the destructive button arms. One POST, one audit row, one toast.
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { RefreshCw } from "lucide-react";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 
 interface AreaLite { id: number; repIds: number[]; status: string }
 
@@ -63,23 +64,19 @@ export function ReclaimAllDialog({
     onClose();
   };
 
-  // Escape closes, like the scrim and Cancel — a modal all three of whose
-  // siblings honour Escape must not be the odd one out.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  });
+  // Full modal contract: Escape (still guarded by the close ritual), focus
+  // moved in, Tab contained, focus restored to the opener.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: open, onClose: close });
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="reclaim-all-title" data-testid="reclaim-all-dialog">
+    <div className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="reclaim-all-title" data-testid="reclaim-all-dialog">
       {/* Scrim */}
       <button type="button" aria-label="Close" onClick={close} disabled={sweep.isPending} className="absolute inset-0 bg-overlay" data-testid="reclaim-all-scrim" />
 
-      <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
+      <div ref={panelRef} className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200 motion-reduce:animate-none">
         <div className="flex items-start gap-3">
           
           <div className="min-w-0">
@@ -140,7 +137,7 @@ export function ReclaimAllDialog({
             <input
               id="reclaim-all-confirm" value={confirmText} onChange={e => setConfirmText(e.target.value)}
               autoComplete="off" spellCheck={false} data-testid="reclaim-all-confirm-input"
-              className="mt-1.5 w-full h-11 rounded-lg bg-secondary border border-border px-3 text-[14px] font-semibold tracking-wide text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-rose-500/40"
+              className="mt-1.5 w-full h-11 rounded-lg bg-secondary border border-border px-3 text-[14px] font-semibold tracking-wide text-foreground placeholder:text-muted-foreground/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
               placeholder="RECLAIM"
             />
           </div>
@@ -156,7 +153,7 @@ export function ReclaimAllDialog({
             onClick={() => sweep.mutate()}
             disabled={impact.areaCount === 0 || !armed || sweep.isPending}
             data-testid="reclaim-all-submit"
-            className="flex-1 h-11 rounded-xl bg-rose-600 text-white text-[14px] font-semibold active:scale-[.98] transition-transform hover:bg-rose-600/90 disabled:opacity-40 disabled:pointer-events-none inline-flex items-center justify-center gap-2"
+            className="flex-1 h-11 rounded-xl bg-destructive text-destructive-foreground text-[14px] font-semibold active:scale-[.98] transition-transform hover:bg-destructive/90 disabled:opacity-40 disabled:pointer-events-none inline-flex items-center justify-center gap-2"
           >
             {sweep.isPending ? <><RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" />Reclaiming…</> : `Reclaim ${impact.areaCount || ""} area${impact.areaCount === 1 ? "" : "s"}`}
           </button>

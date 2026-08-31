@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   FREEZE_REASON_LABELS, FREEZE_REASON_HELP,
@@ -77,14 +78,10 @@ export function StartNextPassDialog({
     return () => { cancelled = true; };
   }, [open, territoryId, keepCallbacks, fetchPreview]);
 
-  // Escape cancels, matching the scrim and the Cancel button — and stays locked
-  // while the reset is committing, for the same reason they do.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onCancel(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, busy, onCancel]);
+  // Full modal contract: Escape (still locked while committing), focus moved
+  // in, Tab contained, focus restored to the opener.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: open, onClose: () => { if (!busy) onCancel(); } });
 
   if (!open) return null;
 
@@ -95,7 +92,7 @@ export function StartNextPassDialog({
   return (
     <div role="dialog" aria-modal="true" aria-labelledby="next-pass-title"
          data-testid="next-pass-dialog"
-         className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center">
+         className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center">
       {/* Scrim — same grammar as ReclaimAllDialog: a real button, so a tap
           outside the card is Cancel, not a dead zone. Locked while committing. */}
       <button
@@ -109,7 +106,8 @@ export function StartNextPassDialog({
 
       <div
         data-testid="next-pass-card"
-        className="relative w-full sm:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-border bg-card text-foreground p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200"
+        ref={panelRef}
+        className="relative w-full sm:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-border bg-card text-foreground p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200 motion-reduce:animate-none"
       >
         <div className="space-y-4">
           <header className="space-y-1">
@@ -181,7 +179,7 @@ export function StartNextPassDialog({
               {/* Never silently drop a promise a rep made to a homeowner. */}
               {preview.callbacksAtRisk > 0 && (
                 <div role="alert" data-testid="pass-callbacks-tile"
-                     className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground space-y-1">
+                     className="rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm text-foreground space-y-1">
                   <div className="flex gap-2">
                     
                     <span>

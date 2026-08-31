@@ -50,7 +50,7 @@ export function ErrorState({
     >
       <div className="text-[15px] font-semibold text-foreground">{title}</div>
       {description && (
-        <div className="mx-auto mt-1 max-w-xs text-[13px] leading-relaxed text-muted-foreground">{description}</div>
+        <div className="mx-auto mt-1 max-w-xs text-sm-minus leading-relaxed text-muted-foreground">{description}</div>
       )}
       {(onRetry || action) && (
         <div className="mt-4 flex items-center justify-center gap-2">
@@ -58,7 +58,7 @@ export function ErrorState({
             <button
               type="button"
               onClick={onRetry}
-              className={`inline-flex min-h-11 items-center gap-2 rounded-xl border border-border bg-secondary px-4 text-[14px] font-semibold text-foreground transition-transform hover:bg-secondary/70 active:scale-95 ${FOCUS}`}
+              className={`inline-flex min-h-11 items-center gap-2 rounded-xl border border-border bg-secondary px-4 text-sm font-semibold text-foreground transition-transform hover:bg-secondary/70 active:scale-95 ${FOCUS}`}
             >
               {retryLabel}
             </button>

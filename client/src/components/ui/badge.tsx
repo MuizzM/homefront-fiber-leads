@@ -7,7 +7,9 @@ import { cn } from "@/lib/utils"
 const badgeVariants = cva(
   // Whitespace-nowrap: Badges should never wrap. Badges are non-interactive —
   // no hover treatment (an inert element that reacts to hover reads as broken).
-  "whitespace-nowrap inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+  // No focus ring: a Badge is a non-interactive div, so it can never take
+  // focus - the ring classes were dead weight from the scaffold.
+  "whitespace-nowrap inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors",
   {
     variants: {
       variant: {

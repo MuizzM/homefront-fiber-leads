@@ -3,8 +3,10 @@
 // toggles, fully controlled by the parent (no internal map state — the sheet
 // only reflects and reports). Same container/scrim grammar as ReclaimAllDialog
 // so every sheet in the app opens, dims, and dismisses identically.
+import { useRef } from "react";
 import { X } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 
 export type BasemapValue = "streets" | "satellite" | "dark";
 
@@ -31,11 +33,16 @@ const BASEMAPS: ReadonlyArray<{ value: BasemapValue; label: string }> = [
 ];
 
 export function MapSettingsSheet({ open, onClose, basemap, toggles }: MapSettingsSheetProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Real modal behavior for the aria-modal claim: focus in, Tab contained,
+  // Escape closes (capture, so the map's tool-exit hatch never sees it),
+  // focus restored to the rail button on close.
+  useModalA11y(panelRef, { active: open, onClose, initialFocus: '[data-testid="map-settings-close"]' });
   if (!open) return null;
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center"
+      className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center"
       role="dialog"
       aria-modal="true"
       aria-labelledby="map-settings-title"
@@ -49,7 +56,7 @@ export function MapSettingsSheet({ open, onClose, basemap, toggles }: MapSetting
         data-testid="map-settings-scrim"
       />
 
-      <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
+      <div ref={panelRef} className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200 motion-reduce:animate-none">
         {/* Header */}
         <div className="flex items-center justify-between gap-3">
           <h2 id="map-settings-title" className="text-[16px] font-bold text-foreground leading-tight">

@@ -73,7 +73,7 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
 
   return (
     <Sheet open={!!lead} onOpenChange={o => { if (!o) onClose(); }}>
-      <SheetContent side="bottom" className="rounded-t-2xl border-border bg-card p-0 max-h-[92dvh] overflow-y-auto" data-testid="outcome-sheet">
+      <SheetContent side="bottom" hideClose className="rounded-t-2xl border-border bg-card p-0 max-h-[92dvh] overflow-y-auto" data-testid="outcome-sheet">
         {lead && (
           <div className="flex flex-col">
             <div className="flex items-start gap-3 px-5 pt-5 pb-3 border-b border-border">

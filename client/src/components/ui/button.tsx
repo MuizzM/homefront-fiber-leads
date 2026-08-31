@@ -2,6 +2,7 @@ import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva } from 'class-variance-authority';
 import type { VariantProps } from 'class-variance-authority';
+import { Loader2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -49,17 +50,35 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean
+  /**
+   * The one pending treatment for mutation buttons: spinner, disabled,
+   * aria-busy. Replaces the hand-rolled `{m.isPending ? <Loader2/> : null}`
+   * pattern so every submitting button behaves the same. Ignored with
+   * `asChild` (Slot requires exactly one child).
+   */
+  loading?: boolean
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, loading = false, disabled, children, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"
     return (
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        disabled={disabled || (loading && !asChild) || undefined}
+        aria-busy={loading || undefined}
         {...props}
-      />
+      >
+        {loading && !asChild ? (
+          <>
+            <Loader2 aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+            {children}
+          </>
+        ) : (
+          children
+        )}
+      </Comp>
     )
   },
 )

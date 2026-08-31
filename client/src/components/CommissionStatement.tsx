@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { X, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { formatCents, statementSummaryRows, type StatementDocument, type StatementLine } from "@shared/commissionStatement";
 
 // ── Printable commission statement ────────────────────────────────────────────
@@ -36,15 +37,20 @@ const shortDate = (iso: string, tz: string) => {
 };
 
 function Shell({ children, onClose, actions }: { children: React.ReactNode; onClose: () => void; actions?: React.ReactNode }) {
+  // A full-screen viewer is a dialog: semantics, focus containment, Escape,
+  // and focus restore. z-overlay (not a hand-picked 200) keeps toasts - the
+  // feedback for this screen's own Download action - above the viewer.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: true, onClose });
   return (
-    <div className="stmt-overlay fixed inset-0 z-[200] overflow-y-auto bg-overlay backdrop-blur-sm px-3 py-6 sm:py-10">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Commission statement" className="stmt-overlay fixed inset-0 z-overlay overflow-y-auto bg-overlay backdrop-blur-sm px-3 py-6 sm:py-10">
       <div className="stmt-toolbar no-print mx-auto mb-4 flex max-w-[760px] items-center justify-end gap-2">
         {actions}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close statement"
-          className="inline-flex items-center justify-center h-10 w-10 rounded-lg bg-white/10 text-white active:scale-95 transition-transform"
+          className="inline-flex items-center justify-center h-11 w-11 rounded-lg bg-card text-foreground border border-border shadow-sm active:scale-95 transition-transform"
         >
           <X className="w-5 h-5" />
         </button>
@@ -67,7 +73,7 @@ function Paper({ children }: { children: React.ReactNode }) {
 
 export function CommissionStatement({ statementId, onClose }: { statementId: number; onClose: () => void }) {
   const [downloading, setDownloading] = useState(false);
-  const { data: doc, isLoading, isError } = useQuery<StatementDocument>({
+  const { data: doc, isLoading, isError, refetch } = useQuery<StatementDocument>({
     queryKey: ["/api/commission/statements", statementId, "document"],
     queryFn: () => apiRequest("GET", `/api/commission/statements/${statementId}/document`).then(r => r.json()),
   });
@@ -101,8 +107,19 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
             ? <div className="flex items-center gap-2 py-10 text-[13px]" style={{ color: MUTED }}>
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading your statement…
               </div>
-            : <div className="py-10 text-[13px]" style={{ color: MUTED }} data-testid="statement-error">
-                Couldn't load this statement. Close and try again - your pay data is safe.
+            : <div role="alert" className="py-10 text-[13px]" style={{ color: MUTED }} data-testid="statement-error">
+                <p>Couldn't load this statement - your pay data is safe.</p>
+                {/* Inline retry: from a /statements/:id deep link, "close and
+                    try again" meant navigating away and re-finding the row. */}
+                <button
+                  type="button"
+                  onClick={() => { void refetch(); }}
+                  data-testid="statement-retry"
+                  className="mt-4 inline-flex min-h-tap items-center rounded-lg px-4 text-sm font-semibold"
+                  style={{ border: `1px solid ${RULE}`, color: INK }}
+                >
+                  Retry
+                </button>
               </div>}
         </Paper>
       </Shell>
@@ -169,7 +186,7 @@ export function CommissionStatement({ statementId, onClose }: { statementId: num
             type="button"
             onClick={() => window.print()}
             data-testid="statement-print"
-            className="inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-white/10 text-white text-sm font-semibold active:scale-95 transition-transform"
+            className="inline-flex items-center gap-2 h-11 px-4 rounded-lg bg-card text-foreground border border-border shadow-sm text-sm font-semibold active:scale-95 transition-transform"
           >
              Print
           </button>

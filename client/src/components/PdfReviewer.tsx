@@ -9,10 +9,11 @@
 // endpoints are session-gated and tenant-walled; an <object data=url> can't
 // carry the session header, so we fetch then hand it a blob: URL), same pattern
 // as the door-photo / badge-photo viewers.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, X } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 
 export function PdfReviewer({
   url,
@@ -34,6 +35,10 @@ export function PdfReviewer({
 }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Full-screen review is a modal: focus moves in, Tab stays inside, Escape
+  // closes, and focus returns to the opener afterward.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: true, onClose, initialFocus: '[data-testid="pdf-reviewer-close"]' });
   // Set once: a coarse pointer is a phone/tablet, where inline PDF embedding
   // is unreliable (iOS Safari especially).
   const [isCoarsePointer] = useState(() => typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true);
@@ -65,7 +70,7 @@ export function PdfReviewer({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`Review ${title}`} data-testid="pdf-reviewer">
+    <div ref={panelRef} className="fixed inset-0 z-overlay flex flex-col bg-background/95 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`Review ${title}`} data-testid="pdf-reviewer">
       <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <h2 className="min-w-0 truncate text-sm font-semibold text-foreground">{title}</h2>
         <div className="flex shrink-0 items-center gap-2">

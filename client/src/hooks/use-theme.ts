@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type Theme = "dark" | "light";
 const KEY = "hfs-theme";
@@ -19,6 +19,39 @@ function apply(theme: Theme) {
   } catch { /* no document (tests) - the class swap above already threw if so */ }
 }
 
+// ── One shared theme store ────────────────────────────────────────────────────
+// The hook used to hold per-instance useState, and Layout and Profile mount
+// simultaneously: toggling on Profile applied .dark and saved, but Layout's
+// copy still said "light" - its footer button wore the wrong label and its
+// first tap was a visible no-op (re-applying the theme already on screen).
+// useSyncExternalStore over module state makes every subscriber read and
+// write the SAME value.
+let current: Theme = (() => {
+  try {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem(KEY) : null;
+    if (saved === "light" || saved === "dark") return saved;
+  } catch { /* storage blocked - fall through to the default */ }
+  return "light";
+})();
+
+const listeners = new Set<() => void>();
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function setTheme(next: Theme) {
+  if (next === current) return;
+  current = next;
+  apply(next);
+  try { localStorage.setItem(KEY, next); } catch { /* storage blocked - session-only */ }
+  listeners.forEach(l => l());
+}
+
+// Sync the DOM once at module load (idempotent with index.html's pre-paint
+// script, which handles the saved-dark flash before React exists).
+if (typeof document !== "undefined") apply(current);
+
 /**
  * App theme with localStorage persistence.
  *
@@ -30,18 +63,6 @@ function apply(theme: Theme) {
  * the base (:root), dark overrides under `.dark`.
  */
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof localStorage !== "undefined") {
-      const saved = localStorage.getItem(KEY);
-      if (saved === "light" || saved === "dark") return saved;
-    }
-    return "light";
-  });
-
-  useEffect(() => {
-    apply(theme);
-    try { localStorage.setItem(KEY, theme); } catch {}
-  }, [theme]);
-
-  return { theme, setTheme, toggle: () => setTheme(t => (t === "dark" ? "light" : "dark")) };
+  const theme = useSyncExternalStore(subscribe, () => current, () => "light" as Theme);
+  return { theme, setTheme, toggle: () => setTheme(current === "dark" ? "light" : "dark") };
 }

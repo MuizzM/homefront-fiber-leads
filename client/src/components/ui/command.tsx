@@ -43,12 +43,12 @@ const CommandDialog = ({ children, title, description, filter, ...props }: Comma
   return (
     <DialogPrimitive.Root {...props}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-overlay data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-overlay bg-overlay data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           className={cn(
             // Bottom sheet on phones, a floating card a little above centre on
             // desktop - where the eye already is when a shortcut fires.
-            "fixed inset-x-0 bottom-0 z-50 max-h-[86dvh] w-full overflow-hidden rounded-t-2xl border border-border bg-card shadow-lg duration-150",
+            "fixed inset-x-0 bottom-0 z-overlay max-h-[86dvh] w-full overflow-hidden rounded-t-2xl border border-border bg-card shadow-lg duration-150",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-4 data-[state=open]:slide-in-from-bottom-4",
             "sm:bottom-auto sm:left-1/2 sm:top-[14%] sm:max-w-xl sm:-translate-x-1/2 sm:rounded-2xl",
             "sm:data-[state=closed]:fade-out-0 sm:data-[state=open]:fade-in-0 sm:data-[state=closed]:zoom-out-95 sm:data-[state=open]:zoom-in-95 sm:data-[state=closed]:slide-out-to-bottom-0 sm:data-[state=open]:slide-in-from-bottom-0",

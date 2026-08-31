@@ -9,21 +9,31 @@ import { X } from "lucide-react";
 
 export function UpdatePrompt() {
   const [ready, setReady] = useState(false);
+  // Announced text is injected AFTER the live region exists in the DOM - a
+  // region that appears already containing its message is silent on most
+  // screen readers, which made the deploy notice invisible to them.
+  const [announced, setAnnounced] = useState("");
   useEffect(() => {
     const on = () => setReady(true);
     window.addEventListener("hfs:update-ready", on);
     return () => window.removeEventListener("hfs:update-ready", on);
   }, []);
+  useEffect(() => {
+    if (!ready) { setAnnounced(""); return; }
+    const t = setTimeout(() => setAnnounced("Update ready. Reload for the latest improvements."), 80);
+    return () => clearTimeout(t);
+  }, [ready]);
 
-  if (!ready) return null;
+  if (!ready) return <span className="sr-only" aria-live="polite" />;
   return (
     <div
       role="region"
       aria-label="Software update available"
       data-testid="pwa-update-prompt"
-      className="fixed inset-x-4 bottom-[calc(5.75rem+env(safe-area-inset-bottom))] z-[70] flex items-center gap-2 rounded-2xl border border-border bg-card p-2 pl-3 shadow-xl md:inset-x-auto md:bottom-5 md:right-5 md:max-w-sm"
+      className="fixed inset-x-4 bottom-[calc(5.75rem+env(safe-area-inset-bottom))] z-raised flex items-center gap-2 rounded-2xl border border-border bg-card p-2 pl-3 shadow-xl md:inset-x-auto md:bottom-5 md:right-5 md:max-w-sm"
     >
-      <span className="min-w-0 flex-1" aria-live="polite">
+      <span className="sr-only" aria-live="polite">{announced}</span>
+      <span className="min-w-0 flex-1">
         <span className="block text-sm-minus font-semibold text-foreground">Update ready</span>
         <span className="block text-2xs text-muted-foreground">Reload for the latest improvements.</span>
       </span>

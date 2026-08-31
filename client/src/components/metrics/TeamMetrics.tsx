@@ -12,13 +12,14 @@
 // brief asks this feature not to be.
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { SectionLabel } from "@/components/ui/page-scaffold";
 import { useToast } from "@/hooks/use-toast";
+import { useModalA11y } from "@/hooks/use-modal-a11y";
 import { useCan } from "@/lib/capabilities";
 import { MetricCard, CountCard } from "./MetricCard";
 import { ChartFrame, FunnelChart, BarChart } from "./charts";
@@ -260,6 +261,10 @@ function RepDrilldown({ repId, period, onClose }: {
   repId: number; period: PeriodKey; onClose: () => void;
 }) {
   const { toast } = useToast();
+  // Modal contract for the aria-modal claim: focus in, Tab contained,
+  // Escape closes, focus restored to the row that opened the drill-down.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, { active: true, onClose });
   const canNote = useCan("coaching.note.write");
   const [noteBody, setNoteBody] = useState("");
   const [shareWithRep, setShareWithRep] = useState(false);
@@ -292,11 +297,11 @@ function RepDrilldown({ repId, period, onClose }: {
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true"
+    <div className="fixed inset-0 z-overlay flex items-end justify-center sm:items-center" role="dialog" aria-modal="true"
          aria-label="Rep detail">
       <button type="button" className="absolute inset-0 bg-overlay backdrop-blur-[2px]" onClick={onClose}
               aria-label="Close" />
-      <div className="relative max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-t-2xl border border-border bg-background p-4 sm:rounded-2xl">
+      <div ref={panelRef} className="relative max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-t-2xl border border-border bg-background p-4 sm:rounded-2xl">
         {isLoading ? (
           <Skeleton className="h-64 rounded-2xl" />
         ) : isError || !data ? (

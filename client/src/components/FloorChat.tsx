@@ -389,7 +389,7 @@ export function FloorChat({
               disabled={loadingEarlier}
               data-testid="chat-load-earlier"
               className={cn(
-                "inline-flex min-h-[36px] items-center gap-1.5 rounded-full border border-border bg-secondary/60 px-3.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50",
+                "inline-flex min-h-tap items-center gap-1.5 rounded-full border border-border bg-secondary/60 px-3.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50",
                 FOCUS,
               )}
             >
