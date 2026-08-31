@@ -112,8 +112,11 @@ describe("controls whose label could be read at all", () => {
     // Near-white text-red-100 on a 15% destructive tint over a white card
     // measured 1.05:1 - on the CONFIRM step of the control that suppresses a
     // number. text-destructive is built to sit on its own tint: 4.69:1.
+    // Commission-bearing confirms (Sale complete etc) arm in the SUCCESS
+    // token pair instead - a sale confirm must not read as a suppression.
     const src = read("client/src/pages/CallingLead.tsx");
-    expect(src).toContain('armed && "border-destructive bg-destructive/15 text-destructive ring-1 ring-destructive"');
+    expect(src).toContain(': "border-destructive bg-destructive/15 text-destructive ring-1 ring-destructive"');
+    expect(src).toContain('"border-success bg-success/15 text-success ring-1 ring-success"');
     expect(src).not.toContain("text-red-100");
   });
 });
