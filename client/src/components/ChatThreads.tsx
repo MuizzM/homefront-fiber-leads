@@ -591,7 +591,7 @@ export function GroupMembersSheet({
                 disabled={disband.isPending}
                 data-testid="group-disband"
                 className={cn(
-                  "flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-[13px] font-medium text-red-500 hover:bg-red-500/5 disabled:opacity-50",
+                  "flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-[13px] font-medium text-destructive hover:bg-destructive/5 disabled:opacity-50",
                   FOCUS,
                 )}
               >

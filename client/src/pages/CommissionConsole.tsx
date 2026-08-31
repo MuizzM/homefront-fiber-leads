@@ -318,7 +318,7 @@ export default function CommissionConsole() {
                       {ex.type.replace(/_/g, " ").toLowerCase()}
                     </span>
                     <span className="text-muted-foreground">
-                      <button type="button" className="text-primary font-medium underline underline-offset-2 hover:text-primary/80" onClick={() => { const r = ov.rows.find(x => x.repId === ex.repId); if (r) setDrillRep(r); }}>{ex.repName}</button>
+                      <button type="button" className="tap-expand text-primary font-medium underline underline-offset-2 hover:text-primary/80" onClick={() => { const r = ov.rows.find(x => x.repId === ex.repId); if (r) setDrillRep(r); }}>{ex.repName}</button>
                       {" - "}{ex.detail}
                     </span>
                   </div>
@@ -527,7 +527,7 @@ export default function CommissionConsole() {
               </div>
               <a href={`/api/commission/week-export.csv?week=${encodeURIComponent(weekRef)}`}
                 onClick={e => { e.preventDefault(); downloadCsv(weekRef); }}
-                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                className="inline-flex items-center gap-1.5 min-h-11 md:min-h-8 px-3 rounded-lg border border-border text-xs font-semibold text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
                 data-testid="export-csv">
                  Export CSV
               </a>
@@ -910,7 +910,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canDecideAdj, can
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold">Adjustments</span>
             {canAdjust && row.statementId && row.status !== "PAID" && (
-              <button onClick={() => setAdjOpen(v => !v)} className="text-[11px] text-primary hover:underline flex items-center gap-0.5" data-testid="btn-new-adjustment">
+              <button type="button" onClick={() => setAdjOpen(v => !v)} className="tap-expand text-[11px] text-primary hover:underline flex items-center gap-0.5" data-testid="btn-new-adjustment">
                  New
               </button>
             )}

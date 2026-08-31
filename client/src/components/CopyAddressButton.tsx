@@ -41,7 +41,7 @@ export function CopyAddressButton({ text, label = "Copy", className = "h-11 text
       aria-label={`Copy address ${text}`}
       className={`inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-secondary/40 px-3 font-medium text-foreground transition-colors hover:bg-secondary active:scale-[0.98] ${className}`}
     >
-      {copied ? <Check className="w-4 h-4 text-emerald-500" /> : null}
+      {copied ? <Check className="w-4 h-4 text-success" /> : null}
       {copied ? "Copied" : label}
     </button>
   );

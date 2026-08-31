@@ -189,7 +189,7 @@ export function AdminHistory() {
             placeholder="Search action, person, target…"
             aria-label="Search history"
             data-testid="audit-search"
-            className="h-9 w-full rounded-lg border border-border bg-secondary pl-8 pr-3 text-[13px] text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none"
+            className="h-9 w-full rounded-lg border border-border bg-secondary px-3 text-[13px] text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none"
           />
         </div>
         <select

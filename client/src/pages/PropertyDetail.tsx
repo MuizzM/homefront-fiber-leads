@@ -67,7 +67,7 @@ const FIBER_PILL_TONE: Record<string, string> = {
   tenured_fiber: "border-primary/30 bg-primary/10 text-primary",
   existing_fiber: "border-primary/30 bg-primary/10 text-primary",
   copper: "border-border bg-secondary text-secondary-foreground",
-  no_service: "border-rose-500/25 bg-rose-500/10 text-rose-500",
+  no_service: "border-destructive/25 bg-destructive/10 text-destructive",
 };
 
 const fmtTime = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -277,7 +277,7 @@ function PillsRow({ lead, showScore = true }: { lead: Lead; showScore?: boolean 
         <span className={`${pill} border-border bg-secondary tabular-nums text-secondary-foreground`}>Score {lead.leadScore}</span>
       )}
       {lead.leadTag === "hot_lead" && (
-        <span className={`${pill} border-rose-500/25 bg-rose-500/10 font-bold text-rose-500`}>Hot</span>
+        <span className={`${pill} border-destructive/25 bg-destructive/10 font-bold text-destructive`}>Hot</span>
       )}
     </div>
   );
@@ -487,7 +487,7 @@ function SaveState({ state, online }: { state?: string; online: boolean }) {
     queued: online
       ? { icon: CloudUpload, text: "Queued - syncing", cls: "bg-primary/10 border-primary/25 text-primary" }
       : { icon: WifiOff, text: "Saved offline - will sync", cls: "bg-muted border-border text-muted-foreground" },
-    error: { icon: AlertTriangle, text: "Didn't save - will retry", cls: "bg-rose-500/10 border-rose-500/30 text-rose-500" },
+    error: { icon: AlertTriangle, text: "Didn't save - will retry", cls: "bg-destructive/10 border-destructive/30 text-destructive" },
   };
   const m = map[state]; if (!m) return null;
   const Icon = m.icon;

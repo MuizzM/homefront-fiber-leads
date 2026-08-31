@@ -65,7 +65,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
   return (
     <Card className={cn(
       "overflow-hidden rounded-2xl border",
-      p.toppedOut ? "border-emerald-500/40 bg-emerald-500/[0.06]" : "border-border bg-card",
+      p.toppedOut ? "border-success/40 bg-success/[0.06]" : "border-border bg-card",
     )} data-testid="milestone-card">
       <CardContent className={cn("p-4", compact && "p-3")}>
         <div className="flex items-start gap-3">
@@ -87,7 +87,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
           </div>
 
           {p.earnedCents > 0 && (
-            <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success"
+            <span className="shrink-0 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success"
                   data-testid="milestone-earned">
               {usd(p.earnedCents)} earned
             </span>
@@ -113,7 +113,7 @@ export function MilestoneCard({ compact = false }: { compact?: boolean }) {
                 className={cn(
                   "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
                   cleared
-                    ? "bg-emerald-500/15 text-success"
+                    ? "bg-success/10 text-success"
                     : "bg-secondary text-muted-foreground",
                 )}>
                 {r.doors}: {usd(r.rewardCents)}

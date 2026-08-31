@@ -337,11 +337,11 @@ interface BoardEntry {
   sales: number;
 }
 
-/** Gold, silver, bronze - same trio the full leaderboard wears.
- *  First and third used to be the identical `text-warning`, and second was a
- *  raw `text-slate-300` at ~1.9:1 on the light card, so the podium was two
- *  indistinguishable places and one unreadable one. */
-const PODIUM_TONE = ["text-gold-text", "text-muted-foreground", "text-warning"];
+/** Gold, silver, bronze - the SAME trio the full leaderboard wears
+ *  (Leaderboard.tsx MEDAL_TONE: gold / foreground / muted). The two surfaces
+ *  are one tap apart and used to give the same race different medals -
+ *  Board's 2nd was muted and its 3rd amber. */
+const PODIUM_TONE = ["text-gold-text", "text-foreground", "text-muted-foreground"];
 
 function BoardPanel() {
   const { user } = useAuth();

@@ -723,10 +723,11 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           <div className="flex items-center gap-2 mb-2">
             
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Neighborhood Data (ZIP {current.zip})</span>
-            <button onClick={() => refetch()} disabled={isFetching}
-              className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+            <button type="button" onClick={() => refetch()} disabled={isFetching}
+              aria-label="Refresh neighborhood data from Census"
+              className="tap-expand ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
               title="Refresh from Census">
-              <RefreshCw className={`w-3 h-3 ${isFetching ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-3 h-3 ${isFetching ? "animate-spin" : ""}`} aria-hidden="true" />
             </button>
           </div>
           {isLoading ? (
@@ -802,6 +803,11 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <div className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">No operational activity has been logged yet.</div>
           ) : (
             <div className="relative ml-1 space-y-0 before:absolute before:left-[6px] before:top-2 before:bottom-2 before:w-px before:bg-border">
+              {history.length > 12 && (
+                <p className="pb-2 pl-4 text-2xs text-muted-foreground" data-testid="history-truncation-note">
+                  Newest 12 of {history.length} entries.
+                </p>
+              )}
               {history.slice(0, 12).map(item => {
                 const verified = item.type === "status_change" && !!item.verification;
                 const open = verified && openHistoryId === item.id;
@@ -908,7 +914,7 @@ function EnterpriseKpi({ label, value, helper, warning = false }: {
   warning?: boolean;
 }) {
   return (
-    <div className={`min-w-0 rounded-lg border bg-card px-4 py-3.5 ${warning ? "border-amber-500/30" : "border-border"}`}>
+    <div className={`min-w-0 rounded-lg border bg-card px-4 py-3.5 ${warning ? "border-warning/30" : "border-border"}`}>
       <div className="flex items-center justify-between gap-3">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
         
@@ -950,7 +956,10 @@ const LeadTableRow = memo(function LeadTableRow({
   const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
   return (
     <tr data-testid={`card-lead-${lead.id}`} className={`group hover:bg-muted/35 transition-colors${saving ? " opacity-70" : ""}`}>
-      <td className="px-4 py-3"><button onClick={() => !saving && onMap(lead)} data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={titleCaseAddress(lead.address)}>{titleCaseAddress(lead.address)}</span>{(lead.leadScore ?? 0) >= 80 && lead.buyerScore == null && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+      {/* The row's biggest target opens DETAILS, matching the mobile row -
+          it used to navigate away to the map, duplicating the MapPin icon
+          while details hid behind a small trailing icon. */}
+      <td className="px-4 py-3"><button onClick={() => !saving && onOpen(lead)} data-testid={`lead-open-${lead.id}`} aria-label={`Open details for ${lead.address}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate" title={titleCaseAddress(lead.address)}>{titleCaseAddress(lead.address)}</span>{(lead.leadScore ?? 0) >= 80 && lead.buyerScore == null && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-warning/10 text-warning">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
       {/* Buyer score (shared/buyerScore.ts): the household-level "will they
           buy" number. Unscored doors say so rather than showing a zero. */}
       <td className="px-3 py-3">{lead.buyerScore == null && isClosedForScoring(lead.leadStatus) ? null : <BuyerScorePill score={lead.buyerScore} label />}</td>
@@ -964,7 +973,7 @@ const LeadTableRow = memo(function LeadTableRow({
       <td className="px-3 py-3">{!lead.maxDownloadMbps && !lead.lastScannedAt && lead.fiberStatus === "unknown" && !(lead.leadScore ?? 0)
         ? <div className="text-2xs text-muted-foreground">Not scanned yet</div>
         : <><div className="flex items-center gap-1.5 text-xs font-medium">{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100 · {lead.lastScannedAt ? `scanned ${formatActivity(lead.lastScannedAt).toLowerCase()}` : "no scan timestamp"}</div></>}</td>
-      <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-destructive" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
+      <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-destructive" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className={`text-2xs mt-0.5 ${stale ? "font-semibold text-destructive" : "text-muted-foreground"}`}>{stale ? "Stale - no activity in 14 days" : "Record updated"}</div></td>
       <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
       <td className="px-3 py-3">
         {saving ? (
@@ -973,17 +982,17 @@ const LeadTableRow = memo(function LeadTableRow({
           </div>
         ) : (
         <div className="flex items-center justify-end gap-0.5">
-          <button onClick={() => onMap(lead)} title="Show on Field Map" aria-label={`Show ${lead.address} on field map`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><MapPin className="w-3.5 h-3.5" aria-hidden="true" /></button>
-          {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
-          {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
-          <button onClick={() => onOpen(lead)} title="Open details" aria-label={`Open details for ${lead.address}`} className="w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" /></button>
+          <button onClick={() => onMap(lead)} title="Show on Field Map" data-testid={`lead-map-${lead.id}`} aria-label={`Show ${lead.address} on field map`} className="tap-expand w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><MapPin className="w-3.5 h-3.5" aria-hidden="true" /></button>
+          {canOpenCalling && <Link href={`/calling/lead/${lead.id}`} title="Open Calling" aria-label="Open Calling" className="tap-expand w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></Link>}
+          {canAssign && <button onClick={() => onAssign(lead)} title="Assign" aria-label={`Assign ${lead.address}`} className="tap-expand w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" aria-hidden="true" /></button>}
+          <button onClick={() => onOpen(lead)} title="Open details" aria-label={`Open details for ${lead.address}`} className="tap-expand w-9 h-9 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" /></button>
           {/* `reveal-on-hover` rather than `opacity-0 group-hover:opacity-100`:
               this table starts at lg, which an iPad in landscape clears, and a
               hover-only control does not exist on a touch screen. See
               index.css - the fade is scoped to real pointers, and everywhere
               else these are simply always visible. */}
-          {canEdit && <button onClick={() => onEdit(lead)} aria-label={`Edit ${lead.address}`} className="reveal-on-hover h-9 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground">Edit</button>}
-          {canDelete && <button onClick={() => onDelete(lead.id)} aria-label={`Delete ${lead.address}`} className="reveal-on-hover h-9 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-destructive/10 hover:text-destructive">Delete</button>}
+          {canEdit && <button onClick={() => onEdit(lead)} aria-label={`Edit ${lead.address}`} className="reveal-on-hover tap-expand h-9 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground">Edit</button>}
+          {canDelete && <button onClick={() => onDelete(lead.id)} aria-label={`Delete ${lead.address}`} className="reveal-on-hover tap-expand h-9 rounded-md inline-flex items-center px-2 text-xs font-semibold text-muted-foreground hover:bg-destructive/10 hover:text-destructive">Delete</button>}
         </div>
         )}
       </td>
@@ -1604,7 +1613,21 @@ export default function Leads() {
           </div>
         )}
 
-        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}-{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
+        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}-{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><label className="flex items-center gap-1 text-[11px] text-muted-foreground px-2">Page
+              <input
+                type="number"
+                min={1}
+                max={Math.max(totalPages, 1)}
+                value={page + 1}
+                onChange={e => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n) && n >= 1 && n <= Math.max(totalPages, 1)) setPage(n - 1);
+                }}
+                aria-label="Jump to page"
+                data-testid="leads-page-jump"
+                className="h-7 w-14 rounded-md border border-border bg-background px-1.5 text-center text-[11px] tabular-nums focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              />
+              of {Math.max(totalPages, 1)}</label><Button size="sm" variant="outline" className="h-11 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
       </section>
 
       {/* Dialogs */}

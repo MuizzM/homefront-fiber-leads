@@ -75,8 +75,8 @@ const STATUS_TONE: Record<string, string> = {
   HIRED: "bg-sky-500/15 text-info",
   ACTIVATED: "bg-sky-500/15 text-info",
   IN_PROGRESS: "bg-amber-500/15 text-warning",
-  QUALIFIED: "bg-emerald-500/15 text-success",
-  REWARD_PENDING: "bg-emerald-500/15 text-success",
+  QUALIFIED: "bg-success/10 text-success",
+  REWARD_PENDING: "bg-success/10 text-success",
   APPROVED: "bg-emerald-600/20 text-success",
   PAID: "bg-emerald-600/20 text-success",
   REJECTED: "bg-destructive/15 text-destructive",
@@ -147,7 +147,7 @@ function ReferralHero() {
                 {money(inReviewCents)} in review
               </span>
             )}
-            <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success">
+            <span className="inline-flex items-center rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-success">
               {money(link.rewardCents)} per hire
             </span>
           </span>
@@ -444,7 +444,7 @@ function Pipeline({ scope }: { scope: "mine" | "org" }) {
                         ? `Confirm: release the ${money(r.rewardAmountCents)} reward?`
                         : `Approve the ${money(r.rewardAmountCents)} reward for ${r.referredName ?? r.referredEmail ?? "this referral"}`}
                       aria-pressed={armedApprove === r.id}
-                      className={armedApprove === r.id ? "border-emerald-500/50 text-emerald-500" : undefined}
+                      className={armedApprove === r.id ? "border-success/50 text-success" : undefined}
                       disabled={decide.isPending}
                       onClick={() => {
                         if (armedApprove === r.id) { setArmedApprove(null); decide.mutate({ id: r.id, action: "approve" }); }

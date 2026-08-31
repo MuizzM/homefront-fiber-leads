@@ -66,9 +66,17 @@ function MetricStrip({ items, loading }: {
   items: { label: string; value: string | number; sub?: string }[];
   loading?: boolean;
 }) {
+  // The column count follows the item count: the rep-shaped strip has 4
+  // items, and the fixed 2/3/6 grid painted its empty tracks as solid
+  // border-colored slabs beside the real tiles from sm up. Static classes
+  // only - Tailwind cannot see a computed grid-cols-{n}.
+  const cols =
+    items.length === 4
+      ? "grid-cols-2 xl:grid-cols-4"
+      : "grid-cols-2 sm:grid-cols-3 xl:grid-cols-6";
   return (
     <div
-      className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3 xl:grid-cols-6"
+      className={`grid gap-px overflow-hidden rounded-xl border border-border bg-border ${cols}`}
       data-testid="metric-strip"
     >
       {items.map((m, i) => {

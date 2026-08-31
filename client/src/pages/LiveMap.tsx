@@ -23,6 +23,9 @@ export default function LiveMap() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<Map<number, any>>(new Map());
+  // Live references to each popup's time line, so a refreshed ping can
+  // update an already-open popup in place.
+  const popupTimeElsRef = useRef(new Map<number, HTMLElement>());
   const [mapReady, setMapReady] = useState(false);
   // Library load failed. Without this the skeleton below is the terminal state:
   // a blocked CDN, a captive portal or a dropped LTE fetch left this screen
@@ -143,7 +146,7 @@ export default function LiveMap() {
     const currentIds = new Set(pings.map(p => p.repId));
     // Remove stale markers
     markersRef.current.forEach((marker, repId) => {
-      if (!currentIds.has(repId)) { marker.remove(); markersRef.current.delete(repId); }
+      if (!currentIds.has(repId)) { marker.remove(); markersRef.current.delete(repId); popupTimeElsRef.current.delete(repId); }
     });
     // Add/update markers
     pings.forEach(ping => {
@@ -156,7 +159,13 @@ export default function LiveMap() {
       el.appendChild(initials);
       el.title = ping.repName;
       if (markersRef.current.has(ping.repId)) {
-        markersRef.current.get(ping.repId).setLngLat([ping.lng, ping.lat]);
+        const existing = markersRef.current.get(ping.repId);
+        existing.setLngLat([ping.lng, ping.lat]);
+        // The marker keeps its ORIGINAL element - update that one, not the
+        // fresh `el` built above (which is discarded on this path).
+        existing.getElement().title = ping.repName;
+        const liveTimeEl = popupTimeElsRef.current.get(ping.repId);
+        if (liveTimeEl) liveTimeEl.textContent = `Last seen: ${new Date(ping.pingAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`;
       } else {
         // Build popup using DOM nodes — never setHTML with user data
         const popupEl = document.createElement("div");
@@ -169,6 +178,7 @@ export default function LiveMap() {
         timeEl.textContent = `Last seen: ${new Date(ping.pingAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`;
         popupEl.appendChild(nameEl);
         popupEl.appendChild(timeEl);
+        popupTimeElsRef.current.set(ping.repId, timeEl);
         if (ping.accuracy) {
           const accEl = document.createElement("p");
           accEl.style.cssText = "color:#7a9ab5;font-size:10px;margin:2px 0 0";
@@ -203,7 +213,7 @@ export default function LiveMap() {
         <div className="flex items-center gap-2">
           {/* Clocked in reps count */}
           {isManager && (
-            <Badge className={activeCount > 0 ? "bg-emerald-500/15 text-success border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
+            <Badge className={activeCount > 0 ? "bg-success/10 text-success border-success/25" : "bg-secondary text-muted-foreground border-border"}>
                <span className="tabular-nums">{activeCount}</span>&nbsp;active
             </Badge>
           )}
@@ -324,11 +334,11 @@ export default function LiveMap() {
                   <span className="text-sm text-foreground font-medium">Field Status</span>
                 </div>
                 <div className="space-y-1">
-                  <Badge className={clockStatus?.clockedIn ? "bg-emerald-500/15 text-success border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
+                  <Badge className={clockStatus?.clockedIn ? "bg-success/10 text-success border-success/25" : "bg-secondary text-muted-foreground border-border"}>
                     {clockStatus?.clockedIn ? "Clocked In" : "Clocked Out"}
                   </Badge>
                   {tracking && (
-                    <Badge className="bg-sky-500/15 text-info border-sky-500/30 ml-2">
+                    <Badge className="bg-info/10 text-info border-info/25 ml-2">
                        Sharing Location
                     </Badge>
                   )}
@@ -350,7 +360,7 @@ export default function LiveMap() {
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full bg-primary border-2 border-white" />
+                  <div className="w-4 h-4 rounded-full border-2 border-white" style={{ background: "#3EA394" }} />
                   <span className="text-xs text-muted-foreground">Active rep</span>
                 </div>
                 <div className="flex items-center gap-2">

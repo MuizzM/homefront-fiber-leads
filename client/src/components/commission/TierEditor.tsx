@@ -229,7 +229,7 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
                     data-testid={`tier-max-${i}`}
                     onChange={e => onMaxChange(i, e.target.value)}
                     onBlur={() => onMaxBlur(i)}
-                    className="h-9 w-16 rounded-md border border-border bg-background px-2 text-sm tabular-nums focus:border-teal-500 focus:outline-none"
+                    className="h-9 w-16 rounded-md border border-border bg-background px-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                   />
                 </>
               )}
@@ -247,15 +247,16 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
                   data-testid={`tier-rate-${i}`}
                   onChange={e => onRateChange(i, e.target.value)}
                   onBlur={() => onRateBlur(i)}
-                  className="h-9 w-24 rounded-md border border-border bg-background pl-5 pr-2 text-sm tabular-nums focus:border-teal-500 focus:outline-none"
+                  className="h-9 w-24 rounded-md border border-border bg-background pl-5 pr-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                 />
               </div>
               <span className="shrink-0 text-xs text-muted-foreground">each</span>
 
               {/* Stripe puts remove in the row's top-right corner rather than in
                   the field flow, so it never competes with the inputs for the
-                  same tap target. Kept at 32px and always rendered — a control
-                  that appears only on hover is unusable on a touch screen. */}
+                  same tap target. Drawn at 28px, hit area floored at 44px via
+                  tap-expand; always rendered — a control that appears only on
+                  hover is unusable on a touch screen. */}
               <button
                 type="button"
                 onClick={() => removeBand(i)}
@@ -263,7 +264,7 @@ export function TierEditor({ tiers, onChange, disabled = false, maxBands = 8 }: 
                 aria-label={`Remove band ${bandLabel(t.minimumSales, t.maximumSales)}`}
                 title={tiers.length <= 1 ? "A plan needs at least one band" : "Remove this band"}
                 data-testid={`tier-remove-${i}`}
-                className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
+                className="tap-expand absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-25"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

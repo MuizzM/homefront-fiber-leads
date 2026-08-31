@@ -1,6 +1,6 @@
 import { FOCUS } from "@/lib/a11y";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { StatStrip, StatTile } from "@/components/ui/page-scaffold";
 import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -69,9 +69,10 @@ export default function Leaderboard() {
     : (since || until) ? `${since || "start"} to ${until || "now"}`
     : "a custom range";
 
-  const { data: board = [], isLoading, isError, refetch } = useQuery<LeaderboardEntry[]>({
+  const { data: board = [], isLoading, isError, refetch, isPlaceholderData } = useQuery<LeaderboardEntry[]>({
     queryKey: [url],
     refetchInterval: 30000, // refresh every 30s
+    placeholderData: keepPreviousData,
   });
 
   // The signed-in rep's own row — powers the tinted self-row + rank summary
@@ -90,7 +91,7 @@ export default function Leaderboard() {
   );
 
   return (
-    <div className="w-full max-w-6xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6">
+    <div aria-busy={isPlaceholderData || undefined} className={`w-full max-w-6xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6 ${isPlaceholderData ? "opacity-60 transition-opacity" : ""}`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>

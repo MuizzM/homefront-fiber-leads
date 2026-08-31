@@ -114,7 +114,7 @@ export function TrainingAccessPanel() {
         
         <Input
           value={filter} onChange={e => setFilter(e.target.value)}
-          placeholder="Find a rep by name or email" className="pl-9"
+          placeholder="Find a rep by name or email"
           data-testid="training-access-search" aria-label="Find a rep"
         />
       </div>

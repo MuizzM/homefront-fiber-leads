@@ -183,7 +183,7 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                   placeholder="Quick note (optional)…" data-testid="outcome-note"
                   className="w-full rounded-xl bg-background border border-border px-3 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none" />
               ) : (
-                <button onClick={() => setNoteOpen(true)} className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground font-medium">
+                <button type="button" onClick={() => setNoteOpen(true)} className="inline-flex min-h-tap items-center gap-1.5 text-[13px] text-muted-foreground font-medium">
                    Add a note
                 </button>
               )}

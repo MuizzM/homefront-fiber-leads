@@ -11,7 +11,7 @@
 // frames every conversation as a sales league table, which is exactly what the
 // brief asks this feature not to be.
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -105,9 +105,13 @@ export function TeamMetrics() {
   });
   const [openRep, setOpenRep] = useState<number | null>(null);
 
-  const { data, isLoading, isError, isFetching, refetch } = useQuery<TeamResponse>({
+  const { data, isLoading, isError, isFetching, refetch, isPlaceholderData } = useQuery<TeamResponse>({
     queryKey: [`/api/metrics/team?period=${period}`],
     refetchInterval: METRICS_REFETCH_MS,
+    // A period switch keeps the previous period's table on screen (dimmed)
+    // while the new one loads - the whole workspace, PeriodChips included,
+    // used to unmount into a single 256px skeleton on every tap.
+    placeholderData: keepPreviousData,
   });
 
   const rows = useMemo(() => {
@@ -143,7 +147,7 @@ export function TeamMetrics() {
   const k = data?.kpis;
 
   return (
-    <div className="space-y-5">
+    <div aria-busy={isPlaceholderData || undefined} className={`space-y-5 ${isPlaceholderData ? "opacity-60 transition-opacity" : ""}`}>
       <PeriodChips value={period} onChange={setPeriod} />
 
       <section>

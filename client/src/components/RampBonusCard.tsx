@@ -9,6 +9,7 @@
 // the first commission cheque, not a salary, and a rep who can see it expiring
 // spends the days rather than drifting through them.
 import { useQuery } from "@tanstack/react-query";
+import { useTabActive } from "@/lib/tabActivity";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,9 +42,12 @@ export interface RampCardData {
 }
 
 export function useMyRampBonus(enabled = true) {
+  // Paused while the stage is hidden - the same gate MilestoneCard documents.
+  // Ungated, this polled every 60s per rep for screens nobody was looking at.
+  const tabActive = useTabActive();
   return useQuery<RampCardData>({
     queryKey: ["/api/me/ramp-bonus"],
-    refetchInterval: 60_000,
+    refetchInterval: tabActive ? 60_000 : false,
     enabled,
   });
 }
@@ -65,7 +69,7 @@ export function RampBonusCard() {
     <Card
       className={cn(
         "overflow-hidden rounded-2xl border",
-        data.earnedToday ? "border-emerald-500/40 bg-emerald-500/[0.06]" : "border-border bg-card",
+        data.earnedToday ? "border-success/40 bg-success/[0.06]" : "border-border bg-card",
       )}
       data-testid="ramp-card"
     >
@@ -91,7 +95,7 @@ export function RampBonusCard() {
 
               <span className={cn(
                 "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
-                data.earnedToday ? "bg-emerald-500/15 text-success"
+                data.earnedToday ? "bg-success/10 text-success"
                                  : "bg-secondary text-muted-foreground",
               )} data-testid="ramp-reward">
                 {data.earnedToday ? `${usd(data.rewardCents)} earned` : `${usd(data.rewardCents)}/day`}
@@ -126,7 +130,7 @@ export function RampBonusCard() {
                 </p>
                 <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-background" aria-hidden="true">
                   <div className={cn("h-full rounded-full transition-[width] duration-500 ease-out",
-                                     c.paid ? "bg-emerald-500" : "bg-primary")}
+                                     c.paid ? "bg-success" : "bg-primary")}
                        style={{ width: `${lessonPct}%` }} data-testid="ramp-completion-bar" />
                 </div>
                 <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
@@ -152,7 +156,8 @@ export function RampBonusCard() {
 
 /** Header + card. Renders nothing once there is nothing left to earn. */
 export function RampBonusSection() {
-  const { data } = useMyRampBonus();
+  const { data, isLoading } = useMyRampBonus();
+  if (isLoading) return <Skeleton className="h-[168px] w-full rounded-2xl" data-testid="ramp-section-loading" />;
   if (!data?.visible) return null;
   return (
     <section className="space-y-2" data-testid="ramp-section">
