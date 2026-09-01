@@ -26,6 +26,7 @@ import {
   previewNextPass, startNextPass, listTerritoryPasses, currentPassOf,
 } from "./territoryPass";
 import { isTerritoryPassAction, type TerritoryPassAction } from "@shared/territoryPass";
+import { displayCityCasing } from "@shared/addressKey";
 import { rawDb } from "./db";
 import {
   emitLeadEvent, onLeadEvent, eventsSince, leadEventsCursor, leadEventsEpoch,
@@ -8444,11 +8445,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Label built in JS (filter(Boolean).join) so NULL/empty city or state
     // collapses exactly as the loop's `[city, state]` template did — distinct
     // (city, state) groups sharing a label accumulate.
+    //
+    // Grouped case-insensitively: the scan-target projectors copy the
+    // provider's UPPERCASE city verbatim while imports title-case it, so a
+    // byte-exact GROUP BY split every scanned town in two ("Concord, NC"
+    // 27,979 beside "CONCORD, NC" 588). MAX(city) prefers the lowercase-first
+    // variant, which in this data is the title-cased spelling.
     const terrRows = rawDb.prepare(
-      `SELECT city, state, COUNT(*) AS n FROM leads ${where} GROUP BY city, state`,
+      `SELECT MAX(city) AS city, MAX(state) AS state, COUNT(*) AS n FROM leads ${where}
+        GROUP BY lower(trim(COALESCE(city,''))), lower(trim(COALESCE(state,'')))`,
     ).all(...params) as Array<{ city: string | null; state: string | null; n: number }>;
     for (const r of terrRows) {
-      const territory = [r.city, r.state].filter(Boolean).join(", ");
+      const territory = [displayCityCasing(r.city), String(r.state ?? "").trim().toUpperCase()]
+        .filter(Boolean).join(", ");
       if (territory) stats.byTerritory[territory] = (stats.byTerritory[territory] || 0) + r.n;
     }
     statsMemo.set(scopeKey, { at: Date.now(), body: stats, epochPart, dbVer });
@@ -12041,9 +12050,12 @@ export function registerSaasRoutes(app: any) {
       sessions = sessions.filter((session) => visibleRepIds.has(session.repId));
     }
     const memberNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
+    // null, not "Unknown": the client already renders `Rep #<id>` for a null
+    // name, which at least identifies the orphaned roster row — the server
+    // sending the string "Unknown" pre-empted that fallback.
     const result = sessions.map(s => ({
       ...s,
-      repName: memberNames.get(s.repId) ?? "Unknown",
+      repName: memberNames.get(s.repId) ?? null,
     }));
     res.json(result);
   });

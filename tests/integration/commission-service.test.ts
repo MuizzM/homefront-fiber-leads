@@ -556,6 +556,25 @@ describe("week overview + Sunday closeout", () => {
     expect(ov.exceptions.some(e => e.type === "PLAN_NOT_ACCEPTED" && e.repId === 1004)).toBe(false);
   });
 
+  // Regression (prod audit 2026-08-31): a deactivated rep — an offboarded
+  // seat, or a fixture like "TEST - HFS Automation" — must not sit in the
+  // closeout queue forever nagging about a plan they will never accept.
+  it("drops PLAN_NOT_ACCEPTED for deactivated reps without touching their rows", () => {
+    const versionId = svc.listRepAssignments(T1, 1004)[0].commission_plan_version_id;
+    rawDb.prepare(`INSERT INTO team_members (id, name, tenant_id, role, reports_to_id, active, created_at)
+                   VALUES (1044,'TEST - HFS Automation',?, 'rep', NULL, 1, ?)`).run(T1, new Date().toISOString());
+    svc.assignPlanVersionToRep(T1, 1, { repId: 1044, commissionPlanVersionId: versionId, effectiveFrom: "2026-01-01" });
+
+    let ov = svc.getWeekOverview(T1, 1, WEEK_REF, null);
+    expect(ov.exceptions.some(e => e.type === "PLAN_NOT_ACCEPTED" && e.repId === 1044)).toBe(true);
+
+    rawDb.prepare(`UPDATE team_members SET active = 0 WHERE id = 1044`).run();
+    ov = svc.getWeekOverview(T1, 1, WEEK_REF, null);
+    expect(ov.exceptions.some(e => e.type === "PLAN_NOT_ACCEPTED" && e.repId === 1044)).toBe(false);
+    // The rep's row itself stays visible — deactivation hides the nag, not the money.
+    expect(ov.rows.some(r => r.repId === 1044)).toBe(true);
+  });
+
   it("batch FINALIZE locks every open statement (recalc-then-lock), idempotently", () => {
     const out = svc.batchTransitionWeek(T1, 1, WEEK_REF, "FINALIZE");
     const fieldRes = out.results.find(r => r.repId === 1004)!;

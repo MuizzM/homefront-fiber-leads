@@ -90,6 +90,20 @@ export default function Leaderboard() {
     { knocks: 0, contacts: 0, callbacks: 0, sales: 0 }
   );
 
+  // On a 129-rep roster with one active crew, the board is a handful of real
+  // rows on top of a hundred zero rows "ranked" 2..129 by alphabet. Collapse
+  // the no-activity tail behind a disclosure. Rank comes from the FULL board's
+  // index (precomputed here), so hiding rows never renumbers anyone — and
+  // myIdx/totals above keep reading the full board.
+  const rankedRows = board.map((entry, idx) => ({
+    entry, idx,
+    idle: entry.sales === 0 && entry.knocks === 0 && entry.contacts === 0 && entry.callbacks === 0,
+  }));
+  const idleCount = rankedRows.filter(r => r.idle).length;
+  const [showIdle, setShowIdle] = useState(false);
+  // Never hide the viewer's own row — finding yourself instantly is the point.
+  const visibleRows = rankedRows.filter(r => showIdle || !r.idle || r.entry.rep.id === user?.teamMemberId);
+
   return (
     <div aria-busy={isPlaceholderData || undefined} className={`w-full max-w-6xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6 ${isPlaceholderData ? "opacity-60 transition-opacity" : ""}`}>
       {/* Header */}
@@ -233,7 +247,7 @@ export default function Leaderboard() {
         </Card>
       ) : (
         <Card className="bg-card border-border overflow-hidden">
-          {board.map((entry, idx) => {
+          {visibleRows.map(({ entry, idx }) => {
             const rankCls = RANK_COLORS[idx] ?? "text-muted-foreground";
             const teamPct = totals.sales > 0 ? (entry.sales / totals.sales) * 100 : 0;
             const isManager = entry.rep.role === "manager";
@@ -301,6 +315,16 @@ export default function Leaderboard() {
               </div>
             );
           })}
+          {idleCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowIdle(v => !v)}
+              className={`w-full min-h-11 px-4 py-3 text-[13px] font-medium text-muted-foreground hover:bg-muted/40 ${FOCUS}`}
+              data-testid="leaderboard-idle-toggle"
+            >
+              {showIdle ? "Hide" : "Show"} {idleCount} rep{idleCount === 1 ? "" : "s"} with no activity in this range
+            </button>
+          )}
         </Card>
       )}
     </div>

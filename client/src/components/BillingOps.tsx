@@ -19,7 +19,7 @@ interface Plan { key: PlanKey; name: string; monthlyCredits: number | null; mont
 interface Row {
   tenantId: number; companyName: string; slug: string;
   enabled: boolean; planKey: PlanKey | null; planName: string | null; state: BillingState | null;
-  unlimited: boolean; creditsIncluded: number; creditsRemaining: number | null; creditsUsed: number;
+  unlimited: boolean; creditsIncluded: number; creditsAvailable: number | null; creditsRemaining: number | null; creditsUsed: number;
   usagePct: number; level: "ok" | "warn" | "critical" | "exhausted"; overageUsed: number;
 }
 
@@ -192,7 +192,7 @@ export function BillingOps() {
                       ) : (
                         <>
                           <div className="flex items-center justify-between text-[12px] mb-1">
-                            <span className="text-muted-foreground tabular-nums">{t.creditsUsed.toLocaleString()} / {t.creditsIncluded.toLocaleString()} credits</span>
+                            <span className="text-muted-foreground tabular-nums">{t.creditsUsed.toLocaleString()} / {(t.creditsAvailable ?? t.creditsIncluded).toLocaleString()} credits</span>
                             <span className="text-muted-foreground tabular-nums">{(t.creditsRemaining ?? 0).toLocaleString()} left{t.overageUsed > 0 ? ` · +${t.overageUsed} over` : ""}</span>
                           </div>
                           <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">

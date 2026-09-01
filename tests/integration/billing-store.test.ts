@@ -125,6 +125,19 @@ describe("state machine + plan + credits persistence", () => {
     B.grantCredits(T1, 500, "purchase");
     expect(B.billingSummary(T1).creditsRemaining).toBe(before + 500);
   });
+  // Regression (prod audit 2026-08-31): the summary must expose the effective
+  // cap (plan + rollover + granted) as creditsAvailable so no UI divides used
+  // by the bare plan allowance — the prod card read "13,277 of 1,500 used"
+  // beside a 3% bar because the client had only creditsIncluded to divide by.
+  it("billingSummary exposes creditsAvailable = plan + granted, consistent with used/remaining/pct", () => {
+    B.ensureBilling(T1, { planKey: "growth", state: "active" }); // 1500 included
+    B.grantCredits(T1, 500_007, "grant");
+    const s = B.billingSummary(T1);
+    expect(s.creditsIncluded).toBe(1500);
+    expect(s.creditsAvailable).toBe(501_507);
+    expect(s.creditsRemaining).toBe(501_507 - s.creditsUsed);
+    expect(s.usagePct).toBe(Math.round((s.creditsUsed / 501_507) * 100));
+  });
   it("resetBillingCycle clears usage and can roll unused credits", () => {
     B.ensureBilling(T1, { planKey: "starter", state: "active" });
     setIncluded(T1, 10);
