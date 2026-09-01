@@ -282,6 +282,35 @@ function generateForTenant(tenantId: number, nowMs: number): number {
         insight.title, insight.explanation, insight.suggestedAction,
         JSON.stringify(insight.supportingMetrics), insight.dataLink,
       );
+      // The window rolls daily, so without this every (rep, rule) accretes one
+      // near-identical row per day forever ("37 insights", 8 of them the same
+      // card). Retire superseded windows — carrying a dismissal forward first,
+      // so "it will not come back" survives the window roll the way the
+      // dismiss toast promises.
+      rawDb.prepare(`
+        UPDATE rep_coaching_insights
+           SET dismissed_at = COALESCE(dismissed_at, (
+                 SELECT MAX(old.dismissed_at) FROM rep_coaching_insights old
+                  WHERE old.tenant_id = ? AND old.rep_id = ? AND old.insight_type = ?
+                    AND old.period_end < ?
+               )),
+               dismissed_by_user_id = COALESCE(dismissed_by_user_id, (
+                 SELECT old.dismissed_by_user_id FROM rep_coaching_insights old
+                  WHERE old.tenant_id = ? AND old.rep_id = ? AND old.insight_type = ?
+                    AND old.period_end < ? AND old.dismissed_at IS NOT NULL
+                  ORDER BY old.period_end DESC LIMIT 1
+               ))
+         WHERE tenant_id = ? AND rep_id = ? AND insight_type = ?
+           AND period_start = ? AND period_end = ?
+      `).run(
+        tenantId, f.repId, insight.insightType, periodEnd,
+        tenantId, f.repId, insight.insightType, periodEnd,
+        tenantId, f.repId, insight.insightType, periodStart, periodEnd,
+      );
+      rawDb.prepare(`
+        DELETE FROM rep_coaching_insights
+         WHERE tenant_id = ? AND rep_id = ? AND insight_type = ? AND period_end < ?
+      `).run(tenantId, f.repId, insight.insightType, periodEnd);
       produced++;
     }
   }

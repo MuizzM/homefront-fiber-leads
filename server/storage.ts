@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
 import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION } from "./addressKey";
-import { streetKeyOf, addressIdentityIssues } from "@shared/addressKey";
+import { streetKeyOf, addressIdentityIssues, displayCityCasing } from "@shared/addressKey";
 import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
 import { ensureAdminAuditSchema } from "./adminAudit";
 import { runKineticBuildMigrations as ensureKineticBuildSchema } from "./kineticBuildMigrations";
@@ -965,6 +965,9 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_activity_log_at ON activity_log(at)`,
     `CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_clock_sessions_rep ON clock_sessions(rep_id)`,
+    // The runaway-session sweep scans open sessions only; without this it
+    // walks the whole table every hour.
+    `CREATE INDEX IF NOT EXISTS idx_clock_sessions_open ON clock_sessions(clocked_out)`,
     `CREATE INDEX IF NOT EXISTS idx_location_pings_rep ON location_pings(rep_id, ping_at)`,
     `CREATE INDEX IF NOT EXISTS idx_commissions_rep ON commissions(rep_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_knocked_at ON knock_log(knocked_at)`,
@@ -3855,9 +3858,20 @@ export class Storage implements IStorage {
       params.push(...repScope);
     }
     const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
-    return rawDb.prepare(
-      `SELECT DISTINCT city, state FROM leads ${where} ORDER BY state, city`
+    // Case-insensitive dedupe: scan projectors write UPPERCASE cities while
+    // imports title-case them, and a byte-exact DISTINCT put both spellings in
+    // the territory dropdown. Display casing is canonicalized in JS; the list
+    // filter downstream is lower()-compared, so any spelling matches the same
+    // rows.
+    const rows = rawDb.prepare(
+      `SELECT MAX(city) AS city, MAX(state) AS state FROM leads ${where}
+        GROUP BY lower(trim(COALESCE(city,''))), lower(trim(COALESCE(state,'')))
+        ORDER BY state, city`
     ).all(...params) as Array<{ city: string; state: string }>;
+    return rows.map(r => ({
+      city: displayCityCasing(r.city),
+      state: String(r.state ?? "").trim().toUpperCase(),
+    }));
   }
 
   // One scoped query returns map fields plus the latest visit/count. The
@@ -5594,6 +5608,24 @@ export class Storage implements IStorage {
     return db.update(clockSessions).set({ clockedOut: now, durationMinutes })
       .where(eq(clockSessions.id, sessionId)).returning().get();
   }
+  /** Close every open session older than the cap, stamping clock-out at
+   *  clock-in + cap so the recorded duration is the cap, not the leak.
+   *  Nothing else ever closes a stranded session: clock-out requires the rep
+   *  to still exist in the caller's tenant, so a session whose rep was deleted
+   *  (Field Hours' "Unknown · since 04:57 AM") was unclosable, and a phone
+   *  that died mid-shift left a 111-hour "shift" accruing hourly pay and
+   *  blocking payroll finalization via the OPEN_CLOCK_SESSION exception. */
+  closeRunawayClockSessions(capMinutes: number): Array<{ id: number; repId: number; tenantId: number | null }> {
+    const cutoff = new Date(Date.now() - capMinutes * 60_000).toISOString();
+    const rows = rawDb.prepare(`
+      UPDATE clock_sessions
+         SET clocked_out = strftime('%Y-%m-%dT%H:%M:%fZ', clocked_in, '+' || ? || ' minutes'),
+             duration_minutes = ?
+       WHERE clocked_out IS NULL AND clocked_in < ?
+      RETURNING id, rep_id AS repId, tenant_id AS tenantId
+    `).all(capMinutes, capMinutes, cutoff) as Array<{ id: number; repId: number; tenantId: number | null }>;
+    return rows;
+  }
   getActiveClockSession(repId: number): ClockSession | undefined {
     return db.select().from(clockSessions)
       .where(and(eq(clockSessions.repId, repId), isNull(clockSessions.clockedOut))).get();
@@ -6155,11 +6187,22 @@ export class Storage implements IStorage {
       ).run(String(email).toLowerCase().slice(0, 254), kind, success ? 1 : 0, reason.slice(0, 60), (ip ?? "").slice(0, 64) || null, (userAgent ?? "").slice(0, 200) || null, tid);
     } catch { /* auth audit must never break the login flow */ }
   }
+  // Synthetic identities used by the deployment's own latency/auth probes.
+  // They fail OTP on purpose, so without this filter a tenant-scoped read
+  // shows ~85 "probe-*.diag@example.com" rows as real failed sign-ins on the
+  // org-facing Login Activity screen (they ride the tenant_id IS NULL clause
+  // that keeps genuinely mistyped emails visible).
+  private static readonly DIAGNOSTIC_EMAIL_FILTER =
+    `email NOT LIKE '%.diag@example.com' AND email NOT LIKE '%.probe@example.com'`;
   getLoginAttempts(limit = 200, email?: string, tenantId?: number | null): any[] {
     const where: string[] = [];
     const args: any[] = [];
     if (email) { where.push("email = ?"); args.push(String(email).toLowerCase()); }
-    if (tenantId != null) { where.push("(tenant_id = ? OR tenant_id IS NULL)"); args.push(tenantId); }
+    if (tenantId != null) {
+      where.push("(tenant_id = ? OR tenant_id IS NULL)");
+      args.push(tenantId);
+      where.push(Storage.DIAGNOSTIC_EMAIL_FILTER);
+    }
     const sql = `SELECT * FROM login_attempts ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY created_at DESC LIMIT ?`;
     return rawDb.prepare(sql).all(...args, limit) as any[];
   }
@@ -6168,7 +6211,7 @@ export class Storage implements IStorage {
     return rawDb.prepare(
       `SELECT email, COUNT(*) AS attempts, SUM(success) AS successes, MAX(created_at) AS last_at,
               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures
-         FROM login_attempts ${scoped ? "WHERE tenant_id = ? OR tenant_id IS NULL" : ""} GROUP BY email ORDER BY last_at DESC`,
+         FROM login_attempts ${scoped ? `WHERE (tenant_id = ? OR tenant_id IS NULL) AND ${Storage.DIAGNOSTIC_EMAIL_FILTER}` : ""} GROUP BY email ORDER BY last_at DESC`,
     ).all(...(scoped ? [tenantId] : [])) as any[];
   }
 

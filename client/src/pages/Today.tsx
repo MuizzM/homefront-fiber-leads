@@ -146,6 +146,11 @@ export default function Today() {
   });
 
   const myRow = useMemo(() => (boardQ.data ?? []).find(r => r.rep.id === user?.teamMemberId) ?? null, [boardQ.data, user?.teamMemberId]);
+  // A login with no roster seat (an admin, typically) has nothing to clock in
+  // or count — without this gate every counter silently rendered 0, which
+  // reads as "no activity" instead of "not a rep". Metrics/Referrals already
+  // say this out loud; Today must agree with them.
+  const hasSeat = user?.teamMemberId != null;
   const pins = pinsQ.data?.pins ?? [];
 
   const [skip, setSkip] = useState<Set<number>>(new Set());
@@ -276,11 +281,13 @@ export default function Today() {
         )}
 
         {/* Reserve the clock-in card's slot while its status loads, so the card
-            doesn't pop in above the hero and shift the tap targets. */}
-        {clockQ.isLoading && <Skeleton className="mt-3 h-[62px] w-full rounded-xl" />}
+            doesn't pop in above the hero and shift the tap targets. Seatless
+            logins get none of the clock affordances — a clock-in with no seat
+            would record a session no roster row owns ("Unknown" in Field Hours). */}
+        {hasSeat && clockQ.isLoading && <Skeleton className="mt-3 h-[62px] w-full rounded-xl" />}
         {/* A failed status fetch must not silently remove the way to start a
             paid shift — say what happened and give the retry. */}
-        {clockQ.isError && (
+        {hasSeat && clockQ.isError && (
           <div role="alert" className="mt-3 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
             <span className="text-[13px] text-muted-foreground flex-1">Couldn't check your clock status.</span>
             <button onClick={() => clockQ.refetch()}
@@ -289,7 +296,16 @@ export default function Today() {
             </button>
           </div>
         )}
-        {clockQ.data && !clockQ.data.clockedIn && (
+        {!hasSeat && (
+          <div className="mt-3 rounded-xl border border-border bg-card px-4 py-3" data-testid="today-no-seat">
+            <p className="text-[13px] font-semibold text-foreground">No field seat on this account</p>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">
+              Doors, sales and field hours are recorded against a roster seat. Link this login to a rep
+              record in Team management if it should work doors.
+            </p>
+          </div>
+        )}
+        {hasSeat && clockQ.data && !clockQ.data.clockedIn && (
           <button onClick={() => clockIn.mutate()} disabled={clockIn.isPending} data-testid="today-clock-in"
             className={`mt-3 w-full flex items-center gap-3 rounded-xl bg-card border border-border px-4 py-3 text-left active:scale-[.99] transition-transform disabled:opacity-60 hover:border-primary/30 ${FOCUS}`}>
             
@@ -302,6 +318,7 @@ export default function Today() {
             All four facts stay visible at phone width. Each chip is also a
             route to the screen that owns the number, so no metric is a dead
             end or hidden behind an undiscoverable horizontal swipe. */}
+        {hasSeat && (
         <div className="mt-4" data-testid="today-glance">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <GlanceChip to="/leaderboard" label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)}
@@ -326,6 +343,7 @@ export default function Today() {
             </div>
           )}
         </div>
+        )}
 
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop).
             On a failed fetch, say the count is unknown rather than implying zero. */}

@@ -648,21 +648,27 @@ export function registerRepMetricsRoutes(app: Express, deps: Deps) {
       // Team yield comes from the rollup rather than the provider feed, so it
       // still reports something real when the carrier integration is dark -
       // which it is in this org today.
+      //
+      // "Team" here means the manager chain (reports_to_id). With no managers
+      // assigned, every rep folds into one bucket — labelled for what it IS
+      // ("No team lead assigned"), because 'Unassigned' read as a data bug
+      // when it was actually the org's structure. The tm.tenant_id guard keeps
+      // a cross-tenant rep id (orphaned rollup row) out of this tenant's table.
       const teams = (() => {
         try {
           return rawDb.prepare(`
-            SELECT COALESCE(lead.name, 'Unassigned') AS label,
+            SELECT COALESCE(lead.name, 'No team lead assigned') AS label,
                    SUM(m.doors_attempted)  AS doorsAttempted,
                    SUM(m.contacts)         AS contacts,
                    SUM(m.submitted_orders) AS submitted,
                    SUM(m.installed_orders) AS installed,
                    SUM(m.paid_commission_cents) AS paidCents
               FROM rep_daily_metrics m
-              JOIN team_members tm ON tm.id = m.rep_id
+              JOIN team_members tm ON tm.id = m.rep_id AND tm.tenant_id = ?
               LEFT JOIN team_members lead ON lead.id = tm.reports_to_id
              WHERE m.tenant_id = ? AND m.metric_date BETWEEN ? AND ?
              GROUP BY label ORDER BY submitted DESC LIMIT 50
-          `).all(tenantId, from, to);
+          `).all(tenantId, tenantId, from, to);
         } catch { return []; }
       })();
 
@@ -974,24 +980,37 @@ function readInsights(tenantId: number, repIds: readonly number[], includeDismis
   if (repIds.length === 0) return [];
   const placeholders = repIds.map(() => "?").join(",");
   try {
+    // The generator writes one row per (rep, rule, rolling window) and the
+    // window rolls daily, so raw rows are 6-8 near-identical cards per finding.
+    // Keep only the NEWEST window per (rep, rule). The dismissal filter sits
+    // OUTSIDE the partition on purpose: dismissing the newest window must hide
+    // the rule, not resurface last week's copy of the same card.
     const rows = rawDb.prepare(`
-      SELECT i.id, i.rep_id AS repId, tm.name AS repName, i.period_start AS periodStart,
-             i.period_end AS periodEnd, i.insight_type AS insightType, i.severity,
-             i.title, i.explanation, i.suggested_action AS suggestedAction,
-             i.supporting_metrics_json AS supportingMetricsJson, i.data_link AS dataLink,
-             i.acknowledged_at AS acknowledgedAt, i.dismissed_at AS dismissedAt
-        FROM rep_coaching_insights i
-        LEFT JOIN team_members tm ON tm.id = i.rep_id
-       WHERE i.tenant_id = ? AND i.rep_id IN (${placeholders})
-         ${includeDismissed ? "" : "AND i.dismissed_at IS NULL"}
+      SELECT * FROM (
+        SELECT i.id, i.rep_id AS repId, tm.name AS repName, i.period_start AS periodStart,
+               i.period_end AS periodEnd, i.insight_type AS insightType, i.severity,
+               i.title, i.explanation, i.suggested_action AS suggestedAction,
+               i.supporting_metrics_json AS supportingMetricsJson, i.data_link AS dataLink,
+               i.acknowledged_at AS acknowledgedAt, i.dismissed_at AS dismissedAt,
+               ROW_NUMBER() OVER (
+                 PARTITION BY i.rep_id, i.insight_type
+                 ORDER BY i.period_end DESC, i.id DESC
+               ) AS rn
+          FROM rep_coaching_insights i
+          LEFT JOIN team_members tm ON tm.id = i.rep_id
+         WHERE i.tenant_id = ? AND i.rep_id IN (${placeholders})
+      )
+       WHERE rn = 1
+         ${includeDismissed ? "" : "AND dismissedAt IS NULL"}
        ORDER BY
-         CASE i.severity WHEN 'urgent' THEN 0 WHEN 'coaching_needed' THEN 1
-                         WHEN 'positive' THEN 2 ELSE 3 END,
-         i.period_end DESC
+         CASE severity WHEN 'urgent' THEN 0 WHEN 'coaching_needed' THEN 1
+                       WHEN 'positive' THEN 2 ELSE 3 END,
+         periodEnd DESC
        LIMIT ?
     `).all(tenantId, ...repIds, INSIGHT_ROW_CAP) as any[];
     return rows.map((r) => ({
       ...r,
+      rn: undefined,
       supportingMetrics: safeJson(r.supportingMetricsJson),
       supportingMetricsJson: undefined,
     }));

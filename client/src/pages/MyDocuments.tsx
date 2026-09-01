@@ -441,7 +441,24 @@ export default function MyDocuments() {
 
       {query.isLoading && <div className="h-40 rounded-2xl bg-card border border-border animate-pulse" role="status" aria-busy="true" aria-label="Loading your documents" />}
       {query.isError && <div className="rounded-2xl bg-card border border-destructive/25 p-6 text-center"><p className="text-sm font-semibold">Couldn’t load your documents</p><Button variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>Try again</Button></div>}
-      {data?.noRepProfile && <div className="rounded-2xl border border-warning/25 bg-card p-5" data-testid="document-account-mismatch"><p className="text-sm font-semibold">This signing link is for a rep account</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">You are currently signed in as {user?.email || "another account"}. Sign out, then use the email address that received the onboarding message. No document has been opened or signed.</p><Button className="mt-4 w-full sm:w-auto" variant="outline" onClick={() => logout()} data-testid="switch-document-account">Sign out and switch account</Button></div>}
+      {/* noRepProfile conflates two situations: a rep opening a signing link
+          from the wrong account (sign out and switch is the fix), and an
+          admin/manager whose login simply has no rep seat reaching this page
+          from their own nav (there is no signing link, and "sign out" is
+          nonsense advice). Branch on role so each reader gets their truth. */}
+      {data?.noRepProfile && (user?.role === "admin" || user?.role === "super_admin" || user?.role === "manager") && (
+        <div className="rounded-2xl border border-border bg-card p-5" data-testid="document-admin-no-profile">
+          <p className="text-sm font-semibold">No rep documents on this account</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            This login ({user?.email || "your account"}) is not linked to a rep seat, so there are no
+            agreements for it to sign. Rep paperwork is issued and tracked from Rep Onboarding.
+          </p>
+          <Button asChild className="mt-4 w-full sm:w-auto" variant="outline">
+            <a href="#/applications" data-testid="document-open-onboarding">Open Rep Onboarding</a>
+          </Button>
+        </div>
+      )}
+      {data?.noRepProfile && !(user?.role === "admin" || user?.role === "super_admin" || user?.role === "manager") && <div className="rounded-2xl border border-warning/25 bg-card p-5" data-testid="document-account-mismatch"><p className="text-sm font-semibold">This signing link is for a rep account</p><p className="mt-1 text-xs leading-relaxed text-muted-foreground">You are currently signed in as {user?.email || "another account"}. Sign out, then use the email address that received the onboarding message. No document has been opened or signed.</p><Button className="mt-4 w-full sm:w-auto" variant="outline" onClick={() => logout()} data-testid="switch-document-account">Sign out and switch account</Button></div>}
       {data && !data.noRepProfile && !data.configured && <div className="rounded-2xl bg-card border border-warning/25 p-4 flex items-start gap-3"><div><p className="text-sm font-semibold">Onboarding email is temporarily unavailable</p><p className="text-xs text-muted-foreground mt-1">Existing agreements remain available to review, sign, and download. Your manager cannot issue new ones until Resend is connected.</p></div></div>}
 
       {data && !data.noRepProfile && (

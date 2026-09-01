@@ -245,3 +245,19 @@ export function addressIdentityOf(address: string | null | undefined): AddressId
 export function streetKeyOf(address: string | null | undefined): string {
   return addressIdentityOf(address).street;
 }
+
+/**
+ * Display casing for a city name that may arrive as any of "Concord",
+ * "CONCORD" or "concord" depending on which importer wrote it (scan
+ * projectors copy the provider's uppercase verbatim; imports title-case).
+ * A mixed-case spelling is presumed intentional ("McAdenville", "Ball
+ * Ground") and kept; single-case spellings are title-cased per word.
+ * Display only — every city comparison in the stack is lower()-folded, so
+ * this never changes which rows a filter matches.
+ */
+export function displayCityCasing(city: string | null | undefined): string {
+  const c = String(city ?? "").trim();
+  if (!c) return "";
+  if (/[a-z]/.test(c) && /[A-Z]/.test(c)) return c;
+  return c.toLowerCase().replace(/(^|[\s\-'./])([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase());
+}

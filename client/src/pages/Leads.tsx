@@ -6,7 +6,7 @@ import {
   LEADS_PAGE_SIZE, isLeadsListKey, leadMatchesListFilters, leadsListQueryOptions,
   upsertLeadIntoLists, type LeadListItem, type LeadsListResponse,
 } from "@/lib/leadsListQuery";
-import { WATCHLIST_QUERY, type WatchlistItem } from "@/components/fiber/ComingSoonWatchlist";
+import { WATCHLIST_QUERY, type WatchlistResult } from "@/components/fiber/ComingSoonWatchlist";
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -1160,12 +1160,15 @@ export default function Leads() {
   });
   const bs = leadStats?.byStatus ?? {};
   const canSeeScanOps = user?.role === "admin" || user?.role === "manager";
-  const { data: comingSoonWatchlist } = useQuery<WatchlistItem[] | null>({
+  const { data: comingSoonWatchlist } = useQuery<WatchlistResult | null>({
     ...WATCHLIST_QUERY,
     enabled: canSeeScanOps,
   });
-  const activeComingSoon = (comingSoonWatchlist ?? []).filter(item => item.status === "active" || item.status == null);
+  const activeComingSoon = (comingSoonWatchlist?.items ?? []).filter(item => item.status === "active" || item.status == null);
   const hotComingSoon = activeComingSoon.filter(item => item.urgency === "hot").length;
+  // When the payload hit the server's row cap these counts are floors, not
+  // totals — say so with a "+" instead of presenting the cap as exact.
+  const comingSoonTruncated = comingSoonWatchlist?.truncated === true;
 
   // Distinct states + cities for the dropdowns (cities scoped to the chosen
   // state). Memoised: this is a Set-dedup + sort over every facet row, and it
@@ -1533,7 +1536,7 @@ export default function Leads() {
                 Fresh neighborhoods
               </Button>
               <Button variant="outline" size="sm" className="h-9" onClick={() => navigate("/fiber")}>
-                Coming soon {activeComingSoon.length}{hotComingSoon > 0 ? ` · ${hotComingSoon} hot` : ""}
+                Coming soon {activeComingSoon.length.toLocaleString()}{comingSoonTruncated ? "+" : ""}{hotComingSoon > 0 ? ` · ${hotComingSoon}${comingSoonTruncated ? "+" : ""} hot` : ""}
               </Button>
             </div>
           </div>

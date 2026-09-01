@@ -710,3 +710,45 @@ describe("field activity and privacy settings", () => {
     expect(res.status).toBe(403); // manager cannot read it at all
   });
 });
+
+// ── Coaching board dedup (prod audit 2026-08-31) ─────────────────────────────
+//
+// The generator writes one row per (rep, rule, rolling 7-day window) and the
+// window rolls daily, so the raw table holds 6-8 near-identical rows per
+// finding. The board must show only the NEWEST window per (rep, rule) — and
+// dismissing that one card must hide the rule instead of resurfacing last
+// week's copy of it.
+
+describe("coaching board window dedup", () => {
+  const shiftDay = (iso: string, days: number) =>
+    new Date(new Date(`${iso}T12:00:00Z`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
+
+  it("keeps one card per (rep, rule) — the newest window — and dismissal hides the rule", async () => {
+    const windowRow = (periodStart: string, periodEnd: string, title: string) =>
+      rawDb.prepare(
+        `INSERT INTO rep_coaching_insights (tenant_id, rep_id, period_start, period_end, insight_type,
+           severity, title, explanation, suggested_action)
+         VALUES (1,?,?,?,'fresh_territory_unworked','coaching_needed',?,'x','y')`,
+      ).run(repA2Rep, periodStart, periodEnd, title);
+    windowRow(shiftDay(TODAY, -8), shiftDay(TODAY, -2), "stale window");
+    windowRow(shiftDay(TODAY, -7), shiftDay(TODAY, -1), "middle window");
+    windowRow(shiftDay(TODAY, -6), TODAY, "newest window");
+
+    const res = await request("/api/metrics/insights", adminSession);
+    expect(res.status).toBe(200);
+    const { insights } = await res.json();
+    const mine = insights.filter((i: any) => i.repId === repA2Rep && i.insightType === "fresh_territory_unworked");
+    expect(mine.length).toBe(1);
+    expect(mine[0].title).toBe("newest window");
+    expect(mine[0].periodEnd).toBe(TODAY);
+
+    // Dismissing the surviving card silences the RULE — the middle/stale
+    // windows must not pop back up in its place.
+    const dismiss = await request(`/api/metrics/insights/${mine[0].id}/dismiss`, adminSession, { method: "POST" });
+    expect(dismiss.status).toBe(200);
+    const after = await request("/api/metrics/insights", adminSession);
+    const remaining = (await after.json()).insights
+      .filter((i: any) => i.repId === repA2Rep && i.insightType === "fresh_territory_unworked");
+    expect(remaining.length).toBe(0);
+  });
+});

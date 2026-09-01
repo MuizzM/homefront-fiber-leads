@@ -9,7 +9,7 @@
 import { rawDb } from "./db";
 import {
   PLANS, type PlanKey, type BillingState, type OverageMode, type CreditState,
-  canTransition, consumeCredit, creditsRemaining, usageFraction, usageLevel,
+  canTransition, consumeCredit, creditsCap, creditsRemaining, usageFraction, usageLevel,
   resetCycle, portalAccess, isScanningAllowed,
 } from "../shared/billing";
 
@@ -274,6 +274,11 @@ export interface BillingSummary {
   scanningAllowed: boolean;
   unlimited: boolean;
   creditsIncluded: number;
+  /** Effective cap this cycle = plan allowance + rollover + granted. This is
+   *  the denominator behind usagePct/creditsRemaining; null = unlimited.
+   *  creditsIncluded is only the plan's base allowance — rendering it as the
+   *  meter denominator is the "13,277 of 1,500" defect. */
+  creditsAvailable: number | null;
   creditsRemaining: number | null; // null = unlimited
   creditsUsed: number;
   overageUsed: number;
@@ -291,7 +296,7 @@ export function billingSummary(tenantId: number): BillingSummary {
   if (!row) {
     return {
       enabled: false, planKey: null, planName: null, state: null, access: "full", scanningAllowed: true,
-      unlimited: false, creditsIncluded: 0, creditsRemaining: null, creditsUsed: 0, overageUsed: 0,
+      unlimited: false, creditsIncluded: 0, creditsAvailable: 0, creditsRemaining: null, creditsUsed: 0, overageUsed: 0,
       usagePct: 0, level: "ok", overageMode: null, seatsPaid: 0, trialEndsAt: null, cycleEnd: null,
     };
   }
@@ -306,6 +311,7 @@ export function billingSummary(tenantId: number): BillingSummary {
     scanningAllowed: isScanningAllowed(row.state),
     unlimited: row.unlimited,
     creditsIncluded: row.creditsIncluded,
+    creditsAvailable: row.unlimited ? null : creditsCap(cs),
     creditsRemaining: Number.isFinite(remaining) ? remaining : null,
     creditsUsed: row.creditsUsed,
     overageUsed: row.overageUsed,

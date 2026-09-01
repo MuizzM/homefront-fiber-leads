@@ -1986,7 +1986,10 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
         detail: `${row.qualifiedSaleCount + row.pendingSaleCount} sale(s) this week but no commission plan assigned - these pay $0 until a plan is set.` });
     }
 
-    if (structure && !acceptedAt && row.status !== "NO_PLAN") {
+    // Deactivated reps keep their rows (money they earned stays visible) but
+    // must not nag the closeout queue about a plan they will never accept —
+    // an offboarded or fixture rep otherwise sits in "Needs review" forever.
+    if (structure && !acceptedAt && row.status !== "NO_PLAN" && rep.active !== false) {
       exceptions.push({ type: "PLAN_NOT_ACCEPTED", repId: rep.id, repName: rep.name,
         detail: "Commission plan has not been accepted by the rep yet." });
     }

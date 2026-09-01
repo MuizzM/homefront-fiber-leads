@@ -566,6 +566,12 @@ const longInactivity: Rule = (ctx) => {
   const { facts } = ctx;
   if (facts.longestInactiveSeconds < 2 * 3600) return null;
   if (facts.doorsAttempted < 5) return null; // no activity at all is a different rule
+  // "While clocked in" must be literally true. With no shift recorded,
+  // computePace still measures gaps over a synthetic all-day window while
+  // activeSeconds stays 0 - which produced cards claiming an 18h gap inside a
+  // 0s shift. A gap can also never exceed the clocked-in time it sits inside.
+  if (facts.activeSeconds <= 0) return null;
+  if (facts.longestInactiveSeconds >= facts.activeSeconds) return null;
   return {
     insightType: "long_inactive_period",
     severity: "neutral",

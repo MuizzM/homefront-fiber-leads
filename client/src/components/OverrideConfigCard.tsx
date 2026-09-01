@@ -138,6 +138,14 @@ export function OverrideConfigCard() {
           </div>
         </div>
       )}
+      {/* Enabled-with-$0/$0 is a valid save that pays nothing — a silent no-op
+          an admin reads as "overrides are on". Say it out loud. */}
+      {enabled && Number(shownTeamLead || 0) === 0 && Number(shownManager || 0) === 0 && (
+        <p className="mt-2 text-[12px] text-warning" data-testid="override-zero-warning">
+          Overrides are on but both amounts are $0.00, so no override will pay out. Enter an amount,
+          or turn the toggle off.
+        </p>
+      )}
 
       <div className="mt-3 flex justify-end">
         <Button

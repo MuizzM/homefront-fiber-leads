@@ -109,15 +109,24 @@ export interface CreditState {
   unlimited: boolean;     // enterprise custom
 }
 
+/** The cycle's effective cap: plan allowance + rollover + granted/purchased.
+ *  Every meter (remaining, fraction, level) divides by THIS — never by the
+ *  bare plan allowance, which reads "13,277 of 1,500" the moment credits are
+ *  granted on top of the plan. */
+export function creditsCap(c: CreditState): number {
+  if (c.unlimited) return Infinity;
+  return c.included + c.rollover + c.purchased;
+}
+
 export function creditsRemaining(c: CreditState): number {
   if (c.unlimited) return Infinity;
-  return Math.max(0, c.included + c.rollover + c.purchased - c.used);
+  return Math.max(0, creditsCap(c) - c.used);
 }
 
 /** 0..>1 — fraction of the allowance consumed (>1 means into overage). */
 export function usageFraction(c: CreditState): number {
   if (c.unlimited) return 0;
-  const cap = c.included + c.rollover + c.purchased;
+  const cap = creditsCap(c);
   return cap <= 0 ? 1 : c.used / cap;
 }
 

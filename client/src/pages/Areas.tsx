@@ -302,12 +302,17 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
         <span className={cn(CHIP, meta.chip, "shrink-0")}>{meta.label}</span>
       </div>
 
+      {/* Knocked counts doors with a logged field knock; Sold counts every
+          door in the polygon whose CURRENT status is sold, however it got
+          there (import, central disposition, pre-area history). Sold > Knocked
+          is therefore legitimate — but without the title hints, "2 knocked /
+          10 sold" reads as impossible arithmetic. */}
       <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
         <CardStat label="Doors" value={row.total} />
-        <CardStat label="Knocked" value={row.knocked} />
+        <CardStat label="Knocked" value={row.knocked} title="Doors in this area with at least one logged knock" />
         {/* Sold is the number a manager triages by — the one quiet tint on the
             card, so the eye lands there first without the card shouting. */}
-        <CardStat label="Sold" value={row.sold} emphasis />
+        <CardStat label="Sold" value={row.sold} emphasis title="Doors in this area currently marked sold, including sales made without a logged knock" />
       </dl>
 
       <div
@@ -339,9 +344,9 @@ function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => vo
   );
 }
 
-function CardStat({ label, value, emphasis }: { label: string; value: number; emphasis?: boolean }) {
+function CardStat({ label, value, emphasis, title }: { label: string; value: number; emphasis?: boolean; title?: string }) {
   return (
-    <div className={cn("rounded-xl py-1.5", emphasis ? "bg-primary/10" : "bg-secondary/50")}>
+    <div className={cn("rounded-xl py-1.5", emphasis ? "bg-primary/10" : "bg-secondary/50")} title={title}>
       <dt className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
       <dd className="text-base font-bold leading-tight tabular-nums text-foreground">{value.toLocaleString()}</dd>
     </div>
