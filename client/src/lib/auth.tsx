@@ -1,7 +1,8 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient, bustInflightGetShare } from "@/lib/queryClient";
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
+import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient, bustInflightGetShare, invalidateRequestScope } from "@/lib/queryClient";
 import { clearPdfBlobCache } from "@/lib/pdfBlobCache";
 import { toast } from "@/hooks/use-toast";
+import { withRequestDeadline } from "@/lib/requestDeadline";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -35,6 +36,8 @@ interface AuthCtx {
   sessionId: string | null;
   isFirstRun: boolean;
   loading: boolean;
+  statusError?: string | null;
+  retryStatus?: () => void;
   login: (sessionId: string, user: AuthUser) => void;
   logout: () => Promise<void>;
 }
@@ -123,8 +126,9 @@ function touchPersistedSession() {
 // The snapshot only ever hydrates alongside a persisted session id on a NETWORK
 // failure — a real 401 still logs out and clears it.
 const USER_KEY = "hfs.user";
-function readPersistedUser(): AuthUser | null {
+function readPersistedUser(sessionId: string): AuthUser | null {
   try {
+    if (window.localStorage?.getItem(SID_KEY) !== sessionId) return null;
     const raw = window.localStorage?.getItem(USER_KEY);
     if (!raw) return null;
     const u = JSON.parse(raw);
@@ -138,172 +142,195 @@ function writePersistedUser(u: AuthUser | null) {
   } catch { /* storage blocked */ }
 }
 
+interface AuthStatus {
+  isFirstRun: boolean;
+  currentUser: AuthUser | null;
+  accessRevoked?: boolean;
+}
+
+async function fetchAuthStatus(sessionId: string, signal?: AbortSignal): Promise<AuthStatus> {
+  return withRequestDeadline(async requestSignal => {
+    const res = await fetch(`${API_BASE}/api/auth/status`, {
+      headers: { "x-session-id": sessionId }, signal: requestSignal,
+    });
+    // Only the status endpoint's successful, complete answer may disown a
+    // session. A proxy/DB error (even JSON) is not an authentication decision.
+    if (!res.ok) throw new Error("Unable to check your session. Please try again.");
+    const data: AuthStatus = await res.json();
+    if (!data || typeof data.isFirstRun !== "boolean"
+      || !(data.currentUser === null || (typeof data.currentUser?.id === "number" && typeof data.currentUser?.role === "string"))) {
+      throw new Error("Unable to check your session. Please try again.");
+    }
+    return data;
+  }, 8_000, signal);
+}
+
 let _memSession: string | null = readPersistedSession();
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [sid, setSid] = useState<string | null>(null);
   const [isFirstRun, setIsFirstRun] = useState(false);
-  const [loading, setLoading] = useState(true);
+  // Anonymous visitors can use Login immediately; it needs no status payload.
+  const [loading, setLoading] = useState(Boolean(_memSession));
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const statusRequest = useRef<AbortController | null>(null);
+  const statusVersion = useRef(0);
+  const [initialIdentity] = useState(() => _memSession
+    ? { sid: _memSession, user: readPersistedUser(_memSession) } : null);
+  const identity = useRef(initialIdentity);
 
   useEffect(() => {
-    checkStatus(_memSession);
+    if (_memSession) void checkStatus(_memSession);
+    return () => statusRequest.current?.abort();
   }, []);
 
-  // Keep the client deadline moving while the app is actually being used, so a
-  // rep who opens it daily is never signed out - the mirror of the server's
-  // sliding renewal. Refreshed on mount, whenever the tab comes back to the
-  // foreground, and hourly; all three are local writes, never a request.
   useEffect(() => {
     if (!sid) return;
     touchPersistedSession();
     const onVisible = () => { if (document.visibilityState === "visible") touchPersistedSession(); };
+    // Always recheck the CURRENT identity after reconnection. A one-off listener
+    // holding an old session could previously resurrect it after account switch.
+    const onOnline = () => { if (_memSession === sid) void checkStatus(sid); };
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
     const timer = window.setInterval(touchPersistedSession, 60 * 60 * 1000);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
       window.clearInterval(timer);
     };
   }, [sid]);
 
-  // Global session-expiry recovery. A 401 is NOT by itself proof the session
-  // died: a deploy restart mid-request, a momentary DB lock, a proxy hiccup, or
-  // one endpoint rejecting for its own reason all surface as a single 401 — and
-  // hard-clearing on any of them is what bounced reps to Login mid-shift, often
-  // several times a day. So CONFIRM against /api/auth/status (the one endpoint
-  // whose whole job is answering "is this session real?") and sign out only when
-  // the server actually disowns it. A network failure keeps the rep signed in —
-  // the offline path already handles that. Queued knocks are never lost either
-  // way; they resync after sign-in.
   useEffect(() => {
-    let confirming: Promise<void> | null = null; // single-flight: a burst of 401s asks once
+    let confirming: Promise<void> | null = null;
+    let disposed = false;
     setUnauthorizedHandler(() => {
       if (!_memSession || confirming) return;
       const suspect = _memSession;
-      let revoked = false;
+      const version = ++statusVersion.current;
       confirming = (async () => {
-        try {
-          const res = await fetch(`${API_BASE}/api/auth/status`, { headers: { "x-session-id": suspect } });
-          const data = await res.json();
-          if (data.currentUser) {
-            // Session is alive — the 401 was transient. Stay signed in and let
-            // the failed call retry on its own; refresh the offline snapshot.
-            writePersistedUser(data.currentUser);
-            setUser(data.currentUser);
-            return;
-          }
-          // Removed from the team (offboarded / login deactivated) rather than
-          // simply timed out. Say so, so a rep who was kicked mid-shift isn't
-          // left retyping a code that will never work.
-          revoked = Boolean(data.accessRevoked);
-        } catch {
-          return; // couldn't reach the server — assume the session is fine
+        let data: AuthStatus;
+        try { data = await fetchAuthStatus(suspect); }
+        catch { return; } // Offline, timeout and server errors do not revoke access.
+        if (disposed || _memSession !== suspect || statusVersion.current !== version) return;
+        if (data.currentUser) {
+          adoptUser(suspect, data.currentUser);
+          return;
         }
-        if (_memSession !== suspect) return; // re-logged-in while we were asking
-        _memSession = null;
-        writePersistedSession(null);
-        writePersistedUser(null); // a confirmed 401 ends offline grace too
-        // P1-11 (K3 swarm): identity changed — purge ALL query state. Previously
-        // only the disk snapshot was dropped on manual logout; the whole in-memory
-        // cache (leads, team, stats) survived into the next login on the same
-        // device, and the 401 path cleared nothing at all.
-        try { bustInflightGetShare(); queryClient.clear(); } catch { /* */ }
-        clearPersistedQueryCache();
-        purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
-        clearPdfBlobCache(); // agreement PDFs are identity-scoped too
-        setSid(null);
-        syncSessionToQueryClient(null);
-        setUser(null);
-        // The most important messages in the app must outlive a slow first
-        // load: default info toasts auto-dismiss in 2.5s, which on field LTE
-        // can be BEFORE the lazy Toaster chunk has even mounted.
-        toast(revoked
+        clearIdentity();
+        toast(data.accessRevoked
           ? { title: "Access removed", description: "Your account was deactivated by your team. Contact your manager if this is unexpected.", variant: "destructive", duration: 30_000 }
-          : { title: "Session expired", description: "Please sign back in - anything you logged is saved and will sync.", variant: "destructive", duration: 30_000 });
+          : { title: "Session expired", description: "Please sign back in to continue.", variant: "destructive", duration: 30_000 });
       })().finally(() => { confirming = null; });
     });
-    return () => setUnauthorizedHandler(null);
+    return () => { disposed = true; setUnauthorizedHandler(null); };
   }, []);
 
-  async function checkStatus(existingSid: string | null) {
+  function clearIdentity() {
+    statusVersion.current += 1;
+    invalidateRequestScope();
+    statusRequest.current?.abort();
+    statusRequest.current = null;
+    _memSession = null;
+    identity.current = null;
+    writePersistedSession(null);
+    writePersistedUser(null);
+    try { bustInflightGetShare(); queryClient.clear(); } catch { /* storage recovery continues */ }
+    clearPersistedQueryCache();
+    purgeSessionScopedKeys();
+    clearPdfBlobCache();
+    setSid(null);
+    syncSessionToQueryClient(null);
+    setUser(null);
+    setLoading(false);
+    setStatusError(null);
+  }
+
+  function adoptUser(sessionId: string, nextUser: AuthUser) {
+    const prior = identity.current?.user;
+    const reassigned = prior && (prior.id !== nextUser.id || prior.tenantId !== nextUser.tenantId
+      || prior.teamMemberId !== nextUser.teamMemberId);
+    if (prior && (reassigned || prior.role !== nextUser.role || !!prior.isSuperAdmin !== !!nextUser.isSuperAdmin)) {
+      // Cached manager/tenant data is no longer authorized after a scope change.
+      // Same-person role changes keep their pending field writes; reassignment
+      // must never replay those writes under a different tenant or rep identity.
+      invalidateRequestScope();
+      queryClient.clear();
+      clearPersistedQueryCache();
+      purgeSessionScopedKeys({ preservePendingWrites: !reassigned });
+      clearPdfBlobCache();
+    }
+    identity.current = { sid: sessionId, user: nextUser };
+    setUser(nextUser);
+    setSid(sessionId);
+    syncSessionToQueryClient(sessionId);
+    // Another tab may have signed in since this request began. Never overwrite
+    // that tab's persisted user with a response belonging to our older session.
+    try { if (window.localStorage?.getItem(SID_KEY) === sessionId) writePersistedUser(nextUser); }
+    catch { /* current in-memory identity remains usable */ }
+  }
+
+  async function checkStatus(existingSid: string) {
+    const version = ++statusVersion.current;
+    statusRequest.current?.abort();
+    const controller = new AbortController();
+    statusRequest.current = controller;
+    setStatusError(null);
+    setLoading(!user);
+    const isCurrent = () => !controller.signal.aborted && _memSession === existingSid && statusVersion.current === version;
     try {
-      const res = await fetch(`${API_BASE}/api/auth/status`, {
-        headers: existingSid ? { "x-session-id": existingSid } : {},
-      });
-      const data = await res.json();
+      const data = await fetchAuthStatus(existingSid, controller.signal);
+      if (!isCurrent()) return;
       setIsFirstRun(data.isFirstRun);
       if (data.currentUser) {
-        setUser(data.currentUser);
-        writePersistedUser(data.currentUser); // refresh the offline-grace snapshot
-        if (existingSid) {
-          setSid(existingSid);
-          syncSessionToQueryClient(existingSid);
-        }
-      } else if (existingSid) {
-        // The server ANSWERED and disowned this session. Clearing it matters
-        // twice over: the dead token was re-sent on every cold start until its
-        // 6-day client deadline, and the surviving offline-grace snapshot
-        // could later resurrect the signed-out identity's cached shell on an
-        // offline launch.
-        writePersistedSession(null);
-        writePersistedUser(null);
+        adoptUser(existingSid, data.currentUser);
+      } else {
+        clearIdentity();
       }
     } catch {
-      // NETWORK failure (dead zone / offline PWA launch) — not an auth rejection
-      // (a rejected session resolves with no currentUser instead). Hydrate the
-      // last-known user so the cached shell, pins and knock queue stay usable,
-      // and re-verify the moment connectivity returns. A true expiry surfaces
-      // as a 401 on the first real API call and logs out via the global handler.
-      if (existingSid) {
-        const snapshot = readPersistedUser();
-        if (snapshot) {
-          setUser(snapshot);
-          setSid(existingSid);
-          syncSessionToQueryClient(existingSid);
-          window.addEventListener("online", () => void checkStatus(existingSid), { once: true });
-        }
+      if (!isCurrent()) return;
+      const snapshot = identity.current?.sid === existingSid ? identity.current.user : readPersistedUser(existingSid);
+      if (snapshot) {
+        // Existing offline grace: the server still authorizes every API action.
+        setUser(snapshot);
+        setSid(existingSid);
+        syncSessionToQueryClient(existingSid);
+      } else {
+        setStatusError("We couldn't check your session. Check your connection and try again.");
       }
+    } finally {
+      if (isCurrent()) setLoading(false);
     }
-    setLoading(false);
   }
 
   function login(newSid: string, u: AuthUser) {
-    // P1-11: a NEW identity is arriving — evict everything the previous
-    // identity cached before the new session hydrates (user switch in one tab),
-    // including any still-in-flight GETs the new identity could otherwise join.
-    try { bustInflightGetShare(); queryClient.clear(); clearPersistedQueryCache(); purgeSessionScopedKeys(); clearPdfBlobCache(); } catch { /* */ }
+    clearIdentity(); // Purge data and invalidate responses from the old identity.
     _memSession = newSid;
-    writePersistedSession(newSid); // persist across page reloads (sessionStorage)
+    writePersistedSession(newSid);
     setSid(newSid);
     syncSessionToQueryClient(newSid);
     setUser(u);
-    writePersistedUser(u); // offline-grace snapshot
+    identity.current = { sid: newSid, user: u };
+    writePersistedUser(u);
     setIsFirstRun(false);
   }
 
   async function logout() {
-    if (sid) {
-      try {
-        await fetch(`${API_BASE}/api/auth/logout`, {
-          method: "POST",
-          headers: { "x-session-id": sid },
-        });
-      } catch {}
-    }
-    _memSession = null;
-    writePersistedSession(null); // clear persisted session
-    writePersistedUser(null); // clear the offline-grace snapshot
-    try { bustInflightGetShare(); queryClient.clear(); } catch { /* */ }
-    clearPersistedQueryCache(); // drop the on-disk dashboard SWR snapshot
-    purgeSessionScopedKeys(); // SEC-B: pin snapshots, pending notes, knock queue
-    clearPdfBlobCache(); // agreement PDFs are identity-scoped too
-    setSid(null);
-    syncSessionToQueryClient(null);
-    setUser(null);
+    const previousSid = _memSession;
+    clearIdentity(); // Signing out locally must not wait on a stalled connection.
+    if (!previousSid) return;
+    try {
+      await withRequestDeadline(signal => fetch(`${API_BASE}/api/auth/logout`, {
+        method: "POST", signal,
+        headers: { "x-session-id": previousSid, "x-csrf-token": previousSid },
+      }), 8_000);
+    } catch { /* Local identity and cached data are already cleared. */ }
   }
 
   return (
-    <Ctx.Provider value={{ user, sessionId: sid, isFirstRun, loading, login, logout }}>
+    <Ctx.Provider value={{ user, sessionId: sid, isFirstRun, loading, statusError,
+      retryStatus: () => { if (_memSession) void checkStatus(_memSession); }, login, logout }}>
       {children}
     </Ctx.Provider>
   );

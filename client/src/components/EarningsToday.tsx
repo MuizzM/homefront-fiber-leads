@@ -20,6 +20,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTabActive } from "@/lib/tabActivity";
+import { ErrorState } from "@/components/ErrorState";
 import { cn } from "@/lib/utils";
 import { usd } from "@shared/moneyFormat";
 
@@ -67,11 +68,12 @@ function useCountUp(target: number, ms = 300): number {
 }
 
 export function EarningsToday({ className }: { className?: string }) {
-  const { data, isLoading } = useEarningsToday();
+  const { data, isPending, isPaused, isError, refetch } = useEarningsToday();
   const banked = data?.bankedCents ?? 0;
   const shown = useCountUp(banked);
 
-  if (isLoading && !data) {
+  if (isPaused && !data) return <ErrorState title="Connect to load today's earnings" description="Your earnings will load when you are back online." className={className} testId="earnings-today-loading" />;
+  if (isPending && !data) {
     return (
       <div className={cn("min-w-0", className)} data-testid="earnings-today-loading">
         <div className="h-[15px] w-24 rounded bg-muted" />
@@ -79,6 +81,8 @@ export function EarningsToday({ className }: { className?: string }) {
       </div>
     );
   }
+
+  if (isError && !data) return <ErrorState title="Today's earnings are unavailable" onRetry={() => refetch()} className={className} testId="earnings-today-error" />;
 
   const sales = data?.salesToday ?? 0;
   const pending = data?.pendingCents ?? null;
@@ -98,6 +102,7 @@ export function EarningsToday({ className }: { className?: string }) {
         {usd(shown)}
       </div>
 
+      {isError && <p role="alert" className="text-xs text-muted-foreground">Showing the last synced earnings. <button type="button" className="min-h-11 px-2 text-primary" onClick={() => refetch()}>Retry</button></p>}
       {/* The second line is where sales live, always as a COUNT and only
           sometimes as money. */}
       {sales > 0 && (

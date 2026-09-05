@@ -1,20 +1,58 @@
 import { useEffect, useRef, useState } from "react";
-import { useAuth } from "@/lib/auth";
+import { useAuth, type AuthUser } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { InstallAppBanner } from "@/components/InstallAppBanner";
+import { ApiError, NetworkError, throwIfResNotOk } from "@/lib/queryClient";
+import { withRequestDeadline } from "@/lib/requestDeadline";
 
 const API_BASE = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
 
-async function apiFetch(path: string, body: { email: string; code?: string }) {
-  return fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+interface LoginResponse {
+  developmentCode?: string;
+  emailDelivered?: boolean;
+  sessionId?: string;
+  user?: AuthUser;
+}
+
+async function apiFetch(path: string, body: { email: string; code?: string }): Promise<LoginResponse> {
+  return withRequestDeadline(async signal => {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${path}`, {
+        method: "POST", signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (error) { throw error instanceof TypeError ? new NetworkError(error) : error; }
+    await throwIfResNotOk(res);
+    try { return await res.json(); }
+    catch { throw new Error("Sign-in is temporarily unavailable. Please try again."); }
+  }, 20_000);
 }
 
 type Step = "email" | "code";
+
+function useCooldown(): [number, (seconds: number) => void] {
+  const [until, setUntil] = useState(0);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!until) return;
+    const tick = () => {
+      const at = Date.now();
+      setNow(at);
+      if (at >= until) setUntil(0);
+    };
+    const timer = setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", tick);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", tick); };
+  }, [until]);
+  return [Math.max(0, Math.ceil((until - now) / 1000)), seconds => {
+    const at = Date.now();
+    setNow(at);
+    setUntil(seconds > 0 ? at + seconds * 1000 : 0);
+  }];
+}
 
 export default function Login() {
   const { login } = useAuth();
@@ -23,41 +61,38 @@ export default function Login() {
   const [email, setEmail]   = useState("");
   const [code, setCode]     = useState("");
   const [loading, setLoading] = useState(false);
-  const [resendIn, setResendIn] = useState(0); // seconds until "Resend code" re-enables
+  const [resendIn, setResendIn] = useCooldown(); // seconds until "Resend code" re-enables
+  const [retryIn, setRetryIn] = useCooldown();
+  const pending = useRef(false);
   // Inline, announced error — the toast alone was invisible to screen readers
   // (no live region near the field) and easy to miss on a phone in sunlight.
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Tick the resend cooldown down to zero.
-  useEffect(() => {
-    if (resendIn <= 0) return;
-    const t = setInterval(() => setResendIn(s => (s <= 1 ? 0 : s - 1)), 1000);
-    return () => clearInterval(t);
-  }, [resendIn]);
+  function showError(error: unknown) {
+    const message = error instanceof Error ? error.message : "Sign-in is temporarily unavailable. Please try again.";
+    if (error instanceof ApiError && error.status === 429) {
+      setRetryIn(Math.max(1, Math.ceil((error.retryAfterMs ?? 30_000) / 1000)));
+    }
+    setFormError(message);
+    toast({ title: message, variant: "destructive" });
+  }
 
   // Request (or re-request) a one-time code for the entered email. Throws with a
   // user-facing message on any non-OK response.
   async function requestCode(): Promise<{ code: string | null; emailDelivered: boolean }> {
-    const res = await apiFetch("/api/auth/otp/request", { email: email.trim().toLowerCase() });
-    const data = await res.json();
-    if (res.status === 429) throw new Error(data.error);
-    // Owner's call for this internal tool: tell the rep plainly instead of a
-    // neutral "if registered…" message — the endpoint stays rate-limited per
-    // IP AND per email, so this can't be used to probe addresses in bulk.
-    if (res.status === 404) throw new Error("This email isn't registered. Contact your manager to get access.");
-    if (!res.ok) throw new Error(data.error ?? "Something went wrong");
+    const data = await apiFetch("/api/auth/otp/request", { email: email.trim().toLowerCase() });
     const code = typeof data.developmentCode === "string" && /^\d{6}$/.test(data.developmentCode)
       ? data.developmentCode
       : null;
     // emailDelivered===false → the code was generated but the mail provider was down
-    // (e.g. daily-quota). We still advance to code entry so a code obtained another
-    // way works; the toast tells the user the email may not arrive.
+    // (e.g. daily quota). Keep the resend path available after its cooldown.
     return { code, emailDelivered: data.emailDelivered !== false };
   }
 
   async function handleEmailSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!email.trim() || pending.current || retryIn > 0) return;
+    pending.current = true;
     setLoading(true);
     setFormError(null);
     try {
@@ -66,19 +101,20 @@ export default function Login() {
       if (developmentCode) setCode(developmentCode);
       setResendIn(30);
       toast({ title: developmentCode ? "Local sign-in code filled in - tap Verify & sign in."
-        : emailDelivered ? "Code sent - check your email."
-        : "Code created, but email is delayed - ask your manager for it.",
+        : emailDelivered ? "Code requested - check your email."
+        : "Email delivery is delayed. Wait a moment, then request a new code.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
-    } catch (err: any) {
-      setFormError(err.message || "Something went wrong");
-      toast({ title: err.message || "Something went wrong", variant: "destructive" });
+    } catch (error) {
+      showError(error);
     } finally {
+      pending.current = false;
       setLoading(false);
     }
   }
 
   async function handleResend() {
-    if (resendIn > 0 || loading) return;
+    if (resendIn > 0 || pending.current || retryIn > 0) return;
+    pending.current = true;
     setLoading(true);
     try {
       const { code: developmentCode, emailDelivered } = await requestCode();
@@ -86,13 +122,13 @@ export default function Login() {
       setFormError(null); // a fresh code invalidates the old "Invalid code"
       setResendIn(30);
       toast({ title: developmentCode ? "New local code filled in - tap Verify & sign in."
-        : emailDelivered ? "New code sent - check your email."
-        : "New code created, but email is delayed - ask your manager for it.",
+        : emailDelivered ? "New code requested - check your email."
+        : "Email delivery is delayed. Wait a moment, then request a new code.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
-    } catch (err: any) {
-      setFormError(err.message || "Something went wrong");
-      toast({ title: err.message || "Something went wrong", variant: "destructive" });
+    } catch (error) {
+      showError(error);
     } finally {
+      pending.current = false;
       setLoading(false);
     }
   }
@@ -100,31 +136,30 @@ export default function Login() {
   // Verify a specific code — called by the form submit AND by auto-submit the
   // moment the 6th digit lands (a passcode UX should never need a second tap).
   async function verify(codeToUse: string) {
-    if (codeToUse.length < 6 || loading) return;
+    if (codeToUse.length < 6 || pending.current || retryIn > 0) return;
+    pending.current = true;
     setLoading(true);
     setFormError(null);
     // The code is only WRONG when the server rejected it (401/400). A 429 or a
     // 5xx (the server is briefly busy) says nothing about the digits the rep
     // just read off their phone — wiping the boxes there makes them re-type a
     // perfectly good code to retry.
-    let codeStillGood = false;
     try {
-      const res = await apiFetch("/api/auth/otp/verify", {
+      const data = await apiFetch("/api/auth/otp/verify", {
         email: email.trim().toLowerCase(),
         code: codeToUse.trim(),
       });
-      // Set BEFORE parsing: a 502 from the proxy has an HTML body, so res.json()
-      // itself throws, and that is exactly a case where the code is still good.
-      codeStillGood = res.status === 429 || res.status >= 500;
-      const data = await res.json();
-      if (res.status === 429) throw new Error(data.error);
-      if (!res.ok) throw new Error(data.error ?? "Invalid code");
+      if (typeof data.sessionId !== "string" || !data.sessionId || typeof data.user?.id !== "number") {
+        throw new Error("Sign-in returned an incomplete response. Please try again.");
+      }
       login(data.sessionId, data.user);
-    } catch (err: any) {
-      setFormError(err.message || "Invalid code");
-      toast({ title: err.message || "Invalid code", variant: "destructive" });
-      if (!codeStillGood) setCode(""); // wrong code → clear the boxes so they can retype cleanly
+    } catch (error) {
+      showError(error);
+      // A network failure says nothing about the digits. Clear only an
+      // explicitly rejected code, preserving input through offline/5xx/timeout.
+      if (error instanceof ApiError && [400, 401].includes(error.status)) setCode("");
     } finally {
+      pending.current = false;
       setLoading(false);
     }
   }
@@ -190,6 +225,7 @@ export default function Login() {
                   id="login-email"
                   type="email"
                   value={email}
+                  disabled={loading}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="you@email.com"
                   required
@@ -206,12 +242,13 @@ export default function Login() {
 
               <button
                 type="submit"
-                disabled={loading || !email.trim()}
+                disabled={loading || !email.trim() || retryIn > 0}
                 data-testid="button-send-code"
                 className={buttonClasses}
               >
                 {loading
                   ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Sending code…</>)
+                  : retryIn > 0 ? `Try again in ${retryIn}s`
                   : (<>Continue <ArrowRight className="h-4 w-4" aria-hidden /></>)}
               </button>
             </form>
@@ -223,9 +260,10 @@ export default function Login() {
               <div className="space-y-1.5">
                 <h2 className="text-lg font-semibold tracking-tight text-foreground">Check your email</h2>
                 <p className="text-sm text-muted-foreground">
-                  We sent a 6-digit code to{" "}
+                  A 6-digit code was requested for{" "}
                   <span className="font-medium text-foreground">{email}</span>.
                 </p>
+                <p className="text-xs text-muted-foreground">If your email is registered, check your inbox and spam folder. Delivery can take a moment.</p>
               </div>
 
               <div className="space-y-2">
@@ -242,11 +280,11 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={handleResend}
-                    disabled={resendIn > 0 || loading}
+                    disabled={resendIn > 0 || loading || retryIn > 0}
                     data-testid="button-resend-code"
                     className="inline-flex items-center min-h-11 px-2 -mx-2 text-xs font-medium text-primary transition-colors hover:text-primary/80 disabled:pointer-events-none disabled:text-muted-foreground/60"
                   >
-                    {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
+                    {retryIn > 0 ? `Try again in ${retryIn}s` : resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
                   </button>
                 </div>
               </div>
@@ -257,17 +295,19 @@ export default function Login() {
 
               <button
                 type="submit"
-                disabled={loading || code.length < 6}
+                disabled={loading || code.length < 6 || retryIn > 0}
                 data-testid="button-verify-code"
                 className={buttonClasses}
               >
                 {loading
                   ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Verifying…</>)
+                  : retryIn > 0 ? `Try again in ${retryIn}s`
                   : (<>Verify &amp; sign in <ArrowRight className="h-4 w-4" aria-hidden /></>)}
               </button>
 
               <button
                 type="button"
+                disabled={loading}
                 onClick={() => { setStep("email"); setCode(""); setResendIn(0); setFormError(null); }}
                 className="inline-flex w-full items-center justify-center gap-1.5 min-h-11 px-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >

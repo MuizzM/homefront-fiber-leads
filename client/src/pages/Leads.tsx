@@ -1,3 +1,4 @@
+import { ErrorState } from "@/components/ErrorState";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient, keepPreviousData, type QueryClient } from "@tanstack/react-query";
@@ -548,7 +549,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
     staleTime: 30_000,
   });
 
-  const { data: history = [], isLoading: historyLoading } = useQuery<LeadHistoryItem[]>({
+  const { data: history = [], isLoading: historyLoading, isError: historyError, refetch: refetchHistory } = useQuery<LeadHistoryItem[]>({
     queryKey: [`/api/leads/${lead.id}/history`],
     queryFn: async () => (await apiRequest("GET", `/api/leads/${lead.id}/history`)).json(),
     enabled: open,
@@ -815,6 +816,8 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           </div>
           {historyLoading ? (
             <div className="space-y-3"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
+          ) : historyError ? (
+            <ErrorState title="Couldn't load activity history" onRetry={() => refetchHistory()} testId="lead-history-error" />
           ) : history.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">No operational activity has been logged yet.</div>
           ) : (
@@ -1085,6 +1088,7 @@ export default function Leads() {
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
+  const editGeneration = useRef(0);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [knockLead, setKnockLead] = useState<Lead | null>(null);
   const [assignLead, setAssignLead] = useState<Lead | null>(null);
@@ -1340,16 +1344,19 @@ export default function Leads() {
       // immediately (spec: update immediately and silently). Failures below
       // stay loud — the snapshot restores and an error toast shows (a long
       // ~6s beat, then auto-dismisses; the error center keeps the record).
+      const generation = editGeneration.current;
+      const draft = editLead?.id === id ? { ...editLead, ...data } as Lead : null;
       await qc.cancelQueries({ queryKey: ["/api/leads"] });
       const snapshots = patchLeadLists(cached => ({
         ...cached,
         leads: cached.leads.map(l => (l.id === id ? { ...l, ...data } as Lead : l)),
       }));
-      setEditLead(null);
-      return { snapshots };
+      if (editGeneration.current === generation) setEditLead(null);
+      return { snapshots, draft, generation };
     },
     onError: (e: any, _vars, ctx) => {
       restoreLeadLists(ctx?.snapshots);
+      if (ctx?.draft && editGeneration.current === ctx.generation) setEditLead(ctx.draft);
       toast({ title: e?.message ?? "Couldn't update lead", severity: "error" });
     },
     onSettled: (_data, _err, vars) => {
@@ -1463,7 +1470,7 @@ export default function Leads() {
     openLeadOnFieldMap({ leadId: lead.id, lat: lead.lat ?? undefined, lng: lead.lng ?? undefined }, navigate);
   }, [navigate]);
   const openAssign = useCallback((lead: Lead) => setAssignLead(lead), []);
-  const openEdit = useCallback((lead: Lead) => setEditLead(lead), []);
+  const openEdit = useCallback((lead: Lead) => { editGeneration.current += 1; setEditLead(lead); }, []);
   const openDelete = useCallback((id: number) => setDeleteId(id), []);
 
   // ONE tree, not two. The table and the card list used to both mount on every
@@ -1728,7 +1735,7 @@ export default function Leads() {
           team={team}
           onboardingStage={intelLead.assignedRepId ? onboardingByRep.get(intelLead.assignedRepId) ?? null : null}
           onAssign={() => { setAssignLead(intelLead); setIntelLead(null); }}
-          onEdit={() => { setEditLead(intelLead); setIntelLead(null); }}
+          onEdit={() => { openEdit(intelLead); setIntelLead(null); }}
           onQualify={() => updateMutation.mutate({ id: intelLead.id, data: { leadStatus: "interested" } })}
           onMap={() => { const target = intelLead; setIntelLead(null); openLeadOnMap(target); }}
           onKnock={() => { const target = intelLead; setIntelLead(null); setKnockLead(target); }}

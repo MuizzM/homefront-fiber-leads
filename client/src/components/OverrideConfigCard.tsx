@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { ErrorState } from "@/components/ErrorState";
 import type { OverrideConfigWire } from "@shared/commissionOverrides";
 
 // ── Downline override pay — org config ────────────────────────────────────────
@@ -22,10 +23,12 @@ import type { OverrideConfigWire } from "@shared/commissionOverrides";
 export function OverrideConfigCard() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { data: config } = useQuery<OverrideConfigWire>({
+  const configQuery = useQuery<OverrideConfigWire>({
     queryKey: ["/api/commission/config"],
     queryFn: () => apiRequest("GET", "/api/commission/config").then(r => r.json()),
   });
+  const config = configQuery.data;
+  const configReady = !!config && !configQuery.isError && !configQuery.isPending;
 
   // `undefined` = "showing the saved value"; anything else = the operator is editing.
   const [draftEnabled, setDraftEnabled] = useState<boolean | undefined>(undefined);
@@ -41,9 +44,11 @@ export function OverrideConfigCard() {
   const dirty = draftEnabled !== undefined || draftTeamLead !== undefined || draftManager !== undefined;
 
   const save = useMutation({
-    mutationFn: (patch: { overridesEnabled: boolean; overrideTeamLeadCents?: number; overrideManagerCents?: number }) =>
-      apiRequest("PATCH", "/api/commission/config", patch).then(r => r.json()),
-    onSuccess: (cfg: any) => {
+    mutationFn: (patch: { overridesEnabled: boolean; overrideTeamLeadCents?: number; overrideManagerCents?: number }) => {
+      if (!configReady) throw new Error("Load the saved override settings before making changes.");
+      return apiRequest("PATCH", "/api/commission/config", patch).then(r => r.json());
+    },
+    onSuccess: (cfg: OverrideConfigWire) => {
       setDraftEnabled(undefined); setDraftTeamLead(undefined); setDraftManager(undefined);
       qc.setQueryData(["/api/commission/config"], cfg);
       toast({
@@ -55,7 +60,7 @@ export function OverrideConfigCard() {
           : "No new override rows will be earned. Everything already on the ledger stands.",
       });
     },
-    onError: (e: any) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
     // The sheet and the rep card both project this config forward — refresh
     // them whichever way the save went.
     onSettled: () => {
@@ -65,6 +70,7 @@ export function OverrideConfigCard() {
   });
 
   const submit = () => {
+    if (!configReady || save.isPending || !dirty) return;
     // Tri-state contract: absent = keep. Disabling sends ONLY the flag, so the
     // saved rates survive for the next enable.
     if (!enabled) return save.mutate({ overridesEnabled: false });
@@ -82,6 +88,9 @@ export function OverrideConfigCard() {
 
   return (
     <div className="rounded-xl bg-card border border-border p-4" data-testid="override-config-card">
+      {configQuery.isError && <ErrorState title="Couldn't load downline override settings" description="Check your connection and try again." onRetry={() => { void configQuery.refetch(); }} />}
+      {configQuery.isPending && <p role="status" className="mb-3 text-sm text-muted-foreground">{configQuery.isPaused ? "Connect to load the saved override settings." : "Loading override settings…"}</p>}
+      <fieldset disabled={!configReady || save.isPending}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="min-w-0">
           <Label htmlFor="override-enabled" className="text-sm font-semibold flex items-center gap-1.5">
@@ -143,12 +152,13 @@ export function OverrideConfigCard() {
         <Button
           size="sm"
           onClick={submit}
-          disabled={save.isPending || !dirty}
+          disabled={!configReady || save.isPending || !dirty}
           data-testid="override-config-save"
         >
           {save.isPending ? "Saving…" : "Save"}
         </Button>
       </div>
+      </fieldset>
     </div>
   );
 }

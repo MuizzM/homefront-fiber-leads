@@ -1,3 +1,4 @@
+import { ErrorState } from "@/components/ErrorState";
 import {
   useEffect,
   useRef,
@@ -10491,6 +10492,11 @@ export default function MapView() {
             </div>
           )}
 
+          {needsDetailFallback && !selectedLead && <div className="absolute bottom-4 left-4 right-4 z-30 mx-auto max-w-sm rounded-xl border border-border bg-card shadow-lg" data-testid="map-selected-lead-recovery">
+            {selectedDetailQuery.isError
+              ? <ErrorState title="Couldn't open this door" description="Check your connection and try again." onRetry={() => selectedDetailQuery.refetch()} action={<button type="button" onClick={closeSheet} className="min-h-11 px-3 text-sm">Cancel</button>} />
+              : <div className="flex items-center justify-between gap-3 px-4 py-3"><p role="status" className="text-sm">Opening door…</p><button type="button" onClick={closeSheet} className="min-h-11 px-3 text-sm">Cancel</button></div>}
+          </div>}
           {/* ── Lead card — the rep's door-to-door workflow (reps always; admins on mobile) ── */}
           {useSheet && (
             <LeadKnockSheet

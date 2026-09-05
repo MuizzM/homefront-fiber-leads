@@ -1,3 +1,4 @@
+import { ErrorState } from "@/components/ErrorState";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -345,7 +346,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
   // The rep's OWN reserve ledger. Self-scoped on the SERVER — the rep id comes
   // from the session, not from this request — so there is no id here that could
   // ever point at another rep.
-  const { data: reserve } = useQuery<ReserveSummaryResponse>({
+  const { data: reserve, isError: reserveError, refetch: refetchReserve } = useQuery<ReserveSummaryResponse>({
     queryKey: ["/api/me/reserve"],
     queryFn: () => apiRequest("GET", "/api/me/reserve").then(r => r.json()),
     enabled: (current?.reservePercent ?? 0) > 0,
@@ -372,6 +373,7 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         </span>
       </header>
 
+      {reserveError && <ErrorState title="Couldn't refresh your reserve balance" description={reserve ? "Showing the last synced reserve balance." : "Showing the weekly estimate; manual releases and drawdowns may be missing."} onRetry={() => refetchReserve()} className="p-4" testId="reserve-error" />}
       {/* What this IS, said first and in plain language. */}
       <p className="px-4 pt-3 text-[11px] leading-snug text-muted-foreground" data-testid="reserve-explainer">
         A small part of each week's pay is set aside to cover sales that later cancel or charge back.
@@ -483,12 +485,13 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
 // uncertain money never share a number), and the statement footer reconciles
 // this card against the frozen statement whenever one exists.
 function OverrideEarningsCard() {
-  const { data, isLoading, isError } = useQuery<MyOverrideWeekResponse>({
+  const { data, isLoading, isError, refetch } = useQuery<MyOverrideWeekResponse>({
     queryKey: ["/api/commission/overrides/me"],
     queryFn: () => apiRequest("GET", "/api/commission/overrides/me").then(r => r.json()),
   });
 
-  if (isLoading || isError || !data) return null;
+  if (isError) return <ErrorState title="Couldn't load override earnings" onRetry={() => refetch()} testId="override-earnings-error" />;
+  if (isLoading || !data) return null;
   // Optional-chained: a payload without the wire shape (older server, proxy
   // error page) must degrade to "no card", never to a crash on a money screen.
   const rows = data.rows ?? [];

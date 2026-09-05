@@ -295,28 +295,35 @@ function expansionByTarget(targetIds: number[]): Map<number, { expansionId: stri
 function nearbyFreshCounts(pool: PoolLead[]): Map<number, number> {
   const counts = new Map<number, number>();
   const cellLat = DENSITY_RADIUS_M / 111_320; // ≈ radius in degrees latitude
-  const buckets = new Map<string, PoolLead[]>();
+  const buckets = new Map<string, Array<{ lead: PoolLead; count: number }>>();
   const keyOf = (lead: PoolLead) => {
     const lngScale = Math.max(0.2, Math.cos((lead.lat! * Math.PI) / 180));
     return { r: Math.floor(lead.lat! / cellLat), c: Math.floor(lead.lng! / (cellLat / lngScale)) };
   };
-  const located = pool.filter((l) => l.lat != null && l.lng != null);
-  for (const lead of located) {
+  const located = pool.filter(l => l.lat != null && l.lng != null).map(lead => ({ lead, count: 0 }));
+  for (const entry of located) {
+    const { lead } = entry;
     const { r, c } = keyOf(lead);
     const key = `${r}:${c}`;
-    (buckets.get(key) ?? buckets.set(key, []).get(key)!).push(lead);
+    (buckets.get(key) ?? buckets.set(key, []).get(key)!).push(entry);
   }
-  for (const lead of located) {
+  for (const entry of located) {
+    const { lead } = entry;
     const { r, c } = keyOf(lead);
-    let n = 0;
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-      for (const other of buckets.get(`${r + dr}:${c + dc}`) ?? []) {
-        if (other.id !== lead.id &&
-            haversineMeters({ lat: lead.lat!, lng: lead.lng! }, { lat: other.lat!, lng: other.lng! }) <= DENSITY_RADIUS_M) n++;
+      for (const otherEntry of buckets.get(`${r + dr}:${c + dc}`) ?? []) {
+        const other = otherEntry.lead;
+        // Neighborhood membership and distance are symmetric. Evaluate each
+        // pair once, preserving exact counts used in the displayed reasons.
+        if (other.id > lead.id &&
+            haversineMeters({ lat: lead.lat!, lng: lead.lng! }, { lat: other.lat!, lng: other.lng! }) <= DENSITY_RADIUS_M) {
+          entry.count++;
+          otherEntry.count++;
+        }
       }
     }
-    counts.set(lead.id, n);
   }
+  for (const { lead, count } of located) counts.set(lead.id, count);
   return counts;
 }
 

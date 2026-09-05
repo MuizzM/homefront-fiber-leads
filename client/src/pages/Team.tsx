@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { parseOverrideDollars } from "@/lib/overrideMoney";
@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { User, Crown, Star, ChevronUp, Wallet, ChevronRight, FileSignature, } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
+import { ErrorState } from "@/components/ErrorState";
 import { TierEditor } from "@/components/commission/TierEditor";
 import { validateTiers, type CommissionTier } from "@shared/commissionTiers";
 import { canActOnMember, HIRABLE_ROLES, isValidSupervisorRole, type MemberRole } from "@shared/teamHierarchy";
@@ -1208,14 +1209,15 @@ function CommissionDialogBody({ member, onClose }: { member: TeamMember; onClose
     { position: 1, minimumSales: 7, maximumSales: null, rateCents: 20000, label: "7+" },
   ]);
 
-  const { data: current, isLoading } = useQuery<any>({
+  const dirty = useRef(false);
+  const { data: current, isPending: isLoading, isPaused, isError, isSuccess, refetch } = useQuery<any>({
     queryKey: ["/api/commission/reps", member.id, "structure"],
     queryFn: () => apiRequest("GET", `/api/commission/reps/${member.id}/structure`).then(r => r.json()),
   });
 
   // Seed the picker from the rep's current structure when it loads.
   useEffect(() => {
-    if (!current) return;
+    if (!current || dirty.current) return; // Refresh untouched fields, preserve edits.
     if (current.structure === "FLAT") {
       setStructure("FLAT");
       // Divide, don't Math.round the cents first — $150.50 was seeding as "151",
@@ -1263,13 +1265,15 @@ function CommissionDialogBody({ member, onClose }: { member: TeamMember; onClose
       ? "Reserve maximum must be $0 or more (leave blank to inherit)"
     : null;
   const blockedReason =
-    structure === "TIERED" && !tierValidation.ok ? tierValidation.errors[0]
+    !isSuccess || !current ? "Load the current plan before applying changes"
+    : structure === "TIERED" && !tierValidation.ok ? tierValidation.errors[0]
     : structure === "FLAT" && !(flatCents > 0) ? "Enter a per-sale rate above $0"
     : structure === "FLAT" && flatCents > 100000 ? "Rate above $1,000/sale - check the number"
     : reserveBlocked;
 
   const assignMutation = useMutation({
     mutationFn: async () => {
+      if (blockedReason) throw new Error(blockedReason);
       const body: any = { repId: member.id, structure, closeExisting: true };
       // Integer cents cross the wire — the dollars → cents conversion happens
       // ONCE, here. `null` explicitly clears the override back to the org default.
@@ -1307,7 +1311,9 @@ function CommissionDialogBody({ member, onClose }: { member: TeamMember; onClose
         <div className="flex items-center gap-2 rounded-xl bg-secondary/40 border border-border px-3 py-2.5 text-xs">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Current</span>
           {isLoading ? (
-            <span className="text-muted-foreground">loading…</span>
+            <span className="text-muted-foreground">{isPaused ? "Connect to load the current plan" : "Loading…"}</span>
+          ) : isError ? (
+            <ErrorState title="Couldn't load the current plan" onRetry={() => refetch()} />
           ) : curStruct === "FLAT" ? (
             <span className="text-foreground font-semibold tabular-nums">Flat - ${((current.flatRateCents || 0) / 100).toLocaleString()}/sale</span>
           ) : curStruct === "TIERED" ? (
@@ -1317,16 +1323,17 @@ function CommissionDialogBody({ member, onClose }: { member: TeamMember; onClose
           )}
         </div>
 
+        <fieldset disabled={!isSuccess || !current || assignMutation.isPending} onChangeCapture={() => { dirty.current = true; }} className="contents">
         {/* Structure picker */}
         <div className="grid grid-cols-2 gap-2 mt-1">
-          <button type="button" onClick={() => setStructure("TIERED")}
+          <button type="button" onClick={() => { dirty.current = true; setStructure("TIERED"); }}
             aria-pressed={structure === "TIERED"}
             className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${structure === "TIERED" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
             data-testid="btn-team-structure-tiered">
             
             <span><span className="block text-xs font-semibold">Tiered</span><span className="block text-2xs text-muted-foreground leading-tight">Retroactive weekly</span></span>
           </button>
-          <button type="button" onClick={() => setStructure("FLAT")}
+          <button type="button" onClick={() => { dirty.current = true; setStructure("FLAT"); }}
             aria-pressed={structure === "FLAT"}
             className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${structure === "FLAT" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
             data-testid="btn-team-structure-flat">
@@ -1344,7 +1351,7 @@ function CommissionDialogBody({ member, onClose }: { member: TeamMember; onClose
             {/* The ladder was a fixed display. Editable now: bands stay tiled and
                 the last stays open-ended by construction, so a rep can never sell
                 into a gap or past the top and earn nothing. */}
-            <TierEditor tiers={tiers} onChange={setTiers} disabled={assignMutation.isPending} />
+            <TierEditor tiers={tiers} onChange={value => { dirty.current = true; setTiers(value); }} disabled={assignMutation.isPending} />
           </div>
         ) : (
           <div className="mt-1 space-y-1.5">
@@ -1402,6 +1409,7 @@ function CommissionDialogBody({ member, onClose }: { member: TeamMember; onClose
           </p>
         </div>
 
+        </fieldset>
         <DialogFooter className="mt-2">
           <Button variant="outline" onClick={onClose} className="h-9 border-border">Cancel</Button>
           {/* Armed only once the CURRENT plan has loaded: applying while the

@@ -5,7 +5,7 @@
 // rates survive for the next enable). And the PATCH is EXACT tri-state: enable
 // sends the flag plus both rates as integer cents (dollars converted once, at
 // the boundary); disable sends ONLY the flag, so absent keys mean "keep".
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -31,12 +31,12 @@ function config(over: Record<string, unknown> = {}) {
 
 function renderCard(cfg: any) {
   apiRequest.mockImplementation((method: string, _url: string, body?: any) => {
-    if (method === "GET") return Promise.resolve({ json: () => Promise.resolve(cfg) });
+    if (method === "GET") return cfg instanceof Error ? Promise.reject(cfg) : Promise.resolve({ json: () => Promise.resolve(cfg) });
     // PATCH echoes the config the server would persist — enough for setQueryData.
     return Promise.resolve({ json: () => Promise.resolve({ ...cfg, ...body }) });
   });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}><OverrideConfigCard /></QueryClientProvider>);
+  return { ...render(<QueryClientProvider client={qc}><OverrideConfigCard /></QueryClientProvider>), qc };
 }
 
 const patchCall = () => apiRequest.mock.calls.find(call => call[0] === "PATCH");
@@ -44,6 +44,37 @@ const patchCall = () => apiRequest.mock.calls.find(call => call[0] === "PATCH");
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 
 describe("the override config card", () => {
+  it("blocks edits after a failed read and retries the saved rates", async () => {
+    renderCard(new Error("offline"));
+    await screen.findByText("Couldn't load downline override settings");
+    expect(screen.getByTestId("override-enabled-switch")).toBeDisabled();
+    expect(screen.getByTestId("override-config-save")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("override-config-save"));
+    expect(patchCall()).toBeUndefined();
+    apiRequest.mockResolvedValue({ json: async () => config() });
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => expect(screen.getByTestId("override-teamlead-input")).toHaveValue("25.00"));
+    expect(screen.getByTestId("override-enabled-switch")).toBeEnabled();
+  });
+
+  it("preserves a draft through failed refresh and blocks Enter until recovery", async () => {
+    const { qc } = renderCard(config());
+    const rate = await screen.findByTestId("override-teamlead-input");
+    fireEvent.change(rate, { target: { value: "37.75" } });
+    apiRequest.mockRejectedValue(new Error("offline"));
+    await act(async () => { await qc.refetchQueries({ queryKey: ["/api/commission/config"] }); });
+    await screen.findByText("Couldn't load downline override settings");
+    expect(rate).toBeDisabled();
+    fireEvent.keyDown(rate, { key: "Enter" });
+    expect(patchCall()).toBeUndefined();
+    apiRequest.mockResolvedValue({ json: async () => config({ overrideTeamLeadCents: 5000 }) });
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => expect(rate).toBeEnabled());
+    expect(rate).toHaveValue("37.75");
+    fireEvent.keyDown(rate, { key: "Enter" });
+    await waitFor(() => expect(patchCall()?.[2]).toEqual({ overridesEnabled: true, overrideTeamLeadCents: 3775, overrideManagerCents: 1000 }));
+  });
+
   it("shows the saved rates in dollars while enabled, and names the fixed basis", async () => {
     renderCard(config());
     await waitFor(() => expect(screen.getByTestId("override-rate-inputs")).toBeInTheDocument());

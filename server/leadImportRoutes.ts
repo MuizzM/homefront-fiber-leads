@@ -24,6 +24,7 @@ import {
   type LeadImportMapping, type EvaluatedLeadRow,
 } from "../shared/leadImport";
 import type { Capability } from "../shared/capabilities";
+import type { TeamMember } from "../shared/schema";
 
 export const MAX_LEAD_IMPORT_BYTES = 8 * 1024 * 1024;
 const IMPORT_CHUNK = 500;
@@ -34,6 +35,7 @@ interface Deps {
   requireCapability: (cap: Capability) => any;
   repInVisibilityScope: (user: any, repId: number) => boolean;
   repInCallerTenant: (user: any, repId: number) => boolean;
+  leadVisibilityScope: (user: any, roster: TeamMember[]) => number | number[] | undefined;
   bustMapCache: (tenantId?: number) => void;
 }
 
@@ -62,11 +64,20 @@ export function parseLeadFile(buffer: Buffer): ParsedFile {
     const text = buffer.toString("utf8").replace(/^﻿/, "");
     grid = parseCsvRows(text);
   }
-  grid = grid.filter((r) => !isBlankCsvRow(r));
-  const columns = (grid[0] ?? []).map((c) => String(c ?? "").trim());
-  const body = grid.slice(1).map((r) => r.map((c) => String(c ?? "")));
-  const truncated = body.length > MAX_LEAD_IMPORT_ROWS;
-  return { columns, rows: body.slice(0, MAX_LEAD_IMPORT_ROWS), rowCount: body.length, truncated };
+  let columns: string[] | undefined;
+  const rows: string[][] = [];
+  let rowCount = 0;
+  // Preview reports the full row count, but only retained rows need copying.
+  for (const row of grid) {
+    if (isBlankCsvRow(row)) continue;
+    if (columns === undefined) {
+      columns = row.map((cell) => String(cell ?? "").trim());
+      continue;
+    }
+    rowCount++;
+    if (rows.length < MAX_LEAD_IMPORT_ROWS) rows.push(row.map((cell) => String(cell ?? "")));
+  }
+  return { columns: columns ?? [], rows, rowCount, truncated: rowCount > MAX_LEAD_IMPORT_ROWS };
 }
 
 function parseMapping(raw: unknown): LeadImportMapping | null {
@@ -100,9 +111,15 @@ function rosterFor(user: any, deps: Deps): { byName: Map<string, number>; names:
   const byName = new Map<string, number>();
   const names = new Map<number, string>();
   const tid = user?.tenantId ?? undefined;
-  for (const m of storage.getTeamMembers(tid) as any[]) {
+  const roster = storage.getTeamMembers(tid);
+  // Resolve permission scope once from this request's authoritative roster.
+  // Per-member checks previously reloaded the entire team for every row.
+  const scope = deps.leadVisibilityScope(user, roster);
+  const allowed = scope === undefined ? null : new Set(Array.isArray(scope) ? scope : [scope]);
+  for (const m of roster) {
     if (!m?.active) continue;
-    if (!deps.repInVisibilityScope(user, m.id) || !deps.repInCallerTenant(user, m.id)) continue;
+    if (allowed && !allowed.has(m.id)) continue;
+    if (user?.role !== "super_admin" && (user?.tenantId == null || m.tenantId == null || m.tenantId !== user.tenantId)) continue;
     byName.set(normalizeRepName(String(m.name ?? "")), m.id);
     if (m.email) byName.set(String(m.email).toLowerCase(), m.id);
     names.set(m.id, String(m.name ?? ""));
