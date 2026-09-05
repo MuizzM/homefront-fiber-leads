@@ -54,6 +54,7 @@ function lead(id: number, over: Record<string, any> = {}) {
 // state while the server has not answered yet, then settle either way.
 let settleDelete: { resolve: () => void; reject: (e: Error) => void };
 let settleAdd: { resolve: () => void; reject: (e: Error) => void };
+let settleUpdate: { reject: (error: Error) => void };
 // Arm with deferNextListGet() to hold the NEXT list GET open; its body is
 // snapshotted at request time (like a real server would), so a fetch that
 // starts pre-create carries a pre-create body no matter when it resolves.
@@ -78,6 +79,9 @@ function renderLeads(leadsDb: any[]) {
           reject,
         };
       });
+    }
+    if (method === "PATCH" && /^\/api\/leads\/\d+$/.test(url)) {
+      return new Promise((_resolve, reject) => { settleUpdate = { reject }; });
     }
     if (method === "DELETE" && url.startsWith("/api/leads/")) {
       const id = Number(url.split("/").pop());
@@ -357,5 +361,32 @@ describe("Leads add - saving state, continuity, reconcile", () => {
     // Saved, honestly absent — and never flashed in and out.
     expect(screen.queryByText("99 Pine St")).toBeNull();
     expect(screen.getByTestId("card-lead-1")).toBeTruthy();
+  });
+});
+
+
+describe("lead edit draft recovery", () => {
+  it("restores submitted fields when an optimistic edit fails", async () => {
+    renderLeads([lead(1)]);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit 1 Oak St" }));
+    fireEvent.change(screen.getByTestId("form-notes"), { target: { value: "Keep this field note" } });
+    fireEvent.click(screen.getByTestId("btn-save-lead-form"));
+    await waitFor(() => expect(screen.queryByTestId("form-notes")).not.toBeInTheDocument());
+    settleUpdate.reject(new Error("offline"));
+    expect(await screen.findByTestId("form-notes")).toHaveValue("Keep this field note");
+    expect(screen.getByTestId("form-address")).toHaveValue("1 Oak St");
+  });
+  it("does not replace a newer edit session with an older failed draft", async () => {
+    renderLeads([lead(1), lead(2)]);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit 1 Oak St" }));
+    fireEvent.change(screen.getByTestId("form-notes"), { target: { value: "Old draft" } });
+    fireEvent.click(screen.getByTestId("btn-save-lead-form"));
+    await waitFor(() => expect(screen.queryByTestId("form-notes")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Edit 2 Oak St" }));
+    fireEvent.change(screen.getByTestId("form-notes"), { target: { value: "New draft" } });
+    settleUpdate.reject(new Error("offline"));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ severity: "error" })));
+    expect(screen.getByTestId("form-address")).toHaveValue("2 Oak St");
+    expect(screen.getByTestId("form-notes")).toHaveValue("New draft");
   });
 });

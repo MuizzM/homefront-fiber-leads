@@ -5032,12 +5032,15 @@ export class Storage implements IStorage {
   // ONE grouped aggregate scoped to the caller's tenant — no per-rep full-history
   // hydration, no cross-tenant scan (the old version SELECT *'d every knock of every
   // rep of EVERY tenant then filtered in JS on every poll). Uses idx_knock_log_rep.
-  getLeaderboard(window?: { since?: string; until?: string }, tenantId?: number) {
+  getLeaderboard(window?: { since?: string; until?: string; preset?: "7d" | "30d" | "1y" }, tenantId?: number) {
     // Concurrent pollers share one compute per (tenant, window): valid while
     // the write epoch is unchanged AND the entry is young (see the epoch's
     // comment for what each leg covers). Callers never mutate the rows.
-    const memoKey = `${tenantId ?? "all"}|${window?.since ?? ""}|${window?.until ?? ""}`;
     const now = Date.now();
+    // Rolling presets share the first request's exact cutoff for at most the
+    // existing 10s TTL. Custom cutoffs remain exact; org midnight always busts.
+    const rangeKey = window?.preset ? `preset:${window.preset}` : `${window?.since ?? ""}|${window?.until ?? ""}`;
+    const memoKey = `${tenantId ?? "all"}|${localDayStartMs(tenantId, now)}|${rangeKey}`;
     const hit = this._leaderboardCache.get(memoKey);
     if (hit && hit.epoch === leaderboardEpoch && now - hit.at >= 0 && now - hit.at < 10_000) return hit.value;
     const value = this.computeLeaderboard(window, tenantId);
@@ -5065,6 +5068,11 @@ export class Storage implements IStorage {
     // (tenantId undefined) has no single org day, so it falls back to the
     // default workweek zone rather than silently reverting to container time.
     const midnight = new Date(localDayStartMs(tenantId, Date.now()));
+    // Earlier rows contribute to neither the requested range nor Today. Keep
+    // the latest-sale correction probe unbounded: later corrections still win.
+    const lowerBound = window?.since ? [window.since, midnight.toISOString()].sort()[0] : null;
+    const tenantPredicate = lowerBound == null && tenantId != null
+      ? "t.tenant_id = @tenantId" : "(@tenantId IS NULL OR t.tenant_id = @tenantId)";
     const w = (col = "") => `(@since IS NULL OR k.knocked_at >= @since) AND (@until IS NULL OR k.knocked_at <= @until)${col}`;
     // A SALE only counts while it is still TRUE. `superseded = 0` alone is not
     // that: it records whether a knock lost the CAS when it was WRITTEN, so an
@@ -5105,9 +5113,10 @@ export class Storage implements IStorage {
        JOIN team_members t ON t.id = k.rep_id
        LEFT JOIN leads l ON l.id = k.lead_id
        WHERE k.superseded = 0
-         AND (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1
+         AND ${tenantPredicate} AND t.active = 1
+         ${lowerBound == null ? "" : "AND k.knocked_at >= @lowerBound"}
        GROUP BY k.rep_id`
-    ).all({ since: window?.since ?? null, until: window?.until ?? null, midnight: midnight.toISOString(), tenantId: tenantId ?? null }) as any[];
+    ).all({ since: window?.since ?? null, until: window?.until ?? null, midnight: midnight.toISOString(), tenantId: tenantId ?? null, ...(lowerBound == null ? {} : { lowerBound }) }) as any[];
     const byRep = new Map(rows.map(r => [r.repId, r]));
     return reps.map(rep => {
       const c: any = byRep.get(rep.id) ?? {};

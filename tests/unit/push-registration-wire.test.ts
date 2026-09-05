@@ -25,15 +25,7 @@ import { setSessionId } from "@/lib/queryClient";
 const SESSION = "sess-push-1";
 
 function jsonRes(body: unknown, status = 200) {
-  const res = {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: { get: () => null },
-    json: async () => body,
-    text: async () => JSON.stringify(body),
-    clone: () => res,
-  };
-  return res;
+  return Response.json(body, { status });
 }
 
 const subscription = {

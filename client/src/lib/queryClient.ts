@@ -1,12 +1,36 @@
-import { QueryCache, QueryClient, QueryFunction } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryFunction, type Mutation } from "@tanstack/react-query";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { signalKnockRecovery } from "@/lib/knockQueue";
+import { RequestTimeoutError, withRequestDeadline } from "@/lib/requestDeadline";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 // Module-level session ID — set by auth context
 let _sessionId: string | null = null;
-export function setSessionId(id: string | null) { _sessionId = id; }
+let requestScope = new AbortController();
+const retiredMutations = new WeakSet<object>();
+function retireMutation<TError>(mutation: Mutation<unknown, TError, unknown, unknown>) {
+  retiredMutations.add(mutation);
+  // Clearing a cache does not cancel mutation callbacks. An old rollback or
+  // success callback must not populate the next account's cache. In-flight
+  // server writes keep their outcome; queued writes cannot start as a new user.
+  mutation.setOptions({ ...mutation.options, onMutate: undefined, onSuccess: undefined,
+    onError: undefined, onSettled: undefined, retry: false,
+    mutationFn: async () => { throw new DOMException("Session changed", "AbortError"); },
+  });
+}
+export function invalidateRequestScope() {
+  for (const mutation of queryClient.getMutationCache().getAll()) {
+    if (mutation.state.status === "pending") retireMutation(mutation);
+  }
+  requestScope.abort();
+  requestScope = new AbortController();
+  bustInflightGetShare();
+}
+export function setSessionId(id: string | null) {
+  if (id !== _sessionId) invalidateRequestScope();
+  _sessionId = id;
+}
 export function getStoredSessionId() { return _sessionId; }
 
 // Global 401 handler — registered by the auth context. When a request comes back
@@ -55,10 +79,16 @@ function retryAfterMs(res: Response): number | null {
 }
 
 function responseMessage(status: number, raw: string, fallback: string): string {
+  if (/^\s*</.test(raw)) {
+    return `${status}: The server is temporarily unavailable. Please try again.`;
+  }
   let detail = raw.trim();
   try {
     const parsed = JSON.parse(detail);
-    if (parsed && typeof parsed === "object") detail = String(parsed.error || parsed.message || fallback);
+    if (parsed && typeof parsed === "object") {
+      detail = typeof parsed.error === "string" ? parsed.error
+        : typeof parsed.message === "string" ? parsed.message : fallback;
+    }
   } catch { /* plain-text API error */ }
   // Never let an upstream HTML page or accidentally-large diagnostic flood a
   // toast/error surface. The request id remains available for support tracing.
@@ -78,7 +108,7 @@ function authHeaders(extra?: Record<string, string>, includeCsrf = false): Recor
   return h;
 }
 
-async function throwIfResNotOk(res: Response) {
+export async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = await res.text();
     throw new ApiError(
@@ -110,7 +140,7 @@ export class NetworkError extends Error {
     super(
       typeof navigator !== "undefined" && navigator.onLine === false
         ? "You are offline - reconnect and try again."
-        : "Lost connection to the server before it answered. Nothing may have been saved - try again.",
+        : "Lost connection to the server before it answered. Check whether your changes were saved before trying again.",
     );
     this.name = "NetworkError";
     this.cause = cause;
@@ -119,6 +149,7 @@ export class NetworkError extends Error {
 
 /** Safe GET retry policy for flaky field connections; mutations remain one-shot. */
 export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+  if (error instanceof RequestTimeoutError || (error instanceof Error && error.name === "AbortError")) return false;
   if (failureCount >= 2) return false;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
   if (!(error instanceof ApiError)) return failureCount < 1;
@@ -138,7 +169,37 @@ export function queryRetryDelay(attempt: number, error: unknown): number {
 // ~15 concurrent /api/leads/map hits on mount). Each caller gets its own clone()
 // so their independent .json()/.text() reads never collide. Only GETs with no body
 // are shared; mutations always run their own request.
-const _inflightGets = new Map<string, Promise<Response>>();
+interface SharedRead {
+  response: Promise<Response>;
+  controller: AbortController;
+  deadline: number;
+  scopeSignal: AbortSignal;
+}
+const _inflightGets = new Map<string, SharedRead>();
+
+function boundedResponse(response: Response, read: SharedRead): Response {
+  const consume = <T>(body: () => Promise<T>) => async (): Promise<T> => {
+    try {
+      return await withRequestDeadline(body, Math.max(1, read.deadline - Date.now()), read.scopeSignal);
+    } catch (error) {
+      if (error instanceof RequestTimeoutError || read.scopeSignal.aborted) read.controller.abort(error);
+      if (read.controller.signal.aborted) throw read.controller.signal.reason;
+      if (error instanceof SyntaxError) throw new Error("The server returned an unreadable response. Please try again.");
+      throw error;
+    }
+  };
+  // Preserve the public Response contract and independent clones without
+  // buffering/copying large payloads. Custom queryFns commonly call .json()
+  // after apiRequest resolves; their body read needs the original deadline too.
+  response.json = consume(response.json.bind(response));
+  response.text = consume(response.text.bind(response));
+  response.blob = consume(response.blob.bind(response));
+  response.arrayBuffer = consume(response.arrayBuffer.bind(response));
+  response.formData = consume(response.formData.bind(response));
+  const clone = response.clone.bind(response);
+  response.clone = () => boundedResponse(clone(), read);
+  return response;
+}
 
 // A completed mutation makes every in-flight GET's eventual body suspect: it
 // left the server BEFORE the write. Any query that refetches after the
@@ -168,22 +229,30 @@ export async function apiRequest(
     const key = `${m} ${url}`;
     let shared = _inflightGets.get(key);
     if (!shared) {
-      shared = fetch(`${API_BASE}${url}`, { headers: authHeaders() }).then(async (res) => {
+      const controller = new AbortController();
+      const scopeSignal = requestScope.signal;
+      const response = withRequestDeadline(async () => {
+        let res: Response;
+        try { res = await fetch(`${API_BASE}${url}`, { method: m, headers: authHeaders(), signal: controller.signal }); }
+        catch (error) { throw error instanceof TypeError ? new NetworkError(error) : error; }
         notifyIfSessionExpired(res.status);
         await throwIfResNotOk(res);
         return res; // body left UNREAD → every caller reads its own clone
-      });
+      }, 30_000, scopeSignal).catch(error => { controller.abort(error); throw error; });
+      shared = { response, controller, deadline: Date.now() + 30_000, scopeSignal };
       _inflightGets.set(key, shared);
       // Free the slot once settled so a later, genuinely-new request re-fetches.
       // .then(onOk, onErr), NOT .finally: .finally's derived promise would
       // itself reject UNHANDLED when the shared request fails (offline GET),
       // which surfaces as unhandled-rejection noise in tests and consoles.
-      shared.then(
+      shared.response.then(
         () => { if (_inflightGets.get(key) === shared) _inflightGets.delete(key); },
         () => { if (_inflightGets.get(key) === shared) _inflightGets.delete(key); },
       );
     }
-    return (await shared).clone();
+    const response = await shared.response;
+    if (shared.scopeSignal.aborted) throw shared.scopeSignal.reason;
+    return boundedResponse(response.clone(), shared);
   }
 
   let res: Response;
@@ -232,16 +301,28 @@ export async function apiRequestIdempotent(
   data?: unknown,
   attempts = 3,
 ): Promise<Response> {
+  const scopeSignal = requestScope.signal;
   const backoffMs = [2_000, 6_000];
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
+    if (scopeSignal.aborted) throw scopeSignal.reason;
     try {
       return await apiRequest(method, url, data);
     } catch (e) {
       if (!(e instanceof NetworkError)) throw e;
       lastError = e;
       if (attempt < attempts - 1) {
-        await new Promise((r) => setTimeout(r, backoffMs[Math.min(attempt, backoffMs.length - 1)]));
+        // The running helper outlives its mutation's callbacks. Cancel its
+        // own backoff so an old selection is never retried as the next user.
+        if (scopeSignal.aborted) throw scopeSignal.reason;
+        await new Promise<void>((resolve, reject) => {
+          const cancel = () => { clearTimeout(timer); reject(scopeSignal.reason); };
+          const timer = setTimeout(() => {
+            scopeSignal.removeEventListener("abort", cancel);
+            resolve();
+          }, backoffMs[Math.min(attempt, backoffMs.length - 1)]);
+          scopeSignal.addEventListener("abort", cancel, { once: true });
+        });
       }
     }
   }
@@ -259,6 +340,8 @@ export async function apiUpload(url: string, form: FormData): Promise<Response> 
       headers: authHeaders({}, true), // x-session-id + x-csrf-token; NO content-type
       body: form,
     });
+  } catch (error) {
+    throw error instanceof TypeError ? new NetworkError(error) : error;
   } finally {
     bustInflightGetShare(); // uploads mutate too — same stale-share rule
   }
@@ -272,19 +355,19 @@ export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
-    const res = await fetch(`${API_BASE}${queryKey[0]}`, {
-      headers: authHeaders(),
-    });
-
+  ({ queryKey, signal }) => withRequestDeadline(async requestSignal => {
+    let res: Response;
+    try { res = await fetch(`${API_BASE}${queryKey[0]}`, { headers: authHeaders(), signal: requestSignal }); }
+    catch (error) { throw error instanceof TypeError ? new NetworkError(error) : error; }
     notifyIfSessionExpired(res.status);
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-      return null;
-    }
-
+    if (unauthorizedBehavior === "returnNull" && res.status === 401) return null;
     await throwIfResNotOk(res);
-    return await res.json();
-  };
+    try { return await res.json(); }
+    catch (error) {
+      if (error instanceof SyntaxError) throw new Error("The server returned an unreadable response. Please try again.");
+      throw error;
+    }
+  }, 30_000, [signal, requestScope.signal]);
 
 // ── Knock-queue recovery signal ───────────────────────────────────────────────
 // The FIRST successful query after any query failure means connectivity + auth
@@ -306,6 +389,13 @@ export function noteQueryOutcome(ok: boolean): void {
 }
 
 export const queryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    // Observers may refresh their options before unmount. Reapply retirement
+    // immediately before late completion invokes any component callbacks.
+    onSuccess: (_data, _variables, _context, mutation) => { if (retiredMutations.has(mutation)) retireMutation(mutation); },
+    onError: (_error, _variables, _context, mutation) => { if (retiredMutations.has(mutation)) retireMutation(mutation); },
+    onSettled: (_data, _error, _variables, _context, mutation) => { if (retiredMutations.has(mutation)) retireMutation(mutation); },
+  }),
   queryCache: new QueryCache({
     onError: () => noteQueryOutcome(false),
     onSuccess: () => noteQueryOutcome(true),
@@ -382,14 +472,15 @@ for (const key of [...PERSISTED_QUERY_KEYS, ...OFFLINE_RETAINED_QUERY_KEYS]) {
 
 const QUERY_CACHE_STORAGE_KEY = "hf-query-cache-v1";
 
-export const queryPersister =
-  typeof window !== "undefined"
-    ? createSyncStoragePersister({
-        storage: window.localStorage,
-        key: QUERY_CACHE_STORAGE_KEY,
-        throttleTime: 1000,
-      })
-    : undefined;
+function optionalStorage(): Storage | undefined {
+  try { return typeof window !== "undefined" ? window.localStorage : undefined; }
+  catch { return undefined; } // Blocked storage must not prevent the app booting.
+}
+export const queryPersister = createSyncStoragePersister({
+  storage: optionalStorage(),
+  key: QUERY_CACHE_STORAGE_KEY,
+  throttleTime: 1000,
+});
 
 export const persistOptions = {
   persister: queryPersister!,
@@ -456,14 +547,15 @@ export function isSessionScopedStorageKey(key: string): boolean {
     || SESSION_SCOPED_KEY_PREFIXES.some((p) => key.startsWith(p));
 }
 
-export function purgeSessionScopedKeys(): void {
+export function purgeSessionScopedKeys({ preservePendingWrites = false } = {}): void {
   try {
     if (typeof window === "undefined" || !window.localStorage) return;
     // Collect first — removing while iterating shifts indexes.
     const doomed: string[] = [];
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i);
-      if (key && isSessionScopedStorageKey(key)) doomed.push(key);
+      if (key && isSessionScopedStorageKey(key)
+        && (!preservePendingWrites || key.startsWith("hf.mapPinsSnapshot.") || key.startsWith("hf.mapWindowSnapshot."))) doomed.push(key);
     }
     for (const key of doomed) window.localStorage.removeItem(key);
   } catch {

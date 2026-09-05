@@ -4,6 +4,7 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { queryClient, persistOptions } from "@/lib/queryClient";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ErrorState } from "@/components/ErrorState";
 import { installGlobalErrorBeacon } from "@/lib/errorBeacon";
 
 // Errors no boundary sees (sync window errors, unhandled rejections) still
@@ -178,7 +179,7 @@ function keepAliveTab(location: string, role: string | undefined): boolean {
 }
 
 function AppRoutes() {
-  const { user, isFirstRun, loading } = useAuth();
+  const { user, isFirstRun, loading, statusError, retryStatus, logout } = useAuth();
   const [location] = useHashLocation();
   // The route stage renders from THIS value, one deferred step behind the live
   // location. wouter keeps the location in useSyncExternalStore, and React
@@ -262,6 +263,14 @@ function AppRoutes() {
     );
   }
 
+  if (!user && statusError) {
+    return <main className="flex min-h-dvh items-center justify-center bg-background p-5">
+      <ErrorState title="Couldn't open your session" description={statusError}
+        onRetry={retryStatus} action={<button type="button" onClick={() => void logout()}
+          className="min-h-11 rounded-xl px-4 text-sm font-semibold text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Sign in again</button>} />
+    </main>;
+  }
+
   if (!user || isFirstRun) {
     return <Login />;
   }
@@ -287,7 +296,7 @@ function AppRoutes() {
           activeLocation={deferredLocation}
           keepAlive={stageKeepAlive}
           maxKept={MAX_KEPT_STAGES}
-          resetKey={`${user?.id ?? ""}:${role ?? ""}`}
+          resetKey={`${user.id}:${user.tenantId ?? ""}:${user.teamMemberId ?? ""}:${role}:${!!user.isSuperAdmin}`}
           className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto"
           renderStage={(loc) => (
             // Per-stage boundary: hidden kept stages keep rendering on state

@@ -24,8 +24,8 @@
 // - display:none stages still render on state changes; their PAGES opt out of
 //   recurring work via useTabActive() (lib/tabActivity), so hidden tabs stop
 //   polling but keep their tree warm.
-import { useEffect, useRef, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState, useId, type ReactNode } from "react";
+import { QueryClient, QueryClientContext, useQueryClient } from "@tanstack/react-query";
 import { TabActivityProvider } from "@/lib/tabActivity";
 
 export function KeepAliveStages({ activeLocation, keepAlive, maxKept = 4, resetKey = "", className, renderStage }: {
@@ -53,34 +53,19 @@ export function KeepAliveStages({ activeLocation, keepAlive, maxKept = 4, resetK
   }
   const kept = keptRef.current;
   const stages = kept.includes(activeLocation) ? kept : [...kept, activeLocation];
-  const queryClient = useQueryClient();
   useEffect(() => {
-    // RE-SHOW REVALIDATION — load-bearing, not an optimization. The app's
-    // freshness model was REMOUNT-driven: refetchOnWindowFocus is globally
-    // false and most queries have no interval, so the unmount/remount cycle
-    // this component removed was the only thing that ever refetched a
-    // revisited tab's data. Returning to an already-mounted stage therefore
-    // refetches every stale mounted query (staleTime still debounces — inside
-    // its window this is a no-op, exactly the pre-keep-alive cadence). Scoped
-    // to type:'active' observers; hidden stages' stale queries ride along,
-    // which only front-loads the refetch their own return would have done.
-    // A stage's FIRST activation skips this: its queries are mounting right
-    // now and refetchOnMount already covers them.
-    const wasAlreadyMounted = keptRef.current.includes(activeLocation);
-    if (wasAlreadyMounted) {
-      void queryClient.refetchQueries({ stale: true, type: "active" });
-    }
     // Post-commit only (the commit-gating invariant above). Move-to-end keeps
     // activation order, so the slice evicts the least recently used stage.
     if (!keepAlive(activeLocation)) return;
     const cur = keptRef.current;
     const next = [...cur.filter((p) => p !== activeLocation), activeLocation];
     keptRef.current = next.length > maxKept ? next.slice(next.length - maxKept) : next;
-  }, [activeLocation, keepAlive, maxKept, queryClient]);
+  }, [activeLocation, keepAlive, maxKept]);
   return (
     <>
       {stages.map((loc) => (
-        <TabActivityProvider key={loc} active={loc === activeLocation}>
+        <StageQueries key={`${resetKey}:${loc}`} active={loc === activeLocation}>
+        <TabActivityProvider active={loc === activeLocation}>
           <div
             style={loc === activeLocation ? undefined : { display: "none" }}
             className={className}
@@ -90,7 +75,46 @@ export function KeepAliveStages({ activeLocation, keepAlive, maxKept = 4, resetK
             {renderStage(loc)}
           </div>
         </TabActivityProvider>
+        </StageQueries>
       ))}
     </>
   );
+}
+
+// Tag observer options (not query.meta, which shared queries overwrite) so a
+// returning stage refreshes only its own stale reads. Both caches and defaults
+// remain shared. The root provider alone owns focus/reconnect subscriptions.
+function StageQueries({ active, children }: { active: boolean; children: ReactNode }) {
+  const root = useQueryClient();
+  const owner = useId();
+  const [client] = useState(() => {
+    const scoped = new QueryClient({ queryCache: root.getQueryCache(), mutationCache: root.getMutationCache() });
+    scoped.defaultQueryOptions = options => {
+      const defaults = root.defaultQueryOptions(options);
+      return { ...defaults, meta: { ...defaults.meta, stageOwner: owner } };
+    };
+    scoped.defaultMutationOptions = options => root.defaultMutationOptions(options);
+    scoped.getDefaultOptions = () => root.getDefaultOptions();
+    scoped.setDefaultOptions = options => root.setDefaultOptions(options);
+    scoped.getQueryDefaults = key => root.getQueryDefaults(key);
+    scoped.setQueryDefaults = (key, options) => root.setQueryDefaults(key, options);
+    scoped.getMutationDefaults = key => root.getMutationDefaults(key);
+    scoped.setMutationDefaults = (key, options) => root.setMutationDefaults(key, options);
+    return scoped;
+  });
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) {
+      for (const query of root.getQueryCache().getAll()) {
+        const observer = query.observers.find(observer =>
+          (observer.options.meta?.stageOwner === owner || observer.options.meta?.stageOwner == null)
+          && observer.getCurrentResult().isStale);
+        // Refetch through the matching observer to honor its own queryFn and
+        // enabled/staleTime options; join an existing request instead of aborting it.
+        if (observer) void observer.refetch({ cancelRefetch: false }).catch(() => {});
+      }
+    }
+    wasActive.current = active;
+  }, [active, root, owner]);
+  return <QueryClientContext.Provider value={client}>{children}</QueryClientContext.Provider>;
 }

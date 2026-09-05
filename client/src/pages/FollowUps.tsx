@@ -111,7 +111,11 @@ export default function FollowUps() {
   // Bookings per day for the strip's dots (status colour = the door's pin colour).
   const byDay = useMemo(() => {
     const m = new Map<string, FollowUp[]>();
-    for (const f of list) m.set(f.callbackDate, [...(m.get(f.callbackDate) ?? []), f]);
+    for (const f of list) {
+      const day = m.get(f.callbackDate);
+      if (day) day.push(f);
+      else m.set(f.callbackDate, [f]);
+    }
     return m;
   }, [list]);
 
@@ -186,11 +190,13 @@ export default function FollowUps() {
 
         {offline && (
           <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-muted px-3 py-2.5 text-[13px] text-muted-foreground">
-            Offline - showing your last synced follow-ups
+            {q.data ? "Offline - showing your last synced follow-ups" : "Offline - reconnect to load your follow-ups"}
           </div>
         )}
 
-        {q.isLoading ? (
+        {q.isPaused && !q.data ? (
+          <ErrorState title="Connect to load your schedule" description="Your appointments and callbacks will load when you are back online." className="mt-6" testId="followups-offline" />
+        ) : q.isPending ? (
           <div className="mt-5 rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
             {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="flex items-center gap-3 px-4 py-3.5">
@@ -221,7 +227,7 @@ export default function FollowUps() {
           <div className="mt-5" data-testid="schedule-day-view">
             {dayRows.length > 0 ? (
               <Section title={fmtDay(selectedDay, today)} tone="text-info" count={dayRows.length}>
-                {dayRows.map(f => <Row key={f.leadId} {...rowProps(f)} overdue={f.callbackDate < today} />)}
+                <PagedRows key={selectedDay} rows={dayRows} label={fmtDay(selectedDay, today)} renderRow={f => <Row key={f.leadId} {...rowProps(f)} overdue={f.callbackDate < today} />} />
               </Section>
             ) : (
               <div className="rounded-xl border border-border bg-card px-4 py-5 text-center text-[13px] text-muted-foreground" data-testid="schedule-day-empty">
@@ -237,17 +243,17 @@ export default function FollowUps() {
           <div className="mt-5 space-y-5">
             {groups.overdue.length > 0 && (
               <Section title="Overdue" tone="text-destructive" count={groups.overdue.length}>
-                {groups.overdue.map(f => <Row key={f.leadId} {...rowProps(f)} overdue />)}
+                <PagedRows rows={groups.overdue} label="Overdue" renderRow={f => <Row key={f.leadId} {...rowProps(f)} overdue />} />
               </Section>
             )}
             {groups.today.length > 0 && (
               <Section title="Today" tone="text-info" count={groups.today.length}>
-                {groups.today.map(f => <Row key={f.leadId} {...rowProps(f)} />)}
+                <PagedRows rows={groups.today} label="Today" renderRow={f => <Row key={f.leadId} {...rowProps(f)} />} />
               </Section>
             )}
             {groups.upcoming.length > 0 && (
               <Section title="Upcoming" tone="text-muted-foreground" count={groups.upcoming.length}>
-                {groups.upcoming.map(f => <Row key={f.leadId} {...rowProps(f)} />)}
+                <PagedRows rows={groups.upcoming} label="Upcoming" renderRow={f => <Row key={f.leadId} {...rowProps(f)} />} />
               </Section>
             )}
           </div>
@@ -279,6 +285,35 @@ export default function FollowUps() {
 
 function sheetLeadOf(f: FollowUp): SheetLead {
   return { id: f.leadId, address: f.address, city: f.city, zip: f.zip, contactName: f.contactName, leadStatus: f.leadStatus, lastOutcome: "callback", lat: f.lat, lng: f.lng };
+}
+
+// Keep large schedules bounded while retaining every appointment and the
+// section totals. Paging also avoids thousands of offscreen distance renders.
+function PagedRows({ rows, label, renderRow }: {
+  rows: FollowUp[]; label: string; renderRow: (row: FollowUp) => React.ReactNode;
+}) {
+  const pageSize = 50;
+  const [requestedPage, setPage] = useState(0);
+  const page = Math.min(requestedPage, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
+  const start = page * pageSize;
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const previousPage = useRef(page);
+  useEffect(() => {
+    if (previousPage.current !== page) {
+      // Start reading the new page at its first appointment, including when
+      // paging from the bottom of a long schedule with the keyboard.
+      rowsRef.current?.querySelector("button")?.focus();
+    }
+    previousPage.current = page;
+  }, [page]);
+  return <>
+    <div ref={rowsRef} className="divide-y divide-border">{rows.slice(start, start + pageSize).map(renderRow)}</div>
+    {rows.length > pageSize && <nav aria-label={`${label} appointments`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+      <button type="button" className={`min-h-11 px-2 text-sm font-medium disabled:opacity-40 ${FOCUS}`} disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
+      <span role="status" className="text-xs text-muted-foreground tabular-nums">{start + 1}–{Math.min(start + pageSize, rows.length)} of {rows.length}</span>
+      <button type="button" className={`min-h-11 px-2 text-sm font-medium disabled:opacity-40 ${FOCUS}`} disabled={start + pageSize >= rows.length} onClick={() => setPage(page + 1)}>Next</button>
+    </nav>}
+  </>;
 }
 
 function Section({ title, tone, count, children }: { title: string; tone: string; count: number; children: React.ReactNode }) {

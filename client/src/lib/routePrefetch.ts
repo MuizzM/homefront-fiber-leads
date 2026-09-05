@@ -194,7 +194,7 @@ export function canPrefetchRouteChunks(): boolean {
 /** Warm the code chunk for a route href (hash-router "/foo" form). Safe to call
  *  on every hover/focus/pointerdown; no-op for unknown or already-warm paths. */
 export function prefetchRoute(href: string | undefined | null): void {
-  if (!href) return;
+  if (!href || !canPrefetchRouteChunks()) return;
   const path = href.replace(/^#/, "");
   const match = resolveThunk(path);
   if (!match) return;

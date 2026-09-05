@@ -599,13 +599,13 @@ function requireCapability(cap: Capability) {
 //   • rep → just their own linked member.
 // Reps/leads with no linkage resolve to a set that matches nothing (never all).
 // Enforced on the SERVER — the map, search, lasso, stats all pass through here.
-function leadVisibilityScope(user: any): number | number[] | undefined {
+function leadVisibilityScope(user: any, roster?: TeamMember[]): number | number[] | undefined {
   const role = user?.role;
   if (role === "admin" || role === "manager" || role === "super_admin") return undefined;
   if (role === "team_lead") {
     const selfTm = user?.teamMemberId ?? null;
     const reports = selfTm != null
-      ? storage.getTeamMembers(user?.tenantId ?? undefined).filter((m: any) => m.reportsToId === selfTm).map((m: any) => m.id)
+      ? (roster ?? storage.getTeamMembers(user?.tenantId ?? undefined)).filter(m => m.reportsToId === selfTm).map(m => m.id)
       : [];
     const ids = selfTm != null ? [selfTm, ...reports] : [];
     return ids.length ? [...new Set(ids)] : [-1]; // fail-closed
@@ -1563,7 +1563,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     repInVisibilityScope, repInCallerTenant,
   });
   // Spreadsheet import: same capability, scope and tenant rules as the lasso.
-  registerLeadImportRoutes(app, { requireCapability, repInVisibilityScope, repInCallerTenant, bustMapCache });
+  registerLeadImportRoutes(app, { requireCapability, repInVisibilityScope, repInCallerTenant, leadVisibilityScope, bustMapCache });
   // Neighborhood sweep: the ranked "whole neighborhoods nobody has knocked"
   // read model and the cycle nudge (manager reads, admin nudge).
   registerNeighborhoodSweepRoutes(app, { requireManager, requireAdmin });
@@ -2262,8 +2262,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // serialized for a response the client would refuse to paint as pins.
       const nosample = req.query.nosample === "1";
       const win = { ...bbox, tag: tag as string | undefined, view: view as MapView | undefined };
-      let rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP + 1 });
-      const truncated = rows.length > MAP_BBOX_ROW_CAP;
+      // Dense honest windows only need their count. Avoid hydrating 25,001
+      // full pins and visit histories that would immediately be discarded.
+      const initialCount = nosample ? storage.getLeadsMapWindowCount(tid, repFilter, win) : undefined;
+      const tooDense = initialCount != null && initialCount > MAP_BBOX_ROW_CAP;
+      let rows = tooDense ? [] : storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP + 1 });
+      const truncated = tooDense || rows.length > MAP_BBOX_ROW_CAP;
       let sampleStep = 1;
       let windowCount: number | undefined;
       if (truncated) {
@@ -2271,7 +2275,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // windows pay it): the true row count, shipped so the client can
         // render honest aggregate counts and predict when a zoomed-in window
         // will fit under the cap without paying a throwaway fetch.
-        windowCount = storage.getLeadsMapWindowCount(tid, repFilter, win);
+        // Recount after capped hydration if a concurrent writer crossed the cap.
+        windowCount = tooDense ? initialCount : storage.getLeadsMapWindowCount(tid, repFilter, win);
         if (nosample) {
           rows = [];
         } else {
@@ -2281,7 +2286,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           // across pans, spread across insertion order; see
           // Storage.mapWindowPred for the bias tradeoff. truncated stays true
           // so the client's "Showing a sample" chip tells the truth.
-          sampleStep = Math.max(2, Math.ceil(windowCount / MAP_BBOX_ROW_CAP));
+          sampleStep = Math.max(2, Math.ceil(windowCount! / MAP_BBOX_ROW_CAP));
           rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP, sampleStep });
         }
       }
@@ -2311,7 +2316,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // The view lens joins the ETag's scope segment ONLY when present — an
     // unfiltered request's token stays byte-identical to before, and a
     // "latest" 304 can never validate the unfiltered payload.
-    const viewKey = view === "latest" ? "-latest" : "";
+    const viewKey = view ? `-${view}` : "";
     // DB-derived version makes the ETag change on ANY cross-process lead write
     // (scan runner, nightly cron) — not just this process's own mutations. Without
     // it, a browser holding the pre-scan ETag would 304 forever and never see the
@@ -8234,9 +8239,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const { y, mo, d } = localYmdParts(now, tz);
         return { since: dayStartIso(y, mo, d) };
       }
-      if (range === "7d") return { since: back(7) };
-      if (range === "30d") return { since: back(30) };
-      if (range === "1y") return { since: back(365) };
+      if (range === "7d") return { since: back(7), preset: range } as const;
+      if (range === "30d") return { since: back(30), preset: range } as const;
+      if (range === "1y") return { since: back(365), preset: range } as const;
       if (range === "custom" || req.query.since || req.query.until) {
         const s = String(req.query.since ?? ""), u = String(req.query.until ?? "");
         const ok = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);

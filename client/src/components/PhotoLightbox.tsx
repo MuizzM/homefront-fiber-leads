@@ -24,7 +24,7 @@ export function PhotoLightbox({ photoId, onClose }: { photoId: number; onClose: 
       aria-label="Photo viewer"
       onClick={onClose}
     >
-      <AuthedImg photoId={photoId} alt="Door photo (full size)" className="max-w-full max-h-full rounded-xl object-contain" />
+      <AuthedImg photoId={photoId} loading="eager" alt="Door photo (full size)" className="max-w-full max-h-full rounded-xl object-contain" />
       <button
         type="button"
         onClick={onClose}

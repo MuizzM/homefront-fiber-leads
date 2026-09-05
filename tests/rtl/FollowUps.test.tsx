@@ -144,3 +144,24 @@ describe("Schedule week strip and time-first rows", () => {
     expect(screen.queryByTestId("followup-distance-1")).toBeNull();
   });
 });
+
+
+it("bounds a large agenda and lets every appointment be reached by paging", async () => {
+  renderPage(Array.from({ length: 123 }, (_, index) => fu(index + 1, todayISO(), { callbackTime: "09:00" })));
+  await screen.findByTestId("followup-1");
+  expect(screen.getByTestId("followups-summary")).toHaveTextContent("123 scheduled");
+  expect(document.querySelectorAll('[data-testid^="followup-time-"]')).toHaveLength(50);
+  const pages = within(screen.getByRole("navigation", { name: "Today appointments" }));
+  fireEvent.click(pages.getByText("Next"));
+  expect(screen.getByTestId("followup-51")).toBeTruthy();
+  expect(screen.getByTestId("followup-51")).toHaveFocus();
+  expect(screen.queryByTestId("followup-1")).toBeNull();
+  fireEvent.click(pages.getByText("Next"));
+  expect(screen.getByTestId("followup-123")).toBeTruthy();
+  expect(screen.getByTestId("followup-101")).toHaveFocus();
+  expect(document.querySelectorAll('[data-testid^="followup-time-"]')).toHaveLength(23);
+  expect(pages.getByText("Next")).toBeDisabled();
+  fireEvent.click(pages.getByText("Previous"));
+  expect(screen.getByTestId("followup-51")).toBeTruthy();
+  expect(screen.getByTestId("followup-51")).toHaveFocus();
+});

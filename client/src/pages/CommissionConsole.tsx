@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { ErrorState } from "@/components/ErrorState";
+import type { BatchRepOutcome } from "../../../server/commissionService";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRovingTabs } from "@/hooks/use-roving-tabs";
 import { apiRequest } from "@/lib/queryClient";
@@ -125,21 +127,25 @@ export default function CommissionConsole() {
     placeholderData: keepPreviousData,
   });
 
+  const [closeoutIssues, setCloseoutIssues] = useState<BatchRepOutcome[]>([]);
   const transition = useMutation({
     mutationFn: (action: "FINALIZE" | "MARK_PAID") =>
       apiRequest("POST", "/api/commission/week/transition", { week: weekRef, action }).then(r => r.json()),
-    onSuccess: (data: any, action) => {
-      const done = data.results.filter((r: any) => r.result === (action === "FINALIZE" ? "FINALIZED" : "PAID")).length;
-      const skipped = data.results.length - done;
+    onSuccess: (data: { results: BatchRepOutcome[] }, action) => {
+      const issues = data.results.filter(r => r.outcome === "blocked" || r.outcome === "failed" || (r.outcome === "skipped" && r.retryable));
+      setCloseoutIssues(issues);
+      const done = data.results.filter((r) => r.result === (action === "FINALIZE" ? "FINALIZED" : "PAID")).length;
+      const skipped = data.results.length - done - issues.length;
       toast({
-        title: action === "FINALIZE" ? `Week finalized - ${done} statement${done === 1 ? "" : "s"} locked` : `${done} statement${done === 1 ? "" : "s"} marked paid`,
-        description: skipped > 0 ? `${skipped} already settled or skipped.` : "Every number on this week is now locked.",
+        title: issues.length ? `Closeout needs attention - ${done} completed` : action === "FINALIZE" ? `Week finalized - ${done} statement${done === 1 ? "" : "s"} locked` : `${done} statement${done === 1 ? "" : "s"} marked paid`,
+        description: issues.length ? `${issues.length} rep(s) need review. Resolve the issues below, then retry closeout.` : skipped > 0 ? `${skipped} already settled or skipped.` : "All requested statements completed.",
+        variant: issues.length ? "destructive" : undefined,
       });
       qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] });
       // Finalizing/paying settles override rows too — refresh both override surfaces.
       qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] });
       qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] });
-      setConfirmAction(null);
+      if (!issues.length) setConfirmAction(null);
     },
     onError: (e: any) => toast({ title: "Closeout failed", description: e.message, variant: "destructive" }),
   });
@@ -536,12 +542,12 @@ export default function CommissionConsole() {
                 <>
                   <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-primary-foreground text-xs"
                     disabled={openCount === 0 || transition.isPending}
-                    onClick={() => setConfirmAction("FINALIZE")} data-testid="btn-finalize-week">
+                    onClick={() => { setCloseoutIssues([]); setConfirmAction("FINALIZE"); }} data-testid="btn-finalize-week">
                      Finalize week
                   </Button>
                   <Button size="sm" variant="outline" className="h-8 border-success/30 text-success hover:bg-success/[0.08] text-xs"
                     disabled={finalizedCount === 0 || transition.isPending}
-                    onClick={() => setConfirmAction("MARK_PAID")} data-testid="btn-mark-paid">
+                    onClick={() => { setCloseoutIssues([]); setConfirmAction("MARK_PAID"); }} data-testid="btn-mark-paid">
                      Mark paid
                   </Button>
                 </>
@@ -569,7 +575,7 @@ export default function CommissionConsole() {
       )}
 
       {/* Confirm closeout */}
-      <Dialog open={!!confirmAction} onOpenChange={v => !v && setConfirmAction(null)}>
+      <Dialog open={!!confirmAction} onOpenChange={v => { if (!v) { setConfirmAction(null); setCloseoutIssues([]); } }}>
         <DialogContent className="bg-card border-border text-foreground max-w-md">
           <DialogHeader>
             <DialogTitle className="text-base">
@@ -597,8 +603,14 @@ export default function CommissionConsole() {
               <strong className="text-foreground">{finalizedCount}</strong> finalized statement{finalizedCount === 1 ? "" : "s"} ({usd(ov?.totals.finalizedPayrollCents ?? 0)}) will be marked paid. Do this after money actually moves.
             </p>
           )}
+          {closeoutIssues.length > 0 && <div role="alert" className="space-y-2 text-sm" data-testid="closeout-issues">
+            <p className="font-semibold">Closeout needs attention. Review these reps, then retry. Completed statements will be skipped.</p>
+            <ul className="max-h-48 overflow-auto space-y-2">{closeoutIssues.map((result, index) => <li key={`${result.repId}:${index}`}>
+              <span className="font-medium">{ov?.rows.find(row => row.repId === result.repId)?.repName ?? `Rep #${result.repId}`}</span>: {result.result}
+            </li>)}</ul>
+          </div>}
           <DialogFooter>
-            <Button variant="outline" className="border-border" onClick={() => setConfirmAction(null)}>Cancel</Button>
+            <Button variant="outline" className="border-border" onClick={() => { setConfirmAction(null); setCloseoutIssues([]); }}>Close</Button>
             <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={transition.isPending}
               onClick={() => confirmAction && transition.mutate(confirmAction)} data-testid="btn-confirm-closeout">
               {transition.isPending ? "Working…" : confirmAction === "FINALIZE" ? `Lock ${openCount} statement${openCount === 1 ? "" : "s"}` : "Mark paid"}
@@ -608,7 +620,7 @@ export default function CommissionConsole() {
       </Dialog>
 
       {/* Statement drill-down */}
-      <StatementDrawer row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canReadAll} canDecideAdj={canPay} canMoveReserve={canPay} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] }); }} />
+      <StatementDrawer key={`${weekRef}:${drillRep?.repId ?? "closed"}:${drillRep?.statementId ?? "none"}`} row={drillRep} weekRef={weekRef} weekLabel={ov?.bounds.localWeekLabel ?? ""} canAdjust={canReadAll} canDecideAdj={canPay} canMoveReserve={canPay} onClose={() => { setDrillRep(null); qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/sheet"] }); qc.invalidateQueries({ queryKey: ["/api/commission/overrides/me"] }); }} />
     </div>
   );
 }
@@ -1174,13 +1186,16 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
   // Reuse the console's exact week reference — same instant the commission
   // overview/statement/sales queries use — so this panel always describes the
   // same week the rest of the screen is showing.
-  const { data, isLoading } = useQuery<PayoutWeek>({
+  const { data, isPending: isLoading, isPaused, isError, refetch } = useQuery<PayoutWeek>({
     queryKey: ["/api/payouts/week", weekRef],
     queryFn: () => apiRequest("GET", `/api/payouts/week?week=${encodeURIComponent(weekRef)}`).then(r => r.json()),
   });
 
   const pay = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/payouts/week/pay", { week: weekRef }).then(r => r.json()),
+    mutationFn: () => {
+      if (isError || !data?.stripeEnabled || !data.payableCount || insufficientBalance) throw new Error("Refresh payout readiness before sending money.");
+      return apiRequest("POST", "/api/payouts/week/pay", { week: weekRef }).then(r => r.json());
+    },
     onSuccess: (res: { week: string; results: PayResult[]; paidCount: number }) => {
       const list = res.results ?? [];
       setResults(list);
@@ -1235,7 +1250,9 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
       </div>
 
       {isLoading ? (
-        <div className="p-4"><div className="h-16 rounded-xl bg-secondary/40 animate-pulse" /></div>
+        <div className="p-4">{isPaused ? <p role="status" className="text-sm text-muted-foreground">Connect to load payout readiness.</p> : <div className="h-16 rounded-xl bg-secondary/40 animate-pulse" />}</div>
+      ) : isError ? (
+        <ErrorState title="Couldn't load payout readiness" onRetry={() => refetch()} className="p-4" testId="pay-reps-error" />
       ) : !stripeEnabled ? (
         /* Disabled / informational — NO pay path exists in this branch. */
         <div className="p-5 flex items-start gap-3" data-testid="pay-reps-disabled">
@@ -1368,9 +1385,10 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
             </p>
             <p className="text-2xs text-muted-foreground">*Estimate uses Stripe's published standard US Connect rate: 0.25% + 25¢ per payout. Active accounts may add $2 per paid rep each month; confirm your account's contracted pricing.</p>
           </div>
+          {isError && <ErrorState title="Payout readiness changed or is unavailable" description="Refresh before confirming this payment." onRetry={() => refetch()} />}
           <DialogFooter>
             <Button variant="outline" className="border-border" onClick={() => setConfirmOpen(false)} disabled={pay.isPending}>Cancel</Button>
-            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={pay.isPending || payableCount === 0 || insufficientBalance || !canPay}
+            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={pay.isPending || payableCount === 0 || insufficientBalance || !canPay || isError || isLoading || !stripeEnabled}
               onClick={() => pay.mutate()} data-testid="pay-confirm">
               {pay.isPending
                 ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Paying…</>
@@ -1391,7 +1409,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents, balanceUnknown = false 
 function HouseAmountCard() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { data: config } = useQuery<{ houseAmountCents: number }>({
+  const { data: config, isError, isSuccess, refetch } = useQuery<{ houseAmountCents: number }>({
     queryKey: ["/api/commission/config"],
     queryFn: () => apiRequest("GET", "/api/commission/config").then(r => r.json()),
   });
@@ -1417,6 +1435,7 @@ function HouseAmountCard() {
   });
 
   const submit = () => {
+    if (save.isPending || draft === undefined || !isSuccess || !config) return;
     const dollars = Number(shown);
     if (shown.trim() === "") return save.mutate(0);
     if (!Number.isFinite(dollars) || dollars < 0) {
@@ -1427,6 +1446,7 @@ function HouseAmountCard() {
 
   return (
     <div className="rounded-xl bg-card border border-border p-4" data-testid="house-amount-card">
+      {isError && <ErrorState title="Couldn't load the saved house amount" onRetry={() => refetch()} />}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="min-w-0">
           <Label htmlFor="house-amount" className="text-sm font-semibold">House amount per sale</Label>
@@ -1443,6 +1463,7 @@ function HouseAmountCard() {
               inputMode="decimal"
               placeholder="0.00"
               value={shown}
+              disabled={!isSuccess || save.isPending}
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter") submit(); }}
               className="w-32 pl-7 tabular-nums"
@@ -1452,7 +1473,7 @@ function HouseAmountCard() {
           <Button
             size="sm"
             onClick={submit}
-            disabled={save.isPending || draft === undefined}
+            disabled={save.isPending || draft === undefined || !isSuccess || !config}
             data-testid="house-amount-save"
           >
             {save.isPending ? "Saving…" : "Save"}
