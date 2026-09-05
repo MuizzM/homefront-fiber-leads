@@ -59,6 +59,45 @@ function mailFailureCategory(line) {
   return "other_mail_event";
 }
 
+async function senderDomainStatus(env, request = fetch) {
+  const configuration = mailConfiguration(env);
+  const domain = configuration.resendFromDomain || configuration.mailFromDomain;
+  const key = env.RESEND_API_KEY?.trim() || (configuration.smtpHostIsResend ? env.SMTP_PASS?.trim() : "");
+  if (!key || !domain) return { available: false };
+  const get = async (resource) => {
+    const response = await request("https://api.resend.com/domains" + resource, {
+      method: "GET", redirect: "error", headers: { Authorization: "Bearer " + key },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return { status: response.status };
+    return { status: response.status, data: await response.json() };
+  };
+  try {
+    const list = await get("");
+    if (!Array.isArray(list.data?.data)) return { status: list.status };
+    // Only this configured sender's exact domain; never inspect other tenants'
+    // email contents or unrelated domains belonging to the provider account.
+    const match = list.data.data.slice(0, 100).find((item) => item.name === domain);
+    if (!match || !/^[a-f0-9-]{36}$/i.test(match.id)) return { status: list.status, domainFound: false };
+    const detail = await get("/" + match.id);
+    if (detail.data?.name !== domain) return { status: detail.status, domainFound: true };
+    const statuses = new Set(["not_started", "pending", "verified", "failed", "temporary_failure"]);
+    const status = (value) => statuses.has(value) ? value : "unknown";
+    return {
+      status: detail.status, domain, domainStatus: status(detail.data.status),
+      // These are public DNS verification records, not authentication keys.
+      dnsRecords: (Array.isArray(detail.data.records) ? detail.data.records : []).slice(0, 10)
+        .filter((record) => ["DKIM", "SPF"].includes(record.record)
+          && ["TXT", "MX", "CNAME"].includes(record.type)
+          && typeof record.name === "string" && /^[a-z0-9_.-]{1,254}$/i.test(record.name)
+          && typeof record.value === "string" && record.value.length <= 2048)
+        .map((record) => ({ purpose: record.record, type: record.type, name: record.name,
+          value: record.value, priority: Number.isInteger(record.priority) ? record.priority : null,
+          status: status(record.status) })),
+    };
+  } catch { return { available: false, reason: "provider_read_failed" }; }
+}
+
 async function main(env) {
   if (env.AUTH_DIAG_MODE === "logs") {
     const counts = {};
@@ -84,9 +123,10 @@ async function main(env) {
   } finally {
     db.close();
   }
+  console.log(JSON.stringify({ senderDomain: await senderDomainStatus(env) }));
 }
 
-module.exports = { mailConfiguration, accountStatus, mailFailureCategory };
+module.exports = { mailConfiguration, accountStatus, mailFailureCategory, senderDomainStatus };
 if (["account", "logs"].includes(process.env.AUTH_DIAG_MODE)) {
   const deadline = setTimeout(() => {
     console.error("Authentication diagnostic exceeded its time budget.");
