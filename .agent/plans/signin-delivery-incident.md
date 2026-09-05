@@ -14,8 +14,9 @@ the same response. Existing perf reports exclude plaintext mail errors.
 
 ## Safety invariants
 
-- Read-only diagnosis: no account changes, new codes, rate-limit resets, restarts
-  or provider sends from the diagnostic workflow.
+- Read-only diagnosis by default: no account changes, new codes, rate-limit
+  resets, restarts or provider sends from the diagnostic workflow. An explicit
+  repair input may restart verification of the existing portal sender only.
 - Preserve the production environment gate and pinned SSH host key.
 - Never read OTP values/session tokens or print raw logs, credentials, IPs or
   email addresses. Emit only account status, bounded audit metadata and error
@@ -37,7 +38,10 @@ the same response. Existing perf reports exclude plaintext mail errors.
 - [x] Diagnostic privacy review complete; three regression tests, both type
   checkers, harness/deployment checks and workflow/shell parsing passed.
 - [x] Full repository verification passed 619 files / 7,747 tests and build.
-- [ ] Cause resolved and user delivery confirmed.
+- [x] Exact missing provider DNS records restored; authoritative and public DNS
+  both return them. Optional sender recheck independently reviewed; full
+  verification passed 619 files / 7,751 tests, both type checkers and build.
+- [ ] Provider verification complete and user delivery confirmed.
 
 ## Decisions
 
@@ -76,4 +80,8 @@ and script if no longer needed. Any app fix retains the existing code rollback.
 
 ## Result
 
-Diagnosis in progress.
+Cause identified: missing Resend DNS records. Restored the exact existing
+provider-specified DKIM TXT, send.portal MX (priority 10) and send.portal SPF TXT
+in Porkbun. Authoritative DNS returns all three; existing apex Microsoft 365 MX,
+SPF and verification records are unchanged. Resend domain status is failed, so
+restart its verification after propagation, then test one fresh code delivery.
