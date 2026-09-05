@@ -116,9 +116,16 @@ function expiryFrom(now = new Date()): string {
 
 function persistToken(row: RecruitingInvite, expiresAt: string): string {
   const token = createInviteToken({ recordId: row.recordId, tenantId: row.tenantId, email: row.candidateEmail, expiresAt });
+  const tokenHash = hashInviteToken(token);
+  const stored = rawDb.prepare(
+    "SELECT token_sha256 AS tokenHash, expires_at AS expiresAt FROM onboarding_recruiting_invites WHERE id = ?",
+  ).get(row.id) as { tokenHash: string | null; expiresAt: string | null } | undefined;
+  // Pipeline reads reuse a deterministic token. Even a no-op UPDATE takes the
+  // SQLite write lock and can stall unrelated requests on this HTTP worker.
+  if (stored?.tokenHash === tokenHash && stored.expiresAt === expiresAt) return token;
   rawDb.prepare(
     "UPDATE onboarding_recruiting_invites SET token_sha256 = ?, expires_at = ?, updated_at = ? WHERE id = ?",
-  ).run(hashInviteToken(token), expiresAt, new Date().toISOString(), row.id);
+  ).run(tokenHash, expiresAt, new Date().toISOString(), row.id);
   return token;
 }
 

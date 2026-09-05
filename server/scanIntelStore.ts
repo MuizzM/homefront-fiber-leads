@@ -362,8 +362,11 @@ const _claimMark = rawDb.prepare(`UPDATE scan_run_targets SET state='inflight',a
 // address across time) would only re-spend proxy. No unique address is lost: the row is
 // resolved from the canonical snapshot, not discarded, and change-detection runs
 // (recheck/rescan/nightly) + user-initiated checks pass skipSec=0 so they always verify.
+// A drained run can retain stale ANALYZE estimates and choose a full history
+// scan while holding the writer lock. Pin the existing run/state index for
+// all three skip policies so unrelated requests can acquire the lock promptly.
 const _skipRecentlyScanned = rawDb.prepare(
-  `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+  `UPDATE scan_run_targets INDEXED BY idx_srt_run_state SET state='skipped', result=?, next_attempt_at=NULL
      WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
        AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
                      AND st.last_scanned_at IS NOT NULL AND st.last_scanned_at > datetime('now', ?))`);
@@ -381,12 +384,12 @@ const _skipRecentlyScanned = rawDb.prepare(
 // that pass skipSec=0 (manual, lasso, field, recheck, the coming-soon lane) are
 // never subjected to it: a rep's tap and a dated promise must always re-verify.
 const _skipAlreadyAnswered = rawDb.prepare(
-  `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+  `UPDATE scan_run_targets INDEXED BY idx_srt_run_state SET state='skipped', result=?, next_attempt_at=NULL
      WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
        AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
                      AND ${answeredSql("st")})`);
 const _skipParkedNotFound = rawDb.prepare(
-  `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+  `UPDATE scan_run_targets INDEXED BY idx_srt_run_state SET state='skipped', result=?, next_attempt_at=NULL
      WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
        AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
                      AND ${anfParkedSql("st", ANF_QUIET_DAYS)})`);
