@@ -33,10 +33,10 @@ the same response. Existing perf reports exclude plaintext mail errors.
 
 - [x] 2026-09-05: Auth trace and release comparison complete; no direct cleanup
   change to mail or sign-in behavior found.
-- [ ] Read-only diagnostic reviewed, validated and run.
+- [x] Read-only diagnostic reviewed, validated and run (Actions 33975568691).
 - [x] Diagnostic privacy review complete; three regression tests, both type
   checkers, harness/deployment checks and workflow/shell parsing passed.
-- [ ] Full repository verification in progress.
+- [x] Full repository verification passed 619 files / 7,747 tests and build.
 - [ ] Cause resolved and user delivery confirmed.
 
 ## Decisions
@@ -55,6 +55,13 @@ account, so avoid speculative resends.
 Review addressed step-environment email exposure, arbitrary audit text, internal
 execution deadlines, input byte limits and the distinction between stored bucket
 counts and active lockouts. Metadata queries are parameterized and read-only.
+
+Production diagnosis: account exists, active, no request lockout. Four recent
+requests recorded code_created_mail_failed; global current-container logs show
+sender_domain rejection. MAIL_FROM uses portal.homefrontsolutionsllc.com; Resend
+HTTP uses the existing SMTP_PASS fallback. Public Porkbun DNS has no Resend DKIM
+or send-subdomain SPF/MX records. Read the provider's exact expected public DNS
+records before proposing a repair; preserve apex Microsoft 365 mail records.
 
 ## Validation
 

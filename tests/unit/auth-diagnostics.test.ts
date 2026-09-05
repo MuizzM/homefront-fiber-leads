@@ -1,14 +1,36 @@
 import { createRequire } from "node:module";
 import Database from "better-sqlite3";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-const { mailConfiguration, accountStatus, mailFailureCategory } = createRequire(import.meta.url)("../../script/auth-diagnostics.cjs") as {
+const { mailConfiguration, accountStatus, mailFailureCategory, senderDomainStatus } = createRequire(import.meta.url)("../../script/auth-diagnostics.cjs") as {
   mailConfiguration(env: Record<string, string>): Record<string, unknown>;
   accountStatus(db: Database.Database, email: string, now?: number): Record<string, unknown>;
   mailFailureCategory(line: string): string | null;
+  senderDomainStatus(env: Record<string, string>, request: typeof fetch): Promise<Record<string, unknown>>;
 };
 
 describe("read-only authentication diagnostics", () => {
+  it("reads only the configured sender's public verification records without sends or secret output", async () => {
+    const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const request = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ data: [{ id, name: "portal.test.example" }, { id: "other", name: "unrelated.example" }] }))
+      .mockResolvedValueOnce(Response.json({ name: "portal.test.example", status: "failed", private: "PRIVATE",
+        records: [{ record: "DKIM", type: "TXT", name: "resend._domainkey.portal", value: "p=PUBLIC_DNS_KEY", status: "failed" }] }));
+    const result = await senderDomainStatus({ SMTP_HOST: "smtp.resend.com", SMTP_PASS: "PRIVATE", MAIL_FROM: "sender@portal.test.example" }, request);
+    expect(result).toMatchObject({ domain: "portal.test.example", domainStatus: "failed", dnsRecords: [{ value: "p=PUBLIC_DNS_KEY" }] });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([url, options]) => [url, options?.method, options?.redirect])).toEqual([
+      ["https://api.resend.com/domains", "GET", "error"], ["https://api.resend.com/domains/" + id, "GET", "error"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE|sender@|unrelated\.example/);
+  });
+
+  it("does not follow provider failures or expose raw response details", async () => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ message: "PRIVATE" }, { status: 403 }));
+    expect(await senderDomainStatus({ RESEND_API_KEY: "PRIVATE", MAIL_FROM: "sender@portal.test.example" }, request)).toEqual({ status: 403 });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("reports credential presence and sender domains without exposing values", () => {
     const result = mailConfiguration({
       NODE_ENV: "production", RESEND_API_KEY: "re_PRIVATE", SMTP_PASS: "PRIVATE_PASSWORD",
