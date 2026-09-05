@@ -101,10 +101,63 @@ unavailable; CI retains that check. Independent code/security review found no
 blockers. Follow-up deployment and live remeasurement are recorded in
 `.agent/plans/production-stall-fix.md`.
 
+## Follow-up deployed and checked
+
+[PR #214](https://github.com/MuizzM/homefront-fiber-leads/pull/214) merged the
+corrections. [Exact-SHA CI](https://github.com/MuizzM/homefront-fiber-leads/actions/runs/33983496070)
+passed 631 files / 7,843 tests and the full gate for
+`8e828435a958dbf4b149d2f48af1c8243b8f1bf5`.
+[Deployment run 33984552292](https://github.com/MuizzM/homefront-fiber-leads/actions/runs/33984552292)
+reported that exact commit healthy at **18:38:26 UTC**, retaining 266c7bb as the
+rollback image. Client assets remain identical because these corrections affect
+only the server.
+
+A second baseline [server report](https://github.com/MuizzM/homefront-fiber-leads/actions/runs/33983833159),
+18:12:14–18:22:14 UTC, confirmed the original stalls persisted beyond startup:
+HTTP-serving loops reached 51,137 ms and 125 slow scanner claim transactions had
+p95 3,947.5 ms. This window had no Leads requests and cannot supply a second
+Leads latency percentile.
+
+Initial post-follow-up desktop reloads used the same warm-cache method:
+
+| Ready criterion | Samples (ms) | Median (ms) |
+| --- | --- | ---: |
+| Leads rows | 454, 411, 453 | 453 |
+| Dashboard KPI tiles | 413, 297, 391 | 391 |
+| Map controls | 323, 545, 446 | 446 |
+
+All nine criteria completed; Leads showed 100 rows without an error. One
+dashboard sample still had nine skeletons outside the loaded KPI tiles, so this
+is not a claim that every secondary panel had loaded. Mobile navigation checks
+for Dashboard, Leads, Schedule and Map completed in 267, 468, 237 and 124 ms,
+respectively, with no document overflow, active-page alerts, remaining skeletons
+or map error indicators. Five separate public HTTP health probes returned 200 /
+healthy / DB up in 114–245 ms (median 132 ms); these are not browser timings.
+
+A later three-reload Leads check completed in **723, 501 and 472 ms**, all with
+100 rows, no skeletons and no read error. Combined, the six Leads reloads were
+**411–723 ms** (median 463 ms), with no recurrence of the earlier deadline misses.
+
+The [post-follow-up server report](https://github.com/MuizzM/homefront-fiber-leads/actions/runs/33984789707)
+covered **18:38:15–18:40:34 UTC**. Ten per-process/minute event-loop observations
+had a worst maximum of **175.4 ms**, versus up to **51,137 ms** in the later
+baseline. The recurring slow scanner-claim, governor and bandwidth statements
+were absent from the slow-statement output. Four recorded Leads requests had
+p50 20.81 ms and maximum/p95 30.72 ms, with no errors; the small count does not
+establish a fleet latency guarantee. This collection ended before the later
+three-reload check. A startup backfill still logged one 1.63-second statement;
+the runtime loop samples do not include every startup operation.
+
+The follow-up window is shorter than the baseline and includes test traffic.
+It supports that the reproduced long runtime stalls did not recur during these
+checks, not a claim that all workloads or cold field devices have been measured.
+The browser viewport was restored and the authenticated session retained.
+
 ## Limits and separate operations follow-up
 
 This pass does not establish that every integration or all real devices are fast.
-Governor/accounting contention must be rechecked after the two corrections.
+Governor/accounting stalls did not recur in the short follow-up window; sustained
+field monitoring remains useful for longer-running workloads.
 The normal code-only deploy used `with_backup=false`; no schema changed. Release
 review found a pre-existing failure-trap ordering defect in the optional offline
 backup path of `scripts/deploy.sh`, which was not exercised and needs a separate

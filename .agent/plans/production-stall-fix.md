@@ -49,8 +49,16 @@ up to 46.9 seconds on synchronous SQLite writes. Production busy_timeout is
 - [x] Full local gate passed: 631 files, 7,843 tests, tsc, tsgo, production build,
   harness and deployment safety. Local Docker Compose config validation is
   unavailable on this host; exact-SHA CI retains that gate.
-- [ ] Exact-SHA CI and verified deployment.
-- [ ] Live measurements and report updated.
+- [x] Exact-SHA CI 33983496070 passed 631 files / 7,843 tests and build for
+  8e828435a958dbf4b149d2f48af1c8243b8f1bf5. PR #214 merged as 88c3b44;
+  its tree exactly matches the release. Deploy run 33984552292 reported that
+  exact SHA healthy at 18:38:26 UTC, retaining 266c7bb for rollback.
+- [x] Live desktop/mobile checks complete; all six Leads reloads succeeded in
+  411–723 ms. Server report 33984789707 (18:38:15–18:40:34 UTC) has 10 loop-lag
+  samples with worst maximum 175.4 ms, versus up to 51,137 ms before the fix.
+  Four recorded Leads requests completed in at most 30.72 ms. No recurring slow
+  scanner-claim/governor/bandwidth statements appeared in this short window.
+- [x] Measurement report updated and browser viewport restored; session retained.
 
 ## Decisions
 
@@ -83,5 +91,10 @@ enabled. No production data rewrite is part of this follow-up.
 
 ## Result
 
-In progress. The first release is live; its measurements exposed a remaining
-database contention problem requiring a separate tested correction.
+Both corrections are deployed and independently reviewed. Full CI passed and the
+live browser/server recheck shows the demonstrated long stalls did not recur
+during the measured window. The report distinguishes cache-warm DOM readiness
+from paint/Web Vitals, records secondary-panel loading, and retains the short
+sample limitation. No production credentials, customer messages, paid scans,
+financial actions, migrations or configuration changes were used for testing.
+The optional-backup trap issue remains a separate operations follow-up.
