@@ -33,6 +33,26 @@ const POLLERS: Array<[string, string, string]> = [
   ["client/src/components/CampaignBoard.tsx", "useMyCampaigns", "60_000"],
 ];
 
+describe("Leads watchlist polling", () => {
+  it("pauses the shared interval in a hidden stage without changing role access", () => {
+    const src = read("client/src/pages/Leads.tsx");
+    const start = src.indexOf("const canSeeScanOps =");
+    const hook = src.slice(start, src.indexOf("const activeComingSoon", start));
+    expect(hook).toContain("const tabActive = useTabActive();");
+    expect(hook).toContain("enabled: canSeeScanOps");
+    expect(hook).toContain("refetchInterval: tabActive ? WATCHLIST_QUERY.refetchInterval : false");
+  });
+});
+
+describe("idle route warming", () => {
+  it("checks the existing connection policy before any speculative imports", () => {
+    const src = read("client/src/App.tsx");
+    const warm = src.slice(src.indexOf("const warm = () => {"));
+    expect(warm.indexOf("if (!canPrefetchRouteChunks()) return;")).toBeGreaterThan(-1);
+    expect(warm.indexOf("if (!canPrefetchRouteChunks()) return;")).toBeLessThan(warm.indexOf("import("));
+  });
+});
+
 describe.each(POLLERS)("%s", (path, fn, interval) => {
   const src = read(path);
   const body = src.slice(src.indexOf(`export function ${fn}(`));

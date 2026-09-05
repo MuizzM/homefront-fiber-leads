@@ -139,7 +139,6 @@ function writePersistedUser(u: AuthUser | null) {
 }
 
 let _memSession: string | null = readPersistedSession();
-export function getSessionId() { return _memSession; }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);

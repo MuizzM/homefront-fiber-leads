@@ -371,15 +371,6 @@ export function rejectAttribution(
   return null;
 }
 
-export const REJECTION_MESSAGES: Record<ReferralRejection, string> = {
-  self_referral: "A rep cannot refer themselves.",
-  existing_user: "This person already has an account, so the referral cannot be credited.",
-  already_referred: "Someone has already referred this applicant.",
-  referrer_inactive: "The referring rep is no longer active.",
-  program_disabled: "The referral program is not currently running.",
-  attribution_expired: "This referral link is older than the attribution window.",
-};
-
 /**
  * May the referrer on an existing referral be CHANGED?
  *

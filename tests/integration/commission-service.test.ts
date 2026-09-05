@@ -218,6 +218,10 @@ describe("onboarding-facing structure assignment (flat vs tiered)", () => {
     expect(cur.structure).toBe("TIERED");
     expect(cur.tiers.length).toBe(DEFAULT_RETRO_TIERS.length);
     expect(cur.tiers[0].rateCents).toBe(15000);
+    expect(cur.acceptedAt).toBeNull();
+    rawDb.prepare("UPDATE rep_commission_assignments SET accepted_at = ? WHERE id = ?")
+      .run("2026-01-02T12:00:00.000Z", out.assignment.id);
+    expect(svc.getCurrentStructureForRep(T1, REP_STRUCT).acceptedAt).toBe("2026-01-02T12:00:00.000Z");
   });
 
   it("re-assigning to FLAT closes the tiered period (no overlap) and becomes current", () => {
@@ -226,6 +230,8 @@ describe("onboarding-facing structure assignment (flat vs tiered)", () => {
     const cur = svc.getCurrentStructureForRep(T1, REP_STRUCT);
     expect(cur.structure).toBe("FLAT");
     expect(cur.flatRateCents).toBe(20000);
+    // Acceptance belongs to the selected assignment, never the closed one.
+    expect(cur.acceptedAt).toBeNull();
     // two assignments exist now, but only one is currently effective
     expect(svc.listRepAssignments(T1, REP_STRUCT).length).toBe(2);
   });

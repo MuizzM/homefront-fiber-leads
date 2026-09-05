@@ -195,12 +195,6 @@ export const GUARDED_ACTION_STATES = [
 ] as const;
 export type GuardedActionState = (typeof GUARDED_ACTION_STATES)[number];
 
-/** States in which the action never reached the database. Used by the UI to
- *  decide whether to show an effect summary at all. */
-export function hadEffect(state: GuardedActionState): boolean {
-  return state === "executed" || state === "undone";
-}
-
 // ── Policy ───────────────────────────────────────────────────────────────────
 
 export interface GatePolicy {

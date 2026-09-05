@@ -61,14 +61,10 @@ CALL_AUTHORIZATION_SIGNING_KEY=
 DNC_IMPORT_MANIFEST_SIGNING_KEY=
 DNC_ALLOW_DIRECT_IMPORT=false
 CONSENT_ARTIFACT_MANIFEST_SIGNING_KEY=
-CONTACT_PROVIDER_HOST_ALLOWLIST=
-CONTACT_PROVIDER_SECRET_ENV_ALLOWLIST=
-CONTACT_PROVIDER_SECRET_BINDINGS_JSON={}
-CONTACT_PROVIDER_TIMEOUT_MS=10000
 CALL_AUTHORIZATION_TTL_SECONDS=120
 ```
 
-Do not reuse JWT, session, provider, or database secrets for these keys. Empty provider allowlists and `{}` bindings deliberately authorize no network provider.
+Do not reuse JWT, session, provider, or database secrets for these keys. Tracerfy credentials and the tenant contract control are described below.
 
 The encryption format currently has one `v1` key and no key identifier, and there is no online re-encryption or phone-hash reindex job. Rotating `CALLING_DATA_ENCRYPTION_KEY` in place makes existing encrypted phones/provider evidence unreadable. Rotating `PHONE_HASH_KEY` in place makes existing exact-match and suppression hashes unsearchable. Rotating `CALL_AUTHORIZATION_SIGNING_KEY` invalidates outstanding tokens; invalidate them in the database first. Changing either manifest-signing key invalidates pending, not-yet-verified DNC imports or artifact attestations. Production activation therefore requires a separately reviewed dual-read/re-key migration and restore test; merely replacing an environment value is not a safe rotation procedure.
 
@@ -78,7 +74,7 @@ Every item is mandatory. A missing item is a blocking result, not a warning.
 
 1. Apply and verify the Calling migration in staging. Back up the database first.
 2. Configure all five independent Calling/import/attestation secrets and confirm they decode to exactly 32 bytes.
-3. Add a disabled provider configuration with its signed contract/order, permitted-use evidence hash, retention/deletion terms, prices, rate limit, and hard daily/monthly budgets. Configure the exact host, secret-name allowlist, and tenant/provider binding described below.
+3. Verify the Tracerfy contract/order, permitted-use evidence, retention/deletion terms, prices, rate limit, and hard daily/monthly budgets. Configure the server credential and verify the tenant contract control described below; keep the calling and skip-trace activation gates off during setup.
 4. Have counsel approve the seller/offer, federal and state analysis, registrations or documented exemptions, caller ID, calling hours, frequency policy, script, and consent/revocation language.
 5. Add seller authorization, state registration/exemption records, one active approved script, and one active immutable rule version.
 6. Import authorized, current National DNC and applicable state DNC datasets through the signed pipeline. Verify source age, manifest/chunk checksums, unique record count, authorized account reference, expiry, and a sample known suppression.
@@ -86,7 +82,7 @@ Every item is mandatory. A missing item is a blocking result, not a warning.
 8. Run the complete negative test suite and one seeded staging lifecycle. Confirm generic lead and Field Map APIs never reveal full numbers.
 9. Add only trained users to the `calling_rep`, `calling_manager`, `compliance_admin`, or `auditor` roles. Generic reps receive no Calling capabilities.
 10. Set `CALLING_PILOT_ORG_IDS` to one staging/pilot organization. Keep the organization profile's `calling_enabled=false` and `emergency_disabled=true` until final sign-off.
-11. Enable the global gates one at a time, then enable the provider and organization profile. Switch the emergency stop off last. Re-run a blocked and eligible decision after each change.
+11. Enable the global gates one at a time, then verify the Tracerfy contract is approved and enable the organization profile. Switch the emergency stop off last. Re-run a blocked and eligible decision after each change.
 
 ## Authoritative decision flow
 
@@ -192,26 +188,24 @@ cost_per_completed_manual_call
 
 Example only: 10,000 $0.03 enrichment queries cost $300 before validation, DNC, failed matches, and contract fees. A lower nominal lookup price can be more expensive if identity confidence or compliant usable-match rate is poor. Enforce per-provider daily/monthly budgets and surface cache hit, match, usable-match, and cost metrics. Cache only when the provider contract permits it, and expire/delete on schedule.
 
-### Provider credential binding
+### Tracerfy credential and contract control
 
-The generic HTTP adapter is unavailable unless every layer agrees:
+Tracerfy replaced the generic HTTP contact-provider registry. The server adapter
+in `server/tracerfyClient.ts` reads `TRACERFY_API_KEY` and optional
+`TRACERFY_BASE_URL`; area tracing also requires `AREA_SKIP_TRACE_ENABLED=true`.
+Keep credentials on the server. The retired generic host/secret allowlists and
+binding settings are no longer read by the application.
 
-- the provider row uses a credential-free `https://` base URL and an exact `providerName` plus `secretEnvName`;
-- the URL hostname is present in comma-separated `CONTACT_PROVIDER_HOST_ALLOWLIST`;
-- the secret environment-variable name is present in `CONTACT_PROVIDER_SECRET_ENV_ALLOWLIST`;
-- `CONTACT_PROVIDER_SECRET_BINDINGS_JSON` maps the exact tenant ID and provider name to that exact secret environment-variable name;
-- that named environment variable contains the secret.
+`server/calling/tracedPhones.ts` owns the tenant's Tracerfy provider record.
+Authorized operators use `GET` and `PATCH` on
+`/api/v1/calling/compliance/trace-provider` (capability `calling.providers.manage`)
+to inspect the record and set its contract status to `approved`, `revoked`, or
+`expired`. Revocation/expiry invalidates unused call authorizations for that
+tenant and prevents traced doors entering the queue. Keep provider audit/history
+records; removing obsolete environment placeholders does not remove them.
 
-Binding format (illustrative structure only, not a vendor approval):
-
-```dotenv
-CONTACT_PROVIDER_HOST_ALLOWLIST=api.contract-approved-provider.example
-CONTACT_PROVIDER_SECRET_ENV_ALLOWLIST=TENANT_42_CONTACT_PROVIDER_KEY
-CONTACT_PROVIDER_SECRET_BINDINGS_JSON='{"42":{"contract-approved-provider":"TENANT_42_CONTACT_PROVIDER_KEY"}}'
-TENANT_42_CONTACT_PROVIDER_KEY=
-```
-
-Provider-name comparison is exact and case-sensitive. A global hostname or secret allowlist by itself never authorizes another tenant to use the credential. The server also rejects URL credentials, non-HTTPS endpoints, restricted/private network destinations, DNS rebinding to restricted addresses, oversized responses, and non-allowlisted secrets. Retries are limited to network failures, HTTP 429, and 5xx responses; a stable upstream operation ID is reused to reduce duplicate charge risk. Do not configure automatic provider fallback until idempotency and billing behavior are contractually verified.
+These controls do not replace the calling activation, consent, DNC, validation,
+and authorization gates. An API credential alone is not permission to call.
 
 ## Data retention and security
 

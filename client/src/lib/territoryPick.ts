@@ -15,10 +15,6 @@
 /** Layer ids are `territory-<id>`; the outline layer adds `-outline`. */
 export const TERRITORY_LAYER_PREFIX = "territory-";
 
-/** Fat-finger box in CSS pixels, matched to the pin hit-test already used for
- *  tap-a-house. A boundary tap has to work with a gloved hand in the cold. */
-export const TERRITORY_TAP_SLOP_PX = 8;
-
 export function territoryLayerId(territoryId: number): string {
   return `${TERRITORY_LAYER_PREFIX}${territoryId}`;
 }

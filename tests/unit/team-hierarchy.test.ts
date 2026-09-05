@@ -7,8 +7,30 @@ import {
   wouldCreateReportsCycle,
   branchOwnerOf,
   uplineSlotsOf,
+  uplineSlotsFromIndex,
   HIRABLE_ROLES,
 } from "@shared/teamHierarchy";
+
+describe("indexed upline lookup", () => {
+  it("preserves cycles, missing parents, inactive ancestors and hop budgets", () => {
+    const members = [
+      { id: 1, role: "manager", reportsToId: null, active: false },
+      { id: 2, role: "team_lead", reportsToId: 1, active: true },
+      { id: 3, role: "rep", reportsToId: 2, active: true },
+      { id: 4, role: "rep", reportsToId: 5, active: true },
+      { id: 5, role: "team_lead", reportsToId: 4, active: true },
+      { id: 6, role: "rep", reportsToId: 999, active: true },
+    ];
+    const index = new Map(members.map(member => [member.id, member]));
+    expect(uplineSlotsFromIndex(3, index, 0)).toEqual({ teamLeadId: null, managerId: null });
+    expect(uplineSlotsFromIndex(3, index, 1)).toEqual({ teamLeadId: 2, managerId: null });
+    expect(uplineSlotsFromIndex(3, index, 2)).toEqual({ teamLeadId: 2, managerId: 1 });
+    expect(uplineSlotsFromIndex(999, index)).toEqual({ teamLeadId: null, managerId: null });
+    expect(uplineSlotsFromIndex(3, index)).toEqual({ teamLeadId: 2, managerId: 1 });
+    expect(uplineSlotsFromIndex(4, index)).toEqual({ teamLeadId: 5, managerId: null });
+    expect(uplineSlotsFromIndex(6, index)).toEqual({ teamLeadId: null, managerId: null });
+  });
+});
 
 describe("canActOnMember - strictly-above authority", () => {
   it("team_lead acts on rep only", () => {

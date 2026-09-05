@@ -1,3 +1,4 @@
+// TODO: verify usage: this audit is referenced by docs/ops/DATA-AUDIT-2026-08-31.md but has no production caller; retain the operational audit contract.
 /**
  * LEAD DEDUP AUDIT — geospatial near-duplicate DETECTION (never deletes).
  *

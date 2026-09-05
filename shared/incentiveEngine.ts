@@ -470,15 +470,3 @@ export function validateCampaign(c: Partial<IncentiveCampaign>): string[] {
   }
   return problems;
 }
-
-/** A human sentence for an admin's campaign card. */
-export function describeCampaign(c: IncentiveCampaign): string {
-  const amount = c.amountBasis === "FLAT"
-    ? `$${(c.rewardCents / 100).toFixed(2)}`
-    : c.amountBasis === "PERCENT"
-      ? `${(c.percentageBp / 100).toFixed(2)}%`
-      : "the approved amount";
-  const trigger = INCENTIVE_TRIGGER_EVENT[c.incentiveType].toLowerCase().replace(/_/g, " ");
-  const cap = c.maximumRewardsPerUser > 0 ? `, up to ${c.maximumRewardsPerUser} per person` : "";
-  return `${amount} on ${trigger}${cap}`;
-}

@@ -1,3 +1,4 @@
+// TODO: verify usage: MP Box routes read stored scans, but this producer has no production caller; confirm the producer workflow before retiring it.
 // ── MP Box incremental scan ──────────────────────────────────────────────────
 //
 // The rule the whole design serves: a repeated scan of an unchanged area must

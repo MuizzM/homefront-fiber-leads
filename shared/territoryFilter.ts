@@ -1,3 +1,4 @@
+// TODO: verify usage: Areas currently uses different substring filters; adopting or retiring this tested word-prefix behavior needs a product decision.
 // ── Narrowing the area list ───────────────────────────────────────────────────
 // The area-management screen shows every territory a manager can see, which on a
 // real tenant is hundreds of rows. Finding one is search-and-filter work, and it

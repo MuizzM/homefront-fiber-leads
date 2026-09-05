@@ -69,7 +69,6 @@ import {
 /** The report this provider is built for. Recorded so an import's provenance
  *  survives the connection row being edited later. */
 export const SOURCE_REPORT_NAME = "Total Submitted Orders by Program";
-export const SOURCE_REPORT_ID = "00O5f000008aWTiEAM";
 export const SOURCE_REPORT_URL =
   "https://perfectvisionpoe.my.site.com/poe/s/report/00O5f000008aWTiEAM/total-submitted-orders-by-program";
 

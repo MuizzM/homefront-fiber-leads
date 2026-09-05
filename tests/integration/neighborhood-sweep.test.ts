@@ -28,7 +28,9 @@ let sweep: typeof import("../../server/neighborhoodSweep");
 let store: typeof import("../../server/scanIntelStore");
 
 const TENANT = 1;
-const NOW = Date.parse("2026-08-22T15:00:00.000Z");
+// SQL retry/negative windows use datetime('now'). Keep the fixture clock near
+// that clock so a "recently parked" row does not expire as the calendar moves.
+const NOW = Date.now();
 const sqlTime = (msAgo: number) => new Date(NOW - msAgo).toISOString().replace("T", " ").slice(0, 19);
 const DAY = 86_400_000;
 

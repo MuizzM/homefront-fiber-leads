@@ -374,18 +374,3 @@ Thanks,
 Prefer not to receive these? {{unsubscribe_link}}`,
   },
 ];
-
-/** Which template kind fits a recovery reason. A default only - the rep picks,
- *  and an org may have several approved templates of the same kind. */
-export const REASON_TO_TEMPLATE_KIND: Readonly<Record<string, TemplateKind>> = {
-  stale_submitted: "customer_action",
-  stale_accepted: "customer_action",
-  install_overdue: "missed_install",
-  failed_install: "failed_install",
-  missed_appointment: "missed_install",
-  pending_customer_action: "customer_action",
-  pending_documents: "missing_documents",
-  on_hold: "customer_action",
-  recoverable_cancellation: "canceled_recovery",
-  vendor_recoverable_flag: "customer_action",
-};
