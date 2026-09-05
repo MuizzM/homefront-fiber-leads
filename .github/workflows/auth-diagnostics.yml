@@ -1,0 +1,72 @@
+name: Sign-in delivery diagnostics (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: Account email to diagnose (codes and credentials are never printed)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auth-diagnostics-production
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read account state and classify delivery failures
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub prints step env values; read the private account input from
+          # the event file instead of interpolating it into the step definition.
+          TARGET_EMAIL="$(jq -r '.inputs.email // empty' "$GITHUB_EVENT_PATH")"
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS TARGET_EMAIL; do
+            [ -n "${!required:-}" ] || { echo "Missing $required" >&2; exit 1; }
+          done
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+          EMAIL_B64="$(printf '%s' "$TARGET_EMAIL" | base64 -w0)"
+          SCRIPT_B64="$(base64 -w0 < script/auth-diagnostics.cjs)"
+          # Base64 constrains both remote arguments to shell-inert characters.
+          ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$EMAIL_B64" "$SCRIPT_B64" <<'REMOTE'
+          set -euo pipefail
+          EMAIL_B64="$1"
+          SCRIPT_B64="$2"
+          [[ "$EMAIL_B64" =~ ^[A-Za-z0-9+/=]+$ ]]
+          [[ "$SCRIPT_B64" =~ ^[A-Za-z0-9+/=]+$ ]]
+          cd /srv/homefront
+          TAG="$(cat .deployed-tag)"
+          [[ "$TAG" =~ ^[0-9a-f]{40}$ ]]
+          APP="$(APP_IMAGE_TAG="$TAG" docker compose -f docker-compose.production.yml ps -q app)"
+          [[ "$APP" =~ ^[0-9a-f]+$ ]]
+          PROGRAM='eval(Buffer.from(process.argv[1], "base64").toString("utf8"))'
+          # Run the reviewed diagnostic from memory, without changing the image,
+          # host files or DB. Only allowlisted metadata leaves the host.
+          timeout 30 docker exec -e AUTH_DIAG_MODE=account -e AUTH_DIAG_EMAIL_B64="$EMAIL_B64" \
+            "$APP" node -e "$PROGRAM" "$SCRIPT_B64"
+          timeout 30 docker logs --since 30m --tail 10000 "$APP" 2>&1 \
+            | { grep -aE '\[otp\]|\[mail\]|"event"[[:space:]]*:[[:space:]]*"(auth\.otp_unavailable|otp_rate_buckets\.degraded)"' || test "$?" -eq 1; } \
+            | timeout 30 docker exec -i -e AUTH_DIAG_MODE=logs "$APP" node -e "$PROGRAM" "$SCRIPT_B64"
+          REMOTE
