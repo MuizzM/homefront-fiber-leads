@@ -1,4 +1,5 @@
-// Read-only incident diagnostics. Never select OTPs, sessions, passwords or keys.
+// Read-only by default; explicit repair input may restart existing sender DNS
+// verification. Never select OTPs, sessions, passwords or keys.
 const path = require("node:path");
 
 function mailConfiguration(env) {
@@ -83,8 +84,25 @@ async function senderDomainStatus(env, request = fetch) {
     if (detail.data?.name !== domain) return { status: detail.status, domainFound: true };
     const statuses = new Set(["not_started", "pending", "verified", "failed", "temporary_failure"]);
     const status = (value) => statuses.has(value) ? value : "unknown";
+    let verification;
+    if (env.AUTH_DIAG_VERIFY_SENDER === "true") {
+      // Repair only this application's existing sender. This checks already
+      // restored DNS; it does not add domains, change records or send email.
+      if (domain !== "portal.homefrontsolutionsllc.com") {
+        verification = { requested: false, reason: "sender_outside_repair_scope" };
+      } else if (detail.data.status === "verified") {
+        verification = { requested: false, reason: "already_verified" };
+      } else {
+        const response = await request("https://api.resend.com/domains/" + match.id + "/verify", {
+          method: "POST", redirect: "error", headers: { Authorization: "Bearer " + key },
+          signal: AbortSignal.timeout(8000),
+        });
+        verification = { requested: response.ok, status: response.status };
+      }
+    }
     return {
       status: detail.status, domain, domainStatus: status(detail.data.status),
+      ...(verification ? { verification } : {}),
       // These are public DNS verification records, not authentication keys.
       dnsRecords: (Array.isArray(detail.data.records) ? detail.data.records : []).slice(0, 10)
         .filter((record) => ["DKIM", "SPF"].includes(record.record)
@@ -131,7 +149,7 @@ if (["account", "logs"].includes(process.env.AUTH_DIAG_MODE)) {
   const deadline = setTimeout(() => {
     console.error("Authentication diagnostic exceeded its time budget.");
     process.exit(1);
-  }, 25_000);
+  }, 35_000);
   main(process.env).catch(() => {
     // Driver/provider errors can contain data. Keep failure output generic.
     console.error("Authentication diagnostic failed; no raw error details emitted.");

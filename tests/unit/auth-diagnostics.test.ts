@@ -10,6 +10,32 @@ const { mailConfiguration, accountStatus, mailFailureCategory, senderDomainStatu
 };
 
 describe("read-only authentication diagnostics", () => {
+  it("restarts verification only when explicitly requested for the existing portal sender", async () => {
+    const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const domain = "portal.homefrontsolutionsllc.com";
+    const request = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ data: [{ id, name: domain }] }))
+      .mockResolvedValueOnce(Response.json({ name: domain, status: "failed", records: [] }))
+      .mockResolvedValueOnce(Response.json({ id }));
+    const result = await senderDomainStatus({ RESEND_API_KEY: "PRIVATE", MAIL_FROM: "sender@" + domain, AUTH_DIAG_VERIFY_SENDER: "true" }, request);
+    expect(result.verification).toEqual({ requested: true, status: 200 });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2][0]).toBe("https://api.resend.com/domains/" + id + "/verify");
+    expect(request.mock.calls[2][1]).toMatchObject({ method: "POST", redirect: "error" });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE");
+  });
+
+  it("refuses verification for a sender outside this repair's scope", async () => {
+    const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const domain = "another.test.example";
+    const request = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ data: [{ id, name: domain }] }))
+      .mockResolvedValueOnce(Response.json({ name: domain, status: "failed", records: [] }));
+    const result = await senderDomainStatus({ RESEND_API_KEY: "PRIVATE", MAIL_FROM: "sender@" + domain, AUTH_DIAG_VERIFY_SENDER: "true" }, request);
+    expect(result.verification).toEqual({ requested: false, reason: "sender_outside_repair_scope" });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("reads only the configured sender's public verification records without sends or secret output", async () => {
     const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const request = vi.fn<typeof fetch>()
