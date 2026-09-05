@@ -18,7 +18,6 @@
 // run for an org that has messaging turned off entirely, which is the default.
 
 import {
-  ATTENTION_STATUSES,
   isInstalledOrderStatus,
   wholeDaysBetween,
   type NormalizedOrderStatus,
@@ -51,10 +50,6 @@ export const RECOVERY_CASE_STATUSES = [
   "open", "in_progress", "snoozed", "resolved", "not_recoverable",
 ] as const;
 export type RecoveryCaseStatus = (typeof RECOVERY_CASE_STATUSES)[number];
-
-/** A case that still consumes attention. Used by the queue, the caps, and the
- *  "do not open a duplicate" rule. */
-export const ACTIVE_CASE_STATUSES: readonly RecoveryCaseStatus[] = ["open", "in_progress", "snoozed"];
 
 export const RESOLUTION_CODES = [
   "recovered_installed",      // the outcome the whole feature exists for
@@ -411,10 +406,4 @@ function matchesAny(haystack: string, needles: readonly string[]): boolean {
 function hoursBetween(from: Date | null | undefined, to: Date): number | null {
   if (!from || !Number.isFinite(from.getTime())) return null;
   return Math.max(0, (to.getTime() - from.getTime()) / 3_600_000);
-}
-
-/** Statuses that need attention right now. Exported so the dashboard's tiles
- *  and the engine agree on what "needs action" counts. */
-export function needsAttention(status: NormalizedOrderStatus): boolean {
-  return ATTENTION_STATUSES.includes(status);
 }

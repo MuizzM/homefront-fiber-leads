@@ -10,7 +10,7 @@ import { rawDb } from "./db";
 import { emit as emitDomainEvent } from "./domainEventStore";
 import { storage, bumpTenantConfigVersion } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
-import { uplineSlotsOf } from "@shared/teamHierarchy";
+import { uplineSlotsFromIndex } from "@shared/teamHierarchy";
 import { computeHoldback, rollupReserve, type Holdback, type ReserveLedger } from "@shared/commissionReserve";
 import {
   resolveRepReserveConfig, getReserveBalanceCents, recordWeeklyHold, setRepReserveConfig,
@@ -781,7 +781,6 @@ export function assignPlanVersionToRep(tenantId: number, actorId: number | null,
   return rawDb.prepare(`SELECT * FROM rep_commission_assignments WHERE id = ?`).get(info.lastInsertRowid);
 }
 
-
 /**
  * Append-only audit for every timestamp this system moved.
  *
@@ -1288,12 +1287,39 @@ export function getStatementForWeek(tenantId: number, repId: number, weekReferen
   return { statement, bounds };
 }
 
-export function listPlans(tenantId: number): any[] {
-  const plans = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? ORDER BY created_at DESC`).all(tenantId) as any[];
-  return plans.map(p => ({
-    ...p,
-    versions: rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE commission_plan_id = ? AND tenant_id = ? ORDER BY version_number ASC`).all(p.id, tenantId),
-  }));
+interface CommissionPlanRow {
+  id: number; tenant_id: number; name: string; description: string | null;
+  currency: string; type: string; tier_mode: string; status: string;
+  created_by: number | null; created_at: string; updated_at: string;
+}
+
+interface CommissionPlanVersionRow {
+  id: number; tenant_id: number; commission_plan_id: number; version_number: number;
+  flat_rate_cents: number | null; qualification_basis: string;
+  effective_from: string; effective_to: string | null; rules_snapshot: string | null;
+  change_summary: string | null; created_by: number | null; created_at: string;
+}
+
+export function listPlans(tenantId: number): Array<CommissionPlanRow & { versions: CommissionPlanVersionRow[] }> {
+  const plans = rawDb.prepare<[number], CommissionPlanRow>(
+    `SELECT * FROM commission_plans WHERE tenant_id = ? ORDER BY created_at DESC`,
+  ).all(tenantId);
+  if (plans.length === 0) return [];
+
+  // Fetch versions once per request, retaining the per-plan version order and
+  // filtering both tables by tenant even if a legacy foreign key is malformed.
+  const versions = rawDb.prepare<[number, number], CommissionPlanVersionRow>(`
+    SELECT v.* FROM commission_plan_versions v
+    JOIN commission_plans p ON p.id = v.commission_plan_id AND p.tenant_id = ?
+    WHERE v.tenant_id = ? ORDER BY v.version_number ASC
+  `).all(tenantId, tenantId);
+  const versionsByPlan = new Map<number, CommissionPlanVersionRow[]>();
+  for (const version of versions) {
+    const group = versionsByPlan.get(version.commission_plan_id);
+    if (group) group.push(version);
+    else versionsByPlan.set(version.commission_plan_id, [version]);
+  }
+  return plans.map(plan => ({ ...plan, versions: versionsByPlan.get(plan.id) ?? [] }));
 }
 
 export function getPlanVersionTiers(tenantId: number, versionId: number): any[] {
@@ -1590,7 +1616,8 @@ export function assignStructureToRep(tenantId: number, actorId: number | null, i
 // Resolve a rep's CURRENT effective structure for display (Team card, rep view):
 // structure type, rate/tiers, effective dates — or null if unassigned.
 export function getCurrentStructureForRep(tenantId: number, repId: number): any {
-  const assignments = listRepAssignments(tenantId, repId).map(a => ({
+  const assignmentRows = listRepAssignments(tenantId, repId);
+  const assignments = assignmentRows.map(a => ({
     id: a.id, commissionPlanVersionId: a.commission_plan_version_id,
     effectiveFrom: a.effective_from, effectiveTo: a.effective_to,
   }));
@@ -1602,7 +1629,7 @@ export function getCurrentStructureForRep(tenantId: number, repId: number): any 
   const version = rawDb.prepare(`SELECT v.*, p.name AS plan_name, p.type AS plan_type, p.tier_mode FROM commission_plan_versions v JOIN commission_plans p ON p.id = v.commission_plan_id WHERE v.id = ? AND v.tenant_id = ?`).get(active.commissionPlanVersionId, tenantId) as any;
   if (!version) return { structure: null, reserve };
   const tiers = version.plan_type === "TIERED" ? getPlanVersionTiers(tenantId, version.id) : [];
-  const acceptedRow = rawDb.prepare(`SELECT accepted_at FROM rep_commission_assignments WHERE id = ?`).get(active.id) as any;
+  const acceptedRow = assignmentRows.find(assignment => assignment.id === active.id);
   return {
     assignmentId: active.id, effectiveFrom: active.effectiveFrom, effectiveTo: active.effectiveTo,
     structure: version.plan_type === "FLAT" ? "FLAT" : "TIERED",
@@ -1841,6 +1868,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
   // who has a payable surface this week, and walking a filtered tree would lose
   // the very supervisors we are resolving.
   const rosterRefs = roster.map((m: any) => ({ id: m.id, role: m.role, reportsToId: m.reportsToId ?? null, active: !!m.active }));
+  const rosterById = new Map(rosterRefs.map(member => [member.id, member]));
   const rosterNameById = new Map<number, string>(roster.map((m: any) => [m.id, m.name]));
   let reps = roster.filter((m: any) => m.role !== "manager" || managerHasPayableSurface(m));
   if (repIds) reps = reps.filter((m: any) => repIds.includes(m.id));
@@ -1870,7 +1898,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
     // effective at week start). Also drives the OPEN_CLOCK_SESSION exception.
     const hp = hourlyPayForWeek(tenantId, rep.id, bounds.weekStartUtc, bounds.nextWeekStartUtc);
 
-    const upline = uplineSlotsOf(rep.id, rosterRefs);
+    const upline = uplineSlotsFromIndex(rep.id, rosterById);
     let row: WeekOverviewRepRow = {
       repId: rep.id, repName: rep.name, active: !!rep.active,
       managerId: upline.managerId, managerName: rosterNameById.get(upline.managerId ?? -1) ?? null,

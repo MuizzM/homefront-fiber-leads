@@ -44,11 +44,6 @@ export function loadTrainingCorpus(): void {
     .catch(() => { pending = null; });
 }
 
-/** Read the corpus without subscribing — for callers outside React. */
-export function readTrainingCorpus(): TrainingCardsModule | null {
-  return corpus;
-}
-
 /**
  * The corpus module, or null until it lands. Pass `enabled` false to subscribe
  * without triggering the download — useful for a component that renders long
@@ -58,11 +53,4 @@ export function useTrainingCorpus(enabled = true): TrainingCardsModule | null {
   const value = useSyncExternalStore(subscribe, read, read);
   useEffect(() => { if (enabled) loadTrainingCorpus(); }, [enabled]);
   return value;
-}
-
-/** Test-only: drop the loaded corpus so a case can exercise the cold path. */
-export function __resetTrainingCorpusForTests(): void {
-  corpus = null;
-  pending = null;
-  listeners.clear();
 }

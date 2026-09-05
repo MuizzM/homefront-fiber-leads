@@ -25,7 +25,7 @@
 //   >= AUTO_MATCH_CONFIDENCE (0.90): a real match. The order is linked, the rep
 //     is attributed, the recovery engine may open a case, and - subject to
 //     every consent rule - a message may eventually be sent.
-//   >= SUGGEST_CONFIDENCE (0.50): a SUGGESTION. It is recorded, it is shown in
+//   >= 0.50: a SUGGESTION. It is recorded, it is shown in
 //     the exception queue with the candidate attached, and it does nothing on
 //     its own. No rep attribution, no case, no message.
 //   below that, or ambiguous: an exception. A human decides.
@@ -46,8 +46,6 @@ import type { MatchStatus } from "./vendorOrderMigrations";
 
 /** At or above this, the match drives consequences. */
 export const AUTO_MATCH_CONFIDENCE = 0.9;
-/** At or above this, the match is recorded as a suggestion for a human. */
-export const SUGGEST_CONFIDENCE = 0.5;
 
 /** How far apart a provider's submitted date and our sale date may be for the
  *  address rule to fire. A provider's report date is often the date THEY keyed

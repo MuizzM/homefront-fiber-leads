@@ -1,4 +1,4 @@
-import { STATE_COLORS, type PinDisplayState } from "@shared/knock";
+import type { PinDisplayState } from "@shared/knock";
 import {
   LEAD_MAP_STATUSES,
   STATUS_CONFIG,
@@ -14,8 +14,6 @@ export const BASE_PX = 40;
 export const PIN_PIXEL_RATIO = 2;
 export type StatusIconKey = PinDisplayState | LeadMapStatus | "neutral";
 export type MapExpr = string | number | boolean | MapExpr[];
-
-export const DISPLAY_STATES = Object.keys(STATE_COLORS) as PinDisplayState[];
 
 export const STATUS_ICON: Record<PinDisplayState | "neutral", {
   key: string;

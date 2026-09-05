@@ -195,7 +195,15 @@ export function uplineSlotsOf(
   members: readonly BranchMemberRef[],
   maxHops = 100,
 ): { teamLeadId: number | null; managerId: number | null } {
-  const byId = new Map(members.map(m => [m.id, m]));
+  return uplineSlotsFromIndex(memberId, new Map(members.map(m => [m.id, m])), maxHops);
+}
+
+/** Reuse a request's roster index when resolving every member of a team. */
+export function uplineSlotsFromIndex(
+  memberId: number,
+  byId: ReadonlyMap<number, BranchMemberRef>,
+  maxHops = 100,
+): { teamLeadId: number | null; managerId: number | null } {
   const seen = new Set<number>([memberId]);
   let teamLeadId: number | null = null;
   let managerId: number | null = null;

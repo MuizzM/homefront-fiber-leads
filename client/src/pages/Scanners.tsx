@@ -1,8 +1,12 @@
-import { useState } from "react";
-import { Radar, Globe, ScanSearch, ChevronRight } from "lucide-react";
+import { Suspense, useState } from "react";
+import { ChevronRight } from "lucide-react";
+import { lazyRoute } from "@/lib/staleChunk";
 import CityScanner from "./CityScanner";
-import USAScanner from "./USAScanner";
-import KineticScanner from "./KineticScanner";
+
+// City is the default tab. Other scanners download only when selected so they
+// do not delay the first tool; lazyRoute retains recovery after a deployment.
+const USAScanner = lazyRoute(() => import("./USAScanner"));
+const KineticScanner = lazyRoute(() => import("./KineticScanner"));
 
 // One Scanner hub — City / USA / Nightly tabs replace three separate nav pages.
 export type ScannerTab = "city" | "usa" | "kinetic";
@@ -11,25 +15,21 @@ const TABS: {
   id: ScannerTab;
   label: string;
   hint: string;
-  Icon: React.ElementType;
 }[] = [
   {
     id: "city",
     label: "City Scan",
     hint: "Fresh fiber: Yes, No, or Recheck",
-    Icon: Radar,
   },
   {
     id: "usa",
     label: "USA Batch",
     hint: "Run the same verdict across cities",
-    Icon: Globe,
   },
   {
     id: "kinetic",
     label: "Kinetic Scanner",
     hint: "Evidence-backed availability command center",
-    Icon: ScanSearch,
   },
 ];
 
@@ -97,9 +97,11 @@ export default function Scanners({
 
       {/* Active scanner */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {tab === "city" && <CityScanner />}
-        {tab === "usa" && <USAScanner />}
-        {tab === "kinetic" && <KineticScanner />}
+        <Suspense key={tab} fallback={<p role="status" className="p-4 text-sm text-muted-foreground">Loading scan tool…</p>}>
+          {tab === "city" && <CityScanner />}
+          {tab === "usa" && <USAScanner />}
+          {tab === "kinetic" && <KineticScanner />}
+        </Suspense>
       </div>
     </div>
   );

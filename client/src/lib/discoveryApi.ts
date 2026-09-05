@@ -392,16 +392,3 @@ export const discoveryApi = {
     };
   },
 };
-
-export function discoveryStageLabel(status: DiscoveryJobStatus): string {
-  switch (status) {
-    case "queued": return "Queued";
-    case "resolving_boundary": return "Resolving boundary";
-    case "discovering": return "Finding addresses";
-    case "qualifying": return "Checking fiber";
-    case "partial": return "Partially complete";
-    case "completed": return "Complete";
-    case "failed": return "Failed";
-    case "cancelled": return "Cancelled";
-  }
-}

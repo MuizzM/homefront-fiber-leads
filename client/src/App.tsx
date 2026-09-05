@@ -20,6 +20,7 @@ import Login from "@/pages/Login";
 import NotFound from "@/pages/not-found";
 import { UpdatePrompt } from "@/components/UpdatePrompt";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { canPrefetchRouteChunks } from "@/lib/routePrefetch";
 
 // Route-level code splitting — every in-app page ships as its own lazy chunk
 // (Mapbox/GL, recharts, the five scanners, etc. no longer weigh down the
@@ -214,6 +215,7 @@ function AppRoutes() {
       && !["slow-2g", "2g", "3g"].includes(connection?.effectiveType ?? "")
       && ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4) >= 4;
     const warm = () => {
+      if (!canPrefetchRouteChunks()) return;
       if (user.role === "calling_rep" || user.role === "calling_manager") import("@/pages/CallingQueue");
       else {
         import("@/pages/Leads");

@@ -304,10 +304,6 @@ export interface OverrideConfigWire {
 
 // ── Display helpers ───────────────────────────────────────────────────────────
 
-export function describeOverrideBasis(basis: OverrideBasis): string {
-  return basis === "FLAT_PER_SALE" ? "Flat amount per qualified sale" : "Percent of downline commission";
-}
-
 /** UI tone per ledger status — mirrors the StatusPill tint idiom. */
 export const OVERRIDE_STATUS_TONE: Record<OverrideLedgerStatus, "positive" | "muted" | "warning" | "critical"> = {
   PAYABLE: "positive",

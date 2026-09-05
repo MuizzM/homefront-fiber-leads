@@ -15,7 +15,7 @@ import {
   connectConfigured, connectWebhookConfigured, createConnectedAccount, createAccountLink,
   fetchAccount, fetchPlatformBalance, ensureAutomaticPayoutSchedule, createTransfer, findTransferByGroup, verifyConnectSignature, processConnectWebhook,
 } from "./stripeConnect";
-import { onboardingStatusFrom, payoutEligibility, BLOCK_LABEL, type PayoutStatus } from "../shared/payouts";
+import { onboardingStatusFrom, payoutEligibility, BLOCK_LABEL } from "../shared/payouts";
 import type { Capability } from "@shared/capabilities";
 
 interface Deps {
@@ -97,33 +97,34 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
     const tenantId = tid(req);
     const weekRef = typeof req.query.week === "string" ? req.query.week : new Date().toISOString();
     const overview = commissionSvc.getWeekOverview(tenantId, uid(req), weekRef, null);
-    const rows = overview.rows.map((r: any) => {
-      const acct = payoutStore.getPayoutAccount(tenantId, r.repId);
-      const existing = r.statementId ? payoutStore.getPayoutByStatement(tenantId, r.statementId) : null;
+    const factsByRep = payoutStore.getPayoutPreviewFacts(tenantId, overview.rows);
+    const rows = overview.rows.map(r => {
+      const facts = factsByRep.get(r.repId);
       const elig = payoutEligibility({
         statementStatus: r.status,
         finalCents: r.finalCommissionCents,
-        onboardingStatus: acct?.onboardingStatus ?? "none",
-        existingPayoutStatus: (existing?.status as PayoutStatus) ?? null,
+        onboardingStatus: facts?.onboardingStatus ?? "none",
+        existingPayoutStatus: facts?.payoutStatus ?? null,
       });
       // Surface a clawed-back (reversed) payout as needs-attention, not a bland "paid".
-      const reversed = existing?.status === "reversed";
+      const reversed = facts?.payoutStatus === "reversed";
       return {
         repId: r.repId, repName: r.repName, statementId: r.statementId, status: r.status,
         finalCommissionCents: r.finalCommissionCents,
-        onboardingStatus: acct?.onboardingStatus ?? "none",
-        payoutStatus: existing?.status ?? null,
+        onboardingStatus: facts?.onboardingStatus ?? "none",
+        payoutStatus: facts?.payoutStatus ?? null,
         eligible: elig.eligible,
         blockReason: reversed ? "payout_reversed" : elig.reason,
         blockLabel: reversed ? "Payout was reversed - needs attention" : (elig.reason ? BLOCK_LABEL[elig.reason] : null),
       };
     });
-    const payableCents = rows.filter(r => r.eligible).reduce((s, r) => s + r.finalCommissionCents, 0);
+    const payable = rows.filter(r => r.eligible);
+    const payableCents = payable.reduce((s, r) => s + r.finalCommissionCents, 0);
     res.json({
       stripeEnabled: connectConfigured(),
       week: overview.bounds.localWeekLabel,
       rows,
-      payableCount: rows.filter(r => r.eligible).length,
+      payableCount: payable.length,
       payableCents,
     });
   });

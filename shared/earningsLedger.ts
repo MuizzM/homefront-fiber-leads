@@ -215,17 +215,3 @@ export function reconcile(
 export function isLedgerLocked(status: LedgerStatus): boolean {
   return status === "PAID";
 }
-
-/** A human label per earning type, for statements and dashboards. */
-export const EARNING_LABEL: Record<EarningType, string> = {
-  PERSONAL_COMMISSION: "Personal commission",
-  TEAM_LEAD_OVERRIDE: "Team lead override",
-  MANAGER_OVERRIDE: "Manager override",
-  SPIFF: "Spiff",
-  TRAINING_BONUS: "Training bonus",
-  REFERRAL_BONUS: "Referral bonus",
-  MILEAGE_REIMBURSEMENT: "Mileage reimbursement",
-  HOURLY: "Hourly pay",
-  ADJUSTMENT: "Adjustment",
-  CLAWBACK: "Clawback",
-};

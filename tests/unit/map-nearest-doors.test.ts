@@ -34,10 +34,15 @@ describe("Nearest doors strip (MapView wiring)", () => {
     // The same slow refresh also runs while a card is open: its Next door row
     // ranks from this fix, and a rep can stand at a door for minutes.
     expect(src).toContain("const fixWanted = nearestVisible || selectedLeadId != null;");
-    const effect = between("if (!fixWanted) return;", "}, [fixWanted, noteRepFix]);");
+    const effect = between("if (!fixWanted || !tabActive) return;", "}, [fixWanted, tabActive, noteRepFix]);");
     expect(effect).toContain('document.visibilityState === "hidden"');
     expect(effect).toContain("window.setInterval(refresh, 45_000)");
     expect(effect).toContain("captureFieldFix(3500)");
+    // Stage changes cancel the interval and invalidate an in-flight GPS result;
+    // returning starts a fresh fix immediately, without waiting 45 seconds.
+    expect(effect).toContain("refresh();");
+    expect(effect).toContain("live = false; window.clearInterval(id)");
+    expect(effect).toContain("if (!live || f.repLat == null || f.repLng == null) return;");
     // The geolocate handler feeds the same state (throttled in noteRepFix).
     const handler = between('geolocate.on("geolocate", (e: any) => {', "gpsCenteredRef.current = true");
     expect(handler).toContain("noteRepFix(");

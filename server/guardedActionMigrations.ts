@@ -196,8 +196,3 @@ export function runGuardedActionMigrations(): void {
 
   schemaReady = true;
 }
-
-/** Test-only: forget the memoised flag when the database is rebuilt under us. */
-export function resetGuardedActionSchemaCache(): void {
-  schemaReady = false;
-}

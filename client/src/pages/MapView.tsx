@@ -6291,7 +6291,7 @@ export default function MapView() {
   // and a rep can stand at a door for minutes.
   const fixWanted = nearestVisible || selectedLeadId != null;
   useEffect(() => {
-    if (!fixWanted) return;
+    if (!fixWanted || !tabActive) return;
     let live = true;
     const refresh = () => {
       if (!live || document.visibilityState === "hidden") return;
@@ -6304,7 +6304,7 @@ export default function MapView() {
     refresh();
     const id = window.setInterval(refresh, 45_000);
     return () => { live = false; window.clearInterval(id); };
-  }, [fixWanted, noteRepFix]);
+  }, [fixWanted, tabActive, noteRepFix]);
 
   // Leads-panel row tap — the SAME path a pin tap takes (flyToLead →
   // setSelectedLeadId → card/sheet). Phone closes the drawer to reveal the map.

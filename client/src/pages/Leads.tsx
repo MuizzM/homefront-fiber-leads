@@ -7,6 +7,7 @@ import {
   upsertLeadIntoLists, type LeadListItem, type LeadsListResponse,
 } from "@/lib/leadsListQuery";
 import { WATCHLIST_QUERY, type WatchlistItem } from "@/components/fiber/ComingSoonWatchlist";
+import { useTabActive } from "@/lib/tabActivity";
 import { useIsDesktop } from "@/hooks/use-mobile";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -137,7 +138,6 @@ const STATUS_COLOR: Record<string, string> = {
   // on /10 and on /15 (docs/DESIGN_SYSTEM.md).
   follow_up:     "bg-warning/10 text-warning",
 };
-
 
 const OUTCOME_COLORS: Record<string, string> = {
   not_home:      "text-muted-foreground",
@@ -463,7 +463,6 @@ function AssignRepModal({ lead, team, onClose }: {
     </DialogContent>
   );
 }
-
 
 // ── Intelligence Panel (Side Sheet) ──────────────────────────────────────────
 type EnrichmentData = {
@@ -1160,9 +1159,11 @@ export default function Leads() {
   });
   const bs = leadStats?.byStatus ?? {};
   const canSeeScanOps = user?.role === "admin" || user?.role === "manager";
+  const tabActive = useTabActive();
   const { data: comingSoonWatchlist } = useQuery<WatchlistItem[] | null>({
     ...WATCHLIST_QUERY,
     enabled: canSeeScanOps,
+    refetchInterval: tabActive ? WATCHLIST_QUERY.refetchInterval : false,
   });
   const activeComingSoon = (comingSoonWatchlist ?? []).filter(item => item.status === "active" || item.status == null);
   const hotComingSoon = activeComingSoon.filter(item => item.urgency === "hot").length;

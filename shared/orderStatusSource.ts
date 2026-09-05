@@ -61,12 +61,6 @@ export const INSTALLED_STATUSES: readonly NormalizedOrderStatus[] = ["installed"
  *  explicit admin policy that says its cancellation reason is recoverable. */
 export const TERMINAL_STATUSES: readonly NormalizedOrderStatus[] = ["canceled", "rejected"];
 
-/** In flight and healthy: the provider is working the order and nobody is
- *  waiting on us. These become recovery candidates only by going STALE. */
-export const IN_FLIGHT_STATUSES: readonly NormalizedOrderStatus[] = [
-  "submitted", "accepted", "install_scheduled",
-];
-
 /** Something is wrong RIGHT NOW and a human can fix it. These are the states
  *  the recovery engine acts on immediately rather than after a stall window. */
 export const ATTENTION_STATUSES: readonly NormalizedOrderStatus[] = [

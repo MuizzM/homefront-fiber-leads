@@ -86,19 +86,6 @@ export function completeActivity(
 
 export type StoredState = { activityId: string; state: unknown; updatedAt: string };
 
-export function getActivityState(userId: number, tenantId: number | null, activityId: string): StoredState | null {
-  const row = rawDb.prepare(
-    `SELECT activity_id AS activityId, state_json AS stateJson, updated_at AS updatedAt
-       FROM academy_activity_state WHERE tenant_id = ? AND user_id = ? AND activity_id = ?`,
-  ).get(tid(tenantId), userId, activityId) as { activityId: string; stateJson: string; updatedAt: string } | undefined;
-  if (!row) return null;
-  try {
-    return { activityId: row.activityId, state: JSON.parse(row.stateJson), updatedAt: row.updatedAt };
-  } catch {
-    return null; // a corrupt blob is a missing blob, not a 500
-  }
-}
-
 export function listActivityStates(userId: number, tenantId: number | null): StoredState[] {
   const rows = rawDb.prepare(
     `SELECT activity_id AS activityId, state_json AS stateJson, updated_at AS updatedAt

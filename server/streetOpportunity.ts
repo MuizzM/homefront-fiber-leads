@@ -1,3 +1,4 @@
+// TODO: verify usage: this tested street-scoring model has no production caller; retain its documented scoring rules until its integration is confirmed.
 // ── Street opportunity: what a rep should walk, and why ──────────────────────
 //
 // A ranked route list that survives the objections an audit of the naive

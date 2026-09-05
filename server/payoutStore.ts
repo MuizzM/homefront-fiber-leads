@@ -121,6 +121,35 @@ export function getPayoutByStatement(tenantId: number, statementId: number): Pay
     "SELECT * FROM rep_payouts WHERE tenant_id = ? AND statement_id = ?",
   ).get(tenantId, statementId));
 }
+
+interface PayoutPreviewFacts {
+  repId: number;
+  onboardingStatus: OnboardingStatus;
+  payoutStatus: PayoutStatus | null;
+}
+
+/** Read only the statuses needed by the preview, without loading account secrets
+ * or payout history. json_each keeps the query below SQLite's bind limit even
+ * for large teams; both joins remain tenant-scoped and use existing keys. */
+export function getPayoutPreviewFacts(
+  tenantId: number,
+  rows: readonly { repId: number; statementId: number | null }[],
+): Map<number, PayoutPreviewFacts> {
+  if (rows.length === 0) return new Map();
+  const requested = JSON.stringify(rows.map(row => [row.repId, row.statementId]));
+  const facts = rawDb.prepare<[string, number, number], PayoutPreviewFacts>(`
+    SELECT json_extract(request.value, '$[0]') AS repId,
+           COALESCE(account.onboarding_status, 'none') AS onboardingStatus,
+           payout.status AS payoutStatus
+    FROM json_each(?) AS request
+    LEFT JOIN rep_payout_accounts AS account
+      ON account.rep_id = json_extract(request.value, '$[0]') AND account.tenant_id = ?
+    LEFT JOIN rep_payouts AS payout
+      ON payout.statement_id = json_extract(request.value, '$[1]') AND payout.tenant_id = ?
+  `).all(requested, tenantId, tenantId);
+  return new Map(facts.map(fact => [fact.repId, fact]));
+}
+
 export function getPayoutById(tenantId: number, id: number): PayoutRow | null {
   return mapPayout(rawDb.prepare(
     "SELECT * FROM rep_payouts WHERE tenant_id = ? AND id = ?",

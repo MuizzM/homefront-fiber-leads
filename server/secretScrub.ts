@@ -12,6 +12,8 @@
 // second server).
 
 /** Object keys that must never be serialized into an API response. */
+// TODO: verify usage: SCANNER_SUBMIT_SECRET is still documented but has no active
+// verifier in this tree. Keep redacting legacy credentials until it is retired.
 export const BLOCKED_RESPONSE_FIELDS: ReadonlySet<string> = new Set([
   "passwordHash", "password_hash", "password", "tempPassword",
   "stack", "trace", "errno", "syscall",

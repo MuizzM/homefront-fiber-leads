@@ -1,3 +1,4 @@
+// TODO: verify usage: this tested money-state model is not wired into production; confirm ledger integration before retiring the separate money contract.
 // ── Commission money: the vocabulary an order-status plane does not have ─────
 // PURE and framework-free. Composes with shared/orderStatusSource.ts rather
 // than duplicating it - that module owns the ORDER lifecycle (submitted,

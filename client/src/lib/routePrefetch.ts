@@ -125,12 +125,6 @@ const ROUTE_QUERIES: Record<string, readonly string[]> = {
 // rapid hover-in/hover-out over a nav rail.
 const warmedChunks = new Set<string>();
 
-/** Test-only: reset the once-per-session guard between cases. */
-export function __resetPrefetchForTests(): void {
-  warmedChunks.clear();
-  cancelPendingData();
-}
-
 function resolveThunk(path: string): [string, Thunk] | null {
   const exact = EXACT_CHUNKS[path];
   if (exact) return [path, exact];
