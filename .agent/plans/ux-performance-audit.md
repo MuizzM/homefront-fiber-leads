@@ -88,6 +88,30 @@ The final full gate passed with the two browser-discovered corrections below.
 The report records measured gains, validation and remaining device/production
 limits. No production actions were performed.
 
+## Authorized deployment and live measurement — 2026-09-05
+
+The user subsequently requested: "deploy it then measure in browser". This
+authorizes the normal PR merge and production deployment of audited commit
+`266c7bb8d7d1ca214d721713f9cd6d9fc25b495a`, followed by read-only browser checks.
+Customer communications, financial mutations and scans are not test actions.
+
+- [x] Push audited branch and open PR #213 against `rep-knocking-workflow`.
+- [x] Exact-SHA CI run 33981308074 succeeded. PR #213 was already merged as e8aa072; its tree matches 266c7bb and preserves release ancestry.
+- [x] Deploy run 33982231000 succeeded for 266c7bb; public health and build fingerprint 77538232daf0 verified. Previous release c7fbd4d is the rollback reference.
+- [x] Live desktop/mobile measurements recorded in docs/PRODUCTION_BROWSER_MEASUREMENTS.md. Slow full reloads exposed production SQLite contention; the separate production-stall-fix ExecPlan tracks the correction.
+
+The normal code-only cutover uses `with_backup=false`; there are no schema or
+migration changes. Independent release review confirmed the usual health and
+rollback controls. It also found a pre-existing optional-backup failure-trap
+ordering defect, so the optional offline snapshot path is not used in this
+release. This needs a separate regression-tested operations fix.
+
+The production browser initially showed Sign in. User sign-in was requested and
+the live tab subsequently reached an authenticated map session, enabling private
+page measurements without reading or copying credentials.
+The browser interface does not expose Performance/Navigation Timing APIs, so
+report observed UI readiness timings as such, not as Core Web Vitals.
+
 
 ## 2026-09-05 implementation checkpoint
 

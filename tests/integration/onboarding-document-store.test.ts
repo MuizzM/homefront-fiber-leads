@@ -214,6 +214,55 @@ describe("first-party onboarding signing store", () => {
     }]);
   });
 
+  it("reads existing invitation links and the pipeline without acquiring a database write lock", () => {
+    const invite = recruitingStore.createRecruitingInvite({
+      tenantId: 1, candidateName: "Read Only Candidate", candidateEmail: "readonly@example.com", invitedBy: 100,
+    });
+    const token = recruitingStore.secureTokenForInvite(invite.id);
+    const before = recruitingStore.getRecruitingInvite(invite.id);
+    rawDb.pragma("query_only = ON");
+    try {
+      expect(recruitingStore.secureTokenForInvite(invite.id)).toBe(token);
+      expect(pipeline.buildOnboardingPipeline(1, "https://portal.example.com"))
+        .toEqual(expect.arrayContaining([expect.objectContaining({ inviteId: invite.id })]));
+      expect(recruitingStore.getRecruitingInvite(invite.id)).toEqual(before);
+      expect(recruitingStore.resolveRecruitingInviteToken(token)?.id).toBe(invite.id);
+    } finally {
+      rawDb.pragma("query_only = OFF");
+    }
+  });
+
+  it.each(["explicit renewal", "expired invitation", "missing hash", "signing secret change"])("still persists token changes for %s", reason => {
+    const inviteSecret = process.env.ONBOARDING_INVITE_SECRET;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
+      const invite = recruitingStore.createRecruitingInvite({
+        tenantId: 1, candidateName: "Renew Candidate", candidateEmail: "renew@example.com", invitedBy: 100,
+      });
+      const original = recruitingStore.secureTokenForInvite(invite.id);
+      if (reason === "missing hash") {
+        rawDb.prepare("UPDATE onboarding_recruiting_invites SET token_sha256 = '' WHERE id = ?").run(invite.id);
+      }
+      if (reason === "signing secret change") {
+        process.env.ONBOARDING_INVITE_SECRET = "rotated-test-onboarding-secret-with-more-than-32-characters";
+      }
+      vi.setSystemTime(new Date(reason === "expired invitation" ? "2026-09-20T12:00:00Z" : "2026-09-05T12:01:00Z"));
+      const token = recruitingStore.secureTokenForInvite(invite.id, reason === "explicit renewal");
+      expect(recruitingStore.resolveRecruitingInviteToken(token)?.id).toBe(invite.id);
+      expect(recruitingStore.getRecruitingInvite(invite.id)?.updatedAt).not.toBe(invite.updatedAt);
+      if (reason === "missing hash") {
+        expect(token).toBe(original);
+      } else {
+        expect(token).not.toBe(original);
+        expect(recruitingStore.resolveRecruitingInviteToken(original)).toBeNull();
+      }
+    } finally {
+      process.env.ONBOARDING_INVITE_SECRET = inviteSecret;
+      vi.useRealTimers();
+    }
+  });
+
   it("creates a secure pre-account invite, resolves it once, and attaches the application", () => {
     const invite = recruitingStore.createRecruitingInvite({
       tenantId: 1,
