@@ -57,7 +57,8 @@ describe("scan hardening wiring", () => {
   });
 
   it("OTP limiters are SQLite-backed (no in-memory Maps)", () => {
-    expect(routesSrc).toContain("otpRateBuckets.check(");
+    expect(routesSrc).toContain("otpRateBuckets.checkInTransaction(");
+    expect(routesSrc).toContain("await interactiveTransaction(rawDb");
     expect(routesSrc).not.toContain("otpRequestLimiter = new Map");
     expect(routesSrc).not.toContain("otpVerifyLimiter  = new Map");
   });

@@ -50,6 +50,13 @@ export function purgeExpiredProviderPayloads(input: {
     ? [nowIso, nowIso]
     : [input.tenantId, nowIso, nowIso];
 
+  // Empty retention ticks are reads. Recheck inside the transaction when work
+  // exists so expiry, tenant scope and concurrent purges retain their semantics.
+  const hasEligible = rawDb.prepare(`SELECT 1 FROM contact_enrichments ce
+    LEFT JOIN contact_enrichment_providers p ON p.tenant_id=ce.tenant_id AND p.id=ce.provider_config_id
+    WHERE ${eligibility} LIMIT 1`);
+  if (!hasEligible.get(...args)) return { purged: 0, hasMore: false };
+
   let purged = 0;
   let hasMore = false;
   rawDb.transaction(() => {
@@ -64,9 +71,7 @@ export function purgeExpiredProviderPayloads(input: {
         WHERE raw_response_encrypted IS NOT NULL AND id IN (${placeholders})`)
         .run(...rows.map(({ id }) => id)).changes;
     }
-    hasMore = Boolean(rawDb.prepare(`SELECT 1 FROM contact_enrichments ce
-      LEFT JOIN contact_enrichment_providers p ON p.tenant_id=ce.tenant_id AND p.id=ce.provider_config_id
-      WHERE ${eligibility} LIMIT 1`).get(...args));
+    hasMore = Boolean(hasEligible.get(...args));
   }).immediate();
   return { purged, hasMore };
 }

@@ -19,6 +19,7 @@ import {
 import { structuredLog } from "./structuredLog";
 import crypto from "node:crypto";
 import { resolveScanWorkerCount } from "./scanWorkers";
+import { consumesScanRuns } from "./scanConsumeRole";
 import { AuthorizedTokenPool, type AuthorizedTokenLease } from "./authorizedTokenPool";
 import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from "./distributedProviderCoordinator";
 
@@ -477,6 +478,7 @@ function gatedMint(): Promise<{ token: string; expiresAt: number }> {
 }
 
 const authorizedTokenPool = new AuthorizedTokenPool({
+  backgroundMaintenance: shouldAutoWarmAuthorizedTokenPool(),
   maxSize: Number.isFinite(configuredTokenPoolSize) ? configuredTokenPoolSize : 100,
   warmMinimum: Number.isFinite(configuredWarmTokens) ? configuredWarmTokens : 2,
   refreshMarginMs: TOKEN_REFRESH_MARGIN_MS,
@@ -695,7 +697,7 @@ export function getTokenStatus(): {
  * AuthorizedTokenPool.install() starts pool maintenance after installing the
  * supplied token.
  */
-export function shouldAutoWarmAuthorizedTokenPool(env: NodeJS.ProcessEnv = process.env): boolean {
+function tokenWarmupPermitted(env: NodeJS.ProcessEnv = process.env): boolean {
   const runningUnderTest =
     env.NODE_ENV === "test"
     || env.VITEST === "true"
@@ -704,8 +706,17 @@ export function shouldAutoWarmAuthorizedTokenPool(env: NodeJS.ProcessEnv = proce
   return !runningUnderTest;
 }
 
-// Production still warms by default even when the legacy authorization flag is
-// absent. Test/module imports remain transport-free.
+export function shouldAutoWarmAuthorizedTokenPool(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!tokenWarmupPermitted(env)) return false;
+  const scanWorkers = resolveScanWorkerCount(env);
+  // The primary imports routes/scanner too, but never consumes a scan. HTTP
+  // workers obtain tokens on demand without running permanent refresh timers.
+  if (scanWorkers > 0 && !env.HF_ROLE) return false;
+  return consumesScanRuns({ scanWorkers, role: env.HF_ROLE, consumeRole: env.SCAN_CONSUME_ROLE });
+}
+
+// Only scan consumers keep an automatic warm reserve. Interactive leases in
+// HTTP workers retain their existing on-demand token acquisition.
 if (shouldAutoWarmAuthorizedTokenPool()) {
   authorizedTokenPool.start();
 }
@@ -1194,10 +1205,12 @@ async function scanAddressDirect(
       tsEpoch: Date.now(), ...extra,
     });
 
-  // Fail closed FAST: automation not authorized and no ready/manual token in the
-  // pool → do not even attempt a mint. The address stays unresolved for a future
-  // recheck; zero token spend is wasted on a session that cannot exist yet.
-  if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true" && authorizedTokenPool.snapshot().ready === 0) {
+  // Preserve the existing production mint policy when moving HTTP workers
+  // from automatic warmup to demand-driven acquisition. A cold pool must reach
+  // lease() in every environment where startup previously minted tokens. Tests
+  // remain transport-free without an explicit flag or installed token; failed
+  // acquisition below still returns unresolved rather than a service verdict.
+  if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true" && authorizedTokenPool.snapshot().ready === 0 && !tokenWarmupPermitted()) {
     base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
     base.retryReason = "not_authorized";
     base.notes = "No authorized session - automation not authorized (unresolved, recheck)";

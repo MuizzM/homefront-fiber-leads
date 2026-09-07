@@ -20,6 +20,16 @@ afterAll(() => {
 });
 
 describe("scanner authorized-token auto-warm boot policy", () => {
+  it("keeps idle HTTP workers and the cluster primary free of token refresh work", () => {
+    const env = { NODE_ENV: "production", SCAN_WORKERS: "4" };
+    expect(scanner.shouldAutoWarmAuthorizedTokenPool(env)).toBe(false);
+    expect(scanner.shouldAutoWarmAuthorizedTokenPool({ ...env, HF_ROLE: "scan" })).toBe(false);
+    expect(scanner.shouldAutoWarmAuthorizedTokenPool({ ...env, HF_ROLE: "control" })).toBe(true);
+    expect(scanner.shouldAutoWarmAuthorizedTokenPool({ ...env, SCAN_CONSUME_ROLE: "all" })).toBe(false);
+    expect(scanner.shouldAutoWarmAuthorizedTokenPool({ ...env, HF_ROLE: "scan", SCAN_CONSUME_ROLE: "all" })).toBe(true);
+    expect(scanner.shouldAutoWarmAuthorizedTokenPool({ ...env, SCAN_WORKERS: "1" })).toBe(false);
+    expect(scanner.shouldAutoWarmAuthorizedTokenPool({ ...env, SCAN_WORKERS: "1", HF_ROLE: "control" })).toBe(true);
+  });
   it("auto-warms in production even when the legacy authorization flag is absent", () => {
     expect(scanner.shouldAutoWarmAuthorizedTokenPool({
       NODE_ENV: "production",

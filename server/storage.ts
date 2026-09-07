@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
+import { withoutSqliteBusyWait } from "./interactiveDb";
 import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION } from "./addressKey";
 import { streetKeyOf, addressIdentityIssues } from "@shared/addressKey";
 import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
@@ -591,6 +592,8 @@ export function runMigrations() {
     // a 6-digit code can't be ground down within its window even across restarts /
     // instances (defense in depth beyond the in-memory per-email rate limiter).
     `ALTER TABLE otp_codes ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0`,
+    // Bounded email/live-code lookup and invalidation, including retained history.
+    `CREATE INDEX IF NOT EXISTS idx_otp_email_used_expiry ON otp_codes(email, used, expires_at)`,
     // Persistent login-attempt audit (owner ask 2026-07-26): every OTP request and
     // verify outcome — who, when, IP, result — survives the nightly OTP purge.
     `CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, kind TEXT NOT NULL, success INTEGER NOT NULL DEFAULT 0, reason TEXT, ip TEXT, user_agent TEXT, tenant_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
@@ -5189,7 +5192,7 @@ export class Storage implements IStorage {
       const current = Date.parse(session.expiresAt) || 0;
       if (target - current <= SESSION_RENEW_SLACK_MS) return session;
       const expiresAt = new Date(target).toISOString();
-      db.update(sessions).set({ expiresAt }).where(eq(sessions.id, session.id)).run();
+      withoutSqliteBusyWait(rawDb, () => db.update(sessions).set({ expiresAt }).where(eq(sessions.id, session.id)).run());
       return { ...session, expiresAt };
     } catch {
       return session; // transient write contention — the session is still valid

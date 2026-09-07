@@ -231,6 +231,7 @@ export function reconcileStrandedRuns(tenantId?: number, territoryId?: number): 
   const params: unknown[] = [];
   if (tenantId != null) { where.push("tenant_id=?"); params.push(tenantId); }
   if (territoryId != null) { where.push("territory_id=?"); params.push(territoryId); }
+  if (!rawDb.prepare(`SELECT 1 FROM area_skip_trace_runs WHERE ${where.join(" AND ")} LIMIT 1`).get(...params)) return 0;
   return rawDb.prepare(`UPDATE area_skip_trace_runs
     SET status='failed',error_code='RUN_INTERRUPTED',finished_at=datetime('now')
     WHERE ${where.join(" AND ")}`).run(...params).changes;

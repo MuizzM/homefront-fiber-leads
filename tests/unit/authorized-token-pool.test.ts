@@ -2,6 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 import { AuthorizedTokenPool } from "../../server/authorizedTokenPool";
 
 describe("AuthorizedTokenPool", () => {
+  it("uses installed and on-demand tokens without background timers in an HTTP worker", async () => {
+    vi.useFakeTimers();
+    const mint = vi.fn(async () => ({ token: "demand-token", expiresAt: Date.now() + 120_000 }));
+    const pool = new AuthorizedTokenPool({ maxSize: 1, warmMinimum: 1, refreshMarginMs: 1000, backgroundMaintenance: false, mint });
+    try {
+      pool.start();
+      expect(mint).not.toHaveBeenCalled();
+      pool.install("installed-token", Date.now() + 120_000);
+      const installed = await pool.lease();
+      expect(installed.token).toBe("installed-token");
+      installed.release();
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(mint).not.toHaveBeenCalled();
+      const demand = await pool.lease();
+      expect(demand.token).toBe("demand-token");
+      expect(mint).toHaveBeenCalledTimes(1);
+      demand.release();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { pool.stop(); vi.useRealTimers(); }
+  });
   it("keeps only the configured warm minimum and leases least-loaded round-robin", async () => {
     let now = 1_000;
     const mint = vi.fn(async (slotId: number) => ({ token: `token-${slotId}`, expiresAt: now + 120_000 }));

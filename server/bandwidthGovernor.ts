@@ -33,6 +33,7 @@
  * Env: DECODO_BUDGET_GB (25), DECODO_RESERVE_PCT (10), DECODO_BILLING_DAY (1).
  */
 import { rawDb } from "./db";
+import { withoutSqliteBusyWait } from "./interactiveDb";
 import { structuredLog } from "./structuredLog";
 
 const BUDGET_GB = Math.max(1, Number(process.env.DECODO_BUDGET_GB) || 25);
@@ -125,16 +126,24 @@ function ensureGovernorStateTable(): void {
 let pendingBytes = 0;
 let pendingReqs = 0;
 let flushTimer: NodeJS.Timeout | null = null;
+let retryFlushAfter = 0;
 
 export function flushBandwidthLedger(): void {
   if (!pendingReqs && !pendingBytes) return;
   try {
-    ensureTable();
-    rawDb.prepare("INSERT INTO bandwidth_ledger (ts, bytes, requests) VALUES (?,?,?)")
-      .run(Date.now(), pendingBytes, pendingReqs);
-  } catch { /* best-effort */ }
-  pendingBytes = 0;
-  pendingReqs = 0;
+    withoutSqliteBusyWait(rawDb, () => {
+      ensureTable();
+      rawDb.prepare("INSERT INTO bandwidth_ledger (ts, bytes, requests) VALUES (?,?,?)")
+        .run(Date.now(), pendingBytes, pendingReqs);
+    });
+    pendingBytes = 0;
+    pendingReqs = 0;
+    retryFlushAfter = 0;
+  } catch {
+    // Retain every byte/request for the next scheduled flush. Retrying on each
+    // response once the 200-request threshold is crossed creates a lock storm.
+    retryFlushAfter = Date.now() + FLUSH_MS;
+  }
 }
 
 function scheduleFlush(): void {
@@ -155,7 +164,7 @@ export function recordProxyResponse(contentLength: number): void {
     pendingBytes += Math.round(estReqBytes);
   }
   scheduleFlush();
-  if (pendingReqs >= 200) flushBandwidthLedger(); // high-rate safety valve
+  if (pendingReqs >= 200 && Date.now() >= retryFlushAfter) flushBandwidthLedger();
 }
 
 // ── Graduated circuit breaker ────────────────────────────────────────────────
@@ -497,6 +506,7 @@ export function governorStats(): GovernorStats {
 /** Test hook: reset in-memory state (ledger rows persist per test DB). */
 export function _resetGovernorForTests(): void {
   pendingBytes = 0; pendingReqs = 0;
+  retryFlushAfter = 0;
   estReqBytes = SEED_REQ_BYTES;
   _resetCircuitForTests();
 }

@@ -27,6 +27,7 @@ import {
 } from "./territoryPass";
 import { isTerritoryPassAction, type TerritoryPassAction } from "@shared/territoryPass";
 import { rawDb } from "./db";
+import { interactiveTransaction, withoutSqliteBusyWait } from "./interactiveDb";
 import {
   emitLeadEvent, onLeadEvent, eventsSince, leadEventsCursor, leadEventsEpoch,
   type LeadEvent, type LeadEventType,
@@ -8536,7 +8537,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   const LOCKOUT_MS       = 30 * 60 * 1000; // 30 min lockout after too many attempts
 
   function checkRateLimit(bucket: "request" | "verify", key: string, max: number): { allowed: boolean; retryAfter?: number } {
-    return otpRateBuckets.check(bucket, key, max, RATE_WINDOW_MS, LOCKOUT_MS);
+    return otpRateBuckets.checkInTransaction(bucket, key, max, RATE_WINDOW_MS, LOCKOUT_MS);
   }
 
   // ── Universal OTP login — works for ALL roles (admin, manager, team_lead, rep) ──
@@ -8556,7 +8557,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       code: e?.code ?? null,
       error: String(e?.message ?? e).slice(0, 200),
     }, "error");
-    return res.status(503).json({ error: "Sign-in is briefly unavailable - please try again in a moment." });
+    return res.setHeader("Retry-After", "1").status(503).json({ error: "Sign-in is briefly unavailable - please try again in a moment." });
   }
 
   // Step 1: Request OTP code (email)
@@ -8570,33 +8571,34 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "Valid email required" });
     }
     const cleanEmail = email.trim().toLowerCase();
-    // IP + email rate limiting
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit("request", ipBucketKey(ip), OTP_REQUEST_IP_MAX);
-    const emailCheck = checkRateLimit("request", `email:${cleanEmail}`, OTP_REQUEST_EMAIL_MAX);
-    if (!ipCheck.allowed || !emailCheck.allowed) {
-      const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
-      res.setHeader("Retry-After", String(retryAfter));
-      storage.logLoginAttempt(cleanEmail, "request", false, "rate_limited", ip, req.headers["user-agent"] as string, (req as any).user?.tenantId ?? null);
-      return res.status(429).json({ error: `Too many requests. Try again in ${Math.ceil(retryAfter / 60)} minutes.` });
+    const prepared = await interactiveTransaction(rawDb, () => {
+      const ipCheck = checkRateLimit("request", ipBucketKey(ip), OTP_REQUEST_IP_MAX);
+      const emailCheck = checkRateLimit("request", `email:${cleanEmail}`, OTP_REQUEST_EMAIL_MAX);
+      if (!ipCheck.allowed || !emailCheck.allowed) {
+        const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
+        storage.logLoginAttempt(cleanEmail, "request", false, "rate_limited", ip, req.headers["user-agent"] as string, (req as any).user?.tenantId ?? null);
+        return { retryAfter };
+      }
+      const user = storage.getUserByEmail(cleanEmail);
+      if (!user || !user.active) {
+        storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
+        return {};
+      }
+      return { user, code: storage.createOtp(cleanEmail) };
+    });
+    if (prepared.retryAfter !== undefined) {
+      res.setHeader("Retry-After", String(prepared.retryAfter));
+      return res.status(429).json({ error: `Too many requests. Try again in ${Math.ceil(prepared.retryAfter / 60)} minutes.` });
     }
-    // Owner's decision (2026-07-08): this is a closed internal team tool, so an
-    // unknown email gets an explicit 404 ("contact your manager") instead of the
-    // neutral anti-enumeration response — field reps kept assuming a silent
-    // "sent" meant a mail delay. The enumeration surface stays bounded by the
-    // dual per-IP AND per-email rate limits above; a public-facing app should
-    // flip this back to the constant response.
-    const user = storage.getUserByEmail(cleanEmail);
-    if (!user || !user.active) {
-      storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
-      // Neutral response — do NOT reveal whether an email is registered/active
-      // (account enumeration). Must be BYTE-IDENTICAL to the happy path: the
-      // success branch returns { sent: true, emailDelivered: true }, so the mere
-      // PRESENCE of emailDelivered here (it used to be absent) was itself an
-      // enumeration oracle. Mirror the happy shape exactly; no email is sent.
-      return res.json({ sent: true, emailDelivered: true });
-    }
-    const code = storage.createOtp(cleanEmail);
+    // Identical response for unknown/inactive accounts; never send a message.
+    if (!prepared.user || !prepared.code) return res.json({ sent: true, emailDelivered: true });
+    const { user, code } = prepared;
+    // Mail completion must not reintroduce a long blocking audit write after
+    // the response. The audit already tolerates write failure; now it yields
+    // that decision immediately when the shared writer is busy.
+    const auditDelivery = (reason: string) => withoutSqliteBusyWait(rawDb, () =>
+      storage.logLoginAttempt(cleanEmail, "request", true, reason, ip, req.headers["user-agent"] as string, user.tenantId ?? null));
 
     // ── PERF: the mail send is NOT awaited in production ────────────────────
     // The code is already generated and stored by the line above; email is only
@@ -8615,13 +8617,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // `developmentCode` in the response and a local login depends on it.
     if (process.env.NODE_ENV === "production") {
       void sendOtpEmail(cleanEmail, code, user.name)
-        .then(() => storage.logLoginAttempt(cleanEmail, "request", true, "code_sent", ip, req.headers["user-agent"] as string, user?.tenantId ?? null))
+        .then(() => auditDelivery("code_sent"))
         .catch((mailErr: any) => {
           // A mail outage must never be a lockout: the code stands and still
           // verifies through any channel that works.
           console.warn("[otp] mail delivery failed (login already advanced):", mailErr?.message);
           try {
-            storage.logLoginAttempt(cleanEmail, "request", true, "code_created_mail_failed", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
+            auditDelivery("code_created_mail_failed");
           } catch { /* audit is best-effort once the response is gone */ }
         });
       // Byte-identical to the unknown-email response above.
@@ -8633,10 +8635,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       delivery = await sendOtpEmail(cleanEmail, code, user.name);
     } catch (mailErr: any) {
       console.warn("[otp] mail delivery failed; advancing login flow anyway:", mailErr?.message);
-      storage.logLoginAttempt(cleanEmail, "request", true, "code_created_mail_failed", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
+      auditDelivery("code_created_mail_failed");
       return res.json({ sent: true, emailDelivered: false });
     }
-    storage.logLoginAttempt(cleanEmail, "request", true, "code_sent", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
+    auditDelivery("code_sent");
     // Localhost must remain usable without a paid mail account. The code is
     // returned only in non-production when delivery fell back to the console;
     // production can never expose an authentication secret in an API response.
@@ -8647,63 +8649,56 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   }
 
-  // Step 2: Verify OTP code
-  app.post("/api/auth/otp/verify", (req, res) => {
-    try { otpVerifyHandler(req, res); }
+  // Step 2: persist the decision and session together, then send the response.
+  app.post("/api/auth/otp/verify", async (req, res) => {
+    try { await otpVerifyHandler(req, res); }
     catch (e: any) { if (!res.headersSent) otpUnavailable(res, "verify", e); }
   });
-  function otpVerifyHandler(req: Request, res: Response) {
+  async function otpVerifyHandler(req: Request, res: Response) {
     const { email, code } = req.body;
     if (!email || typeof email !== "string" || email.length > 254) return res.status(400).json({ error: "Invalid request" });
     if (!code || typeof code !== "string" || !/^\d{6}$/.test(code.trim())) return res.status(400).json({ error: "Code must be 6 digits" });
     const cleanEmail = email.trim().toLowerCase();
-    // Rate limit verify attempts per email
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit("verify", ipBucketKey(ip), OTP_VERIFY_IP_MAX);
-    const emailCheck = checkRateLimit("verify", `email:${cleanEmail}`, OTP_VERIFY_EMAIL_MAX);
-    if (!ipCheck.allowed || !emailCheck.allowed) {
-      const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
-      res.setHeader("Retry-After", String(retryAfter));
-      storage.logLoginAttempt(cleanEmail, "verify", false, "rate_limited", ip, req.headers["user-agent"] as string, (req as any).user?.tenantId ?? null);
-      return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(retryAfter / 60)} minutes.` });
-    }
-    const ok = storage.verifyOtp(cleanEmail, code.trim());
-    if (!ok) {
-      storage.logLoginAttempt(cleanEmail, "verify", false, "bad_code", ip, req.headers["user-agent"] as string, storage.getUserByEmail(cleanEmail)?.tenantId ?? null);
-      return res.status(401).json({ error: "Invalid or expired code. Check your email and try again." });
-    }
-    const user = storage.getUserByEmail(cleanEmail);
-    if (!user || !user.active) {
-      storage.logLoginAttempt(cleanEmail, "verify", false, "account_inactive", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
-      return res.status(401).json({ error: "Account not active. Contact your administrator." });
-    }
-    // A suspended/cancelled org cannot mint NEW sessions either. orgStatusGate
-    // already refuses its existing ones; without this a user of a dead org would
-    // still get a token and only discover the block on the next request. Same
-    // fail-open posture: a lookup failure must not block a live org's login.
-    if (!user.isSuperAdmin && user.tenantId != null) {
-      let orgBlocked = false;
-      try {
-        orgBlocked = ORG_BLOCKING_STATUSES.has(String(storage.getTenantById(user.tenantId)?.status ?? "active").toLowerCase());
-      } catch (e: any) {
-        console.warn("[org-status-gate] login check failed, allowing through:", e?.message);
+    const result = await interactiveTransaction(rawDb, () => {
+      const ipCheck = checkRateLimit("verify", ipBucketKey(ip), OTP_VERIFY_IP_MAX);
+      const emailCheck = checkRateLimit("verify", `email:${cleanEmail}`, OTP_VERIFY_EMAIL_MAX);
+      if (!ipCheck.allowed || !emailCheck.allowed) {
+        const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
+        storage.logLoginAttempt(cleanEmail, "verify", false, "rate_limited", ip, req.headers["user-agent"] as string, (req as any).user?.tenantId ?? null);
+        return { status: 429, retryAfter, body: { error: `Too many attempts. Try again in ${Math.ceil(retryAfter / 60)} minutes.` } };
       }
-      if (orgBlocked) {
-        storage.logLoginAttempt(cleanEmail, "verify", false, "organization_inactive", ip, req.headers["user-agent"] as string, user.tenantId);
-        return res.status(403).json({ error: "This organization is no longer active. Contact your administrator.", code: "ORGANIZATION_INACTIVE" });
+      if (!storage.verifyOtp(cleanEmail, code.trim())) {
+        storage.logLoginAttempt(cleanEmail, "verify", false, "bad_code", ip, req.headers["user-agent"] as string, storage.getUserByEmail(cleanEmail)?.tenantId ?? null);
+        return { status: 401, body: { error: "Invalid or expired code. Check your email and try again." } };
       }
-    }
-    storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
-    // Reset verify limiter on success
-    otpRateBuckets.reset("verify", `email:${cleanEmail}`);
-    otpRateBuckets.reset("verify", ipBucketKey(ip));
-    otpRateBuckets.reset("request", `email:${cleanEmail}`);
-    const session = storage.createSession(user.id);
-    // guardedActionsEnabled must ship on the LOGIN payload too, not only on
-    // /api/auth/status: the SPA runs on this user object until the next full
-    // reload (login() never re-runs checkStatus), so leaving it off would hide
-    // the Action Approvals nav from a freshly signed-in approver.
-    res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId, guardedActionsEnabled: guardedActionsEnabled() } });
+      const user = storage.getUserByEmail(cleanEmail);
+      if (!user || !user.active) {
+        storage.logLoginAttempt(cleanEmail, "verify", false, "account_inactive", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
+        return { status: 401, body: { error: "Account not active. Contact your administrator." } };
+      }
+      if (!user.isSuperAdmin && user.tenantId != null) {
+        // Database errors roll the entire attempt back; they cannot authorize
+        // an organization whose current status could not be read.
+        const orgBlocked = ORG_BLOCKING_STATUSES.has(String(storage.getTenantById(user.tenantId)?.status ?? "active").toLowerCase());
+        if (orgBlocked) {
+          storage.logLoginAttempt(cleanEmail, "verify", false, "organization_inactive", ip, req.headers["user-agent"] as string, user.tenantId);
+          return { status: 403, body: { error: "This organization is no longer active. Contact your administrator.", code: "ORGANIZATION_INACTIVE" } };
+        }
+      }
+      const session = storage.createSession(user.id);
+      storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string, user.tenantId ?? null);
+      otpRateBuckets.reset("verify", `email:${cleanEmail}`);
+      otpRateBuckets.reset("verify", ipBucketKey(ip));
+      otpRateBuckets.reset("request", `email:${cleanEmail}`);
+      return { status: 200, body: { sessionId: session.id, user: {
+        id: user.id, name: user.name, email: user.email, role: user.role,
+        teamMemberId: user.teamMemberId, tenantId: user.tenantId ?? null,
+        isSuperAdmin: Boolean(user.isSuperAdmin), guardedActionsEnabled: guardedActionsEnabled(),
+      } } };
+    });
+    if (result.retryAfter !== undefined) res.setHeader("Retry-After", String(result.retryAfter));
+    res.status(result.status).json(result.body);
   }
 
   // Login-attempt audit (owner ask 2026-07-26): managers read the persistent

@@ -10,9 +10,9 @@ import os from "node:os";
 //             paid for to scan. A resize rescales the cluster with no config change.
 //   integer → pinned worker count.
 //   0/unset → single-process (the kill-switch; byte-for-byte pre-cluster behavior).
-export function resolveScanWorkerCount(): number {
-  if (process.env.SCAN_WORKERS === "auto") {
+export function resolveScanWorkerCount(env: NodeJS.ProcessEnv = process.env): number {
+  if (env.SCAN_WORKERS === "auto") {
     return Math.max(1, os.availableParallelism?.() ?? os.cpus().length);
   }
-  return Math.max(0, Math.floor(Number(process.env.SCAN_WORKERS ?? 0) || 0));
+  return Math.max(0, Math.floor(Number(env.SCAN_WORKERS ?? 0) || 0));
 }

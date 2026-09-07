@@ -101,6 +101,32 @@ describe("Kinetic scanner transport hardening", () => {
       .toBe(scanner.normalizeKineticAddressKey("101 N. Main St", "LEXINGTON", "NC", "27292"));
   });
 
+  it.each([undefined, "false"])("acquires a cold HTTP-worker token on demand with the existing production flag %s", async legacyFlag => {
+    const keys = ["NODE_ENV", "VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID", "KFS_AUTOMATION_AUTHORIZED", "SCAN_WORKERS", "HF_ROLE"];
+    const previous = keys.map(key => [key, process.env[key]] as const);
+    try {
+      process.env.NODE_ENV = "production";
+      for (const key of ["VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID"]) delete process.env[key];
+      if (legacyFlag === undefined) delete process.env.KFS_AUTOMATION_AUTHORIZED;
+      else process.env.KFS_AUTOMATION_AUTHORIZED = legacyFlag;
+      process.env.SCAN_WORKERS = "4";
+      process.env.HF_ROLE = "scan";
+      egressHook.current?.("fixture cold pool");
+      expect(scanner.getTokenStatus().readySessions).toBe(0);
+      expect(scanner.shouldAutoWarmAuthorizedTokenPool()).toBe(false);
+      proxyFetch.mockImplementation(async (url: string) => url.includes("/api/v1/auth/session")
+        ? json(200, { access_token: "fixture-demand-token", expires_in: 2100 })
+        : json(200, noService));
+      const result = await scanner.scanAddress(`1 Cold Pool ${legacyFlag ?? "unset"}`, "Lexington", "NC", "27292", { source: "manual" });
+      expect(result.retryReason).not.toBe("not_authorized");
+      expect(result.retryReason).not.toBe("token_unavailable");
+      expect(proxyFetch.mock.calls.filter(([url]) => String(url).includes("/api/v1/auth/session"))).toHaveLength(1);
+      expect(proxyFetch.mock.calls.filter(([url]) => String(url).includes("/api/v1/address/search"))).toHaveLength(1);
+    } finally {
+      for (const [key, value] of previous) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
+  });
+
   it("on 401 invalidates the token and returns a blocked result (one attempt) for the worker to requeue", async () => {
     let searches = 0;
     proxyFetch.mockImplementation(async (url: string, init: RequestInit) => {
