@@ -15,6 +15,7 @@
  *      (default 1_000_000).
  */
 import { rawDb } from "./db";
+import { withoutSqliteBusyWait } from "./interactiveDb";
 import { structuredLog } from "./structuredLog";
 
 const DAILY_CAP = Math.max(0, Math.floor(Number(process.env.MAPBOX_DAILY_REQUEST_CAP ?? 50_000)));
@@ -33,6 +34,10 @@ export class MapboxBudgetExhaustedError extends Error {
 
 let ensured = false;
 function ensureTable(): void {
+  withoutSqliteBusyWait(rawDb, ensureTableNow);
+}
+
+function ensureTableNow(): void {
   if (ensured) return;
   try {
     rawDb.exec(`CREATE TABLE IF NOT EXISTS mapbox_ledger (
@@ -78,6 +83,7 @@ export function currentMapboxAccount(): string {
 
 // ── Batched ledger ────────────────────────────────────────────────────────────
 let pending = 0;
+let retryFlushAfter = 0;
 let flushTimer: NodeJS.Timeout | null = null;
 
 export function flushMapboxLedger(): void {
@@ -85,9 +91,12 @@ export function flushMapboxLedger(): void {
   const n = pending;
   pending = 0;
   try {
-    ensureTable();
-    rawDb.prepare("INSERT INTO mapbox_ledger (ts, requests, account) VALUES (?,?,?)").run(Date.now(), n, currentMapboxAccount());
-  } catch { pending += n; /* retry next flush */ }
+    withoutSqliteBusyWait(rawDb, () => {
+      ensureTable();
+      rawDb.prepare("INSERT INTO mapbox_ledger (ts, requests, account) VALUES (?,?,?)").run(Date.now(), n, currentMapboxAccount());
+    });
+    retryFlushAfter = 0;
+  } catch { pending += n; retryFlushAfter = Date.now() + FLUSH_MS; }
 }
 
 function scheduleFlush(): void {
@@ -143,7 +152,7 @@ export function recordMapboxRequests(n = 1): void {
   if (n <= 0) return;
   pending += n;
   scheduleFlush();
-  if (pending >= 200) flushMapboxLedger();
+  if (pending >= 200 && Date.now() >= retryFlushAfter) flushMapboxLedger();
 }
 
 /**
@@ -167,6 +176,6 @@ export async function mapboxFetch(url: string, init?: RequestInit): Promise<Resp
 
 /** Test hook. */
 export function _resetMapboxBudgetForTests(): void {
-  pending = 0; lastExhaustLog = 0; accountCache = null;
+  pending = 0; retryFlushAfter = 0; lastExhaustLog = 0; accountCache = null;
   try { rawDb.exec("DELETE FROM mapbox_ledger"); } catch { /* table may not exist */ }
 }

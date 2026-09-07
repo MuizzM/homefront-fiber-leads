@@ -1,6 +1,6 @@
 import { MutationObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiRequest, apiRequestIdempotent, getQueryFn, queryClient, setSessionId, invalidateRequestScope } from "../../client/src/lib/queryClient";
+import { apiRequest, apiRequestIdempotent, getQueryFn, queryClient, setSessionId, invalidateRequestScope, fetchSessionJson, setUnauthorizedHandler, getStoredSessionId } from "../../client/src/lib/queryClient";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -127,4 +127,16 @@ it("boots the query client with persistence disabled when browser storage is blo
     const module = await import("../../client/src/lib/queryClient");
     expect(await module.queryPersister.restoreClient()).toBeUndefined();
   } finally { storage.mockRestore(); }
+});
+
+it("an old-scope late 401 cannot sign out the new account", async () => {
+  const expired = vi.fn(); setUnauthorizedHandler(expired); setSessionId("old-map-session");
+  let finish!: (response:Response)=>void;
+  vi.stubGlobal("fetch",vi.fn(()=>new Promise<Response>(resolve=>{finish=resolve;})));
+  const pending = fetchSessionJson("/api/leads/map").catch(error=>error);
+  setSessionId("new-map-session"); finish(new Response(null,{status:401}));
+  expect(await pending).toMatchObject({name:"AbortError"});
+  await Promise.resolve(); await Promise.resolve();
+  expect(expired).not.toHaveBeenCalled(); expect(getStoredSessionId()).toBe("new-map-session");
+  setUnauthorizedHandler(null); setSessionId(null);
 });

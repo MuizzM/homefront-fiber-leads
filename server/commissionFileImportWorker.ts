@@ -47,6 +47,7 @@ export function stageCommissionImportContent(importId: number, content: Buffer):
 let running = false;
 let busy = false;
 let timer: NodeJS.Timeout | null = null;
+let bootTimer: NodeJS.Timeout | null = null;
 
 export interface WorkerHandle { stop(): void }
 
@@ -54,17 +55,20 @@ export function startCommissionFileImportWorker(): WorkerHandle {
   if (running) return { stop: stopCommissionFileImportWorker };
   running = true;
   const tick = () => {
+    if (!running) return;
     void pump().catch((e: any) => console.warn("[commission-file-worker] tick failed:", e?.message));
   };
   timer = setInterval(tick, POLL_MS);
   if (typeof timer.unref === "function") timer.unref();
-  setTimeout(tick, 1_000).unref?.();
+  bootTimer = setTimeout(tick, 1_000);
+  bootTimer.unref?.();
   return { stop: stopCommissionFileImportWorker };
 }
 
 export function stopCommissionFileImportWorker(): void {
   running = false;
   if (timer) { clearInterval(timer); timer = null; }
+  if (bootTimer) { clearTimeout(bootTimer); bootTimer = null; }
 }
 
 /** One pass. Exported so tests drive the worker instead of waiting a timer. */

@@ -180,26 +180,35 @@ export function recordCorroboration(tenantId: number, rows: CorroborationInput[]
   return result;
 }
 
-export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
+/** Full results serve exports/clusters; the live feed bounds candidates before
+ * evidence joins and object hydration, retaining the same live-time ordering. */
+export function freshPoints(tenantId: number, days = 30, feed?: { since: string; limit: number }): FreshFiberPoint[] {
   const rows = rawDb.prepare(`
-    SELECT s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng, s.carrier,
-           COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) AS firstSeenLiveAt, s.converted_to_lead_id AS leadId,
-           s.last_customer_segment AS customerSegment,s.last_customer_confidence AS customerConfidence,
-           GROUP_CONCAT(DISTINCT c.source) AS corroboratingSources
-      FROM scan_targets s
+    WITH candidates AS MATERIALIZED (
+      SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.carrier,
+             COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) AS firstSeenLiveAt,
+             s.first_seen_live_at,s.converted_to_lead_id AS leadId,
+             s.last_customer_segment AS customerSegment,s.last_customer_confidence AS customerConfidence
+        FROM scan_targets s
+       WHERE s.state IN ('FL','GA','IA','KY','NC','SC')
+         AND s.last_fiber_available=1
+         AND COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) >= datetime('now', ?)
+         AND s.lat IS NOT NULL AND s.lng IS NOT NULL AND s.tenant_id=?
+         ${feed ? "AND julianday(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at)) >= julianday(?)" : ""}
+       ORDER BY s.first_seen_live_at DESC, s.id DESC ${feed ? "LIMIT ?" : ""}
+    )
+    SELECT s.*, GROUP_CONCAT(DISTINCT c.source) AS corroboratingSources
+      FROM candidates s
       LEFT JOIN availability_corroboration c
         ON c.scan_target_id=s.id AND c.tenant_id=? AND c.availability='available'
        AND (lower(COALESCE(c.technology,'')) LIKE '%fiber%' OR lower(COALESCE(c.technology,'')) IN ('fttp','ftth'))
-       AND datetime(c.observed_at) >= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'-7 days')
-       AND datetime(c.observed_at) <= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'+31 days')
+       AND datetime(c.observed_at) >= datetime(s.firstSeenLiveAt,'-7 days')
+       AND datetime(c.observed_at) <= datetime(s.firstSeenLiveAt,'+31 days')
        AND datetime(c.observed_at) <= datetime('now','+5 minutes')
-     WHERE s.state IN ('FL','GA','IA','KY','NC','SC')
-       -- A historical flip remains in the audit ledger, but it must disappear
-       -- from current opportunity/knock surfaces as soon as Kinetic regresses.
-       AND s.last_fiber_available=1
-       AND COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) >= datetime('now', ?)
-       AND s.lat IS NOT NULL AND s.lng IS NOT NULL AND s.tenant_id=?
-     GROUP BY s.id ORDER BY s.first_seen_live_at DESC`).all(tenantId, `-${Math.max(1, Math.min(365, days))} days`, tenantId) as any[];
+     GROUP BY s.id ORDER BY s.first_seen_live_at DESC, s.id DESC`).all(
+       `-${Math.max(1, Math.min(365, days))} days`, tenantId,
+       ...(feed ? [feed.since, Math.max(1, Math.min(1000, Math.floor(feed.limit)))] : []), tenantId,
+     ) as any[];
   return rows.map((r) => {
     const independent = String(r.corroboratingSources ?? "").split(",").filter(Boolean);
     return {

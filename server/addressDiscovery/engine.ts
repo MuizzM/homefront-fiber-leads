@@ -7,6 +7,7 @@ import {
 } from "@shared/addressDiscovery";
 import { MAX_CHECKS_PER_RUN } from "@shared/scanEconomics";
 import { rawDb } from "../db";
+import { thisProcessConsumesScanRuns } from "../scanConsumeRole";
 import { storage } from "../storage";
 import { createScanRun, enqueueRunTargets, getRun } from "../scanIntelStore";
 import { runScanWorker } from "../scanEngine";
@@ -721,7 +722,7 @@ function isSqliteBusy(e: any): boolean {
 }
 
 function schedule(): void {
-  if (scheduling) return;
+  if (scheduling || !thisProcessConsumesScanRuns()) return;
   scheduling = true;
   try {
     while (running < maxWorkers) {
@@ -758,6 +759,7 @@ function schedule(): void {
 }
 
 export function wakeDiscoveryWorkers(): void {
+  if (!thisProcessConsumesScanRuns()) return;
   // A wake is a signal that state changed — new job, finished tile, resumed
   // run — so the idle backoff resets and the next reconcile tick runs at
   // full 1s cadence again.
@@ -767,6 +769,7 @@ export function wakeDiscoveryWorkers(): void {
 }
 
 export function resumeDiscoveryJobs(): void {
+  if (!thisProcessConsumesScanRuns()) return;
   // FIRST, terminalize crash-orphaned operator-ELECTED area scans. A stale
   // running elected scan is a zombie, not permission to restart: mark it failed
   // so neither the resume UPDATE below nor the tile scheduler ever re-drives it,
@@ -800,6 +803,7 @@ export function resumeDiscoveryJobs(): void {
 }
 
 export function startDiscoveryWorkers(): void {
+  if (!thisProcessConsumesScanRuns()) return;
   if (!scheduler) {
     scheduler = setInterval(
       schedule,

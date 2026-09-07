@@ -22,6 +22,7 @@
 // permanently starved behind a steady trickle of today's writes.
 
 import { rawDb } from "./db";
+import { isSqliteContention, withoutSqliteBusyWait } from "./interactiveDb";
 import { structuredLog } from "./structuredLog";
 import { readPressure, PRESSURE_ORDER } from "./resourcePressure";
 import {
@@ -93,20 +94,31 @@ export async function runRollupSlice(chunk = CHUNK): Promise<number> {
   try {
     // Existing daily summaries predate hour buckets. Seed only one bounded
     // chunk per tick so deployment cannot turn a backfill into foreground load.
-    markMissingHourlyRollupsDirty(chunk);
+    withoutSqliteBusyWait(rawDb, () => markMissingHourlyRollupsDirty(chunk));
     const days = claimDirtyDays(chunk);
     for (const day of days) {
       try {
-        recomputeRepDay(day.tenantId, day.repId, day.metricDate);
-        clearDirtyDay(day);
+        withoutSqliteBusyWait(rawDb, () => {
+          // Compute outside the writer; recomputeRepDay already publishes its
+          // daily/hourly pair in one short transaction. A failed acknowledgment
+          // leaves this idempotent day queued for another pass.
+          recomputeRepDay(day.tenantId, day.repId, day.metricDate);
+          clearDirtyDay(day);
+        });
         written++;
       } catch (e: any) {
+        if (isSqliteContention(e)) {
+          structuredLog("rep_metrics.day_deferred", { reason: "database_busy" });
+          break; // retain the historical day and prior summaries for the next tick
+        }
         // Clear it anyway. A day that throws deterministically would otherwise
         // be retried forever at the head of an oldest-first queue and block
         // every day behind it - the failure mode is a stalled rollup for the
         // whole org, which is far worse than one stale rep-day.
-        markHourlyRollupUnavailable(day);
-        clearDirtyDay(day);
+        withoutSqliteBusyWait(rawDb, () => rawDb.transaction(() => {
+          markHourlyRollupUnavailable(day);
+          clearDirtyDay(day);
+        }).immediate());
         structuredLog("rep_metrics.day_failed", {
           tenantId: day.tenantId, repId: day.repId, date: day.metricDate,
           error: String(e?.message ?? e),

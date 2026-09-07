@@ -5305,9 +5305,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
     const tenantId = req.user?.tenantId ?? getDefaultTenantId();
     const cutoff = Date.now() - hours * 3_600_000;
-    const rows = freshPoints(tenantId, Math.ceil(hours / 24) + 1)
-      .filter((point) => Date.parse(point.firstSeenLiveAt) >= cutoff)
-      .slice(0, 200);
+    const rows = freshPoints(tenantId, Math.ceil(hours / 24) + 1, {
+      since: new Date(cutoff).toISOString(), limit: 200,
+    });
     res.json({
       windowHours: hours,
       count: rows.length,

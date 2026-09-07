@@ -351,23 +351,29 @@ export async function apiUpload(url: string, form: FormData): Promise<Response> 
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
-  on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
-  ({ queryKey, signal }) => withRequestDeadline(async requestSignal => {
+/** Capture this alongside a read to guard imperative cache writes after logout. */
+export function getRequestScopeSignal(): AbortSignal { return requestScope.signal; }
+
+/** Session-owned JSON reads share one deadline for headers AND the body. */
+export function fetchSessionJson<T>(url: string, signal?: AbortSignal, on401: UnauthorizedBehavior = "throw"): Promise<T> {
+  return withRequestDeadline(async requestSignal => {
     let res: Response;
-    try { res = await fetch(`${API_BASE}${queryKey[0]}`, { headers: authHeaders(), signal: requestSignal }); }
+    try { res = await fetch(`${API_BASE}${url}`, { headers: authHeaders(), signal: requestSignal }); }
     catch (error) { throw error instanceof TypeError ? new NetworkError(error) : error; }
+    if (requestSignal.aborted) throw requestSignal.reason;
     notifyIfSessionExpired(res.status);
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) return null;
+    if (on401 === "returnNull" && res.status === 401) return null as T;
     await throwIfResNotOk(res);
     try { return await res.json(); }
     catch (error) {
       if (error instanceof SyntaxError) throw new Error("The server returned an unreadable response. Please try again.");
       throw error;
     }
-  }, 30_000, [signal, requestScope.signal]);
+  }, 30_000, signal ? [signal, requestScope.signal] : requestScope.signal);
+}
+
+export const getQueryFn: <T>(options: { on401: UnauthorizedBehavior }) => QueryFunction<T> =
+  ({ on401 }) => ({ queryKey, signal }) => fetchSessionJson(String(queryKey[0]), signal, on401);
 
 // ── Knock-queue recovery signal ───────────────────────────────────────────────
 // The FIRST successful query after any query failure means connectivity + auth

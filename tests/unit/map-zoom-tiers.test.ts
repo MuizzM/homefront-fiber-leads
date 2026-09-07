@@ -95,7 +95,8 @@ describe("the grid→pins handoff has NO empty gap", () => {
     expect(land).toBeGreaterThan(-1);
     expect(body.indexOf('qc.setQueryData(["/api/leads/map/grid"], data)')).toBeGreaterThan(land);
     // Cache hit ALSO counts as landed (a cached window is a landed window).
-    const hitBranch = body.slice(body.indexOf("if (hit &&"), body.indexOf("gridAbortRef.current?.abort()"));
+    const hitStart = body.indexOf("if (hit &&");
+    const hitBranch = body.slice(hitStart, body.indexOf("return;", hitStart));
     expect(hitBranch).toContain("gridWindowLandedRef.current = true");
     expect(hitBranch).toContain("syncViewportTierLayers(mapRef.current)");
   });

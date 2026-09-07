@@ -41,7 +41,7 @@ describe("viewport-mode invalidation bridge", () => {
     // Full-feed mode already refetches on invalidate — double-fetching there
     // would waste the multi-MB feed; and a prefix match would misfire on
     // sibling keys.
-    expect(bridge).toContain("if (!viewportModeRef.current) return;");
+    expect(bridge).toContain("if (!viewportModeRef.current || !displayActiveRef.current) return;");
     expect(bridge).toContain('key.length !== 1 || key[0] !== "/api/leads/map"');
   });
 });

@@ -103,9 +103,9 @@ describe("do-not-repaint-while-saving hold discipline", () => {
 
 describe("background/foreground convergence", () => {
   it("a rep returning to the tab pulls the ETag-backed map query", () => {
-    const at = src.indexOf('document.visibilityState === "visible"');
+    const at = src.indexOf("const resumed = displayActive && !wasDisplayActiveRef.current");
     expect(at).toBeGreaterThan(-1);
-    expect(src.slice(at, at + 300)).toContain('invalidateQueries({ queryKey: ["/api/leads/map"] })');
+    expect(src.slice(at, at + 450)).toContain('invalidateQueries({ queryKey: ["/api/leads/map"] })');
   });
 });
 

@@ -8,12 +8,12 @@ const worker = source.slice(primaryEnd);
 
 describe("calling maintenance ownership", () => {
   it("starts and stops one scheduler in the primary after calling migrations", () => {
-    expect(primary.indexOf("await startCallingMaintenance()")).toBeGreaterThan(primary.indexOf("runCallingMigrations();"));
-    expect(primary).toContain("stopPrimaryCallingMaintenance();");
+    expect(primary.indexOf("await startGlobalMaintenance(false)")).toBeGreaterThan(primary.indexOf("runCallingMigrations();"));
+    expect(primary).toContain("stopPrimaryGlobalMaintenance();");
   });
   it("excludes clustered HTTP workers while retaining single-process startup", () => {
-    expect(worker).toMatch(/if \(!IS_CLUSTER_WORKER\) \{\s*const \{ startCallingMaintenance \} = await import\("\.\/callingMaintenance"\);\s*stopCallingMaintenance = await startCallingMaintenance\(\);/);
-    expect(worker).toContain("stopCallingMaintenance?.();");
+    expect(worker).toContain("stopGlobalMaintenance = await startGlobalMaintenance(IS_CLUSTER_WORKER)");
+    expect(worker).toContain("stopGlobalMaintenance();");
     expect(worker).not.toContain("setInterval(purgeCallingProviderPayloads");
     expect(worker).not.toContain("setInterval(reapStrandedSkipTraceRuns");
   });

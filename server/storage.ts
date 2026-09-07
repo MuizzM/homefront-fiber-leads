@@ -594,6 +594,7 @@ export function runMigrations() {
     `ALTER TABLE otp_codes ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0`,
     // Bounded email/live-code lookup and invalidation, including retained history.
     `CREATE INDEX IF NOT EXISTS idx_otp_email_used_expiry ON otp_codes(email, used, expires_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_otp_expiry ON otp_codes(expires_at)`,
     // Persistent login-attempt audit (owner ask 2026-07-26): every OTP request and
     // verify outcome — who, when, IP, result — survives the nightly OTP purge.
     `CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, kind TEXT NOT NULL, success INTEGER NOT NULL DEFAULT 0, reason TEXT, ip TEXT, user_agent TEXT, tenant_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
@@ -963,6 +964,7 @@ export function runMigrations() {
     // Auth, rep-scoping, tenant-scoping, audit reads, clock/GPS/commission lookups.
     `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_assigned_rep ON leads(assigned_rep_id)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_tenant ON leads(tenant_id)`,
     `CREATE INDEX IF NOT EXISTS idx_activity_log_at ON activity_log(at)`,
@@ -1761,6 +1763,8 @@ export function runMigrations() {
     // partial index the same query returns identical rows in 5 to 46 ms. The
     // WHERE keeps it at the live rows only (4.7k rows, 52 KB).
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`,
+    // The actual freshness predicate uses COALESCE; the live-time index cannot seek it.
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_effective_fresh ON scan_targets(tenant_id, COALESCE(first_seen_fiber_at,first_seen_live_at)) WHERE last_fiber_available=1`,
     `CREATE TABLE IF NOT EXISTS availability_snapshots (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        tenant_id INTEGER NOT NULL,
@@ -3360,6 +3364,7 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_green_unlinked ON scan_targets(tenant_id, last_fiber_status, last_billing_status) WHERE converted_to_lead_id IS NULL`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_effective_fresh ON scan_targets(tenant_id, COALESCE(first_seen_fiber_at,first_seen_live_at)) WHERE last_fiber_available=1`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_lifecycle ON scan_targets(lifecycle_state, lifecycle_changed_at)`);
     // Must be recreated here too: the rebuild drops every index with the old

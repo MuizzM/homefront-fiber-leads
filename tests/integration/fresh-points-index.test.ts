@@ -15,7 +15,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let rawDb: import("better-sqlite3").Database;
 let freshPoints: typeof import("../../server/stateMonitorStore").freshPoints;
@@ -58,7 +58,7 @@ describe("the freshPoints index exists and is the plan's choice", () => {
 
   it("the planner picks it for freshPoints' predicate, not the per-tenant street walk", () => {
     const plan = (rawDb.prepare(`EXPLAIN QUERY PLAN ${REPRESENTATIVE}`).all() as any[]).map(r => String(r.detail)).join("\n");
-    expect(plan).toContain(LIVE_FRESH_INDEX);
+    expect(plan).toMatch(/idx_scan_targets_effective_fresh.*tenant_id=\?.*<expr>>\?/);
     expect(plan).not.toContain("idx_scan_targets_street");
   });
 
@@ -74,4 +74,60 @@ describe("the freshPoints index exists and is the plan's choice", () => {
     expect(points.map(p => p.address)).toEqual(["1 Live Now Ln", "2 Live Older Ln"]);
     expect(freshPoints(1, 2).map(p => p.address)).toEqual(["1 Live Now Ln"]);
   });
+});
+
+describe("effective freshness and bounded feed work", () => {
+  it("uses an effective-time range in the actual query, including corroboration", () => {
+    const prepare = vi.spyOn(rawDb, "prepare");
+    freshPoints(1, 30);
+    const sql = prepare.mock.calls.map(([value]) => value).find(value => value.includes("corroboratingSources"))!;
+    prepare.mockRestore();
+    const plan = rawDb.prepare(`EXPLAIN QUERY PLAN ${sql}`).all("-30 days", 1, 1)
+      .map((row: any) => String(row.detail)).join("\n");
+    expect(plan).toMatch(/idx_scan_targets_effective_fresh.*tenant_id=\?.*<expr>>\?/);
+  });
+
+  it("bounds the feed before hydrating evidence and preserves the exact-hour boundary", () => {
+    const now = Date.now();
+    const cutoff = now - 3_600_000;
+    const insert = rawDb.prepare(`INSERT INTO scan_targets
+      (tenant_id,address,city,state,zip,lat,lng,last_fiber_available,first_seen_live_at,first_seen_fiber_at)
+      VALUES (1,?,'Lexington','NC','27292',35,-80,1,?,?)`);
+    rawDb.transaction(() => {
+      for (let i = 0; i < 500; i++) {
+        insert.run(`Feed fixture ${i}`, new Date(now - i * 1000).toISOString(), new Date(now - i * 1000).toISOString());
+      }
+      insert.run("Recent live but old fiber", new Date(now + 1000).toISOString(), new Date(cutoff - 1).toISOString());
+      insert.run("Exact cutoff", new Date(now - 600_000).toISOString(), new Date(cutoff).toISOString());
+    })();
+    const expected = freshPoints(1, 2).filter(point => Date.parse(point.firstSeenLiveAt) >= cutoff).slice(0, 200);
+    const bounded = freshPoints(1, 2, { since: new Date(cutoff).toISOString(), limit: 200 });
+    expect(bounded).toEqual(expected);
+    expect(bounded).toHaveLength(200);
+    const allWithinHour = freshPoints(1, 2, { since: new Date(cutoff).toISOString(), limit: 1000 });
+    expect(allWithinHour.some(point => point.address === "Exact cutoff")).toBe(true);
+    expect(allWithinHour.some(point => point.address === "Recent live but old fiber")).toBe(false);
+  });
+});
+
+it("uses a stable id tie-breaker when a scan gives many targets the same live timestamp", () => {
+  const now = new Date().toISOString();
+  const insert = rawDb.prepare(`INSERT INTO scan_targets
+    (tenant_id,address,city,state,zip,lat,lng,last_fiber_available,first_seen_live_at,first_seen_fiber_at)
+    VALUES (2,?,'Lexington','NC','27292',35,-80,1,?,?)`);
+  rawDb.transaction(() => {
+    for(let i=0;i<350;i++) insert.run(`Tie fixture ${i}`,now,new Date(Date.now()-i*1000).toISOString());
+  })();
+  const all = freshPoints(2,2);
+  const feed = freshPoints(2,2,{since:new Date(Date.now()-3_600_000).toISOString(),limit:200});
+  expect(feed).toEqual(all.slice(0,200));
+  expect(feed.map(point=>point.address)).toEqual(Array.from({length:200},(_,i)=>`Tie fixture ${349-i}`));
+});
+it("creates the effective freshness and expiry indexes again on repeat migration", async () => {
+  const storage = await import("../../server/storage"); storage.runMigrations();
+  for(const name of ["idx_scan_targets_effective_fresh", "idx_sessions_expiry", "idx_otp_expiry"]) {
+    expect(rawDb.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(name)).toBeTruthy();
+  }
+  const src = await import("node:fs").then(fs=>fs.readFileSync("server/storage.ts","utf8"));
+  expect(src.split("idx_scan_targets_effective_fresh").length-1).toBeGreaterThanOrEqual(2);
 });

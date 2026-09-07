@@ -67,6 +67,7 @@ export function stageImportContent(importId: number, content: Buffer): boolean {
 let running = false;
 let busy = false;
 let timer: NodeJS.Timeout | null = null;
+let bootTimer: NodeJS.Timeout | null = null;
 
 export interface WorkerHandle { stop(): void }
 
@@ -80,19 +81,22 @@ export function startVendorOrderImportWorker(): WorkerHandle {
   if (running) return { stop: stopVendorOrderImportWorker };
   running = true;
   const tick = () => {
+    if (!running) return;
     void pump().catch((e: any) => console.warn("[vendor-order-worker] tick failed:", e?.message));
   };
   timer = setInterval(tick, POLL_MS);
   if (typeof timer.unref === "function") timer.unref();
   // First pass shortly after boot rather than a full poll interval later, so an
   // import queued just before a restart is not stuck for five seconds.
-  setTimeout(tick, 1_000).unref?.();
+  bootTimer = setTimeout(tick, 1_000);
+  bootTimer.unref?.();
   return { stop: stopVendorOrderImportWorker };
 }
 
 export function stopVendorOrderImportWorker(): void {
   running = false;
   if (timer) { clearInterval(timer); timer = null; }
+  if (bootTimer) { clearTimeout(bootTimer); bootTimer = null; }
 }
 
 /** One pass. Exported so a test can drive the worker deterministically instead
