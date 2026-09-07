@@ -63,6 +63,7 @@ export interface AuthorizedTokenPoolOptions {
   warmMinimum: number;
   refreshMarginMs: number;
   maintenanceIntervalMs?: number;
+  backgroundMaintenance?: boolean;
   maxLeasesPerToken?: number;
   maxConcurrentRefreshes?: number;
   maxChecksPerToken?: number;
@@ -85,6 +86,7 @@ export class AuthorizedTokenPool {
   private readonly warmMinimum: number;
   private readonly refreshMarginMs: number;
   private readonly maintenanceIntervalMs: number;
+  private readonly backgroundMaintenance: boolean;
   private readonly maxLeasesPerToken: number;
   private readonly maxConcurrentRefreshes: number;
   private readonly maxChecksPerToken: number;
@@ -116,6 +118,7 @@ export class AuthorizedTokenPool {
     this.warmMinimum = boundedInt(options.warmMinimum, 1, this.maxSize, 1);
     this.refreshMarginMs = Math.max(1_000, Math.floor(options.refreshMarginMs));
     this.maintenanceIntervalMs = Math.max(1_000, Math.floor(options.maintenanceIntervalMs ?? 15_000));
+    this.backgroundMaintenance = options.backgroundMaintenance !== false;
     this.maxLeasesPerToken = boundedInt(options.maxLeasesPerToken ?? 10, 1, 10_000, 10);
     this.maxConcurrentRefreshes = boundedInt(options.maxConcurrentRefreshes ?? 2, 1, 100, 2);
     this.maxChecksPerToken = boundedInt(options.maxChecksPerToken ?? 100, 1, 100_000, 100);
@@ -124,7 +127,7 @@ export class AuthorizedTokenPool {
   }
 
   start(): void {
-    if (this.maintenanceTimer) return;
+    if (!this.backgroundMaintenance || this.maintenanceTimer) return;
     void this.ensureWarm().catch(() => {});
     // A failed mint during maintenance is an expected transient — the pool
     // self-heals on the next tick. Swallow it: an uncaught rejection from a

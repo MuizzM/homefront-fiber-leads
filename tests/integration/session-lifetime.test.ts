@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 
 /**
  * Session lifetime — a rep must never be signed out mid-shift.
@@ -26,6 +27,23 @@ const newUser = (email: string) =>
   storageMod.storage.createUser({ name: "Rep", email, role: "rep" } as any).id;
 
 describe("session lifetime", () => {
+  it("keeps valid access responsive when renewal contends with another writer", () => {
+    const s = storageMod.storage.createSession(newUser("busy@example.test"));
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    rawDb.prepare("UPDATE sessions SET expires_at=? WHERE id=?").run(expiresAt, s.id);
+    const holder = new Database(rawDb.name);
+    const prior = rawDb.pragma("busy_timeout", { simple: true });
+    rawDb.pragma("busy_timeout = 2000");
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      const start = performance.now();
+      expect(storageMod.storage.touchSession({ ...s, expiresAt }).expiresAt).toBe(expiresAt);
+      expect(performance.now() - start).toBeLessThan(250);
+      expect(rawDb.pragma("busy_timeout", { simple: true })).toBe(2000);
+      expect(storageMod.storage.getSession(s.id)).toBeTruthy();
+    } finally { holder.exec("ROLLBACK"); holder.close(); rawDb.pragma(`busy_timeout = ${prior}`); }
+    expect(storageMod.storage.touchSession({ ...s, expiresAt }).expiresAt).not.toBe(expiresAt);
+  });
   it("issues a session that comfortably outlives a 24h day", () => {
     const s = storageMod.storage.createSession(newUser("a@example.com"));
     const lifeMs = Date.parse(s.expiresAt) - Date.now();

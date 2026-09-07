@@ -756,6 +756,8 @@ app.use((req, res, next) => {
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
     try { const { runCallingMigrations } = await import("./calling/migrations"); runCallingMigrations(); }
     catch (e: any) { console.error("[cluster] calling migrations failed in primary:", e?.message); process.exit(1); }
+    const { startCallingMaintenance } = await import("./callingMaintenance");
+    const stopPrimaryCallingMaintenance = await startCallingMaintenance();
     let primaryDown = false;
     // Per-index crash-loop state: a worker that dies almost immediately after
     // fork is crash-looping (bad boot state, unrunnable migration). Respawning
@@ -821,6 +823,7 @@ app.use((req, res, next) => {
     const stopPrimary = (sig: string) => {
       if (primaryDown) return; primaryDown = true;
       stopPrimaryRepMetrics?.();
+      stopPrimaryCallingMaintenance();
       const n = Object.keys(cluster.workers ?? {}).length;
       console.log(`[cluster] ${sig} received - forwarding to ${n} worker(s)`);
       for (const id in cluster.workers) { try { cluster.workers[id]?.kill("SIGTERM"); } catch {} }
@@ -864,46 +867,13 @@ app.use((req, res, next) => {
   // CALL (primary already migrated) but keep the import for the purge/audit hooks.
   const { runCallingMigrations } = await import("./calling/migrations");
   if (!IS_CLUSTER_WORKER) runCallingMigrations();
-  // Provider contracts can require prompt deletion of cached payloads even
-  // when no representative opens Calling. Run a bounded global cleanup at
-  // startup and hourly; durable usage/cost/audit metadata is preserved.
-  const { purgeExpiredProviderPayloads } = await import("./calling/providerRetention");
-  const purgeCallingProviderPayloads = () => {
-    try {
-      let result = { purged: 0, hasMore: true };
-      let purged = 0;
-      for (let batch = 0; batch < 10 && result.hasMore; batch += 1) {
-        result = purgeExpiredProviderPayloads({ batchSize: 500 });
-        purged += result.purged;
-      }
-      if (purged > 0 || result.hasMore) structuredLog("calling.provider_payload_retention", { purged, hasMore: result.hasMore });
-    } catch (error) {
-      structuredLog("calling.provider_payload_retention_failed", {
-        message: error instanceof Error ? error.message : "unknown error",
-      });
-    }
-  };
-  purgeCallingProviderPayloads();
-  const providerRetentionTimer = setInterval(purgeCallingProviderPayloads, 60 * 60 * 1_000);
-  providerRetentionTimer.unref();
-  // An area skip-trace run is driven by an in-process promise, so a deploy or
-  // crash mid-run leaves its row active. The partial unique index that stops
-  // two concurrent runs would then lock that area out permanently. Reap on
-  // boot and hourly; a live run heartbeats every door, so a slow one survives.
-  const { reconcileStrandedRuns } = await import("./areaSkipTrace");
-  const reapStrandedSkipTraceRuns = () => {
-    try {
-      const reaped = reconcileStrandedRuns();
-      if (reaped > 0) structuredLog("calling.area_skip_trace_runs_reaped", { reaped });
-    } catch (error) {
-      structuredLog("calling.area_skip_trace_reap_failed", {
-        message: error instanceof Error ? error.message : "unknown error",
-      });
-    }
-  };
-  if (!IS_CLUSTER_WORKER) reapStrandedSkipTraceRuns();
-  const skipTraceReaperTimer = setInterval(reapStrandedSkipTraceRuns, 60 * 60 * 1_000);
-  skipTraceReaperTimer.unref();
+  // One owner for global retention and stranded-run recovery. The primary
+  // starts these after migrations above; HTTP workers must not repeat them.
+  let stopCallingMaintenance: (() => void) | undefined;
+  if (!IS_CLUSTER_WORKER) {
+    const { startCallingMaintenance } = await import("./callingMaintenance");
+    stopCallingMaintenance = await startCallingMaintenance();
+  }
   const { verifyCallingAuditIntegrity } = await import("./calling/store");
   const verifyCallingAuditChain = () => {
     try {
@@ -1995,6 +1965,7 @@ app.use((req, res, next) => {
   const shutdown = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopCallingMaintenance?.();
     log(`${signal} received - draining connections…`);
     const force = setTimeout(() => { log("drain timed out - forcing exit"); process.exit(1); }, 10_000);
     force.unref();
