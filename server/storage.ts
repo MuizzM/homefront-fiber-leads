@@ -740,7 +740,11 @@ export function runMigrations() {
     // REVIEWER GATE (fin #6): backfill outcome recency for pre-migration leads —
     // without it, a stale offline knock flushed after deploy WINS the CAS over
     // a newer pre-deploy disposition (NULL last_outcome_at).
-    `UPDATE leads SET last_outcome_at = (SELECT MIN(MAX(knocked_at), strftime('%Y-%m-%dT%H:%M:%fZ','now')) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL`,
+    // Untouched leads have no history to backfill. Rewriting NULL to NULL on
+    // every startup also fires lead-version triggers and grows the WAL.
+    `UPDATE leads SET last_outcome_at = (SELECT MIN(MAX(knocked_at), strftime('%Y-%m-%dT%H:%M:%fZ','now')) FROM knock_log WHERE knock_log.lead_id = leads.id)
+       WHERE last_outcome_at IS NULL
+         AND EXISTS (SELECT 1 FROM knock_log WHERE knock_log.lead_id = leads.id AND knocked_at IS NOT NULL)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_superseded ON knock_log(lead_id, superseded)`,
     `ALTER TABLE knock_log ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE clock_sessions ADD COLUMN tenant_id INTEGER`,
@@ -2903,7 +2907,10 @@ export function runMigrations() {
     // /api/stats/saas counts fresh-confirmed doors on every 30s poll from every
     // dashboard viewer; without this partial index that COUNT planned as a full
     // SCAN of leads (verified with EXPLAIN QUERY PLAN).
-    `CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed ON leads(tenant_id)
+    // Use a distinct name: older databases already have leadRanking's
+    // idx_leads_fresh_confirmed on fresh_confirmed_at. IF NOT EXISTS would
+    // otherwise silently skip this different index on those upgrades.
+    `CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed_counts ON leads(tenant_id, assigned_rep_id)
        WHERE lead_tag = 'fresh_fiber_confirmed' AND fresh_confidence = 'cross_verified'`,
 
     // ── Operations command center (additive, 2026-08-31) ─────────────────────

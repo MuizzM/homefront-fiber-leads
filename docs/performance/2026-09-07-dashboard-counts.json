@@ -1,0 +1,545 @@
+{
+  "sqlite": "3.49.2",
+  "rows": 300512,
+  "routeSql": "`SELECT COUNT(*) AS n FROM leads ${wall()}${scopeSql(\"assigned_rep_id\")}\n            AND lead_tag='fresh_fiber_confirmed' AND fresh_confidence='cross_verified'`",
+  "oldStats": "CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed ON leads(tenant_id)\n       WHERE lead_tag = 'fresh_fiber_confirmed' AND fresh_confidence = 'cross_verified'",
+  "ranking": "CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed\n    ON leads(fresh_confirmed_at DESC) WHERE fresh_confirmed_at IS NOT NULL",
+  "proposed": "CREATE INDEX IF NOT EXISTS idx_leads_fresh_confirmed_counts ON leads(tenant_id, assigned_rep_id)\n       WHERE lead_tag = 'fresh_fiber_confirmed' AND fresh_confidence = 'cross_verified'",
+  "storageSqlRevision": "669422b",
+  "fixtureType": "in-memory synthetic",
+  "sourceRevision": "b7fbb20a2b6cd2b46739471b4f4f88e234952cd2",
+  "cases": [
+    {
+      "order": "ranking-first",
+      "before": {
+        "definition": "CREATE INDEX idx_leads_fresh_confirmed\n    ON leads(fresh_confirmed_at DESC) WHERE fresh_confirmed_at IS NOT NULL",
+        "results": [
+          {
+            "name": "tenant-1",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-2",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-3",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "missing-tenant",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-team",
+            "n": 4,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-empty-scope",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-foreign-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "platform",
+            "n": 332,
+            "plan": [
+              "SCAN leads"
+            ]
+          }
+        ],
+        "timings": [
+          {
+            "name": "tenant-1",
+            "medianMs": 50.836709000000155,
+            "minMs": 49.0264159999997,
+            "maxMs": 55.74779199999966
+          },
+          {
+            "name": "tenant-1-rep",
+            "medianMs": 12.382583000000068,
+            "minMs": 11.493124999999964,
+            "maxMs": 13.556832999999642
+          },
+          {
+            "name": "platform",
+            "medianMs": 14.902958000000126,
+            "minMs": 13.372041000000081,
+            "maxMs": 19.036000000000058
+          }
+        ]
+      },
+      "indexBuildMs": 14.614542000000256,
+      "after": {
+        "results": [
+          {
+            "name": "tenant-1",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-2",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-3",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "missing-tenant",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-team",
+            "n": 4,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-empty-scope",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-foreign-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "platform",
+            "n": 332,
+            "plan": [
+              "SCAN leads USING COVERING INDEX idx_leads_fresh_confirmed_counts"
+            ]
+          }
+        ],
+        "timings": [
+          {
+            "name": "tenant-1",
+            "medianMs": 0.0016669999999976426,
+            "minMs": 0.0016249999998763087,
+            "maxMs": 0.0019999999999527063
+          },
+          {
+            "name": "tenant-1-rep",
+            "medianMs": 0.00045799999998052954,
+            "minMs": 0.0004170000001977314,
+            "maxMs": 0.0005000000001018634
+          },
+          {
+            "name": "platform",
+            "medianMs": 0.0017499999999017746,
+            "minMs": 0.001708000000235188,
+            "maxMs": 0.0018329999998059066
+          }
+        ]
+      },
+      "analyzed": {
+        "results": [
+          {
+            "name": "tenant-1",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-2",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-3",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "missing-tenant",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-team",
+            "n": 4,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-empty-scope",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-foreign-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "platform",
+            "n": 332,
+            "plan": [
+              "SCAN leads USING COVERING INDEX idx_leads_fresh_confirmed_counts"
+            ]
+          }
+        ],
+        "timings": [
+          {
+            "name": "tenant-1",
+            "medianMs": 0.006208000000242464,
+            "minMs": 0.005458000000089669,
+            "maxMs": 0.009457999999995081
+          },
+          {
+            "name": "tenant-1-rep",
+            "medianMs": 0.005167000000255939,
+            "minMs": 0.005083000000013271,
+            "maxMs": 0.005291999999826658
+          },
+          {
+            "name": "platform",
+            "medianMs": 0.0017499999999017746,
+            "minMs": 0.0016669999999976426,
+            "maxMs": 0.0018329999998059066
+          }
+        ]
+      }
+    },
+    {
+      "order": "stats-first",
+      "before": {
+        "definition": "CREATE INDEX idx_leads_fresh_confirmed ON leads(tenant_id)\n       WHERE lead_tag = 'fresh_fiber_confirmed' AND fresh_confidence = 'cross_verified'",
+        "results": [
+          {
+            "name": "tenant-1",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-2",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-3",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "missing-tenant",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-team",
+            "n": 4,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-empty-scope",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-foreign-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING INDEX idx_leads_tenant_rep (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "platform",
+            "n": 332,
+            "plan": [
+              "SCAN leads USING COVERING INDEX idx_leads_fresh_confirmed"
+            ]
+          }
+        ],
+        "timings": [
+          {
+            "name": "tenant-1",
+            "medianMs": 0.0017079999997804407,
+            "minMs": 0.0016249999998763087,
+            "maxMs": 0.0070420000001831795
+          },
+          {
+            "name": "tenant-1-rep",
+            "medianMs": 13.351249999999709,
+            "minMs": 12.694666000000325,
+            "maxMs": 14.4917089999999
+          },
+          {
+            "name": "platform",
+            "medianMs": 0.0017499999994470272,
+            "minMs": 0.0017080000006899354,
+            "maxMs": 0.0019579999998313724
+          }
+        ]
+      },
+      "indexBuildMs": 16.187291999999616,
+      "after": {
+        "results": [
+          {
+            "name": "tenant-1",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-2",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-3",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "missing-tenant",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-team",
+            "n": 4,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-empty-scope",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-foreign-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "platform",
+            "n": 332,
+            "plan": [
+              "SCAN leads USING COVERING INDEX idx_leads_fresh_confirmed"
+            ]
+          }
+        ],
+        "timings": [
+          {
+            "name": "tenant-1",
+            "medianMs": 0.0016669999995428952,
+            "minMs": 0.0016249999998763087,
+            "maxMs": 0.00204200000007404
+          },
+          {
+            "name": "tenant-1-rep",
+            "medianMs": 0.00045899999986431794,
+            "minMs": 0.0004579999995257822,
+            "maxMs": 0.0007500000001527951
+          },
+          {
+            "name": "platform",
+            "medianMs": 0.005583000000115135,
+            "minMs": 0.005290999999488122,
+            "maxMs": 0.028000000000247383
+          }
+        ]
+      },
+      "analyzed": {
+        "results": [
+          {
+            "name": "tenant-1",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-2",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-3",
+            "n": 108,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "missing-tenant",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-team",
+            "n": 4,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-empty-scope",
+            "n": 0,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "tenant-1-foreign-rep",
+            "n": 2,
+            "plan": [
+              "SEARCH leads USING COVERING INDEX idx_leads_fresh_confirmed_counts (tenant_id=? AND assigned_rep_id=?)"
+            ]
+          },
+          {
+            "name": "platform",
+            "n": 332,
+            "plan": [
+              "SCAN leads USING COVERING INDEX idx_leads_fresh_confirmed"
+            ]
+          }
+        ],
+        "timings": [
+          {
+            "name": "tenant-1",
+            "medianMs": 0.0059160000000701984,
+            "minMs": 0.00579100000049948,
+            "maxMs": 0.00687500000003638
+          },
+          {
+            "name": "tenant-1-rep",
+            "medianMs": 0.005500000000211003,
+            "minMs": 0.005416999999397376,
+            "maxMs": 0.005707999999685853
+          },
+          {
+            "name": "platform",
+            "medianMs": 0.0018329999993511592,
+            "minMs": 0.001750000000356522,
+            "maxMs": 0.002207999999882304
+          }
+        ]
+      }
+    }
+  ]
+}

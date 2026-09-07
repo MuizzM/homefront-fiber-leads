@@ -1,0 +1,49 @@
+{
+  "source": "669422b",
+  "rows": 200000,
+  "clock": "2026-09-07T12:00:00.000Z (strftime shim freezes SQLite now for exact comparisons)",
+  "variants": [
+    {
+      "name": "original",
+      "sql": "UPDATE leads SET last_outcome_at = (SELECT MIN(MAX(knocked_at), strftime('%Y-%m-%dT%H:%M:%fZ','now')) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL",
+      "plan": [
+        "SCAN leads",
+        "CORRELATED SCALAR SUBQUERY 1",
+        "SEARCH knock_log USING COVERING INDEX idx_knock_log_lead_time (lead_id=?)"
+      ],
+      "first": {
+        "changed": 199990,
+        "ms": 159.761166,
+        "versionIncrements": 599970
+      },
+      "repeat": {
+        "changed": 199799,
+        "ms": 157.27441700000003,
+        "versionIncrements": 599397
+      },
+      "nonNullValues": 201
+    },
+    {
+      "name": "exists",
+      "sql": "UPDATE leads SET last_outcome_at = (SELECT MIN(MAX(knocked_at), strftime('%Y-%m-%dT%H:%M:%fZ','now')) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL AND EXISTS (SELECT 1 FROM knock_log WHERE knock_log.lead_id = leads.id AND knocked_at IS NOT NULL)",
+      "plan": [
+        "SCAN leads",
+        "CORRELATED SCALAR SUBQUERY 2",
+        "SEARCH knock_log USING COVERING INDEX idx_knock_log_lead_time (lead_id=? AND knocked_at>?)",
+        "CORRELATED SCALAR SUBQUERY 1",
+        "SEARCH knock_log USING COVERING INDEX idx_knock_log_lead_time (lead_id=?)"
+      ],
+      "first": {
+        "changed": 191,
+        "ms": 20.588999999999942,
+        "versionIncrements": 573
+      },
+      "repeat": {
+        "changed": 0,
+        "ms": 19.4100830000001,
+        "versionIncrements": 0
+      },
+      "nonNullValues": 201
+    }
+  ]
+}

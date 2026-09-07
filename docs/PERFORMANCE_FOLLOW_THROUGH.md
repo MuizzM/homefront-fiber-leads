@@ -111,3 +111,48 @@ metadata cannot make a durable field save fail. Combining it with the save would
 change that guarantee and can lengthen the writer transaction while historical
 shift lookup runs. Large exports, full-history calling audits and management
 mutations need workload-specific measurement before making broader claims.
+
+## Post-release measurement and compatibility follow-up
+
+[PR #216](https://github.com/MuizzM/homefront-fiber-leads/pull/216) passed exact-SHA
+CI and [deployed successfully](https://github.com/MuizzM/homefront-fiber-leads/actions/runs/34146823542).
+The [first production report](https://github.com/MuizzM/homefront-fiber-leads/actions/runs/34147332892)
+covers 17:17:29–17:22:35 UTC (5m07s): 302 requests, 174 health checks, no
+SQLite-busy/OTP-unavailable errors, and no recurring slow queue-count or
+stranded-run scans. Map samples include nonempty results (maximum 8,322 rows),
+but traffic remains limited. The worst sampled HTTP-loop delay was 489ms;
+the report does not establish universal subsecond behavior under load.
+
+Public synthetic code requests had a 129.8ms median / 141.88ms maximum over
+three probes (including network time); actual email delivery was not exercised.
+Authenticated dashboard, field map and Live Operations browser checks passed
+with no console errors. A health probe timed out during container replacement;
+the one-time feed-index creation took 18.84s, then internal/public health checks
+passed. The existing single-container cutover is unchanged.
+
+The report exposed two further migration inefficiencies, corrected in the
+follow-up described by `.agent/plans/performance-index-followup.md`:
+
+- **Conflicting index names:** older ranking code and the dashboard migration
+  both declared `idx_leads_fresh_confirmed` with different definitions.
+  `IF NOT EXISTS` silently preserved the older timestamp index. The dashboard
+  now gets a uniquely named partial index on `(tenant_id, assigned_rep_id)`;
+  both historical legacy definitions remain intact. The actual count predicates
+  and every role/tenant scope are unchanged. On 300,512 synthetic rows, all nine
+  scope variants matched; tenant count median 50.84→0.0017ms and rep count
+  12.38→0.00046ms. These are local warm-index measurements, not production claims.
+- **No-op startup backfill writes:** the existing recency backfill rewrote NULL
+  to NULL on untouched leads, firing version triggers on every restart. An
+  indexed EXISTS guard skips rows without non-NULL knock history while preserving
+  the original latest-history/future-clamp expression. A 200k-lead fixture produced
+  identical timestamps with 199,990→191 writes initially and 199,799→0 on repeat.
+  Late history and rollback/retry remain covered.
+
+Evidence: [dashboard plans/counts](performance/2026-09-07-dashboard-counts.json)
+and [backfill writes](performance/2026-09-07-backfill-writes.json). The static
+index-name sweep checked 451 declarations across 393 files; the other differing
+name is an intentional canonical-index promotion with an explicit DROP/CREATE.
+New regression coverage exercises the actual migration and ranking initializer,
+legacy creation orders, covering scoped seeks, no-op writes and recency safety.
+Focused migration/ranking tests and independent safety review passed; full local,
+exact-commit CI and deployment results are recorded in the follow-up release PR.
