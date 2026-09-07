@@ -756,8 +756,8 @@ app.use((req, res, next) => {
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
     try { const { runCallingMigrations } = await import("./calling/migrations"); runCallingMigrations(); }
     catch (e: any) { console.error("[cluster] calling migrations failed in primary:", e?.message); process.exit(1); }
-    const { startCallingMaintenance } = await import("./callingMaintenance");
-    const stopPrimaryCallingMaintenance = await startCallingMaintenance();
+    const { startGlobalMaintenance } = await import("./globalMaintenance");
+    const stopPrimaryGlobalMaintenance = await startGlobalMaintenance(false);
     let primaryDown = false;
     // Per-index crash-loop state: a worker that dies almost immediately after
     // fork is crash-looping (bad boot state, unrunnable migration). Respawning
@@ -823,7 +823,7 @@ app.use((req, res, next) => {
     const stopPrimary = (sig: string) => {
       if (primaryDown) return; primaryDown = true;
       stopPrimaryRepMetrics?.();
-      stopPrimaryCallingMaintenance();
+      stopPrimaryGlobalMaintenance();
       const n = Object.keys(cluster.workers ?? {}).length;
       console.log(`[cluster] ${sig} received - forwarding to ${n} worker(s)`);
       for (const id in cluster.workers) { try { cluster.workers[id]?.kill("SIGTERM"); } catch {} }
@@ -867,57 +867,9 @@ app.use((req, res, next) => {
   // CALL (primary already migrated) but keep the import for the purge/audit hooks.
   const { runCallingMigrations } = await import("./calling/migrations");
   if (!IS_CLUSTER_WORKER) runCallingMigrations();
-  // One owner for global retention and stranded-run recovery. The primary
-  // starts these after migrations above; HTTP workers must not repeat them.
-  let stopCallingMaintenance: (() => void) | undefined;
-  if (!IS_CLUSTER_WORKER) {
-    const { startCallingMaintenance } = await import("./callingMaintenance");
-    stopCallingMaintenance = await startCallingMaintenance();
-  }
-  const { verifyCallingAuditIntegrity } = await import("./calling/store");
-  const verifyCallingAuditChain = () => {
-    try {
-      const result = verifyCallingAuditIntegrity();
-      structuredLog(result.invalidTenants.length ? "calling.audit_integrity_failed" : "calling.audit_integrity_ok", {
-        tenantsChecked: result.tenantsChecked,
-        eventsChecked: result.eventsChecked,
-        invalidTenants: JSON.stringify(result.invalidTenants),
-      });
-    } catch (error) {
-      structuredLog("calling.audit_integrity_failed", {
-        message: error instanceof Error ? error.message : "unknown error",
-      });
-    }
-  };
-  verifyCallingAuditChain();
-  const callingAuditTimer = setInterval(verifyCallingAuditChain, 6 * 60 * 60 * 1_000);
-  callingAuditTimer.unref();
-
-  // ── The incentive/referral event drain ─────────────────────────────────────
-  // commissionService now emits SALE_APPROVED / SALE_CANCELLED at the sale
-  // write sites; this loop is the consumer that turns them into campaign
-  // awards and referral-qualification recounts ("6 verified sales -> $500").
-  // Without it the queue only ever drained inside tests - events accumulated
-  // and nothing downstream fired. Cheap when idle: one indexed cursor read.
-  const { drain: drainIncentiveEvents } = await import("./incentiveSubscriber");
-  const drainIncentives = () => {
-    try {
-      const result = drainIncentiveEvents(new Date().toISOString());
-      if (result.processed > 0) {
-        structuredLog("incentives.drained", {
-          processed: result.processed, awarded: result.awarded, reversed: result.reversed,
-          failed: result.failed.length, deferred: result.deferred.length,
-        });
-      }
-    } catch (error) {
-      structuredLog("incentives.drain_failed", {
-        message: error instanceof Error ? error.message : "unknown error",
-      });
-    }
-  };
-  if (!IS_CLUSTER_WORKER) drainIncentives();
-  const incentiveDrainTimer = setInterval(drainIncentives, 30_000);
-  incentiveDrainTimer.unref();
+  // The primary starts global jobs above; the installer also rejects workers.
+  const { startGlobalMaintenance } = await import("./globalMaintenance");
+  const stopGlobalMaintenance = await startGlobalMaintenance(IS_CLUSTER_WORKER);
 
   // Rep metrics rollups. Cluster workers are excluded for the same reason the
   // scan cron is: N workers draining one dirty-day queue would each recompute
@@ -1825,21 +1777,6 @@ app.use((req, res, next) => {
   } // end IS_CONTROL_ROLE work-producers
   }; // end startBackgroundServices
 
-  // ── Purge expired sessions every 6 hours ────────────────────────────────
-  setInterval(() => {
-    try {
-      const raw = (require("./db").db as any).driver ?? (require("./db").db as any).$client;
-      // FORMAT MATCH: both tables store expires_at as a JS ISO string
-      // ("2026-07-25T00:19:00.000Z"), but datetime('now') renders SQLite's
-      // space-separated form ("2026-07-25 00:19:00"). These compare as plain
-      // text, and 'T' (0x54) sorts above ' ' (0x20), so same-day expiries never
-      // matched and lingered a full extra day. Compare ISO against ISO.
-      const nowIso = new Date().toISOString();
-      raw.prepare(`DELETE FROM sessions WHERE expires_at < ?`).run(nowIso);
-      raw.prepare(`DELETE FROM otp_codes WHERE expires_at < ?`).run(nowIso);
-    } catch {}
-  }, 6 * 60 * 60 * 1000);
-
   // ── WAL guard (single-process mode only) ─────────────────────────────────
   // In cluster mode the guard runs in the PRIMARY (see the bootstrap above) —
   // its near-idle supervisor loop can afford the blocking checkpoint. With
@@ -1965,7 +1902,7 @@ app.use((req, res, next) => {
   const shutdown = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    stopCallingMaintenance?.();
+    stopGlobalMaintenance();
     log(`${signal} received - draining connections…`);
     const force = setTimeout(() => { log("drain timed out - forcing exit"); process.exit(1); }, 10_000);
     force.unref();

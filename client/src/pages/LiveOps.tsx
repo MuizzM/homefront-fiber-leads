@@ -1,3 +1,4 @@
+import { useForegroundActivity } from "@/hooks/use-foreground-activity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -92,6 +93,7 @@ function useLiveOpsStream(enabled: boolean): boolean {
       src = new Source("/api/live-ops/stream");
       src.addEventListener?.("ready", () => { if (!closed) setConnected(true); });
       src.addEventListener?.("changed", () => {
+        if (closed) return;
         void qc.invalidateQueries({ queryKey: ["/api/live-ops/reps"] });
         void qc.invalidateQueries({ queryKey: ["/api/live-ops/presence"] });
       });
@@ -109,6 +111,7 @@ function useLiveOpsStream(enabled: boolean): boolean {
 
 export default function LiveOps() {
   const tabActive = useTabActive();
+  const displayActive = useForegroundActivity(tabActive);
   const [selectedRepId, setSelectedRepId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<RepStatus | "all">("all");
@@ -117,7 +120,19 @@ export default function LiveOps() {
   const [outsideOnly, setOutsideOnly] = useState(false);
   const [view, setView] = useState<"map" | "presence">("map");
 
-  const streaming = useLiveOpsStream(tabActive);
+  const streaming = useLiveOpsStream(displayActive);
+  const qc = useQueryClient();
+  const wasDisplayActive = useRef(displayActive);
+  useEffect(() => {
+    const resumed = displayActive && !wasDisplayActive.current;
+    wasDisplayActive.current = displayActive;
+    if (!resumed) return;
+    // A reopened stream only announces readiness; it cannot replay changes
+    // missed while hidden. Reconcile even when the cached rows are still fresh.
+    void qc.invalidateQueries({ queryKey: ["/api/live-ops/reps"] });
+    void qc.invalidateQueries({ queryKey: ["/api/live-ops/presence"] });
+  }, [displayActive, qc]);
+
 
   const repsQuery = useQuery<RepsResponse>({
     queryKey: ["/api/live-ops/reps"],
@@ -125,14 +140,16 @@ export default function LiveOps() {
     // With the socket live the poll drops to a slow safety net rather than the
     // primary transport - it is there to catch a silently dead socket, not to
     // carry the board.
-    refetchInterval: tabActive ? (streaming ? REFRESH_MS * 8 : REFRESH_MS) : false,
+    enabled: displayActive,
+    refetchInterval: displayActive ? (streaming ? REFRESH_MS * 8 : REFRESH_MS) : false,
     refetchIntervalInBackground: false,
   });
 
   const presenceQuery = useQuery<PresenceResponse>({
     queryKey: ["/api/live-ops/presence"],
     queryFn: () => apiRequest("GET", "/api/live-ops/presence").then((r) => r.json()),
-    refetchInterval: tabActive ? REFRESH_MS * 2 : false,
+    enabled: displayActive,
+    refetchInterval: displayActive ? REFRESH_MS * 2 : false,
     refetchIntervalInBackground: false,
   });
 

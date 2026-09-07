@@ -13,7 +13,7 @@ export function withoutSqliteBusyWait<T>(db: Database.Database, work: () => T): 
   }
 }
 
-function isContention(error: unknown): boolean {
+export function isSqliteContention(error: unknown): boolean {
   const code = (error as { code?: unknown })?.code;
   return typeof code === "string" && /^(SQLITE_BUSY|SQLITE_LOCKED)(_|$)/.test(code);
 }
@@ -40,7 +40,7 @@ export async function retrySqliteOperation<T>(db: Database.Database, work: () =>
     try { return withoutSqliteBusyWait(db, work); }
     catch (error) {
       const remaining = deadline - performance.now();
-      if (!isContention(error) || remaining <= 0 || ++attempts >= maxAttempts) throw error;
+      if (!isSqliteContention(error) || remaining <= 0 || ++attempts >= maxAttempts) throw error;
       await delay(Math.min(25 * attempts, 100, remaining));
     }
   }

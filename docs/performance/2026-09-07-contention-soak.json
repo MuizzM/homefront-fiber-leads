@@ -1,0 +1,115 @@
+{
+  "durationSeconds": 900.779,
+  "interactiveResponses": 7161,
+  "successful": 6921,
+  "errorCodes": {
+    "SQLITE_BUSY": 240
+  },
+  "roundTripMs": {
+    "n": 7161,
+    "p50": 26.855041999995592,
+    "p95": 460.61074999999255,
+    "p99": 1002.0824579999899,
+    "max": 2260.2588749999995
+  },
+  "processingMs": {
+    "n": 7161,
+    "p50": 26.43370799999684,
+    "p95": 459.3877920000232,
+    "p99": 1001.3798330000136,
+    "max": 1025.974125000008
+  },
+  "successRoundTripMs": {
+    "n": 6921,
+    "p50": 26.701708999986295,
+    "p95": 359.33045799995307,
+    "p99": 654.8712909999958,
+    "max": 2260.2588749999995
+  },
+  "writerCycles": 857,
+  "writerHeldSeconds": 343.8515086059992,
+  "workerLoopMs": {
+    "web-a": {
+      "n": 42289,
+      "p50": 1.09416700003203,
+      "p95": 2.511459000001196,
+      "p99": 3.9834160000027623,
+      "max": 64.89575000002515
+    },
+    "web-b": {
+      "n": 21155,
+      "p50": 1.108541999998124,
+      "p95": 2.4982079999754205,
+      "p99": 4.058917000016663,
+      "max": 48.84887499999604
+    },
+    "web-b-r1": {
+      "n": 21072,
+      "p50": 1.0851250000414439,
+      "p95": 2.4383749999688007,
+      "p99": 3.8113329999614507,
+      "max": 40.05241600002046
+    }
+  },
+  "snapshotMs": {
+    "web-a": {
+      "n": 8870,
+      "p50": 0.46224999998230487,
+      "p95": 1.1418750000884756,
+      "p99": 1.4665420000092126,
+      "max": 7.085208999924362
+    },
+    "web-b": {
+      "n": 4451,
+      "p50": 0.3996659999829717,
+      "p95": 0.9270420000102604,
+      "p99": 1.3692909999517724,
+      "max": 4.979125000012573
+    },
+    "web-b-r1": {
+      "n": 4434,
+      "p50": 0.5570420000003651,
+      "p95": 1.223874999966938,
+      "p99": 1.491042000008747,
+      "max": 3.267999999981839
+    }
+  },
+  "maxWorkerRssMiB": {
+    "web-a": 77.8,
+    "web-b": 75.9,
+    "web-b-r1": 89.1
+  },
+  "checks": {
+    "nativeBusyTimeoutRestored": true,
+    "sourceVersionsUnchanged": true,
+    "interactiveSuccessRowsMatch": true,
+    "allEventsRelayed": true,
+    "survivingMapboxCountsRecovered": true,
+    "diagnosticLossFullyExplained": true,
+    "bufferHeldNewest5000": true,
+    "snapshotDidNotDeleteExpiredRows": true,
+    "noUnexpectedWorkerErrors": true
+  },
+  "mapbox": {
+    "recorded": 17755,
+    "durable": 17656,
+    "lostOnlyOnSigkill": 99
+  },
+  "telemetry": {
+    "emitted": 184550,
+    "relayed": 184550,
+    "persisted": 182340,
+    "discardedOnBoundedOverflow": 2100,
+    "lostOnlyOnSigkill": 110
+  },
+  "rowCounts": {
+    "soak_interactive": 6921,
+    "provider_admission_queue": 16500,
+    "scan_events": 4000,
+    "soak_burst_seen": 5000
+  },
+  "interruptedRequestsAtSigkill": [
+    "web-b:3581"
+  ],
+  "restartBootMs": 2161.088209
+}

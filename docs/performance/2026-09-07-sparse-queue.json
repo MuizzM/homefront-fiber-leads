@@ -1,0 +1,183 @@
+{
+  "base": "d5bde1f",
+  "rows": {
+    "runs": 200160,
+    "targets": 400207,
+    "pending": 87,
+    "claimable": 62
+  },
+  "indexChanges": 0,
+  "fixture": "Actual extracted/transpiled store functions; original schema column types and existing indexes; 3 tenants, historical terminal targets, 47 stranded tails, full matrix of run state × target state × NULL/past/exact-now/future due times. Separate function versions use same DB snapshot. 3 warmups, 9 alternating samples after ANALYZE. No provider calls, no mutations except synthetic seeding in memory.",
+  "equivalence": [
+    {
+      "limit": 1,
+      "rows": 1,
+      "equal": true
+    },
+    {
+      "limit": 10,
+      "rows": 10,
+      "equal": true
+    },
+    {
+      "limit": 100,
+      "rows": 53,
+      "equal": true
+    },
+    {
+      "limit": 1000,
+      "rows": 53,
+      "equal": true
+    }
+  ],
+  "timings": {
+    "countClaimableQueued": {
+      "beforeMedianMs": 10.401125000000093,
+      "afterMedianMs": 0.035290999999915584,
+      "samples": {
+        "before": [
+          10.419083999999884,
+          10.182542000000012,
+          10.56941699999993,
+          10.429875000000038,
+          10.514999999999873,
+          10.401125000000093,
+          10.329666999999972,
+          10.269250000000056,
+          10.28058400000009
+        ],
+        "after": [
+          0.04437499999994543,
+          0.014166000000159329,
+          0.059584000000086235,
+          0.01925000000005639,
+          0.0365830000000642,
+          0.014416999999866675,
+          0.035290999999915584,
+          0.01445899999998801,
+          0.04387500000007094
+        ]
+      }
+    },
+    "getStrandedDoneRuns": {
+      "beforeMedianMs": 10.425084000000197,
+      "afterMedianMs": 0.13354199999980665,
+      "samples": {
+        "before": [
+          10.451082999999926,
+          10.35879100000011,
+          10.425084000000197,
+          10.430749999999989,
+          10.614708999999948,
+          10.423125000000027,
+          10.377792,
+          10.528792000000067,
+          10.180957999999919
+        ],
+        "after": [
+          0.1364579999999478,
+          0.10941699999989396,
+          0.15837499999997817,
+          0.11841600000002472,
+          0.14866699999993216,
+          0.11412500000005821,
+          0.15133400000013353,
+          0.1179580000000442,
+          0.13354199999980665
+        ]
+      }
+    }
+  },
+  "plans": {
+    "countClaimableQueued": {
+      "before": [
+        "SCAN scan_run_targets"
+      ],
+      "after": [
+        "SEARCH scan_run_targets USING INDEX idx_srt_pending (state=?)"
+      ],
+      "beforeQuery": {
+        "sql": "SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))",
+        "args": []
+      },
+      "afterQuery": {
+        "sql": "SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))",
+        "args": []
+      }
+    },
+    "getStrandedDoneRuns": {
+      "before": [
+        "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+        "LIST SUBQUERY 1",
+        "SCAN t",
+        "CREATE BLOOM FILTER",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "after": [
+        "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+        "LIST SUBQUERY 1",
+        "SEARCH t USING INDEX idx_srt_pending (state=?)",
+        "CREATE BLOOM FILTER",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "beforeQuery": {
+        "sql": "SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,\n            r.new_fiber AS newFiber, r.newly_live AS newlyLive, r.failed, r.status, r.error,\n            r.est_bytes AS estBytes, r.created_by AS createdBy, r.started_at AS startedAt,\n            r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt,\n            r.reopen_count AS reopenCount\n       FROM scan_runs r\n      WHERE r.status IN ('done','error') AND r.id IN (\n        SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued'\n          AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))\n      ORDER BY r.completed_at ASC LIMIT ?",
+        "args": [
+          10
+        ]
+      },
+      "afterQuery": {
+        "sql": "SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,\n            r.new_fiber AS newFiber, r.newly_live AS newlyLive, r.failed, r.status, r.error,\n            r.est_bytes AS estBytes, r.created_by AS createdBy, r.started_at AS startedAt,\n            r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt,\n            r.reopen_count AS reopenCount\n       FROM scan_runs r\n      WHERE r.status IN ('done','error') AND r.id IN (\n        SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight')\n          AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))\n      ORDER BY r.completed_at ASC LIMIT ?",
+        "args": [
+          10
+        ]
+      }
+    }
+  },
+  "noAnalyzePlans": {
+    "countClaimableQueued": {
+      "before": [
+        "SCAN scan_run_targets"
+      ],
+      "after": [
+        "SEARCH scan_run_targets USING INDEX idx_srt_pending (state=?)"
+      ],
+      "beforeQuery": {
+        "sql": "SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))",
+        "args": []
+      },
+      "afterQuery": {
+        "sql": "SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))",
+        "args": []
+      }
+    },
+    "getStrandedDoneRuns": {
+      "before": [
+        "SEARCH r USING INDEX idx_scan_runs_status (status=?)",
+        "LIST SUBQUERY 1",
+        "SCAN t",
+        "CREATE BLOOM FILTER",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "after": [
+        "SEARCH r USING INDEX idx_scan_runs_status (status=?)",
+        "LIST SUBQUERY 1",
+        "SEARCH t USING INDEX idx_srt_pending (state=?)",
+        "CREATE BLOOM FILTER",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "beforeQuery": {
+        "sql": "SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,\n            r.new_fiber AS newFiber, r.newly_live AS newlyLive, r.failed, r.status, r.error,\n            r.est_bytes AS estBytes, r.created_by AS createdBy, r.started_at AS startedAt,\n            r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt,\n            r.reopen_count AS reopenCount\n       FROM scan_runs r\n      WHERE r.status IN ('done','error') AND r.id IN (\n        SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued'\n          AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))\n      ORDER BY r.completed_at ASC LIMIT ?",
+        "args": [
+          10
+        ]
+      },
+      "afterQuery": {
+        "sql": "SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,\n            r.new_fiber AS newFiber, r.newly_live AS newlyLive, r.failed, r.status, r.error,\n            r.est_bytes AS estBytes, r.created_by AS createdBy, r.started_at AS startedAt,\n            r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt,\n            r.reopen_count AS reopenCount\n       FROM scan_runs r\n      WHERE r.status IN ('done','error') AND r.id IN (\n        SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight')\n          AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))\n      ORDER BY r.completed_at ASC LIMIT ?",
+        "args": [
+          10
+        ]
+      }
+    }
+  }
+}

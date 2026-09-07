@@ -371,3 +371,22 @@ describe("operator visibility and recovery", () => {
     expect(report.stillHolding.length).toBe(1);
   });
 });
+
+it("the maintenance event transaction publishes award, lease and cursor together", async () => {
+  const { interactiveTransaction } = await import("../../server/interactiveDb");
+  const event = saleApproved(91);
+  rawDb.exec(`CREATE TRIGGER synthetic_cursor_failure BEFORE INSERT ON event_subscriptions
+    BEGIN SELECT RAISE(ABORT, 'synthetic cursor failure'); END`);
+  try {
+    await expect(interactiveTransaction(rawDb, () => S.drainOnce(NOW,1))).rejects.toThrow("synthetic cursor failure");
+    expect(awardsFor(REP)).toHaveLength(0);
+    expect(E.cursorFor(S.SUBSCRIBER_NAME)).toBe(0);
+    expect(Q.getState(S.SUBSCRIBER_NAME,event.id)).toBeUndefined();
+  } finally { rawDb.exec("DROP TRIGGER synthetic_cursor_failure"); }
+  const retry = await interactiveTransaction(rawDb, () => S.drainOnce(NOW,1));
+  expect(retry.processed).toBe(1); expect(awardsFor(REP)).toHaveLength(1);
+  expect(E.cursorFor(S.SUBSCRIBER_NAME)).toBe(event.id);
+  expect(Q.getState(S.SUBSCRIBER_NAME,event.id)?.status).toBe("completed");
+  expect((await interactiveTransaction(rawDb,()=>S.drainOnce(NOW,1))).processed).toBe(0);
+  expect(awardsFor(REP)).toHaveLength(1);
+});

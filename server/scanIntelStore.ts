@@ -677,9 +677,10 @@ export function countQueued(runId: string): number {
 
 // ── Fleet heartbeat metrics (C4) — one cheap COUNT each, all failure-safe ───
 // Fleet-wide claimable backlog: queued AND due right now (backoff rows excluded).
+// Repeat the partial-index predicate explicitly; see getStrandedDoneRuns below.
 export function countClaimableQueued(): number {
   try {
-    return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))`).c;
+    return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))`).c;
   } catch { return 0; }
 }
 
@@ -707,32 +708,13 @@ export function countOpenDeadLetters(): number | null {
 // must not resurrect. Re-opening lets a worker drain the tail; the requeue backoff
 // guarantees it converges (finishes) instead of spinning.
 //
-// ── WHY `id IN (...)` AND NOT `EXISTS (...)` ────────────────────────────────
-// This runs every 60s from startScanReaper(), on every worker that also serves
-// HTTP, and better-sqlite3 is synchronous — so its cost lands directly on the
-// event loop. `scan_runs` holds ~555k terminal rows in production and nothing
-// prunes them (pruneTerminalScanRuns exists but is deliberately unwired; see
-// dbPrune.ts), so the shape of this one query decides whether the loop stalls.
-//
-// The correlated EXISTS made the cost O(terminal runs): SQLite walked the
-// status index and ran the subquery once PER RUN, ~555k probes, before the
-// LIMIT could apply. Inverting it makes the cost O(claimable queued targets) —
-// the driving set is now the handful of rows that are actually queued, and the
-// runs are looked up by rowid from that list.
-//
-// MEASURED, on a synthetic table built to the production distribution
-// (555,744 done + 2 error, 47 stranded, EXACTLY the production index set,
-// nothing added):
-//     EXISTS  (before) : 0.144s
-//     id IN   (after)  : 0.020s   — same ten rows, in the same order
-//
-// A `scan_run_targets(state, run_id)` index takes this to ~0.000s, and it is
-// deliberately NOT added: scan_run_targets is the largest table in the
-// database (5.57 GB of rows plus 4.56 GB of indexes) and the box it runs on
-// has ~7.6 GB free, which is already why deploys pass with_backup=false. A 7x
-// win for a pure query change beats a 100x win that needs multiple GB the host
-// does not have. The partial idx_srt_pending does not help here — SQLite
-// declines it for this predicate; verified, do not re-add it expecting a win.
+// Drive the reaper from claimable targets, then look up terminal runs by ID.
+// The redundant state IN predicate deliberately matches idx_srt_pending's
+// partial-index predicate: SQLite does not infer that state='queued' implies
+// it. Without that conjunction the subquery scans the complete target ledger
+// (~0.5s per production tick). The same fix is used by countClaimableQueued.
+// Actual-query regression coverage verifies the existing small index is used;
+// no history pruning, additional index or provider eligibility change is needed.
 export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
   return all<ScanRunRow>(
     `SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,
@@ -742,7 +724,7 @@ export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
             r.reopen_count AS reopenCount
        FROM scan_runs r
       WHERE r.status IN ('done','error') AND r.id IN (
-        SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued'
+        SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight')
           AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))
       ORDER BY r.completed_at ASC LIMIT ?`,
     limit,

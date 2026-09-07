@@ -1,0 +1,141 @@
+{
+  "base": "d5bde1f",
+  "currentSourceSha256": "487e45a57a79986c807e5c3531345f3ce7030b0625f9e8764e342c5dbdfd2e93",
+  "rows": 180003,
+  "evidenceRows": 18000,
+  "tenantCount": 3,
+  "anchor": "2026-09-07T17:00:42.000Z",
+  "fixture": "Separate in-memory SQLite databases, identical synthetic data; actual extracted/transpiled freshPoints functions and toIso helper; existing relevant indexes on baseline, new effective-time index on current; ANALYZE, 3 warmups, 9 alternating samples; timings include SQL, hydration and feed filtering.",
+  "scenarios": [
+    {
+      "tenant": 1,
+      "days": 2,
+      "fullRows": 495,
+      "feedRows": 200,
+      "exactEquivalence": true
+    },
+    {
+      "tenant": 1,
+      "days": 30,
+      "fullRows": 1000,
+      "feedRows": 200,
+      "exactEquivalence": true
+    },
+    {
+      "tenant": 2,
+      "days": 2,
+      "fullRows": 492,
+      "feedRows": 200,
+      "exactEquivalence": true
+    },
+    {
+      "tenant": 2,
+      "days": 30,
+      "fullRows": 997,
+      "feedRows": 200,
+      "exactEquivalence": true
+    },
+    {
+      "tenant": 3,
+      "days": 2,
+      "fullRows": 492,
+      "feedRows": 200,
+      "exactEquivalence": true
+    },
+    {
+      "tenant": 3,
+      "days": 30,
+      "fullRows": 997,
+      "feedRows": 200,
+      "exactEquivalence": true
+    }
+  ],
+  "timings": {
+    "full30": {
+      "beforeMedianMs": 24.216708000000153,
+      "afterMedianMs": 7.7807920000000195,
+      "samples": {
+        "before": [
+          23.99025000000006,
+          24.15533399999981,
+          24.316916999999876,
+          24.216708000000153,
+          24.882916999999907,
+          24.086083000000144,
+          24.126833000000033,
+          24.769208000000162,
+          24.300250000000233
+        ],
+        "after": [
+          7.869833999999855,
+          7.866749999999911,
+          7.759792000000061,
+          7.7491670000001704,
+          7.8552920000001905,
+          7.773750000000064,
+          7.7807920000000195,
+          7.816790999999739,
+          7.7443749999997635
+        ]
+      }
+    },
+    "feed1h": {
+      "beforeMedianMs": 20.852249999999913,
+      "afterMedianMs": 1.9238329999998314,
+      "samples": {
+        "before": [
+          21.213000000000193,
+          20.893541999999798,
+          20.924167000000125,
+          20.852249999999913,
+          20.91733400000021,
+          20.741625000000113,
+          20.572999999999865,
+          20.707832999999937,
+          20.64737500000001
+        ],
+        "after": [
+          1.9629159999999501,
+          1.8539999999998145,
+          1.9846669999997175,
+          1.8040829999999914,
+          1.9246670000002268,
+          1.8389170000000377,
+          2.0190419999998994,
+          1.777625000000171,
+          1.9238329999998314
+        ]
+      }
+    }
+  },
+  "plans": {
+    "baselineFull": [
+      "SEARCH s USING INDEX idx_scan_targets_live_fresh (tenant_id=?)",
+      "BLOOM FILTER ON c (tenant_id=? AND scan_target_id=?)",
+      "SEARCH c USING INDEX idx_corroboration_target (tenant_id=? AND scan_target_id=?) LEFT-JOIN",
+      "USE TEMP B-TREE FOR GROUP BY",
+      "USE TEMP B-TREE FOR group_concat(DISTINCT)",
+      "USE TEMP B-TREE FOR ORDER BY"
+    ],
+    "currentFull": [
+      "MATERIALIZE candidates",
+      "SEARCH s USING INDEX idx_scan_targets_effective_fresh (tenant_id=? AND <expr>>?)",
+      "USE TEMP B-TREE FOR ORDER BY",
+      "SCAN s",
+      "SEARCH c USING INDEX idx_corroboration_target (tenant_id=? AND scan_target_id=?) LEFT-JOIN",
+      "USE TEMP B-TREE FOR GROUP BY",
+      "USE TEMP B-TREE FOR group_concat(DISTINCT)",
+      "USE TEMP B-TREE FOR ORDER BY"
+    ],
+    "currentFeed": [
+      "MATERIALIZE candidates",
+      "SEARCH s USING INDEX idx_scan_targets_effective_fresh (tenant_id=? AND <expr>>?)",
+      "USE TEMP B-TREE FOR ORDER BY",
+      "SCAN s",
+      "SEARCH c USING INDEX idx_corroboration_target (tenant_id=? AND scan_target_id=?) LEFT-JOIN",
+      "USE TEMP B-TREE FOR GROUP BY",
+      "USE TEMP B-TREE FOR group_concat(DISTINCT)",
+      "USE TEMP B-TREE FOR ORDER BY"
+    ]
+  }
+}

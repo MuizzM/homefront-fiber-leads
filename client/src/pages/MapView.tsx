@@ -1,3 +1,4 @@
+import { useForegroundActivity } from "@/hooks/use-foreground-activity";
 import { ErrorState } from "@/components/ErrorState";
 import {
   useEffect,
@@ -11,7 +12,7 @@ import {
 import { X, Search, LocateFixed, Menu, LassoSelect, Radar, Loader2, Ellipsis, List, Plus, Crosshair, Users, Settings2, Filter, Landmark, Tag, Flag, Palette, Undo2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
-import { apiRequest, apiRequestIdempotent, getStoredSessionId } from "@/lib/queryClient";
+import { apiRequest, apiRequestIdempotent, getStoredSessionId, fetchSessionJson, getRequestScopeSignal } from "@/lib/queryClient";
 import MpBoxScanPanel from "@/components/map/MpBoxScanPanel";
 import { useToast } from "@/hooks/use-toast";
 import { useSustained } from "@/hooks/use-sustained";
@@ -1242,6 +1243,9 @@ export default function MapView() {
   // return, but a screen nobody is looking at spends no radio. staleTime makes
   // the return revalidate once, which replaces everything the pause skipped.
   const tabActive = useTabActive();
+  const displayActive = useForegroundActivity(tabActive);
+  const displayActiveRef = useRef(displayActive);
+  displayActiveRef.current = displayActive;
   // Ref mirror for rAF loops that must see activity changes without re-arming
   // their effects (the selected-ring pulse below reads it per frame).
   const tabActiveRef = useRef(true);
@@ -1286,7 +1290,7 @@ export default function MapView() {
   const ownedJobIdRef = useRef<string | null>(null);
   // tabActive: a hidden kept stage must not hold the discovery long-poll open
   // — the hook reconnects (and rehydrates) when the stage is shown again.
-  const discovery = useDiscoveryJobs(!!user && canSubmitScan && tabActive, ownedJobIdRef);
+  const discovery = useDiscoveryJobs(!!user && canSubmitScan && displayActive, ownedJobIdRef);
   // ── AREA SCAN STATE MACHINE — the field map OWNS exactly one scan (the box
   // the operator elected), identified by its jobId. "Scanning fiber" is driven
   // SOLELY by this machine, NEVER inferred from the tenant-wide discovery-job
@@ -1502,7 +1506,7 @@ export default function MapView() {
     }[]
   >({
     queryKey: ["/api/territory-requests"],
-    refetchInterval: tabActive ? 30000 : false,
+    refetchInterval: displayActive ? 30000 : false,
     enabled: canManage,
   });
   const pendingRequests = territoryRequests.filter(
@@ -2417,7 +2421,7 @@ export default function MapView() {
     // multi-MB fetch when it flipped — so the full feed stays parked until
     // the probe answers ≤threshold (or fails → today's fallback).
     enabled: fullFeedEnabled({
-      signedIn: !!user,
+      signedIn: !!user && displayActive,
       countIsError: countQuery.isError,
       countTotal: mapPinCount?.total,
     }),
@@ -2428,7 +2432,7 @@ export default function MapView() {
     // DB-derived ETag makes an unchanged poll a cheap 304, so this is nearly
     // free when nothing changed. Paused while the tab is hidden (battery/data),
     // and a return to the tab pulls fresh immediately.
-    refetchInterval: tabActive ? 60_000 : false,
+    refetchInterval: displayActive ? 60_000 : false,
     refetchIntervalInBackground: false,
     // Reps flip between the app and the dialer/camera constantly while knocking —
     // a refetch on every return is wasteful; the 60s poll keeps them fresh enough.
@@ -2537,7 +2541,7 @@ export default function MapView() {
   useEffect(() => {
     const cache = qc.getQueryCache();
     return cache.subscribe((event: any) => {
-      if (!viewportModeRef.current) return;
+      if (!viewportModeRef.current || !displayActiveRef.current) return;
       if (event?.type !== "updated" || event?.action?.type !== "invalidate") return;
       const key = event.query?.queryKey;
       if (!Array.isArray(key) || key.length !== 1 || key[0] !== "/api/leads/map") return;
@@ -2620,10 +2624,12 @@ export default function MapView() {
   // (map-one-tap-add.test.ts) keeps proving that fetch path chrome-free.
   const scheduleWindowSnapshotWrite = useCallback((pins: MapPin[], win: ViewportBBox) => {
     const scope = snapshotScopeRef.current;
+    const sessionScope = getRequestScopeSignal();
     if (!scope || !pins.length) return;
     if (windowSnapshotTimerRef.current) clearTimeout(windowSnapshotTimerRef.current);
     windowSnapshotTimerRef.current = setTimeout(() => {
       windowSnapshotTimerRef.current = null;
+      if (sessionScope.aborted || !displayActiveRef.current) return;
       writeMapWindowSnapshot(scope, pins, win);
     }, MAP_PINS_SNAPSHOT_DEBOUNCE_MS);
   }, []);
@@ -2647,7 +2653,7 @@ export default function MapView() {
   // state is owned by refreshViewportPins below; chip visibility DERIVES from
   // mapPinData.truncated + effects.
   const fetchViewportPins = useCallback(() => {
-    if (!viewportModeRef.current) return;
+    if (!viewportModeRef.current || !displayActiveRef.current) return;
     const bounds = currentFetchWindow(mapRef.current);
     if (!bounds) return;
     const { view, window } = bounds;
@@ -2664,18 +2670,11 @@ export default function MapView() {
     const controller = new AbortController();
     viewportAbortRef.current = controller;
     inFlightPinKeyRef.current = fetchKey;
-    const sessionId = getStoredSessionId();
-    fetch(`/api/leads/map?format=packed&nosample=1&bbox=${bboxParam(window)}${mapView ? `&view=${mapView}` : ""}`, {
-      headers: sessionId ? { "x-session-id": sessionId } : {},
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`bbox pins ${res.status}`);
-        return unpackMapPins<MapPin>(await res.json());
-      })
+    const sessionScope = getRequestScopeSignal();
+    fetchSessionJson(`/api/leads/map?format=packed&nosample=1&bbox=${bboxParam(window)}${mapView ? `&view=${mapView}` : ""}`, controller.signal)
+      .then((body) => unpackMapPins<MapPin>(body))
       .then(({ pins: fetched, truncated, windowCount }) => {
-        if (controller.signal.aborted) return;
-        if (inFlightPinKeyRef.current === fetchKey) inFlightPinKeyRef.current = null;
+        if (controller.signal.aborted || sessionScope.aborted || viewportAbortRef.current !== controller || !displayActiveRef.current) return;
         if (truncated) {
           // Over-cap window: the honest render is the density grid, not a
           // sample (nosample=1 means `fetched` is empty — nothing to merge).
@@ -2725,14 +2724,19 @@ export default function MapView() {
         scheduleWindowSnapshotWrite(fetched, window);
       })
       .catch((err: any) => {
-        if (err?.name === "AbortError") return; // superseded by a newer pan
-        if (inFlightPinKeyRef.current === fetchKey) inFlightPinKeyRef.current = null;
+        if (err?.name === "AbortError" || controller.signal.aborted || sessionScope.aborted || viewportAbortRef.current !== controller || !displayActiveRef.current) return; // superseded by a newer pan
         // A failed window fetch must never empty the map — keep what's there.
         // But keep it HONESTLY: stamp the failure into the cache (the blessed
         // channel — #87 bans React state here) so the viewport notice can say
         // "couldn't refresh" instead of stale ground reading as doorless.
         qc.setQueryData(["/api/leads/map"], (old: any) =>
           old?.pins ? { ...old, windowFetchFailedAt: Date.now() } : old);
+      })
+      .finally(() => {
+        if (viewportAbortRef.current === controller) {
+          inFlightPinKeyRef.current = null;
+          viewportAbortRef.current = null;
+        }
       });
   }, [qc, scheduleWindowSnapshotWrite]);
   const fetchViewportPinsRef = useRef(fetchViewportPins);
@@ -2749,7 +2753,7 @@ export default function MapView() {
   const gridAbortRef = useRef<AbortController | null>(null);
   const gridCacheRef = useRef(new Map<string, { ts: number; data: MapGridResponse }>());
   const fetchViewportGrid = useCallback(() => {
-    if (!viewportModeRef.current) return;
+    if (!viewportModeRef.current || !displayActiveRef.current) return;
     const bounds = currentFetchWindow(mapRef.current);
     if (!bounds) return;
     // Clamp about the CAMERA center, not the window's own midpoint: at world
@@ -2776,6 +2780,8 @@ export default function MapView() {
     const key = gridCacheKey(window, cell, tag, view);
     const hit = gridCacheRef.current.get(key);
     if (hit && Date.now() - hit.ts < MAP_GRID_CACHE_TTL_MS) {
+      gridAbortRef.current?.abort();
+      gridAbortRef.current = null;
       // A cached window IS a landed window — release the pins→grid handoff
       // guard immediately (otherwise the stale pins would linger 60s).
       gridWindowLandedRef.current = true;
@@ -2786,17 +2792,10 @@ export default function MapView() {
     gridAbortRef.current?.abort();
     const controller = new AbortController();
     gridAbortRef.current = controller;
-    const sessionId = getStoredSessionId();
-    fetch(`/api/leads/map/grid?bbox=${bboxParam(window)}&cell=${cell}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}${view ? `&view=${view}` : ""}`, {
-      headers: sessionId ? { "x-session-id": sessionId } : {},
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`bbox grid ${res.status}`);
-        return (await res.json()) as MapGridResponse;
-      })
+    const sessionScope = getRequestScopeSignal();
+    fetchSessionJson<MapGridResponse>(`/api/leads/map/grid?bbox=${bboxParam(window)}&cell=${cell}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}${view ? `&view=${view}` : ""}`, controller.signal)
       .then((data) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || sessionScope.aborted || gridAbortRef.current !== controller || !displayActiveRef.current) return;
         // The grid window landed: the stale pin clusters that covered the
         // pins→grid crossing hand off NOW (imperative layer sync — not React
         // state). Success only — a failure must keep the pins showing.
@@ -2807,16 +2806,28 @@ export default function MapView() {
         qc.setQueryData(["/api/leads/map/grid"], data);
       })
       .catch((err: any) => {
-        if (err?.name === "AbortError") return; // superseded by a newer pan
+        if (err?.name === "AbortError" || controller.signal.aborted || sessionScope.aborted || gridAbortRef.current !== controller || !displayActiveRef.current) return; // superseded by a newer pan
         // A failed grid fetch must never empty the map — keep what's there:
         // gridWindowLandedRef stays false on a FIRST-window failure, so the
         // pin clusters stay visible; re-sync defensively (a style swap could
         // have reset visibility mid-flight).
         syncViewportTierLayers(mapRef.current);
-      });
+      })
+      .finally(() => { if (gridAbortRef.current === controller) gridAbortRef.current = null; });
   }, [qc]);
   const fetchViewportGridRef = useRef(fetchViewportGrid);
   fetchViewportGridRef.current = fetchViewportGrid;
+
+  useEffect(() => {
+    return () => {
+      viewportAbortRef.current?.abort();
+      gridAbortRef.current?.abort();
+      inFlightPinKeyRef.current = null;
+      if (windowSnapshotTimerRef.current) clearTimeout(windowSnapshotTimerRef.current);
+      if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
+      gridCacheRef.current.clear();
+    };
+  }, [displayActive, user?.id, user?.tenantId]);
 
   // The ONE entry point for "the map moved / data changed, refresh the
   // window": owns the tier state (change-only, so a steady pan flips nothing)
@@ -2835,7 +2846,7 @@ export default function MapView() {
     refreshCoalescedRef.current = true;
     queueMicrotask(() => {
       refreshCoalescedRef.current = false;
-      if (!viewportModeRef.current) return;
+      if (!viewportModeRef.current || !displayActiveRef.current) return;
       const bounds = currentFetchWindow(mapRef.current);
       const tier = bounds
         ? viewportTierForWindow(bounds.window, truncationEvidenceRef.current)
@@ -2951,7 +2962,7 @@ export default function MapView() {
   const scannedDoorsAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady) return;
+    if (!map || !mapReady || !displayActive) return;
     const fetchScannedDoors = async () => {
       // A style swap wipes sources. Re-create rather than silently no-op:
       // returning here left the layer permanently dead after the first swap,
@@ -2983,13 +2994,9 @@ export default function MapView() {
         // and `credentials: "include"` silently 401s every request - the same
         // trap leadStream.ts:20 documents. Verified live: the first version of
         // this fetch returned 401 on every pan.
-        const sessionId = getStoredSessionId();
-        const r = await fetch(`/api/map/scanned-doors?bbox=${encodeURIComponent(bbox)}`, {
-          headers: sessionId ? { "x-session-id": sessionId } : {},
-          signal: ac.signal,
-        });
-        if (!r.ok) return;
-        const body = await r.json();
+        const sessionScope = getRequestScopeSignal();
+        const body = await fetchSessionJson<{ doors?: any[] }>(`/api/map/scanned-doors?bbox=${encodeURIComponent(bbox)}`, ac.signal);
+        if (ac.signal.aborted || sessionScope.aborted || !displayActiveRef.current) return;
         const tally: Record<string, number> = {};
         for (const d of body.doors ?? []) tally[d.tag] = (tally[d.tag] ?? 0) + 1;
         setDoorTagCounts((prev) => {
@@ -3023,7 +3030,7 @@ export default function MapView() {
       scannedDoorsAbortRef.current?.abort();
       try { map.off("moveend", onMoveEnd); } catch {}
     };
-  }, [mapReady, styleEpoch]);
+  }, [mapReady, styleEpoch, displayActive, user?.id, user?.tenantId]);
 
   // Viewport-mode safety poll — the windowed twin of the full feed's 60s
   // refetchInterval. Windowed freshness otherwise hangs ENTIRELY off the SSE
@@ -3034,10 +3041,10 @@ export default function MapView() {
   // 60s response cache absorbs it entirely, and hidden tabs pause it the same
   // way the full-feed poll pauses (tabActive gate).
   useEffect(() => {
-    if (!viewportMode || !tabActive) return;
+    if (!viewportMode || !displayActive) return;
     const t = setInterval(() => refreshViewportPinsRef.current(), 60_000);
     return () => clearInterval(t);
-  }, [viewportMode, tabActive]);
+  }, [viewportMode, displayActive]);
 
   // Persist the camera on every settled move (both modes, debounced) so the
   // next launch opens on the same territory and the first pins/grid fetch is
@@ -3076,26 +3083,16 @@ export default function MapView() {
   const [sampleNoticeDismissed, setSampleNoticeDismissed] = useState(false);
   useEffect(() => { if (!sampledPins) setSampleNoticeDismissed(false); }, [sampledPins]);
 
-  // Reps have refetchOnWindowFocus OFF (they flip to the dialer/camera
-  // constantly — a full refetch on every focus is wasteful). But if the
-  // map-changed SSE dropped while backgrounded, a fresh lead could sit invisible
-  // for up to 60s. A visibilitychange→visible invalidation closes that gap: the
-  // /api/leads/map GET is ETag-backed (304 zero-body when unchanged), so a
-  // foreground that changed nothing costs almost nothing. Managers already get
-  // focus-refetch, so this is rep-only.
+  // Reconcile missed updates once when this map becomes visible and online.
+  const wasDisplayActiveRef = useRef(displayActive);
   useEffect(() => {
-    if (!isRep) return;
-    const onVisible = () => {
-      if (document.visibilityState === "visible") {
-        // Missed pings while hidden: bust the 60s grid cache too.
-        gridCacheRef.current.clear();
-        if (viewportModeRef.current) refreshViewportPinsRef.current();
-        else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [isRep, qc]);
+    const resumed = displayActive && !wasDisplayActiveRef.current;
+    wasDisplayActiveRef.current = displayActive;
+    if (!resumed) return;
+    gridCacheRef.current.clear();
+    if (viewportModeRef.current) refreshViewportPinsRef.current();
+    else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+  }, [displayActive, qc]);
 
   // Server-pushed invalidation keeps confirmed fresh-fiber territory leads from
   // waiting for the 60s safety poll. The stream contains no lead data; the
@@ -3103,7 +3100,7 @@ export default function MapView() {
   useEffect(() => {
     // tabActive: the ping stream exists to freshen a map someone is LOOKING at;
     // hidden stages drop it and the re-show revalidation covers the gap.
-    if (!user || !tabActive) return;
+    if (!user || !displayActive) return;
     let stopped = false;
     let controller: AbortController | null = null;
     let reconnect: ReturnType<typeof setTimeout> | null = null;
@@ -3121,13 +3118,13 @@ export default function MapView() {
         });
         if (!response.ok || !response.body)
           throw new Error(`lead event stream ${response.status}`);
-        attempts = 0;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
         while (!stopped) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done || stopped) break;
+          if (value?.byteLength) attempts = 0;
           buffer += decoder
             .decode(value, { stream: true })
             .replace(/\r\n/g, "\n");
@@ -3173,7 +3170,7 @@ export default function MapView() {
       if (reconnect) clearTimeout(reconnect);
       if (refreshTimer) clearTimeout(refreshTimer);
     };
-  }, [user?.id, qc, tabActive]);
+  }, [user?.id, user?.tenantId, qc, displayActive]);
   // Dedupe to ONE pin per physical house before anything renders (pins, the
   // in-view panel, and search all derive from this). Memoized so it only re-runs
   // when the fetched pin set actually changes, not every render.
@@ -3237,7 +3234,7 @@ export default function MapView() {
     // EVERY role: the server scopes the list (reps get only areas they hold),
     // and reps deserve the same penetration/completion read the office has.
     enabled: !!user,
-    refetchInterval: tabActive ? 30000 : false,
+    refetchInterval: displayActive ? 30000 : false,
   });
   // Expose globally so popup onclick handlers can access current data.
   // NOTE: these effects must stay after `team` is declared — their dependency
@@ -6712,7 +6709,7 @@ export default function MapView() {
     // Opening a socket a calling-only role will be 403'd on is pure radio burn.
     // tabActive: a hidden kept map drops the socket too — Last-Event-ID replay
     // (or the onResync full refetch) reconciles on re-show.
-    if (!user || !canUseFieldApp || !tabActive) return;
+    if (!user || !canUseFieldApp || !displayActive) return;
     const handle = subscribeLeadStream({
       // Sessions here are an x-session-id HEADER, which native EventSource
       // cannot send — it would 401 forever. Read per connect so a refreshed
@@ -6749,7 +6746,7 @@ export default function MapView() {
       streamHoldsRef.current.clear();
       setLeadStream(null);
     };
-  }, [user?.id, canUseFieldApp, qc, tabActive]);
+  }, [user?.id, user?.tenantId, canUseFieldApp, qc, displayActive]);
 
   // ── Do not repaint a door the rep is still saving ───────────────────────────
   // A push applied over an in-flight knock shows the rep their own tap being

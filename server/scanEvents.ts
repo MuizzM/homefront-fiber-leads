@@ -8,6 +8,7 @@
 // keeps a rich recent timeline (~400 addresses × ~8 stages) without unbounded
 // growth. Persistence failures are swallowed — telemetry never breaks a scan.
 import { rawDb } from "./db";
+import { isSqliteContention, withoutSqliteBusyWait } from "./interactiveDb";
 import { onStage, type ScanStageEvent, type ScanStage } from "./scanStageBus";
 import { EventEmitter } from "node:events";
 
@@ -29,6 +30,7 @@ const FLUSH_MAX = Math.max(50, Number(process.env.SCAN_EVENTS_FLUSH_MAX ?? 500) 
 const BUF_CAP = Math.max(FLUSH_MAX * 4, Number(process.env.SCAN_EVENTS_BUF_CAP ?? 5000) || 5000);
 const _buf: ScanStageEvent[] = [];
 let _flushTimer: ReturnType<typeof setInterval> | null = null;
+let _retryFlushAfter = 0;
 let _bulkInsert: ((rows: ScanStageEvent[]) => void) | null = null;
 
 const relay = new EventEmitter();
@@ -88,12 +90,27 @@ function ensureSchema(): void {
  *  so a burst never holds the write lock too long; the timer picks up the rest on
  *  the next tick. Best-effort — telemetry never breaks a scan. */
 export function flushScanEvents(): number {
+  return withoutSqliteBusyWait(rawDb, flushScanEventsNow);
+}
+
+function flushScanEventsNow(): number {
   if (!_buf.length) return 0;
   try { ensureSchema(); } catch { return 0; }
   const batch = _buf.splice(0, FLUSH_MAX);
   try {
     _bulkInsert!(batch);
-  } catch { /* swallow — diagnostics; drop this batch rather than break scanning */ }
+  } catch (error) {
+    if (isSqliteContention(error)) {
+      // Preserve pending telemetry through temporary contention, bounded by the
+      // same oldest-first overflow policy as normal ingress.
+      _buf.unshift(...batch);
+      if (_buf.length > BUF_CAP) _buf.splice(0, _buf.length - BUF_CAP);
+      _retryFlushAfter = Date.now() + FLUSH_MS;
+      return 0;
+    }
+    // Malformed diagnostic rows retain the existing lossy failure policy.
+  }
+  _retryFlushAfter = 0;
   // Prune occasionally (amortized), not per-row.
   _sincePrune += batch.length;
   if (_sincePrune >= PRUNE_EVERY) {
@@ -148,11 +165,11 @@ export function startScanEvents(): void {
       if (_buf.length > BUF_CAP) _buf.splice(0, _buf.length - BUF_CAP);
       // Flush eagerly when a full batch has accumulated (keeps the buffer small
       // under bursts without waiting the whole timer interval).
-      if (_buf.length >= FLUSH_MAX) flushScanEvents();
+      if (_buf.length >= FLUSH_MAX && Date.now() >= _retryFlushAfter) flushScanEvents();
       relay.emit("event", { id: null, ...evt });
     } else {
       let id: number | null = null;
-      try { id = persist(evt); } catch { /* swallow — never break a scan */ }
+      try { id = withoutSqliteBusyWait(rawDb, () => persist(evt)); } catch { /* swallow — never break a scan */ }
       relay.emit("event", { id, ...evt });
     }
   });

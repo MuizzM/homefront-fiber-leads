@@ -267,33 +267,41 @@ export class DistributedProviderCoordinator<T> {
   }
 
   snapshot(): DistributedProviderSnapshot {
-    this.cleanup();
+    // GETs and SSE heartbeats must never acquire the shared writer. Apply the
+    // same expiry rules to this view; admission still performs durable cleanup.
     const now = this.now();
-    const counts = rawDb.prepare(`SELECT
-      SUM(CASE WHEN state='active' THEN 1 ELSE 0 END) active,
-      SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END) queued,
-      SUM(CASE WHEN state='active' AND priority>=? THEN 1 ELSE 0 END) activeCritical,
-      SUM(CASE WHEN state='queued' AND priority>=? THEN 1 ELSE 0 END) queuedCritical
-      FROM provider_admission_queue WHERE state IN ('active','queued')`).get(CRITICAL_PRIORITY_CUTOFF, CRITICAL_PRIORITY_CUTOFF) as any;
+    const heartbeatMs = Math.max(2_000, Math.floor(this.leaseMs / 3));
+    const queuedStaleMs = Math.max(6 * heartbeatMs, Number(process.env.PROVIDER_QUEUED_STALE_MS ?? 90_000) || 90_000);
+    const taskCutoff = now - Math.max(60_000, Number(process.env.PROVIDER_TASK_MAX_MS ?? 180_000));
+    const rows = rawDb.prepare(`SELECT source,state,priority,COUNT(*) c FROM provider_admission_queue
+      WHERE (state='active' AND (lease_expires_at IS NULL OR lease_expires_at>?)
+             AND (started_at IS NULL OR started_at>?))
+         OR (state='queued' AND (updated_at>? OR instance_id=?))
+      GROUP BY source,state,priority`).all(now, taskCutoff, now - queuedStaleMs, this.instanceId) as
+        Array<{ source: ProviderRequestPriority; state: string; priority: number; c: number }>;
     const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any)?.count ?? 0);
     const byClass: Record<AdmissionClass, { active: number; queued: number }> = {
       IMMEDIATE: { active: 0, queued: 0 }, NEW_BUILD: { active: 0, queued: 0 },
       DISCOVERY: { active: 0, queued: 0 }, EXPANSION: { active: 0, queued: 0 }, MAINTENANCE: { active: 0, queued: 0 },
     };
-    for (const row of rawDb.prepare(`SELECT source, state, COUNT(*) c FROM provider_admission_queue
-      WHERE state IN ('active','queued') GROUP BY source, state`).all() as any[]) {
-      const cls = admissionClassOf(row.source as ProviderRequestPriority);
-      if (row.state === "active") byClass[cls].active += Number(row.c);
-      else byClass[cls].queued += Number(row.c);
+    let active = 0, queued = 0, activeCritical = 0, queuedCritical = 0;
+    for (const row of rows) {
+      const cls = admissionClassOf(row.source);
+      const count = Number(row.c);
+      if (row.state === "active") {
+        byClass[cls].active += count;
+        active += count;
+        if (row.priority >= CRITICAL_PRIORITY_CUTOFF) activeCritical += count;
+      } else {
+        byClass[cls].queued += count;
+        queued += count;
+        if (row.priority >= CRITICAL_PRIORITY_CUTOFF) queuedCritical += count;
+      }
     }
     return {
-      active: Number(counts?.active ?? 0), queued: Number(counts?.queued ?? 0),
-      activeCritical: Number(counts?.activeCritical ?? 0), queuedCritical: Number(counts?.queuedCritical ?? 0),
-      startsLastMinute: starts,
+      active, queued, activeCritical, queuedCritical, startsLastMinute: starts,
       maxConcurrency: this.maxConcurrency, maxRequestsPerMinute: this.maxRequestsPerMinute,
-      criticalReservedConcurrency: this.criticalReservedConcurrency,
-      byClass,
-      instanceId: this.instanceId,
+      criticalReservedConcurrency: this.criticalReservedConcurrency, byClass, instanceId: this.instanceId,
     };
   }
 

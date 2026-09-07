@@ -1,3 +1,5 @@
+import { useForegroundActivity } from "@/hooks/use-foreground-activity";
+import { useTabActive } from "@/lib/tabActivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { apiRequest } from "@/lib/queryClient";
@@ -126,10 +128,11 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
   // once and never reconnected, freezing the rows behind a permanent
   // "Connecting…" spinner that implied progress.
   const [retryTick, setRetryTick] = useState(0);
+  const displayActive = useForegroundActivity(useTabActive());
   // Stop halts EVERY running scan tenant-wide - one tap arms, the second fires.
   const [stopArmed, setStopArmed] = useState(false);
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !displayActive) { setConnected(false); return; }
     let closed = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleRetry = () => {
@@ -147,6 +150,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
           headers: { "x-session-id": sessionId },
           signal: ctrl.signal,
         });
+        if (closed) return;
         if (!res.ok || !res.body) { setConnected(false); scheduleRetry(); return; }
         setConnected(true);
         const reader = res.body.getReader();
@@ -154,7 +158,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
         let buf = "";
         while (!closed) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done || closed) break;
           buf += dec.decode(value, { stream: true });
           const frames = buf.split("\n\n");
           buf = frames.pop() ?? "";
@@ -184,7 +188,7 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
       } catch { /* aborted or network */ } finally { if (!closed) { setConnected(false); scheduleRetry(); } }
     })();
     return () => { closed = true; if (retryTimer) clearTimeout(retryTimer); ctrl.abort(); };
-  }, [sessionId, applyEvent, city, state, retryTick]);
+  }, [sessionId, applyEvent, city, state, retryTick, displayActive]);
 
   // Recompute counters from live rows so the accounting invariant always holds:
   // found = checked + queued + checking + retrying + unresolved.
@@ -224,14 +228,14 @@ export default function ScanInspector({ city, state, scopeLabel }: ScanInspector
   // for a clock nobody was reading with the pipeline idle.
   const scanLive = rows.size > 0;
   useEffect(() => {
-    if (!scanLive) return;
+    if (!scanLive || !displayActive) return;
     const t = setInterval(() => {
       if (typeof document === "undefined" || document.visibilityState === "visible") {
         forceTick((n) => n + 1);
       }
     }, 1000);
     return () => clearInterval(t);
-  }, [scanLive]);
+  }, [scanLive, displayActive]);
 
   const control = async (action: string) => {
     try {
