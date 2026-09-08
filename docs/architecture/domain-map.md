@@ -1,128 +1,56 @@
-# HomeFront Domain and Workflow Map
+# Domain and dependency map
 
-This is the current ownership map for incremental extraction. It describes the
-existing system; it does not authorize a repository-wide move.
+Updated 2026-09-08 from source. This replaces the older size/defect snapshot with
+current ownership and known extraction boundaries. See [ADR 0002](../adr/0002-domain-boundaries.md).
 
-## Domain Boundaries
+| Domain | Current owners / entry points | Public authority and boundary |
+| --- | --- | --- |
+| Identity and tenancy | `server/auth*`, `server/routes.ts`, `server/tenantGuard.ts`, `shared/capabilities.ts`, `client/src/lib/auth.tsx` | Verified actor, tenant and server capability. Immutable platform authority is separate from mutable roles. Legacy null fallbacks require explicit audit. |
+| Leads and evidence | `server/storage.ts`, `scanIntelStore.ts`, `freshFiberProjector.ts`, `leadRanking.ts` | Canonical lead/evidence state; ranking is advisory. Consumers must preserve authoritative eligibility and tenant ownership. |
+| Territory and assignment | `territoryAssignments.ts`, assignment routes, shared selection geometry contracts | Server visibility, preview/apply parity, committed assignments and CAS undo. Shared territory membership is intentional; direct-owner precedence remains an open product decision. |
+| Field activity | `storage.createKnock`, `LeadKnockSheet`, `useKnockLogger`, `knockQueue.ts` | Durable staging before GPS; server idempotency/supersession; pending presentation cannot claim confirmed money. |
+| Calling and callbacks | `server/calling/routes.ts`, `service.ts`, `store.ts`, `scriptEngine.ts` | Eligibility, consent/DNC/hour rules, session outcomes and callback lifecycle. Optional AI cannot weaken compliance or authorize contact. |
+| Discovery and scanning | `addressDiscovery/*`, `scanEngine.ts`, `scanIntelStore.ts`, `providerRequestQueue.ts`, provider adapters | Authorized finite jobs, normalization, evidence, spend/concurrency, retry/lease state and publication. Transport does not decide business eligibility. |
+| Commissions and incentives | `commissionService.ts`, `reserveService.ts`, `incentiveSubscriber.ts`, ledger/stores | Server-calculated legal transitions, immutable financial evidence and idempotent awards. Legacy and weekly paths need explicit convergence design before consolidation. |
+| Onboarding and workforce | onboarding services/stores, academy, mileage/referral/earnings modules | Identity/privacy, training and workforce state. Existing Applications belongs to current capability holders; no recruiter role is silently added. |
+| Notification and events | `domainEventStore.ts`, `eventQueueOps.ts`, `stateMonitorScheduler.ts` | Local atomic facts, dedupe, ordered financial delivery, tenant-owned recovery and bounded notification retention. Remote delivery is at-least-once. |
+| Reporting and guidance | `repMetricsAggregator.ts`, `opsQueues.ts`, `commissionReconciliation.ts`, shared coaching/priority rules | Derived views and explainable suggestions; never overwrite canonical eligibility, ownership or pay facts. |
+| Platform | `server/index.ts`, `globalMaintenance.ts`, `scanConsumeRole.ts`, deployment workflows | Worker ownership, health, release provenance, finite maintenance and recovery. Current shared SQLite/process-local state limits multi-host scaling. |
 
-| Domain | Current entry points | Canonical responsibility | Known boundary issue |
-|---|---|---|---|
-| auth | `server/auth*`, `client/src/lib/auth.tsx` | authenticated actor and identity lifecycle | session ID and some identity bridges reach `window` |
-| tenants | organization storage, membership and capability code | tenant ownership and membership | legacy routes still contain global/null-tenant fallbacks |
-| leads | lead storage/routes, packed map wire format | lead identity, lifecycle, detail and map delivery | Fresh confidence meanings differ by consumer |
-| knocking | `LeadKnockSheet`, `useKnockLogger`, offline queue, knock routes | disposition command, durable local staging and idempotent replay | pending overlays and permanent-failure rollback are not yet isolated from map query refreshes |
-| calling | `server/calling/*`, `callingApi.ts` | eligible queue, session, outcome and callback handoff | eligibility re-derives Fresh confidence |
-| callbacks | calling routes/store and dashboard queries | due/rescheduled/completed callback lifecycle | state ownership is split and requires an explicit contract |
-| territories | map/territory routes and geometry storage | assignment, reclaim, visibility and history | map UI and policy are coupled in MapView/routes |
-| scanning | scan engine, scheduler, discovery and workers | resumable job execution and capacity | several parallel pipelines and implicit state machines |
-| fiber intelligence | parser, snapshot, classifier, projector | authoritative evidence, transitions and lead projection | strict classifier is not the production owner |
-| commissions | legacy lifecycle contract/routes plus weekly payout subsystem | tenant-owned booking, revision-safe legal transition, atomic audit and payment state | legacy and weekly ledgers still require a future transactional convergence boundary |
-| audit | login and entity audit storage/routes | append-oriented safe change history | platform and tenant audit visibility is not fully separated |
-| platform operations | health, deployment workflow, worker status | readiness, release provenance, recovery | commit/schema/backup readiness is not exposed |
-
-## Critical Workflow Catalog
-
-### Field Knock
-
-- Entry: lead sheet disposition.
-- Current command: synchronous durable staging, optional GPS enrichment, queued
-  persistence and offline replay.
-- Server authority: knock route and storage transaction.
-- Required invariant: optimistic pin state is pending presentation, not confirmed
-  commission state.
-- Retry: durable local queue with idempotency and dead-letter state.
-- Logs/tests: queue replay, slow-GPS durability, rejected command UI,
-  superseded reconciliation and stale-sale protections have focused coverage.
-
-### Fresh Fiber Qualification
-
-- Entry: discovered normalized address admitted to a scan run.
-- Current path: provider queue -> token/session adapter -> response parser ->
-  scan result -> snapshot/lifecycle -> projector -> lead/map/calling.
-- Required authority: one versioned pure verdict requiring a successful exact
-  address match, explicit fiber qualification, NEW FIBER, no active billing, and
-  competitive eligibility.
-- Retry: inconclusive provider outcomes remain retryable and cannot create or
-  delete a lead.
-- Current defect: downstream stages re-derive weaker rules.
-
-### Field Scan
-
-- Entry: completed map draw box/lasso.
-- Current path: discovery POST -> resumable job -> SSE progress -> rAF-batched
-  GeoJSON -> durable lead reconciliation.
-- Required state: idle, submitting, scanning, completed, failed/cancelled.
-- Required presentation: reps see checked/new-lead progress; provider diagnostics
-  remain manager/admin-only.
-- Current defect: submitting can be visually blank on slow networks.
-
-### Calling
-
-- Entry: server-authoritative next-eligible query.
-- Current path: queue sync -> eligibility -> session/outcome -> callback/sale.
-- Required invariant: no stale or non-deliverable Fresh confidence is callable.
-- Current defect: `kinetic_new_fiber` is excluded despite authoritative
-  projection, while confidence rules are duplicated.
-
-### Commission
-
-- Entry: confirmed sale/knock command.
-- Current path: legacy commission system and newer tenant-scoped weekly payout
-  system.
-- Required invariant: tenant-scoped, server-calculated, idempotent booking and
-  truthful client confirmation.
-- Current state: legacy mutations now use a tenant-required, row-revision
-  compare-and-set lifecycle command and atomic audit; unrestricted storage
-  mutation was removed. Rate plans are tenant-owned, and MapView waits for
-  durable knock reconciliation.
-
-## Dependency Direction
-
-Preferred direction for the first extraction:
-
-```text
-address discovery
-  -> normalized address contract
-  -> scan scheduling/admission
-  -> authorized provider adapter
-  -> normalized provider observation
-  -> versioned Fresh eligibility verdict
-  -> evidence snapshot and transition
-  -> lead projection
-  -> map / Fresh feed / calling consumers
+```mermaid
+flowchart LR
+  UI[Role workspace / field queue] --> API[Authenticated tenant command]
+  API --> Rules[Domain rules and authorization]
+  Rules --> Store[Owning store: short transaction]
+  Store --> Facts[Canonical facts and durable events]
+  Facts --> Worker[Bounded authorized worker]
+  Worker --> Derived[Projection / notification / report]
+  Derived --> UI
+  Worker --> Adapter[Provider adapter with policy and budget]
 ```
 
-Consumers may read the public verdict but must not re-derive it. UI modules may
-present server-owned decisions but cannot upgrade eligibility, tenant ownership,
-money state, or workflow completion.
+## Existing product surfaces to extend
 
-## Largest Current Files
+`App.tsx` has lazy routes and retained stages. Existing tokens, Radix components,
+page scaffold, Rep Today, management Dashboard/Ops, Applications and Governance
+are the UI starting point. Map viewport feeds, density tiers and the virtualized
+`LeadsInViewPanel` already exist. Extract a characterized controller or typed API
+slice, not the entire 10,000+ line map at once.
 
-Frontend:
+Assignment preview/confirm/partial counts/audit/undo already ship. Its replay and
+undo receipts remain process-local, which is the durability gap to solve before
+cross-worker scaling. Offline knock replay already ships; a last-view snapshot
+is not a complete territory pack or offline basemap.
 
-1. `client/src/pages/MapView.tsx` — 6,705 lines
-2. `client/src/pages/KineticScanner.tsx` — 1,164
-3. `client/src/pages/Team.tsx` — 1,114
-4. `client/src/pages/Leads.tsx` — 1,112
-5. `client/src/pages/CommissionConsole.tsx` — 1,047
-6. `client/src/components/LeadKnockSheet.tsx` — 894
-7. `client/src/components/ui/sidebar.tsx` — 727
-8. `client/src/pages/MyCommission.tsx` — 725
-9. `client/src/components/scan/LiveScanFeed.tsx` — 690
-10. `client/src/pages/CityScanner.tsx` — 669
+Deterministic rankings/coaching already ship, plus optional time-bounded calling
+script enhancement in `server/calling/scriptEngine.ts`. A shared AI privacy,
+cost and evaluation contract precedes broader assistance.
 
-Backend:
+## Extraction rule
 
-1. `server/routes.ts` — 7,229 lines
-2. `server/storage.ts` — 3,957
-3. `server/addressDiscovery/store.ts` — 1,714
-4. `server/calling/routes.ts` — 1,499
-5. `server/index.ts` — 1,444
-6. `server/scanner.ts` — 1,320
-7. `server/calling/store.ts` — 1,179
-8. `server/commissionService.ts` — 1,104
-9. `server/scanEngine.ts` — 1,098
-10. `server/calling/migrations.ts` — 928
-
-These sizes are review triggers. Extraction must follow characterized behavior
-and one coherent workflow at a time.
+Choose one observable workflow; record current permissions, result/ordering,
+side effects, idempotency and recovery. Extract its command/store interface while
+preserving those contracts. New domains require distinct ownership or invariants;
+new deployables additionally require [measured extraction criteria](service-boundaries.md).
+Historical audits under `docs/` remain useful evidence, but their old file sizes,
+missing-feature claims and unresolved-defect lists must be revalidated.

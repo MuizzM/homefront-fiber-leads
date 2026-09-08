@@ -16,6 +16,8 @@
 import { rawDb } from "./db";
 import { storage } from "./storage";
 import { structuredLog } from "./structuredLog";
+import { cursorFor } from "./domainEventStore";
+import { interactiveTransaction } from "./interactiveDb";
 
 export type EventStatus =
   | "pending"        // never attempted, or waiting out its backoff
@@ -195,38 +197,58 @@ export function isOperatorCleared(state: any): boolean {
 
 export type OperatorAction = "RETRY" | "DEAD_LETTER" | "RESOLVE";
 
-export function operatorAction(input: {
+export class QueueAccessError extends Error {
+  constructor(public readonly code: "ORG_REQUIRED" | "QUEUE_EVENT_NOT_FOUND", public readonly httpStatus: number, message: string) {
+    super(message);
+  }
+}
+
+export function requireQueueTenant(tenantId: number): number {
+  if (!Number.isSafeInteger(tenantId) || tenantId <= 0) {
+    throw new QueueAccessError("ORG_REQUIRED", 400, "An organization context is required.");
+  }
+  return tenantId;
+}
+
+export async function operatorAction(input: {
   subscriber: string; eventId: number; action: OperatorAction;
-  actorUserId: number | null; reason: string; tenantId?: number | null;
-}): any {
+  actorUserId: number | null; reason: string; tenantId: number;
+}): Promise<any> {
+  const tenantId = requireQueueTenant(input.tenantId);
   const reason = String(input.reason ?? "").trim();
   if (reason.length < 3) throw new Error("A reason is required for queue operator actions.");
-  const state = getState(input.subscriber, input.eventId);
-  if (!state) throw new Error("No queue state for that event.");
+  if (!["RETRY", "DEAD_LETTER", "RESOLVE"].includes(input.action)) throw new Error("Invalid queue operator action.");
+
+  const ownedState = rawDb.prepare(`SELECT s.* FROM event_processing_state s
+    JOIN domain_events e ON e.id=s.event_id WHERE s.subscriber=? AND s.event_id=? AND e.tenant_id=?`);
+  const getOwnedState = () => {
+    const row = ownedState.get(input.subscriber, input.eventId, tenantId) as any;
+    if (!row) throw new QueueAccessError("QUEUE_EVENT_NOT_FOUND", 404, "No queue state for that event.");
+    return row;
+  };
+  getOwnedState(); // Denied/absent work takes no writer lease.
 
   const ts = now();
-  if (input.action === "RETRY") {
-    // Clear the backoff and the exhausted flag; the next drain picks it up.
-    upsertState(input.subscriber, input.eventId, {
-      status: "pending", retryable: 1, next_attempt_at: null,
-      lease_owner: null, lease_expires_at: null,
-      resolved_by: input.actorUserId, resolved_reason: reason, resolved_at: ts,
-    });
-  } else {
-    upsertState(input.subscriber, input.eventId, {
-      status: input.action === "DEAD_LETTER" ? "dead_lettered" : "resolved",
-      retryable: 0, next_attempt_at: null, lease_owner: null, lease_expires_at: null,
-      resolved_by: input.actorUserId, resolved_reason: reason, resolved_at: ts,
-    });
-  }
-  storage.logActivity(input.actorUserId, `event_queue.${input.action.toLowerCase()}`, "domain_event", input.eventId, {
-    subscriber: input.subscriber, reason,
-    previousStatus: state.status, attempts: state.attempts,
-    fingerprint: state.error_fingerprint,
-  }, undefined);
+  const state = await interactiveTransaction(rawDb, () => {
+    // Queue metadata is mutable and historically nullable. Only the immutable
+    // event establishes ownership; a cached tenant must never grant access.
+    const prior = getOwnedState();
+    const status = input.action === "RETRY" ? "pending" : input.action === "DEAD_LETTER" ? "dead_lettered" : "resolved";
+    rawDb.prepare(`UPDATE event_processing_state SET status=?,retryable=?,next_attempt_at=NULL,
+      lease_owner=NULL,lease_expires_at=NULL,resolved_by=?,resolved_reason=?,resolved_at=?,updated_at=?
+      WHERE subscriber=? AND event_id=? AND EXISTS
+        (SELECT 1 FROM domain_events e WHERE e.id=event_processing_state.event_id AND e.tenant_id=?)`)
+      .run(status, input.action === "RETRY" ? 1 : 0, input.actorUserId, reason, ts, ts, input.subscriber, input.eventId, tenantId);
+    storage.logActivity(input.actorUserId, `event_queue.${input.action.toLowerCase()}`, "domain_event", input.eventId, {
+      subscriber: input.subscriber, reason,
+      previousStatus: prior.status, attempts: prior.attempts,
+      fingerprint: prior.error_fingerprint,
+    }, undefined, tenantId);
+    return prior;
+  });
   structuredLog("event_queue.operator_action", {
     subscriber: input.subscriber, eventId: input.eventId, action: input.action,
-    actorUserId: input.actorUserId, previousStatus: state.status,
+    actorUserId: input.actorUserId, previousStatus: state.status, tenantId,
   });
   return getState(input.subscriber, input.eventId);
 }
@@ -240,23 +262,37 @@ export interface QueueHealth {
   halted: Array<{ eventId: number; tenantId: number | null; eventType: string | null; attempts: number; fingerprint: string | null; lastError: string | null; firstFailedAt: string | null }>;
   oldestFailureAgeMs: number | null;
   alerts: string[];
+  truncated: boolean;
 }
 
-export function queueHealth(subscriber: string, cursor: number, backlog: number, nowMs = Date.now()): QueueHealth {
-  const halted = rawDb.prepare(
-    `SELECT event_id AS eventId, tenant_id AS tenantId, event_type AS eventType, attempts,
-            error_fingerprint AS fingerprint, last_error AS lastError, first_failed_at AS firstFailedAt
-       FROM event_processing_state
-      WHERE subscriber = ? AND status IN ('blocked','failed')
-      ORDER BY event_id ASC`,
-  ).all(subscriber) as any[];
+export const QUEUE_REPORT_LIMIT = 200;
 
-  const oldest = halted.reduce<number | null>((acc, h) => {
-    const t = Date.parse(h.firstFailedAt ?? "");
-    if (!Number.isFinite(t)) return acc;
-    const age = nowMs - t;
-    return acc == null || age > acc ? age : acc;
-  }, null);
+/** Project the internal global checkpoint onto this organization's event stream.
+ * This is a read view; it never changes delivery ordering or worker progress. */
+function tenantProgress(subscriber: string, tenantId: number) {
+  const globalCursor = cursorFor(subscriber);
+  const cursor = (rawDb.prepare("SELECT COALESCE(MAX(id),0) n FROM domain_events WHERE tenant_id=? AND id<=?").get(tenantId, globalCursor) as { n: number }).n;
+  const backlog = (rawDb.prepare("SELECT COUNT(*) n FROM domain_events WHERE tenant_id=? AND id>?").get(tenantId, globalCursor) as { n: number }).n;
+  return { cursor, backlog };
+}
+
+export function queueHealth(subscriber: string, tenantId: number, nowMs = Date.now()): QueueHealth {
+  requireQueueTenant(tenantId);
+  const { cursor, backlog } = tenantProgress(subscriber, tenantId);
+  const rows = rawDb.prepare(
+    `SELECT s.event_id AS eventId, e.tenant_id AS tenantId, e.type AS eventType, s.attempts,
+            s.error_fingerprint AS fingerprint, s.last_error AS lastError, s.first_failed_at AS firstFailedAt
+       FROM event_processing_state s JOIN domain_events e ON e.id=s.event_id
+      WHERE s.subscriber=? AND e.tenant_id=? AND s.status IN ('blocked','failed')
+      ORDER BY s.event_id ASC LIMIT ?`,
+  ).all(subscriber, tenantId, QUEUE_REPORT_LIMIT + 1) as QueueHealth["halted"];
+  const halted = rows.slice(0, QUEUE_REPORT_LIMIT);
+
+  const first = (rawDb.prepare(`SELECT MIN(s.first_failed_at) first FROM event_processing_state s
+    JOIN domain_events e ON e.id=s.event_id WHERE s.subscriber=? AND e.tenant_id=? AND s.status IN ('blocked','failed')`)
+    .get(subscriber, tenantId) as { first: string | null }).first;
+  const firstMs = Date.parse(first ?? "");
+  const oldest = Number.isFinite(firstMs) ? Math.max(0, nowMs - firstMs) : null;
 
   const alerts: string[] = [];
   for (const h of halted) {
@@ -267,10 +303,7 @@ export function queueHealth(subscriber: string, cursor: number, backlog: number,
   if (oldest != null && oldest > ALERT_QUEUE_AGE_MS) {
     alerts.push(`queue has been halted for ${Math.round(oldest / 60_000)} minutes`);
   }
-  if (alerts.length > 0) {
-    structuredLog("event_queue.alert", { subscriber, halted: halted.length, oldestFailureAgeMs: oldest, backlog }, "error");
-  }
-  return { subscriber, cursor, backlog, halted, oldestFailureAgeMs: oldest, alerts };
+  return { subscriber, cursor, backlog, halted, oldestFailureAgeMs: oldest, alerts, truncated: rows.length > QUEUE_REPORT_LIMIT };
 }
 
 /**
@@ -280,25 +313,29 @@ export function queueHealth(subscriber: string, cursor: number, backlog: number,
  * cursor where the completed work says it should be, is anything still holding
  * the queue, and did the retries leave duplicate ledger effects behind.
  */
-export function recoveryReport(subscriber: string, cursor: number): {
+export function recoveryReport(subscriber: string, tenantId: number): {
   subscriber: string; cursor: number;
   cursorConsistent: boolean; highestCompleted: number;
   stillHolding: number[]; operatorCleared: number[];
   duplicateAwards: Array<{ sourceEventId: number; repId: number; n: number }>;
+  truncated: boolean;
 } {
+  requireQueueTenant(tenantId);
+  const { cursor } = tenantProgress(subscriber, tenantId);
   const highest = Number((rawDb.prepare(
-    `SELECT COALESCE(MAX(event_id), 0) AS m FROM event_processing_state WHERE subscriber = ? AND status = 'completed'`,
-  ).get(subscriber) as any)?.m ?? 0);
+    `SELECT COALESCE(MAX(s.event_id), 0) AS m FROM event_processing_state s
+      JOIN domain_events e ON e.id=s.event_id WHERE s.subscriber=? AND e.tenant_id=? AND s.status='completed'`,
+  ).get(subscriber, tenantId) as any)?.m ?? 0);
 
   const stillHolding = (rawDb.prepare(
-    `SELECT event_id AS id FROM event_processing_state
-      WHERE subscriber = ? AND status IN ('blocked','failed','processing') ORDER BY event_id ASC`,
-  ).all(subscriber) as any[]).map(r => Number(r.id));
+    `SELECT s.event_id AS id FROM event_processing_state s JOIN domain_events e ON e.id=s.event_id
+      WHERE s.subscriber=? AND e.tenant_id=? AND s.status IN ('blocked','failed','processing') ORDER BY s.event_id ASC LIMIT ?`,
+  ).all(subscriber, tenantId, QUEUE_REPORT_LIMIT + 1) as any[]).map(r => Number(r.id));
 
   const operatorCleared = (rawDb.prepare(
-    `SELECT event_id AS id FROM event_processing_state
-      WHERE subscriber = ? AND status IN ('dead_lettered','resolved') ORDER BY event_id ASC`,
-  ).all(subscriber) as any[]).map(r => Number(r.id));
+    `SELECT s.event_id AS id FROM event_processing_state s JOIN domain_events e ON e.id=s.event_id
+      WHERE s.subscriber=? AND e.tenant_id=? AND s.status IN ('dead_lettered','resolved') ORDER BY s.event_id ASC LIMIT ?`,
+  ).all(subscriber, tenantId, QUEUE_REPORT_LIMIT + 1) as any[]).map(r => Number(r.id));
 
   // The idempotency proof: one event must never have produced two awards for
   // the same rep. A retry that double-paid would show up here.
@@ -306,15 +343,20 @@ export function recoveryReport(subscriber: string, cursor: number): {
     && (rawDb.prepare(`PRAGMA table_info(spiffs)`).all() as any[]).some((c: any) => c.name === "source_event_id");
   const duplicateAwards = !hasSpiffs ? [] : (rawDb.prepare(
     `SELECT source_event_id AS sourceEventId, rep_id AS repId, COUNT(*) AS n
-       FROM spiffs WHERE source_event_id IS NOT NULL
-      GROUP BY source_event_id, rep_id HAVING COUNT(*) > 1`,
-  ).all() as any[]).map(r => ({ sourceEventId: Number(r.sourceEventId), repId: Number(r.repId), n: Number(r.n) }));
+       FROM spiffs WHERE tenant_id=? AND source_event_id IS NOT NULL AND EXISTS
+         (SELECT 1 FROM domain_events e WHERE e.id=spiffs.source_event_id AND e.tenant_id=?)
+      GROUP BY source_event_id, rep_id HAVING COUNT(*) > 1 ORDER BY source_event_id,rep_id LIMIT ?`,
+  ).all(tenantId, tenantId, QUEUE_REPORT_LIMIT + 1) as any[]).map(r => ({ sourceEventId: Number(r.sourceEventId), repId: Number(r.repId), n: Number(r.n) }));
 
   return {
     subscriber, cursor,
-    // The cursor must not have outrun what actually committed.
-    cursorConsistent: cursor <= Math.max(highest, cursor === 0 ? 0 : cursor) && cursor >= 0 && (highest === 0 || cursor >= highest),
+    // A completed local event ahead of the visible checkpoint needs recovery.
+    // This tenant view does not assert the global queue's full consistency.
+    cursorConsistent: cursor >= highest,
     highestCompleted: highest,
-    stillHolding, operatorCleared, duplicateAwards,
+    stillHolding: stillHolding.slice(0, QUEUE_REPORT_LIMIT),
+    operatorCleared: operatorCleared.slice(0, QUEUE_REPORT_LIMIT),
+    duplicateAwards: duplicateAwards.slice(0, QUEUE_REPORT_LIMIT),
+    truncated: [stillHolding, operatorCleared, duplicateAwards].some(rows => rows.length > QUEUE_REPORT_LIMIT),
   };
 }

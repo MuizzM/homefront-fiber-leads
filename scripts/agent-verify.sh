@@ -11,6 +11,7 @@ if [[ "$mode" == "harness" ]]; then
 fi
 
 bash tests/deployment-safety.sh
+npm run check:indexes
 npm run check
 npm run check:fast
 

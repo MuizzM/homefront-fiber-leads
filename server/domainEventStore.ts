@@ -58,6 +58,8 @@ export function ensureDomainEventSchema(): void {
     -- The subscriber's read path: "everything after cursor N", id-ordered.
     CREATE INDEX IF NOT EXISTS idx_domain_events_cursor
       ON domain_events(id, tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_domain_events_tenant_cursor
+      ON domain_events(tenant_id, id);
     -- Reporting: "what happened to this thing?" and "what happened to this rep?"
     CREATE INDEX IF NOT EXISTS idx_domain_events_subject
       ON domain_events(tenant_id, subject_type, subject_id, id);

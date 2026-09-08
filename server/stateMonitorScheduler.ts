@@ -10,6 +10,7 @@ import { clusterFreshFiber } from "@shared/freshFiberClusters";
 import { structuredLog } from "./structuredLog";
 import { pollAnnouncementsIfDue } from "./announcementWatcher";
 import { refreshKineticLocationDirectory } from "./kineticMarketCatalog";
+import { pruneTenantAlertBacklogs } from "./alertOutboxMaintenance";
 
 interface MonitorStatus {
   enabled: boolean;
@@ -41,7 +42,7 @@ let catalogInitialized = false;
 //      failures, stop draining for OUTBOX_BREAKER_PAUSE_MS (quota exhaustion isn't
 //      going to clear in the next 30s; retrying is pure CPU + log burn).
 //   3. BOOT JANITOR (pruneAlertOutboxBacklog) — chunked, yielding sweep that
-//      supersedes all but the newest OUTBOX_PENDING_CAP pending rows.
+//      supersedes all but the newest OUTBOX_PENDING_CAP pending rows per tenant.
 const OUTBOX_PENDING_CAP = Math.max(100, Number(process.env.OUTBOX_PENDING_CAP ?? 2_000) || 2_000);
 const OUTBOX_BREAKER_THRESHOLD = Math.max(3, Number(process.env.OUTBOX_BREAKER_THRESHOLD ?? 10) || 10);
 const OUTBOX_BREAKER_PAUSE_MS = Math.max(60_000, Number(process.env.OUTBOX_BREAKER_PAUSE_MS ?? 6 * 60 * 60_000) || 6 * 60 * 60_000);
@@ -55,33 +56,11 @@ let outboxPausedUntil = 0;
 // janitor mid-prune.
 const IS_OUTBOX_CONTROL = process.env.HF_ROLE ? process.env.HF_ROLE === "control" : true;
 
-/** Supersede all but the newest `keep` pending fresh_fiber outbox rows, in bounded
- *  chunks with an event-loop yield between each so a million-row backlog can never
- *  block /api. Skips rows a live drain currently holds leased (their delivery
- *  outcome must win); retries a chunk through transient SQLITE_BUSY so one
- *  contended write can't kill the one-shot boot prune. Idempotent. */
+/** Retention shares the enqueue cap's per-tenant ownership, including on restart.
+ * Chunks yield and use a bounded async retry; ongoing sends retain their leases. */
 export async function pruneAlertOutboxBacklog(keep = OUTBOX_PENDING_CAP): Promise<number> {
-  const cutoff = rawDb.prepare(`SELECT id FROM notification_outbox WHERE kind='fresh_fiber' AND status='pending'
-    ORDER BY id DESC LIMIT 1 OFFSET ?`).get(keep) as any;
-  if (!cutoff?.id) return 0;
-  const chunk = rawDb.prepare(`UPDATE notification_outbox SET status='superseded', last_error='outbox backlog pruned', lease_owner=NULL, lease_expires_at=NULL
-    WHERE id IN (SELECT id FROM notification_outbox WHERE kind='fresh_fiber' AND status='pending' AND id<=?
-      AND (lease_expires_at IS NULL OR lease_expires_at<=datetime('now')) LIMIT 10000)`);
-  let total = 0;
-  for (;;) {
-    let changed = -1;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try { changed = chunk.run(cutoff.id).changes; break; }
-      catch (e: any) {
-        if (attempt === 3 || !/busy|locked/i.test(String(e?.message))) throw e;
-        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
-      }
-    }
-    total += Math.max(0, changed);
-    if (changed < 10000) break;
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  if (total > 0) structuredLog("state_monitor.outbox_pruned", { superseded: total, kept: keep });
+  const total = await pruneTenantAlertBacklogs(rawDb, keep);
+  if (total > 0) structuredLog("state_monitor.outbox_pruned", { superseded: total, keptPerTenant: keep });
   return total;
 }
 

@@ -41,6 +41,9 @@ jobs:
       - name: Type-check (tsc — strict, noUnused*)
         run: npm run check
 
+      - name: Check SQLite index definitions
+        run: npm run check:indexes
+
       - name: Type-check (tsgo — fast native compiler)
         run: npm run check:fast
 

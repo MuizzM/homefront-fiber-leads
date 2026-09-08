@@ -216,10 +216,11 @@ export function reconcile(opts: { tenantId?: number | null; nowIso: string; runI
   // ── 8. Queue events holding the line ───────────────────────────────────────
   if (tableExists("event_processing_state")) {
     for (const r of rawDb.prepare(
-      `SELECT event_id AS eventId, tenant_id AS tenantId, subscriber, status, attempts,
-              error_fingerprint AS fingerprint, first_failed_at AS firstFailedAt
-         FROM event_processing_state
-        WHERE status IN ('blocked','failed') ${tenantId == null ? "" : "AND (tenant_id = ? OR tenant_id IS NULL)"}`,
+      `SELECT s.event_id AS eventId, e.tenant_id AS tenantId, s.subscriber, s.status, s.attempts,
+              s.error_fingerprint AS fingerprint, s.first_failed_at AS firstFailedAt
+         FROM event_processing_state s JOIN domain_events e ON e.id=s.event_id
+        WHERE s.status IN ('blocked','failed') ${tenantId == null ? "" : "AND e.tenant_id = ?"}
+        ORDER BY s.event_id`,
     ).all(...(tenantId == null ? [] : [tenantId])) as any[]) {
       push({
         kind: "BLOCKED_QUEUE_EVENT", severity: r.status === "blocked" ? "critical" : "warning",

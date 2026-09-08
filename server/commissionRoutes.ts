@@ -18,7 +18,7 @@ import { buildStatementDocumentFor } from "./commissionStatementDoc";
 import { renderCommissionStatementPdf } from "./commissionStatementPdf";
 import { reconcile } from "./commissionReconciliation";
 import * as queueOps from "./eventQueueOps";
-import { cursorFor, backlogFor } from "./domainEventStore";
+import { isSqliteContention } from "./interactiveDb";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -54,6 +54,7 @@ export function canReadRep(user: any, repId: number): boolean {
 // Map a thrown CommissionError / ReserveError to its HTTP status; everything
 // else is a 500. Both carry {code, httpStatus} so the mapping is identical.
 function fail(res: Response, e: unknown) {
+  if (e instanceof queueOps.QueueAccessError) return res.status(e.httpStatus).json({ error: e.message, code: e.code });
   if (e instanceof svc.CommissionError) return res.status(e.httpStatus).json({ error: e.message, code: e.code });
   if (e instanceof reserve.ReserveError) return res.status(e.httpStatus).json({ error: e.message, code: e.code });
   const msg = e instanceof Error ? e.message : "Internal error";
@@ -627,7 +628,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   app.get("/api/commission/reconciliation", requireCapability("audit.read.org"), (req, res) => {
     try {
       const nowIso = new Date().toISOString();
-      const report = reconcile({ tenantId: tid(req), nowIso, runId: `recon:${tid(req)}:${nowIso}` });
+      const report = reconcile({ tenantId: queueOps.requireQueueTenant(tid(req)), nowIso, runId: `recon:${tid(req)}:${nowIso}` });
       res.json(report);
     } catch (e) { fail(res, e); }
   });
@@ -636,7 +637,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   app.get("/api/commission/reconciliation.csv", requireCapability("audit.read.org"), (req, res) => {
     try {
       const nowIso = new Date().toISOString();
-      const report = reconcile({ tenantId: tid(req), nowIso, runId: `recon:${tid(req)}:${nowIso}` });
+      const report = reconcile({ tenantId: queueOps.requireQueueTenant(tid(req)), nowIso, runId: `recon:${tid(req)}:${nowIso}` });
       const rows = [
         "Kind,Severity,Tenant,Rep,Sale,Week,Correlation,Detail",
         ...report.findings.map(f => [
@@ -653,33 +654,37 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
 
   // Queue health for the incentive subscriber: what is halted, for how long, and
   // whether anything has crossed an alert threshold.
-  app.get("/api/commission/queue/health", requireCapability("audit.read.org"), (_req, res) => {
+  app.get("/api/commission/queue/health", requireCapability("audit.read.org"), (req, res) => {
     try {
       const subscriber = "incentives";
-      res.json(queueOps.queueHealth(subscriber, cursorFor(subscriber), backlogFor(subscriber)));
+      res.json(queueOps.queueHealth(subscriber, tid(req)));
     } catch (e) { fail(res, e); }
   });
 
-  app.get("/api/commission/queue/recovery", requireCapability("audit.read.org"), (_req, res) => {
+  app.get("/api/commission/queue/recovery", requireCapability("audit.read.org"), (req, res) => {
     try {
       const subscriber = "incentives";
-      res.json(queueOps.recoveryReport(subscriber, cursorFor(subscriber)));
+      res.json(queueOps.recoveryReport(subscriber, tid(req)));
     } catch (e) { fail(res, e); }
   });
 
   // The only WRITE here, and it moves no money — it decides whether the queue
   // may advance. settings.manage.org (admin/owner) plus a mandatory reason.
-  app.post("/api/commission/queue/events/:eventId/action", requireCapability("settings.manage.org"), (req, res) => {
+  app.post("/api/commission/queue/events/:eventId/action", requireCapability("settings.manage.org"), async (req, res) => {
     const { action, reason } = req.body || {};
     if (!["RETRY", "DEAD_LETTER", "RESOLVE"].includes(action)) {
       return res.status(400).json({ error: "action must be RETRY, DEAD_LETTER or RESOLVE" });
     }
     try {
-      res.json(queueOps.operatorAction({
+      res.json(await queueOps.operatorAction({
         subscriber: "incentives", eventId: Number(req.params.eventId),
         action, actorUserId: uid(req), reason: String(reason ?? ""), tenantId: tid(req),
       }));
     } catch (e: any) {
+      if (isSqliteContention(e)) {
+        res.setHeader("Retry-After", "1");
+        return res.status(503).json({ error: "Queue recovery is busy. Try again shortly.", code: "QUEUE_BUSY" });
+      }
       if (/reason is required/i.test(e?.message ?? "")) return res.status(400).json({ error: e.message, code: "REASON_REQUIRED" });
       fail(res, e);
     }
