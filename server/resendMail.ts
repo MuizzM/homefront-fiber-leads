@@ -3,9 +3,9 @@
 // NOT a duplicate of server/mail.ts, and the two must not be merged. That
 // module is the nodemailer/SMTP rail with 587<->465 port failover (built after
 // the 2026-07-16 Resend port outage) and carries the branded HTML shell for
-// OTP and alert mail. This one is the Resend HTTP API, used only by the
-// onboarding-signature flow, and the per-message Idempotency-Key below plus the
-// content_id attachment mapping exist ONLY on this path. Merging the transports
+// OTP and alert mail. This HTTP API carries onboarding signatures and the
+// durable OTP worker. Its stable Idempotency-Key and frozen content let the
+// durable worker recover a lost acknowledgement without changing the message. Merging the transports
 // changes delivery behaviour: double-send risk on SMTP retries, or loss of
 // failover on HTTP. The shared knowledge is the credential convention only —
 // apiKey() falls back to SMTP_PASS when SMTP_HOST=smtp.resend.com, the same
@@ -19,6 +19,8 @@ interface ResendAttachment {
 }
 
 interface ResendMessage {
+  from?: string;
+  signal?: AbortSignal;
   to: string;
   subject: string;
   html: string;
@@ -44,7 +46,7 @@ export function resendConfigured(): boolean {
   return localDeliveryMode() || Boolean(apiKey() && (process.env.RESEND_FROM || process.env.MAIL_FROM));
 }
 
-function sender(): string {
+export function resendSender(): string {
   return process.env.RESEND_FROM?.trim() || process.env.MAIL_FROM?.trim() || "";
 }
 
@@ -55,7 +57,7 @@ export async function sendResendEmail(message: ResendMessage): Promise<{ id: str
     return { id };
   }
   const key = apiKey();
-  const from = sender();
+  const from = message.from ?? resendSender();
   if (!key || !from) throw new Error("Resend email is not configured");
 
   const response = await fetch("https://api.resend.com/emails", {
@@ -79,13 +81,20 @@ export async function sendResendEmail(message: ResendMessage): Promise<{ id: str
       })),
       tags: message.tags,
     }),
-    signal: AbortSignal.timeout(12_000),
+    signal: message.signal ? AbortSignal.any([message.signal, AbortSignal.timeout(12_000)]) : AbortSignal.timeout(12_000),
   });
 
-  const payload = await response.json().catch(() => ({})) as { id?: string; message?: string; error?: string };
-  if (!response.ok || !payload.id) {
-    const reason = payload.message || payload.error || response.statusText;
-    throw new Error(`Resend delivery failed (${response.status}): ${String(reason).slice(0, 240)}`);
+  const payload = await response.json().catch(() => ({})) as { id?: string; name?: string; message?: string; error?: string };
+  if (!response.ok || typeof payload.id !== "string" || !payload.id.trim()) {
+    throw new ResendDeliveryError(response.status, response.ok || response.status >= 500 || response.status === 429 || (response.status === 409 && payload.name === "concurrent_idempotent_requests"));
   }
   return { id: payload.id };
+}
+
+/** Safe machine-readable outcome; never persist a provider body containing PII. */
+export class ResendDeliveryError extends Error {
+  constructor(public readonly status: number, public readonly retryable: boolean) {
+    super(`Resend delivery failed (${status})`);
+    this.name = "ResendDeliveryError";
+  }
 }

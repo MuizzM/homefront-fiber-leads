@@ -31,20 +31,20 @@ beforeAll(async()=>{
   })();
   const spy=vi.spyOn(db,"prepare");store.countClaimableQueued();store.getStrandedDoneRuns();
   const sql=spy.mock.calls.map(([query])=>query);spy.mockRestore();
-  queries={count:sql.find(query=>query.includes("COUNT(*) c FROM scan_run_targets"))!,stranded:sql.find(query=>query.includes("SELECT r.id"))!};
+  queries={count:sql.find(query=>query.includes("SELECT COUNT(*) FROM scan_run_targets"))!,stranded:sql.find(query=>query.includes("SELECT r.id"))!};
 });
-it("uses the small existing pending index in both actual queries, before and after ANALYZE",()=>{
+it("uses the covering pending due-time ranges in both actual queries, before and after ANALYZE",()=>{
   for(const analyze of [false,true]){
     if(analyze)db.exec("ANALYZE");
     for(const [kind,sql] of Object.entries(queries)){
       const args=kind==="count"?[]:[10];
       const plan=db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args).map((r:any)=>r.detail).join("\n");
-      expect(plan).toMatch(/SEARCH (?:t|scan_run_targets) USING INDEX idx_srt_pending \(state=\?\)/);
+      expect(plan).toMatch(/SEARCH (?:t|scan_run_targets) USING COVERING INDEX idx_srt_pending_due_run \(state=\? AND next_attempt_at[=<]\?\)/);
     }
   }
 });
 it("preserves due times, run states, counts and complete row ordering across three tenants",()=>{
-  const originalCount=queries.count.replace(" AND state IN ('queued','inflight')","");
+  const originalCount="SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))";
   expect(store.countClaimableQueued()).toBe(15);
   expect(db.prepare(queries.count).get()).toEqual(db.prepare(originalCount).get());
   const originalRuns=queries.stranded.replace(" AND t.state IN ('queued','inflight')","");

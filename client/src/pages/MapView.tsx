@@ -1694,7 +1694,8 @@ export default function MapView() {
       });
       exitLasso();
     },
-    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ["/api/leads/assignment-operations"] }); },
+    onError: (e: any) => toast({ title: e.message, description: "Open Operations to recover an interrupted assignment.", variant: "destructive" }),
   });
 
   // Put a lasso assignment back. One-use token, same user, inside the window.
@@ -1713,8 +1714,14 @@ export default function MapView() {
       clearAssignResultTimer();
       assignResultDismissTimer.current = setTimeout(() => setAssignResult(null), 8_000);
     },
-    onError: (e: any) => {
-      // The token is spent on redemption (documented single use), so there is
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ["/api/leads/assignment-operations"] }); },
+    onError: (e: any, token: string) => {
+      if (token.startsWith("durable-")) {
+        setAssignResult(r => r ? { ...r, undoPending: false } : r);
+        toast({ title: "Put back paused", description: "Retry Put back or open Operations to continue the same work.", variant: "destructive" });
+        return;
+      }
+      // The legacy token is spent on redemption (documented single use), so there is
       // no retry to offer - the bar states what happened instead.
       setAssignResult(r => (r ? { ...r, undoPending: false, undoError: String(e?.message ?? "The undo did not complete") } : r));
     },

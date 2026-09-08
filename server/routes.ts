@@ -1,3 +1,9 @@
+import { requestSessionCurrent } from "./recoveryAuthority";
+import { recoverySnapshot, discardDelivery } from "./reliabilityRecovery";
+import * as durableAssignment from "./assignmentOperationStore";
+import { reliableOtpEnabled, reliabilityEnabled } from "./reliabilityFeatures";
+import { assertReliableOtpReady, otpSender } from "./otpDeliveryWorker";
+import { issueDurableOtp } from "./otpDeliveryStore";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
@@ -27,7 +33,7 @@ import {
 } from "./territoryPass";
 import { isTerritoryPassAction, type TerritoryPassAction } from "@shared/territoryPass";
 import { rawDb } from "./db";
-import { interactiveTransaction, withoutSqliteBusyWait } from "./interactiveDb";
+import { interactiveTransaction, retrySqliteOperation, isSqliteContention, withoutSqliteBusyWait } from "./interactiveDb";
 import {
   emitLeadEvent, onLeadEvent, eventsSince, leadEventsCursor, leadEventsEpoch,
   type LeadEvent, type LeadEventType,
@@ -366,6 +372,12 @@ function otpMessage(to: string, code: string, name: string) {
         emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. Never share it - Home Front Solutions will never ask you for it.`),
     }),
   };
+}
+
+function durableOtpMessage(to: string, code: string, name: string) {
+  const logo = logoAttachment();
+  return { ...otpMessage(to, code, name), from: otpSender(),
+    attachments: logo ? [{ filename: logo.filename, content: fs.readFileSync(logo.path).toString("base64"), contentId: logo.cid }] : [] };
 }
 
 async function sendOtpEmail(to: string, code: string, name: string): Promise<"email" | "console"> {
@@ -1347,7 +1359,7 @@ interface AssignUndoEntry {
    *  deliberately re-assigned to the SAME rep after this write (an ABA) is
    *  left alone instead of silently reverted to its pre-lasso owner. */
   appliedAt: string | null;
-  prior: Array<{ id: number; assignedRepId: number | null; assignedBy: string | null; assignedAt: string | null; unassignedAt: string | null }>;
+  prior: Array<{ id: number; assignedRepId: number | null; assignedBy: string | null; assignedAt: string | null; unassignedAt: string | null; assignmentVersion: number }>;
   expiresAt: number;
 }
 const assignUndo = new Map<string, AssignUndoEntry>();
@@ -4008,10 +4020,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ones, across every confirmed NC/SC Kinetic city. Also runs nightly (cron).
   app.post("/api/scan/daily-refresh", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
     void runDailyMarketRefresh(tid(req)).catch(() => {});
-    res.status(202).json(getDailyRefreshStatus());
+    res.status(202).json(getDailyRefreshStatus(tid(req)));
   });
-  app.get("/api/scan/daily-refresh", requireManager, (_req, res) => {
-    res.json(getDailyRefreshStatus());
+  app.get("/api/scan/daily-refresh", requireManager, (req, res) => {
+    res.json(getDailyRefreshStatus(tid(req)));
   });
 
   // Internal use only — not exposed to frontend
@@ -6288,6 +6300,111 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(stripProviderIds(updated, user));
   });
 
+  function durableAssignmentAuthority(owner: durableAssignment.AssignmentOwner) {
+    return (repId: number | null, undo: boolean): durableAssignment.AssignmentAuthority => {
+      const actor = storage.getUserById(owner.userId);
+      if (!requestSessionCurrent(rawDb, owner) || !actor?.active || actor.tenantId !== owner.tenantId || !hasCapability(actor.role, "lead.assign")) {
+        throw new durableAssignment.AssignmentOperationError("FORBIDDEN", 403, "Assignment access has changed");
+      }
+      const target = repId == null ? null : storage.getTeamMemberById(repId);
+      if (!undo && repId != null && (!target?.active || target.tenantId !== owner.tenantId || !repInVisibilityScope(actor, repId))) {
+        throw new durableAssignment.AssignmentOperationError("OUT_OF_SCOPE", 403, "That rep is no longer available for this assignment");
+      }
+      return { actorName: actor.name, repName: target?.name ?? null, scope: leadVisibilityScope(actor) as number[] | undefined };
+    };
+  }
+  function durableAssignmentPublisher(user: any, tenantId: number) {
+    let emitted = 0;
+    return (ids: number[]) => {
+      bustMapCache(tenantId);
+      emitLeadChangesBulk("assignment", ids.slice(0, Math.max(0, LEAD_EVENT_BULK_MAX - emitted)), user, tenantId);
+      emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + ids.length);
+    };
+  }
+  function assignmentFailure(res: Response, error: unknown, op?: durableAssignment.AssignmentOperation) {
+    if (error instanceof durableAssignment.AssignmentOperationError) return res.status(error.status).json({ error: error.message, code: error.code });
+    structuredLog("assignment.recovery_required", { operationId: op?.id ?? null, code: isSqliteContention(error) ? "database_busy" : "assignment_failed" }, "warn");
+    return res.setHeader("Retry-After", "1").status(503).json({ error: "Assignment paused. Retry to continue the same operation.",
+      code: "ASSIGN_INCOMPLETE", operationId: op?.id, updated: op?.updated ?? 0, total: op?.total ?? 0 });
+  }
+  async function tryDurableAssignment(req: Request, res: Response, kind: durableAssignment.AssignmentKind, repId: number | null,
+    resolve: () => { ids: number[]; metadata: object } | { fail: { status: number; payload: unknown } }): Promise<boolean> {
+    const user = (req as any).user;
+    const owner = { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") };
+    const enabled = reliabilityEnabled("IDEMPOTENT_ASSIGNMENT", owner.tenantId);
+    const clientId = typeof req.body?.opId === "string" ? req.body.opId : "";
+    let op: durableAssignment.AssignmentOperation | undefined;
+    try {
+      if (owner.tenantId && clientId) op = durableAssignment.findAssignmentOperation(rawDb, owner, kind, clientId);
+      if (!enabled && !op) return false;
+      durableAssignment.requireAssignmentOwner(owner);
+      if (!/^[\w-]{1,80}$/.test(clientId)) throw new durableAssignment.AssignmentOperationError("OP_ID_REQUIRED", 400, "A valid operation id is required");
+      const requestHash = durableAssignment.assignmentFingerprint(kind, req.body);
+      if (op && op.request_hash !== requestHash) throw new durableAssignment.AssignmentOperationError("OP_REUSED", 409, "That operation id was already used for different work");
+      if (!op) {
+        durableAssignmentAuthority(owner)(repId, false);
+        const selection = resolve();
+        if ("fail" in selection) { res.status(selection.fail.status).json(selection.fail.payload); return true; }
+        op = await durableAssignment.admitAssignmentOperation(rawDb, owner, { kind, clientId, requestHash, repId, ...selection,
+          authorize: () => { durableAssignmentAuthority(owner)(repId, false); } });
+      } else {
+        await interactiveTransaction(rawDb, () => rawDb.prepare(`UPDATE assignment_operations SET replays=replays+1 WHERE id=? AND tenant_id=? AND actor_user_id=?`).run(op!.id, owner.tenantId, owner.userId));
+      }
+      op = await durableAssignment.continueAssignmentOperation(rawDb, owner, op.id, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId));
+      res.json(JSON.parse(op.result!));
+    } catch (error) {
+      if (op) op = durableAssignment.getAssignmentOperation(rawDb, owner, op.id) ?? op;
+      assignmentFailure(res, error, op);
+    }
+    return true;
+  }
+
+  app.get("/api/reliability/recovery", requireCapability("audit.read.org"), (req, res) => {
+    try {
+      const user = (req as any).user;
+      durableAssignment.requireAssignmentOwner({ tenantId: user?.tenantId, userId: user?.id });
+      const snapshot = recoverySnapshot(rawDb, user.tenantId);
+      const enabled = reliabilityEnabled("DEAD_LETTER_UI", user.tenantId) || snapshot.items.length > 0
+        || snapshot.pendingAssignments.length > 0 || snapshot.queue.length > 0 || snapshot.scanners.length > 0;
+      res.json({ enabled, scannerMonitoringEnabled: reliabilityEnabled("SCANNER_HEARTBEAT", user.tenantId), canManage: hasCapability(user.role, "settings.manage.org"), ...snapshot });
+    } catch (error) { assignmentFailure(res, error); }
+  });
+  app.post("/api/reliability/recovery/:category/:id/discard", requireCapability("settings.manage.org"), async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const category = String(req.params.category);
+      if (category !== "login" && category !== "notification") return res.status(400).json({ error: "Invalid recovery category" });
+      res.json(await discardDelivery(rawDb, { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") }, category, String(req.params.id), String(req.body?.reason ?? "")));
+    } catch (error) { assignmentFailure(res, error); }
+  });
+  app.post("/api/reliability/assignments/:id/stop", requireCapability("settings.manage.org"), async (req, res) => {
+    try {
+      const user = (req as any).user;
+      res.json({ stopped: await durableAssignment.stopAssignmentOperation(rawDb, { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") }, String(req.params.id), String(req.body?.reason ?? "")) });
+    } catch (error) { assignmentFailure(res, error); }
+  });
+
+  app.get("/api/leads/assignment-operations", requireCapability("lead.assign"), (req, res) => {
+    try {
+      const user = (req as any).user;
+      res.json({ operations: durableAssignment.listAssignmentOperations(rawDb, { tenantId: user?.tenantId, userId: user?.id }).map(durableAssignment.assignmentOperationSummary) });
+    } catch (error) { assignmentFailure(res, error); }
+  });
+  app.post("/api/leads/assignment-operations/:id/resume", requireCapability("lead.assign"), async (req, res) => {
+    const user = (req as any).user, owner = { tenantId: user?.tenantId, userId: user?.id, sessionId: String(req.headers["x-session-id"] ?? "") };
+    let op: durableAssignment.AssignmentOperation | undefined;
+    try {
+      op = durableAssignment.getAssignmentOperation(rawDb, owner, String(req.params.id));
+      if (!op) throw new durableAssignment.AssignmentOperationError("NOT_FOUND", 404, "Assignment not found");
+      if (op.state === "undoing" || op.state === "undone") {
+        const result = await durableAssignment.undoAssignmentOperation(rawDb, owner, op.undo_token!, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId));
+        return res.json(result);
+      }
+      op = await durableAssignment.continueAssignmentOperation(rawDb, owner, op.id, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId));
+      res.json(JSON.parse(op.result!));
+    } catch (error) { assignmentFailure(res, error, op); }
+  });
+
   // ── Bulk assign leads to a rep (lasso selection) ────────────────────────────
   // ── The one assignment writer ───────────────────────────────────────────────
   // WHOLE-TERRITORY ASSIGNMENT. The original per-id loop ran ~3 synchronous
@@ -6341,13 +6458,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // assignment, and a failure leaves whole chunks applied rather than a
       // half-written row.
       const applyChunk = rawDb.transaction(() => {
+        let chunkPrior: AssignUndoEntry["prior"] = [];
         // The rows as they are BEFORE this write, same predicates as the write.
         if (snapshot) {
           const rows = rawDb.prepare(
-            `SELECT id, assigned_rep_id AS assignedRepId, assigned_by AS assignedBy, assigned_at AS assignedAt, unassigned_at AS unassignedAt
+            `SELECT id, assigned_rep_id AS assignedRepId, assigned_by AS assignedBy, assigned_at AS assignedAt, unassigned_at AS unassignedAt, assignment_version AS assignmentVersion
                FROM leads WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
           ).all(...chunk) as AssignUndoEntry["prior"];
-          prior.push(...rows);
+          chunkPrior = rows;
         }
         // Assignment events first — they must see the PRE-update rows, and
         // only for leads this caller is actually allowed to move.
@@ -6363,17 +6481,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // silently and a live event addressed from `chunk` would announce doors
         // that were never touched. One returned row per updated row, so the
         // caller's count is unchanged.
-        return rawDb.prepare(
+        const changed = rawDb.prepare(
           `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?,
                   unassigned_at = CASE WHEN ? IS NULL THEN datetime('now') ELSE unassigned_at END,
                   updated_at = datetime('now')
             WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}
         RETURNING id`,
         ).all(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk) as Array<{ id: number }>;
+        return { changed, chunkPrior };
       });
       let changed: Array<{ id: number }>;
       try {
-        changed = applyChunk.immediate() as Array<{ id: number }>;
+        const committed = await retrySqliteOperation(rawDb, () => applyChunk.immediate());
+        changed = committed.changed; prior.push(...committed.chunkPrior);
       } catch (err) {
         structuredLog("lead.assign.chunk_failed", { at: i, of: ids.length, updated, error: String((err as Error)?.message ?? err) }, "error");
         incomplete = true;
@@ -6455,6 +6575,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const token = typeof req.body?.token === "string" ? req.body.token : "";
+    if (token.startsWith("durable-")) {
+      try {
+        const owner = { tenantId: tid, userId: user.id, sessionId: String(req.headers["x-session-id"] ?? "") } as durableAssignment.AssignmentOwner;
+        return res.json(await durableAssignment.undoAssignmentOperation(rawDb, owner, token, durableAssignmentAuthority(owner), durableAssignmentPublisher(user, owner.tenantId)));
+      } catch (error) { return assignmentFailure(res, error); }
+    }
     const entry = token ? assignUndo.get(token) : undefined;
     if (!entry || entry.expiresAt <= Date.now()) {
       if (token) assignUndo.delete(token);
@@ -6477,14 +6603,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // unassign, which degrades to the original rep-only behaviour.
         const put = rawDb.prepare(
           `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?, unassigned_at = ?, updated_at = datetime('now')
-            WHERE id = ? AND ${tenantSql} AND assigned_rep_id IS ? AND assigned_at IS ?
+            WHERE id = ? AND ${tenantSql} AND assigned_rep_id IS ? AND assigned_at IS ? AND assignment_version=?
         RETURNING id`,
         );
         const event = rawDb.prepare(`INSERT INTO lead_events (lead_id, type, actor, detail, at) VALUES (?, 'assignment', ?, ?, datetime('now'))`);
         const done: number[] = [];
         for (const row of chunk) {
-          const hit = put.get(row.assignedRepId, row.assignedBy, row.assignedAt, row.unassignedAt, row.id, entry.appliedRepId, entry.appliedAt) as { id: number } | undefined;
-          if (!hit) { skipped++; continue; }
+          const hit = put.get(row.assignedRepId, row.assignedBy, row.assignedAt, row.unassignedAt, row.id, entry.appliedRepId, entry.appliedAt, row.assignmentVersion + 1) as { id: number } | undefined;
+          if (!hit) continue;
           done.push(hit.id);
           event.run(hit.id, user?.name ?? null, JSON.stringify({ assignedTo: priorName(row.assignedRepId), assignedBy: user?.name ?? null, undo: true }));
         }
@@ -6492,7 +6618,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
       let changed: number[];
       try {
-        changed = restoreChunk.immediate() as number[];
+        changed = await retrySqliteOperation(rawDb, () => restoreChunk.immediate()) as number[];
+        skipped += chunk.length - changed.length;
       } catch (err) {
         // Committed chunks stand; the token is spent (documented single
         // redemption). Tell the caller exactly how far the restore got instead
@@ -6538,6 +6665,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (repId != null && (!Number.isInteger(Number(repId)) || Number(repId) <= 0)) {
       return res.status(400).json({ error: "repId must be a positive integer" });
     }
+    if (await tryDurableAssignment(req, res, "bulk", repId == null ? null : Number(repId), () => ({ ids: leadIds, metadata: {} }))) return;
     if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     // Tenant: the target rep must belong to the caller's org (the scope check
     // alone passes for admin/manager, whose scope is org-wide) — a foreign
@@ -6547,6 +6675,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (bulkTarget && !bulkTarget.active) {
       return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
     }
+
 
     const { updated, skipped, repName, prior, appliedAt, incomplete } = await applyAssignment(leadIds, repId ?? null, user, tid);
     if (updated > 0) {
@@ -6966,6 +7095,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (repId != null && (!Number.isInteger(repId) || repId <= 0)) {
       return res.status(400).json({ error: "repId must be a positive integer" });
     }
+    if (await tryDurableAssignment(req, res, "selection", repId, () => {
+      const resolved = resolveAssignSelection(user, tid, { ...body, targetRepId: repId });
+      if ("fail" in resolved) return resolved;
+      return { ids: resolved.netIds, metadata: { resolveMs: resolved.resolveMs,
+        alreadyAssignedToTarget: resolved.alreadyTarget, matchedInSelection: resolved.movable.length,
+        ...(resolved.netIds.length === 0 && resolved.alreadyTarget > 0 ? { noChangesNeeded: true } : {}) } };
+    })) return;
     if (repId != null && !repInVisibilityScope(user, repId)) {
       return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     }
@@ -6977,8 +7113,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "That rep is no longer active", code: "REP_INACTIVE" });
     }
 
+
+
     const opId = typeof body.opId === "string" && body.opId.length > 0 && body.opId.length <= 80 ? body.opId : null;
-    const opKey = opId ? `${user.id}:${opId}` : null;
+    const opKey = opId ? `${tid}:${user.id}:${opId}` : null;
     // The op is its BODY, not just its id: replaying a cached response for a
     // different selection under a recycled id would silently answer for work
     // that never ran. Hash the selection-shaping fields; a mismatch refuses.
@@ -8571,6 +8709,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "Valid email required" });
     }
     const cleanEmail = email.trim().toLowerCase();
+    const reliable = reliableOtpEnabled(cleanEmail);
+    // This check precedes account lookup, for the same known/unknown response.
+    if (reliable) assertReliableOtpReady();
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
     const prepared = await interactiveTransaction(rawDb, () => {
       const ipCheck = checkRateLimit("request", ipBucketKey(ip), OTP_REQUEST_IP_MAX);
@@ -8585,12 +8726,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
         return {};
       }
+      if (reliable) {
+        const issued = issueDurableOtp(rawDb, user, code => durableOtpMessage(cleanEmail, code, user.name));
+        storage.logLoginAttempt(cleanEmail, "request", true, "code_queued", ip, req.headers["user-agent"] as string, user.tenantId ?? null);
+        return { user, code: issued.code };
+      }
       return { user, code: storage.createOtp(cleanEmail) };
     });
     if (prepared.retryAfter !== undefined) {
       res.setHeader("Retry-After", String(prepared.retryAfter));
       return res.status(429).json({ error: `Too many requests. Try again in ${Math.ceil(prepared.retryAfter / 60)} minutes.` });
     }
+    if (reliable) return res.json({ sent: true,
+      ...(process.env.NODE_ENV !== "production" && prepared.code ? { developmentCode: prepared.code } : {}) });
     // Identical response for unknown/inactive accounts; never send a message.
     if (!prepared.user || !prepared.code) return res.json({ sent: true, emailDelivered: true });
     const { user, code } = prepared;
@@ -8707,7 +8855,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const email = typeof req.query.email === "string" ? req.query.email.trim().toLowerCase() : "";
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
     // QA GATE FIX (B1): never read another tenant's auth trail.
-    const scope = req.user?.role === "super_admin" ? null : (req.user?.tenantId ?? -1);
+    const scope = req.user?.isSuperAdmin === 1 ? null : (req.user?.tenantId ?? -1);
     try {
       if (req.query.summary === "1") return res.json({ summary: storage.getLoginAttemptSummary(scope) });
       res.json({ attempts: storage.getLoginAttempts(limit, email || undefined, scope) });
@@ -8745,12 +8893,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "Valid name required" });
     if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return res.status(400).json({ error: "Valid email required" });
-    // First admin belongs to the default org (bootstrapped at migration time).
-    const user = storage.createUser({ name: name.trim(), email: email.trim().toLowerCase(), passwordHash: "", role: "admin", active: true, tenantId: getDefaultTenantId() } as any);
-    // Send OTP immediately so admin can log in
-    const code = storage.createOtp(user.email);
-    await sendOtpEmail(user.email, code, user.name);
-    res.json({ sent: true, message: "Admin account created. Check your email for a login code." });
+    const cleanEmail = email.trim().toLowerCase();
+    const reliable = reliableOtpEnabled(cleanEmail);
+    try {
+      if (reliable) assertReliableOtpReady();
+      const prepared = await interactiveTransaction(rawDb, () => {
+        if (!storage.isFirstRun()) return null;
+        const user = storage.createUser({ name: name.trim(), email: cleanEmail, passwordHash: "", role: "admin", active: true, tenantId: getDefaultTenantId() } as any);
+        const code = reliable
+          ? issueDurableOtp(rawDb, user, code => durableOtpMessage(user.email, code, user.name)).code
+          : storage.createOtp(user.email);
+        return { user, code };
+      });
+      if (!prepared) return res.status(403).json({ error: "Setup already completed" });
+      if (!reliable) await sendOtpEmail(prepared.user.email, prepared.code, prepared.user.name);
+      res.json({ sent: true, message: "Admin account created. Check your email for a login code." });
+    } catch (error) { otpUnavailable(res, "setup", error); }
   });
 
   // Admin: list all users

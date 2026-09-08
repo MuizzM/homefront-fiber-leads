@@ -19,6 +19,8 @@ import { renderCommissionStatementPdf } from "./commissionStatementPdf";
 import { reconcile } from "./commissionReconciliation";
 import * as queueOps from "./eventQueueOps";
 import { isSqliteContention } from "./interactiveDb";
+import { recoveryActorAllowed } from "./recoveryAuthority";
+import { rawDb } from "./db";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -676,17 +678,23 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       return res.status(400).json({ error: "action must be RETRY, DEAD_LETTER or RESOLVE" });
     }
     try {
-      res.json(await queueOps.operatorAction({
+      const result = await queueOps.operatorAction({
         subscriber: "incentives", eventId: Number(req.params.eventId),
         action, actorUserId: uid(req), reason: String(reason ?? ""), tenantId: tid(req),
-      }));
+        authorize: () => {
+          if (!recoveryActorAllowed(rawDb, { tenantId: tid(req), userId: uid(req), sessionId: String(req.headers["x-session-id"] ?? "") }))
+            throw new queueOps.QueueAccessError("FORBIDDEN", 403, "Recovery access has changed");
+        },
+      });
+      res.json({ eventId: result.event_id, status: result.status, attempts: result.attempts });
     } catch (e: any) {
       if (isSqliteContention(e)) {
         res.setHeader("Retry-After", "1");
         return res.status(503).json({ error: "Queue recovery is busy. Try again shortly.", code: "QUEUE_BUSY" });
       }
       if (/reason is required/i.test(e?.message ?? "")) return res.status(400).json({ error: e.message, code: "REASON_REQUIRED" });
-      fail(res, e);
+      if (e instanceof queueOps.QueueAccessError) return fail(res, e);
+      res.status(500).json({ error: "Recovery action could not be recorded. Refresh and try again.", code: "QUEUE_ACTION_FAILED" });
     }
   });
 }

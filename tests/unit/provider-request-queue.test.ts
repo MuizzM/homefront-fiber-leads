@@ -2,6 +2,42 @@ import { describe, expect, it, vi } from "vitest";
 import { ProviderRequestQueue } from "../../server/providerRequestQueue";
 
 describe("ProviderRequestQueue", () => {
+  it("reads a shared run cancellation once per sweep even under a large backlog", async () => {
+    vi.useFakeTimers();
+    const queue = new ProviderRequestQueue<number>({ maxConcurrency: 1, cacheTtlMs: 0 });
+    try {
+      queue.pauseFor(10_000); const abort = vi.fn(() => false), task = vi.fn(async () => 1);
+      const work = Array.from({ length: 1_000 }, (_, i) => queue.request(String(i), task, { abort }).catch(() => null));
+      abort.mockClear(); await vi.advanceTimersByTimeAsync(100);
+      expect(abort).toHaveBeenCalledTimes(1); expect(queue.snapshot().queued).toBe(1_000);
+      abort.mockReturnValue(true); await vi.advanceTimersByTimeAsync(100);
+      expect(abort).toHaveBeenCalledTimes(2); expect(queue.snapshot().queued).toBe(0);
+      await Promise.all(work); expect(task).not.toHaveBeenCalled();
+      queue.resume(); await vi.advanceTimersByTimeAsync(10_000);
+    } finally { vi.useRealTimers(); }
+  });
+  it("expires paused admission without executing it later", async () => {
+    const queue = new ProviderRequestQueue<number>({ maxConcurrency: 1, cacheTtlMs: 0 });
+    queue.pauseFor(10_000); const task = vi.fn(async () => 1);
+    await expect(queue.request("expired", task, { deadlineAt: Date.now() + 20 })).rejects.toThrow(/admission/);
+    queue.resume(); await Promise.resolve();
+    expect(task).not.toHaveBeenCalled(); expect(queue.snapshot().queued).toBe(0);
+  });
+  it("cancels one duplicate waiter without releasing a live owner's slot", async () => {
+    const queue = new ProviderRequestQueue<number>({ maxConcurrency: 1, cacheTtlMs: 0 });
+    let release!: (n: number) => void, cancelled = false;
+    const task = vi.fn(() => new Promise<number>(resolve => { release = resolve; }));
+    const owner = queue.request("shared", task); await Promise.resolve();
+    const duplicate = queue.request("shared", task, { abort: () => cancelled }); cancelled = true;
+    await expect(duplicate).rejects.toThrow(/admission/);
+    expect(queue.snapshot().active).toBe(1); expect(task).toHaveBeenCalledTimes(1);
+    release(1); expect(await owner).toBe(1);
+  });
+  it("clears capacity when a task throws synchronously", async () => {
+    const queue = new ProviderRequestQueue<number>({ maxConcurrency: 1, cacheTtlMs: 0 });
+    await expect(queue.request("throw", () => { throw new Error("sync fault"); })).rejects.toThrow("sync fault");
+    expect(await queue.request("next", async () => 2)).toBe(2);
+  });
   it("accepts unlimited queued work while enforcing one global concurrency ceiling", async () => {
     let active = 0;
     let peak = 0;

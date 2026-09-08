@@ -1,4 +1,10 @@
+import { ensureScanCountIntegritySchema } from "./scanCountIntegrity";
 import crypto from "node:crypto";
+import { ensureScannerReliabilitySchema } from "./scannerReliability";
+import { ensureAssignmentOperationSchema } from "./assignmentOperationStore";
+import { ensureOtpDeliverySchema } from "./otpDeliveryStore";
+import { otpCodeMatches } from "./otpSecrets";
+import { ensureDailyRefreshIndexes } from "./dailyRefreshMetrics";
 import { db, rawDb } from "./db";
 import { withoutSqliteBusyWait } from "./interactiveDb";
 import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION } from "./addressKey";
@@ -1769,6 +1775,8 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_live_fresh ON scan_targets(tenant_id, first_seen_live_at DESC) WHERE last_fiber_available=1`,
     // The actual freshness predicate uses COALESCE; the live-time index cannot seek it.
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_effective_fresh ON scan_targets(tenant_id, COALESCE(first_seen_fiber_at,first_seen_live_at)) WHERE last_fiber_available=1`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_tenant_checked_jd ON scan_targets(tenant_id, julianday(last_scanned_at), last_scanned_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_tenant_lit_jd ON scan_targets(tenant_id, julianday(first_seen_fiber_at))`,
     `CREATE TABLE IF NOT EXISTS availability_snapshots (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        tenant_id INTEGER NOT NULL,
@@ -1866,6 +1874,7 @@ export function runMigrations() {
     `UPDATE notification_outbox SET kind='primary_candidate_new' WHERE kind='candidate_new'`,
     `UPDATE notification_outbox SET kind='primary_reconfirmed_new' WHERE kind='verified_new'`,
     `CREATE INDEX IF NOT EXISTS idx_outbox_delivery_due ON notification_outbox(kind, status, next_attempt_at, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_outbox_failed_tenant ON notification_outbox(tenant_id,id DESC) WHERE status='failed'`,
     `CREATE INDEX IF NOT EXISTS idx_outbox_fresh_pending_tenant ON notification_outbox(tenant_id, id DESC)
        WHERE kind='fresh_fiber' AND status='pending'`,
     `CREATE TABLE IF NOT EXISTS sweep_jobs (
@@ -2314,6 +2323,7 @@ export function runMigrations() {
     `ALTER TABLE scan_runs ADD COLUMN updated_at TEXT`,
     `ALTER TABLE scan_run_targets ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE scan_run_targets ADD COLUMN next_attempt_at TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_srt_pending_due_run ON scan_run_targets(state,next_attempt_at,run_id) WHERE state IN ('queued','inflight')`,
     `ALTER TABLE scan_run_targets ADD COLUMN last_error_category TEXT`,
     `ALTER TABLE scan_run_targets ADD COLUMN last_error_message TEXT`,
     `CREATE TABLE IF NOT EXISTS fiber_job_events (
@@ -3099,6 +3109,10 @@ export function runMigrations() {
     ) WHERE tenant_id IS NULL`).run();
   } catch (e) { console.warn("[migration] territory_requests tenant backfill:", (e as any)?.message); }
 
+  ensureOtpDeliverySchema(raw);
+  ensureAssignmentOperationSchema(raw);
+  ensureScannerReliabilitySchema(raw);
+  ensureScanCountIntegritySchema(raw);
   bootstrapDefaultTenant(raw);
   // GATE M6: a money invariant that can't build is a FAILED RELEASE, not a
   // quiet warning — the deploy health-gate rolls back instead of running
@@ -3367,6 +3381,7 @@ function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Datab
   if (!hasOldUnique && hasIndex) return; // already migrated
 
   const recreateIndexes = () => {
+    ensureDailyRefreshIndexes(raw);
     raw.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_targets_addr_city_state ON scan_targets(lower(trim(address)), lower(trim(city)), upper(trim(state)))`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`);
     raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`);
@@ -5239,9 +5254,9 @@ export class Storage implements IStorage {
     const now = new Date().toISOString();
     const em = email.toLowerCase();
     const otp = db.select().from(otpCodes)
-      .where(and(eq(otpCodes.email, em), eq(otpCodes.code, code),
-        eq(otpCodes.used, false), gt(otpCodes.expiresAt, now))).get();
-    if (!otp) {
+      .where(and(eq(otpCodes.email, em), eq(otpCodes.used, false), gt(otpCodes.expiresAt, now)))
+      .orderBy(desc(otpCodes.id)).get();
+    if (!otp || !otpCodeMatches(otp.code, em, code)) {
       // Wrong/expired guess: count it against the email's live codes and burn them
       // once too many misses accumulate, so the code can't be brute-forced within
       // its window (survives restarts / multi-instance, unlike the in-memory limiter).
@@ -6185,7 +6200,7 @@ export class Storage implements IStorage {
     const where: string[] = [];
     const args: any[] = [];
     if (email) { where.push("email = ?"); args.push(String(email).toLowerCase()); }
-    if (tenantId != null) { where.push("(tenant_id = ? OR tenant_id IS NULL)"); args.push(tenantId); }
+    if (tenantId != null) { where.push("tenant_id = ?"); args.push(tenantId); }
     const sql = `SELECT * FROM login_attempts ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY created_at DESC LIMIT ?`;
     return rawDb.prepare(sql).all(...args, limit) as any[];
   }
@@ -6194,7 +6209,7 @@ export class Storage implements IStorage {
     return rawDb.prepare(
       `SELECT email, COUNT(*) AS attempts, SUM(success) AS successes, MAX(created_at) AS last_at,
               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures
-         FROM login_attempts ${scoped ? "WHERE tenant_id = ? OR tenant_id IS NULL" : ""} GROUP BY email ORDER BY last_at DESC`,
+         FROM login_attempts ${scoped ? "WHERE tenant_id = ?" : ""} GROUP BY email ORDER BY last_at DESC`,
     ).all(...(scoped ? [tenantId] : [])) as any[];
   }
 

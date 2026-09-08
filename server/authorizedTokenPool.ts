@@ -1,3 +1,4 @@
+import { providerAborted, providerTaskWaitMs } from "./providerDeadline";
 export type AuthorizedTokenState = "EMPTY" | "READY" | "REFRESHING" | "EXPIRED";
 export type AuthorizedTokenHealth = "HEALTHY" | "DEGRADED" | "UNHEALTHY";
 
@@ -155,7 +156,27 @@ export class AuthorizedTokenPool {
    *   one live slot means one lane means one residential IP, and DECODO_LANES
    *   silently does nothing. Sticky reuse still applies WITHIN a lane.
    */
-  async lease(addressKey?: string, preferLane?: number, laneCount?: number): Promise<AuthorizedTokenLease> {
+  async lease(addressKey?: string, preferLane?: number, laneCount?: number,
+    wait: { deadlineAt?: number; abort?: () => boolean } = {}): Promise<AuthorizedTokenLease> {
+    const deadlineAt = Math.min(this.now() + providerTaskWaitMs(), wait.deadlineAt ?? Infinity);
+    const check = () => {
+      if (this.now() >= deadlineAt || providerAborted(wait.abort)) throw new Error("AUTHORIZED_TOKEN_WAIT_EXPIRED");
+    };
+    // A caller can abandon shared pool maintenance without acquiring a lease
+    // later. Mints retain their own existing permit; no address work continues.
+    const ready = <T>(work: () => Promise<T>): Promise<T> => {
+      check();
+      return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => finish(new Error("AUTHORIZED_TOKEN_WAIT_EXPIRED")), Math.max(1, deadlineAt - this.now()));
+        const poll = wait.abort ? setInterval(() => { if (providerAborted(wait.abort)) finish(new Error("AUTHORIZED_TOKEN_WAIT_EXPIRED")); }, 100) : null;
+        const finish = (error?: unknown, value?: T) => {
+          clearTimeout(timer); if (poll) clearInterval(poll);
+          if (error) reject(error); else resolve(value as T);
+        };
+        Promise.resolve().then(work).then(value => finish(undefined, value), error => finish(error));
+      });
+    };
+    check();
     const normalizedAddressKey = addressKey?.trim() || null;
     const lane = Number.isInteger(preferLane) && Number.isInteger(laneCount) && (laneCount as number) > 1
       ? { id: preferLane as number, count: laneCount as number } : null;
@@ -166,15 +187,15 @@ export class AuthorizedTokenPool {
     // filters on real expiry, so a stale slot can never be returned here.
     let slot = this.pickReady(normalizedAddressKey, lane);
     if (!slot) {
-      await this.ensureWarm();
+      await ready(() => this.ensureWarm());
       // Bounded: mint at most ONE due slot synchronously for this lease; the
       // maintenance tick refreshes the rest in the background.
-      await this.refreshDueSlots(1);
+      await ready(() => this.refreshDueSlots(1));
       slot = this.pickReady(normalizedAddressKey, lane);
     }
     if (slot && slot.leases >= this.maxLeasesPerToken && this.slots.length < this.maxSize) {
       const expanded = this.createSlot();
-      await this.refreshSlot(expanded.id, true);
+      await ready(() => this.refreshSlot(expanded.id, true));
       slot = this.pickReady(normalizedAddressKey, lane);
     }
     // RECYCLE THE LANE'S OWN SLOT, DO NOT GROW THE POOL.
@@ -192,7 +213,7 @@ export class AuthorizedTokenPool {
         ?? own.find((candidate) => !candidate.leases)
         ?? own[0];
       if (reusable) {
-        await this.refreshSlot(reusable.id, true).catch(() => {});
+        await ready(() => this.refreshSlot(reusable.id, true).catch(() => {}));
         slot = this.pickReady(normalizedAddressKey, lane);
       }
     }
@@ -202,7 +223,7 @@ export class AuthorizedTokenPool {
       for (let i = 0; i < attempts && this.slots.length < this.maxSize; i++) {
         const created = this.createSlot();
         if (!lane || created.id % lane.count === lane.id) {
-          await this.refreshSlot(created.id, true);
+          await ready(() => this.refreshSlot(created.id, true));
           break;
         }
       }
@@ -214,7 +235,7 @@ export class AuthorizedTokenPool {
     if (!slot && lane) slot = this.pickReady(normalizedAddressKey);
     if (!slot) {
       const refreshing = this.slots.map(item => item.refreshInFlight).filter(Boolean) as Promise<void>[];
-      if (refreshing.length) await Promise.race(refreshing.map(task => task.catch(() => {})));
+      if (refreshing.length) await ready(() => Promise.race(refreshing.map(task => task.catch(() => {}))));
       slot = this.pickReady(normalizedAddressKey);
     }
     if (!slot?.token) {
@@ -224,6 +245,7 @@ export class AuthorizedTokenPool {
         ? "AUTHORIZED_TOKEN_BATCH_CAPACITY_EXHAUSTED"
         : "AUTHORIZED_TOKEN_POOL_EMPTY");
     }
+    check();
     if (normalizedAddressKey && !slot.addressKeys.has(normalizedAddressKey)) {
       if (slot.addressKeys.size >= this.maxChecksPerToken)
         throw new Error("AUTHORIZED_TOKEN_SLOT_CAPACITY_EXHAUSTED");

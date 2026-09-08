@@ -27,18 +27,18 @@ vi.mock("../../server/scanner", () => ({
 }));
 vi.mock("../../server/frontierScanner", () => ({ scanFrontierAddress: vi.fn() }));
 
-// Spy on claimRunTargets (delegate to the real one) so tests can assert the
+// Spy on claimRunTargetCycle (delegate to the real one) so tests can assert the
 // engine never claims while the breaker is open — and override it to drain
 // instantly for the re-open-budget test.
 const claimCalls: unknown[][] = [];
-let claimOverride: (() => unknown[]) | null = null;
+let claimOverride: (() => { targets: unknown[]; inspected: number; skipped: number }) | null = null;
 vi.mock("../../server/scanIntelStore", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../server/scanIntelStore")>();
   return {
     ...actual,
-    claimRunTargets: (...args: unknown[]) => {
+    claimRunTargetCycle: (...args: unknown[]) => {
       claimCalls.push(args);
-      return claimOverride ? claimOverride() : (actual.claimRunTargets as any)(...args);
+      return claimOverride ? claimOverride() : (actual.claimRunTargetCycle as any)(...args);
     },
   };
 });
@@ -171,7 +171,7 @@ describe("C3 - stranded-run re-open has an error budget", () => {
     intel.setRunStatus(runId, "error", "simulated persistent dispatch failure");
     // The re-opened worker instantly "drains" (mocked empty claim) and finishes,
     // leaving the real target queued — the persistent-failure livelock shape.
-    claimOverride = () => [];
+    claimOverride = () => ({ targets: [], inspected: 0, skipped: 0 });
 
     // 5 ticks: each re-opens (counter 1..5) and the run strands again.
     for (let tick = 1; tick <= 5; tick++) {

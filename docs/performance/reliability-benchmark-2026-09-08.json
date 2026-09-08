@@ -1,0 +1,1275 @@
+{
+  "generatedAt": "2026-09-08T18:37:32.660Z",
+  "runtime": {
+    "node": "v20.20.2",
+    "sqlite": "3.49.2",
+    "platform": "darwin",
+    "release": "25.6.0",
+    "cpu": "Apple M3"
+  },
+  "method": {
+    "fixtureRows": 500000,
+    "runRows": 50000,
+    "readSamples": 7,
+    "writeSamples": 7,
+    "batchSize": 500,
+    "journalMode": "WAL",
+    "synchronous": "NORMAL",
+    "walAutocheckpoint": 0,
+    "caveat": "Synthetic local cached SQLite CPU/write timing, not production load, soak, or durability latency. Daily fixture includes existing canonical/scanned/reprobe/fresh-opportunity/market-sync indexes; unrelated write fields and provider work are excluded. Fixture database files removed at completion. Dates fixed to preserve due classification."
+  },
+  "recovery": [
+    {
+      "scenario": "dense-due",
+      "baseline": {
+        "stranded": {
+          "medianMs": 135.462,
+          "minMs": 134.936,
+          "maxMs": 139.693
+        },
+        "count": {
+          "medianMs": 53.604,
+          "minMs": 53.161,
+          "maxMs": 54.084
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN t USING INDEX idx_srt_pending",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN scan_run_targets USING INDEX idx_srt_pending"
+        ],
+        "dueCount": 400000
+      },
+      "writesBefore": {
+        "claim": {
+          "rows": 500,
+          "medianMs": 2.718,
+          "minMs": 2.658,
+          "maxMs": 2.86,
+          "operation": "500 guarded-by-primary-key queued to inflight updates in one transaction; restore queued outside timer"
+        },
+        "insert": {
+          "rows": 500,
+          "medianMs": 0.885,
+          "minMs": 0.845,
+          "maxMs": 0.933,
+          "operation": "500 queued inserts in one transaction; cleanup outside timer"
+        }
+      },
+      "index": {
+        "buildMs": 214.047,
+        "newDatabasePages": 3446,
+        "walBytes": 14259352,
+        "before": [
+          {
+            "name": "idx_scan_runs_status",
+            "pages": 183,
+            "bytes": 749568
+          },
+          {
+            "name": "idx_scan_runs_tenant",
+            "pages": 271,
+            "bytes": 1110016
+          },
+          {
+            "name": "idx_srt_pending",
+            "pages": 1676,
+            "bytes": 6864896
+          },
+          {
+            "name": "idx_srt_run_state",
+            "pages": 3611,
+            "bytes": 14790656
+          },
+          {
+            "name": "idx_srt_target_state",
+            "pages": 2703,
+            "bytes": 11071488
+          },
+          {
+            "name": "scan_run_targets",
+            "pages": 20052,
+            "bytes": 82132992
+          },
+          {
+            "name": "scan_runs",
+            "pages": 1132,
+            "bytes": 4636672
+          },
+          {
+            "name": "sqlite_autoindex_scan_run_targets_1",
+            "pages": 2906,
+            "bytes": 11902976
+          },
+          {
+            "name": "sqlite_autoindex_scan_runs_1",
+            "pages": 233,
+            "bytes": 954368
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 5,
+            "bytes": 20480
+          }
+        ],
+        "after": [
+          {
+            "name": "idx_scan_runs_status",
+            "pages": 183,
+            "bytes": 749568
+          },
+          {
+            "name": "idx_scan_runs_tenant",
+            "pages": 271,
+            "bytes": 1110016
+          },
+          {
+            "name": "idx_srt_pending",
+            "pages": 1676,
+            "bytes": 6864896
+          },
+          {
+            "name": "idx_srt_pending_due_run",
+            "pages": 3460,
+            "bytes": 14172160
+          },
+          {
+            "name": "idx_srt_run_state",
+            "pages": 3611,
+            "bytes": 14790656
+          },
+          {
+            "name": "idx_srt_target_state",
+            "pages": 2703,
+            "bytes": 11071488
+          },
+          {
+            "name": "scan_run_targets",
+            "pages": 20052,
+            "bytes": 82132992
+          },
+          {
+            "name": "scan_runs",
+            "pages": 1132,
+            "bytes": 4636672
+          },
+          {
+            "name": "sqlite_autoindex_scan_run_targets_1",
+            "pages": 2906,
+            "bytes": 11902976
+          },
+          {
+            "name": "sqlite_autoindex_scan_runs_1",
+            "pages": 233,
+            "bytes": 954368
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 5,
+            "bytes": 20480
+          }
+        ]
+      },
+      "covering": {
+        "stranded": {
+          "medianMs": 73.12,
+          "minMs": 72.204,
+          "maxMs": 74.406
+        },
+        "count": {
+          "medianMs": 14.539,
+          "minMs": 14.298,
+          "maxMs": 14.816
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 1",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=?)"
+        ],
+        "dueCount": 400000
+      },
+      "rangesStaleStats": {
+        "stranded": {
+          "medianMs": 68.968,
+          "minMs": 66.754,
+          "maxMs": 70.373
+        },
+        "count": {
+          "medianMs": 8.691,
+          "minMs": 8.475,
+          "maxMs": 9.128
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 2",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "CREATE BLOOM FILTER",
+          "UNION ALL",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN CONSTANT ROW",
+          "SCALAR SUBQUERY 1",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "SCALAR SUBQUERY 2",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)"
+        ],
+        "dueCount": 400000
+      },
+      "rangesAnalyzed": {
+        "stranded": {
+          "medianMs": 75.015,
+          "minMs": 72.573,
+          "maxMs": 91.762
+        },
+        "count": {
+          "medianMs": 11.541,
+          "minMs": 11.253,
+          "maxMs": 11.683
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 2",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "CREATE BLOOM FILTER",
+          "UNION ALL",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN CONSTANT ROW",
+          "SCALAR SUBQUERY 1",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "SCALAR SUBQUERY 2",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)"
+        ],
+        "dueCount": 400000
+      },
+      "writesAfter": {
+        "claim": {
+          "rows": 500,
+          "medianMs": 5.233,
+          "minMs": 4.626,
+          "maxMs": 6.26,
+          "operation": "500 guarded-by-primary-key queued to inflight updates in one transaction; restore queued outside timer"
+        },
+        "insert": {
+          "rows": 500,
+          "medianMs": 1.181,
+          "minMs": 1.147,
+          "maxMs": 1.236,
+          "operation": "500 queued inserts in one transaction; cleanup outside timer"
+        }
+      },
+      "equivalentFullRows": true
+    },
+    {
+      "scenario": "dense-future",
+      "baseline": {
+        "stranded": {
+          "medianMs": 59.07,
+          "minMs": 58.83,
+          "maxMs": 62.28
+        },
+        "count": {
+          "medianMs": 58.499,
+          "minMs": 56.833,
+          "maxMs": 59.491
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN t USING INDEX idx_srt_pending",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN scan_run_targets USING INDEX idx_srt_pending"
+        ],
+        "dueCount": 5000
+      },
+      "writesBefore": {
+        "claim": {
+          "rows": 500,
+          "medianMs": 2.823,
+          "minMs": 2.622,
+          "maxMs": 3.016,
+          "operation": "500 guarded-by-primary-key queued to inflight updates in one transaction; restore queued outside timer"
+        },
+        "insert": {
+          "rows": 500,
+          "medianMs": 0.874,
+          "minMs": 0.859,
+          "maxMs": 1.488,
+          "operation": "500 queued inserts in one transaction; cleanup outside timer"
+        }
+      },
+      "index": {
+        "buildMs": 207.355,
+        "newDatabasePages": 4379,
+        "walBytes": 18103312,
+        "before": [
+          {
+            "name": "idx_scan_runs_status",
+            "pages": 183,
+            "bytes": 749568
+          },
+          {
+            "name": "idx_scan_runs_tenant",
+            "pages": 271,
+            "bytes": 1110016
+          },
+          {
+            "name": "idx_srt_pending",
+            "pages": 1676,
+            "bytes": 6864896
+          },
+          {
+            "name": "idx_srt_run_state",
+            "pages": 3611,
+            "bytes": 14790656
+          },
+          {
+            "name": "idx_srt_target_state",
+            "pages": 2703,
+            "bytes": 11071488
+          },
+          {
+            "name": "scan_run_targets",
+            "pages": 21469,
+            "bytes": 87937024
+          },
+          {
+            "name": "scan_runs",
+            "pages": 1132,
+            "bytes": 4636672
+          },
+          {
+            "name": "sqlite_autoindex_scan_run_targets_1",
+            "pages": 2906,
+            "bytes": 11902976
+          },
+          {
+            "name": "sqlite_autoindex_scan_runs_1",
+            "pages": 233,
+            "bytes": 954368
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 5,
+            "bytes": 20480
+          }
+        ],
+        "after": [
+          {
+            "name": "idx_scan_runs_status",
+            "pages": 183,
+            "bytes": 749568
+          },
+          {
+            "name": "idx_scan_runs_tenant",
+            "pages": 271,
+            "bytes": 1110016
+          },
+          {
+            "name": "idx_srt_pending",
+            "pages": 1676,
+            "bytes": 6864896
+          },
+          {
+            "name": "idx_srt_pending_due_run",
+            "pages": 4393,
+            "bytes": 17993728
+          },
+          {
+            "name": "idx_srt_run_state",
+            "pages": 3611,
+            "bytes": 14790656
+          },
+          {
+            "name": "idx_srt_target_state",
+            "pages": 2703,
+            "bytes": 11071488
+          },
+          {
+            "name": "scan_run_targets",
+            "pages": 21469,
+            "bytes": 87937024
+          },
+          {
+            "name": "scan_runs",
+            "pages": 1132,
+            "bytes": 4636672
+          },
+          {
+            "name": "sqlite_autoindex_scan_run_targets_1",
+            "pages": 2906,
+            "bytes": 11902976
+          },
+          {
+            "name": "sqlite_autoindex_scan_runs_1",
+            "pages": 233,
+            "bytes": 954368
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 5,
+            "bytes": 20480
+          }
+        ]
+      },
+      "covering": {
+        "stranded": {
+          "medianMs": 21.307,
+          "minMs": 20.582,
+          "maxMs": 31.645
+        },
+        "count": {
+          "medianMs": 20.002,
+          "minMs": 19.779,
+          "maxMs": 20.327
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 1",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=?)"
+        ],
+        "dueCount": 5000
+      },
+      "rangesStaleStats": {
+        "stranded": {
+          "medianMs": 0.601,
+          "minMs": 0.572,
+          "maxMs": 0.629
+        },
+        "count": {
+          "medianMs": 0.11,
+          "minMs": 0.11,
+          "maxMs": 0.119
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 2",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "CREATE BLOOM FILTER",
+          "UNION ALL",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN CONSTANT ROW",
+          "SCALAR SUBQUERY 1",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "SCALAR SUBQUERY 2",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)"
+        ],
+        "dueCount": 5000
+      },
+      "rangesAnalyzed": {
+        "stranded": {
+          "medianMs": 0.619,
+          "minMs": 0.6,
+          "maxMs": 0.625
+        },
+        "count": {
+          "medianMs": 0.114,
+          "minMs": 0.114,
+          "maxMs": 0.116
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 2",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "CREATE BLOOM FILTER",
+          "UNION ALL",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN CONSTANT ROW",
+          "SCALAR SUBQUERY 1",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "SCALAR SUBQUERY 2",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)"
+        ],
+        "dueCount": 5000
+      },
+      "writesAfter": {
+        "claim": {
+          "rows": 500,
+          "medianMs": 4.862,
+          "minMs": 4.807,
+          "maxMs": 5.708,
+          "operation": "500 guarded-by-primary-key queued to inflight updates in one transaction; restore queued outside timer"
+        },
+        "insert": {
+          "rows": 500,
+          "medianMs": 1.16,
+          "minMs": 1.156,
+          "maxMs": 1.2,
+          "operation": "500 queued inserts in one transaction; cleanup outside timer"
+        }
+      },
+      "equivalentFullRows": true
+    },
+    {
+      "scenario": "sparse-due",
+      "baseline": {
+        "stranded": {
+          "medianMs": 0.21,
+          "minMs": 0.202,
+          "maxMs": 0.295
+        },
+        "count": {
+          "medianMs": 0.083,
+          "minMs": 0.082,
+          "maxMs": 0.085
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 1",
+          "SCAN t USING INDEX idx_srt_pending",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN scan_run_targets USING INDEX idx_srt_pending"
+        ],
+        "dueCount": 500
+      },
+      "writesBefore": {
+        "claim": {
+          "rows": 500,
+          "medianMs": 4.167,
+          "minMs": 4.042,
+          "maxMs": 4.76,
+          "operation": "500 guarded-by-primary-key queued to inflight updates in one transaction; restore queued outside timer"
+        },
+        "insert": {
+          "rows": 500,
+          "medianMs": 0.874,
+          "minMs": 0.855,
+          "maxMs": 0.884,
+          "operation": "500 queued inserts in one transaction; cleanup outside timer"
+        }
+      },
+      "index": {
+        "buildMs": 30.95,
+        "newDatabasePages": 0,
+        "walBytes": 28872,
+        "before": [
+          {
+            "name": "idx_scan_runs_status",
+            "pages": 183,
+            "bytes": 749568
+          },
+          {
+            "name": "idx_scan_runs_tenant",
+            "pages": 271,
+            "bytes": 1110016
+          },
+          {
+            "name": "idx_srt_pending",
+            "pages": 3,
+            "bytes": 12288
+          },
+          {
+            "name": "idx_srt_run_state",
+            "pages": 3830,
+            "bytes": 15687680
+          },
+          {
+            "name": "idx_srt_target_state",
+            "pages": 2923,
+            "bytes": 11972608
+          },
+          {
+            "name": "scan_run_targets",
+            "pages": 19280,
+            "bytes": 78970880
+          },
+          {
+            "name": "scan_runs",
+            "pages": 1132,
+            "bytes": 4636672
+          },
+          {
+            "name": "sqlite_autoindex_scan_run_targets_1",
+            "pages": 2906,
+            "bytes": 11902976
+          },
+          {
+            "name": "sqlite_autoindex_scan_runs_1",
+            "pages": 233,
+            "bytes": 954368
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 5,
+            "bytes": 20480
+          }
+        ],
+        "after": [
+          {
+            "name": "idx_scan_runs_status",
+            "pages": 183,
+            "bytes": 749568
+          },
+          {
+            "name": "idx_scan_runs_tenant",
+            "pages": 271,
+            "bytes": 1110016
+          },
+          {
+            "name": "idx_srt_pending",
+            "pages": 3,
+            "bytes": 12288
+          },
+          {
+            "name": "idx_srt_pending_due_run",
+            "pages": 5,
+            "bytes": 20480
+          },
+          {
+            "name": "idx_srt_run_state",
+            "pages": 3830,
+            "bytes": 15687680
+          },
+          {
+            "name": "idx_srt_target_state",
+            "pages": 2923,
+            "bytes": 11972608
+          },
+          {
+            "name": "scan_run_targets",
+            "pages": 19280,
+            "bytes": 78970880
+          },
+          {
+            "name": "scan_runs",
+            "pages": 1132,
+            "bytes": 4636672
+          },
+          {
+            "name": "sqlite_autoindex_scan_run_targets_1",
+            "pages": 2906,
+            "bytes": 11902976
+          },
+          {
+            "name": "sqlite_autoindex_scan_runs_1",
+            "pages": 233,
+            "bytes": 954368
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 5,
+            "bytes": 20480
+          }
+        ]
+      },
+      "covering": {
+        "stranded": {
+          "medianMs": 0.124,
+          "minMs": 0.117,
+          "maxMs": 0.135
+        },
+        "count": {
+          "medianMs": 0.019,
+          "minMs": 0.018,
+          "maxMs": 0.02
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 1",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=?)"
+        ],
+        "dueCount": 500
+      },
+      "rangesStaleStats": {
+        "stranded": {
+          "medianMs": 0.122,
+          "minMs": 0.121,
+          "maxMs": 0.123
+        },
+        "count": {
+          "medianMs": 0.018,
+          "minMs": 0.017,
+          "maxMs": 0.02
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 2",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "CREATE BLOOM FILTER",
+          "UNION ALL",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN CONSTANT ROW",
+          "SCALAR SUBQUERY 1",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "SCALAR SUBQUERY 2",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)"
+        ],
+        "dueCount": 500
+      },
+      "rangesAnalyzed": {
+        "stranded": {
+          "medianMs": 0.132,
+          "minMs": 0.13,
+          "maxMs": 0.143
+        },
+        "count": {
+          "medianMs": 0.023,
+          "minMs": 0.023,
+          "maxMs": 0.025
+        },
+        "strandedPlan": [
+          "SEARCH r USING INDEX sqlite_autoindex_scan_runs_1 (id=?)",
+          "LIST SUBQUERY 2",
+          "COMPOUND QUERY",
+          "LEFT-MOST SUBQUERY",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "CREATE BLOOM FILTER",
+          "UNION ALL",
+          "SEARCH t USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "countPlan": [
+          "SCAN CONSTANT ROW",
+          "SCALAR SUBQUERY 1",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at=?)",
+          "SCALAR SUBQUERY 2",
+          "SEARCH scan_run_targets USING COVERING INDEX idx_srt_pending_due_run (state=? AND next_attempt_at<?)"
+        ],
+        "dueCount": 500
+      },
+      "writesAfter": {
+        "claim": {
+          "rows": 500,
+          "medianMs": 4.446,
+          "minMs": 4.379,
+          "maxMs": 4.572,
+          "operation": "500 guarded-by-primary-key queued to inflight updates in one transaction; restore queued outside timer"
+        },
+        "insert": {
+          "rows": 500,
+          "medianMs": 1.068,
+          "minMs": 1.007,
+          "maxMs": 1.103,
+          "operation": "500 queued inserts in one transaction; cleanup outside timer"
+        }
+      },
+      "equivalentFullRows": true
+    }
+  ],
+  "daily": {
+    "baseline": {
+      "counts": {
+        "checked": 2667,
+        "newLeads": 1000,
+        "comingSoon": 1000,
+        "newlyLit": 500,
+        "pending": 133333
+      },
+      "timing": {
+        "medianMs": 163.475,
+        "minMs": 162.156,
+        "maxMs": 169.378
+      },
+      "plan": [
+        "SCAN CONSTANT ROW",
+        "SCALAR SUBQUERY 1",
+        "SCAN scan_targets",
+        "SCALAR SUBQUERY 2",
+        "SCAN leads",
+        "SCALAR SUBQUERY 3",
+        "SCAN kinetic_addresses",
+        "SCALAR SUBQUERY 4",
+        "SCAN scan_targets",
+        "SCALAR SUBQUERY 5",
+        "SEARCH scan_targets USING INDEX idx_scan_targets_reprobe (last_scanned_at=?)"
+      ]
+    },
+    "indexedStaleStats": {
+      "counts": {
+        "checked": 2667,
+        "newLeads": 1000,
+        "comingSoon": 1000,
+        "newlyLit": 500,
+        "pending": 133333
+      },
+      "timing": {
+        "medianMs": 2.69,
+        "minMs": 2.676,
+        "maxMs": 2.713
+      },
+      "plan": [
+        "SCAN CONSTANT ROW",
+        "SCALAR SUBQUERY 1",
+        "SEARCH scan_targets USING COVERING INDEX idx_scan_targets_tenant_checked_jd (tenant_id=? AND <expr>>?)",
+        "SCALAR SUBQUERY 2",
+        "SCAN leads",
+        "SCALAR SUBQUERY 3",
+        "SCAN kinetic_addresses",
+        "SCALAR SUBQUERY 4",
+        "SEARCH scan_targets USING COVERING INDEX idx_scan_targets_tenant_lit_jd (tenant_id=? AND <expr>>?)",
+        "SCALAR SUBQUERY 5",
+        "SEARCH scan_targets USING COVERING INDEX idx_scan_targets_tenant_checked_jd (tenant_id=? AND <expr>=? AND last_scanned_at=?)"
+      ]
+    },
+    "indexed": {
+      "counts": {
+        "checked": 2667,
+        "newLeads": 1000,
+        "comingSoon": 1000,
+        "newlyLit": 500,
+        "pending": 133333
+      },
+      "timing": {
+        "medianMs": 2.706,
+        "minMs": 2.694,
+        "maxMs": 2.716
+      },
+      "plan": [
+        "SCAN CONSTANT ROW",
+        "SCALAR SUBQUERY 1",
+        "SEARCH scan_targets USING COVERING INDEX idx_scan_targets_tenant_checked_jd (tenant_id=? AND <expr>>?)",
+        "SCALAR SUBQUERY 2",
+        "SCAN leads",
+        "SCALAR SUBQUERY 3",
+        "SCAN kinetic_addresses",
+        "SCALAR SUBQUERY 4",
+        "SEARCH scan_targets USING COVERING INDEX idx_scan_targets_tenant_lit_jd (tenant_id=? AND <expr>>?)",
+        "SCALAR SUBQUERY 5",
+        "SEARCH scan_targets USING COVERING INDEX idx_scan_targets_tenant_checked_jd (tenant_id=? AND <expr>=? AND last_scanned_at=?)"
+      ]
+    },
+    "writesBefore": {
+      "rows": 500,
+      "medianMs": 2.276,
+      "minMs": 2.197,
+      "maxMs": 2.331,
+      "operation": "500 result timestamp updates, some newly-lit updates, one transaction; restore outside timer"
+    },
+    "writesAfter": {
+      "rows": 500,
+      "medianMs": 3.429,
+      "minMs": 3.416,
+      "maxMs": 3.925,
+      "operation": "500 result timestamp updates, some newly-lit updates, one transaction; restore outside timer"
+    },
+    "indexes": [
+      {
+        "buildMs": 264.118,
+        "newDatabasePages": 3621,
+        "walBytes": 14972112,
+        "before": [
+          {
+            "name": "idx_kinetic_addresses_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_leads_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_scan_targets_canonical",
+            "pages": 1419,
+            "bytes": 5812224
+          },
+          {
+            "name": "idx_scan_targets_fresh_opportunity",
+            "pages": 1504,
+            "bytes": 6160384
+          },
+          {
+            "name": "idx_scan_targets_market_sync",
+            "pages": 5021,
+            "bytes": 20566016
+          },
+          {
+            "name": "idx_scan_targets_reprobe",
+            "pages": 3042,
+            "bytes": 12460032
+          },
+          {
+            "name": "idx_scan_targets_scanned",
+            "pages": 2918,
+            "bytes": 11952128
+          },
+          {
+            "name": "kinetic_addresses",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "leads",
+            "pages": 91,
+            "bytes": 372736
+          },
+          {
+            "name": "scan_targets",
+            "pages": 35756,
+            "bytes": 146456576
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 3,
+            "bytes": 12288
+          }
+        ],
+        "after": [
+          {
+            "name": "idx_kinetic_addresses_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_leads_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_scan_targets_canonical",
+            "pages": 1419,
+            "bytes": 5812224
+          },
+          {
+            "name": "idx_scan_targets_fresh_opportunity",
+            "pages": 1504,
+            "bytes": 6160384
+          },
+          {
+            "name": "idx_scan_targets_market_sync",
+            "pages": 5021,
+            "bytes": 20566016
+          },
+          {
+            "name": "idx_scan_targets_reprobe",
+            "pages": 3042,
+            "bytes": 12460032
+          },
+          {
+            "name": "idx_scan_targets_scanned",
+            "pages": 2918,
+            "bytes": 11952128
+          },
+          {
+            "name": "idx_scan_targets_tenant_checked_jd",
+            "pages": 3633,
+            "bytes": 14880768
+          },
+          {
+            "name": "kinetic_addresses",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "leads",
+            "pages": 91,
+            "bytes": 372736
+          },
+          {
+            "name": "scan_targets",
+            "pages": 35756,
+            "bytes": 146456576
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 3,
+            "bytes": 12288
+          }
+        ]
+      },
+      {
+        "buildMs": 164.581,
+        "newDatabasePages": 1294,
+        "walBytes": 5335432,
+        "before": [
+          {
+            "name": "idx_kinetic_addresses_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_leads_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_scan_targets_canonical",
+            "pages": 1419,
+            "bytes": 5812224
+          },
+          {
+            "name": "idx_scan_targets_fresh_opportunity",
+            "pages": 1504,
+            "bytes": 6160384
+          },
+          {
+            "name": "idx_scan_targets_market_sync",
+            "pages": 5021,
+            "bytes": 20566016
+          },
+          {
+            "name": "idx_scan_targets_reprobe",
+            "pages": 3042,
+            "bytes": 12460032
+          },
+          {
+            "name": "idx_scan_targets_scanned",
+            "pages": 2918,
+            "bytes": 11952128
+          },
+          {
+            "name": "idx_scan_targets_tenant_checked_jd",
+            "pages": 3633,
+            "bytes": 14880768
+          },
+          {
+            "name": "kinetic_addresses",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "leads",
+            "pages": 91,
+            "bytes": 372736
+          },
+          {
+            "name": "scan_targets",
+            "pages": 35756,
+            "bytes": 146456576
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 3,
+            "bytes": 12288
+          }
+        ],
+        "after": [
+          {
+            "name": "idx_kinetic_addresses_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_leads_tenant",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "idx_scan_targets_canonical",
+            "pages": 1419,
+            "bytes": 5812224
+          },
+          {
+            "name": "idx_scan_targets_fresh_opportunity",
+            "pages": 1504,
+            "bytes": 6160384
+          },
+          {
+            "name": "idx_scan_targets_market_sync",
+            "pages": 5021,
+            "bytes": 20566016
+          },
+          {
+            "name": "idx_scan_targets_reprobe",
+            "pages": 3042,
+            "bytes": 12460032
+          },
+          {
+            "name": "idx_scan_targets_scanned",
+            "pages": 2918,
+            "bytes": 11952128
+          },
+          {
+            "name": "idx_scan_targets_tenant_checked_jd",
+            "pages": 3633,
+            "bytes": 14880768
+          },
+          {
+            "name": "idx_scan_targets_tenant_lit_jd",
+            "pages": 1294,
+            "bytes": 5300224
+          },
+          {
+            "name": "kinetic_addresses",
+            "pages": 24,
+            "bytes": 98304
+          },
+          {
+            "name": "leads",
+            "pages": 91,
+            "bytes": 372736
+          },
+          {
+            "name": "scan_targets",
+            "pages": 35756,
+            "bytes": 146456576
+          },
+          {
+            "name": "sqlite_schema",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat1",
+            "pages": 1,
+            "bytes": 4096
+          },
+          {
+            "name": "sqlite_stat4",
+            "pages": 3,
+            "bytes": 12288
+          }
+        ]
+      }
+    ],
+    "equivalentCounts": true
+  },
+  "recoverySql": {
+    "baseline": "SELECT r.id,r.tenant_id AS tenantId,r.kind,r.label,r.city,r.state,r.bbox,r.budget,r.verified,r.new_fiber AS newFiber,r.newly_live AS newlyLive,r.failed,r.status,r.error,r.est_bytes AS estBytes,r.created_by AS createdBy,r.started_at AS startedAt,r.heartbeat_at AS heartbeatAt,r.completed_at AS completedAt,r.reopen_count AS reopenCount FROM scan_runs r WHERE r.status IN ('done','error') AND r.id IN (SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight') AND (t.next_attempt_at IS NULL OR t.next_attempt_at<=datetime('now'))) ORDER BY r.completed_at ASC LIMIT ?",
+    "ranges": "SELECT r.id,r.tenant_id AS tenantId,r.kind,r.label,r.city,r.state,r.bbox,r.budget,r.verified,r.new_fiber AS newFiber,r.newly_live AS newlyLive,r.failed,r.status,r.error,r.est_bytes AS estBytes,r.created_by AS createdBy,r.started_at AS startedAt,r.heartbeat_at AS heartbeatAt,r.completed_at AS completedAt,r.reopen_count AS reopenCount FROM scan_runs r WHERE r.status IN ('done','error') AND r.id IN (SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight') AND t.next_attempt_at IS NULL UNION ALL SELECT t.run_id FROM scan_run_targets t WHERE t.state='queued' AND t.state IN ('queued','inflight') AND t.next_attempt_at<=datetime('now')) ORDER BY r.completed_at ASC LIMIT ?",
+    "countOr": "SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))",
+    "countRanges": "SELECT (SELECT COUNT(*) FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND next_attempt_at IS NULL)+(SELECT COUNT(*) FROM scan_run_targets WHERE state='queued' AND state IN ('queued','inflight') AND next_attempt_at<=datetime('now')) c",
+    "index": "CREATE INDEX idx_srt_pending_due_run ON scan_run_targets(state,next_attempt_at,run_id) WHERE state IN ('queued','inflight')"
+  },
+  "dailySql": {
+    "counts": "SELECT\n  (SELECT COUNT(*) FROM scan_targets WHERE tenant_id=@tenantId\n    AND julianday(last_scanned_at)>=julianday(@since)) AS checked,\n  (SELECT COUNT(*) FROM leads WHERE tenant_id=@tenantId\n    AND lead_tag='fresh_fiber_confirmed' AND julianday(created_at)>=julianday(@since)) AS newLeads,\n  (SELECT COUNT(*) FROM kinetic_addresses WHERE tenant_id=@tenantId AND is_coming_soon=1) AS comingSoon,\n  (SELECT COUNT(*) FROM scan_targets WHERE tenant_id=@tenantId\n    AND julianday(first_seen_fiber_at)>=julianday(@since)) AS newlyLit,\n  (SELECT COUNT(*) FROM scan_targets WHERE tenant_id=@tenantId\n    AND julianday(last_scanned_at) IS NULL AND last_scanned_at IS NULL) AS pending",
+    "indexes": [
+      "CREATE INDEX IF NOT EXISTS idx_scan_targets_tenant_checked_jd\n    ON scan_targets(tenant_id, julianday(last_scanned_at), last_scanned_at)",
+      "CREATE INDEX IF NOT EXISTS idx_scan_targets_tenant_lit_jd\n    ON scan_targets(tenant_id, julianday(first_seen_fiber_at))"
+    ]
+  }
+}

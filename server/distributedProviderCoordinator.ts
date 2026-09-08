@@ -1,3 +1,4 @@
+import { providerAdmissionWaitMs } from "./providerDeadline";
 import crypto from "node:crypto";
 import { rawDb } from "./db";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
@@ -159,7 +160,7 @@ export class DistributedProviderCoordinator<T> {
     // saturated (e.g. a sustained CRITICAL flood), a NORMAL request gives up after
     // this deadline and the scan worker requeues its address — the worker keeps
     // looping (heartbeating) instead of hanging, so runs never deadlock.
-    this.admissionMaxWaitMs = Math.max(100, Math.floor(options.admissionMaxWaitMs ?? 120_000));
+    this.admissionMaxWaitMs = providerAdmissionWaitMs(options.admissionMaxWaitMs ?? 120_000);
     // Aging: a queued item earns priority the longer it waits, guaranteeing that
     // even under a permanent CRITICAL flood a NORMAL item eventually crosses the
     // CRITICAL cutoff — for BOTH ordering and the reserved-slot ceiling — and runs.
@@ -193,7 +194,7 @@ export class DistributedProviderCoordinator<T> {
   async execute(
     key: string,
     source: ProviderRequestPriority,
-    task: () => Promise<T>,
+    task: (ownership: { assertActive: () => void }) => Promise<T>,
     options: {
       cacheable: (value: T) => boolean;
       serialize: (value: T) => string;
@@ -203,21 +204,31 @@ export class DistributedProviderCoordinator<T> {
        * wait immediately and the caller requeues the address instead of blocking for
        * up to admissionMaxWaitMs. */
       abort?: () => boolean;
+      deadlineAt?: number;
     },
   ): Promise<T> {
     const cached = this.readResult(key, options.deserialize);
     if (cached !== undefined) return cached;
     const lockOwner = `${this.instanceId}:${crypto.randomUUID()}`;
+    const waitStartedAt = Number.isFinite(options.deadlineAt)
+      ? Math.min(this.now(), options.deadlineAt! - this.admissionMaxWaitMs) : this.now();
     for (;;) {
+      // Address coalescing is part of admission, not an unbounded prelude to it.
+      // An uncertain cancellation read fails closed before any provider execution.
+      if ((options.abort && (() => { try { return options.abort(); } catch { return true; } })())
+          || this.now() - waitStartedAt >= this.admissionMaxWaitMs) {
+        throw new AdmissionTimeoutError(this.now() - waitStartedAt);
+      }
       if (this.tryAddressLock(key, lockOwner)) break;
       const shared = this.readResult(key, options.deserialize);
       if (shared !== undefined) return shared;
-      await sleep(this.pollMs);
+      await sleep(Math.min(this.pollMs, Math.max(1, this.admissionMaxWaitMs - (this.now() - waitStartedAt))));
     }
 
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    try {
     const secondCheck = this.readResult(key, options.deserialize);
     if (secondCheck !== undefined) {
-      this.releaseAddressLock(key, lockOwner);
       return secondCheck;
     }
 
@@ -230,7 +241,7 @@ export class DistributedProviderCoordinator<T> {
     // INCLUDING the admission wait — so a long wait can never let the lock lease lapse
     // and admit a duplicate check of the same address on another worker/instance. Once
     // the row is 'active' the same tick also refreshes its admission lease.
-    const heartbeat = setInterval(() => {
+    heartbeat = setInterval(() => {
       try {
         rawDb.prepare(`UPDATE provider_admission_queue SET lease_expires_at=?,updated_at=? WHERE id=? AND state='active'`)
           .run(this.now() + this.leaseMs, this.now(), workId);
@@ -247,8 +258,16 @@ export class DistributedProviderCoordinator<T> {
     }, Math.max(2_000, Math.floor(this.leaseMs / 3)));
     if (typeof (heartbeat as any).unref === "function") (heartbeat as any).unref();
     try {
-      await this.awaitAdmission(workId, options.abort, key, lockOwner);
-      const value = await task();
+      await this.awaitAdmission(workId, options.abort, key, lockOwner, waitStartedAt);
+      const assertActive = () => {
+        if (options.abort && (() => { try { return options.abort(); } catch { return true; } })()) throw new AdmissionTimeoutError(this.now() - waitStartedAt);
+        const owned = rawDb.prepare(`SELECT 1 FROM provider_admission_queue q JOIN provider_address_locks l ON l.dedupe_key=q.dedupe_key
+          WHERE q.id=? AND q.instance_id=? AND q.state='active' AND q.lease_expires_at>?
+            AND l.owner_id=? AND l.expires_at>?`).get(workId, this.instanceId, this.now(), lockOwner, this.now());
+        if (!owned) throw new AdmissionTimeoutError(this.now() - waitStartedAt);
+      };
+      assertActive();
+      const value = await task({ assertActive });
       if (this.resultCacheTtlMs > 0 && options.cacheable(value)) {
         const payload = options.serialize(value);
         rawDb.prepare(`INSERT INTO provider_shared_result_cache (dedupe_key,payload,expires_at,updated_at)
@@ -260,8 +279,9 @@ export class DistributedProviderCoordinator<T> {
     } catch (error) {
       this.complete(workId, "failed", String((error as any)?.message ?? error).slice(0, 180));
       throw error;
+    }
     } finally {
-      clearInterval(heartbeat);
+      if (heartbeat) clearInterval(heartbeat);
       this.releaseAddressLock(key, lockOwner);
     }
   }
@@ -272,12 +292,10 @@ export class DistributedProviderCoordinator<T> {
     const now = this.now();
     const heartbeatMs = Math.max(2_000, Math.floor(this.leaseMs / 3));
     const queuedStaleMs = Math.max(6 * heartbeatMs, Number(process.env.PROVIDER_QUEUED_STALE_MS ?? 90_000) || 90_000);
-    const taskCutoff = now - Math.max(60_000, Number(process.env.PROVIDER_TASK_MAX_MS ?? 180_000));
     const rows = rawDb.prepare(`SELECT source,state,priority,COUNT(*) c FROM provider_admission_queue
-      WHERE (state='active' AND (lease_expires_at IS NULL OR lease_expires_at>?)
-             AND (started_at IS NULL OR started_at>?))
+      WHERE (state='active' AND (lease_expires_at IS NULL OR lease_expires_at>?))
          OR (state='queued' AND (updated_at>? OR instance_id=?))
-      GROUP BY source,state,priority`).all(now, taskCutoff, now - queuedStaleMs, this.instanceId) as
+      GROUP BY source,state,priority`).all(now, now - queuedStaleMs, this.instanceId) as
         Array<{ source: ProviderRequestPriority; state: string; priority: number; c: number }>;
     const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any)?.count ?? 0);
     const byClass: Record<AdmissionClass, { active: number; queued: number }> = {
@@ -305,13 +323,12 @@ export class DistributedProviderCoordinator<T> {
     };
   }
 
-  private async awaitAdmission(workId: string, abort?: () => boolean, lockKey?: string, lockOwner?: string): Promise<void> {
-    const waitStartedAt = this.now();
+  private async awaitAdmission(workId: string, abort?: () => boolean, lockKey?: string, lockOwner?: string, waitStartedAt = this.now()): Promise<void> {
     for (;;) {
       // Cancellation: if the owning run was cancelled/paused mid-wait, abandon the
       // wait at once (don't block up to admissionMaxWaitMs) — retire the queue row and
       // throw the same transient error so the caller requeues, never mis-classifies.
-      if (abort && (() => { try { return abort(); } catch { return false; } })()) {
+      if (abort && (() => { try { return abort(); } catch { return true; } })()) {
         rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error=?,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='queued'`)
           .run("admission aborted (run cancelled)", this.now(), workId);
         throw new AdmissionTimeoutError(this.now() - waitStartedAt);
@@ -481,7 +498,7 @@ export class DistributedProviderCoordinator<T> {
       }).immediate();
       if (decision.admitted) return;
       if ((decision as any).gone) throw new AdmissionTimeoutError(this.now() - waitStartedAt);
-      await sleep(decision.waitMs);
+      await sleep(Math.min(decision.waitMs, 250, Math.max(1, this.admissionMaxWaitMs - (this.now() - waitStartedAt))));
     }
   }
 
@@ -498,14 +515,9 @@ export class DistributedProviderCoordinator<T> {
     this._lastCleanupAt = now;
     rawDb.prepare(`DELETE FROM provider_rate_events WHERE started_at<=?`).run(now - this.rateWindowMs - 1_000);
     rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',updated_at=? WHERE state='active' AND lease_expires_at<=?`).run(now, now);
-    // HARD active-age cap: the lifetime heartbeat keeps a HUNG task's lease fresh
-    // forever, so lease expiry alone can never reclaim its slot. No legitimate check
-    // exceeds a few tens of seconds (5s search cap + parse + save); anything active
-    // past the task deadline is wedged upstream — expire it so the slot frees (its
-    // eventual completion is a harmless no-op UPDATE). Observed live: 16 slots hung
-    // 435s+ on a black-holed egress collapsed throughput while 300k targets waited.
-    rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error='task deadline exceeded',updated_at=? WHERE state='active' AND started_at<=?`)
-      .run(now, now - Math.max(60_000, Number(process.env.PROVIDER_TASK_MAX_MS ?? 180_000)));
+    // A fresh lease still owns capacity regardless of task age. Releasing it
+    // while its promise runs would allow an old token waiter to send uncounted.
+    // Live scanner waits are bounded; its transport revalidates ownership.
     // DEAD-SUBMITTER QUEUED rows: the lifetime heartbeat touches updated_at every
     // max(2s, leaseMs/3) — 10s at the prod default (leaseMs 30s) — while a request
     // waits; a queued row untouched far longer has no live submitter (process died)

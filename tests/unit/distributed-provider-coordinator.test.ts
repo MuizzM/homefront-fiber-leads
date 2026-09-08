@@ -21,6 +21,53 @@ beforeEach(() => {
 });
 
 describe("DistributedProviderCoordinator", () => {
+  it("retains fresh active ownership past task age and fences a lost lease before later transport", async () => {
+    const a = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 1, maxRequestsPerMinute: 100, resultCacheTtlMs: 0 });
+    const b = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 1, maxRequestsPerMinute: 100, admissionMaxWaitMs: 100, resultCacheTtlMs: 0 });
+    let release!: () => void, ready!: () => void, check!: () => void;
+    const entered = new Promise<void>(resolve => { ready = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
+    const first = a.execute("long-but-owned", "manual", async ownership => { check = ownership.assertActive; ready(); await gate; return { value: 1 }; }, codec);
+    await entered;
+    rawDb.prepare("UPDATE provider_admission_queue SET started_at=? WHERE dedupe_key='long-but-owned'").run(Date.now() - 600_000);
+    expect(a.snapshot().active).toBe(1);
+    const second = vi.fn(async () => ({ value: 2 }));
+    try {
+      await expect(b.execute("must-wait", "manual", second, codec)).rejects.toThrow(/admission/);
+      expect(second).not.toHaveBeenCalled(); check();
+      rawDb.prepare("UPDATE provider_admission_queue SET state='expired' WHERE dedupe_key='long-but-owned'").run();
+      expect(check).toThrow(/admission/);
+    } finally { release(); await first; }
+  });
+  it("bounds address-lock admission wait and never executes the second task", async () => {
+    const a = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerMinute: 100, resultCacheTtlMs: 0 });
+    const b = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerMinute: 100, resultCacheTtlMs: 0, admissionMaxWaitMs: 100 });
+    let release!: () => void, entered!: () => void;
+    const running = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const first = a.execute("contended-address", "manual", async () => { entered(); await gate; return { value: 1 }; }, codec);
+    await running;
+    const task = vi.fn(async () => ({ value: 2 })); const started = performance.now();
+    try { await expect(b.execute("contended-address", "manual", task, codec)).rejects.toThrow(/admission/i); }
+    finally { release(); await first; }
+    expect(performance.now() - started).toBeLessThan(400);
+    expect(task).not.toHaveBeenCalled();
+    expect(rawDb.prepare("SELECT COUNT(*) n FROM provider_address_locks").get()).toEqual({ n: 0 });
+  });
+  it("fails closed on an uncertain cancellation read before admission", async () => {
+    const coordinator = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerMinute: 100 });
+    const task = vi.fn(async () => ({ value: 2 }));
+    await expect(coordinator.execute("abort-read-failure", "manual", task, { ...codec, abort: () => { throw new Error("database unavailable"); } })).rejects.toThrow(/admission/i);
+    expect(task).not.toHaveBeenCalled();
+    expect(rawDb.prepare("SELECT COUNT(*) n FROM provider_address_locks").get()).toEqual({ n: 0 });
+  });
+  it("releases its address lock if queue insertion fails", async () => {
+    const coordinator = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerMinute: 100 });
+    const task = vi.fn(async () => ({ value: 2 }));
+    rawDb.exec("CREATE TEMP TRIGGER fixture_admission_fault BEFORE INSERT ON provider_admission_queue BEGIN SELECT RAISE(ABORT,'fixture admission fault'); END");
+    try { await expect(coordinator.execute("queue-failure", "manual", task, codec)).rejects.toThrow("fixture admission fault"); }
+    finally { rawDb.exec("DROP TRIGGER fixture_admission_fault"); }
+    expect(task).not.toHaveBeenCalled(); expect(rawDb.prepare("SELECT COUNT(*) n FROM provider_address_locks").get()).toEqual({ n: 0 });
+  });
   it("enforces one concurrency semaphore across coordinator instances", async () => {
     const a = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 3, maxRequestsPerMinute: 100, resultCacheTtlMs: 1_000, rateWindowMs: 100 });
     const b = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 3, maxRequestsPerMinute: 100, resultCacheTtlMs: 1_000, rateWindowMs: 100 });

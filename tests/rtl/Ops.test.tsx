@@ -7,12 +7,13 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: 1, name: "Mara", role: "manager" } }) }));
+const authFixture = vi.hoisted(() => ({ role: "manager" }));
+vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: 1, name: "Mara", role: authFixture.role } }) }));
 const toast = vi.fn();
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 
 const apiRequest = vi.fn();
-vi.mock("@/lib/queryClient", () => ({ apiRequest: (...a: any[]) => apiRequest(...a) }));
+vi.mock("@/lib/queryClient", () => ({ apiRequest: (...a: any[]) => apiRequest(...a), apiRequestIdempotent: (...a: any[]) => apiRequest(...a) }));
 
 // Radix Select needs pointer-capture APIs jsdom lacks (house shim, same as
 // AddLeadSheet.test.tsx).
@@ -50,12 +51,14 @@ const QUEUE = {
 function json(body: unknown) { return Promise.resolve({ json: () => Promise.resolve(body) }); }
 
 beforeEach(() => {
+  authFixture.role = "manager";
   apiRequest.mockReset();
   toast.mockReset();
   apiRequest.mockImplementation((method: string, url: string) => {
     if (url.startsWith("/api/ops/overview")) return json(OVERVIEW);
     if (url.startsWith("/api/ops/workload")) return json(WORKLOAD);
     if (url.startsWith("/api/ops/queue/")) return json(QUEUE);
+    if (url === "/api/leads/assignment-operations") return json({ operations: [] });
     if (url === "/api/leads/bulk-assign") return json({ updated: 2, skipped: 0, undoToken: "tok-1", undoExpiresAt: new Date(Date.now() + 600_000).toISOString() });
     if (url === "/api/ops/dismiss") return json({ ok: true });
     return json({});
@@ -68,6 +71,11 @@ function renderOps() {
 }
 
 describe("<Ops />", () => {
+  it("does not request assignment history for an allowed Ops role without lead.assign", async () => {
+    authFixture.role = "calling_manager"; renderOps();
+    await screen.findByTestId("ops-rule");
+    expect(apiRequest.mock.calls.some(([, url]) => url === "/api/leads/assignment-operations")).toBe(false);
+  });
   it("renders the server's rule verbatim with the count and each row's reason", async () => {
     renderOps();
     expect(await screen.findByTestId("ops-rule")).toHaveTextContent("Assigned more than 48 hours ago with no recorded door activity");
@@ -85,7 +93,7 @@ describe("<Ops />", () => {
     fireEvent.click(await screen.findByTestId("rep-option-6"));
     fireEvent.click(screen.getByTestId("ops-assign"));
     await waitFor(() => {
-      expect(apiRequest).toHaveBeenCalledWith("POST", "/api/leads/bulk-assign", { leadIds: [11, 12], repId: 6 });
+      expect(apiRequest).toHaveBeenCalledWith("POST", "/api/leads/bulk-assign", { leadIds: [11, 12], repId: 6, opId: expect.any(String) });
     });
     expect(await screen.findByTestId("ops-result")).toHaveTextContent("2 assigned to Dana Doors");
     expect(screen.getByTestId("ops-undo")).toBeInTheDocument();
