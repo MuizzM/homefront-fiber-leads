@@ -8,9 +8,9 @@
 #   LITESTREAM_BUCKET/ENDPOINT/ACCESS_KEY_ID/SECRET_ACCESS_KEY — enable backups;
 #                without them the app still runs (start.sh warns loudly).
 
-FROM node:20-bookworm-slim AS build
+FROM node:24.20.0-bookworm-slim AS build
 WORKDIR /app
-# better-sqlite3 is a native addon — toolchain needed if no prebuilt binary matches.
+# Keep the build toolchain for dependencies that compile native addons.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
@@ -18,7 +18,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:20-bookworm-slim AS runtime
+FROM node:24.20.0-bookworm-slim AS runtime
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -38,9 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
   && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
-# Prod deps only; better-sqlite3 recompiles here against the runtime Node.
+# Prod deps only. better-sqlite3 13 ships Node-API binaries; npm ci alone does
+# not load them. CI runs the native/backup smoke inside this exact runtime image.
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+COPY script/runtime-smoke.cjs ./script/runtime-smoke.cjs
 COPY deploy ./deploy
 RUN chmod +x deploy/start.sh && mkdir -p /data
 

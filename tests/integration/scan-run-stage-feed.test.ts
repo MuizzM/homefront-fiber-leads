@@ -1,3 +1,4 @@
+// @vitest-environment node
 // ── Run-scoped scan stage feed ────────────────────────────────────────────────
 // The Scan Inspector is requireAdmin, so whoever STARTED an area scan could never
 // see why it was or wasn't moving. /api/scan/runs/:runId/stages (+ /stream) expose

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // ── GET /api/leads/stream — the server push channel ───────────────────────────
 // /api/leads/events is a data-free ping, so its only authorization question is
 // "which tenant". This stream carries the changed PIN, which means the socket

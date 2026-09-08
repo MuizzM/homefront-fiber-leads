@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=24.20.0 <25"
+  },
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "tsx script/build.ts",
@@ -24,7 +27,7 @@
     "harness:check": "python3 scripts/validate-agent-harness.py"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "13.0.3",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
     "dotenv": "^16.4.7",
@@ -69,7 +72,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.0",
     "@types/multer": "^2.2.0",
-    "@types/node": "20.19.27",
+    "@types/node": "24.13.3",
     "@types/nodemailer": "^8.0.1",
     "@types/pdfkit": "^0.17.6",
     "@types/react": "^18.3.11",
