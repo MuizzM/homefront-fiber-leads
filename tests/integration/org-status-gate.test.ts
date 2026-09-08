@@ -235,14 +235,16 @@ describe("REVIEW FIX: suspending through PATCH revokes sessions too", () => {
   });
 });
 
-describe("the gate fails OPEN when the lookup itself breaks", () => {
-  it("serves the request rather than locking out the floor", async () => {
+describe("the gate reuses joined organization authority", () => {
+  it("serves an active identity without a redundant tenant lookup", async () => {
     setStatus(DOOMED, "active");
     const original = storage.getTenantById;
-    (storage as any).getTenantById = () => { throw new Error("simulated tenant lookup failure"); };
+    let lookups = 0;
+    (storage as any).getTenantById = () => { lookups++; throw new Error("redundant tenant lookup"); };
     try {
       const res = await req("/api/leads", doomedRepSession);
       expect(res.status).toBe(200);
+      expect(lookups).toBe(0);
     } finally {
       (storage as any).getTenantById = original;
     }

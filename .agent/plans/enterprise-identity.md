@@ -45,8 +45,8 @@ This is phase 1 of the user's twelve-part enterprise feature specification. Subs
 - [x] 2026-09-08: Created isolated identity branch; dispatched read-only code, protocol and product reviews.
 - [x] 2026-09-08: Reliability PR #232 CI run 34277430203 passed all checks on head 497cc3d; updated PR validation evidence. Staging/canary remain pending.
 - [x] 2026-09-08: Installed checksum-verified Node 24.20.0 in an isolated temporary runtime, upgraded native SQLite/types and patched compatible qs/browserslist advisories. Native backup/WAL/worker/child-process smoke passed locally; CI image smoke added, Linux execution pending.
-- [x] 2026-09-08: First runtime gate: 8,024 passed, 31 failed due to native-fetch/jsdom AbortSignal mismatch and SQLite query-plan wording. HTTP-only suites now use Node; physical-plan checks strengthened. All 51 targeted regressions passed. Second full run: 8,048 passed, seven timeouts in one existing mocked scanner transport suite; diagnosis in progress, no timeout increase or provider-behavior change.
-- [ ] Supported-runtime foundation and compatibility evidence.
+- [x] 2026-09-08: First runtime gate: 8,024 passed, 31 failed due to native-fetch/jsdom AbortSignal mismatch and SQLite query-plan wording. HTTP-only suites now use Node; physical-plan checks strengthened. All 51 targeted regressions passed. Second full run: 8,048 passed, seven timeouts in one existing mocked scanner transport suite; later traced to shared database backoff in the test harness and isolated without increasing timeouts or changing provider behavior.
+- [x] Supported-runtime local foundation and native compatibility evidence. Linux image validation remains a CI/release requirement.
 - [ ] Shared admission/session/schema implementation.
 - [ ] SSO, directory lifecycle, MFA, admin/client integration.
 - [ ] Full validation, review, API/runbook documentation and draft PR.
@@ -81,3 +81,24 @@ Keep additive schema changes compatible with current code; migrations are idempo
 ## Result
 
 Implementation in progress. No identity feature or production deployment is claimed complete.
+
+## Session authority checkpoint — 2026-09-08
+
+- Committed supported runtime checkpoint `2fc26d0`. Diagnosed the seven scanner-transport timeouts: production-mode mocked tests inherited a real shared database fleet-backoff state from parallel suites. Isolated only that unrelated test dependency; provider assertions and timeout budgets remain unchanged. All 18 transport/governor regressions passed.
+- Added fresh indexed session authority, absolute-lifetime read enforcement, renewal CAS and readonly auth status. Streams check session/account/org/training authority before payloads and release resources on server-side close. Delayed recovery retains its transaction-time check and now checks absolute lifetime.
+- Review found and implementation addressed stale cross-worker roster/territory/open-field permissions (including nested config and map ETag/body caches), stale primary-owner SQL visibility, cross-tenant inspector diagnostics/global controls, per-address first-seen N+1 queries, unbounded diagnostic subscriptions and stream output queues. Persistent metadata triggers do not fire on scanner/lead event writes; transaction cache bypass avoids publishing rolled-back permissions.
+- Added synthetic two-connection, migration/restart/restore, wire-level positive-control, rollback/cache, query-plan, resource-limit and RTL regression coverage. New-rep fixtures explicitly represent completed training; no production gate was loosened. SQLite 3.53 query-plan fixtures recognize its physical EXISTS join while retaining PK-probe requirements.
+- Focused authority regression corrections passed (55 tests in three suites); component/source-invariant tests passed. Full gate running in `/tmp/homefront-identity-runtime/full-authority-foundation.log`. Final review still open. Do not mark final verification complete until that run and any required corrections pass.
+- Confirmed business rules remain: SQLite first, tenant-admin approval for new identities and SCIM reactivation, Homefront MFA, block new login at the session limit. Protocol/policy/admin implementation is still subsequent work; these choices are not claimed as implemented by this checkpoint.
+
+### Final local review
+
+- Independent code, security, test and product reviews finished; concrete findings addressed. Scope publication now happens only after successful reads, and errors close the stream. The inspector live test removes the run filter so tenant isolation is tested directly; unreadable stream authority and case-insensitive UI diagnostics have explicit regressions.
+- Full gate passed 8,112 tests across 660 files, both type checkers, index/harness/deployment guards and production build (`full-authority-verified.log`). Two prior failures were corrected without weakening policy: historical request-clock fixture now uses a valid lifetime; offboarding asserts readonly status and continued HTTP denial instead of status-triggered deletion.
+- Final refinement reuses the joined organization status in the organization gate, removing its duplicate full-tenant read. All 28 targeted organization/recovery tests passed. Final full gate is running in `full-final.log`; no further source edits planned. Native smoke passed again: Node 24.20.0, driver 13.0.3, SQLite 3.53.4.
+
+### Verified foundation result
+
+Final source passed `bash scripts/agent-verify.sh full`: 8,113 tests in 660 files, tsc, tsgo, index guard, deployment safety, harness checks and production build (`/tmp/homefront-identity-runtime/full-final.log`). Native SQLite/backup/worker smoke passed. The obsolete organization-test description was then corrected and strengthened with an explicit zero-extra-lookups assertion, followed by its focused rerun. Independent review has no remaining blocker for this foundation. Linux production-image smoke and staging workload/restore evidence remain pending; local Docker is unavailable.
+
+This checkpoint is ready for a dependent draft PR, not production promotion. It does not complete the enterprise identity milestone: next implement the separate approval/directory/policy schema and common admission transaction, then the SAML/OIDC adapters, SCIM and Homefront MFA. Preserve the five confirmed user decisions and the existing rollout gates.

@@ -343,14 +343,15 @@ describe("a kick beats session renewal", () => {
     // state that used to report the kicked rep as happily signed in.
     rawDb.prepare("UPDATE users SET active = 0 WHERE id = ?").run(rep.userId);
 
+    const changes = rawDb.prepare("SELECT total_changes() n").get();
     const res = await request("/api/auth/status", rep.session);
     const body = await res.json() as any;
     expect(body.currentUser).toBeNull();     // never reported as signed in
     expect(body.accessRevoked).toBe(true);   // and distinguishable from a timeout
 
-    // Self-healing: contacting status drops the dead session rows.
-    const left = rawDb.prepare("SELECT COUNT(*) c FROM sessions WHERE user_id = ?").get(rep.userId) as any;
-    expect(left.c).toBe(0);
+    // Status must deny access without competing for the SQLite writer.
+    expect(rawDb.prepare("SELECT total_changes() n").get()).toEqual(changes);
+    expect((await request("/api/leads", rep.session)).status).toBe(401);
   });
 
   it("a plain expiry is NOT reported as a revocation", async () => {

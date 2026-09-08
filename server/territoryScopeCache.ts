@@ -1,3 +1,6 @@
+import { rawDb } from "./db";
+import { scopeAuthorityVersion } from "./scopeAuthorityVersion";
+
 // A version stamp for "the territory table changed".
 //
 // repCanAccessLead answers "may this person read this door", and for a rep it
@@ -16,6 +19,7 @@
 // repId edit changes access too, and a bump that reasons about which fields
 // matter is a bump that will eventually reason wrong.
 //
+// A persisted trigger version also observes other workers and raw SQL writers.
 // Failure mode if this is ever missed: a rep keeps reading doors in an area that
 // was reclaimed from them. That is the exact leak the visibility work closed, so
 // it stays covered by the reclaim-revokes-access integration test, which goes
@@ -34,12 +38,13 @@ export function bumpTerritoryVersion(): void {
  *  drawn or moved area is visible on the next read instead of reading zero
  *  doors for the memo's TTL. */
 export function territoryVersionStamp(): number {
-  return version;
+  return scopeAuthorityVersion(rawDb);
 }
 
 
 interface Entry {
   version: number;
+  authorityVersion: number;
   value: Set<number>;
 }
 
@@ -62,15 +67,18 @@ export function cachedScopeLookup(
   key: string,
   compute: () => Set<number>,
 ): Set<number> {
+  // Rolled-back trigger versions can recur; never publish uncommitted scope.
+  if (rawDb.inTransaction) return compute();
   const current = version;
+  const authorityVersion = scopeAuthorityVersion(rawDb);
   const hit = cache.get(key);
-  if (hit && hit.version === current) return hit.value;
+  if (hit && hit.version === current && hit.authorityVersion === authorityVersion) return hit.value;
 
   const value = compute();
   // Drop the whole map rather than evict cleverly: entries are only valid for
   // one version anyway, so a full clear on overflow costs nothing real.
   if (cache.size >= MAX_ENTRIES) cache.clear();
-  cache.set(key, { version: current, value });
+  cache.set(key, { version: current, authorityVersion, value });
   return value;
 }
 

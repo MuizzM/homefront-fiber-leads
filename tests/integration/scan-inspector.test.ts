@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,35 @@ function emitLifecycle(key: string, addr: string, finalStage: "classified" | "re
 }
 
 describe("Scan Inspector event store", () => {
+  it("isolates rows, counters, first-seen time and timeline when tenants share an address key", async () => {
+    const { rawDb } = await import("../../server/db");
+    rawDb.exec("CREATE TABLE IF NOT EXISTS scan_runs(id TEXT PRIMARY KEY,tenant_id INTEGER); INSERT INTO scan_runs VALUES('tenant-a',1),('tenant-b',2)");
+    const base = { addressKey: "tenant|shared", address: "1 Shared St", city: "Inman", state: "SC", zip: "29349", source: "field", attempt: 1 } as const;
+    bus.emitStage({ ...base, runId: "tenant-b", stage: "queued", status: "info", tsEpoch: 100 });
+    bus.emitStage({ ...base, runId: "tenant-a", stage: "queued", status: "info", tsEpoch: 200 });
+    bus.emitStage({ ...base, runId: "tenant-a", stage: "classified", status: "ok", classification: "fresh_fiber", tsEpoch: 300 });
+    bus.emitStage({ ...base, runId: "tenant-b", stage: "error", status: "error", tsEpoch: 400 });
+    bus.emitStage({ ...base, runId: null, stage: "error", status: "error", tsEpoch: 500 });
+    const snapshot = events.getInspectorSnapshot({ tenantId: 1 });
+    expect(snapshot.rows).toHaveLength(1);
+    expect(snapshot.rows[0]).toMatchObject({ runId: "tenant-a", startedAt: 200, updatedAt: 300, stage: "classified" });
+    expect(snapshot.counters).toMatchObject({ found: 1, checked: 1, unresolved: 0 });
+    expect(events.getAddressTimeline(base.addressKey, 80, { tenantId: 1 }).map(e => e.tsEpoch)).toEqual([200, 300]);
+    expect(events.getInspectorSnapshot({ tenantId: -1 }).rows).toEqual([]);
+  });
+
+  it("reads a multi-row snapshot and first-seen times in one SELECT", async () => {
+    const { rawDb } = await import("../../server/db");
+    for (let i = 0; i < 30; i++) bus.emitStage({ addressKey: `single-query|${i}`, address: `${i} Query St`, city: "Inman", state: "SC", zip: "29349", runId: "query-fixture", source: "field", attempt: 1, stage: "queued", status: "info", tsEpoch: 100 + i });
+    events.flushScanEvents();
+    const spy = vi.spyOn(rawDb, "prepare");
+    try {
+      const snapshot = events.getInspectorSnapshot({ runId: "query-fixture", limit: 50 });
+      expect(snapshot.rows).toHaveLength(30);
+      expect(snapshot.rows.every(row => row.startedAt === row.updatedAt)).toBe(true);
+      expect(spy.mock.calls.filter(([sql]) => /^\s*SELECT/i.test(sql))).toHaveLength(1);
+    } finally { spy.mockRestore(); }
+  });
   it("records a full timeline and derives balanced accounting counters", () => {
     emitLifecycle("k|fresh", "1 Fresh St", "classified", "fresh_fiber");
     emitLifecycle("k|retry", "2 Retry Rd", "retry");
@@ -103,4 +132,15 @@ describe("Scan Inspector event store", () => {
     const afterDb = (rawDb.prepare("SELECT COUNT(*) c FROM scan_events WHERE address_key LIKE 'batch|%'").get() as any).c;
     expect(afterDb).toBe(before + 20); // all persisted in the single bulk transaction
   });
+});
+
+it("tenant snapshot probes each event's run primary key without listing tenant history", async () => {
+  const { rawDb } = await import("../../server/db");
+  const spy = vi.spyOn(rawDb, "prepare");
+  let sql = "";
+  try { events.getInspectorSnapshot({ tenantId: 1 }); sql = spy.mock.calls.find(([text]) => /SELECT e\.\*/.test(text))![0]; }
+  finally { spy.mockRestore(); }
+  const plan = rawDb.prepare(`EXPLAIN QUERY PLAN ${sql}`).all({ tenantId: 1, runId: null, city: null, state: null, limit: 200 }) as Array<{ detail: string }>;
+  expect(plan.some(row => /SEARCH sr(?: EXISTS)? USING INDEX sqlite_autoindex_scan_runs_1 \(id=\?\)/.test(row.detail))).toBe(true);
+  expect(plan.some(row => /LIST SUBQUERY/.test(row.detail))).toBe(false);
 });

@@ -91,10 +91,14 @@ export function repVisibilitySql(
         OR EXISTS (
           SELECT 1 FROM territories t
            WHERE t.id = ${a}.assigned_territory_id
-             AND (t.rep_id IN (${list}) OR EXISTS (
-               SELECT 1 FROM json_each(COALESCE(t.assignee_ids, '[]')) je
-                WHERE je.value IN (${list})
-             ))
+             AND CASE
+               WHEN json_type(CASE WHEN json_valid(t.assignee_ids) THEN t.assignee_ids END) = 'array'
+               THEN EXISTS (
+                 SELECT 1 FROM json_each(t.assignee_ids) je
+                  WHERE je.type IN ('integer', 'real') AND je.value IN (${list})
+               )
+               ELSE t.rep_id IN (${list})
+             END
         )
       )`;
 }

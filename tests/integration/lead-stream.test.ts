@@ -20,7 +20,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let server: Server;
 let baseUrl: string;
@@ -598,6 +598,35 @@ describe("no secret material on the wire", () => {
 });
 
 describe("connection lifecycle", () => {
+  it.each(["logout", "inactive", "role", "member", "tenant", "absolute expiry"] as const)(
+    "closes an already delivering stream after %s and releases its listener", async change => {
+      const viewer = person(`Revocation ${change}`, "manager", 1);
+      const baseline = await settledListenerCount();
+      const stream = await open(viewer.session);
+      try {
+        await stream.ready();
+        const before = door(sharedArea, repA.memberId, 1);
+        await knock(before, repA.session);
+        expect(await stream.awaitLead(before)).toBe(true);
+        if (change === "logout") storage.deleteSession(viewer.session);
+        else if (change === "inactive") storage.updateUser(viewer.userId, { active: false }, 1);
+        else if (change === "role") storage.updateUser(viewer.userId, { role: "rep" }, 1);
+        else if (change === "member") storage.updateUser(viewer.userId, { teamMemberId: repA.memberId }, 1);
+        else if (change === "tenant") storage.updateUser(viewer.userId, { tenantId: 2 }, 1);
+        else {
+          const { rawDb } = await import("../../server/db");
+          const { SESSION_ABSOLUTE_MAX_MS } = await import("../../server/sessionLifetime");
+          rawDb.prepare("UPDATE sessions SET created_at=? WHERE id=?")
+            .run(new Date(Date.now() - SESSION_ABSOLUTE_MAX_MS - 1000).toISOString(), viewer.session);
+        }
+        const after = door(sharedArea, repA.memberId, 1);
+        await knock(after, repA.session);
+        // A successful write above proves a live event was emitted. The server
+        // must detach by itself, before this test aborts the browser connection.
+        expect(await waitFor(() => leadEvents.leadEventListenerCount() === baseline)).toBe(true);
+        expect(stream.leadIds()).not.toContain(after);
+      } finally { await stream.close(); }
+    });
   it("releases its bus subscription when the client hangs up", async () => {
     const baseline = await settledListenerCount();
     const stream = await open(repA.session);
@@ -640,4 +669,51 @@ describe("connection lifecycle", () => {
     expect(leaving.leadIds()).not.toContain(id);
     await staying.close();
   });
+});
+
+describe("permission changes made by a different database connection", () => {
+  it.each(["roster", "territory", "open-field"])("refreshes warm %s scope before delivering more leads", async change => {
+    const { default: Database } = await import("better-sqlite3");
+    const { dbPath } = await import("../../server/db");
+    const writer = new Database(dbPath);
+    const viewer = person(`External ${change} viewer`, change === "roster" ? "team_lead" : "rep", 1);
+    const teammate = person(`External ${change} owner`, "rep", 1);
+    writer.prepare("UPDATE users SET training_required=0 WHERE id=?").run(viewer.userId); // already-trained field fixture
+    const territory = area([viewer.memberId], 1);
+    if (change === "roster") storage.updateTeamMember(teammate.memberId, { reportsToId: viewer.memberId });
+    if (change === "open-field") writer.exec("UPDATE tenants SET open_field_enabled=1 WHERE id=1");
+    const ownership = change === "open-field" ? { assignedRepId: null, assignedTerritoryId: null }
+      : { assignedRepId: teammate.memberId, assignedTerritoryId: change === "territory" ? territory : null };
+    const emit = (id: number, own = ownership) => leadEvents.emitLeadEvent({ tenantId: 1, leadId: id, type: "status", lead: { id, ...own } });
+    const stream = await open(viewer.session);
+    try {
+      await stream.ready();
+      const before = 900000 + ++uniq, denied = 900000 + ++uniq, control = 900000 + ++uniq;
+      emit(before); expect(await stream.awaitLead(before)).toBe(true); // both caches warm
+      if (change === "roster") writer.prepare("UPDATE team_members SET reports_to_id=NULL WHERE id=?").run(teammate.memberId);
+      if (change === "territory") writer.prepare("UPDATE territories SET assignee_ids='[]' WHERE id=?").run(territory);
+      if (change === "open-field") writer.exec("UPDATE tenants SET open_field_enabled=0 WHERE id=1");
+      emit(denied);
+      emit(control, { assignedRepId: viewer.memberId, assignedTerritoryId: null });
+      expect(await stream.awaitLead(control)).toBe(true);
+      expect(stream.leadIds()).not.toContain(denied);
+    } finally { await stream.close(); writer.close(); }
+  });
+});
+
+it("closes a warm stream when a refreshed scope cannot be read", async () => {
+  const { rawDb } = await import("../../server/db");
+  const viewer = person("Scope failure viewer", "team_lead", 1);
+  const baseline = await settledListenerCount();
+  const stream = await open(viewer.session);
+  const emit = (id: number) => leadEvents.emitLeadEvent({ tenantId: 1, leadId: id, type: "status", lead: { id, assignedRepId: viewer.memberId } });
+  const before = 900000 + ++uniq, denied = 900000 + ++uniq;
+  try {
+    await stream.ready(); emit(before); expect(await stream.awaitLead(before)).toBe(true);
+    rawDb.exec("UPDATE tenants SET open_field_enabled=0 WHERE id=1");
+    const read = vi.spyOn(storage, "openFieldEnabled").mockImplementationOnce(() => { throw new Error("unreadable fixture scope"); });
+    try { emit(denied); } finally { read.mockRestore(); }
+    expect(await waitFor(() => leadEvents.leadEventListenerCount() === baseline)).toBe(true);
+    expect(stream.leadIds()).not.toContain(denied);
+  } finally { await stream.close(); }
 });

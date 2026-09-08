@@ -105,16 +105,17 @@ it("keeps failed work visible after flag rollback, without private contents or f
   expect((await request(`/api/reliability/recovery/notification/${own}/discard`, admin.token, { reason: "Reviewed work" })).status).toBe(200);
   expect(db.prepare("SELECT status,payload FROM notification_outbox WHERE id=?").get(own)).toEqual({ status: "discarded", payload: "{}" });
 });
-it.each(["session", "deactivate", "demote", "transfer"])("rechecks %s revocation after acquiring a held SQLite writer", async change => {
+it.each(["session", "absolute", "deactivate", "demote", "transfer"])("rechecks %s revocation after acquiring a held SQLite writer", async change => {
   const admin = actor(), id = notification(); const holder = new Database(file); holder.exec("BEGIN IMMEDIATE");
   let authenticated!: () => void;
   const read = new Promise<void>(resolve => { authenticated = resolve; });
-  const original = storage.getUserById.bind(storage);
-  vi.spyOn(storage, "getUserById").mockImplementation(userId => { const result = original(userId); if (userId === admin.user.id) authenticated(); return result; });
+  const original = storage.touchSession.bind(storage);
+  vi.spyOn(storage, "touchSession").mockImplementation(session => { const result = original(session); if (session.userId === admin.user.id) authenticated(); return result; });
   try {
     const pending = request(`/api/reliability/recovery/notification/${id}/discard`, admin.token, { reason: "Reviewed work" });
-    await read;
+    await Promise.race([read, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("Authenticated request checkpoint missing")), 2000); timer.unref(); })]);
     if (change === "session") holder.prepare("DELETE FROM sessions WHERE id=?").run(admin.token);
+    else if (change === "absolute") holder.prepare("UPDATE sessions SET created_at=? WHERE id=?").run(new Date(0).toISOString(), admin.token);
     else holder.prepare(`UPDATE users SET ${change === "deactivate" ? "active=0" : change === "demote" ? "role='manager'" : "tenant_id=2"} WHERE id=?`).run(admin.user.id);
     holder.exec("COMMIT");
     expect((await pending).status).toBe(403);
@@ -169,11 +170,11 @@ it("rejects assignment admission when its session is revoked during writer conte
   const lead = Number(db.prepare("INSERT INTO leads(tenant_id,address,city,state,zip,created_at,updated_at) VALUES (1,?,'Fixture','NC','27000',datetime('now'),datetime('now'))").run(`${++sequence} Fixture Street`).lastInsertRowid);
   const holder = new Database(file); holder.exec("BEGIN IMMEDIATE");
   let readDone!: () => void; const read = new Promise<void>(resolve => { readDone = resolve; });
-  const original = storage.getUserById.bind(storage);
-  vi.spyOn(storage, "getUserById").mockImplementation(id => { const result = original(id); if (id === admin.user.id) readDone(); return result; });
+  const original = storage.touchSession.bind(storage);
+  vi.spyOn(storage, "touchSession").mockImplementation(session => { const result = original(session); if (session.userId === admin.user.id) readDone(); return result; });
   try {
     const pending = request("/api/leads/bulk-assign", admin.token, { leadIds: [lead], repId: rep.id, opId: `revoked-${++sequence}` });
-    await read; holder.prepare("DELETE FROM sessions WHERE id=?").run(admin.token); holder.exec("COMMIT");
+    await Promise.race([read, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error("Authenticated request checkpoint missing")), 2000); timer.unref(); })]); holder.prepare("DELETE FROM sessions WHERE id=?").run(admin.token); holder.exec("COMMIT");
     expect((await pending).status).toBe(403);
     expect(db.prepare("SELECT COUNT(*) n FROM assignment_operations WHERE actor_user_id=?").get(admin.user.id)).toEqual({ n: 0 });
     expect(db.prepare("SELECT COUNT(*) n FROM lead_events WHERE lead_id=?").get(lead)).toEqual({ n: 0 });
@@ -189,4 +190,27 @@ it("rolls back recovery on audit failure and sanitizes financial failure respons
     expect((await request(`/api/reliability/recovery/notification/${notice}/discard`, admin.token, { reason: "Reviewed work" })).status).toBe(503);
     expect(db.prepare("SELECT status FROM notification_outbox WHERE id=?").get(notice)).toEqual({ status: "failed" });
   } finally { db.exec("DROP TRIGGER reject_recovery_audit"); }
+});
+
+it("auth status authoritatively rejects absolute-expired sessions without a cleanup write", async () => {
+  const admin = actor();
+  db.prepare("UPDATE sessions SET created_at=? WHERE id=?").run(new Date(0).toISOString(), admin.token);
+  const before = db.prepare("SELECT total_changes() n").get();
+  const body = await (await request("/api/auth/status", admin.token)).json();
+  expect(body.currentUser).toBeNull();
+  expect(db.prepare("SELECT total_changes() n").get()).toEqual(before);
+});
+
+it("reuses joined organization status without loading the full tenant on authentication", async () => {
+  const admin = actor();
+  const lookup = vi.spyOn(storage, "getTenantById");
+  try {
+    const allowed = await request("/api/announcements", admin.token);
+    expect(allowed.status).toBe(200); await allowed.json();
+    db.exec("UPDATE tenants SET status='suspended' WHERE id=1");
+    const denied = await request("/api/announcements", admin.token);
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ code: "ORGANIZATION_INACTIVE" });
+    expect(lookup).not.toHaveBeenCalled();
+  } finally { lookup.mockRestore(); db.exec("UPDATE tenants SET status='active' WHERE id=1"); }
 });
