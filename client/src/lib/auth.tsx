@@ -1,3 +1,5 @@
+import { activateWork, lastWorkOwner, wasWorkPurged, hasWorkQuarantine, persistedWorkOwner, persistedQuarantineOwner, syncWorkQuarantineFromStorage, purgeWork, quarantinedWorkOwner, quarantineWork, retireWorkLocally,
+  sameWorkOwner, suspendWork, workOwner, type WorkOwner } from "./workAuthority";
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
 import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, purgeSessionScopedKeys, queryClient, bustInflightGetShare, invalidateRequestScope } from "@/lib/queryClient";
 import { clearPdfBlobCache } from "@/lib/pdfBlobCache";
@@ -71,9 +73,11 @@ const SID_DEADLINE_KEY = "hfs.sid.until";
 // first and shows a clean sign-in rather than firing a request it knows is
 // dead. SESSION_TTL_HOURS can lengthen the server side; this floor stays safe
 // because every authenticated request pushes the real deadline out again.
+let sessionStorageUnavailable = false;
 const CLIENT_SESSION_MS = 6 * 24 * 60 * 60 * 1000;
 
 function readPersistedSession(): string | null {
+  if (hasWorkQuarantine()) return null;
   try {
     const sid = window.localStorage?.getItem(SID_KEY);
     if (typeof sid !== "string" || !sid) {
@@ -99,15 +103,31 @@ function readPersistedSession(): string | null {
 
 function writePersistedSession(sid: string | null) {
   try {
-    if (sid) {
-      window.localStorage?.setItem(SID_KEY, sid);
-      window.localStorage?.setItem(SID_DEADLINE_KEY, String(Date.now() + CLIENT_SESSION_MS));
-    } else {
-      window.localStorage?.removeItem(SID_KEY);
-      window.localStorage?.removeItem(SID_DEADLINE_KEY);
-      window.sessionStorage?.removeItem(SID_KEY);
-    }
-  } catch { /* storage blocked */ }
+    if (sid) window.localStorage?.setItem(SID_KEY, sid);
+    else window.localStorage?.removeItem(SID_KEY);
+    sessionStorageUnavailable = false;
+  } catch { sessionStorageUnavailable = true; }
+  // A deadline quota error must never disable cross-tab token comparisons.
+  try {
+    if (sid) window.localStorage?.setItem(SID_DEADLINE_KEY, String(Date.now() + CLIENT_SESSION_MS));
+    else { window.localStorage?.removeItem(SID_DEADLINE_KEY); window.sessionStorage?.removeItem(SID_KEY); }
+  } catch { /* token durability is tracked separately above */ }
+}
+
+type SessionFence = { sid: string | null; owner: string | null; quarantine: string | null; purge: string | null } | null;
+function readSessionFence(): SessionFence {
+  try { return { sid: localStorage.getItem(SID_KEY), owner: localStorage.getItem("hfs.work.owner.v1"),
+    quarantine: localStorage.getItem("hfs.work.quarantine.v1"), purge: localStorage.getItem("hfs.work.purge.v1") }; } catch { return null; }
+}
+function ownsPersistedSession(expected: string, captured: SessionFence): boolean {
+  const current = readSessionFence();
+  if (hasWorkQuarantine()) return false;
+  if (!captured || !current) return !captured && !current && sessionStorageUnavailable;
+  if (current.sid !== captured.sid || current.owner !== captured.owner || current.quarantine !== captured.quarantine || current.purge !== captured.purge) return false;
+  // A stable old same-owner stamp may remain after a quota failure. The fresh
+  // server status, captured SID and unchanged storage together establish who
+  // may recover; no already-active lease is needed on reload or in a peer tab.
+  return current.sid === expected || (current.sid === null && sessionStorageUnavailable);
 }
 
 /** Push the client deadline out while the app is in use, mirroring the
@@ -127,6 +147,7 @@ function touchPersistedSession() {
 // failure — a real 401 still logs out and clears it.
 const USER_KEY = "hfs.user";
 function readPersistedUser(sessionId: string): AuthUser | null {
+  if (hasWorkQuarantine()) return null;
   try {
     if (window.localStorage?.getItem(SID_KEY) !== sessionId) return null;
     const raw = window.localStorage?.getItem(USER_KEY);
@@ -146,6 +167,9 @@ interface AuthStatus {
   isFirstRun: boolean;
   currentUser: AuthUser | null;
   accessRevoked?: boolean;
+  disposition?: "reauth" | "revoked";
+  reason?: string;
+  owner?: WorkOwner;
 }
 
 async function fetchAuthStatus(sessionId: string, signal?: AbortSignal): Promise<AuthStatus> {
@@ -208,17 +232,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUnauthorizedHandler(() => {
       if (!_memSession || confirming) return;
       const suspect = _memSession;
+      const fence = readSessionFence();
       const version = ++statusVersion.current;
       confirming = (async () => {
         let data: AuthStatus;
         try { data = await fetchAuthStatus(suspect); }
         catch { return; } // Offline, timeout and server errors do not revoke access.
-        if (disposed || _memSession !== suspect || statusVersion.current !== version) return;
+        if (disposed || _memSession !== suspect || statusVersion.current !== version || !ownsPersistedSession(suspect, fence)) return;
         if (data.currentUser) {
           adoptUser(suspect, data.currentUser);
           return;
         }
-        clearIdentity();
+        applyStatusDenial(data);
         toast(data.accessRevoked
           ? { title: "Access removed", description: "Your account was deactivated by your team. Contact your manager if this is unexpected.", variant: "destructive", duration: 30_000 }
           : { title: "Session expired", description: "Please sign back in to continue.", variant: "destructive", duration: 30_000 });
@@ -227,24 +252,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { disposed = true; setUnauthorizedHandler(null); };
   }, []);
 
-  function clearIdentity() {
+  useEffect(() => {
+    const changed = (event: StorageEvent) => {
+      if (event.key !== null && !["hfs.sid", "hfs.work.owner.v1", "hfs.work.quarantine.v1", "hfs.work.purge.v1"].includes(event.key)) return;
+      // Retire this tab without deleting the session/work written by its peer.
+      const priorOwner = identity.current?.user ? workOwner(identity.current.user) : lastWorkOwner() ?? quarantinedWorkOwner();
+      const peerOwner = persistedQuarantineOwner() ?? persistedWorkOwner();
+      clearIdentity({ persist: false, preserveWork: !wasWorkPurged() && sameWorkOwner(priorOwner, peerOwner) });
+      syncWorkQuarantineFromStorage();
+      const nextSid = readPersistedSession();
+      if (nextSid) {
+        _memSession = nextSid;
+        identity.current = { sid: nextSid, user: readPersistedUser(nextSid) };
+        void checkStatus(nextSid);
+      }
+    };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, []);
+
+  function clearIdentity({ preserveWork = false, persist = true } = {}) {
+    // This synchronous boundary precedes changing queryClient's shared token.
+    if (!persist && !preserveWork) retireWorkLocally();
+    else if (preserveWork) suspendWork();
+    else purgeWork();
     statusVersion.current += 1;
     invalidateRequestScope();
     statusRequest.current?.abort();
     statusRequest.current = null;
     _memSession = null;
     identity.current = null;
-    writePersistedSession(null);
-    writePersistedUser(null);
+    if (persist) { writePersistedSession(null); writePersistedUser(null); }
     try { bustInflightGetShare(); queryClient.clear(); } catch { /* storage recovery continues */ }
-    clearPersistedQueryCache();
-    purgeSessionScopedKeys();
+    if (persist) { clearPersistedQueryCache(); purgeSessionScopedKeys({ preservePendingWrites: preserveWork }); }
     clearPdfBlobCache();
     setSid(null);
     syncSessionToQueryClient(null);
     setUser(null);
     setLoading(false);
     setStatusError(null);
+  }
+
+  function applyStatusDenial(data: AuthStatus) {
+    const prior = identity.current?.user;
+    const recoverable = data.disposition === "reauth" && ["SESSION_EXPIRED", "MFA_REQUIRED"].includes(data.reason ?? "")
+      && prior && sameWorkOwner(workOwner(prior), data.owner);
+    if (recoverable && prior) quarantineWork(workOwner(prior), data.reason!);
+    clearIdentity({ preserveWork: !!recoverable });
   }
 
   function adoptUser(sessionId: string, nextUser: AuthUser) {
@@ -255,13 +309,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Cached manager/tenant data is no longer authorized after a scope change.
       // Same-person role changes keep their pending field writes; reassignment
       // must never replay those writes under a different tenant or rep identity.
+      if (reassigned) purgeWork(); else suspendWork();
       invalidateRequestScope();
       queryClient.clear();
       clearPersistedQueryCache();
       purgeSessionScopedKeys({ preservePendingWrites: !reassigned });
       clearPdfBlobCache();
     }
+    activateWork(workOwner(nextUser), sessionId);
     identity.current = { sid: sessionId, user: nextUser };
+    setLoading(false);
     setUser(nextUser);
     setSid(sessionId);
     syncSessionToQueryClient(sessionId);
@@ -273,12 +330,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function checkStatus(existingSid: string) {
     const version = ++statusVersion.current;
+    const fence = readSessionFence();
     statusRequest.current?.abort();
     const controller = new AbortController();
     statusRequest.current = controller;
     setStatusError(null);
     setLoading(!user);
-    const isCurrent = () => !controller.signal.aborted && _memSession === existingSid && statusVersion.current === version;
+    const isCurrent = () => !controller.signal.aborted && _memSession === existingSid && statusVersion.current === version && ownsPersistedSession(existingSid, fence);
     try {
       const data = await fetchAuthStatus(existingSid, controller.signal);
       if (!isCurrent()) return;
@@ -286,13 +344,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data.currentUser) {
         adoptUser(existingSid, data.currentUser);
       } else {
-        clearIdentity();
+        applyStatusDenial(data);
       }
     } catch {
       if (!isCurrent()) return;
       const snapshot = identity.current?.sid === existingSid ? identity.current.user : readPersistedUser(existingSid);
-      if (snapshot) {
+      if (snapshot && !hasWorkQuarantine()) {
+        activateWork(workOwner(snapshot), existingSid);
         // Existing offline grace: the server still authorizes every API action.
+        setLoading(false);
         setUser(snapshot);
         setSid(existingSid);
         syncSessionToQueryClient(existingSid);
@@ -305,9 +365,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function login(newSid: string, u: AuthUser) {
-    clearIdentity(); // Purge data and invalidate responses from the old identity.
+    const preserveWork = sameWorkOwner(quarantinedWorkOwner(), workOwner(u));
+    clearIdentity({ preserveWork });
     _memSession = newSid;
     writePersistedSession(newSid);
+    activateWork(workOwner(u), newSid);
     setSid(newSid);
     syncSessionToQueryClient(newSid);
     setUser(u);

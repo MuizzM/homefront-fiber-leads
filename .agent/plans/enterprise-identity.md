@@ -136,3 +136,23 @@ This checkpoint is ready for a dependent draft PR, not production promotion. It 
 ### Verified isolated core result
 
 The reviewed source passed the full gate: **8,176 tests in 666 files**, both compilers, index/harness/deployment guards and production build (`identity-core-reviewed-full.log`). The resulting real production map artifact passed online and service-worker-cached offline smoke with zero outbound requests or page errors (`map-runtime-reviewed-smoke.log`). No identity schema or HTTP entry point is activated by this isolated core checkpoint. Next integrate authorization, issuance, typed UI and owner-bound queue suspension together; continue SSO/SCIM afterward without claiming them implemented by the core.
+
+## Owner-bound field-work integration
+
+- Committed and pushed isolated core checkpoint `7c69815`; draft PR #233 description now reflects the tested foundation and explicitly unwired identity state.
+- Product review traced live resources beyond localStorage: knock/review registries, pending-note memory and GPS callbacks can survive sign-out. Implementing a synchronous work-lease boundary, complete user/tenant/team ownership, same-owner quarantine, bound request tokens, late-result suppression and actual revocation purge before enabling shorter policies/MFA.
+- GPS flush previously erased the entire durable backlog before sending its first item; a first failure lost the unsent tail. New delivery retains items until individual acknowledgement, preserves temporary rate-limit responses with bounded retry, and keeps ordinary stale/low-quality fixes separate from consent/shift restrictions.
+- Initial focused run had two test-contract mismatches (new queue transport lease argument and a source guard assuming a parameterless clearIdentity). Updated assertions to retain full payload and purge requirements. New behavioral regressions cover quarantine, exact-owner resume, cross-tab races, memory-only stores, stale async completions, note edit CAS, GPS tails, body deadlines and durable migration failures.
+- Read-only integration mapping identified an additional migration prerequisite: generic default-tenant bootstrap currently adopts every NULL tenant_id table, including immutable auth delivery ownership. Exclude `identity_*` and `auth_delivery_outbox` before installing identity schema; test repeated full startup/reopen. All later auth wiring must preserve route-specific org exceptions without skipping expiry/epoch/MFA checks.
+- OTP verification needs a known browser-bound flow/idempotency key before consuming its first factor, because final-admission receipts alone cannot recover a lost initial OTP-verify response. HTTP guard must use exact configured first-party origin, HttpOnly browser cookie and explicit continuation header; existing broad CORS/CSRF is insufficient.
+
+### Field-work review and validation
+
+- New exact-head `7c69815` CI passed quality and the Linux production-image native smoke (`34285731031`).
+- Initial full field-work run passed 8,213 tests and failed two CoachEngine tests whose mocked AuthUser never established work authority. Fixtures now activate the same complete owner as the hook; offline persistence and exact delivery assertions remain. A source ordering guard now requires durable synchronous capture plus immediate recoloring before GPS/network, rather than presenting success before persistence.
+- Independent reviews corrected same-owner peer-event memory loss, late status publication after quota failures, legacy migration eligibility after reload, the body deadline ending at headers, GPS permission/replay/throttle distinctions, stale permission/GPS callbacks, malformed/oversized persisted GPS arrays, and owner-stamp quota recovery on current and cold sessions. Added a random no-identity purge tombstone for explicit peer logout followed rapidly by same-owner sign-in.
+- All **145 focused tests** passed (`work-owner-all-focused.log`), including actual hook/component flows. Final full gate runs in `work-owner-reviewed-full.log`. Security's final bounded delta review reports no confirmed blocker. No server identity schema or enterprise entry point has been activated.
+
+### Verified field-work result
+
+The reviewed source passed `bash scripts/agent-verify.sh full`: **8,228 tests in 669 files**, both compilers, index/harness/deployment guards and production build (`work-owner-reviewed-full.log`). All read-only reviews are complete with no outstanding confirmed blocker. No server identity feature is activated by this client prerequisite. Next integrate schema/bootstrap ownership, common HTTP/status/SSE/recovery admission, policy-aware renewal, OTP binding and browser-known retryable continuation issuance with typed MFA login UI as one coherent milestone.

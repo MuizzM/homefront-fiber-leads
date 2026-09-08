@@ -50,3 +50,15 @@ The admission capacity query uses the user/expiry expression index and joins ass
 Additive tables do not make old application binaries safe after activation: they ignore approval and MFA policy. Before enabling any enterprise configuration, upgrade all workers, establish a minimum compatible rollback image, validate an encrypted representative backup/restore, and complete the existing staging/canary gates. No production activation is authorized by isolated module tests.
 
 Primary implementation references: [otplib replay protection](https://otplib.yeojz.dev/guide/advanced-usage), [SimpleWebAuthn server verification](https://simplewebauthn.dev/docs/packages/server).
+
+## Browser field-work boundary
+
+`workAuthority.ts` grants delivery through an in-memory lease bound to user, tenant, rep profile and the exact session. Auth transitions suspend or destroy queues synchronously before replacing queryClient's shared token. Knock and training queues capture that lease for each request and check their run generation after every await. Notes preserve a version before dispatch and remove only that acknowledged version. GPS keeps each backlog item until acknowledgement, retains throttled items for bounded retry, and samples only after a fresh shift/consent decision.
+
+Only an explicit successful status response with `disposition: "reauth"`, a matching `owner`, and `reason: "SESSION_EXPIRED"` or `"MFA_REQUIRED"` preserves pending work. Unknown, revoked or mismatched decisions purge it. These response fields are prepared client contracts; current server status does not emit them yet. A quarantine marker grants no application access and prevents cached-user restoration. Reauthentication resumes work only for the same user, tenant and rep profile. No client-side queue rule grants server permissions.
+
+New pending envelopes carry full ownership. Legacy envelopes are adopted only with matching prior persisted identity evidence; that eligibility survives explicit quarantine. A failed durable migration preserves the original key. Memory mirrors survive same-owner suspension and are destroyed on purge/account switch. Cross-tab status results require unchanged captured SID, owner stamp, quarantine and purge marker. A random, identity-free purge tombstone distinguishes explicit logout followed by rapid same-owner login from recoverable reauthentication.
+
+The captured-session transport bounds fetch **and response consumption** to 30 seconds and 1 MiB, forwards lease cancellation through the body read, and never reads a mutable replacement session. An unavailable store can use memory from the outset. If previously established storage authority becomes unreadable, delivery stops. A same-owner owner-stamp quota failure can recover only against the exact independently persisted SID; fresh server status can restore that stable state after reload.
+
+This boundary is integrated into existing field queues and auth transitions. It does not itself activate MFA, enterprise policies, SSO or SCIM. Protocol integration must use the explicit status contract above instead of treating a generic 401 as permission to preserve or resume work.

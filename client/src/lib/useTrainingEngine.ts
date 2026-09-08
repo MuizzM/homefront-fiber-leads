@@ -1,3 +1,4 @@
+import { workJson, workOwner } from "./workAuthority";
 // ── useTrainingEngine — the coaching engine's shared hooks ───────────────────
 // One hook family, consumed by Coach, the deck runner, and Today's WarmupStrip
 // so the offline contract (persisted deck snapshot + durable review outbox +
@@ -146,12 +147,13 @@ export function useTrainingQueue() {
   const { user } = useAuth();
   const ownerKey = ownerKeyFor(user);
   return useMemo(() => {
-    if (ownerKey == null) return null;
+    if (ownerKey == null || !user) return null;
     return getTrainingReviewQueue({
       ownerKey,
-      post: (url, body) => apiRequest("POST", url, body).then((r) => r.json()),
+      owner: workOwner(user),
+      post: (url, body, lease) => workJson(lease ?? null, "POST", url, body),
     });
-  }, [ownerKey]);
+  }, [ownerKey, user?.id, user?.tenantId, user?.teamMemberId]);
 }
 
 /** Live outbox snapshot (pendingCount / online) for honest UI affordances. */
@@ -238,6 +240,7 @@ export function useRecordReviews(): {
 
   const recordReview = useCallback(
     (card: DrillCard, grade: Grade, _mode?: DeckMode) => {
+      if (!queue?.canCapture()) return;
       const reviewedAt = new Date().toISOString();
       const ladder = loadLadder(ladderKey);
       const rungBefore = ladder.rungs[card.id] ?? 0;

@@ -1,3 +1,4 @@
+import { canAdoptLegacyWork, currentWorkLease, isCurrentWorkLease, sameWorkOwner, subscribeWorkAuthority, workOwnerKey, type WorkOwner, type WorkLease } from "./workAuthority";
 // Offline-first drill-card review outbox — framework-free (no React, no
 // react-query), cloned from knockQueue.ts's proven structure. Every grade a
 // rep gives a drill card is durably appended here BEFORE the UI moves on, so
@@ -43,9 +44,10 @@ export interface StorageLike {
 }
 
 export interface ReviewQueueOpts {
+  owner?: WorkOwner;
   /** Owner key (teamMemberId, or user id when unlinked) — partitions storage. */
   ownerKey: number | string;
-  post: (url: string, body: unknown) => Promise<any>; // parsed JSON; throws Error("<status>: <text>")
+  post: (url: string, body: unknown, lease?: WorkLease | null) => Promise<any>; // parsed JSON; throws Error("<status>: <text>")
   storage?: StorageLike;
   now?: () => number;
   isOnline?: () => boolean;
@@ -64,6 +66,9 @@ export interface TrainingReviewQueue {
   getSnapshot(): ReviewQueueSnapshot;
   /** Current pending entries (defensive copy) — tests + optimistic ladder. */
   pending(): QueuedReview[];
+  canCapture(): boolean;
+  suspend(): void;
+  resume(): void;
   destroy(): void;
 }
 
@@ -102,12 +107,12 @@ function safeStorage(inner?: StorageLike): StorageLike {
   };
 }
 
-function loadItems(storage: StorageLike, key: string): PendingReview[] {
+function loadItems(storage: StorageLike, key: string, owner?: WorkOwner): PendingReview[] {
   const raw = storage.getItem(key);
   if (!raw) return [];
   try {
     const env = JSON.parse(raw);
-    if (!env || env.v !== 1 || !Array.isArray(env.items)) {
+    if (!env || env.v !== 1 || !Array.isArray(env.items) || (env.owner && owner && !sameWorkOwner(env.owner, owner))) {
       console.warn(`[trainingReviewQueue] discarding unrecognized envelope at ${key}`);
       return [];
     }
@@ -125,9 +130,15 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
   const isOnline = opts.isOnline ??
     (() => (typeof navigator === "undefined" ? true : navigator.onLine !== false));
   const storage = safeStorage(opts.storage);
-  const pendingKey = `hf.trainingReviews.v1.${opts.ownerKey}`;
+  const registryKey = opts.owner ? workOwnerKey(opts.owner) : String(opts.ownerKey);
+  const pendingKey = opts.owner ? `hf.trainingReviews.v2.${registryKey}` : `hf.trainingReviews.v1.${opts.ownerKey}`;
+  if (opts.owner && canAdoptLegacyWork(opts.owner)) {
+    const legacy = `hf.trainingReviews.v1.${opts.ownerKey}`;
+    if (!storage.getItem(pendingKey) && storage.getItem(legacy)) storage.setItem(pendingKey, storage.getItem(legacy)!);
+    storage.removeItem(legacy);
+  }
 
-  const pending: PendingReview[] = loadItems(storage, pendingKey).map((it) => ({
+  const pending: PendingReview[] = loadItems(storage, pendingKey, opts.owner).map((it) => ({
     ...it,
     attempts: it.attempts ?? 0,
     nextAttemptAt: it.nextAttemptAt ?? 0,
@@ -140,9 +151,15 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
   let interval: ReturnType<typeof setInterval> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let destroyed = false;
+  let suspended = !!opts.owner && !currentWorkLease(opts.owner);
+  let runVersion = 0;
+  let unsubscribeAuthority = () => {};
+  const canCapture = () => !destroyed && !suspended && (!opts.owner || !!currentWorkLease(opts.owner));
+  const currentRun = (version: number, lease: WorkLease | null) => canCapture() && version === runVersion
+    && (!opts.owner || isCurrentWorkLease(lease));
 
   const persist = (): void => {
-    if (pending.length) storage.setItem(pendingKey, JSON.stringify({ v: 1, items: pending }));
+    if (pending.length) storage.setItem(pendingKey, JSON.stringify({ v: 1, owner: opts.owner, items: pending }));
     else storage.removeItem(pendingKey);
   };
 
@@ -155,7 +172,7 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
 
   // Heartbeat runs ONLY while something is pending — an idle queue costs nothing.
   const syncInterval = (): void => {
-    if (destroyed) return;
+    if (!canCapture()) return;
     if (pending.length > 0 && interval == null) {
       interval = setInterval(() => { void flush(); }, INTERVAL_MS);
     } else if (pending.length === 0 && interval != null) {
@@ -166,7 +183,7 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
 
   const armRetryTimer = (): void => {
     if (retryTimer != null) { clearTimeout(retryTimer); retryTimer = null; }
-    if (destroyed || !pending.length) return;
+    if (!canCapture() || !pending.length) return;
     const t = now();
     let earliest = Infinity;
     for (const it of pending) {
@@ -177,14 +194,17 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
   };
 
   async function flush(): Promise<void> {
-    if (inflight || destroyed) return;
+    if (inflight || !canCapture()) return;
     if (!isOnline()) return;
     if (!pending.length) return;
     inflight = true;
+    const version = runVersion;
+    const lease = opts.owner ? currentWorkLease(opts.owner) : null;
     try {
       // The batch loop re-reads `pending` each pass: reviews graded mid-flight
       // (inflight was already true for their own flush call) ride the next pass.
       for (;;) {
+        if (!currentRun(version, lease)) return;
         const due = pending.filter((it) => it.nextAttemptAt <= now());
         if (!due.length) break;
         try {
@@ -197,7 +217,8 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
               reviewedAt,
               ...(rungBefore != null ? { rungBefore } : {}),
             })),
-          });
+          }, lease);
+          if (!currentRun(version, lease)) return;
           const delivered = due.length;
           for (const it of due) {
             const idx = pending.indexOf(it);
@@ -207,6 +228,7 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
           markChanged();
           opts.onSynced?.(delivered);
         } catch (err) {
+          if (!currentRun(version, lease)) return;
           const message = err instanceof Error ? err.message : String(err);
           const status = /^(\d{3}):/.exec(message)?.[1];
           // A 4xx batch is a shape problem (unknown card id, bad payload): drop
@@ -239,6 +261,7 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
         }
       }
     } finally {
+      if (version !== runVersion) return;
       inflight = false;
       syncInterval();
       armRetryTimer();
@@ -248,8 +271,9 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
   // Recovery signals: connectivity returning and the app coming back to the
   // foreground each attempt a delivery. Cooldown is unnecessary here — unlike
   // the knock dead lane there is no per-item retry budget to burn.
-  const onOnline = (): void => { markChanged(); void flush(); };
+  const onOnline = (): void => { if (!canCapture()) return; markChanged(); void flush(); };
   const onVisible = (): void => {
+    if (!canCapture()) return;
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
     void flush();
   };
@@ -258,6 +282,7 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
 
   const queue: TrainingReviewQueue = {
     enqueue(review) {
+      if (!canCapture()) throw new Error("Sign in before recording more work");
       // Dedupe an identical (cardId, reviewedAt) already pending — a
       // double-tap on a grade button before the deck advances can never
       // queue the same review twice.
@@ -296,16 +321,41 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
       ...(rungBefore != null ? { rungBefore } : {}),
     })),
 
+    canCapture,
+    suspend() {
+      suspended = true; runVersion++; inflight = false;
+      if (interval != null) { clearInterval(interval); interval = null; }
+      if (retryTimer != null) { clearTimeout(retryTimer); retryTimer = null; }
+    },
+    resume() {
+      if (destroyed || (opts.owner && !currentWorkLease(opts.owner))) return;
+      suspended = false; runVersion++; inflight = false;
+      syncInterval(); armRetryTimer();
+      queueMicrotask(() => { void flush(); });
+    },
     destroy() {
+      queue.suspend();
       destroyed = true;
+      unsubscribeAuthority();
+      pending.length = 0;
+
       if (interval != null) { clearInterval(interval); interval = null; }
       if (retryTimer != null) { clearTimeout(retryTimer); retryTimer = null; }
       listeners.clear();
       if (typeof window !== "undefined") window.removeEventListener("online", onOnline);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
-      if (registry.get(String(opts.ownerKey)) === queue) registry.delete(String(opts.ownerKey));
+      if (registry.get(registryKey) === queue) registry.delete(registryKey);
     },
   };
+
+  if (opts.owner) unsubscribeAuthority = subscribeWorkAuthority(event => {
+    if (event === "purge") {
+      storage.removeItem(pendingKey);
+      queue.destroy();
+    } else if (event === "discard") queue.destroy();
+    else if (event === "suspend") queue.suspend();
+    else if (currentWorkLease(opts.owner)) queue.resume();
+  });
 
   // Reload recovery: persisted reviews resurface and the first flush fires as
   // soon as the caller has the queue object in hand.
@@ -323,7 +373,7 @@ export function createTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReview
 const registry = new Map<string, TrainingReviewQueue>();
 
 export function getTrainingReviewQueue(opts: ReviewQueueOpts): TrainingReviewQueue {
-  const key = String(opts.ownerKey);
+  const key = opts.owner ? workOwnerKey(opts.owner) : String(opts.ownerKey);
   const existing = registry.get(key);
   if (existing) return existing;
   const q = createTrainingReviewQueue(opts);

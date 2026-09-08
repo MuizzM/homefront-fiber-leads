@@ -41,11 +41,14 @@ describe("a single door: silent, and painted before the network", () => {
     expect(notifies, "only superseded + SPIFF may notify").toBe(2);
   });
 
-  it("the rep knock recolours before it enqueues", () => {
+  it("the rep knock persists and recolours synchronously before GPS or network", () => {
     const optimistic = knockLogger.indexOf('qc.setQueryData(["/api/leads/map"]');
     const enqueue = knockLogger.indexOf("queue.stage({");
     expect(optimistic).toBeGreaterThan(-1);
-    expect(optimistic, "the pin must move before the queue call").toBeLessThan(enqueue);
+    expect(enqueue).toBeGreaterThan(-1);
+    expect(enqueue, "durable capture precedes presenting success").toBeLessThan(optimistic);
+    expect(optimistic).toBeLessThan(knockLogger.indexOf("void captureFieldFix()"));
+    expect(knockLogger.slice(enqueue, optimistic)).not.toMatch(/\bawait\b/);
   });
 
   it("a manager's central mark is silent on success but speaks on revert", () => {

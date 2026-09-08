@@ -1,0 +1,27 @@
+import { act, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { activateWork, purgeWork, quarantineWork } from "../../client/src/lib/workAuthority";
+import { useKnockLogger } from "../../client/src/lib/useKnockLogger";
+const capture = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/geoFix", () => ({ captureFieldFix: capture }));
+vi.mock("@/lib/auth", () => ({ useAuth: () => ({ user: { id: 10, tenantId: 1, teamMemberId: 20, role: "rep" } }) }));
+const owner = { userId: 10, tenantId: 1, teamMemberId: 20 };
+beforeEach(() => { purgeWork(); localStorage.clear(); activateWork(owner, "first"); capture.mockReset(); });
+afterEach(() => { purgeWork(); vi.unstubAllGlobals(); });
+it("paints from durable staging immediately and ignores GPS from before same-owner reauth", async () => {
+  let finish!: (fix: any) => void; capture.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc.setQueryData(["/api/leads/map"], { pins: [{ id: 1, leadStatus: "new", knockCount: 0 }] });
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  const view = renderHook(() => useKnockLogger(), { wrapper });
+  act(() => expect(view.result.current.log({ id: 1, leadStatus: "new" }, "not_home")).toBe(true));
+  expect(view.result.current.queue!.getSnapshot().pendingCount).toBe(1);
+  expect((qc.getQueryData(["/api/leads/map"]) as any).pins[0].knockCount).toBe(1);
+  const enrich = vi.spyOn(view.result.current.queue!, "enrich");
+  act(() => { quarantineWork(owner, "MFA_REQUIRED"); activateWork(owner, "second"); });
+  await act(async () => finish({ repLat: 30, repLng: -70, gpsAccuracy: 10 }));
+  expect(enrich).not.toHaveBeenCalled(); view.unmount(); qc.clear();
+});

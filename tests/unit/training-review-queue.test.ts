@@ -59,7 +59,7 @@ describe("trainingReviewQueue", () => {
         { cardId: "card:m1-a:takeaway:0", grade: "good", reviewedAt: "2025-01-01T10:00:00.000Z", rungBefore: 0 },
         { cardId: "card:m1-b:drill:0", grade: "again", reviewedAt: "2025-01-01T10:01:00.000Z", rungBefore: 1 },
       ],
-    });
+    }, null);
     await vi.waitFor(() => expect(q.getSnapshot().pendingCount).toBe(0));
     // Delivered → storage envelope removed.
     expect(storage.map.has("hf.trainingReviews.v1.42")).toBe(false);

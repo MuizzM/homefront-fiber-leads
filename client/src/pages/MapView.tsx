@@ -1,3 +1,4 @@
+import { currentWorkLease, isCurrentWorkLease, workOwner, workRequest } from "@/lib/workAuthority";
 import { useForegroundActivity } from "@/hooks/use-foreground-activity";
 import { ErrorState } from "@/components/ErrorState";
 import {
@@ -7072,9 +7073,10 @@ export default function MapView() {
   // Lead-level notes: the card owns typing; this owns persistence through the
   // offline-safe, conflict-aware pipeline in lib/leadNotes. Explicit leadId so
   // the card can flush the OUTGOING lead's pending note during a swap.
+  const noteLease = user ? currentWorkLease(workOwner(user)) : null;
   const notePoster = useCallback<NotePoster>(
-    (leadId, body) => apiRequest("PATCH", `/api/leads/${leadId}/notes`, body),
-    [],
+    (leadId, body) => workRequest(noteLease, "PATCH", `/api/leads/${leadId}/notes`, body),
+    [noteLease],
   );
   const handleSaveNote = useCallback(
     async (
@@ -7087,26 +7089,27 @@ export default function MapView() {
         leadId,
         note,
         baseUpdatedAt,
+        noteLease,
       );
-      if (result.status === "saved") {
+      if (result.status === "saved" && isCurrentWorkLease(noteLease)) {
         qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}`] });
         qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/history`] }); // note event just landed
       }
       return result;
     },
-    [notePoster, qc],
+    [notePoster, noteLease, qc],
   );
 
   // Stashed offline notes flush the moment connectivity returns (and once on
   // mount, in case the app reloaded while offline notes were pending).
   useEffect(() => {
     const flush = () => {
-      void flushPendingNotes(notePoster);
+      void flushPendingNotes(notePoster, noteLease);
     };
     flush();
     window.addEventListener("online", flush);
     return () => window.removeEventListener("online", flush);
-  }, [notePoster]);
+  }, [notePoster, noteLease]);
 
   // Stable identity so the memoized card never re-renders for MapView churn.
   const closeSheet = useCallback(() => setSelectedLeadId(null), []);
