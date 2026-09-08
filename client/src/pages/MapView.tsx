@@ -3390,6 +3390,7 @@ export default function MapView() {
     // answers, instead of a default-city flash the geolocate has to correct.
     const savedCamera = readPersistedMapCamera();
     const map = new (window as any).mapboxgl.Map({
+        zoomLevelsToOverscale: undefined, // Preserve pre-v6 rendered-feature picking.
       container: el,
       style: basemapStyle(appliedStyleRef.current),
       center: savedCamera?.center ?? ROCKWELL_CENTER,
@@ -3744,7 +3745,7 @@ export default function MapView() {
         });
         const clusterId = features[0]?.properties?.cluster_id;
         if (!clusterId) return;
-        void clusterExpansionZoom(map.getSource("leads-cluster"), clusterId).then((zoom) => {
+        void clusterExpansionZoom(map.getSource("leads-cluster"), clusterId, () => mapRef.current === map).then((zoom) => {
           if (zoom == null) return;
           map.easeTo({
             center: features[0].geometry.coordinates,
@@ -3859,7 +3860,7 @@ export default function MapView() {
         const feature = e.features?.[0];
         const clusterId = feature?.properties?.cluster_id;
         if (clusterId == null) return;
-        void clusterExpansionZoom(map.getSource(SCAN_RESULTS_SOURCE), clusterId).then((zoom) => {
+        void clusterExpansionZoom(map.getSource(SCAN_RESULTS_SOURCE), clusterId, () => mapRef.current === map).then((zoom) => {
           if (zoom != null) map.easeTo({ center: feature.geometry.coordinates, zoom });
         });
       });

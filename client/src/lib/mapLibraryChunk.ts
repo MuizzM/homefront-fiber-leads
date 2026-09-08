@@ -6,6 +6,10 @@
 // attaches a dynamic chunk's stylesheet to that chunk, so it is fetched with
 // the library and not before.
 import "maplibre-gl/dist/maplibre-gl.css";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 
-export default maplibregl;
+// Vite must bundle the worker's shared-module imports, not copy it as a raw
+// asset. Publish a mutable facade for legacy callers assigning accessToken.
+maplibregl.setWorkerUrl(workerUrl);
+export default { ...maplibregl, accessToken: "" };

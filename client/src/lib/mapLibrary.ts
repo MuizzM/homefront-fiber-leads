@@ -70,8 +70,10 @@ export const NO_TOKEN_REQUIRED = "maplibre-no-token";
 export async function clusterExpansionZoom(
   source: any,
   clusterId: number,
+  isCurrent: () => boolean = () => true,
 ): Promise<number | null> {
   if (!source?.getClusterExpansionZoom) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // Armed BEFORE the call, because the callback flavour can fire
     // synchronously when the cluster index is already in memory.
@@ -79,20 +81,19 @@ export async function clusterExpansionZoom(
     const viaCallback = new Promise<number | null>((resolve) => {
       settle = resolve;
       // Never hang a tap on a worker that does not answer.
-      setTimeout(() => resolve(null), 2000);
+      timer = setTimeout(() => resolve(null), 2000);
     });
 
     const maybe = source.getClusterExpansionZoom(clusterId, (err: any, zoom: number) => {
-      settle(err || typeof zoom !== "number" ? null : zoom);
+      settle(err || typeof zoom !== "number" || !Number.isFinite(zoom) ? null : zoom);
     });
 
-    if (maybe && typeof maybe.then === "function") {
-      const zoom = await maybe;                       // MapLibre v5
-      return typeof zoom === "number" ? zoom : null;
-    }
-    return await viaCallback;                         // mapbox-gl
+    const zoom = await (maybe && typeof maybe.then === "function" ? Promise.race([maybe, viaCallback]) : viaCallback);
+    return isCurrent() && typeof zoom === "number" && Number.isFinite(zoom) ? zoom : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

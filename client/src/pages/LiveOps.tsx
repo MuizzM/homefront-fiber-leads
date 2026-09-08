@@ -445,6 +445,7 @@ function LiveMapCanvas({
         // watching in a truck at night.
         const dark = document.documentElement.classList.contains("dark");
         map.current = new mapboxgl.Map({
+        zoomLevelsToOverscale: undefined, // Preserve pre-v6 rendered-feature picking.
           container: container.current,
           style: basemapStyle(dark ? "dark" : "streets"),
           center: [-80.4139, 35.5501],
@@ -494,10 +495,12 @@ function LiveMapCanvas({
             if (id != null) onSelect(Number(id));
           });
           map.current.on("click", "live-reps-clusters", (e: any) => {
-            const f = map.current.queryRenderedFeatures(e.point, { layers: ["live-reps-clusters"] })[0];
-            const src = map.current.getSource("live-reps");
-            void clusterExpansionZoom(src, f.properties.cluster_id).then((zoom) => {
-              if (zoom != null) map.current.easeTo({ center: f.geometry.coordinates, zoom });
+            const openedMap = map.current;
+            const f = openedMap?.queryRenderedFeatures(e.point, { layers: ["live-reps-clusters"] })[0];
+            if (!f) return;
+            const src = openedMap.getSource("live-reps");
+            void clusterExpansionZoom(src, f.properties.cluster_id, () => map.current === openedMap).then((zoom) => {
+              if (zoom != null) openedMap.easeTo({ center: f.geometry.coordinates, zoom });
             });
           });
           setReady(true);
