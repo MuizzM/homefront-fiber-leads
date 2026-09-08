@@ -116,12 +116,14 @@ describe("what it catches", () => {
     expect(f!.severity).toBe("warning");
   });
 
-  it("a blocked queue event, because it holds every later event", () => {
+  it("a blocked queue event, because it holds every later event", async () => {
     queueOps.ensureEventQueueSchema();
+    const { emit } = await import("../../server/domainEventStore");
+    const event = emit({ tenantId: T, type: "SALE_APPROVED", subjectType: "sale", subjectId: 99001, occurredAt: NOW }, NOW);
     rawDb.prepare(
       `INSERT INTO event_processing_state (subscriber, event_id, tenant_id, status, attempts, error_fingerprint, created_at, updated_at)
-       VALUES ('incentives', 99001, ?, 'blocked', 5, 'TypeError:boom', ?, ?)`,
-    ).run(T, NOW, NOW);
+       VALUES ('incentives', ?, ?, 'blocked', 5, 'TypeError:boom', ?, ?)`,
+    ).run(event.id, T, NOW, NOW);
     const f = run().findings.find(x => x.kind === "BLOCKED_QUEUE_EVENT");
     expect(f).toBeTruthy();
     expect(f!.severity).toBe("critical");

@@ -24,9 +24,9 @@ const sqlite = new Database(dbPath);
   if (thresholdMs != null) installSlowStatementLog(sqlite, { thresholdMs, where: walGuardWhere() });
 }
 sqlite.pragma("journal_mode = WAL");
-// Enforce the durable discovery/qualification graph in local SQLite just as
-// PostgreSQL does in production. WAL + a busy timeout lets background workers
-// checkpoint while field/API reads continue without spurious SQLITE_BUSY.
+// Enforce the durable discovery/qualification graph in SQLite in every environment.
+// WAL allows concurrent readers; writes still serialize on one writer. Interactive
+// operations override the native busy wait and retry asynchronously (interactiveDb).
 sqlite.pragma("foreign_keys = ON");
 sqlite.pragma("synchronous = NORMAL");
 // Longer busy timeout: under heavy scanning a writer transaction can hold the

@@ -1,0 +1,141 @@
+{
+  "kind": "synthetic-foundation-index-and-retention",
+  "recordedAt": "2026-09-08T14:39:40.844Z",
+  "sourceBase": "e64583d64c332547b1a7eb160e801ceb2256d3be",
+  "source": "working tree; pin final revision via containing commit/PR",
+  "node": "v20.20.2",
+  "platform": "darwin",
+  "arch": "arm64",
+  "sqlite": {
+    "version": "3.49.2"
+  },
+  "fixtureRowsPerTable": 200000,
+  "warmups": 3,
+  "samples": 25,
+  "before": {
+    "tenantAlertCount": {
+      "result": {
+        "n": 100
+      },
+      "medianMs": 11.405709000000002,
+      "p95Ms": 11.760958000000073,
+      "maxMs": 11.858334000000013,
+      "plan": [
+        {
+          "id": 4,
+          "parent": 0,
+          "notused": 62,
+          "detail": "SEARCH notification_outbox USING INDEX idx_outbox_delivery_due (kind=? AND status=?)"
+        }
+      ]
+    },
+    "tenantAlertCutoff": {
+      "result": {
+        "id": 50
+      },
+      "medianMs": 13.462375000000065,
+      "p95Ms": 13.709540999999945,
+      "maxMs": 13.751457999999957,
+      "plan": [
+        {
+          "id": 8,
+          "parent": 0,
+          "notused": 62,
+          "detail": "SEARCH notification_outbox USING INDEX idx_outbox_delivery_due (kind=? AND status=?)"
+        },
+        {
+          "id": 27,
+          "parent": 0,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR ORDER BY"
+        }
+      ]
+    },
+    "tenantEventBacklog": {
+      "result": {
+        "n": 90
+      },
+      "medianMs": 3.3267499999999472,
+      "p95Ms": 3.667500000000018,
+      "maxMs": 3.717666999999892,
+      "plan": [
+        {
+          "id": 3,
+          "parent": 0,
+          "notused": 56,
+          "detail": "SEARCH domain_events USING COVERING INDEX idx_domain_events_subject (tenant_id=?)"
+        }
+      ]
+    }
+  },
+  "after": {
+    "tenantAlertCount": {
+      "result": {
+        "n": 100
+      },
+      "medianMs": 0.0016249999998763087,
+      "p95Ms": 0.0017090000001189765,
+      "maxMs": 0.0018749999999272404,
+      "plan": [
+        {
+          "id": 3,
+          "parent": 0,
+          "notused": 52,
+          "detail": "SEARCH notification_outbox USING COVERING INDEX idx_outbox_fresh_pending_tenant (tenant_id=?)"
+        }
+      ]
+    },
+    "tenantAlertCutoff": {
+      "result": {
+        "id": 50
+      },
+      "medianMs": 0.0010829999998804851,
+      "p95Ms": 0.001125000000001819,
+      "maxMs": 0.001125000000001819,
+      "plan": [
+        {
+          "id": 7,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH notification_outbox USING COVERING INDEX idx_outbox_fresh_pending_tenant (tenant_id=? AND id<?)"
+        }
+      ]
+    },
+    "tenantEventBacklog": {
+      "result": {
+        "n": 90
+      },
+      "medianMs": 0.0016250000001036824,
+      "p95Ms": 0.0016669999999976426,
+      "maxMs": 0.0017080000000078144,
+      "plan": [
+        {
+          "id": 3,
+          "parent": 0,
+          "notused": 46,
+          "detail": "SEARCH domain_events USING COVERING INDEX idx_domain_events_tenant_cursor (tenant_id=? AND id>?)"
+        }
+      ]
+    }
+  },
+  "indexBuildMs": 82.13383399999998,
+  "indexBytes": 5320704,
+  "retention": {
+    "superseded": 197900,
+    "remaining": [
+      {
+        "tenant_id": 1,
+        "n": 100
+      },
+      {
+        "tenant_id": 2,
+        "n": 2000
+      }
+    ],
+    "repeated": 0,
+    "pruneMs": 700.2049159999999,
+    "batches": 396,
+    "maxWritesBetweenYields": 500
+  },
+  "limits": "In-memory synthetic SQLite, sequential before/after samples; no production SLO, disk-lock or provider-delivery measurement. Indexes add ongoing write/storage cost."
+}

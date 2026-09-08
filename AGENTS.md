@@ -10,11 +10,13 @@ Maintain the Home Front Solutions field-sales platform without weakening tenant 
 - `server/`: Express APIs, scanner orchestration, calling, commissions, onboarding, and persistence.
 - `shared/`: types and logic shared by browser and server.
 - `tests/`: Vitest unit, integration, and RTL coverage; Playwright lives in `tests/e2e/`.
-- `migrations/`: forward-only SQLite migrations.
+- `server/storage.ts` and domain `*Migrations.ts` / `ensure*Schema` modules: SQLite schema initialization and forward-only changes (no current `migrations/` directory).
 - `scripts/` and `deploy/`: operational and deployment tooling.
 - `docs/`: architecture, compliance, scanner, and operations references.
 
 Read the closest relevant documentation before editing a subsystem. Prefer `rg` and targeted reads over broad file dumps.
+
+The current phased SaaS upgrade is tracked in `docs/roadmap.md`, `docs/upgrade-board.md`, and `docs/adr-index.md`. Treat older audit snapshots as historical evidence and revalidate their claims against source.
 
 ## Standard workflow
 

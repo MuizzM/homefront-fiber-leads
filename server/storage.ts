@@ -1306,12 +1306,12 @@ export function runMigrations() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_episode_target_seq ON transition_episodes(target_id, episode_sequence)`,
     `CREATE INDEX IF NOT EXISTS idx_episode_tenant_status ON transition_episodes(tenant_id, status, candidate_at DESC)`,
 
-    // Transactional outbox — a state change and its alert commit together, so a
-    // crash after the state write still delivers the alert exactly once.
+    // Transactional outbox: state and alert commit together. Remote delivery is
+    // at-least-once; a crash after sending but before acknowledgement can retry.
     `CREATE TABLE IF NOT EXISTS notification_outbox (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        tenant_id INTEGER NOT NULL,
-       dedupe_key TEXT NOT NULL UNIQUE,     -- exactly-once
+       dedupe_key TEXT NOT NULL UNIQUE,     -- deduplicates enqueue, not remote delivery
        kind TEXT NOT NULL,                  -- primary_candidate_new | primary_reconfirmed_new | fresh_fiber
        target_id INTEGER,
        episode_id INTEGER,
@@ -1866,6 +1866,8 @@ export function runMigrations() {
     `UPDATE notification_outbox SET kind='primary_candidate_new' WHERE kind='candidate_new'`,
     `UPDATE notification_outbox SET kind='primary_reconfirmed_new' WHERE kind='verified_new'`,
     `CREATE INDEX IF NOT EXISTS idx_outbox_delivery_due ON notification_outbox(kind, status, next_attempt_at, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_outbox_fresh_pending_tenant ON notification_outbox(tenant_id, id DESC)
+       WHERE kind='fresh_fiber' AND status='pending'`,
     `CREATE TABLE IF NOT EXISTS sweep_jobs (
        id TEXT PRIMARY KEY,
        tenant_id INTEGER NOT NULL,

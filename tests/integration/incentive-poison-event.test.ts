@@ -125,7 +125,7 @@ describe("a throwing event is isolated, reported, and retryable", () => {
     expect(E.cursorFor(S.SUBSCRIBER_NAME)).toBeLessThan(e2.id);
   });
 
-  it("RETRY after the fault clears drains the rest and pays each event exactly once", () => {
+  it("RETRY after the fault clears drains the rest and pays each event exactly once", async () => {
     saleApproved(1);
     saleApproved(2);
     saleApproved(3);
@@ -142,8 +142,8 @@ describe("a throwing event is isolated, reported, and retryable", () => {
     expect(stalled.deferred.length).toBeGreaterThan(0);
 
     const blockedId = stalled.deferred[0].eventId;
-    Q.operatorAction({
-      subscriber: S.SUBSCRIBER_NAME, eventId: blockedId, action: "RETRY",
+    await Q.operatorAction({
+      tenantId: T1, subscriber: S.SUBSCRIBER_NAME, eventId: blockedId, action: "RETRY",
       actorUserId: 1, reason: "collaborator fault fixed in deploy 1234",
     });
 
@@ -246,16 +246,16 @@ describe("operator actions are audited and never silently discard money", () => 
     `SELECT * FROM activity_log WHERE action = ? ORDER BY id DESC LIMIT 1`,
   ).get(`event_queue.${action}`) as any;
 
-  it("requires a reason", () => {
+  it("requires a reason", async () => {
     const e = saleApproved(1);
     fault.nth = 1;
     S.drain(NOW);
-    expect(() => Q.operatorAction({
-      subscriber: S.SUBSCRIBER_NAME, eventId: e.id, action: "RETRY", actorUserId: 1, reason: "  ",
-    })).toThrow(/reason is required/i);
+    await expect(Q.operatorAction({
+      tenantId: T1, subscriber: S.SUBSCRIBER_NAME, eventId: e.id, action: "RETRY", actorUserId: 1, reason: "  ",
+    })).rejects.toThrow(/reason is required/i);
   });
 
-  it("RETRY clears the backoff, is audited, and lets the queue resume", () => {
+  it("RETRY clears the backoff, is audited, and lets the queue resume", async () => {
     saleApproved(1);
     saleApproved(2);
     fault.nth = 1;
@@ -263,8 +263,8 @@ describe("operator actions are audited and never silently discard money", () => 
     const badId = stalled.failed[0].eventId;
 
     fault.nth = -1;
-    Q.operatorAction({
-      subscriber: S.SUBSCRIBER_NAME, eventId: badId, action: "RETRY",
+    await Q.operatorAction({
+      tenantId: T1, subscriber: S.SUBSCRIBER_NAME, eventId: badId, action: "RETRY",
       actorUserId: 42, reason: "upstream dependency restored",
     });
     expect(Q.getState(S.SUBSCRIBER_NAME, badId)).toMatchObject({ status: "pending", retryable: 1 });
@@ -278,15 +278,15 @@ describe("operator actions are audited and never silently discard money", () => 
     expect(awardsFor(REP)).toHaveLength(2);
   });
 
-  it("DEAD_LETTER lets the queue advance past the event WITHOUT deleting it", () => {
+  it("DEAD_LETTER lets the queue advance past the event WITHOUT deleting it", async () => {
     const e1 = saleApproved(1);
     saleApproved(2);
     fault.nth = 1;
     S.drain(NOW);
 
     fault.nth = -1;
-    Q.operatorAction({
-      subscriber: S.SUBSCRIBER_NAME, eventId: e1.id, action: "DEAD_LETTER",
+    await Q.operatorAction({
+      tenantId: T1, subscriber: S.SUBSCRIBER_NAME, eventId: e1.id, action: "DEAD_LETTER",
       actorUserId: 7, reason: "malformed payload from a retired importer; handled manually",
     });
 
@@ -300,12 +300,12 @@ describe("operator actions are audited and never silently discard money", () => 
     expect(JSON.parse(auditFor("dead_letter").details).reason).toContain("retired importer");
   });
 
-  it("RESOLVE records the human decision and its reason", () => {
+  it("RESOLVE records the human decision and its reason", async () => {
     const e1 = saleApproved(1);
     fault.nth = 1;
     S.drain(NOW);
-    Q.operatorAction({
-      subscriber: S.SUBSCRIBER_NAME, eventId: e1.id, action: "RESOLVE",
+    await Q.operatorAction({
+      tenantId: T1, subscriber: S.SUBSCRIBER_NAME, eventId: e1.id, action: "RESOLVE",
       actorUserId: 9, reason: "award booked by hand under ticket OPS-88",
     });
     const st = Q.getState(S.SUBSCRIBER_NAME, e1.id);
@@ -329,7 +329,7 @@ describe("operator visibility and recovery", () => {
       S.drain(NOW);
     }
 
-    const health = Q.queueHealth(S.SUBSCRIBER_NAME, E.cursorFor(S.SUBSCRIBER_NAME), 1);
+    const health = Q.queueHealth(S.SUBSCRIBER_NAME, T1);
     expect(health.halted.length).toBeGreaterThan(0);
     expect(health.halted[0].attempts).toBeGreaterThanOrEqual(Q.ALERT_ATTEMPTS);
     expect(health.alerts.join(" ")).toMatch(/has failed/);
@@ -355,7 +355,7 @@ describe("operator visibility and recovery", () => {
     saleApproved(1);
     saleApproved(2);
     S.drain(NOW);
-    const report = Q.recoveryReport(S.SUBSCRIBER_NAME, E.cursorFor(S.SUBSCRIBER_NAME));
+    const report = Q.recoveryReport(S.SUBSCRIBER_NAME, T1);
     expect(report.cursorConsistent).toBe(true);
     expect(report.stillHolding).toEqual([]);
     expect(report.duplicateAwards).toEqual([]);
@@ -367,7 +367,7 @@ describe("operator visibility and recovery", () => {
     saleApproved(2);
     fault.nth = 1;
     S.drain(NOW);
-    const report = Q.recoveryReport(S.SUBSCRIBER_NAME, E.cursorFor(S.SUBSCRIBER_NAME));
+    const report = Q.recoveryReport(S.SUBSCRIBER_NAME, T1);
     expect(report.stillHolding.length).toBe(1);
   });
 });

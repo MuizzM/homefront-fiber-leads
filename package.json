@@ -16,6 +16,7 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "check:fast": "tsgo --noEmit",
+    "check:indexes": "tsx scripts/check-sqlite-indexes.ts",
     "lint": "node tools/oxlint/build-plugin.mjs && oxlint",
     "calling:dnc:sign": "tsx script/sign-dnc-import.ts",
     "markets:refresh": "tsx script/build-state-markets.ts",

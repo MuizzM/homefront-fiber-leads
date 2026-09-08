@@ -124,7 +124,7 @@ describe("migration: rows that predate the basis column", () => {
 });
 
 describe("production-like end to end", () => {
-  it("qualification → override → reversal → locked week → poison event → retry → reconciliation", () => {
+  it("qualification → override → reversal → locked week → poison event → retry → reconciliation", async () => {
     const mgr = person("E2E Manager", "manager", null);
     const tl = person("E2E Lead", "team_lead", mgr.memberId);
     const rep = person("E2E Rep", "rep", tl.memberId);
@@ -184,7 +184,7 @@ describe("production-like end to end", () => {
     expect(queueOps.getState(S.SUBSCRIBER_NAME, ev.id).status).toBe("failed");
 
     // The stall is operator-visible…
-    const health = queueOps.queueHealth(S.SUBSCRIBER_NAME, E.cursorFor(S.SUBSCRIBER_NAME), 1);
+    const health = queueOps.queueHealth(S.SUBSCRIBER_NAME, T);
     expect(health.halted.some(h => h.eventId === ev.id)).toBe(true);
 
     // …and reconciliation reports it as a blocked queue event.
@@ -193,8 +193,8 @@ describe("production-like end to end", () => {
 
     // 5. OPERATOR RETRY — with a reason, audited, and the queue resumes.
     fault.always = false;
-    queueOps.operatorAction({
-      subscriber: S.SUBSCRIBER_NAME, eventId: ev.id, action: "RETRY",
+    await queueOps.operatorAction({
+      tenantId: T, subscriber: S.SUBSCRIBER_NAME, eventId: ev.id, action: "RETRY",
       actorUserId: mgr.userId, reason: "dependency restored; safe to reprocess",
     });
     const resumed = S.drain(ts);
@@ -203,7 +203,7 @@ describe("production-like end to end", () => {
     expect(queueOps.getState(S.SUBSCRIBER_NAME, ev.id).status).toBe("completed");
 
     // 6. RECOVERY — cursor consistent, nothing holding, no duplicate awards.
-    const recovery = queueOps.recoveryReport(S.SUBSCRIBER_NAME, E.cursorFor(S.SUBSCRIBER_NAME));
+    const recovery = queueOps.recoveryReport(S.SUBSCRIBER_NAME, T);
     expect(recovery.stillHolding).toEqual([]);
     expect(recovery.duplicateAwards).toEqual([]);
     expect(recovery.cursorConsistent).toBe(true);
