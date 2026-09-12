@@ -119,10 +119,16 @@ export function PushSetupCard({ className }: { className?: string }) {
               <p className="text-[13px] font-bold text-foreground">Alerts are blocked</p>
               {/* No button here on purpose: once denied, the browser will not
                   re-prompt, and a button that silently does nothing is worse
-                  than no button. Say where the switch actually lives. */}
+                  than no button. Say where the switch actually lives — which is
+                  a different place on a phone install than in a desktop
+                  browser, so the copy follows the platform. "HomeFront" matches
+                  the manifest short_name, i.e. the label iOS Settings shows. */}
               <p className="mt-0.5 text-[13px] text-muted-foreground">
-                Your phone is blocking notifications for Homefront. Turn them back on in
-                Settings &gt; Notifications &gt; Homefront, and you'll hear about live bonuses again.
+                {readiness.isIOS
+                  ? <>Your phone is blocking notifications for HomeFront. Turn them back on in
+                      Settings &gt; Notifications &gt; HomeFront, and you'll hear about live bonuses again.</>
+                  : <>This browser is blocking notifications for HomeFront. Allow notifications for
+                      this site in your browser's site settings, and you'll hear about live bonuses again.</>}
               </p>
             </>
           ) : (

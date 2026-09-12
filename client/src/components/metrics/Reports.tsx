@@ -71,6 +71,17 @@ export function Reports() {
       <section>
         <SectionLabel className="mb-2 px-1">Yield by team</SectionLabel>
         <TeamTable rows={g?.team ?? []} />
+        {/* The two sections COUNT DIFFERENT THINGS and will disagree whenever
+            the provider feed holds orders no rep is matched to. Without this
+            line, "15 submitted" above "33 submitted" on one screen reads as a
+            broken report rather than two lenses. */}
+        {!providerEmpty && (
+          <p className="mt-2 px-1 text-[11px] leading-relaxed text-muted-foreground">
+            Team rows count orders attributed to a rep's field activity. The carrier, product and
+            program cards below count every order in the provider feed for the period, including
+            orders not yet matched to a rep - so their totals can legitimately differ.
+          </p>
+        )}
       </section>
 
       <CommissionSourceNotice manager />

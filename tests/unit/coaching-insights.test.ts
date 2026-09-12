@@ -187,6 +187,26 @@ describe("pace", () => {
     // States plainly that the system cannot tell a break from an appointment.
     expect(found!.explanation.toLowerCase()).toContain("cannot tell");
   });
+
+  // Regression (prod audit 2026-08-31): with no clock session at all,
+  // computePace still measures gaps over a synthetic all-day window while
+  // activeSeconds is 0 — which produced a card claiming an 18h26m gap
+  // "while clocked in" beside "Active field time 0s".
+  it("never claims a gap 'while clocked in' on a week with zero active field time", () => {
+    const fired = types(ctx(
+      { doorsAttempted: 30, longestInactiveSeconds: 18 * 3600 + 26 * 60, inactivePeriodCount: 2, activeSeconds: 0 },
+      BASELINE,
+    ));
+    expect(fired).not.toContain("long_inactive_period");
+  });
+
+  it("never reports a gap longer than the clocked-in time it sits inside", () => {
+    const fired = types(ctx(
+      { doorsAttempted: 30, longestInactiveSeconds: 5 * 3600, inactivePeriodCount: 1, activeSeconds: 4 * 3600 },
+      BASELINE,
+    ));
+    expect(fired).not.toContain("long_inactive_period");
+  });
 });
 
 // ── Shape of every insight ───────────────────────────────────────────────────

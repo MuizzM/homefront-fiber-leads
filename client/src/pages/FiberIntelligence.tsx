@@ -22,7 +22,7 @@ const EgressLive = lazy(() => import("@/components/fiber/EgressLive"));
 // Statically imported (it's tiny) so the Coming Soon tab header can share the
 // exact watchlist query — the big "Watching" count and the list count can
 // never disagree.
-import ComingSoonWatchlist, { WATCHLIST_QUERY, type WatchlistItem } from "@/components/fiber/ComingSoonWatchlist";
+import ComingSoonWatchlist, { WATCHLIST_QUERY, type WatchlistResult } from "@/components/fiber/ComingSoonWatchlist";
 
 // ONE workspace, FOUR jobs: what's hot right now (Fresh Now), what's about to
 // be (Coming Soon), what's being built (New Builds), and how far the machine
@@ -499,8 +499,8 @@ function ComingSoon() {
     refetchInterval: 15000,
     staleTime: 10000,
   });
-  const { data: watchlist } = useQuery<WatchlistItem[] | null>(WATCHLIST_QUERY);
-  const watching = watchlist?.length ?? 0;
+  const { data: watchlist } = useQuery<WatchlistResult | null>(WATCHLIST_QUERY);
+  const watching = watchlist?.total ?? 0;
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">

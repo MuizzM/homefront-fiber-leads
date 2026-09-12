@@ -90,6 +90,13 @@ export function CoachingBoard() {
   }
 
   const total = data?.insights.length ?? 0;
+  // Claim the range the cards actually cover, not a hardcoded "last 7 days" —
+  // each card is the newest window for its rule, and a rule that last fired
+  // two weeks ago keeps its two-week-old window.
+  const newestEnd = (data?.insights ?? []).reduce<string | null>(
+    (max, i) => (max == null || i.periodEnd > max ? i.periodEnd : max), null);
+  const oldestStart = (data?.insights ?? []).reduce<string | null>(
+    (min, i) => (min == null || i.periodStart < min ? i.periodStart : min), null);
 
   return (
     <div className="space-y-5">
@@ -97,7 +104,8 @@ export function CoachingBoard() {
         <p className="text-xs text-muted-foreground">
           {total === 0
             ? "No insights in the current window."
-            : `${total} insight${total === 1 ? "" : "s"} across your team, from the last 7 days of activity.`}
+            : `${total} insight${total === 1 ? "" : "s"} across your team, newest window per finding${
+                oldestStart && newestEnd ? ` (${oldestStart} to ${newestEnd})` : ""}.`}
         </p>
         <Button variant="ghost" size="sm" onClick={() => setShowDismissed((v) => !v)}>
           {showDismissed ? "Hide dismissed" : "Show dismissed"}

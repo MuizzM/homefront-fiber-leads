@@ -870,6 +870,124 @@ app.use((req, res, next) => {
   // The primary starts global jobs above; the installer also rejects workers.
   const { startGlobalMaintenance } = await import("./globalMaintenance");
   const stopGlobalMaintenance = await startGlobalMaintenance(IS_CLUSTER_WORKER);
+  // Provider contracts can require prompt deletion of cached payloads even
+  // when no representative opens Calling. Run a bounded global cleanup at
+  // startup and hourly; durable usage/cost/audit metadata is preserved.
+  const { purgeExpiredProviderPayloads } = await import("./calling/providerRetention");
+  const purgeCallingProviderPayloads = () => {
+    try {
+      let result = { purged: 0, hasMore: true };
+      let purged = 0;
+      for (let batch = 0; batch < 10 && result.hasMore; batch += 1) {
+        result = purgeExpiredProviderPayloads({ batchSize: 500 });
+        purged += result.purged;
+      }
+      if (purged > 0 || result.hasMore) structuredLog("calling.provider_payload_retention", { purged, hasMore: result.hasMore });
+    } catch (error) {
+      structuredLog("calling.provider_payload_retention_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  purgeCallingProviderPayloads();
+  const providerRetentionTimer = setInterval(purgeCallingProviderPayloads, 60 * 60 * 1_000);
+  providerRetentionTimer.unref();
+  // An area skip-trace run is driven by an in-process promise, so a deploy or
+  // crash mid-run leaves its row active. The partial unique index that stops
+  // two concurrent runs would then lock that area out permanently. Reap on
+  // boot and hourly; a live run heartbeats every door, so a slow one survives.
+  const { reconcileStrandedRuns } = await import("./areaSkipTrace");
+  const reapStrandedSkipTraceRuns = () => {
+    try {
+      const reaped = reconcileStrandedRuns();
+      if (reaped > 0) structuredLog("calling.area_skip_trace_runs_reaped", { reaped });
+    } catch (error) {
+      structuredLog("calling.area_skip_trace_reap_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  if (!IS_CLUSTER_WORKER) reapStrandedSkipTraceRuns();
+  const skipTraceReaperTimer = setInterval(reapStrandedSkipTraceRuns, 60 * 60 * 1_000);
+  skipTraceReaperTimer.unref();
+  // A clock session only ends when someone clocks out. A dead phone, a crash,
+  // or a rep deleted from the roster leaves it open forever: it accrues hourly
+  // pay through every week boundary (hourlyPay counts open sessions to now),
+  // blocks payroll finalization via the OPEN_CLOCK_SESSION exception, and
+  // keeps Field Hours' "active now" disagreeing with the dashboard's "in
+  // field". Close anything past the cap the review badge and the daily pay
+  // clamp already use (16h). Same shape as the skip-trace reaper above.
+  const { storage: clockStorage } = await import("./storage");
+  const { clearLiveStateForRep: clearLiveForClosedShift } = await import("./liveOpsStore");
+  const { notifyLiveOpsChanged: notifyLiveOpsShiftClosed } = await import("./liveOpsRoutes");
+  const CLOCK_SESSION_CAP_MINUTES = Math.max(60, Number(process.env.CLOCK_SESSION_CAP_MINUTES) || 16 * 60);
+  const closeRunawayClockSessions = () => {
+    try {
+      const closed = clockStorage.closeRunawayClockSessions(CLOCK_SESSION_CAP_MINUTES);
+      if (closed.length > 0) {
+        const tenants = new Set<number>();
+        for (const row of closed) {
+          clearLiveForClosedShift(row.repId);
+          if (row.tenantId != null) tenants.add(row.tenantId);
+          clockStorage.logActivity(null, "rep.clock_session_auto_closed", "clock_session", row.id,
+            { repId: row.repId, capMinutes: CLOCK_SESSION_CAP_MINUTES }, undefined, row.tenantId);
+        }
+        for (const t of tenants) notifyLiveOpsShiftClosed(t);
+        structuredLog("clock.runaway_sessions_closed", { closed: closed.length });
+      }
+    } catch (error) {
+      structuredLog("clock.runaway_close_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  if (!IS_CLUSTER_WORKER) closeRunawayClockSessions();
+  const runawayClockTimer = setInterval(closeRunawayClockSessions, 60 * 60 * 1_000);
+  runawayClockTimer.unref();
+  const { verifyCallingAuditIntegrity } = await import("./calling/store");
+  const verifyCallingAuditChain = () => {
+    try {
+      const result = verifyCallingAuditIntegrity();
+      structuredLog(result.invalidTenants.length ? "calling.audit_integrity_failed" : "calling.audit_integrity_ok", {
+        tenantsChecked: result.tenantsChecked,
+        eventsChecked: result.eventsChecked,
+        invalidTenants: JSON.stringify(result.invalidTenants),
+      });
+    } catch (error) {
+      structuredLog("calling.audit_integrity_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  verifyCallingAuditChain();
+  const callingAuditTimer = setInterval(verifyCallingAuditChain, 6 * 60 * 60 * 1_000);
+  callingAuditTimer.unref();
+
+  // ── The incentive/referral event drain ─────────────────────────────────────
+  // commissionService now emits SALE_APPROVED / SALE_CANCELLED at the sale
+  // write sites; this loop is the consumer that turns them into campaign
+  // awards and referral-qualification recounts ("6 verified sales -> $500").
+  // Without it the queue only ever drained inside tests - events accumulated
+  // and nothing downstream fired. Cheap when idle: one indexed cursor read.
+  const { drain: drainIncentiveEvents } = await import("./incentiveSubscriber");
+  const drainIncentives = () => {
+    try {
+      const result = drainIncentiveEvents(new Date().toISOString());
+      if (result.processed > 0) {
+        structuredLog("incentives.drained", {
+          processed: result.processed, awarded: result.awarded, reversed: result.reversed,
+          failed: result.failed.length, deferred: result.deferred.length,
+        });
+      }
+    } catch (error) {
+      structuredLog("incentives.drain_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  if (!IS_CLUSTER_WORKER) drainIncentives();
+  const incentiveDrainTimer = setInterval(drainIncentives, 30_000);
+  incentiveDrainTimer.unref();
 
   // Rep metrics rollups. Cluster workers are excluded for the same reason the
   // scan cron is: N workers draining one dirty-day queue would each recompute

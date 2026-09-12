@@ -408,6 +408,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location.startsWith("/statements/") ? "Statement"
     : location.startsWith("/property/") ? "Property"
     : location === "/metrics" ? "Metrics"
+    // /metrics/live is deliberately absent from NAV_ITEMS (the sidebar routes
+    // to /live-ops instead), so without this clause the NAV_ITEMS fallback
+    // misses and the header shows the org name instead of a screen title.
+    // Inlined rather than read from METRICS_TABS: Metrics is a lazy route and
+    // importing it here would pull that chunk into the always-loaded shell.
+    : location === "/metrics/live" ? "Live Field Activity"
     : location === "/token" ? "Scanner setup"
     : NAV_ITEMS.find(item => item.href === location)?.label ?? orgName;
 

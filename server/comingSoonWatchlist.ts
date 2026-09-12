@@ -364,6 +364,12 @@ export function registerComingSoonRoutes(app: Express, deps: ComingSoonRouteDeps
       URGENCY_RANK[a.urgency] - URGENCY_RANK[b.urgency] ||
       (parseDateMs(a.estimatedCompletion) ?? Number.MAX_SAFE_INTEGER) - (parseDateMs(b.estimatedCompletion) ?? Number.MAX_SAFE_INTEGER) ||
       (a.firstSeenAt ?? 0) - (b.firstSeenAt ?? 0));
-    res.json({ items });
+    // The 1000-row LIMIT is a payload cap, not the population. Without the
+    // true total the client renders the cap as an exact count ("Coming soon
+    // 1000") and understates every derived figure.
+    const total = Number((rawDb.prepare(
+      `SELECT COUNT(*) AS n FROM coming_soon_watchlist w WHERE w.tenant_id = ? ${statusFilter ? "AND w.status = ?" : ""}`,
+    ).get(...(statusFilter ? [tid, statusFilter] : [tid])) as any)?.n ?? items.length);
+    res.json({ items, total, truncated: total > items.length });
   });
 }

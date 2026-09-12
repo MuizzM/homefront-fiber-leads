@@ -129,7 +129,7 @@ function timeAgo(ts: string) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-interface LeadStats { total: number; byStatus: Record<string, number> }
+interface LeadStats { total: number; assigned: number; byStatus: Record<string, number> }
 interface LeaderRow {
   rep: { id: number; name: string; role: string };
   knocks: number; sales: number; knocksToday: number; salesToday: number;
@@ -276,8 +276,10 @@ export default function Dashboard() {
   });
 
   const statsFailed = statsError || leadStatsError;
-  const assigned = statsFailed ? " - " : (leadStats?.total ?? 0);
-  const dispositioned = typeof assigned === "number" ? assigned - (leadStats?.byStatus?.prospect ?? 0) : " - ";
+  // "Assigned" means doors owned by a field rep — stats.assigned, never
+  // stats.total (total stood in here once and read 78k on a 199-door book).
+  const assigned = statsFailed ? " - " : (leadStats?.assigned ?? 0);
+  const dispositioned = statsFailed ? " - " : (leadStats?.total ?? 0) - (leadStats?.byStatus?.prospect ?? 0);
 
   const today = sessionsDate;
   const todayHours = clockSessions

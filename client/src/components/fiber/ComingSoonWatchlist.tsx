@@ -73,15 +73,23 @@ function normalize(json: unknown): WatchlistItem[] {
     }));
 }
 
+// The endpoint caps its payload at 1,000 rows; total/truncated carry the true
+// population so no consumer renders the cap as an exact count ("Coming soon
+// 1000" when 4,000 are watched).
+export interface WatchlistResult { items: WatchlistItem[]; total: number; truncated: boolean }
+
 // Shared with the Coming Soon tab header (FiberIntelligence.tsx) so its big
 // "Watching" count reads the exact same cached query as this list — the two
 // numbers can never disagree.
 export const WATCHLIST_QUERY = {
   queryKey: ["/api/coming-soon/watchlist"],
-  queryFn: async (): Promise<WatchlistItem[] | null> => {
+  queryFn: async (): Promise<WatchlistResult | null> => {
     try {
       const res = await apiRequest("GET", "/api/coming-soon/watchlist");
-      return normalize(await res.json());
+      const json = await res.json();
+      const items = normalize(json);
+      const total = Number((json as any)?.total) || items.length;
+      return { items, total, truncated: Boolean((json as any)?.truncated) || total > items.length };
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null; // endpoint not shipped yet
       throw e;
@@ -92,9 +100,9 @@ export const WATCHLIST_QUERY = {
 } as const;
 
 export default function ComingSoonWatchlist() {
-  const { data, isLoading } = useQuery<WatchlistItem[] | null>(WATCHLIST_QUERY);
+  const { data, isLoading } = useQuery<WatchlistResult | null>(WATCHLIST_QUERY);
 
-  const items = (data ?? []).slice().sort((a, b) =>
+  const items = (data?.items ?? []).slice().sort((a, b) =>
     URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency]
     || String(a.estimatedCompletion ?? "9999").localeCompare(String(b.estimatedCompletion ?? "9999")));
 
@@ -104,7 +112,7 @@ export default function ComingSoonWatchlist() {
         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
            Watchlist
         </div>
-        {items.length > 0 && <div className="text-[11px] text-muted-foreground">{items.length} watched</div>}
+        {items.length > 0 && <div className="text-[11px] text-muted-foreground">{(data?.total ?? items.length).toLocaleString()} watched</div>}
       </div>
 
       {isLoading && data === undefined ? (

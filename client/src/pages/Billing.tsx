@@ -25,7 +25,7 @@ interface Summary {
   enabled: boolean; planKey: PlanKey | null; planName: string | null;
   state: "trial" | "active" | "past_due" | "suspended" | "canceled" | null;
   access: "full" | "paywall" | "blocked"; scanningAllowed: boolean; unlimited: boolean;
-  creditsIncluded: number; creditsRemaining: number | null; creditsUsed: number;
+  creditsIncluded: number; creditsAvailable: number | null; creditsRemaining: number | null; creditsUsed: number;
   overageUsed: number; usagePct: number; level: "ok" | "warn" | "critical" | "exhausted";
   overageMode: "stop" | "allow_overage" | "auto_purchase" | "require_approval" | null;
   seatsPaid: number; trialEndsAt: string | null; cycleEnd: string | null;
@@ -178,7 +178,10 @@ export default function Billing() {
           {/* Stat strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <StatTile label="Plan" value={summary.planName ?? " - "} sub={fmtPrice(plans.find(p => p.key === summary.planKey)?.monthlyPriceUsd ?? null)} />
-            <StatTile label="Lead credits" value={summary.unlimited ? "∞" : summary.creditsUsed.toLocaleString()} sub={summary.unlimited ? "Unlimited" : `of ${summary.creditsIncluded.toLocaleString()} used`} accent />
+            {/* Denominator is the cycle's effective cap (plan + rollover +
+                granted), NOT the plan allowance — against creditsIncluded this
+                read "13,277 of 1,500 used" the moment credits were granted. */}
+            <StatTile label="Lead credits" value={summary.unlimited ? "∞" : summary.creditsUsed.toLocaleString()} sub={summary.unlimited ? "Unlimited" : `of ${(summary.creditsAvailable ?? summary.creditsIncluded).toLocaleString()} used`} accent />
             <StatTile label="Seats" value={summary.seatsPaid || " - "} sub="paid seats" />
             <StatTile label={summary.state === "trial" ? "Trial ends" : "Renews"} value={fmtDate(summary.state === "trial" ? summary.trialEndsAt : summary.cycleEnd)} />
           </div>
@@ -204,7 +207,7 @@ export default function Billing() {
                   <div className="mt-3 flex items-end justify-between gap-2">
                     <div className="text-[26px] font-semibold tracking-tight text-foreground tabular-nums">
                       {summary.creditsUsed.toLocaleString()}
-                      <span className="text-[15px] font-normal text-muted-foreground"> / {summary.creditsIncluded.toLocaleString()} credits</span>
+                      <span className="text-[15px] font-normal text-muted-foreground"> / {(summary.creditsAvailable ?? summary.creditsIncluded).toLocaleString()} credits</span>
                     </div>
                     <div className="text-[13px] tabular-nums text-muted-foreground">{summary.usagePct}%</div>
                   </div>
